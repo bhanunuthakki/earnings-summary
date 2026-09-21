@@ -3,14 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from alembic.config import Config
 
-from alembic import command
 from provenance.filing_xbrl_extraction_ledger import (
     FilingXbrlExtractionDispositionRecord,
     FilingXbrlExtractionDispositionSeal,
@@ -25,11 +24,10 @@ from provenance.filing_xbrl_fact_adapter import (
     NormalizedFilingXbrlFact,
 )
 from provenance.source_fact_repository import SourceFactRepository
+from tests.migration_support import build_filing_xbrl_ledger_history
 
-ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
 PERIOD_END = STAMP - timedelta(days=30)
-BASE_REVISION = "0213_decision_draft_provider_id"
 
 
 def _sha(value: str) -> str:
@@ -154,36 +152,16 @@ def _insert_extraction_run(
         )
 
 
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path}")
-    return config
-
-
 def _database(
     tmp_path: Path,
     output: FilingXbrlNormalizedOutput,
+    migrated_db: Callable[[Path], Path] | None = None,
 ) -> sqlite3.Connection:
     path = tmp_path / "filing-xbrl-ledger.db"
-    conn = sqlite3.connect(path)
-    conn.executescript(
-        """
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY,
-            source_doc_id INTEGER NOT NULL
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY,
-            source_doc_id INTEGER NOT NULL
-        );
-        """
-    )
-    conn.commit()
-    conn.close()
-    config = _config(path)
-    command.stamp(config, BASE_REVISION)
-    command.upgrade(config, "head")
+    if migrated_db is None:
+        build_filing_xbrl_ledger_history(path)
+    else:
+        migrated_db(path)
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute(
@@ -287,9 +265,19 @@ def _database(
     return conn
 
 
-def test_all_published_and_exact_replay(tmp_path: Path) -> None:
+# Shared builders used by the canonical-resolution integration tests. Public
+# aliases keep cross-module test reuse visible to strict type checking.
+filing_xbrl_ledger_database = _database
+filing_xbrl_entry = _entry
+insert_filing_xbrl_extraction_run = _insert_extraction_run
+filing_xbrl_output = _output
+
+
+def test_all_published_and_exact_replay(
+    tmp_path: Path, migrated_db: Callable[[Path], Path]
+) -> None:
     output = _output((_entry(0), _entry(1, concept_name="Assets")))
-    conn = _database(tmp_path, output)
+    conn = _database(tmp_path, output, migrated_db)
     try:
         ledger = FilingXbrlExtractionLedger(conn)
         first = ledger.publish(output)
@@ -310,14 +298,16 @@ def test_all_published_and_exact_replay(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_mixed_publish_and_invalid_graph_quarantine(tmp_path: Path) -> None:
+def test_mixed_publish_and_invalid_graph_quarantine(
+    tmp_path: Path, migrated_db: Callable[[Path], Path]
+) -> None:
     invalid = _entry(
         1,
         period_kind="instant",
         period_start=PERIOD_END - timedelta(days=1),
     )
     output = _output((_entry(0), invalid))
-    conn = _database(tmp_path, output)
+    conn = _database(tmp_path, output, migrated_db)
     try:
         receipt = FilingXbrlExtractionLedger(conn).publish(output)
         assert (
@@ -336,12 +326,13 @@ def test_mixed_publish_and_invalid_graph_quarantine(tmp_path: Path) -> None:
 
 def test_exact_duplicate_links_to_one_auditable_primary(
     tmp_path: Path,
+    migrated_db: Callable[[Path], Path],
 ) -> None:
     shared_sha = _sha("shared-entry")
     first = _entry(0, source_entry_sha256=shared_sha)
     second = first.model_copy(update={"ordinal": 1})
     output = _output((first, second))
-    conn = _database(tmp_path, output)
+    conn = _database(tmp_path, output, migrated_db)
     try:
         receipt = FilingXbrlExtractionLedger(conn).publish(output)
         assert (
@@ -376,6 +367,7 @@ def test_exact_duplicate_links_to_one_auditable_primary(
 
 def test_conflicting_source_identity_quarantines_entire_group(
     tmp_path: Path,
+    migrated_db: Callable[[Path], Path],
 ) -> None:
     shared_sha = _sha("shared-entry")
     output = _output(
@@ -388,7 +380,7 @@ def test_conflicting_source_identity_quarantines_entire_group(
             ),
         )
     )
-    conn = _database(tmp_path, output)
+    conn = _database(tmp_path, output, migrated_db)
     try:
         receipt = FilingXbrlExtractionLedger(conn).publish(output)
         assert (
@@ -403,9 +395,11 @@ def test_conflicting_source_identity_quarantines_entire_group(
         conn.close()
 
 
-def test_zero_entry_run_is_explicitly_sealed(tmp_path: Path) -> None:
+def test_zero_entry_run_is_explicitly_sealed(
+    tmp_path: Path, migrated_db: Callable[[Path], Path]
+) -> None:
     output = _output(())
-    conn = _database(tmp_path, output)
+    conn = _database(tmp_path, output, migrated_db)
     try:
         receipt = FilingXbrlExtractionLedger(conn).publish(output)
         assert receipt.entry_count == 0
@@ -420,9 +414,10 @@ def test_zero_entry_run_is_explicitly_sealed(tmp_path: Path) -> None:
 
 def test_dangling_observation_and_entry_digest_tamper_are_rejected(
     tmp_path: Path,
+    migrated_db: Callable[[Path], Path],
 ) -> None:
     output = _output((_entry(0),))
-    conn = _database(tmp_path, output)
+    conn = _database(tmp_path, output, migrated_db)
     try:
         result = FilingXbrlFactAdapter().adapt(output)
         record = FilingXbrlExtractionLedger.build_disposition_records(
@@ -526,9 +521,10 @@ class _DirectSealLedger(FilingXbrlExtractionLedger):
 
 def test_final_seal_failure_rolls_back_publication_and_facts(
     tmp_path: Path,
+    migrated_db: Callable[[Path], Path],
 ) -> None:
     output = _output((_entry(0),))
-    conn = _database(tmp_path, output)
+    conn = _database(tmp_path, output, migrated_db)
     try:
         with pytest.raises(
             sqlite3.IntegrityError,
@@ -549,9 +545,10 @@ def test_final_seal_failure_rolls_back_publication_and_facts(
 
 def test_reordered_canonical_disposition_set_fails_atomic_seal(
     tmp_path: Path,
+    migrated_db: Callable[[Path], Path],
 ) -> None:
     output = _output((_entry(0), _entry(1, concept_name="Assets")))
-    conn = _database(tmp_path, output)
+    conn = _database(tmp_path, output, migrated_db)
     try:
         with pytest.raises(
             sqlite3.IntegrityError,
@@ -586,10 +583,11 @@ def _foreign_output() -> FilingXbrlNormalizedOutput:
 
 def test_cross_run_publication_contamination_is_rejected_by_database_seal(
     tmp_path: Path,
+    migrated_db: Callable[[Path], Path],
 ) -> None:
     output = _output((_entry(0),))
     foreign_output = _foreign_output()
-    conn = _database(tmp_path, output)
+    conn = _database(tmp_path, output, migrated_db)
     try:
         _insert_extraction_run(conn, foreign_output)
         adapter = FilingXbrlFactAdapter()
@@ -631,10 +629,11 @@ def test_cross_run_publication_contamination_is_rejected_by_database_seal(
 
 def test_typed_publisher_rejects_cross_run_result_before_writing(
     tmp_path: Path,
+    migrated_db: Callable[[Path], Path],
 ) -> None:
     output = _output((_entry(0),))
     foreign_output = _foreign_output()
-    conn = _database(tmp_path, output)
+    conn = _database(tmp_path, output, migrated_db)
     try:
         _insert_extraction_run(conn, foreign_output)
         foreign_result = FilingXbrlFactAdapter().adapt(foreign_output)
@@ -661,11 +660,13 @@ def test_typed_publisher_rejects_cross_run_result_before_writing(
         conn.close()
 
 
-def test_gap_and_post_seal_mutation_fail_closed(tmp_path: Path) -> None:
+def test_gap_and_post_seal_mutation_fail_closed(
+    tmp_path: Path, migrated_db: Callable[[Path], Path]
+) -> None:
     gap_output = _output((_entry(0), _entry(2)))
     gap_path = tmp_path / "gap"
     gap_path.mkdir()
-    conn = _database(gap_path, gap_output)
+    conn = _database(gap_path, gap_output, migrated_db)
     try:
         with pytest.raises(
             sqlite3.IntegrityError,
@@ -679,7 +680,7 @@ def test_gap_and_post_seal_mutation_fail_closed(tmp_path: Path) -> None:
     output = _output((_entry(0),))
     sealed_path = tmp_path / "sealed"
     sealed_path.mkdir()
-    conn = _database(sealed_path, output)
+    conn = _database(sealed_path, output, migrated_db)
     try:
         FilingXbrlExtractionLedger(conn).publish(output)
         with pytest.raises(sqlite3.IntegrityError, match="append-only"):

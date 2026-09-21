@@ -282,6 +282,26 @@
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
+      "path": "tests/test_filing_xbrl_extraction_ledger.py",
+      "source_sha256": "6a03508f976c49e75968899d286b7a32a89649fa790ffe086d60ac8f0c5819c2",
+      "parity_receipt": {
+        "schema_version": "test-db-parity/v1",
+        "status": "PASS",
+        "invocation_id": "bfd01cef866bfe959a1cd05a5dae46cb9980ed30f417793e58d6f32e62023422",
+        "path": "tests/test_filing_xbrl_extraction_ledger.py",
+        "locator": {
+          "start_line": 164,
+          "start_col": 8,
+          "end_line": 164,
+          "end_col": 25
+        },
+        "source_sha256": "6a03508f976c49e75968899d286b7a32a89649fa790ffe086d60ac8f0c5819c2"
+      },
+      "owner_issue": "linear:BHA-104",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
+      "expires_at": "2027-01-01T00:00:00Z"
+    },
+    {
       "path": "tests/test_filing_xbrl_fact_adapter.py",
       "source_sha256": "c56217e2189f5f5366dc3c7b2c4a2a2d75c4878f281038bd728d300f5532ba6d",
       "parity_receipt": {

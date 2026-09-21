@@ -1,10 +1,10 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import hashlib
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from functools import partial
 from pathlib import Path
 from typing import cast
 
@@ -39,11 +39,12 @@ from provenance.source_fact_repository import (
     SourceFactPublication,
     SourceFactRepository,
 )
+from tests.migration_support import build_filing_xbrl_ledger_history
 from tests.test_filing_xbrl_extraction_ledger import (
-    _database,
-    _entry,
-    _insert_extraction_run,
-    _output,
+    filing_xbrl_entry,
+    filing_xbrl_ledger_database,
+    filing_xbrl_output,
+    insert_filing_xbrl_extraction_run,
 )
 
 NOW = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
@@ -70,25 +71,35 @@ class _DuplicateSnapshotEngine(CanonicalFactResolutionEngine):
         return [*members, *members]
 
 
+class _InspectableSnapshotEngine(CanonicalFactResolutionEngine):
+    def latest_resolution_members(
+        self,
+        cutoff: datetime,
+        scope: ResolutionSnapshotScope,
+        *,
+        recorded_cutoff: datetime | None = None,
+    ) -> list[dict[str, object]]:
+        return self._latest_resolution_members(
+            cutoff,
+            scope,
+            recorded_cutoff=recorded_cutoff,
+        )
+
+
 def _resolution_database(
     tmp_path: Path,
     output: FilingXbrlNormalizedOutput,
     *,
     target_revision: str = "0267_source_definition_taxonomy_identity",
 ) -> sqlite3.Connection:
-    real_upgrade = command.upgrade
-
-    def _bounded_upgrade(config: Config, revision: str) -> None:
-        real_upgrade(
-            config,
-            "0244_canonical_fact_resolution" if revision == "head" else revision,
-        )
-
-    command.upgrade = _bounded_upgrade
-    try:
-        conn = _database(tmp_path, output)
-    finally:
-        command.upgrade = real_upgrade
+    conn = filing_xbrl_ledger_database(
+        tmp_path,
+        output,
+        partial(
+            build_filing_xbrl_ledger_history,
+            target="0244_canonical_fact_resolution",
+        ),
+    )
     path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
     conn.execute(
         "CREATE TABLE llm_budgets ("
@@ -362,14 +373,14 @@ def _persist_taxonomy_assertion(
 def test_cross_qname_candidates_are_exhaustive_and_conflicts_stay_unresolved(
     tmp_path: Path,
 ) -> None:
-    output = _output(
+    output = filing_xbrl_output(
         (
-            _entry(
+            filing_xbrl_entry(
                 0,
                 concept_name="Revenue",
                 numeric_value=Decimal("100"),
             ),
-            _entry(1, concept_name="Sales", numeric_value=Decimal("200")),
+            filing_xbrl_entry(1, concept_name="Sales", numeric_value=Decimal("200")),
         )
     )
     conn = _resolution_database(tmp_path, output)
@@ -438,8 +449,8 @@ def test_cross_qname_candidates_are_exhaustive_and_conflicts_stay_unresolved(
 def test_duplicate_entry_is_related_without_inflating_the_candidate_universe(
     tmp_path: Path,
 ) -> None:
-    first = _entry(0, source_entry_sha256="a" * 64)
-    output = _output((first, first.model_copy(update={"ordinal": 1})))
+    first = filing_xbrl_entry(0, source_entry_sha256="a" * 64)
+    output = filing_xbrl_output((first, first.model_copy(update={"ordinal": 1})))
     conn = _resolution_database(tmp_path, output)
     try:
         FilingXbrlExtractionLedger(conn).publish(output)
@@ -470,7 +481,7 @@ def test_duplicate_entry_is_related_without_inflating_the_candidate_universe(
 def test_non_filing_reported_publication_is_admitted_without_xbrl_fk(
     tmp_path: Path,
 ) -> None:
-    output = _output((_entry(0),))
+    output = filing_xbrl_output((filing_xbrl_entry(0),))
     conn = _resolution_database(tmp_path, output)
     try:
         xbrl = FilingXbrlFactAdapter().adapt(output)
@@ -508,7 +519,7 @@ def test_non_filing_reported_publication_is_admitted_without_xbrl_fk(
 def test_later_binding_retirement_creates_complete_resolution_supersession(
     tmp_path: Path,
 ) -> None:
-    output = _output((_entry(0),))
+    output = filing_xbrl_output((filing_xbrl_entry(0),))
     conn = _resolution_database(tmp_path, output)
     later = NOW + timedelta(hours=1)
     try:
@@ -577,7 +588,7 @@ def test_later_binding_retirement_creates_complete_resolution_supersession(
 def test_resolution_refuses_reverse_observation_horizon_backfill(
     tmp_path: Path,
 ) -> None:
-    output = _output((_entry(0),))
+    output = filing_xbrl_output((filing_xbrl_entry(0),))
     conn = _resolution_database(tmp_path, output)
     database_path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
     conn.commit()
@@ -644,7 +655,7 @@ def test_candidate_cap_fails_before_any_resolution_write(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    output = _output((_entry(0), _entry(1, concept_name="Sales")))
+    output = filing_xbrl_output((filing_xbrl_entry(0), filing_xbrl_entry(1, concept_name="Sales")))
     conn = _resolution_database(tmp_path, output)
     try:
         FilingXbrlExtractionLedger(conn).publish(output)
@@ -676,7 +687,7 @@ def test_candidate_cap_fails_before_any_resolution_write(
 def test_ineligible_binding_is_sealed_but_never_selected_or_compared(
     tmp_path: Path,
 ) -> None:
-    output = _output((_entry(0, numeric_value=Decimal("100")),))
+    output = filing_xbrl_output((filing_xbrl_entry(0, numeric_value=Decimal("100")),))
     conn = _resolution_database(tmp_path, output)
     later = NOW + timedelta(hours=1)
     try:
@@ -688,7 +699,7 @@ def test_ineligible_binding_is_sealed_but_never_selected_or_compared(
             "FROM fact_cell_canonical_binding_revisions LIMIT 1"
         ).fetchone()
 
-        foreign_entry = _entry(
+        foreign_entry = filing_xbrl_entry(
             0,
             numeric_value=Decimal("999"),
             source_entry_sha256="f" * 64,
@@ -698,12 +709,12 @@ def test_ineligible_binding_is_sealed_but_never_selected_or_compared(
                 "source_context_id": "context-unpublished",
             }
         )
-        foreign_output = _output(
+        foreign_output = filing_xbrl_output(
             (foreign_entry,),
             extraction_run_id="run-unpublished",
             extractor_config_sha256="e" * 64,
         )
-        _insert_extraction_run(conn, foreign_output)
+        insert_filing_xbrl_extraction_run(conn, foreign_output)
         foreign = FilingXbrlFactAdapter().adapt(foreign_output)
         source_fact = foreign.publication.reported_facts[0]
         plane = FactPlaneV2(conn)
@@ -790,7 +801,7 @@ def test_ineligible_binding_is_sealed_but_never_selected_or_compared(
 def test_final_seals_reject_omission_and_snapshot_binds_live_latest(
     tmp_path: Path,
 ) -> None:
-    output = _output((_entry(0),))
+    output = filing_xbrl_output((filing_xbrl_entry(0),))
     conn = _resolution_database(tmp_path, output)
     try:
         FilingXbrlExtractionLedger(conn).publish(output)
@@ -869,7 +880,7 @@ def test_final_seals_reject_omission_and_snapshot_binds_live_latest(
 
 
 def test_resolution_snapshots_are_exactly_issuer_scoped(tmp_path: Path) -> None:
-    output = _output((_entry(0),))
+    output = filing_xbrl_output((filing_xbrl_entry(0),))
     conn = _resolution_database(tmp_path, output)
     try:
         FilingXbrlExtractionLedger(conn).publish(output)
@@ -956,20 +967,20 @@ def test_resolution_snapshots_are_exactly_issuer_scoped(tmp_path: Path) -> None:
 
 
 def test_snapshot_uses_separate_knowledge_and_system_clocks(tmp_path: Path) -> None:
-    output = _output((_entry(0),))
+    output = filing_xbrl_output((filing_xbrl_entry(0),))
     conn = _resolution_database(tmp_path, output)
     try:
         FilingXbrlExtractionLedger(conn).publish(output)
         cell_id = _bind_every_published_cell(conn)
         recorded_at = NOW + timedelta(hours=1)
-        engine = CanonicalFactResolutionEngine(conn)
+        engine = _InspectableSnapshotEngine(conn)
         engine.resolve(
             cell_id,
             NOW,
             ResolutionPolicy(name="dual-clock", version="v1", config={}),
             recorded_at=recorded_at,
         )
-        members = engine._latest_resolution_members(
+        members = engine.latest_resolution_members(
             NOW,
             SCOPE,
             recorded_cutoff=recorded_at,
