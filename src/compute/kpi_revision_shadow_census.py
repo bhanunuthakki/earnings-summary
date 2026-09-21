@@ -626,10 +626,6 @@ def _current_membership(conn: sqlite3.Connection, *, effective_at: datetime) -> 
     semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
     semantic_identity = semantic_series_identity_sql(conn, fact_relation=relation)
     cutoff = effective_at.isoformat()
-    portfolio = (
-        " AND UPPER(kf.ticker) IN (SELECT UPPER(ticker) FROM tracked_companies "
-        "WHERE list_type='portfolio' AND archived_at IS NULL) "
-    )
 
     def partition(sql: str) -> dict[tuple[str, int], tuple[int, ...]]:
         grouped: dict[tuple[str, int], list[int]] = {}
@@ -642,18 +638,23 @@ def _current_membership(conn: sqlite3.Connection, *, effective_at: datetime) -> 
     raw = partition(
         "SELECT kf.id,kf.ticker,kf.kpi_definition_id FROM kpi_facts kf "
         "WHERE kf.id NOT IN (SELECT supersedes_id FROM kpi_facts "
-        "WHERE supersedes_id IS NOT NULL) AND datetime(kf.period_end)<=datetime(?)"
-        + portfolio
-        + "ORDER BY kf.id"
+        "WHERE supersedes_id IS NOT NULL) AND datetime(kf.period_end)<=datetime(?) "
+        "AND UPPER(kf.ticker) IN (SELECT UPPER(ticker) FROM tracked_companies "
+        "WHERE list_type='portfolio' AND archived_at IS NULL) "
+        "ORDER BY kf.id"
     )
     canonical = partition(
-        f"SELECT kf.id,kf.ticker,kf.kpi_definition_id FROM {relation} kf "
-        "WHERE datetime(kf.period_end)<=datetime(?)" + portfolio + "ORDER BY kf.id"
+        f"SELECT kf.id,kf.ticker,kf.kpi_definition_id FROM {relation} kf "  # nosec B608 -- relation is selected by canonical_fact_relation from its closed internal registry
+        "WHERE datetime(kf.period_end)<=datetime(?) "
+        "AND UPPER(kf.ticker) IN (SELECT UPPER(ticker) FROM tracked_companies "
+        "WHERE list_type='portfolio' AND archived_at IS NULL) ORDER BY kf.id"
     )
     legacy = partition(
-        f"SELECT kf.id,kf.ticker,kf.kpi_definition_id FROM {relation} kf {semantic_join} "
+        f"SELECT kf.id,kf.ticker,kf.kpi_definition_id FROM {relation} kf {semantic_join} "  # nosec B608 -- relation and semantic clauses come only from closed internal policy helpers
         f"WHERE datetime(kf.period_end)<=datetime(?) AND {semantic_where} "
-        f"AND {semantic_identity}" + portfolio + "ORDER BY kf.id"
+        f"AND {semantic_identity} "
+        "AND UPPER(kf.ticker) IN (SELECT UPPER(ticker) FROM tracked_companies "
+        "WHERE list_type='portfolio' AND archived_at IS NULL) ORDER BY kf.id"
     )
     return _CurrentMembership(raw=raw, canonical=canonical, legacy=legacy)
 

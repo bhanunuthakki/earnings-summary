@@ -88,7 +88,8 @@ def test_measurement_replay_immutability_and_legacy_rows(
         event = SourceAttemptMeasurement(
             run_id="run",
             provider="fmp",
-            endpoint="https://user:password@example.invalid/data?apikey=SECRET",
+            # Synthetic credential URL exercises rejection/redaction.
+            endpoint="https://user:password@example.invalid/data?apikey=SECRET",  # pragma: allowlist secret
             latency_ms=5,
             retry_count=0,
             status="ok",

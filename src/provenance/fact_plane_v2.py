@@ -1864,17 +1864,22 @@ class FactPlaneV2:
             "fact_derivation_input_edges_v2",
             "input_canonical_resolution_revision_id",
         )
-        canonical_resolution_column = (
-            ",input_canonical_resolution_revision_id" if has_canonical_resolution else ""
-        )
-        edge_rows = self._fetchall(
+        edge_query = (
             "SELECT edge_id,idempotency_key,output_observation_id,"
-            "input_observation_id,input_resolution_revision_id"
-            + canonical_resolution_column
-            + ",input_role,"
+            "input_observation_id,input_resolution_revision_id,"
+            "input_canonical_resolution_revision_id,input_role,"
             "input_ordinal,recorded_at "
             "FROM fact_derivation_input_edges_v2 "
-            "WHERE output_observation_id = ? ORDER BY input_ordinal",
+            "WHERE output_observation_id = ? ORDER BY input_ordinal"
+            if has_canonical_resolution
+            else "SELECT edge_id,idempotency_key,output_observation_id,"
+            "input_observation_id,input_resolution_revision_id,input_role,"
+            "input_ordinal,recorded_at "
+            "FROM fact_derivation_input_edges_v2 "
+            "WHERE output_observation_id = ? ORDER BY input_ordinal"
+        )
+        edge_rows = self._fetchall(
+            edge_query,
             (seal.derived_observation_id,),
         )
         stored_edges = tuple(

@@ -6,6 +6,7 @@ No filesystem fallback, source ranking, currency conversion or financial write.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
@@ -182,10 +183,20 @@ def read_financial_history(
     try:
         if owns_snapshot:
             conn.execute("BEGIN")
-        placeholders = ",".join("?" for _ in concepts)
         rows = conn.execute(
-            f"SELECT DISTINCT binding.canonical_metric_cell_id,source.concept_name,source.period_end FROM fact_cell_canonical_binding_revisions binding JOIN fact_cells_v2 source ON source.fact_cell_id=binding.fact_cell_id JOIN fact_observations_v2 observation ON observation.observation_id=binding.source_observation_id JOIN evidence_document_versions document ON document.document_version_id=observation.document_version_id WHERE document.ticker=? AND source.concept_namespace='urn:earnings-summary:legacy:financial' AND source.concept_name IN ({placeholders}) AND binding.binding_status='bound' ORDER BY source.concept_name,binding.canonical_metric_cell_id",
-            (ticker, *concepts),
+            "SELECT DISTINCT binding.canonical_metric_cell_id,source.concept_name,source.period_end "
+            "FROM fact_cell_canonical_binding_revisions binding "
+            "JOIN fact_cells_v2 source ON source.fact_cell_id=binding.fact_cell_id "
+            "JOIN fact_observations_v2 observation "
+            "ON observation.observation_id=binding.source_observation_id "
+            "JOIN evidence_document_versions document "
+            "ON document.document_version_id=observation.document_version_id "
+            "WHERE document.ticker=? "
+            "AND source.concept_namespace='urn:earnings-summary:legacy:financial' "
+            "AND source.concept_name IN (SELECT value FROM json_each(?)) "
+            "AND binding.binding_status='bound' "
+            "ORDER BY source.concept_name,binding.canonical_metric_cell_id",
+            (ticker, json.dumps(concepts)),
         ).fetchall()
         resolver = CanonicalFactResolutionEngine(conn)
         reader = FactReadModel(conn)

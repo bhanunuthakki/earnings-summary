@@ -379,10 +379,10 @@ def record_ir_events_batch(
         # An omitted event is not cancellation or resolution. Keep unresolved
         # retained conflicts visible even when a later feed is empty.
         if roster:
-            placeholders = ",".join("?" for _ in roster)
             for row in conn.execute(
-                f"SELECT DISTINCT event_id FROM ir_event_revisions WHERE ticker IN ({placeholders}) AND event_date>=?",
-                (*roster, cal_date.isoformat()),
+                "SELECT DISTINCT event_id FROM ir_event_revisions "
+                "WHERE ticker IN (SELECT value FROM json_each(?)) AND event_date>=?",
+                (json.dumps(sorted(roster)), cal_date.isoformat()),
             ):
                 event_id = str(row[0])
                 if event_id not in histories:

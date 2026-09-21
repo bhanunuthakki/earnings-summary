@@ -132,7 +132,13 @@ def _row_json(conn: sqlite3.Connection, table: str, row_id: int) -> str:
         "owner_decision_checkpoints",
     }:
         raise ValueError("unsupported correction table")
-    cursor = conn.execute(f"SELECT * FROM {table} WHERE id=?", (row_id,))
+    query = {
+        "position_entries": "SELECT * FROM position_entries WHERE id=?",
+        "analyst_notes": "SELECT * FROM analyst_notes WHERE id=?",
+        "decisions": "SELECT * FROM decisions WHERE id=?",
+        "owner_decision_checkpoints": "SELECT * FROM owner_decision_checkpoints WHERE id=?",
+    }[table]
+    cursor = conn.execute(query, (row_id,))
     row = cursor.fetchone()
     if row is None or cursor.description is None:
         raise LookupError("correction source row unavailable")

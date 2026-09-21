@@ -249,7 +249,6 @@ def discover_canonical_financial_tickers(
         raise ValueError("canonical financial cutoff must be timezone-aware")
     if not metrics or not cadences:
         return ()
-    marks = ",".join("?" for _ in metrics)
     try:
         rows = conn.execute(
             "SELECT document.ticker,source.period_start,source.period_end,source.fiscal_period,"
@@ -260,10 +259,10 @@ def discover_canonical_financial_tickers(
             "AND observation.observation_kind='reported' "
             "JOIN evidence_document_versions document "
             "ON document.document_version_id=observation.document_version_id "
-            "WHERE source.concept_namespace=? AND source.concept_name IN ("
-            + marks
-            + ") AND source.period_kind='duration'",
-            (FINANCIAL_CONCEPT_NAMESPACE, *metrics),
+            "WHERE source.concept_namespace=? "
+            "AND source.concept_name IN (SELECT value FROM json_each(?)) "
+            "AND source.period_kind='duration'",
+            (FINANCIAL_CONCEPT_NAMESPACE, json.dumps(metrics)),
         ).fetchall()
     except sqlite3.Error as exc:
         raise CanonicalFinancialReadError("canonical_financial_schema_unavailable") from exc

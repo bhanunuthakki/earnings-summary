@@ -336,7 +336,8 @@ def test_drop_duplicates_degrades_to_batch_only_without_table(tmp_path: Path) ->
     [
         "javascript:alert(1)",
         "file:///private/data",
-        "https://user:secret@example.com/story",
+        # Synthetic credential URL exercises rejection/redaction.
+        "https://user:secret@example.com/story",  # pragma: allowlist secret
         "https://example.com/bad path",
     ],
 )

@@ -56,7 +56,8 @@ def test_rejected_provider_payload_redacts_credentials_before_persistence(tmp_pa
         [
             {
                 "value": "bad",
-                "url": "https://user:fixture-password@example.com?apikey=fixture-key",
+                # Synthetic credential URL exercises rejection/redaction.
+                "url": "https://user:fixture-password@example.com?apikey=fixture-key",  # pragma: allowlist secret
                 "token": "fixture-token",
             }
         ],

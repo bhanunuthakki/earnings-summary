@@ -320,10 +320,16 @@ def read_sec_coverage_state(
             if "tracked_companies" not in tables:
                 return SecCoverageSummaryView()
             columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
-            instrument = "instrument_type" if "instrument_type" in columns else "NULL"
-            rows = conn.execute(
-                f"SELECT ticker,name,list_type,sec_validated,filing_regime,{instrument} AS instrument_type FROM tracked_companies WHERE archived_at IS NULL ORDER BY CASE list_type WHEN 'portfolio' THEN 1 WHEN 'evaluation' THEN 2 WHEN 'watchlist' THEN 3 ELSE 4 END,ticker"
-            ).fetchall()
+            query = (
+                "SELECT ticker,name,list_type,sec_validated,filing_regime,instrument_type "
+                "FROM tracked_companies WHERE archived_at IS NULL ORDER BY CASE list_type "
+                "WHEN 'portfolio' THEN 1 WHEN 'evaluation' THEN 2 WHEN 'watchlist' THEN 3 ELSE 4 END,ticker"
+                if "instrument_type" in columns
+                else "SELECT ticker,name,list_type,sec_validated,filing_regime,NULL AS instrument_type "
+                "FROM tracked_companies WHERE archived_at IS NULL ORDER BY CASE list_type "
+                "WHEN 'portfolio' THEN 1 WHEN 'evaluation' THEN 2 WHEN 'watchlist' THEN 3 ELSE 4 END,ticker"
+            )
+            rows = conn.execute(query).fetchall()
             if not rows:
                 return SecCoverageSummaryView(state="empty")
             wired = tables >= _EVIDENCE_TABLES

@@ -6,6 +6,7 @@ reader neither defines metrics nor ranks raw provider/legacy candidates.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections import defaultdict
 from collections.abc import Sequence
@@ -233,7 +234,6 @@ def read_financial_table(
         if owns_snapshot:
             conn.execute("BEGIN")
         conn.row_factory = sqlite3.Row
-        marks = ",".join("?" for _ in REPORT_CONCEPTS)
         rows = conn.execute(
             "SELECT DISTINCT binding.canonical_metric_cell_id,source.concept_name,target.metric_id "
             "FROM fact_cell_canonical_binding_revisions binding "
@@ -242,10 +242,11 @@ def read_financial_table(
             "JOIN fact_observations_v2 observation ON observation.observation_id=binding.source_observation_id "
             "JOIN evidence_document_versions document ON document.document_version_id=observation.document_version_id "
             "WHERE document.ticker=? AND source.concept_namespace='urn:earnings-summary:legacy:financial' "
-            f"AND source.concept_name IN ({marks}) AND binding.binding_status='bound' "
+            "AND source.concept_name IN (SELECT value FROM json_each(?)) "
+            "AND binding.binding_status='bound' "
             "AND julianday(binding.recorded_at)<=julianday(?) AND julianday(binding.knowledge_at)<=julianday(?) "
             "ORDER BY source.concept_name,binding.canonical_metric_cell_id",
-            (ticker, *REPORT_CONCEPTS, cutoff.isoformat(), cutoff.isoformat()),
+            (ticker, json.dumps(REPORT_CONCEPTS), cutoff.isoformat(), cutoff.isoformat()),
         ).fetchall()
         resolver, reader, ontology = (
             CanonicalFactResolutionEngine(conn),

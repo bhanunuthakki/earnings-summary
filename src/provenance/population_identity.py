@@ -230,29 +230,37 @@ def _recorded_issuer_ids(
     conn: sqlite3.Connection,
     request: PopulationIdentityRequest,
 ) -> tuple[str, ...]:
-    scope_sql = ""
     parameters: list[str] = [
         _db_time(request.knowledge_cutoff),
         _db_time(request.operation_recorded_at),
         _db_time(request.operation_recorded_at),
     ]
     if request.document_version_ids is not None:
-        scope_sql = (
-            " AND version.document_version_id IN ("
-            + ",".join("?" for _ in request.document_version_ids)
-            + ")"
+        query = (
+            "SELECT version.document_version_id,version.issuer_id "
+            "FROM evidence_document_versions version "
+            "JOIN evidence_source_observations observation "
+            "ON observation.observation_id=version.observation_id "
+            "WHERE datetime(observation.observed_at)<=datetime(?) "
+            "AND datetime(observation.retrieved_at)<=datetime(?) "
+            "AND datetime(version.recorded_at)<=datetime(?) "
+            "AND version.document_version_id IN (SELECT value FROM json_each(?)) "
+            "ORDER BY version.issuer_id,version.document_version_id"
         )
-        parameters.extend(request.document_version_ids)
+        parameters.append(json.dumps(request.document_version_ids))
+    else:
+        query = (
+            "SELECT version.document_version_id,version.issuer_id "
+            "FROM evidence_document_versions version "
+            "JOIN evidence_source_observations observation "
+            "ON observation.observation_id=version.observation_id "
+            "WHERE datetime(observation.observed_at)<=datetime(?) "
+            "AND datetime(observation.retrieved_at)<=datetime(?) "
+            "AND datetime(version.recorded_at)<=datetime(?) "
+            "ORDER BY version.issuer_id,version.document_version_id"
+        )
     rows = conn.execute(
-        "SELECT version.document_version_id,version.issuer_id "
-        "FROM evidence_document_versions version "
-        "JOIN evidence_source_observations observation "
-        "ON observation.observation_id=version.observation_id "
-        "WHERE datetime(observation.observed_at)<=datetime(?) "
-        "AND datetime(observation.retrieved_at)<=datetime(?) "
-        "AND datetime(version.recorded_at)<=datetime(?) "
-        + scope_sql
-        + " ORDER BY version.issuer_id,version.document_version_id",
+        query,
         parameters,
     ).fetchall()
     if request.document_version_ids is not None and {str(row[0]) for row in rows} != set(
