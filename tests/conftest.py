@@ -390,7 +390,7 @@ def _no_real_claim_grounding_llm(monkeypatch: pytest.MonkeyPatch) -> None:
 # Application tests use the complete active graph. Historical migration tests
 # request an explicit archived graph and keep the revision they actually ran.
 
-_DB_TEMPLATES: dict[tuple[str, str, str], Path] = {}
+_DB_TEMPLATES: dict[tuple[str, ...], Path] = {}
 
 
 @pytest.fixture(scope="session")
@@ -432,18 +432,48 @@ def migrated_db(
         archived: bool = False,
         upgrade_from: str | None = None,
         before_upgrade: Callable[[Path], None] | None = None,
+        seed_sha256: str | None = None,
         upgrade_existing: bool = False,
     ) -> Path:
         if (upgrade_from is None) != (before_upgrade is None):
             raise ValueError("upgrade_from and before_upgrade must be provided together")
+        if seed_sha256 is not None and upgrade_from is None:
+            raise ValueError("seed_sha256 requires upgrade_from and before_upgrade")
+        if seed_sha256 is not None and (
+            len(seed_sha256) != 64
+            or seed_sha256 != seed_sha256.lower()
+            or any(character not in "0123456789abcdef" for character in seed_sha256)
+        ):
+            raise ValueError("seed_sha256 must be a lowercase SHA-256 digest")
         if upgrade_existing and (upgrade_from is not None or archived):
             raise ValueError("upgrade_existing cannot be combined with migration build options")
         if upgrade_existing:
             command.upgrade(_config(dest, archived=False), target)
             return dest
-        if upgrade_from is not None and archived:
-            raise ValueError("seeded upgrades are supported only on the active graph")
         if upgrade_from is not None:
+            if archived and seed_sha256 is None:
+                raise ValueError("archived seeded upgrades require seed_sha256")
+            if seed_sha256 is not None:
+                graph = "archived-seeded" if archived else "active-seeded"
+                key = (graph, upgrade_from, target, seed_sha256)
+                template = _DB_TEMPLATES.get(key)
+                if template is None or not template.exists():
+                    template = cache_dir / f"{graph}_{upgrade_from}_{seed_sha256}_{target}.db"
+                    template.unlink(missing_ok=True)
+                    assert before_upgrade is not None
+                    if archived:
+                        before_upgrade(template)
+                        config = _config(template, archived=True)
+                        command.stamp(config, upgrade_from)
+                    else:
+                        build(template, target=upgrade_from)
+                        before_upgrade(template)
+                        config = _config(template, archived=False)
+                    command.upgrade(config, target)
+                    _DB_TEMPLATES[key] = template
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(template, dest)
+                return dest
             build(dest, target=upgrade_from)
             assert before_upgrade is not None
             before_upgrade(dest)
