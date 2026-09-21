@@ -14,6 +14,7 @@ from operations.models import (
     DatabaseIdentityObservation,
     DatabaseIdentityRow,
     DatabaseRunsObservation,
+    DataCoverageSummary,
     FMPBacklogObservation,
     FMPBacklogRow,
     FMPCircuitObservation,
@@ -47,6 +48,9 @@ from operations.models import (
     SourceCallsObservation,
 )
 from operations.paths import portfolio_tracker_receipt_path
+from pipeline.data_policy_settings_panel import FMP_PROVIDER_FRESHNESS_POLICY
+from pipeline.fmp_operations_view import read_fmp_operational_details
+from pipeline.sec_operations_view import read_sec_coverage_state
 from runtime.job_runtime import health_receipt_directory
 from runtime.portfolio_tracker import RuntimeReceipt
 
@@ -971,6 +975,40 @@ def _circuit_observation(
     )
 
 
+def _data_coverage(conn: sqlite3.Connection, observed_at: datetime) -> DataCoverageSummary:
+    """Read the same projections as Settings, without persisting another truth."""
+    original_factory = conn.row_factory
+    try:
+        conn.row_factory = sqlite3.Row
+        fmp = read_fmp_operational_details(
+            conn,
+            as_of=observed_at,
+            receipt_max_age=FMP_PROVIDER_FRESHNESS_POLICY.success_max_age,
+        )
+        main = next((row for row in conn.execute("PRAGMA database_list") if row[1] == "main"), None)
+        db_path = Path(str(main[2])) if main is not None and main[2] else None
+        sec = read_sec_coverage_state(db_path, as_of=observed_at)
+        fmp_attention = fmp.receipt_state not in {"fresh", "empty"}
+        if fmp.receipt_state == "empty":
+            fmp_attention = bool(fmp.role_priority_counts)
+        return DataCoverageSummary(
+            attention_count=int(fmp_attention)
+            + sec.gap_count
+            + sec.execution_gap_count
+            + int(sec.state == "unavailable"),
+            unknown_freshness_count=sum(
+                company.coverage_status == "Covered / freshness unknown"
+                for company in sec.companies
+            ),
+            fmp_state=fmp.receipt_state,
+            sec_state=sec.state,
+        )
+    except (sqlite3.Error, ValueError):
+        return DataCoverageSummary(attention_count=1, fmp_state="unavailable")
+    finally:
+        conn.row_factory = original_factory
+
+
 def collect_operations_snapshot(
     registry: OperationsRegistry,
     *,
@@ -1024,6 +1062,9 @@ def collect_operations_snapshot(
         receipt_error=pair_error,
     )
     return OperationsSnapshot(
+        data_coverage=_data_coverage(conn, observed_at)
+        if metadata_error is None
+        else DataCoverageSummary(attention_count=1, fmp_state="unavailable"),
         observed_at=observed_at,
         registry_version=registry.registry_version,
         database_identity=_database_identity(conn, observed_at),

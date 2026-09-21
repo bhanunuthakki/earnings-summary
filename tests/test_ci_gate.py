@@ -55,27 +55,29 @@ def test_unknown_non_documentation_path_fails_closed(helper: ModuleType) -> None
 
 
 @pytest.mark.parametrize(
-    ("path", "python"),
+    ("path", "python", "design"),
     [
-        ("src/report/builder.py", True),
-        ("execution/run_morning_pipeline.py", True),
-        ("tests/test_smoke.py", True),
-        ("alembic/versions/0003_seed.py", True),
-        ("cron/check_task_exit.ps1", False),
-        ("scripts/check_ci.sh", False),
-        (".githooks/pre-push", False),
-        ("config/task_manifest.json", False),
-        ("templates/company_brief.html", False),
-        (".github/workflows/ci.yml", False),
-        (".github/scripts/ci_gate.py", True),
-        ("requirements.lock", True),
-        ("requirements.txt", False),
-        ("pyproject.toml", True),
-        ("Makefile", False),
+        ("src/report/builder.py", True, True),
+        ("execution/run_morning_pipeline.py", True, True),
+        ("tests/test_smoke.py", True, False),
+        ("alembic/versions/0003_seed.py", True, False),
+        ("cron/check_task_exit.ps1", False, False),
+        ("scripts/check_ci.sh", False, False),
+        (".githooks/pre-push", False, False),
+        ("config/task_manifest.json", False, False),
+        ("templates/company_brief.html", False, False),
+        (".github/workflows/ci.yml", False, False),
+        (".github/scripts/ci_gate.py", True, False),
+        ("requirements.lock", True, False),
+        ("requirements.txt", False, False),
+        ("pyproject.toml", True, False),
+        ("Makefile", False, False),
     ],
 )
-def test_code_change_classification(helper: ModuleType, path: str, python: bool) -> None:
-    assert helper.classify_paths([path]) == {"code": True, "python": python, "design": False}
+def test_code_change_classification(
+    helper: ModuleType, path: str, python: bool, design: bool
+) -> None:
+    assert helper.classify_paths([path]) == {"code": True, "python": python, "design": design}
 
 
 @pytest.mark.parametrize(
@@ -88,6 +90,11 @@ def test_code_change_classification(helper: ModuleType, path: str, python: bool)
         "mockups/work_os_shell.html",
         "tests/golden/workspace/some_golden.html",
         # Exact design contract sources, tooling, and guard inputs.
+        "src/pipeline/operations_panel.py",
+        "src/pipeline/work_os_portfolio.py",
+        "execution/comments_server.py",
+        "src/dashboard/new_emitter.py",
+        "execution/new_emitter.py",
         "src/pipeline/work_os_shell.py",
         "src/pipeline/work_os_runtime.js",
         "src/pipeline/work_os_styles.py",
@@ -123,6 +130,27 @@ def test_design_impacting_paths_require_the_design_job(helper: ModuleType, path:
     assert groups["design"] is True
 
 
+def test_every_visual_census_root_requires_design_sync(helper: ModuleType) -> None:
+    # New emitters must be discovered before they can be registered. Restricting
+    # this to existing manifest paths silently bypasses that discovery gate.
+    for path in ("src/new_module.py", "execution/new_command.py"):
+        groups = helper.classify_paths([path])
+        assert groups["design"] is True
+        assert helper.gate_failures(
+            **groups,
+            results={
+                "changes": "success",
+                "public-boundary": "success",
+                "fast-signal": "success",
+                "tests": "success",
+                "design": "skipped",
+                "quality": "success",
+                "typecheck": "success",
+                "security": "success",
+            },
+        ) == ["design must succeed for this change set; got skipped"]
+
+
 def test_design_content_documentation_requires_design_job_without_code_jobs(
     helper: ModuleType,
 ) -> None:
@@ -137,17 +165,13 @@ def test_design_content_documentation_requires_design_job_without_code_jobs(
 @pytest.mark.parametrize(
     "path",
     [
-        "src/pipeline/work_os_portfolio.py",
-        "src/pipeline/operations_panel.py",
-        "src/timeseries/kpi.py",
         "cron/backup_db.py",
         "alembic/versions/0033_next.py",
         "tests/test_backup_restore.py",
         "tests/test_comments_server_dashboard.py",
-        "src/report/builder.py",
     ],
 )
-def test_backend_only_paths_skip_design_sync(helper: ModuleType, path: str) -> None:
+def test_paths_outside_visual_census_skip_design_sync(helper: ModuleType, path: str) -> None:
     assert helper.classify_paths([path])["design"] is False
 
 

@@ -6,15 +6,11 @@ renormalisation over the attributable share, and the FMP geo-cache loader.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from dcf import country_risk  # noqa: E402
+from dcf import country_risk
 
 
 # --------------------------------------------------------------------------- #
@@ -65,18 +61,29 @@ def test_weighted_crp_renormalises_over_attributable_revenue() -> None:
         + 6475.0 * country_risk.COUNTRY_CRP["Mexico"]
         + 5962.0 * country_risk.COUNTRY_CRP["Argentina"]
     ) / attributable
-    assert country_risk.weighted_crp(geo) == pytest.approx(expected)
+    premium = country_risk.weighted_crp(geo)
+    assert premium == pytest.approx(expected)
     # A LatAm-heavy name lands well above zero; Argentina is the dominant lever.
-    assert country_risk.weighted_crp(geo) > 0.025
+    assert premium is not None
+    assert premium > 0.025
 
 
 def test_weighted_crp_us_only_is_zero() -> None:
     assert country_risk.weighted_crp({"United States": 1000.0}) == 0.0
 
 
-def test_weighted_crp_empty_or_unattributable_is_zero() -> None:
-    assert country_risk.weighted_crp({}) == 0.0
-    assert country_risk.weighted_crp({"Other": 500.0, "Rest of World": 250.0}) == 0.0
+def test_weighted_crp_empty_or_unattributable_is_unavailable() -> None:
+    assert country_risk.weighted_crp({}) is None
+    assert country_risk.weighted_crp({"Other": 500.0, "Rest of World": 250.0}) is None
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_weighted_crp_nonfinite_revenue_is_unavailable(value: float) -> None:
+    assert country_risk.weighted_crp({"Brazil": value}) is None
+
+
+def test_weighted_crp_overflowing_aggregate_is_unavailable() -> None:
+    assert country_risk.weighted_crp({"United States": 1e308, "Brazil": 1e308}) is None
 
 
 def test_weighted_crp_ignores_nonpositive_revenue() -> None:
@@ -135,8 +142,13 @@ def test_country_risk_premium_reads_annual_geo_cache(tmp_path: Path) -> None:
     assert observation.source_record["influences_calculation"] is True
 
 
-def test_country_risk_premium_no_cache_is_zero(tmp_path: Path) -> None:
-    assert country_risk.country_risk_premium(tmp_path, "NOFILE") == 0.0
+def test_country_risk_premium_no_cache_is_unavailable(tmp_path: Path) -> None:
+    with pytest.raises(country_risk.CountryRiskUnavailableError) as raised:
+        country_risk.country_risk_observation(tmp_path, "NOFILE")
+    assert raised.value.reason == "geographic_revenue_unavailable"
+    assert raised.value.source_record is None
+    with pytest.raises(country_risk.CountryRiskUnavailableError):
+        country_risk.country_risk_premium(tmp_path, "NOFILE")
 
 
 def test_country_risk_premium_falls_back_to_quarterly_ttm(tmp_path: Path) -> None:
@@ -166,8 +178,40 @@ def test_country_risk_premium_falls_back_to_quarterly_ttm(tmp_path: Path) -> Non
     assert observation.source_record["selection"] == "quarterly_latest_four"
 
 
-def test_country_risk_premium_survives_malformed_cache(tmp_path: Path) -> None:
+def test_country_risk_premium_rejects_malformed_cache(tmp_path: Path) -> None:
     fmp = tmp_path / "data" / "historical" / "fmp"
     fmp.mkdir(parents=True, exist_ok=True)
     (fmp / "BAD_geo_segments_annual.json").write_text("{not json", encoding="utf-8")
-    assert country_risk.country_risk_premium(tmp_path, "BAD") == 0.0
+    with pytest.raises(country_risk.CountryRiskUnavailableError) as raised:
+        country_risk.country_risk_observation(tmp_path, "BAD")
+    assert raised.value.reason == "geographic_revenue_unavailable"
+
+
+def test_country_risk_known_mature_geography_is_available_zero(tmp_path: Path) -> None:
+    _write_geo(
+        tmp_path,
+        "USCO",
+        [{"fiscalYear": 2025, "period": "FY", "data": {"United States": 100.0}}],
+        annual=True,
+    )
+
+    observation = country_risk.country_risk_observation(tmp_path, "USCO")
+
+    assert observation.premium == 0.0
+    assert observation.source_record is not None
+
+
+def test_country_risk_unattributable_geo_is_not_mature_market_zero(tmp_path: Path) -> None:
+    _write_geo(
+        tmp_path,
+        "UNKNOWN",
+        [{"fiscalYear": 2025, "period": "FY", "data": {"Rest of World": 100.0}}],
+        annual=True,
+    )
+
+    with pytest.raises(country_risk.CountryRiskUnavailableError) as raised:
+        country_risk.country_risk_observation(tmp_path, "UNKNOWN")
+
+    assert raised.value.reason == "geographic_revenue_unattributable"
+    assert raised.value.source_record is not None
+    assert raised.value.geo_revenue == {"Rest of World": 100.0}

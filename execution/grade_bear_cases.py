@@ -22,13 +22,16 @@ import logging
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from bear_case_grader import grade_due_predictions, materialize_predictions  # noqa: E402
-from llm.calibration import CalibrationScore, record_score  # noqa: E402
-from llm.prompt_versions import prompt_version_for  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from bear_case_grader import grade_due_predictions, materialize_predictions
+from db_paths import require_db_path
+from llm.calibration import CalibrationScore, record_score
+from llm.prompt_versions import prompt_version_for
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger("grade_bear_cases")
 
@@ -47,10 +50,8 @@ def _aggregate_to_calibration_score(outcomes: dict[str, int]) -> float | None:
     return float(score)
 
 
-def _portfolio_tickers(repo_root: Path) -> list[str]:
-    db = repo_root / "data" / "portfolio.db"
-    if not db.exists():
-        return []
+def _portfolio_tickers(db_path: Path) -> list[str]:
+    db = require_db_path(db_path)
     conn = connect_sqlite(str(db), role=SQLiteConnectionRole.READ_ONLY)
     try:
         return [
@@ -67,7 +68,7 @@ def _portfolio_tickers(repo_root: Path) -> list[str]:
         conn.close()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     g = parser.add_mutually_exclusive_group(required=True)
     g.add_argument("--ticker", help="Single ticker to grade.")
@@ -83,24 +84,29 @@ def main() -> int:
         help="Skip the materialization step (only re-grade existing pending predictions).",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument(
+        "--db", type=Path, help="Explicit database; defaults to configured authority."
+    )
+    args = parser.parse_args(argv)
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    tickers = [args.ticker.upper()] if args.ticker else _portfolio_tickers(args.repo_root)
+    db_path = require_db_path(args.db)
+    tickers = [args.ticker.upper()] if args.ticker else _portfolio_tickers(db_path)
 
     total_inserted = 0
     total_graded: dict[str, int] = {"met": 0, "missed": 0, "mixed": 0, "unfalsifiable": 0}
-    db_path = args.repo_root / "data" / "portfolio.db"
     for ticker in tickers:
         if not args.skip_materialize:
-            inserted = materialize_predictions(ticker=ticker, repo_root=args.repo_root)
+            inserted = materialize_predictions(
+                ticker=ticker, repo_root=args.repo_root, db_path=db_path
+            )
             log.info({"event": "materialized", "ticker": ticker, "inserted": inserted})
             total_inserted += inserted
-        outcomes = grade_due_predictions(ticker=ticker, repo_root=args.repo_root)
+        outcomes = grade_due_predictions(ticker=ticker, repo_root=args.repo_root, db_path=db_path)
         log.info({"event": "graded", "ticker": ticker, "outcomes": outcomes})
         for k, v in outcomes.items():
             total_graded[k] = total_graded.get(k, 0) + v

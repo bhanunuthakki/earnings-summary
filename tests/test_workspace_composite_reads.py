@@ -278,6 +278,20 @@ def test_peer_tracking_uses_supplied_database(workspace_database: Path, tmp_path
         conn.execute(
             "INSERT INTO tracked_companies (ticker,name,list_type) VALUES ('TRACKED','Tracked','portfolio')"
         )
+        from datetime import date
+
+        from compute.comparable_sets import METHOD_VERSION, comparable_set_id
+
+        source_id = comparable_set_id("TEST", METHOD_VERSION)
+        today = date.today().isoformat()
+        conn.execute(
+            "INSERT INTO comparable_sets(comparable_set_id,ticker,method_version,resolved_at,metric_class,method_flags,source_summary) VALUES (?,?,?,?,?,?,?)",
+            (source_id, "TEST", METHOD_VERSION, today, "operating", "{}", "{}"),
+        )
+        conn.execute(
+            "INSERT INTO comparable_set_members(comparable_set_id,member_ticker,membership_reason,context_only,valid_from) VALUES (?,?,?,0,?)",
+            (source_id, "TRACKED", "pinned_override", today),
+        )
         rows = p3_data.load_peer_comp("TEST", repo_root=tmp_path, max_peers=1, conn=conn)
         assert [row.peer_ticker for row in rows] == ["TRACKED"]
         assert conn.execute("SELECT 1").fetchone() == (1,)

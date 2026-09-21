@@ -12,8 +12,14 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict, Field
 
 from models.companies import ListType
+from pipeline.fmp_operations_view import FmpOperationalDetails, read_fmp_operational_details
+from pipeline.fmp_recovery import ContainmentReason, ExecutionMode, OutcomeCode
 from pipeline.ir_approval_panel import read_ir_approval_review, render_ir_approval_panel
 from pipeline.operations_styles import OPERATIONS_STYLE
+from pipeline.sec_operations_view import (
+    SecCoverageSummaryView,
+    read_sec_coverage_state,
+)
 from pipeline.source_policy import (
     DISPLAY_ROLE_ORDER,
     POLICY_VERSION,
@@ -23,7 +29,6 @@ from pipeline.source_policy import (
     CollectionMode,
     CollectionSource,
     decision_for,
-    instrument_allows_artifact,
     issuer_policy,
     mode_for_role,
 )
@@ -134,31 +139,7 @@ class FmpOperationalReadModel(BaseModel):
     corpus_ticker_count: int | None = None
     last_corpus_at: str | None = None
     recent_events: tuple[FmpRecoveryEventView, ...] = ()
-
-
-class SecCoverageCompanyView(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    ticker: str
-    name: str
-    role: str
-    sec_validated: bool
-    filing_regime: str
-    coverage_status: str
-    coverage_tone: Tone
-    notes: str
-
-
-class SecCoverageSummaryView(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    total_tracked: int = 0
-    portfolio_count: int = 0
-    evaluation_count: int = 0
-    watchlist_count: int = 0
-    validated_count: int = 0
-    gap_count: int = 0
-    companies: tuple[SecCoverageCompanyView, ...] = ()
+    details: FmpOperationalDetails = Field(default_factory=FmpOperationalDetails)
 
 
 class DataPolicySettingsView(BaseModel):
@@ -321,6 +302,11 @@ def read_fmp_operational_state(
         conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
         conn.row_factory = sqlite3.Row
         try:
+            details = read_fmp_operational_details(
+                conn,
+                as_of=as_of or datetime.now(UTC),
+                receipt_max_age=FMP_PROVIDER_FRESHNESS_POLICY.success_max_age,
+            )
             circuit = conn.execute(
                 "SELECT state,next_probe_at,last_reason_code,last_success_at "
                 "FROM provider_circuit_state WHERE provider='fmp'"
@@ -399,6 +385,7 @@ def read_fmp_operational_state(
             corpus_ticker_count=corpus_ticker_count,
             last_corpus_at=last_corpus_at,
             recent_events=recent_events,
+            details=details,
         )
     state = str(circuit["state"])
     if state not in {"CLOSED", "OPEN", "HALF_OPEN"}:
@@ -444,117 +431,7 @@ def read_fmp_operational_state(
         corpus_ticker_count=corpus_ticker_count,
         last_corpus_at=last_corpus_at,
         recent_events=recent_events,
-    )
-
-
-def read_sec_coverage_state(db_path: Path | None) -> SecCoverageSummaryView:
-    """Read SEC collection priority and company coverage gaps without taking write locks."""
-
-    if db_path is None or not db_path.is_file():
-        return SecCoverageSummaryView()
-    try:
-        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
-        conn.row_factory = sqlite3.Row
-        try:
-            has_table = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tracked_companies'"
-            ).fetchone()
-            if not has_table:
-                return SecCoverageSummaryView()
-            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(tracked_companies)")}
-            query = (
-                "SELECT instrument_type, "
-                "ticker, name, list_type, sec_validated, filing_regime, archived_at "
-                "FROM tracked_companies WHERE archived_at IS NULL "
-                "ORDER BY CASE list_type WHEN 'portfolio' THEN 1 WHEN 'evaluation' THEN 2 ELSE 3 END, ticker"
-            )
-            if "instrument_type" not in columns:
-                query = (
-                    "SELECT NULL AS instrument_type, "
-                    "ticker, name, list_type, sec_validated, filing_regime, archived_at "
-                    "FROM tracked_companies WHERE archived_at IS NULL "
-                    "ORDER BY CASE list_type WHEN 'portfolio' THEN 1 WHEN 'evaluation' THEN 2 ELSE 3 END, ticker"
-                )
-            rows = conn.execute(query).fetchall()
-        finally:
-            conn.close()
-    except (OSError, sqlite3.Error):
-        return SecCoverageSummaryView()
-
-    companies: list[SecCoverageCompanyView] = []
-    portfolio_count = 0
-    evaluation_count = 0
-    watchlist_count = 0
-    validated_count = 0
-    gap_count = 0
-
-    for row in rows:
-        ticker = str(row["ticker"])
-        name = str(row["name"])
-        role = str(row["list_type"])
-        sec_validated = bool(row["sec_validated"])
-        filing_regime = str(row["filing_regime"] or "10-K")
-
-        if role == "portfolio":
-            portfolio_count += 1
-        elif role == "evaluation":
-            evaluation_count += 1
-        elif role == "watchlist":
-            watchlist_count += 1
-        try:
-            allowed = decision_for(
-                role,
-                CollectionSource.SEC,
-                ArtifactKind.FILING_PACKAGE,
-                requested=False,
-            ).allowed
-        except ValueError:
-            allowed = False
-        applicable = instrument_allows_artifact(
-            row["instrument_type"],
-            source=CollectionSource.SEC,
-            artifact_kind=ArtifactKind.FILING_PACKAGE,
-        )
-        tone: Tone = "ok"
-        if allowed and not applicable:
-            status = "Instrument review required"
-            tone = "warn"
-            notes = "Corporate SEC collection requires a confirmed equity or ADR identity"
-            gap_count += 1
-        elif allowed and sec_validated:
-            status = "Automatic full"
-            notes = f"SEC collection authorized ({filing_regime}); processing proof is separate"
-            validated_count += 1
-        elif allowed:
-            status = "Coverage gap"
-            tone = "warn"
-            notes = f"{role.capitalize()} issuer pending SEC profile validation"
-            gap_count += 1
-        else:
-            status = "Excluded by policy"
-            notes = "SEC document crawl excluded by policy"
-
-        companies.append(
-            SecCoverageCompanyView(
-                ticker=ticker,
-                name=name,
-                role=role.capitalize(),
-                sec_validated=sec_validated,
-                filing_regime=filing_regime,
-                coverage_status=status,
-                coverage_tone=tone,
-                notes=notes,
-            )
-        )
-
-    return SecCoverageSummaryView(
-        total_tracked=len(rows),
-        portfolio_count=portfolio_count,
-        evaluation_count=evaluation_count,
-        watchlist_count=watchlist_count,
-        validated_count=validated_count,
-        gap_count=gap_count,
-        companies=tuple(companies),
+        details=details,
     )
 
 
@@ -667,41 +544,136 @@ def _render_issuers(view: DataPolicySettingsView) -> str:
 
 
 def _render_sec_coverage(coverage: SecCoverageSummaryView) -> str:
-    if coverage.total_tracked == 0:
-        return (
-            '<div class="k-well">'
-            '<div class="k-card-row-title">SEC collection priority &amp; coverage gaps</div>'
-            '<p class="k-card-meta">No tracked company records found in the database. SEC collection requires registered company targets.</p></div>'
-        )
+    if coverage.state == "unavailable":
+        return '<div class="k-well k-well-warn" role="status">SEC evidence unavailable. The database or required schema could not be read; no zero-coverage or healthy claim is inferred.</div>'
+    if coverage.state == "empty":
+        return '<div class="k-well" role="status">No tracked company records found in the database. This is an empty roster, not a coverage-health result.</div>'
     cards = (
         '<div class="policy-grid">'
-        f'<div class="k-well"><div class="k-label">Portfolio issuers</div><div class="k-card-row-title">{coverage.portfolio_count}</div><div class="k-card-meta">Automatic SEC collection</div></div>'
-        f'<div class="k-well"><div class="k-label">Evaluation issuers</div><div class="k-card-row-title">{coverage.evaluation_count}</div><div class="k-card-meta">Automatic SEC collection</div></div>'
-        f'<div class="k-well"><div class="k-label">Watchlist issuers</div><div class="k-card-row-title">{coverage.watchlist_count}</div><div class="k-card-meta">Automatic SEC collection</div></div>'
-        f'<div class="k-well"><div class="k-label">SEC Profile Gaps</div><div class="k-card-row-title">{coverage.gap_count}</div><div class="k-card-meta">Pending SEC validation</div></div>'
-        "</div>"
+        f'<div class="k-well"><div class="k-label">Portfolio</div><div class="k-card-row-title">{coverage.portfolio_count}</div><div class="k-card-meta">Automatic authorization</div></div>'
+        f'<div class="k-well"><div class="k-label">Evaluation</div><div class="k-card-row-title">{coverage.evaluation_count}</div><div class="k-card-meta">Automatic authorization</div></div>'
+        f'<div class="k-well"><div class="k-label">Watchlist</div><div class="k-card-row-title">{coverage.watchlist_count}</div><div class="k-card-meta">Automatic authorization</div></div>'
+        f'<div class="k-well"><div class="k-label">Coverage gaps</div><div class="k-card-row-title">{coverage.gap_count}</div><div class="k-card-meta">Missing inventory, identity or capture proof</div></div></div>'
     )
-    rows = "".join(
-        "<tr>"
-        f'<td><span class="k-ticker-symbol">{escape(c.ticker)}</span> <span class="k-card-meta">{escape(c.name)}</span></td>'
-        f'<td><span class="k-chip">{escape(c.role)}</span></td>'
-        f'<td><span class="k-chip k-chip-mono">{escape(c.filing_regime)}</span></td>'
-        f'<td><span class="k-pill k-pill-{c.coverage_tone}">{escape(c.coverage_status)}</span></td>'
-        f'<td><span class="k-card-meta">{escape(c.notes)}</span></td>'
-        "</tr>"
-        for c in coverage.companies
+    rows: list[str] = []
+    details: list[str] = []
+    for company in coverage.companies:
+        anchor = "sec-evidence-" + company.ticker
+        rows.append(
+            "<tr>"
+            f'<th scope="row"><span class="k-ticker-symbol">{escape(company.ticker)}</span> <span class="k-card-meta">{escape(company.name)}</span></th>'
+            f"<td>{escape(company.role)} · {escape(company.acquisition_mode)}</td>"
+            f"<td>{escape(company.filing_regime)}</td>"
+            f'<td><span class="k-pill k-pill-{company.coverage_tone}">{escape(company.coverage_status)}</span></td>'
+            f'<td><a class="k-link" href="#{escape(anchor, quote=True)}">{company.captured_native_count}/{company.expected_native_count} native · {company.companyfacts_snapshot_count} aggregate</a></td>'
+            f"<td>{escape(company.notes)}</td></tr>"
+        )
+        document_rows = "".join(
+            "<tr>"
+            f'<th scope="row">{escape(doc.family)}</th><td>{escape(doc.period)}</td>'
+            f"<td>{escape(doc.state.replace('_', ' '))}</td>"
+            f"<td>{escape((doc.captured_at or 'unavailable') + (f' · {doc.capture_age_seconds / 3600:.1f}h old' if doc.capture_age_seconds is not None else ' · age unavailable'))}</td>"
+            f"<td>{'verified' if doc.exact_bytes else 'missing'} / {'available' if doc.locator_available else 'missing'}"
+            + (
+                f' · <a class="k-link" href="{escape(doc.locator_url, quote=True)}" target="_blank" rel="noopener noreferrer">SEC source</a>'
+                if doc.locator_url
+                else ""
+            )
+            + "</td>"
+            f"<td>{'amendment' if doc.amendment else 'original'}{' · supersedes prior version' if doc.supersedes else ''}</td>"
+            f"<td>{escape(doc.record_id)}<br>{escape(doc.document_version_id or 'no captured version')}</td></tr>"
+            for doc in company.documents
+        )
+        evidence_table = (
+            (
+                '<div class="policy-scroll" tabindex="0" role="region" aria-label="SEC source evidence table">'
+                f'<table class="p-table" aria-label="{escape(company.ticker)} SEC source evidence">'
+                '<thead><tr><th scope="col">Family / governed source</th><th scope="col">Period</th><th scope="col">Coverage</th><th scope="col">Captured at</th><th scope="col">Exact bytes / locator</th><th scope="col">Revision</th><th scope="col">Persisted record</th></tr></thead>'
+                f"<tbody>{document_rows}</tbody></table></div>"
+            )
+            if document_rows
+            else '<p class="k-card-meta">No observed source records. Required coverage is unknown until a governed inventory is available.</p>'
+        )
+        execution_rows: list[str] = []
+        for execution in company.executions:
+            receipt = execution.receipt
+            label = receipt.state
+            if receipt.state in {"requested", "running"}:
+                label = "Running / completion unconfirmed"
+            if not execution.population_matches:
+                label = "Historical population · " + label
+            if not execution.timestamp_valid:
+                label = "Unavailable · invalid execution time"
+            result = receipt.result
+            counts = (
+                f"Batch totals: {result.considered} considered · {result.captured} captured · {result.deferred} deferred · {result.failed} failed"
+                if result is not None
+                else "No terminal result; running status does not establish process liveness."
+            )
+            execution_rows.append(
+                f'<li class="ops-attention-ref">{escape(receipt.scope.kind.replace("_", " "))}: {escape(label)} · {escape(receipt.recorded_at.isoformat())}<br>{escape(counts)}<br>Attempt {escape(receipt.attempt_id)}</li>'
+            )
+        execution_html = (
+            f'<details class="ops-task-card k-grid-single"><summary class="k-card-row-title">Actual SEC execution · {escape(company.execution_state.replace("_", " "))}</summary><ul>{"".join(execution_rows)}</ul></details>'
+            if execution_rows
+            else f'<p class="k-card-meta">Actual SEC execution: {escape(company.execution_state.replace("_", " "))}. Historical queue state is not inferred.</p>'
+        )
+        details.append(
+            f'<details class="k-well ops-task-card k-grid-single" id="{escape(anchor, quote=True)}"><summary class="k-card-row-title">{escape(company.ticker)} — source evidence and periods</summary>'
+            f'<p class="k-card-meta ops-attention-ref">Inventory: {escape(company.inventory_id or "unavailable")} · {escape(company.inventory_state)} · observed {escape(company.inventory_observed_at or "unknown")}</p>'
+            + evidence_table
+            + execution_html
+            + "</details>"
+        )
+    return (
+        '<div class="policy-stack">'
+        '<p class="k-card-meta">Authorization is policy. Coverage below comes from sealed inventories, immutable captures and locators. CompanyFacts is one aggregate snapshot, not one document per accession. Deferred states require recorded execution or transient-fetch evidence; missing capture alone never establishes queued work.</p>'
+        + cards
+        + '<div class="policy-scroll" tabindex="0" role="region" aria-label="SEC coverage table"><table class="p-table" aria-label="SEC Collection Priority and Company Coverage">'
+        '<thead><tr><th scope="col">Company</th><th scope="col">Role / acquisition</th><th scope="col">Regime</th><th scope="col">Observed coverage</th><th scope="col">Capture proof</th><th scope="col">Missing evidence / limits</th></tr></thead>'
+        + "<tbody>"
+        + "".join(rows)
+        + "</tbody></table></div>"
+        + "".join(details)
+        + "</div>"
     )
-    table = (
-        '<div class="policy-scroll">'
-        '<table class="p-table" aria-label="SEC Collection Priority and Company Coverage">'
-        "<thead><tr><th>Company</th><th>Priority role</th><th>Regime</th><th>SEC status</th><th>Policy notes</th></tr></thead>"
-        f"<tbody>{rows}</tbody></table></div>"
+
+
+def _safe_fmp_code(value: str | None) -> str:
+    codes = (
+        {code.value for code in OutcomeCode}
+        | {code.value for code in ContainmentReason}
+        | {mode.value.lower() for mode in ExecutionMode}
+        | {
+            "auth_missing",
+            "auth_invalid",
+            "lease_expired",
+            "probe_window_reached",
+            "rate_limit_probe",
+            "circuit_half_open",
+            "circuit_opened",
+            "provider_success",
+            "circuit_contained",
+            "work_leased",
+            "outcome_recorded",
+        }
+    )
+    return value if value in codes else "unclassified"
+
+
+def _render_fmp_receipt(details: FmpOperationalDetails) -> str:
+    receipt = details.latest_receipt
+    if receipt is None:
+        return f'<p class="k-card-meta" role="status">Terminal run receipt: {escape(details.receipt_state.replace("_", " "))}. Events and attempts do not establish completed recovery.</p>'
+    records = "".join(
+        f'<li class="ops-attention-ref">{escape(identifier)}</li>'
+        for identifier in (*receipt.attempt_ids, *receipt.reused_attempt_ids)
     )
     return (
-        '<div class="k-well">'
-        '<div class="k-card-row-title">SEC collection priority &amp; coverage gaps</div>'
-        '<p class="k-card-meta">Priority-governed SEC CompanyFacts and native filing collection status across tracked companies.</p>'
-        f"{cards}{table}</div>"
+        f'<details class="k-well" id="fmp-receipt-{escape(receipt.receipt_id)}"><summary class="k-card-row-title">Latest completed recovery · {escape(details.receipt_state.replace("_", " "))}</summary>'
+        f'<p class="k-card-meta ops-attention-ref">Receipt {escape(receipt.receipt_id)} · recorded {escape(receipt.recorded_at.isoformat())}</p>'
+        f"<p>{receipt.fresh_count} fresh · {receipt.corpus_count} corpus · {receipt.failed_count} failed · {receipt.unattempted_count} unattempted. Circuit revision {receipt.circuit_revision}.</p>"
+        f"<details><summary>Persisted attempt records ({len(receipt.attempt_ids)}) and reused proof ({len(receipt.reused_attempt_ids)})</summary><ul>{records}</ul></details></details>"
     )
 
 
@@ -728,9 +700,31 @@ def _render_fmp_state(state: FmpOperationalReadModel) -> str:
         "unavailable": "Unavailable",
     }
     tone = "k-pill-ok" if state.provider_availability == "available" else "k-pill-warn"
+    details = state.details
+    distribution = (
+        " · ".join(
+            f"{item.role}: {item.count} (priority {item.priority})"
+            for item in details.role_priority_counts
+        )
+        or "none recorded"
+    )
+    oldest = (
+        f"{details.oldest_backlog_age_seconds / 3600:.1f} hours"
+        if details.oldest_backlog_age_seconds is not None
+        else "unavailable"
+    )
+    backlog_records = "".join(
+        f'<li class="ops-attention-ref">{escape(identifier)}</li>'
+        for identifier in details.backlog_record_ids
+    )
+    backlog_proof = (
+        f'<details class="k-well"><summary class="k-card-row-title">Persisted backlog records ({details.backlog_record_count}; first {len(details.backlog_record_ids)} shown)</summary><ul>{backlog_records}</ul></details>'
+        if details.backlog_record_ids
+        else ""
+    )
     backlog = str(state.backlog_count or 0)
     next_probe = state.next_probe_at or "not scheduled"
-    reason = state.last_reason_code or "none"
+    reason = _safe_fmp_code(state.last_reason_code) if state.last_reason_code else "none"
     corpus_last_seen = state.last_corpus_at or "none recorded"
     provider_last_success = state.last_success_at or "none recorded"
     provider_success_evidence = {
@@ -747,15 +741,15 @@ def _render_fmp_state(state: FmpOperationalReadModel) -> str:
         event_rows = "".join(
             "<tr>"
             f'<td><span class="k-chip k-chip-mono">{escape(ev.recorded_at[:19])}</span></td>'
-            f'<td><span class="k-chip">{escape(ev.event_type)}</span></td>'
-            f'<td><span class="k-card-meta">{escape(ev.reason_code or "—")}</span></td>'
-            f'<td><span class="k-card-meta">{escape(str(ev.state_from or "—"))} → {escape(str(ev.state_to or "—"))}</span></td>'
+            f'<td><span class="k-chip">{escape(_safe_fmp_code(ev.event_type))}</span></td>'
+            f'<td><span class="k-card-meta">{escape(_safe_fmp_code(ev.reason_code)) if ev.reason_code else "—"}</span></td>'
+            f'<td><span class="k-card-meta">{escape(ev.state_from if ev.state_from in {"CLOSED", "OPEN", "HALF_OPEN"} else "—")} → {escape(ev.state_to if ev.state_to in {"CLOSED", "OPEN", "HALF_OPEN"} else "—")}</span></td>'
             "</tr>"
             for ev in state.recent_events
         )
         events_html = (
             '<div class="policy-events">'
-            '<div class="k-label">Recent recovery receipts &amp; transitions</div>'
+            '<div class="k-label">Recent recovery events &amp; transitions</div>'
             '<div class="policy-scroll"><table class="p-table" aria-label="Recent FMP recovery events">'
             "<thead><tr><th>Timestamp</th><th>Event type</th><th>Reason</th><th>State transition</th></tr></thead>"
             f"<tbody>{event_rows}</tbody></table></div></div>"
@@ -773,6 +767,11 @@ def _render_fmp_state(state: FmpOperationalReadModel) -> str:
         f'<div><dt class="k-label">Refresh backlog</dt><dd>{escape(backlog)}</dd></div>'
         f'<div><dt class="k-label">Pending / leased</dt><dd>{state.pending_count or 0} / {state.leased_count or 0}</dd></div>'
         f'<div><dt class="k-label">Satisfied / terminal</dt><dd>{state.satisfied_count or 0} / {state.terminal_count or 0}</dd></div>'
+        f'<div><dt class="k-label">Circuit opened</dt><dd>{escape(details.opened_at or "none recorded")}</dd></div>'
+        f'<div><dt class="k-label">Last circuit transition</dt><dd>{escape(details.last_transition_at or "none recorded")}</dd></div>'
+        f'<div><dt class="k-label">Deferred until eligible</dt><dd>{details.deferred_count if details.deferred_count is not None else "unavailable"}</dd></div>'
+        f'<div><dt class="k-label">Oldest backlog age</dt><dd>{escape(oldest)}</dd></div>'
+        f'<div><dt class="k-label">Role / priority distribution</dt><dd>{escape(distribution)}</dd></div>'
         f'<div><dt class="k-label">Next recovery probe</dt><dd>{escape(next_probe)}</dd></div>'
         f'<div><dt class="k-label">Last reason code</dt><dd>{escape(reason)}</dd></div>'
         f'<div><dt class="k-label">Last successful request</dt><dd>{escape(provider_last_success)}</dd></div>'
@@ -785,6 +784,8 @@ def _render_fmp_state(state: FmpOperationalReadModel) -> str:
             if queue
             else ""
         )
+        + backlog_proof
+        + _render_fmp_receipt(details)
         + events_html
         + "</div>"
     )

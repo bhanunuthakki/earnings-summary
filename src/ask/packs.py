@@ -63,6 +63,7 @@ from integrations.portfolio_tracker_client import (
     fetch_live_portfolio,
     fetch_portfolio_analytics,
 )
+from macro_store import fetch_sensitivities
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -812,26 +813,40 @@ def _macro_item(spec: PackSpec, db_path: Path, focus: list[str]) -> dict[str, ob
             + ", ".join(f"{r['series_id']}={_f(r['value']):g} ({_day(r['d'])})" for r in levels)
         )
 
-    sens = _rows(
-        db_path,
-        "SELECT ticker, series_id, beta, r_squared FROM macro_sensitivities "
-        "ORDER BY ticker, series_id",
-    )
-    strong = [r for r in sens if (_f(r["r_squared"]) or 0.0) >= _MACRO_R2_FLOOR]
-    if focus:
-        strong = [r for r in strong if str(r["ticker"]).upper() in focus] or strong
+    names = focus or [
+        str(r["ticker"])
+        for r in _rows(
+            db_path,
+            "SELECT DISTINCT ticker FROM macro_sensitivities",
+        )
+    ]
+    if not focus:
+        names = sorted(
+            set(names)
+            | {
+                str(r["ticker"])
+                for r in _rows(db_path, "SELECT DISTINCT ticker FROM macro_sensitivity_estimates")
+            }
+        )
+    sens = [s for ticker in names for s in fetch_sensitivities(ticker=ticker, db_path=db_path)]
+    strong = [s for s in sens if (s.r_squared or 0.0) >= _MACRO_R2_FLOOR]
     if strong:
         lines.append(
             "betas (r²≥0.10): "
             + ", ".join(
-                f"{r['ticker']}~{r['series_id']}: β={_f(r['beta']):.2f} (r²={_f(r['r_squared']):.2f})"
-                for r in strong[:12]
+                f"{s.ticker}~{s.series_id}: β={s.beta:.2f} (r²={s.r_squared:.2f})"
+                + (
+                    f" log return per +100 bps; {s.metric_version}; source {s.source_as_of}; input {s.input_sha}"
+                    if s.shock_unit == "percentage_point"
+                    else " log return per log change"
+                )
+                for s in strong[:12]
+                if s.r_squared is not None
             )
         )
-    elif sens:
+    else:
         lines.append(
-            f"betas: {len(sens)} computed but none clears the r²≥{_MACRO_R2_FLOOR:.2f} fit "
-            "floor — treat statistical macro exposure as UNKNOWN, not zero"
+            "macro sensitivity unavailable: no admitted fit; legacy or stale rates are quarantined, not zero"
         )
 
     stances = _rows(

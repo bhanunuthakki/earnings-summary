@@ -512,6 +512,8 @@ def test_derivation_edges_seal_exact_inputs_and_freeze_set(
     _insert_derived(conn, "output-1", "cell-derivation")
     conn.execute(
         "INSERT INTO fact_derivation_input_edges_v2 "
+        "(edge_id,idempotency_key,output_observation_id,input_observation_id,"
+        "input_resolution_revision_id,input_role,input_ordinal,recorded_at) "
         "VALUES ('edge-1','edge-1','output-1','input-1',NULL,'numerator',0,?)",
         (T0,),
     )
@@ -531,6 +533,8 @@ def test_derivation_edges_seal_exact_inputs_and_freeze_set(
     with pytest.raises(sqlite3.IntegrityError, match="sealed"):
         conn.execute(
             "INSERT INTO fact_derivation_input_edges_v2 "
+            "(edge_id,idempotency_key,output_observation_id,input_observation_id,"
+            "input_resolution_revision_id,input_role,input_ordinal,recorded_at) "
             "VALUES ('edge-2','edge-2','output-1','input-2',NULL,"
             "'denominator',1,?)",
             (T0,),
@@ -626,7 +630,9 @@ def test_derived_candidates_require_a_seal(conn: sqlite3.Connection) -> None:
             selected="derived-candidate",
         )
     conn.execute(
-        "INSERT INTO fact_derivation_input_edges_v2 VALUES "
+        "INSERT INTO fact_derivation_input_edges_v2 "
+        "(edge_id,idempotency_key,output_observation_id,input_observation_id,"
+        "input_resolution_revision_id,input_role,input_ordinal,recorded_at) VALUES "
         "('derived-edge','derived-edge','derived-candidate','derived-input',"
         "NULL,'input',0,?)",
         (T0,),

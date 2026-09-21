@@ -117,11 +117,31 @@ in the population with an exact blocking disposition rather than disappearing th
 view. Unavailable roster or population schema remains distinct from an observed empty population.
 An unparseable fact period is retained as an exact blocking disposition rather than omitted or inferred.
 
+A manifest-matched, quiesced snapshot uses the central immutable reader role so the
+verification read cannot create WAL sidecars. The existing sidecar and identity
+checks remain mandatory before and after reading. `execution/audit_kpi_revision_reader.py`
+compares the existing sourced time-series loader with the revision-aware projection
+for one explicit definition and cutoff. It retains source locators, observation and
+resolution revisions, duplicate selections and semantic breaks. Its receipt remains
+HOLD and does not change the default reader or activate a cutover.
+
 This capability has no schedule, service, retry control, database write, or Operations-workspace
 button. Its current supported state is `hold`: deterministic resolver readiness is visible in the
 receipt, while reader activation requires separately approved portfolio evidence and an explicit owner
 decision. The CLI is the primary operator surface for this rehearsal; no current-health projection is
 claimed from an old receipt.
+
+### Captured IR event ingestion
+
+The captured-feed CLI is an internal, explicit offline-produce/apply operation. It adds
+no registered Scheduler task, managed service, network fetcher or operator action.
+The Operations registry therefore has no new item to project. Existing Scheduler
+ownership and lock receipts remain authoritative if a job is later registered.
+Forward calendar coverage is deliberately surfaced beside its retained events using
+`ir_event_runs`, source observation time, and the active tracked roster; it is not a
+claim about provider health. Missing, stale and failed receipts cannot render a
+verified empty calendar. `tests/test_ir_events_ingestion.py` and
+`tests/test_ir_events_cli_unavailable.py` cover these boundaries and disabled apply.
 
 ### Legacy evidence backfill and managed IR byte admission
 
@@ -220,3 +240,249 @@ Neither command adds a scheduled job, managed service, current-health claim, or 
 button. Their primary operator surface is the CLI because the re-audit requires a deliberate bounded
 scope and the audit can be expensive over large retained artifacts. Any future UI control requires a
 separate activation review under the Operator-action boundary.
+### WIX history correction
+
+`execution/repair_wix_history.py --db <explicit-target> prepare` produces a private,
+immutable review plan from complete current tracker holdings and transaction pages,
+the exact owner decision, and retained before-images. It never writes the database.
+The plan freezes any existing linked owner checkpoint and expires after one hour or
+at the UTC date boundary. `apply --plan <file> --approved-sha256 <fingerprint>` uses
+the exact database-adjacent writer lock, revalidates sources and target identity,
+and atomically corrects the lifecycle while superseding the invalid generated note.
+Migration 0044 retains a duplicate lifecycle identity through an immutable supersession
+link; canonical active readers exclude it, while direct historical lookup retains it.
+Original note text and all affected before-images remain in correction provenance.
+The replacement observation is advisor-authored and explicitly owner-review-pending.
+No AVDV proceeds attribution, investment grade, or owner lesson is inferred from trades.
+
+This is a manual recovery command, not a scheduler or dashboard action. Production
+use requires the exact reviewed target/plan and the canonical host's verified backup
+and deployment procedure. Failed compare-and-swap, stale evidence, ambiguous new
+purchases, invalid account coverage, or transaction failure leave records unchanged.
+The CLI emits a typed failure category without source payloads. Keep its private
+plan outside public artifacts; prepare again after changed evidence or migration.
+
+### Factor and rate calculation repair
+
+The existing business-factor refresh resolves an explicit/configured database,
+uses materialized holdings rather than the tracked roster, and shares the target
+writer lock. Factor admission binds current thesis, business mix and taxonomy
+hashes; holdings timestamps and the existing 48-hour cache policy remain operative.
+`execution/compute_macro_sensitivities.py` writes immutable, input-bound estimates
+under migration 0041. Legacy unversioned rate rows remain retained but are excluded
+from current rate conclusions; old risk snapshots do not establish an admitted beta.
+Rate shocks in basis points are converted to percentage-point changes before using
+a return-per-percentage-point coefficient. Canonical-host migration, recomputation
+and fresh reader verification remain operational steps; local fixtures do not prove
+that live legacy values have been replaced. No new scheduled window is added.
+
+
+### Collection evidence read surface
+
+Settings distinguishes authorization from observed SEC coverage. Portfolio, evaluation,
+and watchlist retain automatic source authorization. A sealed SEC inventory defines the
+listed native-filing population; immutable document/source identities, exact-byte location
+receipts and successful extraction locators prove individual captures. CompanyFacts is one
+aggregate snapshot. Missing, unavailable, unsealed and partial evidence remain explicit.
+A covered historical population has **unknown current freshness**: capture age is displayed,
+with no invented universal SEC expiry or inference from an Operations heartbeat.
+
+FMP timing/backlog detail derives from the recovery ledger. Migration
+`0045_fmp_recovery_receipts` adds an immutable final run receipt, separate from events and
+attempts, with expected work, attempted/reused proof, unresolved work and typed outcome.
+The existing 24-hour FMP freshness policy governs receipt age. An interrupted run has no
+terminal receipt until finalization; reusing a finalized run ID for new execution is rejected.
+
+Operations headline attention includes these same derived FMP/SEC evidence gaps and links
+to Settings. Covered historical populations with unknown freshness are informational gaps,
+never a green current-coverage claim. No new collection action, scheduler, refresh control,
+network permission or production activation is introduced by this read surface.
+
+### Qualitative common-drawdown inspection
+
+`execution/common_drawdown.py` reads an explicit existing database and emits
+current or paired scenario evidence. It cannot apply trades or modify holdings.
+Factor admission, constituent-weight coverage, source dates and unknown ETF
+publication currency remain visible; missing after-state coverage cannot be
+presented as an improvement. The WIX/AVDV target band remains an unverified
+scenario input. Synthetic replay lives in `tests/test_qualitative_stress.py`.
+
+### News collection failure state
+
+The existing Yahoo journalism adapter remains the default free general-news leg;
+paid web discovery remains opt-in. A Yahoo transport or response-container failure
+now yields partial completion (exit 2), while valid rows from other feeds remain
+persisted. Any persistence failure yields exit 1. A completed attempt does not
+certify source completeness. Rejected provider diagnostics use the canonical
+structured redactor before storage; article identity retains nonsecret URL query
+parameters. No new source or scheduled action was added.
+
+### Captured foreign-source normalization
+
+`execution/normalize_foreign_filings.py` now requires an explicit database,
+frozen exact-document input manifest and new immutable receipt path. Dry-run is
+read-only. Apply holds the existing target/package locks and publishes only
+selected captured-source facts through the shared source repository. HOLD means
+prerequisites failed; PARTIAL includes any committed source progress but does not
+claim canonical semantic binding or decision-grade consumer readiness. Native
+packages still require authoritative sealed inventory and the qualified offline
+processor. This command performs no source acquisition, scheduler activation or
+whole-corpus canonical population.
+
+Before source publication, apply establishes the selected documents' recorded-subject
+bindings from the existing canonical issuer registry. Unknown or conflicting identities
+stop the run. This prerequisite is a separately committed, idempotent stage; its actual
+progress remains in the receipt if a later source publication fails. It grants no metric
+semantic admission.
+
+### Source measurements and foreign-source comparison
+
+The shared HTTP clients append actual attempt measurements with their source-call rows
+under migration `0047_source_regime_measurements`. Missing regime attribution, costs,
+record counts and operator time remain unknown. Dashboard logical-call totals exclude
+the additional physical-attempt rows, avoiding double counting. Persistence failures
+remain visible through the existing HTTP event.
+
+`execution/attribute_source_cost.py` verifies an explicit retained canary selection and
+reports measured and missing evidence. `execution/backfill_foreign_oracle.py` compares
+explicit sealed source observations with independent counterparts through the shared
+fact reader and, when supplied, a verified ontology snapshot. Empty inputs, missing
+counterparts, self-comparisons and unknown completeness cannot pass. Both are manual
+diagnostics; they introduce no schedule, acquisition, dashboard action or activation.
+
+
+### Actual SEC execution receipts
+
+Migration `0046_sec_execution_receipts` records actual apply requests, running attempts,
+and immutable terminal results from the native capture and inventory synchronization
+writers. A retry is a new attempt of the same scope-bound logical request; replaying an
+identical terminal result preserves its original timestamp. An interrupted attempt remains
+completion unconfirmed. A completed batch never proves current issuer coverage or process
+liveness. Dry runs and pure SEC plan/admission functions remain database-write-free; no
+historical scheduling state is backfilled.
+
+Settings uses the existing canonical transient-fetch assessment reasons to distinguish
+actual deferred native work from other failures. Execution details bind selected documents
+and snapshots; mismatches with the current population are explicitly historical. Missing
+or invalid terminal evidence contributes to Operations attention. Exact captures and
+source inventory remain the coverage authorities, with no universal SEC freshness TTL.
+
+### Sealed canonical growth rendering
+
+The existing internal `execution/render_three_regimes.py` action accepts
+`--input-manifest`, `--manifest-sha256`, and `--output-dir` for an explicit closed
+snapshot and hash-bound source inventory. It reconstructs the migrated canonical
+growth projection for the fixed cohort under all three source regimes and writes
+immutable, provenance-bearing artifacts. Excluded canonical winners remain
+unavailable; this action does not choose an alternate source. Full acceptance stays
+`HOLD` with a nonzero exit while report/DCF/valuation migration, acquisition
+completeness, regime-specific resolution, and OS isolation evidence are missing.
+This extends the internal offline action only: no Operations control, schedule,
+production write, or managed activation is added.
+
+### Grading database authority
+
+`execution/grade_bear_cases.py` now accepts `--db` for an explicit existing
+fixture or approved retained database; omission resolves the configured database
+through `db_paths.require_db_path`. A checkout-default or missing database fails
+before materialization or grading. The same path is passed to prediction stores,
+corpus reads and calibration, and scoped through internal LLM bookkeeping with
+restoration on failure. No scheduler, Operations control or live grading is
+activated by this change. The targeted authority tests exercise explicit fixture
+selection, refusal of checkout state, and context restoration; they do not certify
+the remaining legacy financial corpus or qualitative grading accuracy.
+
+`execution/grade_decisions.py` likewise requires the configured existing database,
+with `--db-path` / `--db` for an explicit override. It preserves the price-only
+verdict rules while admitting only same-instrument, quote-currency-bound,
+split-and-dividend-adjusted observations within the shared market-price age
+limit. Missing or contradictory price evidence leaves the decision pending and
+does not emit calibration. Successful outcomes retain a versioned input manifest
+in their notes; source capture freshness remains explicitly unverified. This
+changes the existing manual grader only, without activating a run or schedule.
+
+### README generation contract evidence
+
+The existing README update action retains a compact attestation for each generator
+and judge call, binding its registered purpose, prompt and schema versions, source
+hashes and observed provider attempt. The facade is limited to the existing
+`meta_eval` scope; prompt drift fails closed and missing usage, cost or effective
+prompt verification remains unknown. Setup, schema and budget failures cannot
+enter provider fallback. This changes evidence retained by the existing action;
+it adds no Operations control, schedule, provider activation or live execution.
+Other LLM consumers remain outside this migrated tranche.
+
+`execution/grade_predictions.py` uses the same explicit/configured database
+boundary. It grades only uniquely identified, admitted revision-aware KPI facts
+known at the batch cutoff; ambiguous names, unsupported concept bindings and
+unit mismatches remain pending. Retained notes bind the source and target inputs.
+A short conditional publication checks the complete loaded prediction, preserving
+newer owner edits and existing outcomes. Future-made predictions are excluded;
+extraction calibration retains its existing malformed-input formula and excludes
+failed outcome writes. This extends evidence and controls for the existing manual
+action only; no grading run, service or schedule is activated.
+
+### Canonical report and valuation readers
+
+The existing report financial tables read admitted canonical observations at one
+knowledge cutoff, retain their source manifest, and show unavailable cells when
+fiscal identity, units or comparability are unproved. Current P/E and P/FCF use
+comparable annual windows of reported facts plus separately captured market
+capitalization. Annual consensus estimates and historical provider ratios retain
+distinct bases; unlike bases cannot establish a valuation comparison band.
+These read surfaces add no operator action, schedule, acquisition permission or
+live cutover. Source-population completeness and activation remain separate gates;
+positive synthetic reader tests do not certify decision-grade coverage.
+
+### Canonical DCF statement inputs
+
+`execution/build_redesigned_dcf.py` now reads `src/sources/dcf_statements.py`,
+which resolves exact reported statement observations through the existing canonical
+fact and provenance readers at one cutoff. Missing, semantically changed, partial,
+or non-primary inputs fail closed rather than falling back to provider cache data.
+This changes the inputs to the existing explicit DCF build only. It adds no
+operator action, scheduler entry, managed service, source acquisition permission,
+or production activation; the Operations registry and visible workspace contracts
+remain unchanged. `tests/test_dcf_canonical_statements.py` and
+`tests/test_redesigned_dcf_smoke.py` exercise the admitted and rejected boundaries.
+
+### Canonical evaluation snapshot
+
+The existing evaluation report snapshot now projects admitted financial cells and
+captured market context at one explicit cutoff. It retains exact cell lineage for
+annual, TTM, margin, and CAGR displays; unavailable, stale, malformed, mixed-
+currency, or semantically incompatible inputs remain unavailable. This is a
+read-only report projection. It adds no operator action, scheduler, managed
+service, source acquisition permission, or production activation; the Operations
+registry and its visible workspace contracts remain unchanged.
+
+### Canonical soft-rule financial reader
+
+Soft-rule evaluation now reads reported financial quarters through
+`src/sources/canonical_financial_series.py` at one explicit cutoff. It retains admitted
+observation and definition lineage; unavailable, stale, semantically changed,
+mixed-currency, or incomplete series remain unresolved. This only changes the
+existing local evaluator's read path. It adds no operator action, scheduler,
+managed service, source acquisition permission, or production activation; the
+Operations registry and visible workspace contracts remain unchanged.
+
+### Canonical cockpit fundamentals
+
+The existing cockpit fundamentals cache now reads admitted reported financial
+series at one explicit cutoff and retains source manifests for its displayed
+revenue growth and free-cash-flow margin. Rejected, malformed, incomplete, or
+incompatible series remain unavailable; the existing refresh command and cache
+contract are retained. This adds no operator action, scheduler, managed
+service, source acquisition permission, or production activation; the
+Operations registry and visible workspace contracts remain unchanged.
+
+### Canonical revenue year-over-year computation
+
+The existing metrics engine can now persist an admitted canonical revenue
+year-over-year derivation with its output observation and sealed input lineage.
+It remains part of the existing local computation path: missing, ambiguous,
+incomparable, incomplete, or cutoff-ineligible quarterly inputs produce an
+unavailable computation rather than a derived value. This adds no operator
+action, scheduler, managed service, source acquisition permission, or
+production activation; the Operations registry and visible workspace contracts
+remain unchanged.

@@ -13,31 +13,17 @@ No network: yfinance payloads are fixtures.
 
 from __future__ import annotations
 
-import importlib.util
-import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Never
 
 import pytest
 
+from execution import fetch_yf_news as yfnews
+from news.store import NewsFeedUnavailableError, NewsRow
 from pipeline.row_validation import RowValidationDriftError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-
-
-def _load() -> object:
-    spec = importlib.util.spec_from_file_location(
-        "fetch_yf_news_under_test", PROJECT_ROOT / "execution" / "fetch_yf_news.py"
-    )
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["fetch_yf_news_under_test"] = mod
-    spec.loader.exec_module(mod)
-    return mod
-
-
-yfnews = _load()
 
 
 def _recent_iso(hours: int = 2) -> str:
@@ -116,28 +102,24 @@ def test_items_outside_the_window_are_dropped() -> None:
 
 
 def test_one_bad_item_does_not_lose_the_others() -> None:
-    items = [_modern_item("good one"), {"content": {}}, _modern_item("second good")]
+    items: list[object] = [_modern_item("good one"), {"content": {}}, _modern_item("second good")]
     rows = yfnews.rows_for_ticker("NU", items, days=7)
     assert {r.headline for r in rows} == {"good one", "second good"}
 
 
-def test_fetch_degrades_to_empty_on_transport_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """yfinance is unofficial — this feed must never take the pipeline down."""
-    import builtins
+def test_fetch_distinguishes_transport_failure_from_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    import yfinance as yf
 
-    real_import = builtins.__import__
+    def failing_ticker(_ticker: str) -> Never:
+        raise RuntimeError("https://provider.invalid?apikey=private-fixture-key")
 
-    def boom(name: str, *a: object, **kw: object) -> object:
-        if name == "yfinance":
-            raise RuntimeError("yfinance exploded")
-        return real_import(name, *a, **kw)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(builtins, "__import__", boom)
-    assert yfnews.fetch_news_for_ticker("NU") == []
+    monkeypatch.setattr(yf, "Ticker", failing_ticker)
+    with pytest.raises(NewsFeedUnavailableError):
+        yfnews.fetch_news_for_ticker("NU")
 
 
 def test_fetch_many_survives_a_failing_ticker() -> None:
-    def flaky(ticker: str, *, days: int) -> list[object]:
+    def flaky(ticker: str, *, days: int) -> list[NewsRow]:
         if ticker == "BAD":
             raise RuntimeError("nope")
         return yfnews.rows_for_ticker(ticker, [_modern_item(f"{ticker} news")], days=days)

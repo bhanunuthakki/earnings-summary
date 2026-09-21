@@ -63,14 +63,14 @@ from pipeline.research_cockpit import (
 )
 from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
 from pipeline.source_viewers import (
-    _STATEMENT_JSON_DOC_TYPES,  # pyright: ignore[reportPrivateUsage]
+    STATEMENT_JSON_DOC_TYPES,
     load_document,
     render_form10k_page,
     render_pdf_page_view,
     render_statement_json_page,
     render_transcript_page,
 )
-from pipeline.source_viewers import _DocRow as _SourceDocRow  # pyright: ignore[reportPrivateUsage]
+from pipeline.source_viewers import SourceDocRow as _SourceDocRow
 from pipeline.you_said import render_you_said_strip
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_reltime
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -208,7 +208,7 @@ def render_new_docs_peek(
     return f'<div class="cc-peek-docs">{body}</div>{foot}<style>{_DOCS_CSS}</style>'
 
 
-class _DocRow(NamedTuple):
+class SourceDocRow(NamedTuple):
     doc_id: int
     kind: str  # humanized doc_type
     name: str  # file basename (or source host) — the muted secondary label
@@ -221,7 +221,7 @@ def _new_doc_rows(
     limit: int,
     *,
     conn: sqlite3.Connection | None = None,
-) -> list[_DocRow]:
+) -> list[SourceDocRow]:
     """Documents whose ``fetched_at`` is after the ticker's ``last_built_at`` —
     the same "new since the build" window :func:`_new_doc_counts` counts. The
     ``ticker = ?`` predicate rides ``ix_documents_ticker_doctype_period``; the
@@ -252,11 +252,11 @@ def _new_doc_rows(
     finally:
         if own:
             conn.close()
-    out: list[_DocRow] = []
+    out: list[SourceDocRow] = []
     for doc_id, doc_type, file_path, source_url, fetched_at in fetched:
         kind = str(doc_type or "").replace("_", " ").strip().title() or "Document"
         name = Path(str(file_path)).name if file_path else _host(str(source_url or ""))
-        out.append(_DocRow(int(doc_id), kind, name, str(fetched_at) if fetched_at else None))
+        out.append(SourceDocRow(int(doc_id), kind, name, str(fetched_at) if fetched_at else None))
     return out
 
 
@@ -266,7 +266,7 @@ def _host(url: str) -> str:
     return rest.split("/", 1)[0] if rest else ""
 
 
-def _doc_row_html(row: _DocRow) -> str:
+def _doc_row_html(row: SourceDocRow) -> str:
     name = f'<span class="cc-doc-name" title="{escape(row.name, quote=True)}">{escape(row.name)}</span>'
     when = stamp_html(row.fetched_at, css="cc-doc-when")
     return (
@@ -2029,7 +2029,7 @@ def _render_fmp_json_table_peek(
     if doc.doc_type in {"fmp_10k_json", "fmp_10q_json"}:
         section = (cell.section if cell is not None else None) or locator.section
         return render_form10k_page(repo_root, db_path, doc.id, section, fragment=True)
-    if doc.doc_type in _STATEMENT_JSON_DOC_TYPES:
+    if doc.doc_type in STATEMENT_JSON_DOC_TYPES:
         return render_statement_json_page(
             repo_root,
             db_path,
@@ -2869,10 +2869,10 @@ def _readout_kpi_moves(conn: sqlite3.Connection, t: str) -> str:
     chips render (one reader, so the peek can't disagree with the cockpit)."""
     try:
         from pipeline.research_cockpit import (
-            _tier1_kpi_deltas,  # pyright: ignore[reportPrivateUsage]
+            tier1_kpi_deltas,
         )
 
-        deltas = _tier1_kpi_deltas(conn, {t}, as_of=datetime.now(UTC).date()).get(t, [])
+        deltas = tier1_kpi_deltas(conn, {t}, as_of=datetime.now(UTC).date()).get(t, [])
     except Exception:
         return ""
     if not deltas:

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
-from collections.abc import Sequence
-from datetime import datetime, timedelta
-from typing import Any
+from collections.abc import Callable, Generator, Sequence
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -18,6 +20,24 @@ from compute.soft_rule_evaluator import (
     evaluate_soft_rules,
     load_soft_rules,
 )
+from provenance.fact_plane_v2 import (
+    CanonicalJSONObject,
+    ExtractionRunCompletenessSealV2,
+    FactCellV2,
+)
+from provenance.source_fact_repository import (
+    ReportedSourceFact,
+    SourceFactPublication,
+    SourceFactRepository,
+)
+from sources.canonical_financial_series import (
+    CanonicalFinancialSeries,
+    CanonicalFinancialSeriesReader,
+    FinancialCadence,
+    SeriesContinuity,
+)
+from tests import test_source_fact_repository as foundation
+from tests.test_report_canonical_financials import seed_table
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
@@ -72,11 +92,24 @@ def _create_schema(conn: sqlite3.Connection) -> None:
 
 
 @pytest.fixture
+def canonical_conn(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> Generator[sqlite3.Connection, None, None]:
+    factory = cast(
+        Callable[..., Generator[sqlite3.Connection, None, None]],
+        getattr(foundation.conn, "__wrapped__"),
+    )
+    for database in factory(tmp_path, migrated_db):
+        database.row_factory = sqlite3.Row
+        yield database
+
+
+@pytest.fixture
 def conn() -> sqlite3.Connection:
-    c = sqlite3.connect(":memory:")
-    c.row_factory = sqlite3.Row
-    _create_schema(c)
-    return c
+    database = sqlite3.connect(":memory:")
+    database.row_factory = sqlite3.Row
+    _create_schema(database)
+    return database
 
 
 def _quarter_end(idx: int, *, start: str = "2022-03-31") -> str:
@@ -97,14 +130,146 @@ def _seed_financial(
     *,
     start: str = "2022-03-31",
 ) -> None:
-    for i, v in enumerate(values):
-        quarter = f"Q{(i % 4) + 1}"
-        conn.execute(
-            "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, "
-            "line_item, value, currency, unit, source_doc_id) "
-            "VALUES (?, ?, ?, ?, ?, 'USD', 'actual', 1)",
-            (ticker.upper(), _quarter_end(i, start=start), quarter, line_item, float(v)),
+    _seed_financials(conn, ticker, {line_item: values}, start=start)
+
+
+def _seed_financials(
+    conn: sqlite3.Connection,
+    ticker: str,
+    series: dict[str, Sequence[float]],
+    *,
+    start: str = "2022-03-31",
+) -> None:
+    assert ticker.upper() == "SYNTH"
+    seed_table(conn, _financial_rows(series, start=start))
+
+
+def _financial_rows(
+    series: dict[str, Sequence[float]], *, start: str = "2022-03-31"
+) -> list[tuple[str, str, str, str, str, str]]:
+    first_end = date.fromisoformat(start)
+    rows: list[tuple[str, str, str, str, str, str]] = []
+    for concept, values in series.items():
+        period_end = first_end
+        for index, value in enumerate(values):
+            if index:
+                next_month = period_end.month + 3
+                year = period_end.year + (next_month - 1) // 12
+                month = (next_month - 1) % 12 + 1
+                day = 31 if month in {3, 12} else 30
+                period_end = date(year, month, day)
+            start_month = period_end.month - 2
+            period_start = date(period_end.year, start_month, 1)
+            rows.append(
+                (
+                    concept,
+                    period_start.isoformat(),
+                    period_end.isoformat(),
+                    f"Q{(index % 4) + 1}",
+                    str(value),
+                    "USD",
+                )
+            )
+    return rows
+
+
+def _append_unadmitted_financial_source(
+    conn: sqlite3.Connection,
+    *,
+    suffix: str,
+    namespace: str,
+    concept: str,
+    recorded_at: datetime,
+    value: str = "999",
+) -> None:
+    locator = {"path": f"/facts/{suffix}/value"}
+    locator_json = json.dumps(locator, sort_keys=True, separators=(",", ":"))
+    document_id = f"document-{suffix}"
+    run_id = f"run-{suffix}"
+    node_id = f"node-{suffix}"
+    conn.execute(
+        "INSERT INTO evidence_document_versions("
+        "document_version_id,document_key,version_sequence,observation_id,blob_sha256,"
+        "issuer_id,ticker,document_type,form_type,language,recorded_at) "
+        "SELECT ?,?,1,observation_id,blob_sha256,issuer_id,ticker,document_type,form_type,"
+        "language,? FROM evidence_document_versions WHERE document_version_id='report-document'",
+        (document_id, document_id, recorded_at),
+    )
+    conn.execute(
+        "INSERT INTO evidence_extraction_runs "
+        "SELECT ?,?,?,input_sha256,extractor_name,extractor_config_sha256,extractor_code_version,"
+        "output_sha256,?,?,outcome FROM evidence_extraction_runs "
+        "WHERE extraction_run_id='report-run'",
+        (run_id, run_id, document_id, recorded_at, recorded_at),
+    )
+    conn.execute(
+        "INSERT INTO evidence_nodes VALUES (?,?,?, ?,NULL,NULL,'table_cell',?,?,?,?)",
+        (
+            node_id,
+            node_id,
+            1,
+            run_id,
+            value,
+            locator_json,
+            foundation.sha256(locator_json),
+            recorded_at,
+        ),
+    )
+    period_end = datetime(2024, 3, 31, tzinfo=UTC)
+    cell = FactCellV2.model_validate(
+        {
+            **foundation.make_cell(suffix).model_dump(),
+            "semantic_key_sha256": None,
+            "concept_namespace": namespace,
+            "concept_name": concept,
+            "taxonomy_name": "earnings-summary-test",
+            "taxonomy_version": "2026",
+            "period_start": datetime(2024, 1, 1, tzinfo=UTC),
+            "period_end": period_end,
+            "fiscal_year": 2024,
+            "fiscal_period": "Q1",
+            "dimensions": (),
+            "unit_key": "USD",
+            "currency": "USD",
+            "effective_at": recorded_at,
+            "knowledge_at": recorded_at,
+            "recorded_at": recorded_at,
+        }
+    )
+    observation = foundation.make_report(
+        cell,
+        suffix,
+        numeric_value=value,
+        at=recorded_at,
+    ).model_copy(
+        update={
+            "document_version_id": document_id,
+            "evidence_node_id": node_id,
+            "source_locator": CanonicalJSONObject.model_validate(locator),
+            "source_locator_sha256": foundation.sha256(locator_json),
+        }
+    )
+    conn.commit()
+    SourceFactRepository(conn).publish(
+        SourceFactPublication(
+            publication_id=f"publication-{suffix}",
+            idempotency_key=f"publication-{suffix}",
+            reported_facts=(ReportedSourceFact(cell=cell, observation=observation),),
+            extraction_seals=(
+                ExtractionRunCompletenessSealV2(
+                    extraction_seal_id=f"seal-{suffix}",
+                    idempotency_key=f"seal-{suffix}",
+                    extraction_run_id=run_id,
+                    expected_node_count=1,
+                    completeness_policy_name="all-run-nodes",
+                    completeness_policy_version="v1",
+                    completeness_policy_sha256=foundation.sha256("soft-rule-test"),
+                    knowledge_at=recorded_at,
+                    recorded_at=recorded_at,
+                ),
+            ),
         )
+    )
     conn.commit()
 
 
@@ -344,7 +509,9 @@ def test_series_above_fires_for_consecutive_breaches(conn: sqlite3.Connection) -
 # ---------------------------------------------------------------------------
 
 
-def test_series_decel_fires_when_yoy_growth_collapses(conn: sqlite3.Connection) -> None:
+def test_series_decel_fires_when_yoy_growth_collapses(
+    canonical_conn: sqlite3.Connection,
+) -> None:
     """Revenue YoY growth drops sharply for 2 consecutive Q → YELLOW.
 
     Series: 8Q of revenue with prior-year baseline ~100 and recent quarters
@@ -357,8 +524,9 @@ def test_series_decel_fires_when_yoy_growth_collapses(conn: sqlite3.Connection) 
     # decel year Q1:      170 (13.3% YoY)
     # decel year Q2:      155 (3.3% YoY)
     # decel year Q3:      148 (-1.3% YoY)
+    conn = canonical_conn
     revenue = [100, 100, 100, 100, 150, 150, 150, 150, 170, 155, 148]
-    _seed_financial(conn, "TEST", "revenue", revenue)
+    _seed_financial(conn, "SYNTH", "revenue", revenue)
     rule = SoftRule(
         name="revenue_decel_2q",
         predicate=SoftRulePredicate(
@@ -367,17 +535,37 @@ def test_series_decel_fires_when_yoy_growth_collapses(conn: sqlite3.Connection) 
         ),
         evidence_template="Revenue YoY decelerated {first_bps}→{second_bps}bps",
     )
-    [result] = evaluate_soft_rules("TEST", [rule], conn)
-    assert result.status == SoftRuleStatus.YELLOW
+    [result] = evaluate_soft_rules("SYNTH", [rule], conn)
+    assert result.status == SoftRuleStatus.YELLOW, result.details
     # Template rendered with the deceleration bps values.
     assert "decelerated" in result.evidence
     assert "bps" in result.evidence
+    manifest = cast("dict[str, Any]", result.details["source_manifest"])
+    observations = cast("list[dict[str, Any]]", manifest["observations"])
+    assert len(observations) == len(revenue)
+    assert {
+        "metric_definition_revision_id",
+        "canonical_metric_cell_id",
+        "canonical_resolution_revision_id",
+        "observation_id",
+        "observation_payload_sha256",
+        "document_version_id",
+        "source_locator",
+        "period_start",
+        "period_end",
+        "currency",
+        "unit",
+        "accounting_basis",
+        "consolidation_scope",
+    } <= observations[0].keys()
+    json.dumps(result.details)
 
 
-def test_series_decel_green_when_growth_steady(conn: sqlite3.Connection) -> None:
+def test_series_decel_green_when_growth_steady(canonical_conn: sqlite3.Connection) -> None:
     """Steady 50% YoY across the window → no deceleration → GREEN."""
+    conn = canonical_conn
     revenue = [100, 100, 100, 100, 150, 150, 150, 150, 225, 225, 225, 225]
-    _seed_financial(conn, "TEST", "revenue", revenue)
+    _seed_financial(conn, "SYNTH", "revenue", revenue)
     rule = SoftRule(
         name="revenue_decel_2q",
         predicate=SoftRulePredicate(
@@ -385,14 +573,17 @@ def test_series_decel_green_when_growth_steady(conn: sqlite3.Connection) -> None
             params={"metric": "revenue", "periods": 2, "threshold_bps": 200},
         ),
     )
-    [result] = evaluate_soft_rules("TEST", [rule], conn)
+    [result] = evaluate_soft_rules("SYNTH", [rule], conn)
     assert result.status == SoftRuleStatus.GREEN
 
 
-def test_series_decel_unresolved_when_insufficient_history(conn: sqlite3.Connection) -> None:
+def test_series_decel_unresolved_when_insufficient_history(
+    canonical_conn: sqlite3.Connection,
+) -> None:
     """Series too short for periods + 5 quarters of YoY → UNRESOLVED, not crash,
     never a silent GREEN."""
-    _seed_financial(conn, "TEST", "revenue", [100, 100, 100, 100, 150])
+    conn = canonical_conn
+    _seed_financial(conn, "SYNTH", "revenue", [100, 100, 100, 100, 150])
     rule = SoftRule(
         name="revenue_decel_2q",
         predicate=SoftRulePredicate(
@@ -400,7 +591,7 @@ def test_series_decel_unresolved_when_insufficient_history(conn: sqlite3.Connect
             params={"metric": "revenue", "periods": 2, "threshold_bps": 200},
         ),
     )
-    [result] = evaluate_soft_rules("TEST", [rule], conn)
+    [result] = evaluate_soft_rules("SYNTH", [rule], conn)
     assert result.status == SoftRuleStatus.UNRESOLVED
     assert "insufficient" in result.evidence.lower()
 
@@ -411,11 +602,15 @@ def test_series_decel_unresolved_when_insufficient_history(conn: sqlite3.Connect
 
 
 def test_ratio_breach_fires_when_ratio_under_threshold_for_n_periods(
-    conn: sqlite3.Connection,
+    canonical_conn: sqlite3.Connection,
 ) -> None:
     """fcf/revenue < 15% for 2 consecutive Q → YELLOW."""
-    _seed_financial(conn, "TEST", "revenue", [100, 100, 100, 100])
-    _seed_financial(conn, "TEST", "free_cash_flow", [20, 18, 12, 10])
+    conn = canonical_conn
+    _seed_financials(
+        conn,
+        "SYNTH",
+        {"revenue": [100, 100, 100, 100], "free_cash_flow": [20, 18, 12, 10]},
+    )
     rule = SoftRule(
         name="fcf_margin_below_15",
         predicate=SoftRulePredicate(
@@ -430,15 +625,19 @@ def test_ratio_breach_fires_when_ratio_under_threshold_for_n_periods(
         ),
         evidence_template="FCF margin {last_ratio_pct}% (threshold {threshold_pct}%)",
     )
-    [result] = evaluate_soft_rules("TEST", [rule], conn)
+    [result] = evaluate_soft_rules("SYNTH", [rule], conn)
     assert result.status == SoftRuleStatus.YELLOW
     assert "10" in result.evidence or "12" in result.evidence
 
 
-def test_ratio_breach_green_when_above_threshold(conn: sqlite3.Connection) -> None:
+def test_ratio_breach_green_when_above_threshold(canonical_conn: sqlite3.Connection) -> None:
     """fcf/revenue 18% / 20% — well above 15% threshold → GREEN."""
-    _seed_financial(conn, "TEST", "revenue", [100, 100, 100, 100])
-    _seed_financial(conn, "TEST", "free_cash_flow", [20, 18, 18, 20])
+    conn = canonical_conn
+    _seed_financials(
+        conn,
+        "SYNTH",
+        {"revenue": [100, 100, 100, 100], "free_cash_flow": [20, 18, 18, 20]},
+    )
     rule = SoftRule(
         name="fcf_margin_below_15",
         predicate=SoftRulePredicate(
@@ -452,7 +651,7 @@ def test_ratio_breach_green_when_above_threshold(conn: sqlite3.Connection) -> No
             },
         ),
     )
-    [result] = evaluate_soft_rules("TEST", [rule], conn)
+    [result] = evaluate_soft_rules("SYNTH", [rule], conn)
     assert result.status == SoftRuleStatus.GREEN
 
 
@@ -644,9 +843,10 @@ def test_evaluator_tolerates_invalid_predicate_params(conn: sqlite3.Connection) 
 # ---------------------------------------------------------------------------
 
 
-def test_default_source_is_financial(conn: sqlite3.Connection) -> None:
-    """Predicate with no `source` param reads from financial_facts."""
-    _seed_financial(conn, "TEST", "revenue", [50, 40])
+def test_default_source_is_financial(canonical_conn: sqlite3.Connection) -> None:
+    """Predicate with no `source` param reads canonical financial facts."""
+    conn = canonical_conn
+    _seed_financial(conn, "SYNTH", "revenue", [50, 40])
     rule = SoftRule(
         name="rev_below",
         predicate=SoftRulePredicate(
@@ -654,8 +854,332 @@ def test_default_source_is_financial(conn: sqlite3.Connection) -> None:
             params={"metric": "revenue", "threshold": 100, "periods": 2},
         ),
     )
-    [result] = evaluate_soft_rules("TEST", [rule], conn)
+    [result] = evaluate_soft_rules("SYNTH", [rule], conn)
     assert result.status == SoftRuleStatus.YELLOW
+
+
+def test_financial_reader_ignores_annual_and_trailing_duration_rows(
+    canonical_conn: sqlite3.Connection,
+) -> None:
+    rows = _financial_rows({"revenue": [120, 110, 90, 80]})
+    rows.extend(
+        [
+            ("revenue", "2022-01-01", "2022-12-31", "FY", "400", "USD"),
+            ("revenue", "2022-04-01", "2023-03-31", "TTM", "390", "USD"),
+        ]
+    )
+    seed_table(canonical_conn, rows)
+    rule = SoftRule(
+        name="quarterly_revenue_only",
+        predicate=SoftRulePredicate(
+            type=PredicateType.SERIES_BELOW,
+            params={"metric": "revenue", "threshold": 100, "periods": 2},
+        ),
+    )
+
+    [result] = evaluate_soft_rules("SYNTH", [rule], canonical_conn)
+
+    assert result.status == SoftRuleStatus.YELLOW
+    manifest = cast("dict[str, Any]", result.details["source_manifest"])
+    observations = cast("list[dict[str, Any]]", manifest["observations"])
+    assert [item["fiscal_period"] for item in observations] == ["Q1", "Q2", "Q3", "Q4"]
+
+
+def test_same_financial_name_in_other_namespace_is_not_admitted(
+    canonical_conn: sqlite3.Connection,
+) -> None:
+    _seed_financial(canonical_conn, "SYNTH", "free_cash_flow", [20])
+    _append_unadmitted_financial_source(
+        canonical_conn,
+        suffix="other-namespace-revenue",
+        namespace="urn:example:other-financials",
+        concept="revenue",
+        recorded_at=foundation.STAMP,
+    )
+    rule = SoftRule(
+        name="namespace_guard",
+        predicate=SoftRulePredicate(
+            type=PredicateType.SERIES_BELOW,
+            params={"metric": "revenue", "threshold": 1000, "periods": 1},
+        ),
+    )
+
+    [result] = evaluate_soft_rules("SYNTH", [rule], canonical_conn)
+
+    assert result.status == SoftRuleStatus.UNRESOLVED
+    assert result.details["source_reason"] == "exact_financial_concept_unavailable"
+
+
+def test_financial_source_never_falls_back_to_legacy_raw_rows(
+    conn: sqlite3.Connection,
+) -> None:
+    conn.executemany(
+        "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, line_item, "
+        "value, currency, unit, source_doc_id) VALUES ('TEST', ?, ?, 'revenue', ?, "
+        "'USD', 'actual', 1)",
+        [(_quarter_end(index), f"Q{index + 1}", value) for index, value in enumerate([50, 40])],
+    )
+    rule = SoftRule(
+        name="legacy_is_not_authority",
+        predicate=SoftRulePredicate(
+            type=PredicateType.SERIES_BELOW,
+            params={"metric": "revenue", "threshold": 100, "periods": 2},
+        ),
+    )
+    [result] = evaluate_soft_rules("TEST", [rule], conn)
+    assert result.status == SoftRuleStatus.UNRESOLVED
+    assert result.details["source_reason"] == "canonical_financial_schema_unavailable"
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ("gap", "quarterly_duration_gap_or_overlap"),
+        ("mixed_currency", "incomparable_financial_series_coordinate"),
+    ],
+)
+def test_financial_series_rejects_noncomparable_quarterly_history(
+    canonical_conn: sqlite3.Connection,
+    mutation: str,
+    reason: str,
+) -> None:
+    rows = _financial_rows({"revenue": [100, 90, 80, 70]})
+    currencies: dict[int, str] | None = None
+    if mutation == "gap":
+        rows.pop(1)
+    elif mutation == "mixed_currency":
+        currencies = {2: "EUR"}
+    seed_table(canonical_conn, rows, currencies=currencies)
+    rule = SoftRule(
+        name="coordinate_guard",
+        predicate=SoftRulePredicate(
+            type=PredicateType.SERIES_BELOW,
+            params={"metric": "revenue", "threshold": 200, "periods": 2},
+        ),
+    )
+    [result] = evaluate_soft_rules("SYNTH", [rule], canonical_conn)
+    assert result.status == SoftRuleStatus.UNRESOLVED
+    assert result.details["source_reason"] == reason
+
+
+def test_ratio_requires_exact_matching_financial_periods(
+    canonical_conn: sqlite3.Connection,
+) -> None:
+    rows = _financial_rows({"revenue": [100, 100, 100, 100]})
+    rows.extend(_financial_rows({"free_cash_flow": [20, 18, 12, 10]}, start="2022-06-30"))
+    seed_table(canonical_conn, rows)
+    rule = SoftRule(
+        name="ratio_period_guard",
+        predicate=SoftRulePredicate(
+            type=PredicateType.RATIO_BREACH,
+            params={
+                "numerator": "free_cash_flow",
+                "denominator": "revenue",
+                "threshold": 0.15,
+                "direction": "below",
+                "periods": 2,
+            },
+        ),
+    )
+    [result] = evaluate_soft_rules("SYNTH", [rule], canonical_conn)
+    assert result.status == SoftRuleStatus.UNRESOLVED
+    assert result.details["source_reason"] == "ratio_exact_period_mismatch"
+
+
+@pytest.mark.parametrize("mismatch", ["currency", "unit", "fiscal_year", "fiscal_period"])
+def test_ratio_rejects_incompatible_published_financial_coordinates(
+    canonical_conn: sqlite3.Connection,
+    mismatch: str,
+) -> None:
+    rows = _financial_rows({"revenue": [100, 100], "free_cash_flow": [10, 10]})
+    currencies: dict[int, str] | None = None
+    fiscal_years: dict[int, int | None] | None = None
+    if mismatch == "currency":
+        currencies = {2: "EUR", 3: "EUR"}
+    elif mismatch == "unit":
+        rows[2] = (*rows[2][:5], "USD millions")
+        rows[3] = (*rows[3][:5], "USD millions")
+    elif mismatch == "fiscal_year":
+        fiscal_years = {2: 2023, 3: 2023}
+    elif mismatch == "fiscal_period":
+        rows[2] = (*rows[2][:3], "Q2", *rows[2][4:])
+        rows[3] = (*rows[3][:3], "Q3", *rows[3][4:])
+    seed_table(
+        canonical_conn,
+        rows,
+        currencies=currencies,
+        fiscal_years=fiscal_years,
+    )
+    rule = SoftRule(
+        name="ratio_coordinate_guard",
+        predicate=SoftRulePredicate(
+            type=PredicateType.RATIO_BREACH,
+            params={
+                "numerator": "free_cash_flow",
+                "denominator": "revenue",
+                "threshold": 0.15,
+                "direction": "below",
+                "periods": 2,
+            },
+        ),
+    )
+
+    [result] = evaluate_soft_rules("SYNTH", [rule], canonical_conn)
+
+    assert result.status == SoftRuleStatus.UNRESOLVED
+    assert result.details["source_reason"] == "ratio_exact_coordinate_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("reporting_entity_id", "reporting-other"),
+        ("accounting_basis", "ifrs"),
+        ("consolidation_scope", "subsidiary"),
+    ],
+)
+def test_ratio_rejects_entity_basis_and_scope_mismatch(
+    canonical_conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: str,
+) -> None:
+    _seed_financials(
+        canonical_conn,
+        "SYNTH",
+        {"revenue": [100, 100], "free_cash_flow": [10, 10]},
+    )
+    original_read = CanonicalFinancialSeriesReader.read
+
+    def read_with_mismatch(
+        reader: CanonicalFinancialSeriesReader,
+        metric: str,
+        *,
+        cadence: FinancialCadence = FinancialCadence.QUARTERLY,
+        continuity: SeriesContinuity = SeriesContinuity.STRICT_CONTIGUOUS,
+    ) -> CanonicalFinancialSeries:
+        series = original_read(reader, metric, cadence=cadence, continuity=continuity)
+        if metric != "free_cash_flow":
+            return series
+        return series.model_copy(
+            update={
+                "observations": tuple(
+                    item.model_copy(update={field: value}) for item in series.observations
+                )
+            }
+        )
+
+    monkeypatch.setattr(CanonicalFinancialSeriesReader, "read", read_with_mismatch)
+    rule = SoftRule(
+        name="ratio_coordinate_guard",
+        predicate=SoftRulePredicate(
+            type=PredicateType.RATIO_BREACH,
+            params={
+                "numerator": "free_cash_flow",
+                "denominator": "revenue",
+                "threshold": 0.15,
+                "direction": "below",
+                "periods": 2,
+            },
+        ),
+    )
+
+    [result] = evaluate_soft_rules("SYNTH", [rule], canonical_conn)
+
+    assert result.status == SoftRuleStatus.UNRESOLVED
+    assert result.details["source_reason"] == "ratio_exact_coordinate_mismatch"
+
+
+def test_unsupported_exact_financial_concept_is_unresolved(
+    canonical_conn: sqlite3.Connection,
+) -> None:
+    rule = SoftRule(
+        name="unsupported_owner_metric",
+        predicate=SoftRulePredicate(
+            type=PredicateType.SERIES_BELOW,
+            params={"metric": "FCF Margin (GAAP)", "threshold": 20, "periods": 2},
+        ),
+    )
+    [result] = evaluate_soft_rules("SYNTH", [rule], canonical_conn)
+    assert result.status == SoftRuleStatus.UNRESOLVED
+    assert result.details["source_reason"] == "exact_financial_concept_unavailable"
+
+
+def test_financial_reader_excludes_observations_recorded_after_cutoff(
+    canonical_conn: sqlite3.Connection,
+) -> None:
+    _seed_financial(canonical_conn, "SYNTH", "revenue", [100, 90])
+    before = CanonicalFinancialSeriesReader(
+        canonical_conn,
+        "SYNTH",
+        cutoff=foundation.STAMP - timedelta(microseconds=1),
+    ).read("revenue")
+    at_recording = CanonicalFinancialSeriesReader(
+        canonical_conn,
+        "SYNTH",
+        cutoff=foundation.STAMP,
+    ).read("revenue")
+    assert before.status == "unavailable"
+    assert before.observations == ()
+    assert at_recording.status == "available"
+    assert [item.value for item in at_recording.observations] == [100, 90]
+
+
+def test_subsecond_future_source_append_does_not_poison_prior_read(
+    canonical_conn: sqlite3.Connection,
+) -> None:
+    _seed_financial(canonical_conn, "SYNTH", "revenue", [100, 90])
+    cutoff = foundation.STAMP + timedelta(microseconds=100)
+    before_append = CanonicalFinancialSeriesReader(
+        canonical_conn,
+        "SYNTH",
+        cutoff=cutoff,
+    ).read("revenue")
+    _append_unadmitted_financial_source(
+        canonical_conn,
+        suffix="future-revenue",
+        namespace="urn:earnings-summary:legacy:financial",
+        concept="revenue",
+        recorded_at=foundation.STAMP + timedelta(microseconds=500),
+    )
+    after_append = CanonicalFinancialSeriesReader(
+        canonical_conn,
+        "SYNTH",
+        cutoff=cutoff,
+    ).read("revenue")
+
+    assert before_append.status == after_append.status == "available"
+    assert before_append.observations == after_append.observations
+    assert [item.value for item in after_append.observations] == [100, 90]
+
+
+def test_future_financial_period_is_unresolved_at_cutoff(
+    canonical_conn: sqlite3.Connection,
+) -> None:
+    seed_table(
+        canonical_conn,
+        [("revenue", "2026-10-01", "2026-12-31", "Q1", "1", "USD")],
+    )
+    direct = CanonicalFinancialSeriesReader(
+        canonical_conn,
+        "SYNTH",
+        cutoff=foundation.STAMP,
+    ).read("revenue")
+    rule = SoftRule(
+        name="future_period_guard",
+        predicate=SoftRulePredicate(
+            type=PredicateType.SERIES_BELOW,
+            params={"metric": "revenue", "threshold": 2, "periods": 1},
+        ),
+    )
+
+    [result] = evaluate_soft_rules("SYNTH", [rule], canonical_conn)
+
+    assert direct.status == "unavailable"
+    assert direct.reason_code == "future_financial_period"
+    assert direct.observations == ()
+    assert result.status == SoftRuleStatus.UNRESOLVED
+    assert result.details["source_reason"] == "future_financial_period"
 
 
 def test_source_enum_round_trips() -> None:

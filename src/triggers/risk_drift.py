@@ -42,7 +42,7 @@ Dedup that still lets a WORSENING drift re-fire
 Naive dedup keyed on (metric, direction) would suppress a persisting drift
 after day 1 forever, even as it gets materially worse. Naive dedup keyed on
 the exact magnitude would re-fire every single day (yesterday's beta and
-today's are never bit-identical). :func:`_bucket_magnitude` buckets the drift
+today's are never bit-identical). :func:`bucket_magnitude` buckets the drift
 into "how many threshold-multiples crossed" — the signature stays stable
 while the drift sits in the same band (no daily re-fire) but changes (and
 re-fires) the moment it crosses into the next band (the drift getting worse
@@ -122,7 +122,7 @@ _FACTOR_METRIC_PREFIX: Final[str] = "factor:"
 
 
 @dataclass(frozen=True, slots=True)
-class _HistoryRow:
+class HistoryRow:
     """One ``portfolio_risk_snapshot_history`` row, narrowed to what drift
     needs: the scalar metrics (``None`` for a column that was NULL at capture
     time) and the parsed C3 factor vector (``None`` when the capture predates
@@ -206,7 +206,7 @@ def _parse_captured_at(raw: str) -> datetime:
     return dt
 
 
-def _row_to_history(select_cols: list[str], row: tuple[object, ...]) -> _HistoryRow:
+def _row_to_history(select_cols: list[str], row: tuple[object, ...]) -> HistoryRow:
     values = dict(zip(select_cols, row, strict=True))
     metrics: dict[str, float | None] = {}
     for metric, _ in _SCALAR_METRICS:
@@ -232,7 +232,7 @@ def _row_to_history(select_cols: list[str], row: tuple[object, ...]) -> _History
                 if isinstance(v, (int, float)) and not isinstance(v, bool):
                     coerced[str(k)] = float(v)
             factor_vector = coerced or None
-    return _HistoryRow(
+    return HistoryRow(
         captured_at=str(values["captured_at"]), metrics=metrics, factor_vector=factor_vector
     )
 
@@ -247,7 +247,7 @@ def load_drift_inputs(
     *,
     user_id: str = DEFAULT_USER_ID,
     now: datetime | None = None,
-) -> tuple[_HistoryRow | None, list[_HistoryRow]]:
+) -> tuple[HistoryRow | None, list[HistoryRow]]:
     """The latest ``portfolio_risk_snapshot_history`` row plus every OTHER row
     in the trailing ``_BASELINE_WINDOW_DAYS`` before it (baseline, newest
     first). ``(None, [])`` when the table/DB is unavailable or empty — the
@@ -318,7 +318,7 @@ def _mean(values: list[float]) -> tuple[float, int] | None:
     return sum(values) / len(values), len(values)
 
 
-def _scalar_baseline_values(baseline: list[_HistoryRow], metric: str) -> list[float]:
+def _scalar_baseline_values(baseline: list[HistoryRow], metric: str) -> list[float]:
     """Non-None baseline observations for one scalar metric. A small helper
     (rather than an inline filtered comprehension) so the None-check narrows
     the SAME expression it guards — ``r.metrics.get(metric) is not None``
@@ -332,7 +332,7 @@ def _scalar_baseline_values(baseline: list[_HistoryRow], metric: str) -> list[fl
     return out
 
 
-def _factor_baseline_values(baseline: list[_HistoryRow], factor: str) -> list[float]:
+def _factor_baseline_values(baseline: list[HistoryRow], factor: str) -> list[float]:
     """Non-None baseline observations for one C3 factor leg — same narrowing
     rationale as :func:`_scalar_baseline_values`."""
     out: list[float] = []
@@ -343,7 +343,7 @@ def _factor_baseline_values(baseline: list[_HistoryRow], factor: str) -> list[fl
     return out
 
 
-def compute_drift_findings(latest: _HistoryRow, baseline: list[_HistoryRow]) -> list[DriftFinding]:
+def compute_drift_findings(latest: HistoryRow, baseline: list[HistoryRow]) -> list[DriftFinding]:
     """Pure drift computation: latest vs trailing-baseline mean, per metric.
 
     A metric with no baseline observations (all-NULL history, or — for a
@@ -401,7 +401,7 @@ def compute_drift_findings(latest: _HistoryRow, baseline: list[_HistoryRow]) -> 
     return findings
 
 
-def _bucket_magnitude(magnitude: float, threshold: float) -> int:
+def bucket_magnitude(magnitude: float, threshold: float) -> int:
     """How many threshold-multiples the drift has crossed — the coarse bucket
     dedup keys on (see module docstring for why this is neither "re-fire
     forever" nor "never re-fire")."""
@@ -418,7 +418,7 @@ def signature_key_evidence(finding: DriftFinding) -> dict[str, object]:
     return {
         "metric": finding.metric,
         "direction": finding.direction,
-        "magnitude_bucket": _bucket_magnitude(finding.magnitude, finding.threshold),
+        "magnitude_bucket": bucket_magnitude(finding.magnitude, finding.threshold),
     }
 
 
@@ -441,7 +441,7 @@ def _compose_memo(finding: DriftFinding) -> str:
     )
 
 
-def build_evidence(finding: DriftFinding, latest: _HistoryRow) -> dict[str, object]:
+def build_evidence(finding: DriftFinding, latest: HistoryRow) -> dict[str, object]:
     return {
         "summary": _compose_memo(finding),
         "metric": finding.metric,
@@ -561,7 +561,7 @@ def append_factor_vector(
     except Exception as exc:  # C3 read is best-effort here — never blocks the writer
         log.debug({"event": "risk_drift_factor_vector_read_failed", "error": str(exc)})
         return False
-    if not vector_result.vector:
+    if not vector_result.vector or vector_result.availability != "full":
         return False
 
     conn = _open(db_path, role=SQLiteConnectionRole.WRITER)
@@ -610,3 +610,6 @@ __all__ = [
     "scan_and_fire",
     "signature_key_evidence",
 ]
+
+_bucket_magnitude = bucket_magnitude
+_HistoryRow = HistoryRow

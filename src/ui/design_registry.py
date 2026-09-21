@@ -38,7 +38,7 @@ from ui.tokens import (
     RAIL_TOKENS as _RAIL_TOKENS,
 )
 
-REGISTRY_VERSION = "1.12.0"
+REGISTRY_VERSION = "1.12.1"
 
 # The canonical token module owns mutable dictionaries for generation and
 # composition. This registry exposes read-only views so its public import
@@ -644,6 +644,7 @@ _BHA_89_TO_92_ADDITIONAL_EMITTERS = (
     "pipeline/work_os_styles.py",
     "pipeline/work_os_research.py",
     "pipeline/you_said.py",
+    "report/renderers/offline_document.py",
     "report/renderers/markdown.py",
     "report/renderers/workspace_decision_card.py",
     "report/renderers/workspace_html.py",
@@ -779,6 +780,7 @@ _PYTHON_CSS_SURFACES = frozenset(
         "report/renderers/workspace_script.py",
         "report/renderers/workspace_sections/company.py",
         "report/renderers/workspace_sections/thesis_risk.py",
+        "report/renderers/offline_document.py",
         "report/renderers/workspace_styles.py",
         "ui/cite_marks.py",
         "ui/controls.py",
@@ -1092,6 +1094,8 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/work_os_runtime.js": "9f130216532bb0e7da89aec20d6a804eacb74799e5d74b4f2ce01ed03216ba83",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "dc8c2615add4455efea1095cb501f00b0fcbdcc29e0171a8abda4ea234c6a14a",  # pragma: allowlist secret
         "report/renderers/charts_v2.py": "38895e26b31e240446d2cd93ebf38869df6a86bdcd3ad4ea8be9d040f4102f29",  # pragma: allowlist secret
+        # Offline projections embed only the canonical report stylesheet.
+        "report/renderers/offline_document.py": "0ebbf3dcf61600b5327907412bff05b81628a4bd5b439e2fd683ee2736376a47",  # pragma: allowlist secret
         "report/renderers/workspace_html.py": "867b089ceac45baa3dd1f72d35e74feba80f1af19ae6b8c4f4bdeeb2a5d60c05",  # pragma: allowlist secret
         "report/renderers/workspace_sections/company.py": "a2a7e88bb845c9eafa39e7673ac009ee3220e068430e91dc0160c3ef62b53551",  # pragma: allowlist secret
         "report/renderers/workspace_sections/thesis_risk.py": "ea6efda97e1eba69cdeb02e03744784f89ff7e606dcb86ccddceb1d4d12c0fea",  # pragma: allowlist secret

@@ -32,21 +32,10 @@ def test_reader_receipt_frozen_immutability() -> None:
         verified_at=datetime.now(UTC),
     )
     with pytest.raises(ValidationError):
-        receipt.parity_passed = False  # type: ignore[misc]
+        setattr(receipt, "parity_passed", False)
 
     with pytest.raises(ValidationError):
-        DualReadParityReceipt(
-            run_id="run_test",
-            ticker="WIX",
-            consumer="price_history",
-            legacy_record_count=100,
-            adapter_record_count=100,
-            status=ParityStatus.VERIFIED_MATCH,
-            parity_passed=True,
-            discrepancy_details=(),
-            verified_at=datetime.now(UTC),
-            extra_field="invalid",  # type: ignore[call-arg]
-        )
+        DualReadParityReceipt.model_validate({**receipt.model_dump(), "extra_field": "invalid"})
 
 
 def test_reader_unavailable_on_empty_repo(tmp_path: Path) -> None:
@@ -124,6 +113,11 @@ def test_reader_and_dual_read_parity_on_mock_corpus(tmp_path: Path) -> None:
     ]
     (fmp_dir / "TEST_analyst_estimates.json").write_text(
         json.dumps(estimates_payload), encoding="utf-8"
+    )
+
+    (fmp_dir / "TEST_income_statement.json").write_text(
+        json.dumps([{"symbol": "TEST", "reportedCurrency": "USD", "date": "2026-03-31"}]),
+        encoding="utf-8",
     )
 
     # 3. Mock geographic segments
@@ -206,7 +200,9 @@ def test_reader_and_dual_read_parity_on_mock_corpus(tmp_path: Path) -> None:
     assert len(filing_receipt.discrepancy_details) == 0
 
 
-def test_dual_read_field_divergence_detection(tmp_path: Path) -> None:
+def test_dual_read_field_divergence_detection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Assert verifier fails closed and flags detailed errors when values, dates, or availability diverge."""
     repo = tmp_path / "repo"
     fmp_dir = repo / "data" / "historical" / "fmp"
@@ -222,6 +218,7 @@ def test_dual_read_field_divergence_detection(tmp_path: Path) -> None:
                 "high": 105.0,
                 "low": 99.0,
                 "close": 104.0,
+                "adjClose": 104.0,
                 "volume": 500,
             },
             {
@@ -230,6 +227,7 @@ def test_dual_read_field_divergence_detection(tmp_path: Path) -> None:
                 "high": 108.0,
                 "low": 103.0,
                 "close": 107.0,
+                "adjClose": 107.0,
                 "volume": 600,
             },
         ],
@@ -245,15 +243,19 @@ def test_dual_read_field_divergence_detection(tmp_path: Path) -> None:
     # Patch reader to simulate adapter discrepancy
     orig_series = verifier.reader.get_adjusted_price_series("DIVERGE")
     assert isinstance(orig_series, AdjustedPriceSeries)
-    verifier.reader.get_adjusted_price_series = lambda t: AdjustedPriceSeries(  # type: ignore[method-assign]
-        ticker=t,
-        provider="fmp",
-        adjustment_method=orig_series.adjustment_method,
-        currency=orig_series.currency,
-        currency_binding=orig_series.currency_binding,
-        points=(),  # empty points = divergence
-        source_payload_hash="0" * 64,
-    )
+
+    def empty_prices(t: str) -> AdjustedPriceSeries:
+        return AdjustedPriceSeries(
+            ticker=t,
+            provider="fmp",
+            adjustment_method=orig_series.adjustment_method,
+            currency=orig_series.currency,
+            currency_binding=orig_series.currency_binding,
+            points=(),  # empty points = divergence
+            source_payload_hash="0" * 64,
+        )
+
+    monkeypatch.setattr(verifier.reader, "get_adjusted_price_series", empty_prices)
     receipt = verifier.verify_price_parity("DIVERGE")
     assert receipt.parity_passed is False
     assert receipt.status == ParityStatus.VERIFIED_DIVERGENCE
@@ -261,13 +263,16 @@ def test_dual_read_field_divergence_detection(tmp_path: Path) -> None:
     assert "Price count mismatch" in receipt.discrepancy_details[0]
 
     # 2. Legacy present, adapter unavailable divergence path
-    verifier.reader.get_adjusted_price_series = lambda t: ReaderUnavailableStatus(  # type: ignore[method-assign]
-        ticker=t,
-        provider="fmp",
-        data_type="adjusted_prices",
-        reason="Forced adapter simulation failure",
-        as_of=datetime.now(UTC),
-    )
+    def unavailable_prices(t: str) -> ReaderUnavailableStatus:
+        return ReaderUnavailableStatus(
+            ticker=t,
+            provider="fmp",
+            data_type="adjusted_prices",
+            reason="Forced adapter simulation failure",
+            as_of=datetime.now(UTC),
+        )
+
+    monkeypatch.setattr(verifier.reader, "get_adjusted_price_series", unavailable_prices)
     unavail_receipt = verifier.verify_price_parity("DIVERGE")
     assert unavail_receipt.parity_passed is False
     assert unavail_receipt.status == ParityStatus.VERIFIED_DIVERGENCE
@@ -278,7 +283,11 @@ def test_dual_read_field_divergence_detection(tmp_path: Path) -> None:
     (fmp_dir / "DIVERGE_analyst_estimates.json").write_text(
         json.dumps(est_payload), encoding="utf-8"
     )
-    verifier.reader.get_analyst_estimates = lambda t, metric=None: []  # type: ignore[method-assign]
+
+    def empty_results(*_args: object, **_kwargs: object) -> list[object]:
+        return []
+
+    monkeypatch.setattr(verifier.reader, "get_analyst_estimates", empty_results)
     est_receipt = verifier.verify_estimates_parity("DIVERGE")
     assert est_receipt.parity_passed is False
     assert est_receipt.status == ParityStatus.VERIFIED_DIVERGENCE
@@ -291,7 +300,7 @@ def test_dual_read_field_divergence_detection(tmp_path: Path) -> None:
     (fmp_dir / "DIVERGE_revenue_geographic_segmentation.json").write_text(
         json.dumps(seg_payload), encoding="utf-8"
     )
-    verifier.reader.get_segment_structure = lambda t, dim_type="geography": []  # type: ignore[method-assign]
+    monkeypatch.setattr(verifier.reader, "get_segment_structure", empty_results)
     seg_receipt = verifier.verify_segments_parity("DIVERGE", dim_type="geography")
     assert seg_receipt.parity_passed is False
     assert seg_receipt.status == ParityStatus.VERIFIED_DIVERGENCE
@@ -302,8 +311,44 @@ def test_dual_read_field_divergence_detection(tmp_path: Path) -> None:
     (fmp_dir / "DIVERGE_form_10k_2025.json").write_text(
         json.dumps(filing_payload), encoding="utf-8"
     )
-    verifier.reader.get_filing_sections = lambda t, form="10-K", year=None: []  # type: ignore[method-assign]
+    monkeypatch.setattr(verifier.reader, "get_filing_sections", empty_results)
     filing_receipt = verifier.verify_filing_sections_parity("DIVERGE", form="10-K")
     assert filing_receipt.parity_passed is False
     assert filing_receipt.status == ParityStatus.VERIFIED_DIVERGENCE
     assert len(filing_receipt.discrepancy_details) > 0
+
+
+def test_missing_currency_packet_cannot_be_replaced_with_manufactured_usd(tmp_path: Path) -> None:
+    cache = tmp_path / "data" / "historical" / "fmp"
+    cache.mkdir(parents=True)
+    (cache / "NVO_analyst_estimates.json").write_text(
+        json.dumps([{"symbol": "NVO", "date": "2027-12-31", "fiscalYear": 2027, "revenueAvg": 100}])
+    )
+    (cache / "NVO_price_chart_10y_div_adj.json").write_text(
+        json.dumps(
+            {
+                "symbol": "NVO",
+                "historical": [{"date": "2026-03-31", "close": 50, "adjClose": 50, "volume": 1}],
+            }
+        )
+    )
+    reader = ProviderNeutralDataReader(tmp_path)
+    estimates = reader.get_analyst_estimates("NVO")
+    assert isinstance(estimates, ReaderUnavailableStatus)
+    assert estimates.reason == "issuer_reporting_currency_evidence_unavailable"
+    prices = reader.get_adjusted_price_series("NVO", currency="USD")
+    assert isinstance(prices, ReaderUnavailableStatus)
+    assert prices.reason == "quote_currency_evidence_unavailable"
+    (cache / "NVO_profile.json").write_text(json.dumps([{"symbol": "NVO", "currency": "DKK"}]))
+    assert isinstance(
+        reader.get_adjusted_price_series("NVO", currency="USD"), ReaderUnavailableStatus
+    )
+    bound = reader.get_adjusted_price_series("NVO")
+    assert isinstance(bound, AdjustedPriceSeries)
+    assert bound.currency.value == "DKK"
+    (cache / "NVO_income_statement.json").write_text(
+        json.dumps([{"symbol": "NVO", "reportedCurrency": "DKK", "date": "2026-03-31"}])
+    )
+    bound_estimates = reader.get_analyst_estimates("NVO")
+    assert isinstance(bound_estimates, list)
+    assert all(item.currency.value == "DKK" for item in bound_estimates)

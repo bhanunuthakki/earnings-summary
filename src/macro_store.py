@@ -25,6 +25,8 @@ math testable without setting up the schema.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import math
 import sqlite3
@@ -89,6 +91,11 @@ class Sensitivity:
     # written before the column existed â€” consumers treat None as "unknown"
     # (the rÂ² floor still applies; the n floor only when n is known).
     n_obs: int | None = None
+    metric_version: str = "legacy_unversioned"
+    shock_unit: str = "log_return"
+    return_unit: str = "log_return"
+    input_sha: str | None = None
+    source_as_of: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +336,10 @@ def upsert_sensitivity(
     the read-side quality floor can distinguish a thin fit from a real one;
     silently ignored on a pre-0184 schema (the write must not break old data
     dirs)."""
+    if series_id in RATE_SERIES_IDS:
+        raise ValueError(
+            "Rate estimates require persist_rate_sensitivity with reconstructable inputs"
+        )
     conn = _open(db_path, expect_table="macro_sensitivities")
     if conn is None:
         return None
@@ -390,13 +401,16 @@ def fetch_sensitivities(
     ticker: str,
     lookback_window_days: int | None = None,
     db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[Sensitivity]:
-    conn = _open(db_path, expect_table="macro_sensitivities")
-    if conn is None:
+    db_conn = conn if conn is not None else _open(db_path, expect_table="macro_sensitivities")
+    if db_conn is None:
         return []
+    original_factory = db_conn.row_factory
+    db_conn.row_factory = sqlite3.Row
     try:
         if lookback_window_days is not None:
-            rows = conn.execute(
+            rows = db_conn.execute(
                 """
                 SELECT * FROM macro_sensitivities
                 WHERE ticker = ? AND lookback_window_days = ?
@@ -405,7 +419,7 @@ def fetch_sensitivities(
                 (ticker.upper(), int(lookback_window_days)),
             ).fetchall()
         else:
-            rows = conn.execute(
+            rows = db_conn.execute(
                 """
                 SELECT * FROM macro_sensitivities
                 WHERE ticker = ?
@@ -415,6 +429,8 @@ def fetch_sensitivities(
             ).fetchall()
         out: list[Sensitivity] = []
         for r in rows:
+            if str(r["series_id"]) in RATE_SERIES_IDS:
+                continue  # Retained unversioned rate history is never admitted.
             ca = r["computed_at"]
             ca_dt = datetime.fromisoformat(str(ca)) if ca is not None else datetime.now(UTC)
             out.append(
@@ -430,14 +446,18 @@ def fetch_sensitivities(
                     # column-presence probe genuinely needs .keys() here.
                     n_obs=(
                         int(r["n_obs"])
-                        if "n_obs" in r.keys() and r["n_obs"] is not None  # noqa: SIM118
+                        if "n_obs" in set(r.keys()) and r["n_obs"] is not None
                         else None
                     ),
                 )
             )
+        out.extend(_read_rate_estimates(db_conn, ticker, lookback_window_days))
         return out
     finally:
-        conn.close()
+        if conn is None:
+            db_conn.close()
+        else:
+            db_conn.row_factory = original_factory
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +466,139 @@ def fetch_sensitivities(
 
 
 SENSITIVITY_METRIC_VERSION = "v2_rate_diff"
+RATE_SERIES_IDS = frozenset({"us_10y", "fed_funds"})
+# Existing allocation macro-series freshness policy; shared by all rate readers.
+SENSITIVITY_MAX_AGE_DAYS = 45
+
+
+def _read_rate_estimates(
+    conn: sqlite3.Connection, ticker: str, lookback: int | None
+) -> list[Sensitivity]:
+    if not conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name='macro_sensitivity_estimates'"
+    ).fetchone():
+        return []
+    rows = conn.execute(
+        "SELECT * FROM macro_sensitivity_estimates WHERE ticker=? ORDER BY source_as_of DESC, id DESC",
+        (ticker.upper(),),
+    ).fetchall()
+    out: list[Sensitivity] = []
+    seen: set[tuple[str, int]] = set()
+    for row in rows:
+        key = (str(row["series_id"]), int(row["lookback_window_days"]))
+        if key in seen or (lookback is not None and key[1] != lookback):
+            continue
+        seen.add(key)
+        age = (date.today() - date.fromisoformat(str(row["source_as_of"])[:10])).days
+        if not 0 <= age <= SENSITIVITY_MAX_AGE_DAYS:
+            continue
+        if (
+            row["metric_version"] != SENSITIVITY_METRIC_VERSION
+            or row["shock_unit"] != "percentage_point"
+            or row["return_unit"] != "log_return"
+        ):
+            continue
+        out.append(
+            Sensitivity(
+                id=int(row["id"]),
+                ticker=str(row["ticker"]),
+                series_id=key[0],
+                beta=float(row["beta"]),
+                r_squared=float(row["r_squared"]),
+                lookback_window_days=key[1],
+                computed_at=datetime.fromisoformat(str(row["computed_at"])),
+                n_obs=int(row["n_obs"]),
+                metric_version=str(row["metric_version"]),
+                shock_unit=str(row["shock_unit"]),
+                return_unit=str(row["return_unit"]),
+                input_sha=str(row["input_sha"]),
+                source_as_of=str(row["source_as_of"]),
+            )
+        )
+    return out
+
+
+def persist_rate_sensitivity(
+    *,
+    ticker: str,
+    series_id: str,
+    ticker_prices: list[tuple[date, float]],
+    series_points: list[tuple[date, float]],
+    lookback_days: int = 252,
+    db_path: Path | str | None = None,
+) -> int | None:
+    """Compute and append a reconstructable estimate; never reinterpret old rows."""
+    if series_id not in RATE_SERIES_IDS:
+        raise ValueError("Not a supported rate series")
+    if any(not math.isfinite(v) for _, v in [*ticker_prices, *series_points]):
+        raise ValueError("Rate estimate inputs must be finite")
+    prices = sorted(ticker_prices)
+    rates = sorted(series_points)
+    result = compute_sensitivities(
+        ticker_prices=prices, series_lookups={series_id: rates}, lookback_days=lookback_days
+    ).get(series_id)
+    if result is None:
+        return None
+    beta, r_squared, n_obs = result
+    payload = json.dumps(
+        {
+            "metric_version": SENSITIVITY_METRIC_VERSION,
+            "shock_unit": "percentage_point",
+            "return_unit": "log_return",
+            "ticker": ticker.upper(),
+            "series_id": series_id,
+            "lookback_days": lookback_days,
+            "ticker_prices": [(d.isoformat(), v) for d, v in prices],
+            "series_points": [(d.isoformat(), v) for d, v in rates],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    input_sha = hashlib.sha256(payload.encode()).hexdigest()
+    source_as_of = min(prices[-1][0], rates[-1][0]).isoformat()
+    conn = _open(db_path, expect_table="macro_sensitivity_estimates")
+    if conn is None:
+        return None
+    try:
+        conn.execute(
+            """INSERT INTO macro_sensitivity_estimates
+            (ticker,series_id,metric_version,shock_unit,return_unit,beta,r_squared,n_obs,
+             lookback_window_days,input_sha,inputs_json,source_as_of,computed_at)
+            VALUES (?,?,?,'percentage_point','log_return',?,?,?,?,?,?,?,?)
+            ON CONFLICT(ticker,series_id,lookback_window_days,metric_version,input_sha) DO NOTHING""",
+            (
+                ticker.upper(),
+                series_id,
+                SENSITIVITY_METRIC_VERSION,
+                beta,
+                r_squared,
+                n_obs,
+                lookback_days,
+                input_sha,
+                payload,
+                source_as_of,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        row = conn.execute(
+            "SELECT id FROM macro_sensitivity_estimates WHERE ticker=? AND series_id=? AND lookback_window_days=? AND metric_version=? AND input_sha=?",
+            (ticker.upper(), series_id, lookback_days, SENSITIVITY_METRIC_VERSION, input_sha),
+        ).fetchone()
+        conn.commit()
+        return int(row[0]) if row else None
+    finally:
+        conn.close()
+
+
+def rate_shock_log_return(estimate: Sensitivity, *, basis_points: float) -> float:
+    """Signed first-order log return under a declared basis-point rate shock."""
+    if (
+        estimate.series_id not in RATE_SERIES_IDS
+        or estimate.metric_version != SENSITIVITY_METRIC_VERSION
+        or estimate.shock_unit != "percentage_point"
+    ):
+        raise ValueError("Unversioned or incompatible rate sensitivity")
+    return estimate.beta * basis_points / 100.0
 
 
 def _weekly_returns(
@@ -536,7 +689,7 @@ def compute_sensitivities(
 
     For rate series (e.g. us_10y, fed_funds), transforms yields using declared
     first differences in percentage points (PRD §7.1, BHA-48) so beta represents
-    expected % price return per +1.0 percentage point (+100 bps) yield change.
+    expected log return per +1.0 percentage point (+100 bps) yield change.
 
     The lookback_days cap is applied to the input window (latest N days),
     not the regression — this lets the caller pass historical archives and

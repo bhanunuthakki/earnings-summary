@@ -71,6 +71,7 @@ from integrations.portfolio_tracker_client import (
     fetch_portfolio_analytics,
     probe_tracker,
 )
+from macro_store import Sensitivity, fetch_sensitivities
 from pipeline.portfolio_styles import portfolio_css
 from portfolio_correlation import (
     CLUSTER_CORR,
@@ -1622,8 +1623,15 @@ def render_portfolio_risk_panel(
     factor: FactorRollup | None = None
     gap: RiskRewardGap | None = None
     if analytics.positioning is not None:
-        rate_betas = _rate_betas(analytics.positioning.correlations, db_path)
-        factor = factor_exposure_rollup(analytics.positioning.correlations, rate_betas)
+        rate_estimates = rate_estimates_for_rows(analytics.positioning.correlations, db_path)
+        factor = factor_exposure_rollup(
+            analytics.positioning.correlations, {t: s.beta for t, s in rate_estimates.items()}
+        )
+        if factor is not None:
+            factor.rate_evidence = tuple(
+                f"{t}: {s.metric_version}; log return per +100 bps; source {s.source_as_of}; input {s.input_sha}"
+                for t, s in rate_estimates.items()
+            )
         if db_path is not None:
             gap = _build_risk_reward_gap(analytics.positioning, db_path)
     style = _build_style_rollup(analytics.positioning, db_path)
@@ -1874,12 +1882,6 @@ def _implicit_bets_section(
         if abs(g) > 0.1:
             direction = "growth leadership over value" if g > 0 else "value leadership over growth"
             rate_txt = ""
-            if snapshot.rate_beta_10y is not None:
-                rate_txt = (
-                    f" Rate sensitivity is near-neutral (10y β {snapshot.rate_beta_10y:+.2f})"
-                    if abs(snapshot.rate_beta_10y) < 0.1
-                    else f" 10y-rate β {snapshot.rate_beta_10y:+.2f}"
-                )
             bets.append(
                 (
                     abs(g),
@@ -1904,7 +1906,7 @@ def _implicit_bets_section(
             )
         )
 
-    if factors is not None and factors.vector:
+    if factors is not None and factors.vector and factors.availability == "full":
         for name, loading in sorted(
             factors.vector.items(), key=lambda kv: abs(kv[1]), reverse=True
         )[:2]:
@@ -2092,7 +2094,7 @@ def compose_risk_page(
         parts.append(_bear_lint_section(bear_lint))
         parts.append(_position_guard_section(position_guard))
         parts.append(_thesis_collision_section(collision))
-        parts.append(_business_factor_section(factors))
+        parts.append(business_factor_section(factors))
         if gap is not None:
             parts.append(_risk_reward_gap_section(gap))
     else:
@@ -2107,7 +2109,7 @@ def compose_risk_page(
         parts.append(_bear_lint_section(bear_lint))
         parts.append(_position_guard_section(position_guard))
         parts.append(_thesis_collision_section(collision))
-        parts.append(_business_factor_section(factors))
+        parts.append(business_factor_section(factors))
     parts.append(_macro_stress_section(scenarios, digest))
     parts.append("</div>")
     return "".join(parts)
@@ -2240,8 +2242,7 @@ def _cached_risk_section(snap: RiskSnapshot) -> str:
         cards.append(_kpi_card("Market β (SPY)", _ratio(snap.spy_beta), sub="value-weighted"))
     if snap.qqq_beta is not None:
         cards.append(_kpi_card("Growth β (QQQ)", _ratio(snap.qqq_beta), sub="value-weighted"))
-    if snap.rate_beta_10y is not None:
-        cards.append(_kpi_card("Rate β (10Y)", _ratio(snap.rate_beta_10y), sub="vs 10Y yield"))
+
     if snap.top5_weight_pct is not None:
         cards.append(_kpi_card("Top 5", _pct(snap.top5_weight_pct), sub="of book"))
     strip = f'<div class="kpi-strip">{"".join(cards)}</div>' if cards else ""
@@ -2254,29 +2255,31 @@ def _cached_risk_section(snap: RiskSnapshot) -> str:
     )
 
 
-def _rate_betas(rows: list[PositionCorrelationRow], db_path: Path | None) -> dict[str, float]:
-    """Per-ticker 10Y-yield beta from the local ``macro_sensitivities`` table —
-    the rate-sensitivity leg of the factor roll-up. ``{}`` when the table or DB
-    is absent (the leg then hides itself)."""
+def rate_estimates_for_rows(
+    rows: list[PositionCorrelationRow], db_path: Path | None
+) -> dict[str, Sensitivity]:
+    """Current admitted 10Y estimates, preserving their provenance."""
     if db_path is None or not db_path.exists():
         return {}
-    try:
-        from macro_store import fetch_sensitivities
-    except ImportError:
-        return {}
-    out: dict[str, float] = {}
-    for r in rows:
-        if not r.ticker:
-            continue
-        try:
-            sens = fetch_sensitivities(ticker=r.ticker, db_path=db_path)
-        except Exception:  # defensive on a render path; absence is fine
-            continue
-        for s in sens:
-            if s.series_id == "us_10y":
-                out[r.ticker.upper()] = s.beta
-                break
+    out: dict[str, Sensitivity] = {}
+    for row in rows:
+        if row.ticker:
+            estimates = [
+                s
+                for s in fetch_sensitivities(ticker=row.ticker, db_path=db_path)
+                if s.series_id == "us_10y"
+            ]
+            if estimates:
+                out[row.ticker.upper()] = min(
+                    estimates, key=lambda s: (s.lookback_window_days != 252, s.lookback_window_days)
+                )
     return out
+
+
+def rate_betas_for_rows(
+    rows: list[PositionCorrelationRow], db_path: Path | None
+) -> dict[str, float]:
+    return {ticker: s.beta for ticker, s in rate_estimates_for_rows(rows, db_path).items()}
 
 
 def _scenario_options() -> list[tuple[str, str]]:
@@ -2465,7 +2468,15 @@ def _factor_exposure_section(factor: FactorRollup) -> str:
             _kpi_card("Crowding", _ratio(factor.avg_correlation_spy), sub="avg corr to SPY")
         )
     if factor.rate_beta_10y is not None:
-        cards.append(_kpi_card("Rate β (10Y)", _ratio(factor.rate_beta_10y), sub="vs 10Y yield"))
+        cards.append(
+            _kpi_card(
+                "10Y sensitivity", _ratio(factor.rate_beta_10y), sub="v2: log return per +100 bps"
+            )
+        )
+    if factor.rate_evidence:
+        head += '<p class="muted">' + _provenance_html(" · ".join(factor.rate_evidence)) + "</p>"
+    else:
+        head += '<p class="muted">Rate sensitivity unavailable: legacy or stale estimates are quarantined.</p>'
     cov = f"{factor.names_priced} of {factor.names_total} names priced"
     note = (
         f'<p class="muted pfr-top">{escape(cov)}. Value / size / momentum load from local '
@@ -3198,7 +3209,16 @@ def _thesis_collision_section(cached: CachedReport | None) -> str:
     return f'{head}{stale_note}<div class="ptc-findings">{"".join(findings)}</div>{note}</section>'
 
 
-def _business_factor_section(factors: BookFactorVector | None) -> str:
+def _provenance_html(text: str) -> str:
+    """Keep full copyable hashes while allowing dense evidence to wrap."""
+    return re.sub(
+        r"[0-9a-f]{64}",
+        lambda match: "<wbr>".join(match[0][i : i + 16] for i in range(0, 64, 16)),
+        escape(text),
+    )
+
+
+def business_factor_section(factors: BookFactorVector | None) -> str:
     """C3: the book's business-factor exposure vector — book weight x
     persisted loading, summed per taxonomy factor, with each factor's top-3
     contributing tickers. Reuses the ``.pf-exp-*`` bar vocabulary the sector
@@ -3234,16 +3254,27 @@ def _business_factor_section(factors: BookFactorVector | None) -> str:
         "holding's disclosed revenue mix or thesis. Cached; regenerated on demand, "
         "not on every page load.</p>"
     )
+    if factors is not None:
+        head += (
+            f'<p class="muted">Source as of {escape(factors.source_as_of or "unavailable")} · '
+            f"effective as of {escape(factors.effective_as_of or 'unavailable')} · "
+            f"input {_provenance_html(factors.input_sha or 'unavailable')} · registry {escape(factors.registry_version)} · "
+            f"excluded {escape(', '.join(factors.excluded_tickers) or 'none')}</p>"
+        )
+        if factors.freshness_reasons:
+            head += f'<p class="muted">{escape("; ".join(factors.freshness_reasons))}</p>'
     if factors is None or not factors.vector:
         reason = "No business-factor exposures on file yet"
         if factors is not None and factors.availability == "missing_table":
             reason = "business_factor_exposures table not found on this substrate"
+        elif factors is not None and factors.availability == "stale":
+            reason = "Factor evidence is stale; current exposure is unavailable"
         elif factors is not None and factors.availability == "empty_table":
             reason = "business_factor_exposures table is empty (0 holdings populated)"
         return (
             f"{head}"
             f'<p class="muted">{reason} — run '
-            "<code>python execution/refresh_business_factors.py</code> "
+            "<code>python execution/<wbr>refresh_business_factors.py</code> "
             "(re-running is free once no holding's mix/thesis has changed).</p></section>"
         )
     top = sorted(factors.vector.items(), key=lambda kv: kv[1], reverse=True)
@@ -3612,3 +3643,10 @@ def _money(v: float | None) -> str:
     if abs(v) >= 1000:
         return f"${v:,.0f}"
     return f"${v:,.2f}"
+
+
+# Retain the existing internal entry point for older callers.
+_rate_betas = rate_betas_for_rows
+
+# Retain the existing internal entry point for older callers.
+_business_factor_section = business_factor_section

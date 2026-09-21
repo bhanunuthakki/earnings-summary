@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -36,7 +40,7 @@ def test_regime_models_frozen_immutability() -> None:
         notes="OK",
     )
     with pytest.raises(ValidationError):
-        obs.composite_quality_score = Decimal("0.50")  # type: ignore[misc]
+        setattr(obs, "composite_quality_score", Decimal("0.50"))
 
     receipt = ThreeRegimeBacktestReceipt(
         run_id="run_1",
@@ -51,69 +55,30 @@ def test_regime_models_frozen_immutability() -> None:
         verified_at=datetime.now(UTC),
     )
     with pytest.raises(ValidationError):
-        receipt.status = "HOLD"  # type: ignore[misc]
+        setattr(receipt, "status", "HOLD")
 
 
-def test_three_regime_backtest_runner_evaluation() -> None:
-    """Assert runner evaluates stratified cohort across all 3 regimes without look-ahead."""
-    runner = ThreeRegimeBacktestRunner()
-    cohort = ["RBRK", "WIX", "NVO", "BN", "ASML", "BHP"]
-    as_of = date(2026, 4, 30)
-
-    receipt = runner.evaluate_cohort(tickers=cohort, as_of_date=as_of)
-
-    assert receipt.status == "PASS"
-    assert receipt.total_tickers_evaluated == 6
-    assert receipt.total_regimes_evaluated == 3
-    assert len(receipt.observations) == 18  # 6 tickers * 3 regimes
-
-    # Check lookahead prevention invariant
-    for obs in receipt.observations:
-        assert obs.lookahead_prevented is True
-        assert obs.as_of_date == as_of
-
-    # Regime 2 (Combined) should achieve highest composite quality
-    q_regime0 = receipt.regime_quality_summary[SourceRegime.REGIME_0_VENDOR_ONLY.value]
-    q_regime1 = receipt.regime_quality_summary[SourceRegime.REGIME_1_SEC_IR_PRIMARY.value]
-    q_regime2 = receipt.regime_quality_summary[SourceRegime.REGIME_2_COMBINED.value]
-
-    assert q_regime2 > q_regime0
-    assert q_regime2 > q_regime1
-    assert q_regime2 >= Decimal("0.95")
-
-    # Regime 2 (Combined) has substantially lower cost than Regime 0 (Vendor-Only)
-    c_regime0 = receipt.regime_cost_summary_usd[SourceRegime.REGIME_0_VENDOR_ONLY.value]
-    c_regime2 = receipt.regime_cost_summary_usd[SourceRegime.REGIME_2_COMBINED.value]
-    assert c_regime2 < c_regime0
+@pytest.mark.parametrize("tickers", [["RBRK", "WIX"], ["NO_SUCH_ISSUER"], []])
+def test_missing_real_artifacts_cannot_certify_backtest(tickers: list[str]) -> None:
+    receipt = ThreeRegimeBacktestRunner().evaluate_cohort(tickers, date(1900, 1, 1))
+    assert receipt.status == "HOLD"
+    assert receipt.observations == ()
+    assert receipt.total_tickers_evaluated == 0
+    assert receipt.total_regimes_evaluated == 0
+    assert receipt.regime_quality_summary == {}
+    assert receipt.regime_cost_summary_usd == {}
+    assert "unavailable" in receipt.recommendation.lower()
 
 
-def test_strata_specific_quality_adjustments() -> None:
-    """Assert semiannual and foreign filer strata receive specific empirical adjustments."""
-    runner = ThreeRegimeBacktestRunner()
-    receipt = runner.evaluate_cohort(tickers=["WIX", "BHP"])
-
-    # BHP (Semiannual) completeness adjusted
-    bhp_obs_regime2 = next(
-        o
-        for o in receipt.observations
-        if o.ticker == "BHP" and o.regime == SourceRegime.REGIME_2_COMBINED
+def test_operational_cli_exits_nonzero_with_hold_receipt(tmp_path: Path) -> None:
+    receipt_path = tmp_path / "receipt.json"
+    result = subprocess.run(
+        [sys.executable, "execution/run_regime_backtest.py", "--output-receipt", str(receipt_path)],
+        capture_output=True,
+        text=True,
+        check=False,
     )
-    wix_obs_regime2 = next(
-        o
-        for o in receipt.observations
-        if o.ticker == "WIX" and o.regime == SourceRegime.REGIME_2_COMBINED
-    )
-    assert bhp_obs_regime2.completeness_score < wix_obs_regime2.completeness_score
-
-    # WIX (20-F) under vendor-only has reduced citation fidelity
-    wix_vendor = next(
-        o
-        for o in receipt.observations
-        if o.ticker == "WIX" and o.regime == SourceRegime.REGIME_0_VENDOR_ONLY
-    )
-    wix_sec = next(
-        o
-        for o in receipt.observations
-        if o.ticker == "WIX" and o.regime == SourceRegime.REGIME_1_SEC_IR_PRIMARY
-    )
-    assert wix_vendor.citation_fidelity_score < wix_sec.citation_fidelity_score
+    assert result.returncode == 1
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["status"] == "HOLD"
+    assert receipt["reason_codes"]

@@ -1,6 +1,6 @@
 """Materialise per-ticker fundamentals for the cockpit evaluation table.
 
-Runs the financial_facts double-scan (rev_yoy + fcf_margin per ticker) and
+Runs the canonical financial-series reader (rev_yoy + fcf_margin per ticker) and
 writes the result to data/cockpit_fundamentals.json. The GET / render reads
 this cache instead of hitting the DB on every boot — cutting ~1.2s off the
 render path (S12b profiling: the dominant boot offender, PR #535).
@@ -20,11 +20,13 @@ import logging
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from cockpit_fundamentals import materialize_fundamentals  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from cockpit_fundamentals import materialize_fundamentals
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger("refresh_cockpit_fundamentals")
 

@@ -37,9 +37,12 @@ import json
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict
 
 from models.companies import AccountingStandard, BusinessModelClass
 from models.documents import SourceQualityTier, SourceType
@@ -47,9 +50,41 @@ from models.facts import Currency, DerivedInputRef, DerivedRef, Unit
 from pipeline import locators
 from pipeline.confidence import score_confidence
 from pipeline.kpi_persistence import find_or_create_kpi_definition
+from pipeline.kpi_semantics import (
+    KpiAccountingBasis,
+    KpiConsolidationScope,
+    KpiPeriodRole,
+    KpiPublicationLane,
+    KpiSemanticContext,
+    KpiSemanticStatus,
+    KpiUnitScale,
+    persist_kpi_semantic_context,
+)
 from pipeline.restatement_detector import insert_kpi_with_restatement_detection
+from provenance.fact_plane_v2 import (
+    CanonicalJSONObject,
+    DerivationInputV2,
+    DerivationSealV2,
+    DerivedFactObservationV2,
+    FactCellV2,
+    FactResolutionCandidateV2,
+    FactResolutionRevisionV2,
+)
+from provenance.fact_read_model import FactAdmissionError, FactReadModel, ProvenanceBundle
+from provenance.financial_fact_resolution import canonical_fact_relation
+from provenance.source_fact_repository import (
+    DerivedSourceFact,
+    SourceFactPublication,
+    SourceFactRepository,
+)
 from report.sections._common import calendar_quarter_key
 from report.sections.financials import dedupe_by_calendar_quarter
+from sources.canonical_financial_series import (
+    CanonicalFinancialCoordinate,
+    CanonicalFinancialObservation,
+    CanonicalFinancialSeriesReader,
+    FinancialCadence,
+)
 from sources.price import LivePrice, read_live_price
 from timeseries.loaders import reader_tier_rank_sql
 
@@ -1149,11 +1184,767 @@ def persist_attempt(
 _persist_attempt = persist_attempt
 
 
+_DERIVED_METRIC_NAMESPACE = "urn:earnings-summary:derived:metrics-engine"
+_DERIVED_METRIC_TAXONOMY = "earnings-summary-metrics-engine"
+_CANONICAL_REVENUE_YOY_POLICY = "canonical-same-fiscal-quarter-v1"
+_YOY_SPAN_MIN_DAYS = 365 - 20
+_YOY_SPAN_MAX_DAYS = 365 + 20
+
+
+class MetricAttemptResult(BaseModel):
+    """Admitted public read of one metrics-engine computation attempt."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
+
+    ticker: str
+    formula_key: str
+    period_end: datetime
+    fiscal_period_type: str
+    status: Literal["ok", "not_computable", "unavailable"]
+    value: Decimal | None = None
+    reason_code: str | None = None
+    reason_detail: str | None = None
+    output_observation_id: str | None = None
+    kpi_fact_id: int | None = None
+    provenance: ProvenanceBundle | None = None
+
+
+def _aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _canonical_digest(value: object) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _canonical_revenue_fingerprint(
+    formula: FormulaDef,
+    coordinate: CanonicalFinancialCoordinate,
+    *,
+    source_cutoff: datetime,
+) -> str:
+    return _canonical_digest(
+        {
+            "coordinate": coordinate.model_dump(mode="json"),
+            "engine_version": ENGINE_VERSION,
+            "formula": formula.model_dump(mode="json"),
+            "selection_policy": _CANONICAL_REVENUE_YOY_POLICY,
+            "source_cutoff": _aware(source_cutoff).isoformat(),
+        }
+    )
+
+
+def _financial_coordinate_identity(
+    observation: CanonicalFinancialObservation,
+) -> tuple[object, ...]:
+    return (
+        observation.metric_id,
+        observation.metric_definition_revision_id,
+        observation.reporting_entity_id,
+        observation.scope_security_id,
+        observation.currency,
+        observation.unit,
+        observation.accounting_basis,
+        observation.consolidation_scope,
+        tuple(
+            json.dumps(item.canonical_member, sort_keys=True, separators=(",", ":"))
+            for item in observation.dimensions
+        ),
+    )
+
+
+def _canonical_prior_window(
+    coordinates: tuple[CanonicalFinancialCoordinate, ...],
+    current: CanonicalFinancialCoordinate,
+) -> tuple[CanonicalFinancialObservation | None, str | None]:
+    if current.observation is None or current.fiscal_year is None:
+        return None, "canonical_current_coordinate_not_admitted"
+    target = (current.fiscal_year - 1, current.fiscal_period)
+    matches = [item for item in coordinates if (item.fiscal_year, item.fiscal_period) == target]
+    if len(matches) != 1:
+        return None, "canonical_prior_coordinate_missing_or_ambiguous"
+    prior_coordinate = matches[0]
+    if prior_coordinate.status != "admitted" or prior_coordinate.observation is None:
+        return None, (
+            "canonical_prior_coordinate_"
+            f"{prior_coordinate.status}:{prior_coordinate.reason_code or 'unavailable'}"
+        )
+    prior = prior_coordinate.observation
+    span_days = (current.observation.period_end.date() - prior.period_end.date()).days
+    if not _YOY_SPAN_MIN_DAYS <= span_days <= _YOY_SPAN_MAX_DAYS:
+        return None, "canonical_prior_year_span_mismatch"
+    if _financial_coordinate_identity(current.observation) != _financial_coordinate_identity(prior):
+        return None, "canonical_prior_coordinate_incomparable"
+
+    labels = ("Q1", "Q2", "Q3", "Q4")
+    admitted = {
+        (item.fiscal_year, item.fiscal_period): item.observation
+        for item in coordinates
+        if item.status == "admitted" and item.observation is not None
+    }
+    cursor = prior
+    year = prior.fiscal_year
+    label = prior.fiscal_period
+    for _ in range(4):
+        index = labels.index(label)
+        label = labels[(index + 1) % len(labels)]
+        if index == len(labels) - 1:
+            year += 1
+        next_item = admitted.get((year, label))
+        if next_item is None:
+            return None, "canonical_quarterly_window_incomplete"
+        if next_item.period_start.date() != cursor.period_end.date() + timedelta(days=1):
+            return None, "canonical_quarterly_window_gap_or_overlap"
+        if _financial_coordinate_identity(next_item) != _financial_coordinate_identity(prior):
+            return None, "canonical_quarterly_window_incomparable"
+        cursor = next_item
+    if cursor.observation_id != current.observation.observation_id:
+        return None, "canonical_quarterly_fiscal_progression_mismatch"
+    return prior, None
+
+
+def _canonical_existing_attempt(
+    conn: sqlite3.Connection,
+    ticker: str,
+    coordinate: CanonicalFinancialCoordinate,
+    formula_id: int,
+) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT input_fingerprint,engine_version,status,reason_code,reason_detail,"
+        "output_observation_id,kpi_fact_id FROM metric_computation_attempts "
+        "WHERE ticker=? AND period_end=? AND fiscal_period_type=? AND formula_id=?",
+        (ticker.upper(), coordinate.period_end, coordinate.fiscal_period, formula_id),
+    ).fetchone()
+
+
+def _read_derived_output(
+    conn: sqlite3.Connection,
+    observation_id: str,
+    formula: FormulaDef,
+    *,
+    cutoff: datetime,
+) -> ProvenanceBundle | None:
+    try:
+        bundle = FactReadModel(conn).provenance_bundle(observation_id, cutoff=_aware(cutoff))
+    except (FactAdmissionError, ValueError, sqlite3.Error):
+        return None
+    derivation = bundle.derivation
+    if (
+        bundle.observation.observation_kind != "derived"
+        or bundle.observation.value_kind != "numeric"
+        or bundle.observation.decimal_value is None
+        or derivation is None
+        or derivation.formula_id != formula.formula_key
+        or derivation.formula_version != str(formula.version)
+        or bundle.cell.concept_namespace != _DERIVED_METRIC_NAMESPACE
+        or bundle.cell.concept_name != formula.formula_key
+        or bundle.cell.taxonomy_name != _DERIVED_METRIC_TAXONOMY
+        or bundle.cell.taxonomy_version != f"formula-v{formula.version}"
+        or bundle.cell.unit_key != Unit.PERCENT.value
+        or bundle.cell.currency is not None
+    ):
+        return None
+    snapshot = FactReadModel(conn).current_resolved(bundle.cell.fact_cell_id, cutoff=_aware(cutoff))
+    if snapshot is None:
+        return None
+    resolution = snapshot.resolution
+    if (
+        resolution is None
+        or resolution.status != "resolved"
+        or resolution.selected_observation_id != observation_id
+    ):
+        return None
+    return bundle
+
+
+def _legacy_document_bridge(
+    conn: sqlite3.Connection,
+    observation: CanonicalFinancialObservation,
+    ticker: str,
+) -> int | None:
+    row = conn.execute(
+        "SELECT document.legacy_document_id FROM evidence_document_versions AS document "
+        "JOIN documents AS legacy ON legacy.id=document.legacy_document_id "
+        "WHERE document.document_version_id=? AND upper(legacy.ticker)=?",
+        (observation.document_version_id, ticker.upper()),
+    ).fetchone()
+    return None if row is None or row[0] is None else int(row[0])
+
+
+def _write_revenue_yoy_compatibility(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    formula: FormulaDef,
+    formula_id: int,
+    current: CanonicalFinancialObservation,
+    prior: CanonicalFinancialObservation,
+    result: ComputedValue,
+    publication_at: datetime,
+) -> int | None:
+    anchor_doc_id = _legacy_document_bridge(conn, current, ticker)
+    if anchor_doc_id is None:
+        return None
+    inputs = [
+        DerivedInputRef(
+            ref="canonical_observation",
+            item=role,
+            period_end=item.period_end.date().isoformat(),
+            doc_id=anchor_doc_id if item is current else None,
+            observation_id=item.observation_id,
+            resolution_revision_id=item.canonical_resolution_revision_id,
+            fact_cell_id=item.canonical_metric_cell_id,
+            metric_definition_revision_id=item.metric_definition_revision_id,
+            observation_payload_sha256=item.observation_payload_sha256,
+            document_version_id=item.document_version_id,
+        )
+        for role, item in (("current_revenue", current), ("prior_year_revenue", prior))
+    ]
+    derived_loc = locators.derived_locator(
+        derived=DerivedRef(
+            formula_id=formula_id,
+            display=formula.display_formula,
+            method_flags=list(result.method_flags),
+            inputs=inputs,
+        )
+    )
+    # This projection is optional.  Some exact legacy-document bridges point
+    # at source classes which intentionally bypass legacy fact capture.  Keep
+    # the canonical publication even when that compatibility write cannot
+    # produce its own immutable legacy observation.
+    conn.execute("SAVEPOINT metrics_engine_revenue_yoy_compatibility")
+    try:
+        kpi_definition_id = find_or_create_kpi_definition(
+            conn,
+            ticker=ticker,
+            name=formula.formula_key,
+            unit=formula.unit,
+            primary_source=SourceType.FMP,
+        )
+        new_id, _ = insert_kpi_with_restatement_detection(
+            conn,
+            ticker=ticker,
+            period_end=current.period_end,
+            fiscal_period_type=current.fiscal_period,
+            kpi_definition_id=kpi_definition_id,
+            value=result.value,
+            unit=formula.unit.value,
+            currency=None,
+            source_doc_id=anchor_doc_id,
+            confidence=score_confidence(
+                tier=SourceQualityTier.FMP_NORMALIZED, extracted_by="metrics_engine"
+            ),
+            extracted_by="metrics_engine",
+            locator=derived_loc.to_json(),
+            computed_from=json.dumps(
+                {
+                    "display": formula.display_formula,
+                    "inputs": [item.model_dump() for item in inputs],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            formula_id=formula_id,
+            formula_version=formula.version,
+        )
+        if new_id is not None:
+            persist_kpi_semantic_context(
+                conn,
+                kpi_fact_id=new_id,
+                context=KpiSemanticContext(
+                    metric_name_as_reported=formula.formula_key,
+                    reported_period_end=current.period_end.date(),
+                    period_role=KpiPeriodRole.CURRENT,
+                    publication_lane=KpiPublicationLane.CURRENT_ACTUAL,
+                    accounting_basis={
+                        "us_gaap": KpiAccountingBasis.GAAP,
+                        "ifrs": KpiAccountingBasis.GAAP,
+                        "non_gaap": KpiAccountingBasis.NON_GAAP,
+                        "management": KpiAccountingBasis.MANAGEMENT,
+                    }[current.accounting_basis],
+                    consolidation_scope=KpiConsolidationScope(current.consolidation_scope),
+                    dimensions={
+                        f"{item.axis_namespace}:{item.axis_name}": json.dumps(
+                            item.canonical_member,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        for item in current.dimensions
+                    },
+                    unit_scale=KpiUnitScale.NONE,
+                    status=KpiSemanticStatus.ADMITTED,
+                ),
+                reviewed_by="deterministic:metrics_engine",
+                knowledge_at=_aware(publication_at),
+                kpi_definition_revision_id=None,
+            )
+    except (KeyError, RuntimeError, ValueError, sqlite3.Error):
+        conn.execute("ROLLBACK TO metrics_engine_revenue_yoy_compatibility")
+        conn.execute("RELEASE metrics_engine_revenue_yoy_compatibility")
+        return None
+    conn.execute("RELEASE metrics_engine_revenue_yoy_compatibility")
+    return new_id
+
+
+def _publish_revenue_yoy(
+    conn: sqlite3.Connection,
+    *,
+    formula: FormulaDef,
+    current: CanonicalFinancialObservation,
+    prior: CanonicalFinancialObservation,
+    result: ComputedValue,
+    fingerprint: str,
+    source_cutoff: datetime,
+    publication_at: datetime,
+    supersedes_observation_id: str | None,
+) -> str:
+    formula_definition_sha256 = _canonical_digest(formula.model_dump(mode="json"))
+    execution_config_sha256 = _canonical_digest(
+        {
+            "engine_version": ENGINE_VERSION,
+            "selection_policy": _CANONICAL_REVENUE_YOY_POLICY,
+            "source_cutoff": _aware(source_cutoff).isoformat(),
+        }
+    )
+    cell_digest = _canonical_digest(
+        {
+            "accounting_basis": current.accounting_basis,
+            "consolidation_scope": current.consolidation_scope,
+            "dimensions": [item.canonical_member for item in current.dimensions],
+            "fiscal_period": current.fiscal_period,
+            "fiscal_year": current.fiscal_year,
+            "period_end": current.period_end.isoformat(),
+            "period_start": current.period_start.isoformat(),
+            "reporting_entity_id": current.reporting_entity_id,
+            "scope_security_id": current.scope_security_id,
+        }
+    )
+    cell_id = f"metrics-engine-cell-{cell_digest[:64]}"
+    observation_id = f"metrics-engine-observation-{fingerprint[:64]}"
+    published_at = _aware(publication_at)
+    known_at = _aware(source_cutoff)
+    output_cell = FactCellV2.model_validate(
+        {
+            "fact_cell_id": cell_id,
+            "idempotency_key": f"metrics-engine-cell:{cell_digest}",
+            "reporting_entity_id": current.reporting_entity_id,
+            "scope_security_id": current.scope_security_id,
+            "concept_namespace": _DERIVED_METRIC_NAMESPACE,
+            "concept_name": formula.formula_key,
+            "taxonomy_name": _DERIVED_METRIC_TAXONOMY,
+            "taxonomy_version": f"formula-v{formula.version}",
+            "accounting_basis": current.accounting_basis,
+            "consolidation_scope": current.consolidation_scope,
+            "period_kind": "duration",
+            "period_start": current.period_start,
+            "period_end": current.period_end,
+            "fiscal_year": current.fiscal_year,
+            "fiscal_period": current.fiscal_period,
+            "dimensions": current.dimensions,
+            "unit_key": Unit.PERCENT.value,
+            "currency": None,
+            "effective_at": current.period_end,
+            "knowledge_at": known_at,
+            "recorded_at": published_at,
+        }
+    )
+    output = DerivedFactObservationV2(
+        observation_id=observation_id,
+        idempotency_key=f"metrics-engine-observation:{fingerprint}",
+        fact_cell_id=cell_id,
+        observation_kind="derived",
+        value_kind="numeric",
+        numeric_value=str(result.value),
+        raw_lexical_value=str(result.value),
+        method_name="metrics-engine",
+        method_version=ENGINE_VERSION,
+        method_config_sha256=execution_config_sha256,
+        revision_kind="initial" if supersedes_observation_id is None else "restatement",
+        supersedes_observation_id=supersedes_observation_id,
+        effective_at=known_at,
+        knowledge_at=known_at,
+        recorded_at=published_at,
+        formula_id=formula.formula_key,
+        formula_version=str(formula.version),
+    )
+    edges = tuple(
+        DerivationInputV2(
+            edge_id=f"metrics-engine-edge-{fingerprint[:48]}-{position}",
+            idempotency_key=f"metrics-engine-edge:{fingerprint}:{position}",
+            derived_observation_id=observation_id,
+            input_position=position,
+            input_observation_id=item.observation_id,
+            input_canonical_resolution_revision_id=(item.canonical_resolution_revision_id),
+            input_role=role,
+            recorded_at=published_at,
+        )
+        for position, (role, item) in enumerate(
+            (("current_revenue", current), ("prior_year_revenue", prior))
+        )
+    )
+    derivation = DerivationSealV2(
+        derivation_seal_id=f"metrics-engine-derivation-{fingerprint[:64]}",
+        idempotency_key=f"metrics-engine-derivation:{fingerprint}",
+        derived_observation_id=observation_id,
+        ordered_inputs=edges,
+        input_basis="as_known",
+        formula_definition_sha256=formula_definition_sha256,
+        formula_config_sha256=execution_config_sha256,
+        seal_method="canonical-json",
+        seal_method_version="v1",
+        effective_at=known_at,
+        knowledge_at=known_at,
+        recorded_at=published_at,
+    )
+    candidate = FactResolutionCandidateV2(
+        candidate_id=f"metrics-engine-candidate-{fingerprint[:64]}",
+        idempotency_key=f"metrics-engine-candidate:{fingerprint}",
+        candidate_set_id=f"metrics-engine-candidate-set-{fingerprint[:64]}",
+        fact_cell_id=cell_id,
+        observation_id=observation_id,
+        candidate_ordinal=0,
+        eligibility="eligible",
+        reason_code="sealed_formula",
+        reason_details=CanonicalJSONObject({}),
+        recorded_at=published_at,
+    )
+    prior_revision = conn.execute(
+        "SELECT resolution_revision_id,revision FROM fact_resolution_revisions_v2 "
+        "WHERE fact_cell_id=? ORDER BY revision DESC LIMIT 1",
+        (cell_id,),
+    ).fetchone()
+    revision_number = 1 if prior_revision is None else int(prior_revision[1]) + 1
+    resolution = FactResolutionRevisionV2.model_validate(
+        {
+            "resolution_revision_id": f"metrics-engine-resolution-{fingerprint[:64]}",
+            "idempotency_key": f"metrics-engine-resolution:{fingerprint}",
+            "fact_cell_id": cell_id,
+            "revision": revision_number,
+            "status": "resolved",
+            "candidate_set_id": candidate.candidate_set_id,
+            "candidates": (candidate,),
+            "selected_observation_id": observation_id,
+            "policy_name": "sealed-derived-only",
+            "policy_version": "v1",
+            "policy_config_sha256": _canonical_digest("sealed-derived-only:v1"),
+            "reason_code": "resolved",
+            "reason_details": CanonicalJSONObject({}),
+            "knowledge_cutoff": known_at,
+            "effective_at": known_at,
+            "recorded_at": published_at,
+            "supersedes_resolution_revision_id": (
+                None if prior_revision is None else str(prior_revision[0])
+            ),
+        }
+    )
+    SourceFactRepository(conn).publish(
+        SourceFactPublication(
+            publication_id=f"metrics-engine-publication-{fingerprint[:64]}",
+            idempotency_key=f"metrics-engine-publication:{fingerprint}",
+            created_at=published_at,
+            recorded_at=published_at,
+            derived_facts=(DerivedSourceFact(cell=output_cell, observation=output),),
+            derivations=(derivation,),
+            resolutions=(resolution,),
+        )
+    )
+    return observation_id
+
+
+def _upsert_canonical_attempt(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    coordinate: CanonicalFinancialCoordinate,
+    formula_id: int,
+    result: ComputedValue | NotComputable,
+    fingerprint: str,
+    output_observation_id: str | None,
+    kpi_fact_id: int | None,
+    computed_at: datetime,
+) -> None:
+    status = "ok" if isinstance(result, ComputedValue) else "not_computable"
+    reason_code = None if isinstance(result, ComputedValue) else result.reason_code.value
+    reason_detail = None if isinstance(result, ComputedValue) else result.reason_detail
+    conn.execute(
+        """
+        INSERT INTO metric_computation_attempts
+            (ticker,period_end,fiscal_period_type,formula_id,status,reason_code,
+             reason_detail,kpi_fact_id,input_fingerprint,engine_version,computed_at,
+             output_observation_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(ticker,period_end,fiscal_period_type,formula_id) DO UPDATE SET
+            status=excluded.status,
+            reason_code=excluded.reason_code,
+            reason_detail=excluded.reason_detail,
+            kpi_fact_id=excluded.kpi_fact_id,
+            input_fingerprint=excluded.input_fingerprint,
+            engine_version=excluded.engine_version,
+            computed_at=excluded.computed_at,
+            output_observation_id=excluded.output_observation_id
+        """,
+        (
+            ticker.upper(),
+            coordinate.period_end,
+            coordinate.fiscal_period,
+            formula_id,
+            status,
+            reason_code,
+            reason_detail,
+            kpi_fact_id,
+            fingerprint,
+            ENGINE_VERSION,
+            _aware(computed_at),
+            output_observation_id,
+        ),
+    )
+
+
+def _compute_canonical_revenue_yoy(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    business_model: BusinessModelClass,
+    formula_id: int,
+    source_cutoff: datetime,
+    force: bool,
+) -> tuple[int, int, int, int]:
+    formula = REGISTRY[("revenue_yoy", 1)]
+    projection = CanonicalFinancialSeriesReader(
+        conn, ticker, cutoff=source_cutoff
+    ).project_coordinates("revenue", cadence=FinancialCadence.QUARTERLY)
+    if projection.status == "unavailable":
+        return 0, 0, 0, 0
+    attempts = computed_ok = not_computable = skipped = 0
+    for coordinate in projection.coordinates:
+        fingerprint = _canonical_revenue_fingerprint(
+            formula, coordinate, source_cutoff=source_cutoff
+        )
+        if not formula.applies_to(business_model):
+            result: ComputedValue | NotComputable = NotComputable(
+                reason_code=ReasonCode.NOT_APPLICABLE_BUSINESS_MODEL,
+                reason_detail=f"{business_model.value} excluded from revenue_yoy",
+            )
+            prior = None
+        elif coordinate.status != "admitted" or coordinate.observation is None:
+            result = NotComputable(
+                reason_code=ReasonCode.MISSING_INPUT,
+                reason_detail=(
+                    f"canonical_current_{coordinate.status}:"
+                    f"{coordinate.reason_code or 'unavailable'}"
+                ),
+            )
+            prior = None
+        else:
+            prior, prior_reason = _canonical_prior_window(projection.coordinates, coordinate)
+            if prior is None:
+                result = NotComputable(
+                    reason_code=ReasonCode.MISSING_INPUT,
+                    reason_detail=prior_reason or "canonical_prior_unavailable",
+                )
+            else:
+                result = compute(
+                    formula,
+                    {CanonicalConcept.REVENUE: coordinate.observation.value},
+                    prior_inputs={CanonicalConcept.REVENUE: prior.value},
+                )
+        existing = _canonical_existing_attempt(conn, ticker, coordinate, formula_id)
+        expected = (
+            fingerprint,
+            ENGINE_VERSION,
+            "ok" if isinstance(result, ComputedValue) else "not_computable",
+            None if isinstance(result, ComputedValue) else result.reason_code.value,
+            None if isinstance(result, ComputedValue) else result.reason_detail,
+        )
+        unchanged = (
+            existing is not None and tuple(existing[index] for index in range(5)) == expected
+        )
+        reusable_output: str | None = None
+        if existing is not None and unchanged and isinstance(result, ComputedValue):
+            output_id = existing["output_observation_id"]
+            if (
+                output_id is not None
+                and _read_derived_output(
+                    conn,
+                    str(output_id),
+                    formula,
+                    cutoff=datetime.now(UTC),
+                )
+                is not None
+            ):
+                reusable_output = str(output_id)
+            else:
+                unchanged = False
+        if unchanged and not force:
+            skipped += 1
+            continue
+        publication_at = datetime.now(UTC)
+        output_observation_id: str | None = None
+        kpi_fact_id: int | None = None
+        if isinstance(result, ComputedValue):
+            assert coordinate.observation is not None and prior is not None
+            if reusable_output is not None:
+                output_observation_id = reusable_output
+                kpi_fact_id = None if existing is None else existing["kpi_fact_id"]
+            else:
+                supersedes: str | None = None
+                if existing is not None and existing["output_observation_id"] is not None:
+                    prior_output_id = str(existing["output_observation_id"])
+                    if (
+                        _read_derived_output(conn, prior_output_id, formula, cutoff=publication_at)
+                        is not None
+                    ):
+                        supersedes = prior_output_id
+                output_observation_id = _publish_revenue_yoy(
+                    conn,
+                    formula=formula,
+                    current=coordinate.observation,
+                    prior=prior,
+                    result=result,
+                    fingerprint=fingerprint,
+                    source_cutoff=source_cutoff,
+                    publication_at=publication_at,
+                    supersedes_observation_id=supersedes,
+                )
+                kpi_fact_id = _write_revenue_yoy_compatibility(
+                    conn,
+                    ticker=ticker,
+                    formula=formula,
+                    formula_id=formula_id,
+                    current=coordinate.observation,
+                    prior=prior,
+                    result=result,
+                    publication_at=publication_at,
+                )
+        _upsert_canonical_attempt(
+            conn,
+            ticker=ticker,
+            coordinate=coordinate,
+            formula_id=formula_id,
+            result=result,
+            fingerprint=fingerprint,
+            output_observation_id=output_observation_id,
+            kpi_fact_id=kpi_fact_id,
+            computed_at=publication_at,
+        )
+        attempts += 1
+        if isinstance(result, ComputedValue):
+            computed_ok += 1
+        else:
+            not_computable += 1
+    return attempts, computed_ok, not_computable, skipped
+
+
+def read_attempt_result(
+    conn: sqlite3.Connection,
+    ticker: str,
+    formula_key: str,
+    *,
+    read_cutoff: datetime,
+    period_end: datetime | None = None,
+) -> MetricAttemptResult | None:
+    """Read one attempt through its admitted canonical output when present."""
+    if read_cutoff.tzinfo is None:
+        raise ValueError("metrics attempt read cutoff must be timezone-aware")
+    params: list[object] = [ticker.upper(), formula_key]
+    period_filter = ""
+    if period_end is not None:
+        period_filter = " AND attempt.period_end=?"
+        params.append(period_end)
+    row = conn.execute(
+        "SELECT attempt.*,definition.formula_key,definition.version "
+        "FROM metric_computation_attempts AS attempt "
+        "JOIN formula_definitions AS definition ON definition.id=attempt.formula_id "
+        "WHERE attempt.ticker=? AND definition.formula_key=?"
+        + period_filter
+        + " ORDER BY attempt.period_end DESC LIMIT 1",
+        params,
+    ).fetchone()
+    if row is None:
+        return None
+    result_ticker = str(row["ticker"])
+    result_formula = str(row["formula_key"])
+    result_period_end = datetime.fromisoformat(str(row["period_end"]))
+    result_fiscal_period = str(row["fiscal_period_type"])
+    output_id = None if row["output_observation_id"] is None else str(row["output_observation_id"])
+    kpi_fact_id = None if row["kpi_fact_id"] is None else int(row["kpi_fact_id"])
+    if str(row["status"]) != "ok":
+        return MetricAttemptResult(
+            ticker=result_ticker,
+            formula_key=result_formula,
+            period_end=result_period_end,
+            fiscal_period_type=result_fiscal_period,
+            status="not_computable",
+            reason_code=None if row["reason_code"] is None else str(row["reason_code"]),
+            reason_detail=None if row["reason_detail"] is None else str(row["reason_detail"]),
+            output_observation_id=output_id,
+            kpi_fact_id=kpi_fact_id,
+        )
+    formula = REGISTRY.get((formula_key, int(row["version"])))
+    if isinstance(output_id, str):
+        bundle = (
+            None
+            if formula is None
+            else _read_derived_output(conn, output_id, formula, cutoff=read_cutoff)
+        )
+        if bundle is None:
+            return MetricAttemptResult(
+                ticker=result_ticker,
+                formula_key=result_formula,
+                period_end=result_period_end,
+                fiscal_period_type=result_fiscal_period,
+                status="unavailable",
+                reason_code="canonical_output_unavailable",
+                reason_detail="attempt output observation is not admitted at the read cutoff",
+                output_observation_id=output_id,
+                kpi_fact_id=kpi_fact_id,
+            )
+        return MetricAttemptResult(
+            ticker=result_ticker,
+            formula_key=result_formula,
+            period_end=result_period_end,
+            fiscal_period_type=result_fiscal_period,
+            status="ok",
+            value=bundle.observation.decimal_value,
+            output_observation_id=output_id,
+            kpi_fact_id=kpi_fact_id,
+            provenance=bundle,
+        )
+    if isinstance(kpi_fact_id, int):
+        legacy_relation = canonical_fact_relation(conn, "kpi_facts").sql
+        legacy = conn.execute(
+            f"SELECT value FROM {legacy_relation} WHERE id=? AND ticker=?",  # nosec B608
+            (kpi_fact_id, ticker.upper()),
+        ).fetchone()
+        if legacy is not None:
+            return MetricAttemptResult(
+                ticker=result_ticker,
+                formula_key=result_formula,
+                period_end=result_period_end,
+                fiscal_period_type=result_fiscal_period,
+                status="ok",
+                value=Decimal(str(legacy["value"])),
+                kpi_fact_id=kpi_fact_id,
+            )
+    return MetricAttemptResult(
+        ticker=result_ticker,
+        formula_key=result_formula,
+        period_end=result_period_end,
+        fiscal_period_type=result_fiscal_period,
+        status="unavailable",
+        reason_code="metric_output_unavailable",
+        reason_detail="ok attempt has no admitted canonical or legacy output",
+        kpi_fact_id=kpi_fact_id,
+    )
+
+
 def compute_for_ticker(
     conn: sqlite3.Connection,
     ticker: str,
     *,
     force: bool = False,
+    source_cutoff: datetime | None = None,
     repo_root: Path | None = None,
     price_reader: PriceReader = read_live_price,
 ) -> TickerComputeSummary:
@@ -1172,6 +1963,7 @@ def compute_for_ticker(
     avoid the network.
     """
     ticker = ticker.upper()
+    cutoff = datetime.now(UTC) if source_cutoff is None else _aware(source_cutoff)
     business_model, standard = resolve_classification(conn, ticker)
     formula_ids = upsert_formula_definitions(conn)
     applicable = {f.formula_key for f in applicable_formulas(business_model, ticker=ticker)}
@@ -1192,7 +1984,19 @@ def compute_for_ticker(
     not_computable = 0
     skipped = 0
 
+    canonical_counts = _compute_canonical_revenue_yoy(
+        conn,
+        ticker=ticker,
+        business_model=business_model,
+        formula_id=formula_ids[("revenue_yoy", 1)],
+        source_cutoff=cutoff,
+        force=force,
+    )
+    attempts, computed_ok, not_computable, skipped = canonical_counts
+
     for formula in all_latest():
+        if formula.formula_key == "revenue_yoy":
+            continue
         formula_id = formula_ids[(formula.formula_key, formula.version)]
         is_applicable = formula.formula_key in applicable
         is_valuation = formula.formula_key in _VALUATION_FORMULA_KEYS

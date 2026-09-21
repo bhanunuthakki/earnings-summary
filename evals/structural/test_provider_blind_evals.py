@@ -12,6 +12,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from llm.envelope import (
+    LLMCapability,
     LLMFailureCode,
     LLMRequestEnvelope,
     LLMResponseEnvelope,
@@ -206,13 +207,15 @@ def test_provider_adapter_failure_closed_handling() -> None:
 
 def test_request_envelope_immutability() -> None:
     req = LLMRequestEnvelope(
-        purpose="eval_purpose",
+        purpose="decision_conditions_extract",
+        prompt_version="v1",
+        schema_version="test/v1",
         prompt="Analyze earnings transcript",
         temperature=0.2,
-        capabilities_required=("fast_inference",),
+        capabilities_required=(LLMCapability.STRUCTURED_OUTPUT,),
     )
-    assert req.purpose == "eval_purpose"
+    assert req.purpose == "decision_conditions_extract"
     assert req.prompt_version == "v1"
 
     with pytest.raises(ValidationError):
-        req.purpose = "mutation_attempt"  # type: ignore[misc]
+        req.purpose = "mutation_attempt"

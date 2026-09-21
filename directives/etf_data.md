@@ -47,6 +47,22 @@ the evaluation lane depends on them.
   14.3 = 14.3x), `weighted_avg_mktcap_usd_m`, `characteristics_as_of`,
   `characteristics_source`. Characteristics merge read-modify-write — a
   source that publishes only ER never blanks another source's fields.
+- `etf_profile.field_evidence_json`: per-field value, source, timezone-aware
+  `captured_at`, and nullable source-published `source_as_of` for deterministic
+  investment labels. Legacy rows default to `{}`; no backfilled timestamp is
+  invented. An issuer overlay updates receipts only for fields it actually
+  publishes and does not renew `profile_fetched_at` for the original profile.
+  Holdings dates must not be assigned to separately fetched profile fields.
+- Label acquisition admission uses `etf_weekly_capture.v1`: at most seven days
+  since a verified capture, derived from the weekly refresh cadence below.
+  This means **recently captured**, not proof that underlying issuer facts are
+  current. Undated source observations retain an explicit unknown-publication
+  warning. Dated observations predating their capture remain historical/unknown
+  currency and cannot authorize current profile labels until an applicable
+  issuer/field validity policy exists. There is no universal issuer-data TTL.
+  Future/ambiguous timestamps, changed values without matching receipts, legacy
+  rows, and filesystem-mtime-only cache replays cannot authorize labels. Other
+  independently admitted style/book evidence remains usable.
 - Prices: `data/factor_proxies/<T>.json` `{"ticker","fetched_at","rows":
   [[iso_date, close]]}` — `allocation.price_history.load_daily_closes` falls
   back to this store when the FMP price-chart cache has nothing (FMP wins

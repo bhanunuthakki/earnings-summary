@@ -4,6 +4,8 @@ import hashlib
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from provenance.population_completeness import PopulationTemporalScope
 from provenance.population_identity import (
     PopulationIdentityRequest,
@@ -190,3 +192,51 @@ def test_identity_verifier_ignores_post_o_revision_but_commits_actual_clocks() -
     assert verification.materialized_count == 1
     assert verification.failed_count == 0
     assert verification.artifact_sets[0].row_count == 1
+
+
+def test_exact_document_scope_avoids_unrelated_issuer_bindings() -> None:
+    conn = _connection()
+    conn.execute(
+        "INSERT INTO evidence_document_versions VALUES (?,?,?,?)",
+        ("unrelated-document", "source-1", "unrelated-issuer", OBSERVED.isoformat()),
+    )
+    conn.commit()
+    request = PopulationIdentityRequest(
+        apply=True,
+        knowledge_cutoff=K,
+        operation_recorded_at=OBSERVED,
+        document_version_ids=("document-1",),
+    )
+    result = populate_recorded_subject_bindings(conn, request)
+    assert result.expected_count == result.selected_count == 1
+    assert result.unresolved_count == 0
+    assert (
+        conn.execute(
+            "SELECT count(*) FROM recorded_subject_binding_revisions WHERE recorded_issuer_id='unrelated-issuer'"
+        ).fetchone()[0]
+        == 0
+    )
+    all_result = populate_recorded_subject_bindings(
+        conn, request.model_copy(update={"apply": False, "document_version_ids": None})
+    )
+    assert all_result.expected_count == 2
+    assert result.input_commitment_sha256 != all_result.input_commitment_sha256
+    conn.close()
+
+
+def test_missing_exact_document_scope_fails_before_any_identity_write() -> None:
+    conn = _connection()
+    conn.commit()
+    before = list(conn.iterdump())
+    with pytest.raises(ValueError, match="selected document unavailable"):
+        populate_recorded_subject_bindings(
+            conn,
+            PopulationIdentityRequest(
+                apply=True,
+                knowledge_cutoff=K,
+                operation_recorded_at=OBSERVED,
+                document_version_ids=("absent",),
+            ),
+        )
+    assert list(conn.iterdump()) == before
+    conn.close()

@@ -106,6 +106,33 @@ def upsert_candidate(
     user_id: str = DEFAULT_USER_ID,
     db_path: Path | str | None = None,
 ) -> CandidateRow:
+    """Refresh candidate evidence/score without changing the owner's lifecycle."""
+    conn = open_conn(db_path)
+    try:
+        with conn:
+            return _upsert_candidate(
+                conn,
+                ticker=ticker,
+                name=name,
+                score=score,
+                evidence=evidence,
+                score_json=score_json,
+                user_id=user_id,
+            )
+    finally:
+        conn.close()
+
+
+def _upsert_candidate(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    name: str | None,
+    score: float,
+    evidence: list[dict[str, object]],
+    score_json: dict[str, object] | None = None,
+    user_id: str = DEFAULT_USER_ID,
+) -> CandidateRow:
     """INSERT a fresh candidate, or refresh an existing (user, ticker) row's
     evidence/score/score_json/name/last_seen_at. Status is never written on
     conflict."""
@@ -114,34 +141,29 @@ def upsert_candidate(
         raise ValueError("candidate ticker must be non-empty")
     now = now_iso()
     score_blob = None if score_json is None else json.dumps(score_json)
-    conn = open_conn(db_path)
-    try:
-        conn.execute(
-            """
-            INSERT INTO discovery_candidates
-                (user_id, ticker, name, status, score, evidence_json, score_json,
-                 first_seen_at, last_seen_at, updated_at)
-            VALUES (?, ?, ?, 'new', ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (user_id, ticker) DO UPDATE SET
-              name = excluded.name,
-              score = excluded.score,
-              evidence_json = excluded.evidence_json,
-              score_json = excluded.score_json,
-              last_seen_at = excluded.last_seen_at,
-              updated_at = excluded.updated_at
-            """,
-            (user_id, symbol, name, score, json.dumps(evidence), score_blob, now, now, now),
-        )
-        conn.commit()
-        row = conn.execute(
-            "SELECT * FROM discovery_candidates WHERE user_id = ? AND ticker = ?",
-            (user_id, symbol),
-        ).fetchone()
-        if row is None:  # pragma: no cover - upsert guarantees presence
-            raise LookupError(f"discovery_candidates ({user_id!r}, {symbol!r}) missing")
-        return _row_to_dc(row)
-    finally:
-        conn.close()
+    conn.execute(
+        """
+        INSERT INTO discovery_candidates
+            (user_id, ticker, name, status, score, evidence_json, score_json,
+             first_seen_at, last_seen_at, updated_at)
+        VALUES (?, ?, ?, 'new', ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (user_id, ticker) DO UPDATE SET
+          name = excluded.name,
+          score = excluded.score,
+          evidence_json = excluded.evidence_json,
+          score_json = excluded.score_json,
+          last_seen_at = excluded.last_seen_at,
+          updated_at = excluded.updated_at
+        """,
+        (user_id, symbol, name, score, json.dumps(evidence), score_blob, now, now, now),
+    )
+    row = conn.execute(
+        "SELECT * FROM discovery_candidates WHERE user_id = ? AND ticker = ?",
+        (user_id, symbol),
+    ).fetchone()
+    if row is None:  # pragma: no cover - upsert guarantees presence
+        raise LookupError(f"discovery_candidates ({user_id!r}, {symbol!r}) missing")
+    return _row_to_dc(row)
 
 
 def existing_candidate_tickers(
@@ -387,6 +409,22 @@ def replace_signals(
     user_id: str = DEFAULT_USER_ID,
     db_path: Path | str | None = None,
 ) -> int:
+    """Replace exactly the requested owner's signal classes atomically."""
+    conn = open_conn(db_path)
+    try:
+        with conn:
+            return _replace_signals(conn, signals, classes=classes, user_id=user_id)
+    finally:
+        conn.close()
+
+
+def _replace_signals(
+    conn: sqlite3.Connection,
+    signals: Iterable[SignalWrite],
+    *,
+    classes: Iterable[str],
+    user_id: str = DEFAULT_USER_ID,
+) -> int:
     """Replace this user's signals for the given ``classes`` with ``signals``,
     in one transaction. Each producer owns its classes and fully refreshes them
     each run: the screen+adjacency run replaces ``{'screen','adjacency'}``, the
@@ -398,42 +436,37 @@ def replace_signals(
         return 0
     rows = list(signals)
     now = now_iso()
-    conn = open_conn(db_path)
-    try:
-        marks = ",".join("?" * len(class_set))
-        conn.execute(
-            f"DELETE FROM discovery_signals WHERE user_id = ? AND signal_class IN ({marks})",
-            [user_id, *class_set],
-        )
-        conn.executemany(
-            """
-            INSERT INTO discovery_signals
-                (user_id, ticker, signal_class, source_key, weight, raw_strength,
-                 observed_at, detail, meta_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    user_id,
-                    s.ticker.strip().upper(),
-                    s.signal_class,
-                    s.source_key,
-                    float(s.weight),
-                    float(s.raw_strength),
-                    s.observed_at,
-                    s.detail,
-                    json.dumps(s.meta) if s.meta else None,
-                    now,
-                    now,
-                )
-                for s in rows
-                if s.signal_class in class_set
-            ],
-        )
-        conn.commit()
-        return len(rows)
-    finally:
-        conn.close()
+    marks = ",".join("?" * len(class_set))
+    conn.execute(
+        f"DELETE FROM discovery_signals WHERE user_id = ? AND signal_class IN ({marks})",
+        [user_id, *class_set],
+    )
+    conn.executemany(
+        """
+        INSERT INTO discovery_signals
+            (user_id, ticker, signal_class, source_key, weight, raw_strength,
+             observed_at, detail, meta_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                user_id,
+                s.ticker.strip().upper(),
+                s.signal_class,
+                s.source_key,
+                float(s.weight),
+                float(s.raw_strength),
+                s.observed_at,
+                s.detail,
+                json.dumps(s.meta) if s.meta else None,
+                now,
+                now,
+            )
+            for s in rows
+            if s.signal_class in class_set
+        ],
+    )
+    return len(rows)
 
 
 def list_signals(
@@ -450,6 +483,37 @@ def list_signals(
             [*params, ticker.strip().upper()],
         ).fetchall()
         return [_signal_row_to_dc(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def load_discovery_refresh_state(
+    *, user_id: str = DEFAULT_USER_ID, db_path: Path | str | None = None
+) -> tuple[dict[str, CandidateRow], dict[str, list[SignalRow]]]:
+    """Read every lifecycle and signal owner in two queries on one consistent connection."""
+    clause, params = _user_in(user_id)
+    conn = open_conn(db_path)
+    try:
+        conn.execute("BEGIN")
+        candidate_rows = conn.execute(
+            f"SELECT * FROM discovery_candidates WHERE {clause} "
+            "ORDER BY CASE WHEN user_id=? THEN 0 ELSE 1 END,id",
+            [*params, user_id],
+        ).fetchall()
+        signal_rows = conn.execute(
+            f"SELECT * FROM discovery_signals WHERE {clause} "
+            "ORDER BY observed_at DESC,signal_class,source_key",
+            params,
+        ).fetchall()
+        candidates: dict[str, CandidateRow] = {}
+        for row in candidate_rows:
+            candidate = _row_to_dc(row)
+            candidates.setdefault(candidate.ticker, candidate)
+        signals: dict[str, list[SignalRow]] = {}
+        for row in signal_rows:
+            signal = _signal_row_to_dc(row)
+            signals.setdefault(signal.ticker, []).append(signal)
+        return candidates, signals
     finally:
         conn.close()
 
@@ -479,3 +543,39 @@ def signals_by_ticker(
     for r in rows:
         out.setdefault(str(r["ticker"]).upper(), []).append(_signal_row_to_dc(r))
     return out
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateWrite:
+    ticker: str
+    name: str | None
+    score: float
+    evidence: list[dict[str, object]]
+    score_json: dict[str, object]
+
+
+def persist_discovery_refresh(
+    candidates: Iterable[CandidateWrite],
+    signals: Iterable[SignalWrite],
+    *,
+    classes: Iterable[str],
+    user_id: str = DEFAULT_USER_ID,
+    db_path: Path | str | None = None,
+) -> None:
+    """Candidate evidence/scores and this producer's signals commit or roll back together."""
+    conn = open_conn(db_path)
+    try:
+        with conn:
+            for candidate in candidates:
+                _upsert_candidate(
+                    conn,
+                    ticker=candidate.ticker,
+                    name=candidate.name,
+                    score=candidate.score,
+                    evidence=candidate.evidence,
+                    score_json=candidate.score_json,
+                    user_id=user_id,
+                )
+            _replace_signals(conn, signals, classes=classes, user_id=user_id)
+    finally:
+        conn.close()

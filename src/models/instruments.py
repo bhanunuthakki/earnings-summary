@@ -18,7 +18,17 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class EtfFieldEvidence(BaseModel):
+    """Observed source value, not an inferred issuer publication date."""
+
+    model_config = ConfigDict(frozen=True, allow_inf_nan=False)
+    value: str | float
+    source: str = Field(min_length=1)
+    captured_at: datetime
+    source_as_of: date | None = None
 
 
 class EtfProfile(BaseModel):
@@ -56,6 +66,7 @@ class EtfProfile(BaseModel):
     characteristics_source: str | None = None
     source: str = "fmp"
     profile_fetched_at: datetime
+    field_evidence: dict[str, EtfFieldEvidence] = Field(default_factory=dict[str, EtfFieldEvidence])
 
 
 class EtfHolding(BaseModel):

@@ -458,7 +458,10 @@ def test_derivation_inputs_are_atomically_sealed_with_exact_digest(
     }
     with pytest.raises(sqlite3.IntegrityError, match="sealed"):
         conn.execute(
-            "INSERT INTO fact_derivation_input_edges_v2 VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO fact_derivation_input_edges_v2 ("
+            "edge_id,idempotency_key,output_observation_id,input_observation_id,"
+            "input_resolution_revision_id,input_role,input_ordinal,recorded_at"
+            ") VALUES (?,?,?,?,?,?,?,?)",
             (
                 "edge-late",
                 "edge-key-late",

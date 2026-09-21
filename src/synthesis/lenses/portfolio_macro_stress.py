@@ -15,6 +15,7 @@ import sqlite3
 from pathlib import Path
 from typing import cast
 
+from db_paths import resolve_db_path
 from llm.style import compose_brief_prompt, style_block_cache_token
 from llm_artifact_store import (
     Artifact,
@@ -89,12 +90,14 @@ with the thesis." That's also a view.
 """
 
 
-def _ctx_portfolio_macro_stress(*, scenario_obj: object, repo_root: Path) -> LensContext | None:
-    db = repo_root / "data" / "portfolio.db"
-    if not db.exists():
+def build_portfolio_macro_stress_context(
+    *, scenario_obj: object, repo_root: Path
+) -> LensContext | None:
+    db = resolve_db_path(None)
+    if db is None or not db.exists():
         return None
     try:
-        from macro_store import fetch_sensitivities
+        from macro_store import fetch_sensitivities, rate_shock_log_return
     except ImportError:
         return None
     conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
@@ -128,16 +131,17 @@ def _ctx_portfolio_macro_stress(*, scenario_obj: object, repo_root: Path) -> Len
             thesis = str(h.get("thesis") or "")[:200]
             port_lines.append(f"### {t}\n- Thesis: {thesis}\n- DCF over/under: {ou_str}")
             sens = fetch_sensitivities(ticker=t, db_path=db)
-            beta_by_series = {s.series_id: s.beta for s in sens}
+            beta_by_series = {s.series_id: s for s in sens}
             stress_pieces: list[str] = []
             for shock in getattr(scenario_obj, "shocks", ()):
                 sid = getattr(shock, "series_id", None)
                 if sid is None:
                     continue
-                beta = beta_by_series.get(sid)
-                if beta is None:
+                estimate = beta_by_series.get(sid)
+                if estimate is None:
                     stress_pieces.append(f"{sid}: β n/a")
                     continue
+                beta = estimate.beta
                 # Implied return contribution = beta x shock_return.
                 # `magnitude` is in pct or bps depending on unit; normalize to
                 # a return-style decimal for a rough mechanical estimate.
@@ -145,16 +149,24 @@ def _ctx_portfolio_macro_stress(*, scenario_obj: object, repo_root: Path) -> Len
                 mag = float(getattr(shock, "magnitude", 0.0))
                 direction = getattr(shock, "direction", "up")
                 sign = 1.0 if direction == "up" else -1.0
-                if unit == "pct":
+                if unit == "pct" or unit == "bps":
                     shock_ret = sign * (mag / 100.0)
-                elif unit == "bps":
-                    shock_ret = sign * (mag / 10000.0)
                 elif unit == "absolute":
                     shock_ret = sign * mag
                 else:
                     shock_ret = sign * mag
-                impact = beta * shock_ret * 100  # in %
-                stress_pieces.append(f"{sid}: β={beta:+.2f}→{impact:+.1f}%")
+                if unit == "bps":
+                    impact = rate_shock_log_return(estimate, basis_points=sign * mag) * 100
+                else:
+                    impact = beta * shock_ret * 100  # log-return percentage points
+                stress_pieces.append(
+                    f"{sid}: β={beta:+.2f}→{impact:+.1f}% log return"
+                    + (
+                        f" ({estimate.metric_version}; per percentage point; source {estimate.source_as_of}; input {estimate.input_sha})"
+                        if unit == "bps"
+                        else ""
+                    )
+                )
             grid_lines.append(f"- **{t}** · " + " · ".join(stress_pieces))
     finally:
         conn.close()
@@ -195,9 +207,9 @@ def run_portfolio_macro_stress_lens(
     scenario_id = str(getattr(scenario_obj, "id", "scenario"))
     purpose = f"lens:portfolio_macro_stress:{scenario_id}"
     model = "claude-opus-4-8"
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = resolve_db_path(None)
 
-    ctx = _ctx_portfolio_macro_stress(scenario_obj=scenario_obj, repo_root=repo_root)
+    ctx = build_portfolio_macro_stress_context(scenario_obj=scenario_obj, repo_root=repo_root)
     if ctx is None:
         log.debug({"event": "portfolio_macro_stress_context_empty", "scenario": scenario_id})
         return None
@@ -246,3 +258,6 @@ def run_portfolio_macro_stress_lens(
     if artifact_id is None:
         return None
     return read_current(ticker=None, purpose=purpose, scope="portfolio", db_path=db_path)
+
+
+_ctx_portfolio_macro_stress = build_portfolio_macro_stress_context

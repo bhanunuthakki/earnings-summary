@@ -1,44 +1,30 @@
-"""Tests for cockpit_fundamentals — the precomputed fundamentals cache.
-
-Covers: round-trip (materialize → read), missing-cache degradation, and
-integration with build_cockpit_rows (cache takes priority over the DB scan
-when present; DB scan fires as fallback when cache is absent).
-"""
+"""Canonical financial-source coverage for the cockpit fundamentals cache."""
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import sqlite3
-import sys
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import db as dbmod  # noqa: E402
-from cockpit_fundamentals import (  # noqa: E402
+from cockpit_fundamentals import (
     compute_from_db,
+    compute_snapshot,
     materialize_fundamentals,
     read_materialized_fundamentals,
 )
-from provenance.evidence_ledger import (  # noqa: E402
-    ContentBlob,
-    DocumentVersion,
-    EvidenceLedger,
-    EvidenceNode,
-    ExtractionRun,
-    SourceObservation,
+from sources.canonical_financial_series import (
+    CanonicalFinancialReadError,
+    CanonicalFinancialSeriesReader,
+    FinancialCadence,
+    SeriesContinuity,
 )
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+from tests import test_source_fact_repository as foundation
+from tests.test_report_canonical_financials import STAMP, seed_table
 
 
 @pytest.fixture(scope="module")
@@ -46,19 +32,18 @@ def head_template(
     tmp_path_factory: pytest.TempPathFactory,
     migrated_db: Callable[..., Path],
 ) -> Path:
-    db = tmp_path_factory.mktemp("fund_tmpl") / "head.db"
-    dbmod.set_db_path(str(db))
-    return migrated_db(db)
+    path = tmp_path_factory.mktemp("fundamentals-head") / "head.db"
+    return migrated_db(path)
 
 
 @pytest.fixture
 def conn(head_template: Path, tmp_path: Path) -> Iterator[sqlite3.Connection]:
-    db = tmp_path / "portfolio.db"
-    shutil.copy(head_template, db)
-    c = sqlite3.connect(str(db))
-    c.row_factory = sqlite3.Row
-    yield c
-    c.close()
+    path = tmp_path / "portfolio.db"
+    shutil.copy(head_template, path)
+    connection = sqlite3.connect(path)
+    connection.row_factory = sqlite3.Row
+    yield connection
+    connection.close()
 
 
 @pytest.fixture
@@ -68,305 +53,268 @@ def repo_root(tmp_path: Path) -> Path:
     return root
 
 
-def _seed_quarters(
+def _publish(
     conn: sqlite3.Connection,
-    ticker: str,
-    rows: list[tuple[str, str, float, float | None, float | None, float | None]],
+    rows: list[tuple[str, str, str, str, str, str]],
+    *,
+    currencies: dict[int, str] | None = None,
 ) -> None:
-    """Insert financial_facts rows for the given ticker.
+    foundation.seed_foundation(conn)
+    seed_table(conn, rows, currencies=currencies)
 
-    Each tuple: (period_end, fiscal_period_type, revenue, ocf, capex, fcf).
-    source_doc_id increments so ROW_NUMBER() dedup works correctly.
-    """
+
+def _track_synth(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT OR IGNORE INTO tenants (id, created_at) VALUES ('bhanu', '2026-01-01')")
     conn.execute(
         "INSERT OR IGNORE INTO tracked_companies "
-        "(user_id, ticker, name, list_type, instrument_type) "
-        "VALUES ('bhanu', ?, ?, 'evaluation', 'equity')",
-        (ticker, ticker),
+        "(user_id,ticker,name,list_type,instrument_type) "
+        "VALUES ('bhanu','SYNTH','Synthetic','evaluation','equity')"
     )
-    for i, (period_end, fp_type, rev, ocf, capex, fcf) in enumerate(rows):
-        doc_id = i + 1
-        document = conn.execute(
-            "INSERT OR IGNORE INTO documents "
-            "(ticker, source_type, doc_type, file_path, sha256, fetched_at, fetch_status, "
-            "raw_bytes_size) VALUES (?, 'fmp', 'fmp_statements', ?, ?, '2026-01-01', 'ok', 10)",
-            (ticker, f"data/{ticker}_{i}.json", f"{hash(ticker + str(i)):064x}"[:64]),
-        )
-        assert document.lastrowid is not None
-        doc_id = int(document.lastrowid)
-        _bind_document_evidence(conn, ticker=ticker, document_id=doc_id)
-        for line_item, value in [
-            ("revenue", rev),
-            ("operating_cash_flow", ocf),
+    conn.commit()
+
+
+def _quarter_rows(
+    *, missing_direct_index: int | None = None
+) -> list[tuple[str, str, str, str, str, str]]:
+    periods = [
+        ("2025-01-01", "2025-03-31", "Q1", "100", None, None, None),
+        ("2025-04-01", "2025-06-30", "Q2", "100", "25", "-5", "20"),
+        ("2025-07-01", "2025-09-30", "Q3", "105", "20", "-5", "15"),
+        ("2025-10-01", "2025-12-31", "Q4", "110", "25", "-5", "20"),
+        ("2026-01-01", "2026-03-31", "Q1", "120", "30", "-5", "25"),
+    ]
+    rows: list[tuple[str, str, str, str, str, str]] = []
+    for period_index, (start, end, fiscal, revenue, operating, capex, direct) in enumerate(periods):
+        rows.append(("revenue", start, end, fiscal, revenue, "USD"))
+        if operating is not None:
+            rows.append(("operating_cash_flow", start, end, fiscal, operating, "USD"))
+        if capex is not None:
+            rows.append(("capital_expenditure", start, end, fiscal, capex, "USD"))
+        if direct is not None and period_index != missing_direct_index:
+            rows.append(("free_cash_flow", start, end, fiscal, direct, "USD"))
+    return rows
+
+
+def _semiannual_rows() -> list[tuple[str, str, str, str, str, str]]:
+    rows: list[tuple[str, str, str, str, str, str]] = []
+    periods = [
+        ("2024-01-01", "2024-06-30", "Q2", "100", "25", "-5", "20"),
+        ("2024-07-01", "2024-12-31", "Q4", "105", "20", "-5", "15"),
+        ("2025-01-01", "2025-06-30", "Q2", "110", "25", "-5", None),
+        ("2025-07-01", "2025-12-31", "Q4", "120", "30", "-5", "25"),
+    ]
+    for start, end, fiscal, revenue, operating, capex, direct in periods:
+        for concept, value in (
+            ("revenue", revenue),
+            ("operating_cash_flow", operating),
             ("capital_expenditure", capex),
-            ("free_cash_flow", fcf),
-        ]:
+            ("free_cash_flow", direct),
+        ):
             if value is not None:
-                conn.execute(
-                    "INSERT INTO financial_facts "
-                    "(ticker, period_end, fiscal_period_type, line_item, value, unit, source_doc_id) "
-                    "VALUES (?, ?, ?, ?, ?, 'actual', ?)",
-                    (ticker, period_end, fp_type, line_item, value, doc_id),
-                )
-    conn.commit()
+                rows.append((concept, start, end, fiscal, value, "USD"))
+    return rows
 
 
-def _bind_document_evidence(
+def test_compute_from_db_preserves_quarterly_oracles_and_derivation(
     conn: sqlite3.Connection,
-    *,
-    ticker: str,
-    document_id: int,
 ) -> None:
-    """Give each legacy test document the exact evidence required by head."""
-
-    stamp = datetime(2026, 1, 1, tzinfo=UTC)
-    blob_sha = hashlib.sha256(f"{ticker}:{document_id}".encode()).hexdigest()
-    config_sha = hashlib.sha256(b"cockpit-fundamentals-test").hexdigest()
-    output_sha = hashlib.sha256(f"output:{ticker}:{document_id}".encode()).hexdigest()
-    ledger = EvidenceLedger(conn)
-    ledger.persist(
-        ContentBlob(
-            sha256=blob_sha,
-            byte_size=10,
-            media_type="application/json",
-            storage_uri=f"file:///test/{ticker}-{document_id}.json",
-            recorded_at=stamp,
-        )
-    )
-    ledger.persist(
-        SourceObservation(
-            observation_id=f"source:{ticker}:{document_id}",
-            idempotency_key=f"source:{ticker}:{document_id}",
-            source_kind="vendor_api",
-            source_url=f"https://example.test/{ticker}/{document_id}",
-            blob_sha256=blob_sha,
-            source_published_at=stamp,
-            filing_at=None,
-            accepted_at=None,
-            observed_at=stamp,
-            retrieved_at=stamp,
-            retrieval_config_sha256=config_sha,
-            collector_code_version="test@1",
-        )
-    )
-    ledger.persist(
-        DocumentVersion(
-            document_version_id=f"document:{ticker}:{document_id}",
-            document_key=f"{ticker}:vendor:{document_id}",
-            version_sequence=1,
-            observation_id=f"source:{ticker}:{document_id}",
-            blob_sha256=blob_sha,
-            issuer_id=f"issuer:{ticker}",
-            ticker=ticker,
-            document_type="vendor_statement",
-            form_type="vendor_json",
-            accession_number=None,
-            exhibit_id=None,
-            period_start=None,
-            period_end=stamp,
-            as_of_at=stamp,
-            language="en",
-            replaces_document_version_id=None,
-            legacy_document_id=document_id,
-            recorded_at=stamp,
-        )
-    )
-    ledger.persist(
-        ExtractionRun(
-            extraction_run_id=f"run:{ticker}:{document_id}",
-            idempotency_key=f"run:{ticker}:{document_id}",
-            document_version_id=f"document:{ticker}:{document_id}",
-            input_sha256=blob_sha,
-            extractor_name="test-fixture",
-            extractor_config_sha256=config_sha,
-            extractor_code_version="test@1",
-            output_sha256=output_sha,
-            started_at=stamp,
-            completed_at=stamp,
-            outcome="succeeded",
-        )
-    )
-    ledger.persist(
-        EvidenceNode(
-            node_id=f"node:{ticker}:{document_id}",
-            evidence_key=f"node:{ticker}:{document_id}",
-            revision=1,
-            extraction_run_id=f"run:{ticker}:{document_id}",
-            parent_node_id=None,
-            supersedes_node_id=None,
-            node_kind="document",
-            text=f"{ticker} vendor statement",
-            locator=None,
-            recorded_at=stamp,
-        )
-    )
-
-
-# ---------------------------------------------------------------------------
-# compute_from_db — mirrors the _eval_fundamentals tests in test_research_cockpit
-# so we confirm the logic survives the move.
-# ---------------------------------------------------------------------------
-
-
-def test_compute_from_db_basic(conn: sqlite3.Connection) -> None:
-    _seed_quarters(
-        conn,
-        "BASIC",
-        [
-            ("2026-03-31 00:00:00", "Q1", 120.0, 30.0, -5.0, 25.0),
-            ("2025-12-31 00:00:00", "Q4", 110.0, 25.0, -5.0, 20.0),
-            ("2025-09-30 00:00:00", "Q3", 105.0, 20.0, -5.0, 15.0),
-            ("2025-06-30 00:00:00", "Q2", 100.0, 25.0, -5.0, 20.0),
-            ("2025-03-31 00:00:00", "Q1", 100.0, None, None, 99.0),  # excluded
-        ],
-    )
-    result = compute_from_db(conn)
-    rev_yoy, margin = result["BASIC"]
-    assert rev_yoy == pytest.approx(20.0)
+    _publish(conn, _quarter_rows(missing_direct_index=3))
+    revenue_yoy, margin = compute_from_db(conn, cutoff=STAMP)["SYNTH"]
+    assert revenue_yoy == pytest.approx(20.0)
     assert margin == pytest.approx(80.0 / 435.0 * 100.0)
+    snapshot = compute_snapshot(conn, cutoff=STAMP)
+    result = snapshot.fundamentals["SYNTH"].fcf_margin
+    assert result.status == "available"
+    assert result.calculation_kind == "calculated"
+    periods = cast(list[dict[str, object]], result.lineage["periods"])
+    assert any(period["kind"] == "calculated" for period in periods)
+    assert all("revenue_observation_id" in period for period in periods)
 
 
-def test_compute_from_db_empty_table(conn: sqlite3.Connection) -> None:
-    assert compute_from_db(conn) == {}
-
-
-# ---------------------------------------------------------------------------
-# materialize_fundamentals + read_materialized_fundamentals
-# ---------------------------------------------------------------------------
-
-
-def test_materialize_round_trip(conn: sqlite3.Connection, repo_root: Path) -> None:
-    _seed_quarters(
-        conn,
-        "RT",
+def test_semiannual_and_reported_ttm_cadences_are_explicit(conn: sqlite3.Connection) -> None:
+    rows = _semiannual_rows()
+    rows.extend(
         [
-            ("2026-03-31 00:00:00", "Q1", 120.0, 30.0, -5.0, 25.0),
-            ("2025-12-31 00:00:00", "Q4", 110.0, 25.0, -5.0, 20.0),
-            ("2025-09-30 00:00:00", "Q3", 105.0, 20.0, -5.0, 15.0),
-            ("2025-06-30 00:00:00", "Q2", 100.0, 25.0, -5.0, 20.0),
-            ("2025-03-31 00:00:00", "Q1", 100.0, None, None, 99.0),
-        ],
+            ("revenue", "2025-04-01", "2026-03-31", "TTM", "400", "USD"),
+            ("free_cash_flow", "2025-04-01", "2026-03-31", "TTM", "100", "USD"),
+        ]
     )
-    n = materialize_fundamentals(conn, repo_root)
-    assert n == 1
-
-    cache_file = repo_root / "data" / "cockpit_fundamentals.json"
-    assert cache_file.exists()
-
-    payload = json.loads(cache_file.read_text(encoding="utf-8"))
-    assert "computed_at" in payload
-    assert "RT" in payload["fundamentals"]
-
-    restored = read_materialized_fundamentals(repo_root)
-    rev_yoy, margin = restored["RT"]
-    assert rev_yoy == pytest.approx(20.0)
-    assert margin == pytest.approx(80.0 / 435.0 * 100.0)
-
-
-def test_read_missing_cache_returns_empty(repo_root: Path) -> None:
-    assert read_materialized_fundamentals(repo_root) == {}
-
-
-def test_read_corrupt_cache_returns_empty(repo_root: Path) -> None:
-    cache = repo_root / "data" / "cockpit_fundamentals.json"
-    cache.write_text("not json", encoding="utf-8")
-    assert read_materialized_fundamentals(repo_root) == {}
-
-
-def test_read_null_values_round_trip(conn: sqlite3.Connection, repo_root: Path) -> None:
-    """A ticker with rev_yoy=None (only one quarter) round-trips correctly."""
-    _seed_quarters(
-        conn,
-        "ONEK",
-        [("2026-03-31 00:00:00", "Q1", 100.0, 30.0, -5.0, 25.0)],
+    _publish(conn, rows)
+    snapshot = compute_snapshot(conn, cutoff=STAMP)
+    result = snapshot.fundamentals["SYNTH"]
+    assert result.revenue_yoy.value_pct == pytest.approx(120.0 / 105.0 * 100.0 - 100.0)
+    assert result.fcf_margin.value_pct == pytest.approx(25.0)
+    assert result.fcf_margin.lineage["formula"] == (
+        "reported_ttm_free_cash_flow/reported_ttm_revenue*100"
     )
-    materialize_fundamentals(conn, repo_root)
-    restored = read_materialized_fundamentals(repo_root)
-    rev_yoy, margin = restored["ONEK"]
-    assert rev_yoy is None
-    # margin is still computable from a single quarter (only one FCF-bearing row
-    # → _ttm_fcf_margin needs 4 quarters to be confident, so it returns None too)
-    assert margin is None
-
-
-def test_materialize_overwrites_stale_cache(conn: sqlite3.Connection, repo_root: Path) -> None:
-    _seed_quarters(
-        conn,
-        "STALE",
-        [
-            ("2026-03-31 00:00:00", "Q1", 200.0, 40.0, -10.0, 30.0),
-            ("2025-12-31 00:00:00", "Q4", 190.0, 35.0, -10.0, 25.0),
-            ("2025-09-30 00:00:00", "Q3", 185.0, 30.0, -10.0, 20.0),
-            ("2025-06-30 00:00:00", "Q2", 180.0, 35.0, -10.0, 25.0),
-            ("2025-03-31 00:00:00", "Q1", 100.0, None, None, 99.0),
-        ],
+    reader = CanonicalFinancialSeriesReader(conn, "SYNTH", cutoff=STAMP)
+    quarter = reader.read(
+        "revenue", cadence=FinancialCadence.QUARTERLY, continuity=SeriesContinuity.WINDOWED
     )
-    # Write once, then update the DB and rematerialise.
-    materialize_fundamentals(conn, repo_root)
-    first = read_materialized_fundamentals(repo_root)
-    rev_yoy_first = first["STALE"][0]
-
-    # Update revenue so YoY changes.
-    conn.execute(
-        "UPDATE financial_facts SET value=300.0 "
-        "WHERE ticker='STALE' AND line_item='revenue' AND period_end='2026-03-31 00:00:00'"
+    semiannual = reader.read(
+        "revenue", cadence=FinancialCadence.SEMIANNUAL, continuity=SeriesContinuity.WINDOWED
     )
-    conn.commit()
-    materialize_fundamentals(conn, repo_root)
-    second = read_materialized_fundamentals(repo_root)
-    rev_yoy_second = second["STALE"][0]
-
-    assert rev_yoy_second is not None
-    assert rev_yoy_second != pytest.approx(rev_yoy_first)
-
-
-# ---------------------------------------------------------------------------
-# Integration: build_cockpit_rows uses cache when present, falls back to DB
-# ---------------------------------------------------------------------------
-
-
-def test_build_cockpit_rows_uses_cache(conn: sqlite3.Connection, repo_root: Path) -> None:
-    """build_cockpit_rows reads precomputed fundamentals from the JSON cache."""
-    from pipeline.research_cockpit import build_cockpit_rows
-
-    _seed_quarters(
-        conn,
-        "V",
-        [
-            ("2026-03-31 00:00:00", "Q1", 120.0, 30.0, -5.0, 25.0),
-            ("2025-12-31 00:00:00", "Q4", 110.0, 25.0, -5.0, 20.0),
-            ("2025-09-30 00:00:00", "Q3", 105.0, 20.0, -5.0, 15.0),
-            ("2025-06-30 00:00:00", "Q2", 100.0, 25.0, -5.0, 20.0),
-            ("2025-03-31 00:00:00", "Q1", 100.0, None, None, 99.0),
-        ],
+    ttm = reader.read(
+        "revenue", cadence=FinancialCadence.REPORTED_TTM, continuity=SeriesContinuity.WINDOWED
     )
-    materialize_fundamentals(conn, repo_root)
-    rows = build_cockpit_rows(conn, repo_root)
-    by_ticker = {r.base.ticker: r for r in rows.get("evaluation", [])}
-    assert "V" in by_ticker
-    assert by_ticker["V"].fcf_margin_pct == pytest.approx(80.0 / 435.0 * 100.0)
+    assert quarter.status == "unavailable"
+    assert semiannual.status == "available" and len(semiannual.observations) == 4
+    assert ttm.status == "available" and len(ttm.observations) == 1
 
 
-def test_build_cockpit_rows_fallback_without_cache(
+def test_rejected_direct_fcf_does_not_fall_back_to_derived(
+    conn: sqlite3.Connection,
+) -> None:
+    rows = _quarter_rows()
+    direct_indexes = [index for index, row in enumerate(rows) if row[0] == "free_cash_flow"]
+    _publish(conn, rows, currencies={direct_indexes[-1]: "EUR"})
+    result = compute_snapshot(conn, cutoff=STAMP).fundamentals["SYNTH"].fcf_margin
+    assert result.status == "unavailable"
+    assert result.reason_code == "direct_free_cash_flow_candidate_rejected"
+    assert result.value_pct is None
+    rejected = cast(tuple[str, ...], result.lineage["rejected_direct_candidate_observation_ids"])
+    assert len(rejected) == 1
+
+
+def test_malformed_direct_fcf_candidate_blocks_derived_fallback(
+    conn: sqlite3.Connection,
+) -> None:
+    rows = _quarter_rows(missing_direct_index=2)
+    rows.append(("free_cash_flow", "2025-08-01", "2025-09-30", "Q3", "15", "USD"))
+    _publish(conn, rows)
+    result = compute_snapshot(conn, cutoff=STAMP).fundamentals["SYNTH"].fcf_margin
+    assert result.status == "unavailable"
+    assert result.reason_code == "direct_free_cash_flow_candidate_rejected"
+    rejected = cast(tuple[str, ...], result.lineage["rejected_direct_candidate_observation_ids"])
+    assert len(rejected) == 1
+
+
+def test_irrelevant_annual_row_does_not_poison_quarterly_window(
+    conn: sqlite3.Connection,
+) -> None:
+    rows = _quarter_rows()
+    rows.append(("revenue", "2025-01-01", "2025-12-31", "FY", "415", "USD"))
+    _publish(conn, rows)
+    result = compute_snapshot(conn, cutoff=STAMP).fundamentals["SYNTH"]
+    assert result.revenue_yoy.value_pct == pytest.approx(20.0)
+    assert result.fcf_margin.value_pct == pytest.approx(80.0 / 435.0 * 100.0)
+
+
+def test_empty_canonical_universe_is_a_complete_snapshot(conn: sqlite3.Connection) -> None:
+    snapshot = compute_snapshot(conn, cutoff=STAMP)
+    assert snapshot.status == "complete"
+    assert snapshot.ticker_universe == ()
+    assert snapshot.fundamentals == {}
+    assert compute_from_db(conn, cutoff=STAMP) == {}
+
+
+def test_empty_canonical_universe_materializes_complete_receipt(
     conn: sqlite3.Connection, repo_root: Path
 ) -> None:
-    """build_cockpit_rows falls back to the DB scan when no cache exists."""
+    assert materialize_fundamentals(conn, repo_root) == 0
+    payload = json.loads(
+        (repo_root / "data" / "cockpit_fundamentals.json").read_text(encoding="utf-8")
+    )
+    assert payload["snapshot"]["status"] == "complete"
+    assert payload["snapshot"]["ticker_universe"] == []
+    assert payload["snapshot"]["fundamentals"] == {}
+
+
+def test_rejected_supported_label_candidate_remains_in_universe(
+    conn: sqlite3.Connection,
+) -> None:
+    _publish(
+        conn,
+        [("revenue", "2026-03-01", "2026-03-31", "Q1", "120", "USD")],
+    )
+    snapshot = compute_snapshot(conn, cutoff=STAMP)
+    assert snapshot.ticker_universe == ("SYNTH",)
+    result = snapshot.fundamentals["SYNTH"]
+    assert result.status == "unavailable"
+    assert result.revenue_yoy.reason_code == "unsupported_financial_cadence_or_duration"
+
+
+def test_materialized_cache_requires_complete_canonical_manifest(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
+    _publish(conn, _quarter_rows())
+    _track_synth(conn)
+    assert materialize_fundamentals(conn, repo_root) == 1
+    cache = repo_root / "data" / "cockpit_fundamentals.json"
+    payload = json.loads(cache.read_text(encoding="utf-8"))
+    assert payload["cache_schema"] == "cockpit-fundamentals-canonical/v2"
+    snapshot = payload["snapshot"]
+    assert snapshot["source_authority"] == "canonical_fact_resolution"
+    assert snapshot["status"] == "complete"
+    assert snapshot["ticker_universe"] == ["SYNTH"]
+    manifests = snapshot["fundamentals"]["SYNTH"]["fcf_margin"]["source_manifests"]
+    assert manifests
+    selected = next(
+        observation for manifest in manifests.values() for observation in manifest["observations"]
+    )
+    assert selected["observation_id"]
+    assert selected["canonical_resolution_revision_id"]
+    assert selected["document_version_id"]
+    assert read_materialized_fundamentals(repo_root)["SYNTH"][0] == pytest.approx(20.0)
+
+
+def test_legacy_or_incomplete_cache_cannot_claim_canonical(repo_root: Path) -> None:
+    cache = repo_root / "data" / "cockpit_fundamentals.json"
+    cache.write_text(json.dumps({"fundamentals": {"OLD": [99.0, 99.0]}}), encoding="utf-8")
+    assert read_materialized_fundamentals(repo_root) == {}
+
+
+def test_cache_rejects_manifest_or_envelope_cutoff_tampering(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
+    _publish(conn, _quarter_rows())
+    materialize_fundamentals(conn, repo_root)
+    cache = repo_root / "data" / "cockpit_fundamentals.json"
+    payload = json.loads(cache.read_text(encoding="utf-8"))
+    manifests = payload["snapshot"]["fundamentals"]["SYNTH"]["fcf_margin"]["source_manifests"]
+    next(iter(manifests.values()))["cutoff"] = "2001-01-01T00:00:00Z"
+    cache.write_text(json.dumps(payload), encoding="utf-8")
+    assert read_materialized_fundamentals(repo_root) == {}
+
+    materialize_fundamentals(conn, repo_root)
+    payload = json.loads(cache.read_text(encoding="utf-8"))
+    payload["computed_at"] = "2001-01-01T00:00:00"
+    cache.write_text(json.dumps(payload), encoding="utf-8")
+    assert read_materialized_fundamentals(repo_root) == {}
+    cache.write_text("not-json", encoding="utf-8")
+    assert read_materialized_fundamentals(repo_root) == {}
+
+
+def test_global_failure_preserves_previous_cache_bytes(
+    conn: sqlite3.Connection,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _publish(conn, _quarter_rows())
+    materialize_fundamentals(conn, repo_root)
+    cache = repo_root / "data" / "cockpit_fundamentals.json"
+    before = cache.read_bytes()
+
+    def fail(*_args: object, **_kwargs: object) -> tuple[str, ...]:
+        raise CanonicalFinancialReadError("synthetic failure")
+
+    monkeypatch.setattr("cockpit_fundamentals.discover_canonical_financial_tickers", fail)
+    with pytest.raises(CanonicalFinancialReadError, match="synthetic failure"):
+        materialize_fundamentals(conn, repo_root)
+    assert cache.read_bytes() == before
+
+
+def test_build_cockpit_rows_uses_cache_and_canonical_fallback(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
     from pipeline.research_cockpit import build_cockpit_rows
 
-    _seed_quarters(
-        conn,
-        "V",
-        [
-            ("2026-03-31 00:00:00", "Q1", 120.0, 30.0, -5.0, 25.0),
-            ("2025-12-31 00:00:00", "Q4", 110.0, 25.0, -5.0, 20.0),
-            ("2025-09-30 00:00:00", "Q3", 105.0, 20.0, -5.0, 15.0),
-            ("2025-06-30 00:00:00", "Q2", 100.0, 25.0, -5.0, 20.0),
-            ("2025-03-31 00:00:00", "Q1", 100.0, None, None, 99.0),
-        ],
-    )
-    # No cache file — fallback path must still populate.
-    rows = build_cockpit_rows(conn, repo_root)
-    by_ticker = {r.base.ticker: r for r in rows.get("evaluation", [])}
-    assert "V" in by_ticker
-    assert by_ticker["V"].fcf_margin_pct == pytest.approx(80.0 / 435.0 * 100.0)
+    _publish(conn, _quarter_rows(missing_direct_index=3))
+    _track_synth(conn)
+    without_cache = build_cockpit_rows(conn, repo_root)
+    row = {item.base.ticker: item for item in without_cache["evaluation"]}["SYNTH"]
+    assert row.fcf_margin_pct == pytest.approx(80.0 / 435.0 * 100.0)
+    materialize_fundamentals(conn, repo_root)
+    with_cache = build_cockpit_rows(conn, repo_root)
+    row = {item.base.ticker: item for item in with_cache["evaluation"]}["SYNTH"]
+    assert row.rev_yoy_pct == pytest.approx(20.0)

@@ -12,7 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-REGIME_REGISTRY_VERSION = "2026-08-15.1"
+REGIME_REGISTRY_VERSION = "2026-09-19.1"
 
 QualitativeRating = Literal[
     "benefits",
@@ -126,19 +126,19 @@ INITIAL_REGIMES: list[RegimeDefinition] = [
         historical_analogs=["2008 GFC", "2001 Tech Recession"],
         factors=[
             FactorImpact(
-                factor="US consumer mobility/delivery",
+                factor="rides/delivery marketplace",
                 effect_ordinal=-2,
                 confidence=0.9,
                 transmission_mechanism="Discretionary ride-hailing and food delivery volumes contract with household belt-tightening.",
             ),
             FactorImpact(
-                factor="Global travel demand",
+                factor="global travel demand",
                 effect_ordinal=-2,
                 confidence=0.95,
                 transmission_mechanism="Leisure and business travel budgets face immediate cancellations and down-trading.",
             ),
             FactorImpact(
-                factor="Digital advertising demand",
+                factor="digital ad spend",
                 effect_ordinal=-2,
                 confidence=0.85,
                 transmission_mechanism="Brand marketing budgets slashed rapidly by enterprises seeking immediate cash preservation.",
@@ -150,13 +150,13 @@ INITIAL_REGIMES: list[RegimeDefinition] = [
                 transmission_mechanism="Software seat additions stall and procurement cycles extend.",
             ),
             FactorImpact(
-                factor="SMB digital adoption",
+                factor="SMB web/e-commerce",
                 effect_ordinal=-2,
                 confidence=0.85,
                 transmission_mechanism="Higher SMB churn and business closures reduce subscription base.",
             ),
             FactorImpact(
-                factor="Alternative-asset fee growth",
+                factor="alternative-asset fundraising",
                 effect_ordinal=-1,
                 confidence=0.75,
                 transmission_mechanism="M&A realizations slow, delaying performance fees despite resilient management fees.",
@@ -184,13 +184,13 @@ INITIAL_REGIMES: list[RegimeDefinition] = [
                 transmission_mechanism="High multiple cloud/SaaS multiples de-rate across equity markets.",
             ),
             FactorImpact(
-                factor="SMB digital adoption",
+                factor="SMB web/e-commerce",
                 effect_ordinal=-1,
                 confidence=0.8,
                 transmission_mechanism="Higher borrowing costs squeeze SMB operating margins and capital spending.",
             ),
             FactorImpact(
-                factor="Alternative-asset fee growth",
+                factor="alternative-asset fundraising",
                 effect_ordinal=1,
                 confidence=0.7,
                 transmission_mechanism="Private credit, real estate, and floating-rate infrastructure strategies benefit from higher yields.",
@@ -217,7 +217,7 @@ INITIAL_REGIMES: list[RegimeDefinition] = [
                 transmission_mechanism="Capital flight sparks emerging market currency depreciation and domestic demand slump.",
             ),
             FactorImpact(
-                factor="Alternative-asset fee growth",
+                factor="alternative-asset fundraising",
                 effect_ordinal=-2,
                 confidence=0.85,
                 transmission_mechanism="Debt capital markets freeze, hindering leveraged buyout originations and asset refinancings.",
@@ -259,13 +259,13 @@ INITIAL_REGIMES: list[RegimeDefinition] = [
         historical_analogs=["1973 OPEC Embargo", "2022 Energy Shock"],
         factors=[
             FactorImpact(
-                factor="US consumer mobility/delivery",
+                factor="rides/delivery marketplace",
                 effect_ordinal=-2,
                 confidence=0.9,
                 transmission_mechanism="Fuel pump price surges squeeze gig-worker driver unit economics and consumer surcharges.",
             ),
             FactorImpact(
-                factor="Global travel demand",
+                factor="global travel demand",
                 effect_ordinal=-1,
                 confidence=0.85,
                 transmission_mechanism="Jet fuel price hikes pass through into airline ticket pricing, cooling leisure travel volume.",
@@ -287,13 +287,13 @@ INITIAL_REGIMES: list[RegimeDefinition] = [
                 transmission_mechanism="Enterprise software enterprise value to NTM sales multiples compress severely.",
             ),
             FactorImpact(
-                factor="SMB digital adoption",
+                factor="SMB web/e-commerce",
                 effect_ordinal=-2,
                 confidence=0.9,
                 transmission_mechanism="High-beta SMB web software platforms face acute valuation multiples deflation.",
             ),
             FactorImpact(
-                factor="Life-sciences R&D/cloud",
+                factor="life sciences cloud software",
                 effect_ordinal=-1,
                 confidence=0.85,
                 transmission_mechanism="Vertical SaaS multiples pull back in sympathy with broader enterprise software peer group.",
@@ -314,13 +314,13 @@ INITIAL_REGIMES: list[RegimeDefinition] = [
         historical_analogs=["2022 Digital Ad Spending Reset"],
         factors=[
             FactorImpact(
-                factor="Digital advertising demand",
+                factor="digital ad spend",
                 effect_ordinal=-2,
                 confidence=0.95,
                 transmission_mechanism="Direct drop in blended CPMs, ad impressions monetization, and merchant ad budgets.",
             ),
             FactorImpact(
-                factor="SMB digital adoption",
+                factor="SMB web/e-commerce",
                 effect_ordinal=-1,
                 confidence=0.8,
                 transmission_mechanism="E-commerce merchants cut acquisition spend, slowing merchant website additions.",
@@ -362,7 +362,7 @@ INITIAL_REGIMES: list[RegimeDefinition] = [
         historical_analogs=["2024 Medicare Price Negotiations"],
         factors=[
             FactorImpact(
-                factor="GLP-1 reimbursement/supply",
+                factor="GLP-1/obesity reimbursement",
                 effect_ordinal=-2,
                 confidence=0.95,
                 transmission_mechanism="Net realized price per prescription declines under aggressive PBM rebate demands and statutory caps.",

@@ -426,7 +426,6 @@ def _selected_price_value(
     return (
         record.get(adjusted)
         if adjustment_method is CorporateActionAdjustment.SPLIT_AND_DIVIDEND
-        and record.get(adjusted) is not None
         else record.get(key)
     )
 

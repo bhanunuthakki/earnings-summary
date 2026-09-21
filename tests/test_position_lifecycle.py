@@ -24,6 +24,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -50,6 +51,7 @@ CREATE TABLE position_entries (
     entry_conviction TEXT,
     entry_thesis_excerpt TEXT,
     entry_conditions TEXT,
+    superseded_by_entry_id INTEGER,
     exit_date TEXT,
     exit_price FLOAT,
     exit_reason TEXT,
@@ -63,7 +65,7 @@ CREATE TABLE position_entries (
     CHECK (source IN ('reconciler','backfill','manual'))
 );
 CREATE UNIQUE INDEX uq_position_entries_open ON position_entries(user_id, ticker)
-    WHERE exit_date IS NULL;
+    WHERE exit_date IS NULL AND superseded_by_entry_id IS NULL;
 CREATE TABLE tracked_companies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker TEXT NOT NULL,
@@ -334,7 +336,7 @@ def test_close_logs_postmortem_pending_without_changing_tally(
         "db_unavailable": 0,
     }
     events = [
-        r.msg
+        cast(dict[str, object], r.msg)
         for r in caplog.records
         if isinstance(r.msg, dict) and r.msg.get("event") == "postmortem_pending"
     ]
@@ -352,7 +354,7 @@ def test_no_close_does_not_log_postmortem_pending(
         sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())  # opens, no closes
 
     events = [
-        r.msg
+        cast(dict[str, object], r.msg)
         for r in caplog.records
         if isinstance(r.msg, dict) and r.msg.get("event") == "postmortem_pending"
     ]

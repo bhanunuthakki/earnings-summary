@@ -252,7 +252,8 @@ def test_risk_budget_rounds_every_scalar_metric(tmp_path: Path) -> None:
     assert "R&sup2;: 0.10" in html
     assert "Effective holdings: 9.3" in html
     assert "Growth tilt: -0.47" in html
-    assert "Rate beta (10y): 0.02" in html
+    assert "Legacy rate sensitivity quarantined" in html
+    assert "Rate beta (10y): 0.02" not in html
 
 
 def test_risk_budget_absent_scalars_render_em_dash_not_zero(tmp_path: Path) -> None:
@@ -271,7 +272,7 @@ def test_risk_budget_absent_scalars_render_em_dash_not_zero(tmp_path: Path) -> N
 
     assert "Sharpe: —" in html
     assert "HHI: —" in html
-    assert "Rate beta (10y): —" in html
+    assert "Legacy rate sensitivity quarantined" in html
     assert "Sharpe: 0.00" not in html
     assert "HHI: 0" not in html
 

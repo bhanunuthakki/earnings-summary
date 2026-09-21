@@ -1,6 +1,6 @@
 """Run the discovery pipelines and land candidates in the approval queue.
 
-Factor screens over the index-member universe (local FMP caches — no
+Factor screens over the index-member universe (canonical financial facts — no
 network, no LLM) plus the adjacency miner over the holdings' competitive
 watchlists, transcripts, and news rows (master build P5.3). Hits aggregate
 per ticker into discovery_candidates (alembic 0081) with the "why
@@ -27,37 +27,44 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
+from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_ROOT = SCRIPT_DIR.parent
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from pydantic import TypeAdapter
 
-from discovery.adjacency import AdjacencyHit, mine_adjacency  # noqa: E402
-from discovery.need_rank import (  # noqa: E402
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
+
+from db_paths import require_db_path
+from discovery.adjacency import AdjacencyHit, mine_adjacency
+from discovery.need_rank import (
     NeedRank,
     compute_need_rank,
     need_rank_to_json,
 )
-from discovery.scoring import (  # noqa: E402
+from discovery.scoring import (
     ScoreResult,
     Signal,
     adjacency_signal,
     score_candidate,
     screen_signal,
 )
-from discovery.screens import ScreenHit, run_screens  # noqa: E402
-from discovery.sources import load_source_map, weight_for  # noqa: E402
-from discovery.store import (  # noqa: E402
+from discovery.screens import ScreenHit, run_screens
+from discovery.sources import load_source_map, weight_for
+from discovery.store import (
+    CandidateWrite,
     SignalWrite,
-    existing_candidate_tickers,
-    replace_signals,
-    upsert_candidate,
+    load_discovery_refresh_state,
+    persist_discovery_refresh,
 )
-from identity import DEFAULT_USER_ID  # noqa: E402
+from identity import DEFAULT_USER_ID
+from runtime.job_runtime import portfolio_db_path
+from sources.discovery_financials import GrowthFinancials
 
 #: How many interim-ranked candidates get the (heavier, price-history-reading)
 #: coarse diversifier leg each run — the PRD's "reusing the candidate-fit/ΔSR
@@ -98,6 +105,8 @@ def discover(
     repo_root: Path,
     *,
     user_id: str = DEFAULT_USER_ID,
+    db_path: Path | None = None,
+    growth_coverage_sink: Callable[[GrowthFinancials], None] | None = None,
     include_screens: bool = True,
     include_adjacency: bool = True,
     per_holding_transcripts: int = 4,
@@ -106,13 +115,32 @@ def discover(
     """Run the pipelines, score by weighted typed signals, persist the signals
     and the scored candidates. Returns (ticker, score, evidence_count) tuples
     sorted by score for the caller's summary."""
-    db_path = repo_root / "data" / "portfolio.db"
+    if db_path is None:
+        db_path = portfolio_db_path(repo_root)
+        if db_path.resolve() == (repo_root / "data" / "portfolio.db").resolve():
+            raise RuntimeError(
+                "Discovery requires an explicit configured database; checkout database is prohibited"
+            )
+    db_path = require_db_path(db_path)
     fmp_dir = repo_root / "data" / "historical" / "fmp"
     source_map = load_source_map(db_path=db_path)
     as_of = date.today()
 
+    financial_coverage: dict[str, dict[str, object]] = {}
+
+    def collect_financial_coverage(ticker: str, evidence: dict[str, object]) -> None:
+        financial_coverage[ticker] = evidence
+
     screen_hits: list[ScreenHit] = (
-        run_screens(db_path, fmp_dir, user_id=user_id) if include_screens else []
+        run_screens(
+            db_path,
+            fmp_dir,
+            user_id=user_id,
+            growth_coverage_sink=growth_coverage_sink,
+            financial_coverage_sink=collect_financial_coverage,
+        )
+        if include_screens
+        else []
     )
     adjacency_hits: list[AdjacencyHit] = (
         mine_adjacency(
@@ -137,7 +165,9 @@ def discover(
 
     for sh in screen_hits:
         acc = _slot(sh.ticker, sh.name)
-        acc.evidence.append({"source": f"screen:{sh.screen}", "detail": sh.detail})
+        acc.evidence.append(
+            {"source": f"screen:{sh.screen}", "detail": sh.detail, "calculation": sh.evidence}
+        )
         acc.signals.append(
             screen_signal(
                 sh.screen,
@@ -172,7 +202,61 @@ def discover(
             )
         )
 
-    existing = existing_candidate_tickers(user_id=user_id, db_path=db_path)
+    existing_rows, retained_signals = load_discovery_refresh_state(user_id=user_id, db_path=db_path)
+    existing = set(existing_rows)
+    active_classes = {
+        key
+        for key, enabled in (("screen", include_screens), ("adjacency", include_adjacency))
+        if enabled
+    }
+    for ticker, coverage in financial_coverage.items():
+        if ticker in existing and ticker not in by_ticker:
+            previous = existing_rows.get(ticker)
+            acc = _slot(ticker, previous.name if previous else None)
+            acc.evidence.append(
+                {
+                    "source": "screen:coverage",
+                    "detail": "No current canonical screen signal; see financial coverage",
+                    "calculation": coverage,
+                }
+            )
+    # An owned signal can disappear when a name leaves the screened universe
+    # or loses its last adjacency mention. Refresh its candidate in the same
+    # transaction as removing that signal, even without a new screen receipt.
+    for ticker, previous in existing_rows.items():
+        if any(
+            item.signal_class in active_classes for item in retained_signals.get(ticker, [])
+        ) or any(
+            str(item.get("source", "")).split(":", 1)[0] in active_classes
+            for item in previous.evidence
+        ):
+            _slot(ticker, previous.name)
+    for ticker, acc in by_ticker.items():
+        for retained in retained_signals.get(ticker, []):
+            if retained.signal_class in active_classes:
+                continue
+            action = retained.meta.get("action")
+            acc.signals.append(
+                Signal(
+                    signal_class=retained.signal_class,
+                    source_key=retained.source_key,
+                    weight=retained.weight,
+                    raw_strength=retained.raw_strength,
+                    observed_at=datetime.fromisoformat(retained.observed_at),
+                    detail=retained.detail or "",
+                    action=action if isinstance(action, str) else None,
+                    style_tags=TypeAdapter(tuple[str, ...]).validate_python(
+                        retained.meta.get("style_tags", ())
+                    ),
+                )
+            )
+        previous = existing_rows.get(ticker)
+        if previous is not None:
+            acc.evidence.extend(
+                item
+                for item in previous.evidence
+                if str(item.get("source", "")).split(":", 1)[0] not in active_classes
+            )
     qualifying: list[tuple[str, _Acc, ScoreResult]] = []
     for ticker, acc in by_ticker.items():
         result = score_candidate(acc.signals)
@@ -188,26 +272,31 @@ def discover(
         user_id=user_id,
     )
 
+    candidate_writes: list[CandidateWrite] = []
     signal_writes: list[SignalWrite] = []
     results: list[tuple[str, float, int]] = []
     for ticker, acc, result in qualifying:
         why = dict(result.why)
+        if ticker in financial_coverage:
+            why["financial_coverage"] = financial_coverage[ticker]
         rank = need_ranks.get(ticker)
         if rank is not None:
             why["need_rank"] = need_rank_to_json(rank)
-        upsert_candidate(
-            ticker=ticker,
-            name=acc.name,
-            score=result.score,
-            evidence=acc.evidence,
-            score_json=why,
-            user_id=user_id,
-            db_path=db_path,
+        candidate_writes.append(
+            CandidateWrite(
+                ticker=ticker,
+                name=acc.name,
+                score=result.score,
+                evidence=acc.evidence,
+                score_json=why,
+            )
         )
         signal_writes.extend(_to_signal_writes(ticker, acc.signals))
         results.append((ticker, result.score, len(acc.evidence)))
 
-    replace_signals(signal_writes, classes=_FUNDAMENTAL_CLASSES, user_id=user_id, db_path=db_path)
+    persist_discovery_refresh(
+        candidate_writes, signal_writes, classes=active_classes, user_id=user_id, db_path=db_path
+    )
     results.sort(key=lambda r: (-r[1], r[0]))
     return results
 
@@ -322,8 +411,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--top", type=int, default=20, help="summary rows to print")
     args = parser.parse_args(argv)
 
+    growth_coverage: list[GrowthFinancials] = []
     results = discover(
         args.repo_root.resolve(),
+        growth_coverage_sink=growth_coverage.append,
         user_id=args.user_id,
         include_screens=not args.skip_screens,
         include_adjacency=not args.skip_adjacency,
@@ -335,6 +426,10 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "event": "discovery_run_done",
                 "candidates_upserted": len(results),
+                "canonical_growth_coverage": dict(Counter(item.status for item in growth_coverage)),
+                "canonical_growth_unavailable_reasons": dict(
+                    Counter(reason for item in growth_coverage for reason in item.reason_codes)
+                ),
                 "top": [
                     {"ticker": t, "score": s, "evidence": n} for t, s, n in results[: args.top]
                 ],

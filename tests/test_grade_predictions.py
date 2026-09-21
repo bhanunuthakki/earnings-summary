@@ -5,42 +5,15 @@ pending (never guessing)."""
 from __future__ import annotations
 
 import sqlite3
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import grade_predictions  # noqa: E402
-
-import predictions_store  # noqa: E402
-
-_SCHEMA = """
-CREATE TABLE predictions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT NOT NULL, source_kind TEXT NOT NULL,
-    source_doc_id INTEGER, source_artifact_id INTEGER, source_excerpt TEXT,
-    made_at TEXT NOT NULL, target_period TEXT, prediction_md TEXT NOT NULL,
-    kpi_name TEXT, kpi_concept_id INTEGER, comparator TEXT,
-    target_value REAL, target_unit TEXT,
-    realized_value REAL, realized_doc_id INTEGER,
-    outcome TEXT NOT NULL DEFAULT 'pending', outcome_confidence REAL,
-    evaluated_at TEXT, evaluator_run_id TEXT, notes TEXT, created_at TEXT
-);
-CREATE TABLE kpi_definitions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, name TEXT NOT NULL
-);
-CREATE TABLE kpi_facts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, ticker TEXT NOT NULL, period_end TEXT,
-    fiscal_period_type TEXT, kpi_definition_id INTEGER, value REAL, unit TEXT,
-    source_doc_id INTEGER, confidence REAL
-);
-"""
-
+import predictions_store
+from execution import grade_predictions
+from tests.fixtures.kpi_revision_setup import NOW
+from tests.fixtures.prediction_grading import admit_prediction_facts, prediction_database
 
 # ---------------------------------------------------------------------------
 # Pure comparator logic
@@ -77,11 +50,8 @@ def test_grade_comparison_unknown_returns_none() -> None:
 
 
 def test_grade_pending_grades_matchable_leaves_rest_pending(tmp_path: Path) -> None:
-    data = tmp_path / "data"
-    data.mkdir()
-    db = data / "portfolio.db"
-    conn = sqlite3.connect(str(db))
-    conn.executescript(_SCHEMA)
+    db = tmp_path / "explicit.db"
+    conn = prediction_database(db)
     conn.commit()
     conn.close()
 
@@ -162,17 +132,18 @@ def test_grade_pending_grades_matchable_leaves_rest_pending(tmp_path: Path) -> N
     conn = sqlite3.connect(str(db))
     conn.executescript(
         """
-        INSERT INTO kpi_definitions (id, ticker, name)
-            VALUES (1, 'AMAT', 'Revenue YoY Growth (USD)'), (2, 'AMAT', 'Gross Margin (GAAP)');
+        INSERT INTO kpi_definitions (id, ticker, name, unit)
+            VALUES (1, 'AMAT', 'Revenue YoY Growth (USD)', 'percent'), (2, 'AMAT', 'Gross Margin (GAAP)', 'percent');
         INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, source_doc_id, confidence)
             VALUES ('AMAT','2025-10-26','Q4',1,-3.48,'percent',101,0.9),
                    ('AMAT','2025-07-27','Q3',2,48.5,'percent',102,0.9);
         """
     )
+    admit_prediction_facts(conn)
     conn.commit()
     conn.close()
 
-    tally = grade_predictions.grade_pending(tmp_path, as_of=datetime(2026, 6, 1, tzinfo=UTC))
+    tally = grade_predictions.grade_pending(tmp_path, as_of=NOW, db_path=db)
 
     assert tally["pending"] == 4  # the future one is excluded by pending_for_grading
     assert tally["graded"] == 2
@@ -193,11 +164,8 @@ def test_grade_pending_grades_matchable_leaves_rest_pending(tmp_path: Path) -> N
 
 
 def test_grade_pending_dry_run_writes_nothing(tmp_path: Path) -> None:
-    data = tmp_path / "data"
-    data.mkdir()
-    db = data / "portfolio.db"
-    conn = sqlite3.connect(str(db))
-    conn.executescript(_SCHEMA)
+    db = tmp_path / "explicit.db"
+    conn = prediction_database(db)
     conn.commit()
     conn.close()
 
@@ -217,17 +185,16 @@ def test_grade_pending_dry_run_writes_nothing(tmp_path: Path) -> None:
     conn = sqlite3.connect(str(db))
     conn.executescript(
         """
-        INSERT INTO kpi_definitions (id, ticker, name) VALUES (1, 'AMAT', 'Revenue YoY Growth (USD)');
+        INSERT INTO kpi_definitions (id, ticker, name, unit) VALUES (1, 'AMAT', 'Revenue YoY Growth (USD)', 'percent');
         INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, source_doc_id, confidence)
             VALUES ('AMAT','2025-10-26','Q4',1,-3.48,'percent',101,0.9);
         """
     )
+    admit_prediction_facts(conn)
     conn.commit()
     conn.close()
 
-    tally = grade_predictions.grade_pending(
-        tmp_path, dry_run=True, as_of=datetime(2026, 6, 1, tzinfo=UTC)
-    )
+    tally = grade_predictions.grade_pending(tmp_path, dry_run=True, as_of=NOW, db_path=db)
     assert tally["graded"] == 1  # counted...
     hist = {p.id: p for p in predictions_store.history(ticker="AMAT", limit=10, db_path=db)}
     assert hist[pid].outcome == "pending"  # ...but nothing written
@@ -252,11 +219,9 @@ def test_grade_pending_records_extraction_calibration(tmp_path: Path) -> None:
     """``record_calibration=True`` writes one calibration row for the run tagged
     ``management_prediction`` @ the registry version, with the gradeable fraction
     as the score. Two gradeable + one malformed (no_kpi) -> 2/3; no_fact excluded."""
-    data = tmp_path / "data"
-    data.mkdir()
-    db = data / "portfolio.db"
-    conn = sqlite3.connect(str(db))
-    conn.executescript(_SCHEMA + _CALIBRATION_SCHEMA)
+    db = tmp_path / "explicit.db"
+    conn = prediction_database(db)
+    conn.executescript(_CALIBRATION_SCHEMA)
     conn.commit()
     conn.close()
 
@@ -302,18 +267,19 @@ def test_grade_pending_records_extraction_calibration(tmp_path: Path) -> None:
     conn = sqlite3.connect(str(db))
     conn.executescript(
         """
-        INSERT INTO kpi_definitions (id, ticker, name)
-            VALUES (1, 'AMAT', 'Revenue YoY Growth (USD)'), (2, 'AMAT', 'Gross Margin (GAAP)');
+        INSERT INTO kpi_definitions (id, ticker, name, unit)
+            VALUES (1, 'AMAT', 'Revenue YoY Growth (USD)', 'percent'), (2, 'AMAT', 'Gross Margin (GAAP)', 'percent');
         INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, value, unit, source_doc_id, confidence)
             VALUES ('AMAT','2025-10-26','Q4',1,-3.48,'percent',101,0.9),
                    ('AMAT','2025-07-27','Q3',2,48.5,'percent',102,0.9);
         """
     )
+    admit_prediction_facts(conn)
     conn.commit()
     conn.close()
 
     tally = grade_predictions.grade_pending(
-        tmp_path, record_calibration=True, as_of=datetime(2026, 6, 1, tzinfo=UTC)
+        tmp_path, record_calibration=True, as_of=NOW, db_path=db
     )
     assert tally["graded"] == 2
     assert tally["skipped_no_kpi"] == 1

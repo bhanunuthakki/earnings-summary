@@ -14,8 +14,10 @@ DB. Every LLM call is an injected stub — zero live LLM.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -113,7 +115,7 @@ def _db(tmp_path: Path) -> Path:
 
 def _fixed(loadings: list[dict[str, object]]) -> rf.FactorCall:
     def call(_prompt: str) -> list[object]:
-        return loadings
+        return list(loadings)
 
     return call
 
@@ -128,7 +130,22 @@ def _raising() -> rf.FactorCall:
 def _write_weights(repo_root: Path, weights: dict[str, float]) -> None:
     path = repo_root / "data" / "portfolio_weights.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"computed_at": "2026-07-24T00:00:00", "weights": weights}))
+    path.write_text(json.dumps({"computed_at": datetime.now(UTC).isoformat(), "weights": weights}))
+    db = repo_root / "portfolio.db"
+    if db.exists():
+        with sqlite3.connect(db) as conn:
+            for ticker in weights:
+                _write_holdings(repo_root, ticker)
+                thesis = repo_root / "micro_thesis" / "holdings" / f"{ticker}.json"
+                sha = rf.compute_input_sha(
+                    ticker,
+                    geo_mix=None,
+                    product_mix=None,
+                    thesis_sha=hashlib.sha256(thesis.read_bytes()).hexdigest(),
+                )
+                conn.execute(
+                    "UPDATE business_factor_exposures SET input_sha=? WHERE ticker=?", (sha, ticker)
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -185,59 +202,59 @@ def test_migration_creates_table(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Grounding gate: _validate_loadings
+# Grounding gate: validate_loadings
 # ---------------------------------------------------------------------------
 
 
-def test_validate_loadings_drops_out_of_taxonomy_factor() -> None:
+def testvalidate_loadings_drops_out_of_taxonomy_factor() -> None:
     raw = [
         {"factor": _FACTOR_A, "loading": 0.5, "rationale": "grounded"},
         {"factor": "a made-up factor", "loading": 0.9, "rationale": "hallucinated"},
     ]
-    out = rf._validate_loadings(raw)
+    out = rf.validate_loadings(raw)
     assert [fl.factor for fl in out] == [_FACTOR_A]
 
 
-def test_validate_loadings_clamps_range() -> None:
+def testvalidate_loadings_clamps_range() -> None:
     raw = [
         {"factor": _FACTOR_A, "loading": 5.0, "rationale": "too high"},
         {"factor": _FACTOR_B, "loading": -2.0, "rationale": "too low"},
     ]
-    out = {fl.factor: fl.loading for fl in rf._validate_loadings(raw)}
+    out = {fl.factor: fl.loading for fl in rf.validate_loadings(raw)}
     assert out[_FACTOR_A] == 1.0
     assert out[_FACTOR_B] == 0.0
 
 
-def test_validate_loadings_dedups_keeping_higher() -> None:
+def testvalidate_loadings_dedups_keeping_higher() -> None:
     raw = [
         {"factor": _FACTOR_A, "loading": 0.2, "rationale": "first"},
         {"factor": _FACTOR_A, "loading": 0.8, "rationale": "second, higher"},
     ]
-    out = rf._validate_loadings(raw)
+    out = rf.validate_loadings(raw)
     assert len(out) == 1
     assert out[0].loading == 0.8
     assert out[0].rationale == "second, higher"
 
 
-def test_validate_loadings_caps_at_max_and_orders_desc() -> None:
+def testvalidate_loadings_caps_at_max_and_orders_desc() -> None:
     raw = [
         {"factor": f, "loading": i / 10.0, "rationale": "r"}
         for i, f in enumerate(rf.TAXONOMY[: rf.MAX_LOADINGS_PER_TICKER + 3], start=1)
     ]
-    out = rf._validate_loadings(raw)
+    out = rf.validate_loadings(raw)
     assert len(out) == rf.MAX_LOADINGS_PER_TICKER
     assert [fl.loading for fl in out] == sorted((fl.loading for fl in out), reverse=True)
 
 
-def test_validate_loadings_rejects_malformed_entries() -> None:
+def testvalidate_loadings_rejects_malformed_entries() -> None:
     raw = [
         "not a dict",
         {"factor": _FACTOR_A},  # missing loading/rationale
         {"factor": _FACTOR_A, "loading": "not a number", "rationale": "x"},
         {"factor": _FACTOR_A, "loading": True, "rationale": "bool is not a number"},
     ]
-    assert rf._validate_loadings(raw) == ()
-    assert rf._validate_loadings("not a list") == ()
+    assert rf.validate_loadings(raw) == ()
+    assert rf.validate_loadings("not a list") == ()
 
 
 # ---------------------------------------------------------------------------
@@ -576,6 +593,13 @@ def test_refresh_all_sweeps_portfolio_tickers(tmp_path: Path) -> None:
         conn.commit()
     finally:
         conn.close()
+    weights = tmp_path / "data" / "portfolio_weights.json"
+    weights.parent.mkdir(parents=True)
+    weights.write_text(
+        json.dumps(
+            {"weights": {"AAA": 0.5, "BBB": 0.5}, "computed_at": datetime.now(UTC).isoformat()}
+        )
+    )
     _write_holdings(tmp_path, "AAA", thesis="Alpha thesis")
     # BBB has no holdings file and no segment tables -> nothing to ground on.
 
@@ -668,7 +692,7 @@ def test_book_factor_vector_never_raises_on_missing_db(tmp_path: Path) -> None:
     result = rf.book_factor_vector(missing, tmp_path)
     assert result.vector == {}
     assert result.top_contributors == {}
-    assert result.availability == "missing_table"
+    assert result.availability == "unavailable"
     assert result.excluded_tickers == ("AAA",)
 
 

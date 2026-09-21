@@ -1,194 +1,99 @@
-# Non-FMP news sources — scoping + fallback ladder
+# News sources and deferred-source disposition
 
-**Status:** pilot landed (EDGAR 8-K / 13D / 13G + yfinance grades, additive). This doc is the
-source evaluation behind that pilot and the design sketch for the deferred legs (13F diffs,
-yfinance general news, Finnhub).
+**Reconciled:** 2026-09-19 (BHA-61). This document describes the actual dispatcher,
+not a separate policy implementation. The former `news.news_ladder` module had no
+production consumers, used different source names, and could collapse distinct
+SEC query-document URLs; it and its self-only tests were retired after a complete
+source census. The canonical authorities remain `execution/fetch_news.py` and
+`src/news/store.py`.
 
-**Ask (verbatim):** "Can you also have a fallback news source that is not FMP, where ratings
-changes by sell-side analysts, key position changes at top hedge funds, product releases,
-acquisitions, and other key news can be pulled in."
+## Actual collection and consumers
 
-**Context.** The `news` table (alembic `0065_news`) is populated by the daily Stage-0 fetch
-(`execution/fetch_news.py`, invoked by `run_morning_pipeline.py`). Today's ladder is FMP
-stock-news (FMP_TIER=free, quota-fragile) → WebSearch+Opus per ticker on FMP refusal. The
-dedicated FMP `/stable/grades` endpoint could not be verified on the free tier (probe hit the
-daily quota; see `src/dashboard/inbox_rank.py` docstring). Everything below is evaluated for
-the active tracked book (`tracked_companies`, list_type ∈ portfolio/watchlist/evaluation,
-~62 tickers — mostly US filers, plus FPIs: NU, MELI*, ASML, NVO, TSM, BHP, RIO, VALE, HDB…
-*MELI files domestic forms 10-K/8-K despite being LatAm).
+| Leg | Actual producer | Current behavior |
+|---|---|---|
+| General journalism | `execution/fetch_yf_news.py` | Implemented since July; additive by default. Maps modern nested and legacy Yahoo payloads into `NewsRow`. |
+| FMP stock news | `execution/fetch_fmp_news.py` | Attempted under `--source auto` or `fmp`; provider refusals remain visible. |
+| Web search | `execution/fetch_news_websearch.py` | Explicit source mode or deliberately enabled fallback. CLI defaults `--websearch-scope none`, so paid discovery is not the standing fallback. |
+| Material disclosures / stakes | `execution/fetch_edgar_news.py` | Additive 8-K/13D/13G, with SEC pacing and source filing URLs. |
+| Analyst actions | `execution/fetch_yf_grades.py` | Additive; per-ticker upstream gaps do not prove no rating activity. |
+| Competitor IPO watch | `competitive.sec_watch` | Existing bounded S-1 watch, independently opt-out. |
+| 13F / congressional disclosures | Owner-invoked ownership-disclosure workflow | On demand; no recurring product feed, writer, or notification activation. Historical stored 13F rows do not prove an active feed. |
 
----
+All current ingestion persists through `news.store.upsert_news_rows` into the
+canonical `news` table. Exact `(ticker,url)` identity is idempotent; meaningful
+query parameters remain part of source identity. Additive cross-source stories
+are deduplicated by ticker, normalized headline and publication date against both
+the current batch and retained rows. Consumers include `triggers.material_news`,
+news diet scoring and the dashboard's news/ratings/disclosures projections.
+The store validates UTC publication format and plausible dates. HTTP(S) source
+URLs must have a hostname and no embedded credentials or whitespace. An article
+cannot be made current by inventing a timestamp; undated Yahoo strings are refused.
 
-## 1. Source evaluation by category
+## Current measured evidence
 
-Ranking criteria, in order: **cost** (free first, no paid signups), **ToS/licensing**,
-**latency**, **coverage of our tracked tickers**, **maintenance burden**.
+A read-only census of the canonical Windows database on 2026-09-19 enumerated the
+entire active portfolio/watchlist/evaluation population and per-source stored
+presence for 7-day and 30-day windows. It confirms substantial current Yahoo
+journalism and additive grades/EDGAR rows; Yahoo general news is **implemented**,
+not a deferred leg. The private, source-bound receipt is retained with the
+completion-fixes audit (`news-source-evidence.json`), including the population,
+window counts, latest publication times and recorded news-structuring costs.
+The public source tree does not carry the owner's ticker population.
 
-### (a) Sell-side rating changes
+These measurements establish stored presence only. Zero rows may mean no story,
+failed acquisition, or an unserved ticker. Publication recency is not a successful
+collection receipt or archive-completeness proof. Historical dollar-per-row figures
+in the July implementation are historical rationale, not current measured prices
+or a guaranteed forecast of marginal operating cost. No paid provider call or new
+source canary was run for this reconciliation.
 
-| Source | Cost | ToS / licensing | Latency | Coverage | Maintenance | Verdict |
-|---|---|---|---|---|---|---|
-| **yfinance `Ticker.upgrades_downgrades`** | Free, **no key** | Unofficial Yahoo endpoints; gray zone, fine for personal research, no redistribution | Minutes–hours after the event | **Verified live 2026-06-11**: AAPL latest 2026-06-09, NU 2026-06-03, NOW 2026-05-06 — but **per-ticker gaps** (META frozen at 2024-09-30; upstream Yahoo data gap) | Low–moderate (pin yfinance, degrade to `[]` on breakage) | **PILOT — implemented** as `source_feed='yf_grades'` |
-| Finnhub `/stock/upgrade-downgrade` | Free **key** (signup), 60 req/min | Attribution required; no redistribution; ratings endpoint is marked premium-ish in docs — needs post-signup verification | Near-real-time | Unverified | Low | **Backup rung** if yfinance breaks; needs a (free) key signup first |
-| Benzinga APIs | **Paid** (Benzinga Pro; powers FMP's grades and used to power Yahoo's) | Commercial license | Real-time, canonical firehose | Full | Low | **Note only** — the upgrade path if ratings ever become load-bearing |
-| FMP stock-news headline regex (existing) | Free tier | Already in use | Hours | Partial (only stories FMP carries) | Zero (exists) | Remains the in-feed refinement (`_RATING_HEADLINE_RX`) |
+## Candidate decision and primary-source evidence
 
-### (b) Hedge-fund position changes
+| Candidate | Disposition | Evidence and limit |
+|---|---|---|
+| Yahoo general news | Retain existing implementation; remove obsolete deferred checkbox | Current live stored evidence and existing deterministic adapter/tests establish actual use. No duplicate source is needed. |
+| Finnhub company news / ratings | Do not add or schedule; deferred pending a demonstrated unmet gap | No measured incremental coverage advantage over current sources is established. Official company-news contract limits coverage to North American companies and requires an API key. Current plan rights, quotas and price were not verifiable from the fetched pricing page; prior fixed 60/min and redundancy assertions are withdrawn as unproven for this selection. |
+| Generic RSS/scrapers | Do not add | No selected publisher contract, supported schema, relevance benchmark or incremental coverage evidence. This is not a universal assertion that RSS lacks provenance. |
+| AlphaVantage sentiment | Do not add | Not required by the current news task; no supported incremental-value case. Prior universal quota assertion is withdrawn. |
 
-| Source | Cost | ToS / licensing | Latency | Coverage | Maintenance | Verdict |
-|---|---|---|---|---|---|---|
-| **EDGAR 13D / 13G (incl. amendments)** | Free | **Public domain** (SEC fair-access rules: descriptive UA + contact, ≤10 req/s) | 13D: ≤5 business days after crossing 5% (activist intent); 13G: periodic/quarterly (passive) | **Verified live 2026-06-11**: filings appear under the **subject company's** submissions JSON. Note EDGAR's Dec-2024 renaming: new filings are `SCHEDULE 13D` / `SCHEDULE 13G(/A)`, legacy are `SC 13D` / `SC 13G(/A)` — match both | Low (one submissions JSON per ticker, already cached) | **PILOT — implemented** as `edgar_13d` / `edgar_13g` |
-| Ownership disclosures (13F and congressional PTR) | Free | Public records | Filing-lagged | Explicit request scope | Skill-led research | **On demand only** — never a product feed |
-| WhaleWisdom / HedgeFollow / Dataroma scrapes | Free-ish | Scraping against ToS | Same 13F lag | Full | High, fragile | Rejected — EDGAR is the same data, canonical and legal |
+Sources checked 2026-09-19:
 
-### (c) Product releases / acquisitions / material events
+- [yfinance project and data-rights boundary](https://github.com/ranaroussi/yfinance):
+  unofficial and unaffiliated with Yahoo; software licensing does not grant rights
+  to redistributed provider content. The project directs users to Yahoo terms and
+  characterizes the API as personal-use. This localhost research tool does not
+  acquire redistribution rights through its adapter.
+- [yfinance get_news contract](https://ranaroussi.github.io/yfinance/reference/api/yfinance.Ticker.get_news.html):
+  ticker-scoped list response, default count 10, selectable news/all/press-releases
+  tab. No guaranteed completeness, rate allowance or SLA is specified there.
+- [Finnhub maintained OpenAPI](https://github.com/Finnhub-Stock-API/finnhub-go/blob/master/api/openapi.yaml):
+  `/company-news` takes symbol/from/to, returns article identity, publication time,
+  headline, source and URL, and uses API-key authentication. Its stated geographic
+  scope does not itself prove ticker coverage for this book.
+- [Finnhub pricing](https://finnhub.io/pricing) and [rate-limit documentation](https://finnhub.io/docs/api/rate-limit):
+  fetched pages exposed no readable plan details in this check. No account was
+  created or key provisioned; cost, retention/redistribution rights and exact plan
+  allowance remain unknown rather than guessed.
 
-| Source | Cost | ToS / licensing | Latency | Coverage | Maintenance | Verdict |
-|---|---|---|---|---|---|---|
-| **EDGAR 8-K with item codes** | Free | Public domain (fair-access) | The fastest *legal* channel — most items due within 4 business days, usually filed same day; earnings 2.02 lands minutes after the press release | **Verified live 2026-06-11**: `filings.recent.items` carries codes (e.g. `"2.02,9.01"`). Covers acquisitions (1.01/2.01), exec changes (5.02), restatements (4.02), cyber incidents (1.05), Reg-FD/press (7.01/8.01). **FPI caveat:** 20-F/6-K filers don't file 8-K, and 6-K carries no item codes → FPIs get 13D/G coverage only for now | Low | **PILOT — implemented** as `edgar_8k` |
-| Company press RSS (per-issuer IR feeds) | Free | Generally fine (published feeds) | Real-time | ~62 bespoke URLs to discover and babysit; many issuers have none | **High** — breakage-prone | Deferred; the weekly `ir_pipeline` already covers IR documents |
-| PR-wire public RSS (GlobeNewswire/BusinessWire/PRN) | Free | Wire ToS allow personal RSS consumption | Real-time | Firehose; per-ticker filtering is weak on the free feeds | Moderate | Noted; FMP already syndicates the wires when its quota holds |
+Reopen Finnhub selection only for a named material missed event/ticker or sustained
+current-source outage, with a bounded side-by-side canary demonstrating net-new
+useful stories, measured failures/latency and complete source identity. Before any
+implementation/activation, bind current plan rights, auth, quotas, timestamp/issuer
+semantics, retention and marginal operating cost. A positive canary is evidence
+for a separate scheduling decision, never automatic activation.
 
-### (d) General news
+## Failure and retention behavior
 
-| Source | Cost | ToS / licensing | Latency | Coverage | Maintenance | Verdict |
-|---|---|---|---|---|---|---|
-| FMP stock-news (existing primary) | Free tier, quota-fragile | OK | Hours | Good while quota holds | Zero | Stays primary |
-| **yfinance `Ticker.news`** | Free, no key | Same unofficial-API gray zone as (a) | Minutes–hours | ~10 recent stories/ticker, title+link+publisher+timestamp — maps cleanly onto `NewsRow` | Low | **Recommended next rung** (follow-up PR): slots between FMP and WebSearch+Opus, would absorb most of the Opus fallback cost |
-| AlphaVantage `NEWS_SENTIMENT` | Free key, **25 req/day** | Personal use | Hours | 25 req/day cannot cover 62 tickers daily | Low | Rejected as a daily rung; usable only for spot-checks |
-| Google News RSS (`news.google.com/rss/search?q=<ticker>`) | Free, no key | Gray; Google tolerates personal RSS use, no SLAs | Minutes | Broad but noisy (needs publisher allowlist) | Moderate | Backup of last resort before Opus |
-| WebSearch+Opus (existing) | LLM tokens | n/a | n/a | n/a | Zero (exists) | Stays the last rung |
+Yahoo transport failure or a non-array payload is unavailable, not a successful
+empty response. The dispatcher retains other sources' valid rows, emits a partial
+collection disposition and returns nonzero. Any persistence failure also returns
+nonzero, including when another batch succeeded. The existing dead-man freshness
+alert is only a last-stored-row check; it cannot establish per-ticker collection
+coverage. Deterministic tests cover malformed/unsafe URLs, timestamp rejection,
+unavailable collection, genuine empty responses, duplicates and cross-source
+stories. Operational receipts must retain the degraded state instead of inferring
+success from old news rows.
 
----
-
-## 2. Recommended default stack + fallback ladder
-
-Mirror of the `expected_earnings` FMP→yfinance ladder pattern, with one structural difference:
-EDGAR is not a *fallback* — it is canonical primary-source disclosure that FMP merely
-paraphrases, so it runs **additively every day**, not only on FMP refusal.
-
-```
-Category            Always-on (additive)            Ladder on top
------------------   -----------------------------   ------------------------------------------
-Rating changes      yf_grades (free, keyless)       FMP headline regex (existing)
-                                                    → [Finnhub free key, if yfinance breaks]
-Hedge-fund moves    edgar_13d / edgar_13g           Ownership disclosures (on demand, §4)
-Material events     edgar_8k (item-coded)           FMP stock-news (existing)
-General news        —                               FMP → [yfinance news, follow-up] → WebSearch+Opus
-```
-
-Dedup policy: the table's `UNIQUE(ticker, url)` dedupes re-runs within a feed; **cross-feed**
-the additive sources are filtered by `(ticker, normalized headline, published date)` against
-both the same batch and rows already in the table (`drop_duplicate_stories` in
-`src/news/store.py`) — so an FMP story and the matching EDGAR filing never double-post, and
-the additive feeds *never replace* FMP/WebSearch rows.
-
----
-
-## 3. Pilot implementation (landed with this doc)
-
-### EDGAR leg — `execution/fetch_edgar_news.py`
-
-* **Fair access:** descriptive `User-Agent` with contact email (`EDGAR_USER_AGENT` env
-  override), global ≥0.15s spacing between SEC requests (≤10 req/s policy), on-disk cache
-  under `data/edgar/`:
-  * `company_tickers.json` (ticker→CIK registry, TTL 7 days)
-  * `submissions/CIK##########.json` (per-CIK, TTL 6h — the daily run refetches, same-day
-    re-runs hit cache)
-* **One request per ticker per day** (the submissions JSON carries form type, 8-K item
-  codes, filing date and acceptance time — no per-filing fetches needed).
-* Maps, for filings within the `--days` window (default 3):
-  * `8-K`/`8-K/A` → `source_feed='edgar_8k'`, headline `"8-K 2.01, 9.01: completed
-    acquisition or disposition — <Company>"` (item-code descriptions from the Reg-S-K map
-    inside the fetcher; first non-boilerplate item names the filing)
-  * `SC 13D(/A)` + `SCHEDULE 13D(/A)` → `edgar_13d`, headline `"SC 13D: activist stake
-    (>5%) disclosed — <Company>"` (filer name is not in the subject's submissions arrays;
-    fetching each filing's primary doc to name the filer is a possible enhancement at +1
-    request per filing)
-  * `SC 13G(/A)` + `SCHEDULE 13G(/A)` → `edgar_13g` (passive ≥5% stakes)
-* `published_at` = `acceptanceDateTime` (already UTC) → canonical `'YYYY-MM-DD HH:MM:SS'`;
-  falls back to `filingDate 00:00:00` (date real, midnight = conservative floor); a row with
-  neither parseable is dropped, never fabricated.
-* URL = the primary document under `https://www.sec.gov/Archives/edgar/data/<cik>/<accession>/`
-  (unique per filing → the `(ticker, url)` key keeps re-runs idempotent).
-
-### Ratings leg — `execution/fetch_yf_grades.py`
-
-* `yf.Ticker(t).upgrades_downgrades`, keyless; **manually verified 2026-06-11** (shape:
-  index `GradeDate` UTC, columns Firm/ToGrade/FromGrade/Action/priceTargetAction/
-  currentPriceTarget/priorPriceTarget; actions `up|down|init|main|reit`).
-* Maps rows within the window to `source_feed='yf_grades'` with headlines like
-  `"Morgan Stanley upgrades META to Overweight from Equal-Weight; PT $620 → $700"` —
-  deliberately shaped so the existing `_RATING_HEADLINE_RX` also matches them.
-* Synthetic-but-clickable stable URL (`https://finance.yahoo.com/quote/<T>/analysis#grade-…`)
-  provides the per-event uniqueness the `(ticker, url)` key needs.
-* Degrades to `[]` on any yfinance import/transport/shape error. Known gap: some tickers
-  (META) are frozen upstream — the FMP headline-regex leg still catches those.
-
-### Wiring — `execution/fetch_news.py` (dispatcher)
-
-* Additive collection runs **after** the FMP/WebSearch policy rows, for every `--source`
-  mode; `--skip-edgar` / `--skip-grades` opt out. Failures log (`news_edgar_failed` /
-  `news_grades_failed`) and degrade — they can never block the primary feeds or the
-  morning pipeline's trigger stage.
-* Grades fetch is threaded (8 workers); EDGAR stays sequential under the SEC throttle.
-  Stage-0 timeout in `run_morning_pipeline.py` bumped 600s → 900s for headroom.
-
-### Inbox categorization — `src/dashboard/inbox_rank.py`
-
-* `yf_grades` joins `fmp_grades` as a grades feed → **Rating changes**.
-* `edgar_8k`: disclosure-only filings (items ⊆ {7.01, 8.01, 9.01}) → **Press releases**;
-  anything with a material item (2.01, 5.02, 4.02, …) → **News**. No new category.
-* `edgar_13d` / `edgar_13g` → **News** (default), deliberately: a 5% activist stake is
-  news, not PR.
-
----
-
-## 4. Ownership disclosures — on demand only
-
-Quarterly 13F comparisons and congressional Periodic Transaction Report scans are
-not product feeds. They have no scheduler, database writer, discovery/news producer,
-or notification path. Run them explicitly through the tracked
-`ownership-disclosure-scan` skill, which owns first-party source selection,
-amendment reconstruction, provenance, and completeness receipts. Results remain
-foreground research unless the owner explicitly requests a private dated export.
-
----
-
-## 5. Risks & watch items
-
-* **yfinance is an unofficial API** — Yahoo can break it any week. Pinned via
-  `requirements.txt`; every failure path degrades to `[]`; the plan's backup is a Finnhub
-  free key (signup decision deferred to the user).
-* **Per-ticker grade gaps** (META frozen 2024-09): treat `yf_grades` as additive coverage,
-  never as proof of "no rating activity".
-* **EDGAR `filings.recent` window** holds ~1,000 filings (META: back to 2024-04) — orders of
-  magnitude more than any 3-day window needs; older pages exist under `filings.files` if a
-  backfill ever wants them.
-* **Form-name drift**: EDGAR renamed `SC 13D/G` → `SCHEDULE 13D/G` in Dec 2024; the fetcher
-  normalizes both spellings. Watch for the same rename pattern on other forms.
-* **FPIs file 6-K, not 8-K** (NU, ASML, NVO, TSM, BHP, RIO, VALE, HDB): no item codes, so
-  deterministic headlines/categorization aren't possible — 6-K ingestion would need an LLM
-  classification pass (deferred; those names keep FMP/WebSearch + 13D/G coverage).
-* **Trigger flooding**: material_news reads the latest 15 stories/ticker/24h. Realistic
-  additive volume is ≤3 filings+grades per ticker per day; 13G amendment season (Feb) is the
-  worst case and still small. No cap implemented; revisit if a ticker ever floods.
-* **Contact email in the default UA** lives in `execution/fetch_edgar_news.py`
-  (`EDGAR_USER_AGENT` env var overrides). SEC policy requires a real contact; the repo is
-  private, so the default carries one.
-
----
-
-## 6. Formal Disposition on Deferred Legs (BHA-61 / 2026-08-15)
-
-In accordance with Linear issue **BHA-61** and the combined-source data backbone roadmap, the candidate fallback sources have been formally audited and dispositioned:
-
-1. **Finnhub `/stock/upgrade-downgrade`**: **FORMALLY RETIRED (KILLED)**.
-   - *Rationale*: Requires proprietary API key management, 60 req/min quota tracking, and ongoing maintenance for redundant data already captured by `yf_grades` and SEC EDGAR 8-K disclosures.
-2. **Generic RSS & Web Scrapers**: **FORMALLY RETIRED (KILLED)**.
-   - *Rationale*: High noise-to-signal ratio, lack of authoritative publisher provenance, and scraping fragility violate repository data standards.
-3. **Canonical Active Ladder**:
-   - **Tier 1 (Additive Core)**: SEC EDGAR 8-K/13D/13G filings (public domain, canonical).
-   - **Tier 2 (Market Core)**: FMP stock-news (curated financial wire).
-   - **Tier 3 (Analyst Actions)**: `yf_grades` (keyless, structured).
-   - **Tier 4 (Contingency Fallback)**: Curated WebSearch + LLM structuring (fail-closed, deterministic refusal on network failure).
+Fetch windows bound retrieval; they are not a retention policy. Existing retained
+news is not deleted by this repair. New-provider selection must establish retention
+before activation; a cleanup run is a separate owner-authorized operation.

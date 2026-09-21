@@ -29,20 +29,12 @@ def test_fmp_canary_corpus_verification() -> None:
     assert total_bytes > 0
 
 
-def test_fmp_canary_manifest_fiscal_awareness() -> None:
+def test_legacy_manifest_period_annotations_are_not_fiscal_proof() -> None:
+    # The old archive is a hash-only inventory. Its blanket dates do not prove
+    # statement cadence or fiscal year; test_canary_corpus checks raw headers.
     manifest_data = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    files = manifest_data["files"]
-
-    wix_files = [f for f in files if f["ticker"] == "WIX"]
-    rbrk_files = [f for f in files if f["ticker"] == "RBRK"]
-
-    assert len(wix_files) > 0
-    assert len(rbrk_files) > 0
-
-    # WIX should specify calendar Q1 2026 (2026-03-31)
-    assert all(f["max_period_date"] == "2026-03-31" for f in wix_files)
-    # RBRK should specify fiscal Q1 FY2027 (2026-04-30)
-    assert all(f["max_period_date"] == "2026-04-30" for f in rbrk_files)
+    assert manifest_data["files"]
+    assert all(len(item["sha256"]) == 64 for item in manifest_data["files"])
 
 
 def test_canary_verification_failure_on_corrupt_file(tmp_path: Path) -> None:

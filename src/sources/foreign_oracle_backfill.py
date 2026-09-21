@@ -44,8 +44,8 @@ class ForeignOracleComparisonObservation(BaseModel):
     ticker: str
     concept: str
     canonical_concept: str | None = None
-    fiscal_year: int
-    fiscal_period: str
+    fiscal_year: int | None
+    fiscal_period: str | None
     currency: str
     sec_fact_value: Decimal | None = None
     oracle_fmp_value: Decimal | None = None
@@ -104,8 +104,8 @@ class ForeignOracleBackfillValidator:
                 ticker=ticker_clean,
                 concept="all",
                 canonical_concept=None,
-                fiscal_year=2026,
-                fiscal_period="Q1",
+                fiscal_year=None,
+                fiscal_period=None,
                 currency=currency,
                 sec_fact_value=None,
                 oracle_fmp_value=None,
@@ -123,7 +123,7 @@ class ForeignOracleBackfillValidator:
                 exact_matches_count=0,
                 discrepancies_count=0,
                 degraded_or_na_count=1,
-                status="PASS",
+                status="HOLD",
                 comparisons=(obs,),
                 reason=f"Correctly degraded non-inline SEC form for {ticker_clean}.",
                 verified_at=now_ts,
@@ -134,8 +134,8 @@ class ForeignOracleBackfillValidator:
                 ticker=ticker_clean,
                 concept="all",
                 canonical_concept=None,
-                fiscal_year=2025,
-                fiscal_period="Q1",
+                fiscal_year=None,
+                fiscal_period=None,
                 currency=currency,
                 sec_fact_value=None,
                 oracle_fmp_value=None,
@@ -153,7 +153,7 @@ class ForeignOracleBackfillValidator:
                 exact_matches_count=0,
                 discrepancies_count=0,
                 degraded_or_na_count=1,
-                status="PASS",
+                status="HOLD",
                 comparisons=(obs,),
                 reason=f"Correctly handled semiannual cadence for {ticker_clean}.",
                 verified_at=now_ts,
@@ -166,7 +166,9 @@ class ForeignOracleBackfillValidator:
 
         for fact in sec_receipt.facts:
             lookup_key = fact.canonical_concept or fact.concept.lower().replace(" ", "_")
-            oracle_val = oracle_facts.get(lookup_key) or oracle_facts.get(fact.concept)
+            oracle_val = oracle_facts.get(lookup_key)
+            if oracle_val is None:
+                oracle_val = oracle_facts.get(fact.concept)
 
             if oracle_val is None:
                 # Oracle missing this specific fact
@@ -215,11 +217,8 @@ class ForeignOracleBackfillValidator:
                     if oracle_val != Decimal("0")
                     else Decimal("1.0")
                 )
-                # Classify divergence type
-                if div_ratio > Decimal("0.05"):
-                    classification = OracleComparisonClassification.MATERIAL_DISAGREEMENT
-                else:
-                    classification = OracleComparisonClassification.PROVIDER_NORMALIZATION
+                # A small difference does not establish a provider transformation.
+                classification = OracleComparisonClassification.MATERIAL_DISAGREEMENT
 
                 comparisons.append(
                     ForeignOracleComparisonObservation(
@@ -239,9 +238,10 @@ class ForeignOracleBackfillValidator:
                 )
                 discrepancies += 1
 
-        status: Literal["PASS", "HOLD"] = (
-            "PASS" if discrepancies == 0 or (exact_matches > 0 and discrepancies == 0) else "HOLD"
-        )
+        # Bare values do not bind oracle bytes, periods, units or semantic admission.
+        # This compatibility helper remains arithmetic-only; operational evidence
+        # must pass foreign_oracle_run's sealed source graph boundary.
+        status: Literal["PASS", "HOLD"] = "HOLD"
 
         return ForeignBackfillReceipt(
             run_id=run_id,
@@ -254,6 +254,6 @@ class ForeignOracleBackfillValidator:
             degraded_or_na_count=0,
             status=status,
             comparisons=tuple(comparisons),
-            reason=f"Evaluated {len(comparisons)} facts against sealed oracle: {exact_matches} exact matches, {discrepancies} discrepancies.",
+            reason=f"Unverified arithmetic comparison only: {len(comparisons)} inputs, {exact_matches} equal values, {discrepancies} differences; source-bound oracle and completion evidence unavailable.",
             verified_at=now_ts,
         )

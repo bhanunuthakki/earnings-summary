@@ -172,7 +172,8 @@ def test_verify_calendars_audit_cli_integration(tmp_path: Path) -> None:
 
     today = date(2026, 8, 14)
     res = audit_calendars(db, today=today)
-    assert res.integrity_pass is True
+    # Earnings-only schemas cannot establish the general Forward calendar.
+    assert res.integrity_pass is False
     assert res.tracked_companies_count == 1
     assert res.upcoming_expected_count == 1
-    assert len(res.issues) == 0
+    assert any("Forward event store unavailable" in issue for issue in res.issues)

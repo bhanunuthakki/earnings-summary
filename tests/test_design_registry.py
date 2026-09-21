@@ -95,7 +95,7 @@ def _expected_grid_signature(item: registry.GridSignature) -> str:
 
 
 def test_registry_is_frozen_typed_and_complete() -> None:
-    assert registry.REGISTRY_VERSION == "1.12.0"
+    assert registry.REGISTRY_VERSION == "1.12.1"
     records = (
         registry.CARD_ARCHETYPES[0],
         registry.SHAPE_ARCHETYPES[0],
@@ -115,15 +115,15 @@ def test_registry_is_frozen_typed_and_complete() -> None:
 
     assert isinstance(registry.REGISTERED, frozenset)
     assert isinstance(registry.GOVERNED, frozenset)
-    assert len(registry.REGISTERED) == 111
-    assert len(registry.VISUAL_EMITTER_MANIFEST) == 156
+    assert len(registry.REGISTERED) == 112
+    assert len(registry.VISUAL_EMITTER_MANIFEST) == 157
     backup_observer = next(
         entry
         for entry in registry.VISUAL_EMITTER_MANIFEST
         if entry.path == "operations/backup_observer.py"
     )
     assert backup_observer.disposition is registry.EmitterDisposition.NONVISUAL
-    assert len(registry.GOVERNED) == 132
+    assert len(registry.GOVERNED) == 133
     assert (
         frozenset(
             {

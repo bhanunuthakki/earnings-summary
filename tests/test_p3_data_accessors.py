@@ -1,4 +1,6 @@
-"""Tests for src/report/sections/p3_data.py — read-side data accessors for
+"""Retained legacy shadow tests; active canonical peer tests live in test_canonical_peer_comp.
+
+Tests for src/report/sections/p3_data.py — read-side data accessors for
 the six P3 panels (macro sensitivity, strategic targets, customer
 concentration, lease ladder, decision history, say-do verdicts).
 
@@ -11,19 +13,15 @@ authoritative source of truth for the column shapes.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from report.sections.p3_data import (  # noqa: E402
+from report.sections.p3_data import (
     load_customer_concentrations,
     load_decision_history,
     load_lease_ladder,
     load_macro_sensitivities,
-    load_peer_comp,
+    load_peer_comp_legacy_shadow,
     load_saydo_verdicts,
     load_strategic_targets,
 )
@@ -315,7 +313,7 @@ def test_saydo_verdicts_returns_typed_rows(tmp_path: Path) -> None:
 
 def test_peer_comp_returns_empty_when_files_missing(tmp_path: Path) -> None:
     """Cold-start eval — no FMP peers JSON yet — returns []."""
-    out = load_peer_comp("XYZ", repo_root=tmp_path)
+    out = load_peer_comp_legacy_shadow("XYZ", repo_root=tmp_path)
     assert out == []
 
 
@@ -357,7 +355,7 @@ def test_peer_comp_loads_from_fmp_cache(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    out = load_peer_comp("GOOG", repo_root=tmp_path)
+    out = load_peer_comp_legacy_shadow("GOOG", repo_root=tmp_path)
     # MSFT / AAPL carry no profile, and the peersList payload shape has no
     # name/cap fallback -> zero affinity -> dropped.
     assert [r.peer_ticker for r in out] == ["META"]
@@ -389,7 +387,7 @@ def test_peer_comp_caps_at_max_peers(tmp_path: Path) -> None:
     (fmp / "GOOG_profile.json").write_text(json.dumps(profile), encoding="utf-8")
     for p in big_peer_list:
         (fmp / f"{p}_profile.json").write_text(json.dumps(profile), encoding="utf-8")
-    out = load_peer_comp("GOOG", repo_root=tmp_path, max_peers=4)
+    out = load_peer_comp_legacy_shadow("GOOG", repo_root=tmp_path, max_peers=4)
     assert len(out) == 4
     assert [r.peer_ticker for r in out] == big_peer_list[:4]
 

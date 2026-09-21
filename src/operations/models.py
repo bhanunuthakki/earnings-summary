@@ -565,7 +565,17 @@ class PortfolioTrackerRuntimeObservation(ObservationEnvelope):
     receipt: RuntimeReceipt | None = None
 
 
+class DataCoverageSummary(FrozenModel):
+    """Derived read state; detailed authority remains in the linked Settings view."""
+
+    attention_count: int = Field(default=0, ge=0)
+    unknown_freshness_count: int = Field(default=0, ge=0)
+    fmp_state: str = "not_yet_wired"
+    sec_state: str = "unavailable"
+
+
 class OperationsSnapshot(FrozenModel):
+    data_coverage: DataCoverageSummary = Field(default_factory=DataCoverageSummary)
     snapshot_version: Literal["1"] = "1"
     observed_at: datetime
     registry_version: str

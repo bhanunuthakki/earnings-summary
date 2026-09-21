@@ -99,6 +99,7 @@ from pipeline.fmp_recovery import (
     WorkOutcome,
     WorkSpec,
     enqueue_work,
+    finalize_refresh_receipt,
     make_work_id,
     record_outcomes,
     recoverable_work,
@@ -297,14 +298,7 @@ def resolve_tier(explicit: str | None) -> TierConfig:
 # How long an endpoint stays fresh, by list_type x endpoint class. Hours.
 # `none` = tracked but de-emphasized; refresh quarterly to keep history alive
 # without burning budget on names the user isn't actively analyzing.
-_LIST_TYPE_BASE_FRESH_H: dict[str, int] = {
-    "portfolio": 24,
-    "watchlist": 24,
-    "evaluation": 24,
-    "none": 24 * 90,
-    "etf": 24 * 30,
-    "index_member": 24 * 30,
-}
+_LIST_TYPE_BASE_FRESH_H = _cadence_policy.LIST_TYPE_BASE_FRESH_H
 
 # Endpoint classification — drives priority weights and cadence multipliers.
 # An endpoint's class is matched by substring on the path; first match wins.
@@ -347,13 +341,7 @@ _ENDPOINT_CLASSES: list[tuple[str, str]] = [
 # watchlist (base = 24h = 1d), `mult` equals the freshness in days, so
 # statement=14.0 here matches STATEMENT_STALE_DAYS=14 there. Update both
 # when editing the policy.
-_CLASS_CADENCE_MULT: dict[str, float] = {
-    "time_sensitive": float(_cadence_policy.TIME_SENSITIVE_STALE_DAYS),
-    "growth": float(_cadence_policy.GROWTH_STALE_DAYS),
-    "segment": float(_cadence_policy.STATEMENT_STALE_DAYS),
-    "statement": float(_cadence_policy.STATEMENT_STALE_DAYS),
-    "reference": float(_cadence_policy.REFERENCE_STALE_DAYS),
-}
+_CLASS_CADENCE_MULT = _cadence_policy.CLASS_CADENCE_MULT
 
 _CLASS_PRIORITY_WEIGHT: dict[str, int] = {
     "time_sensitive": 0,
@@ -397,9 +385,7 @@ def classify_endpoint(endpoint: str) -> str:
 
 
 def cadence_hours(list_type: str, endpoint_class: str) -> float:
-    base = _LIST_TYPE_BASE_FRESH_H.get(list_type, 24 * 30)
-    mult = _CLASS_CADENCE_MULT.get(endpoint_class, 1.0)
-    return base * mult
+    return _cadence_policy.cadence_hours(list_type, endpoint_class)
 
 
 # ---------------------------------------------------------------------------
@@ -1440,6 +1426,13 @@ def run_recovery_batch(
         )
         for item in intended
     )
+    if (
+        connection.execute(
+            "SELECT 1 FROM fmp_refresh_receipts WHERE run_id=?", (run_id,)
+        ).fetchone()
+        is not None
+    ):
+        raise ValueError("FMP run is already finalized; use a new run ID for new work")
     config = circuit_config or CircuitConfig()
     admit_corpus = corpus_admitter or _admit_corpus
     intended_work_ids = frozenset(make_work_id(spec) for spec in specs)
@@ -1462,6 +1455,7 @@ def run_recovery_batch(
     dispatch_count = 0
     cursor_now = now
     processed: set[str] = set()
+    reused_work: dict[str, ExecutionMode] = {}
     call_budget = max_items if provider_call_budget is None else provider_call_budget
 
     while len(processed) < max_items:
@@ -1514,6 +1508,7 @@ def run_recovery_batch(
             item = item_by_id.get(planned.work_id)
             mode = planned.execution_mode
             if mode in {ExecutionMode.ALREADY_SATISFIED, ExecutionMode.ALREADY_APPLIED_CORPUS}:
+                reused_work[planned.work_id] = mode
                 if mode is ExecutionMode.ALREADY_SATISFIED:
                     fresh_count += 1
                 else:
@@ -1618,6 +1613,14 @@ def run_recovery_batch(
         corpus=corpus_count,
         failed=failed_count,
     )
+    final_receipt = finalize_refresh_receipt(
+        connection,
+        run_id=run_id,
+        expected_work_ids=tuple(sorted(intended_work_ids | processed)),
+        now=cursor_now,
+        reused_work=reused_work,
+    )
+    status = final_receipt.status
     return RecoveryRunResult(
         run_id=run_id,
         status=status,

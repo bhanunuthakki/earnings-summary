@@ -1,7 +1,7 @@
 """Grade pending decisions against subsequent realized price moves.
 
 For each decision where outcome_at IS NULL and made_at is older than the
-threshold (default 30 days), read the FMP price chart at made_at and at the
+threshold (default 30 days), read admitted, typed adjusted prices at made_at and at the
 latest available bar, compute the % change, and write an outcome.
 
 Grading heuristic (price-only, no fundamentals):
@@ -31,29 +31,26 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import logging
+import sqlite3
 import sys
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-
-def _sync_db_path(repo_root: Path) -> None:
-    import db
-
-    db.PROJECT_ROOT = str(repo_root)
-    db.DATA_DIR = str(repo_root / "data")
-    db.DB_PATH = str(repo_root / "data" / "portfolio.db")
-    db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
-
-
-from decision_extractor import OutcomeLabel, pending_for_grading, record_outcome  # noqa: E402
-from llm.calibration import CalibrationScore, record_score  # noqa: E402
-from llm.prompt_versions import prompt_version_for  # noqa: E402
+from db_paths import configured_db_path, db_path_context, require_db_path
+from decision_extractor import OutcomeLabel, pending_for_grading, record_outcome
+from llm.calibration import CalibrationScore, record_score
+from llm.prompt_versions import prompt_version_for
+from sources.decision_grading_prices import decision_price_evidence
+from sources.readers import ProviderNeutralDataReader, ReaderUnavailableStatus
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger("grade_decisions")
 
@@ -69,59 +66,6 @@ def _decisions_calibration_score(tally: dict[str, int]) -> float | None:
     if counted == 0:
         return None
     return (tally.get("correct", 0) + 0.5 * tally.get("mixed", 0)) / counted
-
-
-def _load_price_series(repo_root: Path, ticker: str) -> list[tuple[str, float]] | None:
-    """Read FMP dividend-adjusted price chart for ticker. Returns sorted
-    (date, adjClose) list newest-first, or None when no file exists."""
-    candidates = [
-        repo_root / "data" / "historical" / "fmp" / f"{ticker}_price_chart_10y_div_adj.json",
-        # Some tickers (GOOG) are stored under their primary symbol (GOOGL)
-        repo_root
-        / "data"
-        / "historical"
-        / "fmp"
-        / f"{_fmp_alias(ticker)}_price_chart_10y_div_adj.json",
-    ]
-    for path in candidates:
-        if not path.exists():
-            continue
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(payload, list):
-            continue
-        out: list[tuple[str, float]] = []
-        for rec in cast("list[object]", payload):
-            if not isinstance(rec, dict):
-                continue
-            r = cast("dict[str, object]", rec)
-            d = r.get("date")
-            p = r.get("adjClose")
-            if isinstance(d, str) and isinstance(p, (int, float)) and p > 0:
-                out.append((d[:10], float(p)))
-        if out:
-            out.sort(key=lambda t: t[0], reverse=True)
-            return out
-    return None
-
-
-# Ticker → FMP filename prefix for known sister tickers (matches db._FMP_ALIASES).
-_ALIASES = {"GOOG": "GOOGL"}
-
-
-def _fmp_alias(ticker: str) -> str:
-    return _ALIASES.get(ticker.upper(), ticker.upper())
-
-
-def _price_on_or_before(series: list[tuple[str, float]], iso_date: str) -> float | None:
-    """First adjClose at or before the iso_date (YYYY-MM-DD). Series is
-    newest-first, so we walk forward until we hit it."""
-    for d, p in series:
-        if d <= iso_date:
-            return p
-    return None
 
 
 def _verdict(*, kind: str, pct_change: float, threshold_pct: float) -> tuple[str, str]:
@@ -188,7 +132,7 @@ def _verdict(*, kind: str, pct_change: float, threshold_pct: float) -> tuple[str
     return ("unfalsifiable", f"unknown kind={kind}")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--since-days",
@@ -206,7 +150,7 @@ def main() -> int:
         "--repo-root",
         type=Path,
         default=PROJECT_ROOT,
-        help="Repo root containing data/portfolio.db.",
+        help="Repo root containing retained provider source artifacts.",
     )
     parser.add_argument(
         "--avoid-after-days",
@@ -217,21 +161,49 @@ def main() -> int:
         "the wider window keeps the pass's falsifiable conditions open to "
         "resurface in the meantime.",
     )
+    parser.add_argument("--db-path", "--db", type=Path, help="Explicit existing database override.")
     parser.add_argument("--limit", type=int, default=200)
     parser.add_argument("--verbose", "-v", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    _sync_db_path(args.repo_root.resolve())
+    repo_root = args.repo_root.resolve()
+    try:
+        db_path = require_db_path(args.db_path or configured_db_path(repo_root))
+        if db_path == (repo_root / "data" / "portfolio.db").resolve():
+            raise RuntimeError("Checkout-default database is prohibited")
+        with closing(connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)) as conn:
+            conn.execute("SELECT id FROM decisions LIMIT 1").fetchone()
+    except (OSError, RuntimeError, sqlite3.Error):
+        log.error(
+            {"event": "decision_grading_unavailable", "reason": "configured_database_unavailable"}
+        )
+        return 2
+    with db_path_context(db_path):
+        return _grade(
+            repo_root=repo_root,
+            db_path=db_path,
+            since_days=args.since_days,
+            limit=args.limit,
+            avoid_after_days=args.avoid_after_days,
+            threshold_pct=args.threshold_pct,
+        )
 
-    db_path = args.repo_root / "data" / "portfolio.db"
-    pending = pending_for_grading(
-        older_than_days=args.since_days, limit=args.limit, db_path=db_path
-    )
+
+def _grade(
+    *,
+    repo_root: Path,
+    db_path: Path,
+    since_days: int,
+    limit: int,
+    avoid_after_days: int,
+    threshold_pct: float,
+) -> int:
+    pending = pending_for_grading(older_than_days=since_days, limit=limit, db_path=db_path)
     log.info({"event": "pending_decisions", "n": len(pending)})
 
     tally = {
@@ -243,46 +215,40 @@ def main() -> int:
         "skipped_no_price": 0,
         "skipped_young_avoid": 0,
     }
-    today_iso = datetime.now(UTC).date().isoformat()
-    now_naive = datetime.now(UTC).replace(tzinfo=None)
+    now = datetime.now(UTC)
+    now_naive = now.replace(tzinfo=None)
+    reader = ProviderNeutralDataReader(repo_root)
 
     for dec in pending:
         # A pass needs a longer horizon than an add/trim before its outcome means
         # anything; leave young avoids open (and watchable) until they ripen.
         if dec.recommendation_kind == "avoid":
             age_days = (now_naive - dec.made_at.replace(tzinfo=None)).days
-            if age_days < args.avoid_after_days:
+            if age_days < avoid_after_days:
                 tally["skipped_young_avoid"] += 1
                 continue
-        series = _load_price_series(args.repo_root, dec.ticker)
-        if series is None:
+        evidence = decision_price_evidence(reader, ticker=dec.ticker, made_at=dec.made_at, now=now)
+        if isinstance(evidence, ReaderUnavailableStatus):
             tally["skipped_no_price"] += 1
+            log.info(
+                {
+                    "event": "decision_price_unavailable",
+                    "decision_id": dec.id,
+                    "reason": evidence.reason,
+                }
+            )
             continue
-        made_iso = dec.made_at.date().isoformat()
-        # Reference price on/before made_at
-        ref_price = _price_on_or_before(series, made_iso)
-        # Outcome price = today (or latest available)
-        cur_price = _price_on_or_before(series, today_iso)
-        if ref_price is None or cur_price is None or ref_price <= 0:
-            tally["skipped_no_price"] += 1
-            continue
-
-        pct_change = (cur_price - ref_price) / ref_price
+        pct_change = evidence.pct_change
         label, notes = _verdict(
             kind=dec.recommendation_kind,
             pct_change=pct_change,
-            threshold_pct=args.threshold_pct,
+            threshold_pct=threshold_pct,
         )
-        # Don't grade if the price observation is from the same calendar day as
-        # the recommendation — there's no realized move to measure.
-        if made_iso == today_iso:
-            continue
-
         ok = record_outcome(
             decision_id=dec.id,
             outcome_label=cast("OutcomeLabel", label),
             outcome_pct=pct_change,
-            outcome_notes=notes,
+            outcome_notes=notes + "\nprice_evidence=" + evidence.model_dump_json(),
             outcome_at=datetime.now(UTC),
             db_path=db_path,
         )
@@ -321,7 +287,7 @@ def main() -> int:
     if len(pending) == 0:
         # Most likely cause: artifacts younger than --since-days. Show the
         # threshold so the operator can re-run with a longer window.
-        cutoff = (datetime.now(UTC) - timedelta(days=args.since_days)).date().isoformat()
+        cutoff = (datetime.now(UTC) - timedelta(days=since_days)).date().isoformat()
         print(f"  (no decisions made on or before {cutoff} are awaiting grading)")
     return 0
 

@@ -207,6 +207,30 @@ def upgrade():
     op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
     op.execute(SQL)
 """,
+        """revision = "0001"
+down_revision = None
+class PretendSQL:
+    @staticmethod
+    def text(value):
+        return "SELECT 1"
+sql = PretendSQL()
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    op.execute(sql.text("CREATE TABLE orphaned (id INTEGER)"))
+""",
+        """revision = "0001"
+down_revision = None
+class PretendSQL:
+    @staticmethod
+    def text(value):
+        return "different_table"
+sql = PretendSQL()
+def upgrade():
+    op.execute("CREATE TABLE facts (id INTEGER PRIMARY KEY)")
+    op.execute("CREATE VIEW fact_ids AS SELECT id FROM facts")
+    op.create_table(sql.text("orphaned"))
+""",
         """SQL = "CREATE TABLE orphaned (id INTEGER)"
 revision = "0001"
 down_revision = None

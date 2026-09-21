@@ -19,7 +19,7 @@ from macro_regime_playbook import (
 def test_initial_regimes_registry_integrity() -> None:
     assert len(INITIAL_REGIMES) == 9
     assert len(REGIME_REGISTRY) == 9
-    assert REGIME_REGISTRY_VERSION == "2026-08-15.1"
+    assert REGIME_REGISTRY_VERSION == "2026-09-19.1"
 
     expected_ids = {
         "demand_led_recession",
@@ -72,24 +72,24 @@ def test_holding_evaluation_formula_and_incidental_floor() -> None:
     # Impact = 1.0 * (-2/2) * 0.95 = -0.95
     # Denominator = max(1.0, 1.0) = 1.0 -> score = -0.95 -> highly_vulnerable
     score_full, rating_full, factors_full = evaluate_holding_regime(
-        {"Global travel demand": 1.0},
+        {"global travel demand": 1.0},
         recession,
     )
     assert score_full == pytest.approx(-0.95, abs=1e-3)
     assert rating_full == "highly_vulnerable"
-    assert factors_full == ["Global travel demand"]
+    assert factors_full == ["global travel demand"]
 
     # Incidental 0.10 loading on travel
     # Impact = 0.10 * (-2/2) * 0.95 = -0.095
     # Denominator = max(1.0, 0.10) = 1.0 -> score = -0.095 -> mixed
     # Floor of 1.0 prevents 0.10 from scoring as -0.95
     score_incidental, rating_incidental, factors_incidental = evaluate_holding_regime(
-        {"Global travel demand": 0.10},
+        {"global travel demand": 0.10},
         recession,
     )
     assert score_incidental == pytest.approx(-0.095, abs=1e-3)
     assert rating_incidental == "mixed"
-    assert factors_incidental == ["Global travel demand"]
+    assert factors_incidental == ["global travel demand"]
 
 
 def test_holding_with_no_matching_factors_is_mixed_zero() -> None:
@@ -114,9 +114,9 @@ def test_portfolio_evaluation_with_coverage_tiers() -> None:
     }
 
     holdings_factors = {
-        "BKNG": {"Global travel demand": 1.0},
-        "UBER": {"US consumer mobility/delivery": 0.9},
-        "META": {"Digital advertising demand": 1.0},
+        "BKNG": {"global travel demand": 1.0},
+        "UBER": {"rides/delivery marketplace": 0.9},
+        "META": {"digital ad spend": 1.0},
     }
 
     assessment = evaluate_portfolio_regime(
@@ -144,7 +144,7 @@ def test_portfolio_partial_coverage_below_70_pct() -> None:
     }
 
     holdings_factors = {
-        "BKNG": {"Global travel demand": 1.0},
+        "BKNG": {"global travel demand": 1.0},
     }
 
     assessment = evaluate_portfolio_regime(
@@ -169,7 +169,7 @@ def test_evaluate_action_regime_impact_materiality() -> None:
     }
     holdings_factors = {
         "NOW": {"US enterprise IT budgets": 1.0},
-        "BKNG": {"Global travel demand": 1.0},
+        "BKNG": {"global travel demand": 1.0},
     }
 
     # Propose adding 5% to NOW (high SaaS exposure)
@@ -195,7 +195,7 @@ def test_select_top_regimes_for_action_ranking() -> None:
     }
     holdings_factors = {
         "NU": {"Brazil consumer credit": 1.0, "LatAm consumer/FX": 0.8},
-        "MELI": {"LatAm consumer/FX": 1.0, "SMB digital adoption": 0.5},
+        "MELI": {"LatAm consumer/FX": 1.0, "SMB web/e-commerce": 0.5},
         "NOW": {"US enterprise IT budgets": 1.0},
     }
 

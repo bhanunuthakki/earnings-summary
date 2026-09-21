@@ -62,9 +62,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import sqlite3
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -227,6 +228,13 @@ class BookFactorVector:
     source_as_of: str | None = None
     effective_as_of: str | None = None
     registry_version: str = TAXONOMY_VERSION
+    input_sha: str | None = None
+    holdings_as_of: str | None = None
+    stale_tickers: tuple[str, ...] = ()
+    freshness_reasons: tuple[str, ...] = ()
+    ticker_loadings: dict[str, dict[str, float]] = field(
+        default_factory=lambda: dict[str, dict[str, float]]()
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -427,7 +435,7 @@ def _default_call() -> FactorCall:
     return call
 
 
-def _validate_loadings(raw: object) -> tuple[FactorLoading, ...]:
+def validate_loadings(raw: object) -> tuple[FactorLoading, ...]:
     """The grounding gate: a factor label not EXACTLY in :data:`TAXONOMY` is
     dropped (and logged — a model that invents factor labels is a
     hallucination-pattern signal worth watching, matching
@@ -491,7 +499,7 @@ def propose_factor_loadings(
         ticker, name=name, geo_mix=geo_mix, product_mix=product_mix, snapshot=snapshot
     )
     raw = the_call(prompt)
-    return _validate_loadings(raw)
+    return validate_loadings(raw)
 
 
 def generate_factor_loadings(
@@ -556,7 +564,9 @@ def derive_factor_exposures(
 # ---------------------------------------------------------------------------
 
 
-def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
+def _open(
+    db_path: Path | str | None, *, role: SQLiteConnectionRole = SQLiteConnectionRole.WRITER
+) -> sqlite3.Connection | None:
     """Best-effort connection open, matching ``llm_artifact_store._open`` —
     the LLM call that produced the loadings must never fail because the
     store can't write. busy_timeout=30000 per this repo's operational
@@ -568,7 +578,7 @@ def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
         path = resolve_db_path(db_path)
         if path is None or not Path(path).exists():
             return None
-        conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        conn = connect_sqlite(path, role=role, schema_preflight=role == SQLiteConnectionRole.WRITER)
         conn.execute("PRAGMA busy_timeout = 30000")
         cur = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='business_factor_exposures'"
@@ -787,12 +797,20 @@ def refresh_ticker_exposures(
     )
 
 
-def portfolio_tickers(db_path: Path | str | None) -> list[str]:
+def portfolio_tickers(db_path: Path | str | None, repo_root: Path | None = None) -> list[str]:
     """Every active portfolio-list ticker, alphabetical. ``[]`` when the DB
     is unavailable or has no ``tracked_companies`` table (a thin/offline
     fixture)."""
     from db_paths import resolve_db_path
+    from portfolio_weights import read_materialized_weight_snapshot
 
+    if repo_root is not None:
+        snapshot = read_materialized_weight_snapshot(repo_root)
+        if snapshot is None:
+            return []
+        return sorted(
+            t for t, w in snapshot.weights.items() if w > 0 and t not in {"USD", "CASH", "CURRENCY"}
+        )
     path = resolve_db_path(db_path)
     if path is None or not Path(path).exists():
         return []
@@ -831,7 +849,7 @@ def refresh_all(
         "deferred_transient": 0,
         "rows_written": 0,
     }
-    for ticker in portfolio_tickers(db_path):
+    for ticker in portfolio_tickers(db_path, repo_root):
         counts["tickers"] += 1
         try:
             result = refresh_ticker_exposures(
@@ -858,131 +876,175 @@ def refresh_all(
 # ---------------------------------------------------------------------------
 
 
-def book_factor_vector(db_path: Path | str | None, repo_root: Path) -> BookFactorVector:
-    """Weights x is_latest loadings, aggregated per factor, with each
-    factor's top-3 contributing tickers. Pure DB read + the materialized
-    weights cache — zero LLM, zero live tracker call, safe on the render
-    path. Carries full availability, coverage, and provenance metadata (PRD §6.2, BHA-46)."""
-    from portfolio_weights import read_materialized_weights
+def current_factor_input_sha(
+    db_path: Path | str | None, repo_root: Path, ticker: str
+) -> str | None:
+    """Canonical current source identity, including segment mix and taxonomy revision."""
+    inputs = _gather_inputs(ticker, db_path=db_path, repo_root=repo_root)
+    return inputs.input_sha if inputs is not None else None
 
-    empty = BookFactorVector(vector={}, top_contributors={}, availability="unavailable")
-    try:
-        weights = read_materialized_weights(repo_root)
-    except Exception:
-        log.warning({"event": "business_factor_weights_unavailable"}, exc_info=True)
-        return empty
-    if not weights:
-        return empty
 
-    # Filter out cash/currency from non-cash portfolio weight
-    non_cash_weights: dict[str, float] = {
-        ticker.upper(): float(w)
-        for ticker, w in weights.items()
-        if ticker.upper() not in ("USD", "CASH", "CURRENCY") and float(w) > 0.0
-    }
-    total_non_cash_weight = sum(non_cash_weights.values())
-
-    conn = _open(db_path)
-    if conn is None:
-        return BookFactorVector(
-            vector={},
-            top_contributors={},
-            availability="missing_table",
-            total_weight_pct=round(total_non_cash_weight, 4),
-            excluded_tickers=tuple(sorted(non_cash_weights.keys())),
-        )
+def current_ticker_loadings(
+    db_path: Path | str | None, repo_root: Path, ticker: str
+) -> dict[str, float]:
+    """Only current-input, current-taxonomy loadings; no history substitution."""
+    inputs = _gather_inputs(ticker, db_path=db_path, repo_root=repo_root)
+    conn = _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    if inputs is None or conn is None:
+        if conn is not None:
+            conn.close()
+        return {}
     try:
         rows = conn.execute(
-            "SELECT ticker, factor, loading, created_at, input_sha FROM business_factor_exposures WHERE is_latest = 1"
+            "SELECT factor,loading,input_sha FROM business_factor_exposures WHERE ticker=? AND is_latest=1",
+            (ticker.upper(),),
         ).fetchall()
-    except sqlite3.Error as exc:
-        log.warning({"event": "business_factor_vector_read_failed", "error": str(exc)})
-        return BookFactorVector(
-            vector={},
-            top_contributors={},
-            availability="missing_table",
-            total_weight_pct=round(total_non_cash_weight, 4),
-            excluded_tickers=tuple(sorted(non_cash_weights.keys())),
-        )
     finally:
         conn.close()
+    if any(str(r[2]) != inputs.input_sha or str(r[0]) not in TAXONOMY for r in rows):
+        return {}
+    return {
+        str(r[0]): float(r[1]) for r in rows if math.isfinite(float(r[1])) and 0 <= float(r[1]) <= 1
+    }
 
-    if not rows:
+
+def book_factor_vector(db_path: Path | str | None, repo_root: Path) -> BookFactorVector:
+    """Current input-bound loadings over the materialized holdings snapshot.
+
+    Factor freshness follows the existing changed-input cache policy (including
+    taxonomy revision), not an invented TTL. Holdings reuse the allocation
+    frontier's 48-hour freshness policy. Stale rows remain stored for review but
+    do not enter owner conclusions or masquerade as measured zero exposure.
+    """
+    from allocation.eligibility import WEIGHTS_CACHE_STALE_HOURS
+    from portfolio_weights import read_materialized_weight_snapshot
+
+    snapshot = read_materialized_weight_snapshot(repo_root)
+    if snapshot is None:
         return BookFactorVector(
             vector={},
             top_contributors={},
-            availability="empty_table",
-            total_weight_pct=round(total_non_cash_weight, 4),
-            excluded_tickers=tuple(sorted(non_cash_weights.keys())),
+            availability="unavailable",
+            freshness_reasons=("materialized holdings unavailable",),
         )
-
-    vector: dict[str, float] = {}
-    contributions: dict[str, list[tuple[str, float]]] = {}
-    evaluated_tickers_set: set[str] = set()
-    oldest_created_at: str | None = None
-    newest_created_at: str | None = None
-
-    for r in rows:
-        raw_ticker = r[0]
-        raw_factor = r[1]
-        raw_loading = r[2]
-        created_at_val = r[3] if len(r) > 3 else None
-
-        ticker = str(raw_ticker).upper()
-        if created_at_val is not None:
-            created_str = str(created_at_val)
-            if oldest_created_at is None or created_str < oldest_created_at:
-                oldest_created_at = created_str
-            if newest_created_at is None or created_str > newest_created_at:
-                newest_created_at = created_str
-
-        weight = non_cash_weights.get(ticker)
-        if weight is None:
-            continue
-
-        evaluated_tickers_set.add(ticker)
-        try:
-            loading = float(raw_loading)
-        except (TypeError, ValueError):
-            continue
-        factor = str(raw_factor)
-        contribution = weight * loading
-        vector[factor] = vector.get(factor, 0.0) + contribution
-        contributions.setdefault(factor, []).append((ticker, contribution))
-
-    evaluated_tickers = tuple(sorted(evaluated_tickers_set))
-    excluded_tickers = tuple(sorted(set(non_cash_weights.keys()) - evaluated_tickers_set))
-    covered_weight = sum(non_cash_weights[t] for t in evaluated_tickers)
-    coverage_pct = (
-        (covered_weight / total_non_cash_weight * 100.0) if total_non_cash_weight > 0.0 else 0.0
-    )
-
-    # Determine availability status (PRD §6.2)
-    if not evaluated_tickers or covered_weight <= 0.0:
-        availability = "empty_table"
-    elif coverage_pct >= 70.0:
-        availability = "full"
-    elif coverage_pct > 0.0:
-        availability = "partial"
-    else:
-        availability = "unavailable"
-
-    top_contributors = {
-        factor: tuple(sorted(items, key=lambda kv: kv[1], reverse=True)[:3])
-        for factor, items in contributions.items()
+    weights = {
+        t: w for t, w in snapshot.weights.items() if t not in {"USD", "CASH", "CURRENCY"} and w > 0
     }
-    return BookFactorVector(
+    result = BookFactorVector(
+        vector={},
+        top_contributors={},
+        total_weight_pct=sum(weights.values()),
+        excluded_tickers=tuple(sorted(weights)),
+        holdings_as_of=snapshot.computed_at.isoformat(),
+        effective_as_of=snapshot.computed_at.isoformat(),
+    )
+    from db_paths import resolve_db_path
+
+    path = resolve_db_path(db_path)
+    if path is None or not path.is_file():
+        return replace(
+            result, availability="unavailable", freshness_reasons=("no database on file",)
+        )
+    try:
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY)
+        try:
+            if (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE name='business_factor_exposures'"
+                ).fetchone()
+                is None
+            ):
+                return replace(result, availability="missing_table")
+            rows = conn.execute(
+                "SELECT id,ticker,factor,loading,created_at,input_sha FROM business_factor_exposures WHERE is_latest=1"
+            ).fetchall()
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError):
+        return replace(
+            result,
+            availability="unavailable",
+            freshness_reasons=("factor database read unavailable",),
+        )
+    if not rows:
+        return replace(result, availability="empty_table")
+    if not weights:
+        return replace(
+            result, availability="unavailable", freshness_reasons=("no non-cash holdings",)
+        )
+    age_hours = (datetime.now(UTC) - snapshot.computed_at).total_seconds() / 3600
+    if not 0 <= age_hours <= WEIGHTS_CACHE_STALE_HOURS:
+        return replace(
+            result,
+            availability="stale",
+            freshness_reasons=("materialized holdings outside freshness policy",),
+        )
+    held_rows = [r for r in rows if str(r[1]).upper() in weights]
+    grouped: dict[str, list[tuple[object, ...]]] = {}
+    for row in held_rows:
+        grouped.setdefault(str(row[1]).upper(), []).append(tuple(row))
+    vector: dict[str, float] = {}
+    contributors: dict[str, list[tuple[str, float]]] = {}
+    admitted: dict[str, dict[str, float]] = {}
+    stale: list[str] = []
+    stamps: list[str] = []
+    identities: dict[str, str] = {}
+    for ticker, ticker_rows in sorted(grouped.items()):
+        inputs = _gather_inputs(ticker, db_path=db_path, repo_root=repo_root)
+        identities[ticker] = inputs.input_sha if inputs is not None else "unavailable"
+        if inputs is None or any(str(r[5]) != inputs.input_sha for r in ticker_rows):
+            stale.append(ticker)
+            continue
+        loadings: dict[str, float] = {}
+        for row in ticker_rows:
+            try:
+                loading = float(str(row[3]))
+            except (ValueError, TypeError):
+                continue
+            if str(row[2]) in TAXONOMY and math.isfinite(loading) and 0 <= loading <= 1:
+                loadings[str(row[2])] = loading
+        if not loadings or len(loadings) != len(ticker_rows):
+            stale.append(ticker)
+            continue
+        admitted[ticker] = loadings
+        identities[ticker] = inputs.input_sha
+        stamps.extend(str(r[4]) for r in ticker_rows)
+        for factor, loading in loadings.items():
+            contribution = weights[ticker] * loading
+            vector[factor] = vector.get(factor, 0.0) + contribution
+            contributors.setdefault(factor, []).append((ticker, contribution))
+    covered = sum(weights[t] for t in admitted)
+    coverage = covered / sum(weights.values()) * 100
+    payload = json.dumps(
+        {
+            "holdings_as_of": snapshot.computed_at.isoformat(),
+            "weights": weights,
+            "factor_inputs": identities,
+            "factor_record_ids": [int(str(r[0])) for r in held_rows],
+            "loadings": admitted,
+            "registry": TAXONOMY_VERSION,
+        },
+        sort_keys=True,
+    )
+    availability = (
+        "stale" if stale else "full" if coverage >= 70 else "partial" if admitted else "unavailable"
+    )
+    return replace(
+        result,
         vector=vector,
-        top_contributors=top_contributors,
+        top_contributors={
+            f: tuple(sorted(items, key=lambda x: -x[1])[:3]) for f, items in contributors.items()
+        },
         availability=availability,
-        coverage_pct=round(coverage_pct, 2),
-        covered_weight_pct=round(covered_weight, 4),
-        total_weight_pct=round(total_non_cash_weight, 4),
-        excluded_tickers=excluded_tickers,
-        evaluated_tickers=evaluated_tickers,
-        source_as_of=newest_created_at,
-        effective_as_of=oldest_created_at,
-        registry_version=TAXONOMY_VERSION,
+        coverage_pct=round(coverage, 2),
+        covered_weight_pct=covered,
+        evaluated_tickers=tuple(sorted(admitted)),
+        excluded_tickers=tuple(sorted(set(weights) - set(admitted))),
+        source_as_of=min(stamps) if stamps else None,
+        input_sha=hashlib.sha256(payload.encode()).hexdigest(),
+        stale_tickers=tuple(stale),
+        freshness_reasons=("factor inputs changed, absent or invalid",) if stale else (),
+        ticker_loadings=admitted,
     )
 
 
@@ -1007,3 +1069,6 @@ __all__ = [
     "refresh_all",
     "refresh_ticker_exposures",
 ]
+
+# Retain the existing internal entry point for older callers.
+_validate_loadings = validate_loadings

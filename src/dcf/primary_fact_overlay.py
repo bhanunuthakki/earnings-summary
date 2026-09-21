@@ -254,6 +254,16 @@ _PRIMARY_SOURCE_TYPES: Final[frozenset[str]] = frozenset({"sec_xbrl", "ir_doc"})
 _PRIMARY_TIERS: Final[frozenset[str]] = frozenset({"sec_official"})
 
 
+def statement_field_mappings(statement: Statement) -> tuple[FieldMapping, ...]:
+    """Approved exact statement mappings shared by canonical source adapters."""
+    return _MAPPINGS[statement]
+
+
+def primary_source_eligible(source_type: str | None, source_tier: str | None) -> bool:
+    """Preserve the overlay's existing primary-document authority policy."""
+    return source_type in _PRIMARY_SOURCE_TYPES or source_tier in _PRIMARY_TIERS
+
+
 @dataclass(frozen=True, slots=True)
 class _AggregateMapping:
     line_item: str

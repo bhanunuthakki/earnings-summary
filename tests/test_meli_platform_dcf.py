@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Tests for the MELI sum-of-the-parts platform DCF
 (``execution/build_meli_platform_dcf.py``): the value-of-record mirror — the SOTP
 identity, the convex growth fade, the credit-book capital charge — plus the
@@ -9,17 +8,15 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import subprocess
 import sys
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import build_meli_platform_dcf as meli  # noqa: E402
-import refresh_dcf  # noqa: E402
+from execution import build_meli_platform_dcf as meli
+from execution import refresh_dcf
 
 _BASE = meli.Assum(derive_capm=0)  # explicit scalar discount rates (no DB read)
 
@@ -61,19 +58,28 @@ def test_year_one_revenue_reconciles_to_base_plus_near_growth() -> None:
 # Convex growth fade
 # --------------------------------------------------------------------------- #
 def test_fade_hits_near_at_year_one_and_terminal_at_year_n() -> None:
-    n = _BASE.years
-    assert meli._fade(0.30, 0.05, 1, n) == pytest.approx(0.30)
-    assert meli._fade(0.30, 0.05, n, n) == pytest.approx(0.05)
+    near, terminal = 0.30, 0.05
+    assumptions = dataclasses.replace(_BASE, comm_g_near=near, comm_g_term=terminal)
+    rows = meli.mirror(assumptions).rows
+    rates = [rows[0].comm_rev / assumptions.comm_rev0 - 1] + [
+        row.comm_rev / previous.comm_rev - 1 for previous, row in pairwise(rows)
+    ]
+    assert rates[0] == pytest.approx(near)
+    assert rates[-1] == pytest.approx(terminal)
 
 
 def test_fade_is_convex_front_loaded() -> None:
     """A convex fade sheds more growth in the first half than a straight line —
     the year-by-year rate sits BELOW the linear interpolation through the middle."""
-    n = _BASE.years
     near, term = 0.30, 0.05
-    for t in range(2, n):
-        linear = meli._interp(near, term, t, n)
-        assert meli._fade(near, term, t, n) < linear
+    assumptions = dataclasses.replace(_BASE, comm_g_near=near, comm_g_term=term)
+    rows = meli.mirror(assumptions).rows
+    rates = [rows[0].comm_rev / assumptions.comm_rev0 - 1] + [
+        row.comm_rev / previous.comm_rev - 1 for previous, row in pairwise(rows)
+    ]
+    for index, rate in enumerate(rates[1:-1], start=2):
+        linear = near + (term - near) * (index - 1) / (assumptions.years - 1)
+        assert rate < linear
 
 
 # --------------------------------------------------------------------------- #
@@ -112,7 +118,9 @@ def test_credit_terminal_roe_bounds_terminal_value() -> None:
 # --------------------------------------------------------------------------- #
 # Routing
 # --------------------------------------------------------------------------- #
-def test_refresh_routes_meli_to_sotp_builder(tmp_path: Path) -> None:
+def test_refresh_routes_meli_to_sotp_builder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A holdings ``valuation_model`` override of 'meli_platform_sotp' resolves to
     the new archetype, so refresh dispatches to the MELI SOTP builder."""
     hp = tmp_path / "micro_thesis" / "holdings" / "MELI.json"
@@ -121,8 +129,30 @@ def test_refresh_routes_meli_to_sotp_builder(tmp_path: Path) -> None:
         json.dumps({"ticker": "MELI", "valuation_model": "meli_platform_sotp"}),
         encoding="utf-8",
     )
-    model, _suggestion = refresh_dcf._valuation_model(tmp_path, "MELI")
-    assert model == "meli_platform_sotp"
+    db_path = tmp_path / "synthetic.db"
+    db_path.touch()
+    calls: list[list[str]] = []
+
+    def run_builder(
+        command: list[str], *, env: dict[str, str], **_: object
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        Path(env["DCF_PROMOTE_DEST"]).parent.mkdir(parents=True, exist_ok=True)
+        Path(env["DCF_PROMOTE_DEST"]).touch()
+        return subprocess.CompletedProcess(command, 0, stdout="RESULT dcf_runs=ok\n", stderr="")
+
+    def configured_path(_root: Path) -> Path:
+        return db_path
+
+    monkeypatch.setattr(refresh_dcf, "configured_db_path", configured_path)
+    monkeypatch.setattr(refresh_dcf.subprocess, "run", run_builder)
+    monkeypatch.setattr(
+        sys, "argv", ["refresh_dcf.py", "--ticker", "MELI", "--repo-root", str(tmp_path)]
+    )
+
+    assert refresh_dcf.main() == 0
+    assert len(calls) == 1
+    assert calls[0][-1].endswith("build_meli_platform_dcf.py")
 
 
 def _write_geo(
@@ -184,7 +214,7 @@ def test_owner_country_risk_override_reads_and_records_no_geo_source(
 ) -> None:
     owner = tmp_path / "data" / "bank_assumptions" / "MELI_sotp.json"
     owner.parent.mkdir(parents=True)
-    owner.write_text(json.dumps({"country_risk_premium": 0.0123}), encoding="utf-8")
+    owner.write_text(json.dumps({"country_risk_premium": 0.0}), encoding="utf-8")
     _write_geo(
         tmp_path,
         annual=[{"fiscalYear": 2025, "period": "FY", "data": {"Argentina": 100.0}}],
@@ -199,5 +229,37 @@ def test_owner_country_risk_override_reads_and_records_no_geo_source(
 
     assumptions = meli.load_assumptions("MELI")
 
-    assert assumptions.country_risk_premium == pytest.approx(0.0123)
+    assert assumptions.country_risk_premium == 0.0
     assert assumptions.country_risk_source == {}
+
+
+def test_load_assumptions_fails_without_geo_or_owner_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(meli, "REPO", tmp_path)
+
+    with pytest.raises(RuntimeError, match="country risk unavailable"):
+        meli.load_assumptions("MELI")
+
+
+def test_main_fails_before_workbook_persistence_with_infinite_geography(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_geo(
+        tmp_path,
+        annual=[{"fiscalYear": 2025, "period": "FY", "data": {"Brazil": float("inf")}}],
+        quarterly=[],
+    )
+    destination = tmp_path / "MELI.xlsx"
+    sentinel = b"existing-workbook-must-survive"
+    destination.write_bytes(sentinel)
+    monkeypatch.setattr(meli, "REPO", tmp_path)
+    monkeypatch.setattr(meli, "DEST", destination)
+
+    with pytest.raises(
+        meli.country_risk.CountryRiskUnavailableError,
+        match="geographic_revenue_unattributable",
+    ):
+        meli.main()
+
+    assert destination.read_bytes() == sentinel

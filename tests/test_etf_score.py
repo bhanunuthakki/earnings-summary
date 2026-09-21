@@ -13,34 +13,35 @@ import json
 import math
 import sqlite3
 import sys
+from collections.abc import Iterator
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from etf_score_cache import (  # noqa: E402
+from etf_score_cache import (
     materialize_etf_scores,
     read_materialized_etf_loadings,
     read_materialized_etf_scores,
 )
-from instrument_store import upsert_etf_profile  # noqa: E402
-from models.instruments import EtfProfile  # noqa: E402
-from pipeline.etf_score import (  # noqa: E402
+from instrument_store import upsert_etf_profile
+from models.instruments import EtfProfile
+from pipeline.etf_score import (
     EtfScoreInputs,
     StyleLoadingRead,
     gather_etf_score_inputs,
     score_etf,
 )
+from pipeline.research_cockpit import AttractivenessBreakdown
 
 # ---------------------------------------------------------------------------
 # Pure scorer — band edges + why format
 # ---------------------------------------------------------------------------
 
 
-def _mult(bd, key: str) -> float:  # type: ignore[no-untyped-def]
+def _mult(bd: AttractivenessBreakdown, key: str) -> float:
     return {f.key: f.multiplier for f in bd.factors}[key]
 
 
@@ -163,6 +164,7 @@ CREATE TABLE etf_profile (
     pe_ratio REAL, pb_ratio REAL, weighted_avg_mktcap_usd_m REAL,
     characteristics_as_of TEXT, characteristics_source TEXT,
     source TEXT NOT NULL DEFAULT 'fmp',
+    field_evidence_json TEXT NOT NULL DEFAULT '{}',
     profile_fetched_at TIMESTAMP NOT NULL
 );
 """
@@ -196,7 +198,7 @@ def _write_proxy(repo: Path, ticker: str, returns: list[float]) -> None:
 
 
 @pytest.fixture
-def etf_env(tmp_path: Path) -> tuple[sqlite3.Connection, Path]:
+def etf_env(tmp_path: Path) -> Iterator[tuple[sqlite3.Connection, Path]]:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.executescript(_ETF_DDL)

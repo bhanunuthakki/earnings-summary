@@ -61,6 +61,11 @@ def conn(
         database.close()
 
 
+def seed_foundation(conn: sqlite3.Connection) -> None:
+    """Seed the reusable admitted-fact foundation for reader tests."""
+    _seed_foundation(conn)
+
+
 def _seed_foundation(conn: sqlite3.Connection) -> None:
     conn.execute(
         "INSERT INTO issuer_entities VALUES (?,?,?,?)",

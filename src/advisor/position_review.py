@@ -193,7 +193,7 @@ class RiskContext:
     contract EXACTLY: every field is ``None``/``()`` when that sub-leg had
     nothing to report or failed to compute, and the WHOLE block renders
     nothing (not a placeholder) when every field is empty. Built by
-    :func:`_build_risk_context`, which independently try/excepts each leg so
+    :func:`build_risk_context`, which independently try/excepts each leg so
     one broken input (e.g. a pre-migration DB missing
     ``business_factor_exposures``) never blocks the others."""
 
@@ -215,6 +215,8 @@ class RiskContext:
     # business_factor_exposures, is_latest rows only), highest first, capped
     # at 3 — e.g. (("Brazil consumer credit", 0.9), ("LatAm consumer/FX", 0.7)).
     top_factors: tuple[tuple[str, float], ...] = ()
+    factor_provenance: str | None = None
+    common_drawdown: str | None = None
     # EVENT_SCENARIOS (src/portfolio_montecarlo.py) ids where this ticker is a
     # NAMED member — e.g. ("joint_latam",). Membership only; the modeled
     # book-level stress return is the Risk tab's job, not this one-line read.
@@ -233,6 +235,8 @@ class RiskContext:
             and self.corr_to_book is None
             and self.crowding_cluster is None
             and not self.top_factors
+            and self.factor_provenance is None
+            and self.common_drawdown is None
             and not self.event_scenarios
         )
 
@@ -654,12 +658,16 @@ def render_risk_lines(risk: RiskContext | None) -> list[str]:
     if risk.top_factors:
         factors = ", ".join(f"{factor} {loading:.1f}" for factor, loading in risk.top_factors)
         lines.append(f"- Business factors: {factors}")
+    if risk.factor_provenance:
+        lines.append(f"- Business-factor evidence: {risk.factor_provenance}")
+    if risk.common_drawdown:
+        lines.append(f"- Common drawdown: {risk.common_drawdown}")
     if risk.event_scenarios:
         lines.append(f"- Event scenarios: {', '.join(risk.event_scenarios)}")
     return lines
 
 
-def _build_risk_context(
+def build_risk_context(
     ticker: str, db_path: Path | str | None, repo_root: Path
 ) -> RiskContext | None:
     """Assemble the C7 risk block for ``ticker`` (§ plan: "risk-aware
@@ -738,34 +746,34 @@ def _build_risk_context(
             )
             degraded.append(f"crowding-cluster leg failed: {type(exc).__name__}")
 
-    # --- leg 4: this ticker's own top business-factor loadings (C3) ---------
+    # Same holdings/input admission as the Risk page; no raw-history fallback.
     top_factors: tuple[tuple[str, float], ...] = ()
+    factor_provenance: str | None = None
     try:
-        from db_paths import resolve_db_path
+        from risk_factors import book_factor_vector
 
-        resolved = resolve_db_path(db_path)
-        if resolved is None or not Path(resolved).exists():
-            degraded.append("no database on file for business-factor exposures")
-        else:
-            conn = connect_sqlite(resolved, role=SQLiteConnectionRole.READ_ONLY)
-            try:
-                rows = conn.execute(
-                    "SELECT factor, loading FROM business_factor_exposures "
-                    "WHERE ticker = ? AND is_latest = 1 ORDER BY loading DESC LIMIT 3",
-                    (ticker,),
-                ).fetchall()
-                top_factors = tuple((str(f), float(loading)) for f, loading in rows)
-            finally:
-                conn.close()
-    except sqlite3.OperationalError as exc:
-        # Pre-migration substrate: business_factor_exposures doesn't exist yet.
-        log.debug(
-            {"event": "risk_context_factors_table_absent", "ticker": ticker, "error": str(exc)}
+        factors = book_factor_vector(db_path, repo_root)
+        top_factors = tuple(
+            sorted(factors.ticker_loadings.get(ticker, {}).items(), key=lambda pair: -pair[1])[:3]
         )
-        degraded.append("business_factor_exposures table not on this substrate")
+        factor_provenance = (
+            f"{factors.availability}; coverage {factors.coverage_pct:.0f}%; "
+            f"excluded {', '.join(factors.excluded_tickers) or 'none'}; "
+            f"source {factors.source_as_of or 'unavailable'}; effective {factors.effective_as_of or 'unavailable'}; "
+            f"input {factors.input_sha or 'unavailable'}; registry {factors.registry_version}"
+        )
+        if factors.freshness_reasons:
+            degraded.extend(factors.freshness_reasons)
     except Exception as exc:
-        log.debug({"event": "risk_context_factors_failed", "ticker": ticker, "error": str(exc)})
         degraded.append(f"business-factor leg failed: {type(exc).__name__}")
+
+    common_drawdown: str | None = None
+    try:
+        from research.qualitative_stress import read_common_drawdown, review_summary
+
+        common_drawdown = review_summary(read_common_drawdown(db_path, repo_root))
+    except Exception as exc:
+        common_drawdown = f"unavailable: {type(exc).__name__}; no qualitative rating admitted"
 
     # --- leg 5: event-scenario membership (C5, src.portfolio_montecarlo) ----
     event_scenarios: tuple[str, ...] = ()
@@ -782,6 +790,8 @@ def _build_risk_context(
         corr_to_book=corr_to_book,
         crowding_cluster=crowding_cluster,
         top_factors=top_factors,
+        factor_provenance=factor_provenance,
+        common_drawdown=common_drawdown,
         event_scenarios=event_scenarios,
         degraded_reasons=tuple(degraded),
     )
@@ -989,12 +999,12 @@ def build_pre_analysis(
             history_truncated=history is not None and len(history) >= TRANSACTION_HISTORY_LIMIT,
         )
     # --- risk context (C7): a separate I/O leg, wrapped defensively even
-    # though _build_risk_context already guards every sub-leg internally —
+    # though build_risk_context already guards every sub-leg internally —
     # matching this function's paranoid style for every cross-cutting block
     # (capacity's wealthplan/exit-quality legs above do the same) so a bug in
     # a NEW leg can never break /review.
     try:
-        risk_ctx = _build_risk_context(ticker, db_path, repo_root)
+        risk_ctx = build_risk_context(ticker, db_path, repo_root)
     except Exception as exc:
         log.debug({"event": "risk_context_build_failed", "ticker": ticker, "error": str(exc)})
         risk_ctx = None
@@ -1433,7 +1443,7 @@ def _convictions_block(repo_root: Path, ticker: str, db_path: Path | str | None)
     return spotlight(raw, source="the owner's own captured convictions (the Ledger)")
 
 
-def _risk_prompt_block(risk: RiskContext | None) -> str:
+def risk_prompt_block(risk: RiskContext | None) -> str:
     """Compact ``RISK: ...`` line for the verdict prompt — mirrors the tax/
     capacity legs' degrade contract: ``risk=None`` or an all-empty
     :class:`RiskContext` renders nothing (``""``), never a placeholder line,
@@ -1453,6 +1463,8 @@ def _risk_prompt_block(risk: RiskContext | None) -> str:
             "factors: "
             + ", ".join(f"{factor} {loading:.1f}" for factor, loading in risk.top_factors)
         )
+    if risk.common_drawdown:
+        bits.append(f"common drawdown: {risk.common_drawdown}")
     if risk.event_scenarios:
         bits.append("scenarios: " + ", ".join(risk.event_scenarios))
     return f"RISK: {'; '.join(bits)}\n" if bits else ""
@@ -1486,7 +1498,7 @@ def _build_verdict_prompt(
         f"over/under {pre.dcf_gap_pct}% (+ = over-valued), mos_bar {pre.mos_bar}; "
         f"ladder verdict: {pre.valuation_verdict}\n"
         f"Conviction encoded: {pre.conviction_encoded}\n"
-        f"{_risk_prompt_block(pre.risk)}"
+        f"{risk_prompt_block(pre.risk)}"
     )
     profile_block = f"{owner_profile_anchor}\n" if owner_profile_anchor else ""
     return (
@@ -2061,3 +2073,10 @@ def review_reply_text(repo_root: Path, text: str, *, plain: bool = False) -> str
     if plain:
         return render_pre_analysis_plain(pre, db_path=db_path)
     return render_pre_analysis_chat(pre, db_path=db_path)
+
+
+# Retain the existing internal entry point for older callers.
+_build_risk_context = build_risk_context
+
+# Retain the existing internal entry point for older callers.
+_risk_prompt_block = risk_prompt_block

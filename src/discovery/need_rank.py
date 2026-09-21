@@ -40,13 +40,15 @@ tests without files, a DB, or a network.
 
 from __future__ import annotations
 
-import json
 import sqlite3
+from contextlib import closing
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Literal, cast
 
-from discovery.screens import TickerMetrics, load_ticker_metrics
+from compute.comparable_set_reader import FrozenComparableSet, read_frozen_comparable_set
+from discovery.screens import TickerMetrics, canonical_ticker_metrics, load_ticker_metrics
 from identity import DEFAULT_USER_ID
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -122,6 +124,10 @@ class NeedRank:
     first_rejection_reason: str | None
     composite: float
     version: int = 1
+    peer_source: str = "unavailable"
+    peer_source_as_of: str | None = None
+    peer_membership_reasons: tuple[str, ...] = ()
+    financial_evidence: dict[str, object] | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -198,7 +204,7 @@ def garp_grade(m: TickerMetrics | None) -> tuple[float, str]:
     no such multiple — and every reason string says so explicitly so the card
     never implies precision the read doesn't have."""
     if m is None:
-        return 0.0, "no cached fundamentals for a GARP read"
+        return 0.0, "no canonical fundamentals for a GARP read"
     rev, fcf, roic = m.rev_yoy, m.fcf_yield_ttm, m.roic_ttm
     rev_s, fcf_s, roic_s = _pct(rev), _pct(fcf), _pct(roic)
 
@@ -297,35 +303,18 @@ def composite_score(
 # --------------------------------------------------------------------------- #
 
 
-def _load_peers(fmp_dir: Path, ticker: str) -> set[str]:
-    """``{T}_peers.json`` (``save_fmp_data.py``'s ``stock-peers`` cache) as an
-    upper-cased ticker set. Payload shapes shift across FMP versions
-    (mirrors ``report.sections.p3_data._fmp_peer_pool``'s tolerance); []/absent
-    degrades to an empty set, never a crash."""
-    path = fmp_dir / f"{ticker.upper()}_peers.json"
+def _load_peers(db_path: Path, ticker: str) -> FrozenComparableSet | None:
+    """Read canonical comparable membership only; absence never falls back to raw peers."""
+    if not db_path.exists():
+        return None
     try:
-        parsed: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return set()
-    if not isinstance(parsed, list) or not parsed:
-        return set()
-    raw = cast("list[object]", parsed)
-    first = raw[0]
-    if isinstance(first, dict):
-        rec = cast("dict[str, object]", first)
-        if "peersList" in rec:
-            lst = rec.get("peersList")
-            if isinstance(lst, list):
-                return {str(p).upper() for p in cast("list[object]", lst)}
-            return set()
-        out: set[str] = set()
-        for entry in raw:
-            if isinstance(entry, dict):
-                erec = cast("dict[str, object]", entry)
-                if erec.get("symbol") is not None:
-                    out.add(str(erec["symbol"]).upper())
-        return out
-    return {str(p).upper() for p in raw if isinstance(p, str)}
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+        try:
+            return read_frozen_comparable_set(conn, ticker)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
 
 
 def load_eval_names(
@@ -423,16 +412,49 @@ def compute_need_rank(
     callers gate this to the interim top ~25 by cost (a price-history read
     per name)."""
     fmp_dir = repo_root / "data" / "historical" / "fmp"
-    metrics = load_ticker_metrics(fmp_dir, ticker, None)
+    financial_evidence: dict[str, object]
+    try:
+        with closing(connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)) as connection:
+            metrics, financial_evidence = canonical_ticker_metrics(
+                connection, fmp_dir, ticker, None, as_of=date.today()
+            )
+    except sqlite3.Error:
+        metrics = TickerMetrics(
+            ticker=ticker.upper(),
+            name=None,
+            sector=None,
+            industry=None,
+            market_cap=None,
+            roic_ttm=None,
+            fcf_yield_ttm=None,
+            nd_to_ebitda_ttm=None,
+            rev_yoy=None,
+            rev_yoy_prior=None,
+            gross_margin_ttm=None,
+            op_margin_ttm=None,
+            is_actively_trading=True,
+            latest_income_date=None,
+        )
+        financial_evidence = {
+            "status": "unavailable",
+            "reason_codes": ["canonical_database_unavailable"],
+            "decision_grade": False,
+        }
     has_metrics = metrics.roic_ttm is not None or metrics.rev_yoy is not None
 
-    peers = _load_peers(fmp_dir, ticker)
+    peer_set = _load_peers(db_path, ticker)
+    peers: set[str] = {ticker for ticker, _reason in peer_set.members} if peer_set else set()
     names = (
         eval_names if eval_names is not None else load_eval_names(db_path, fmp_dir, user_id=user_id)
     )
     adj_score, adj_reasons = eval_adjacency(peers, metrics.sector, metrics.industry, names)
 
     garp_score, garp_reason = garp_grade(metrics if has_metrics else None)
+    garp_reason += (
+        "; canonical database unavailable"
+        if financial_evidence.get("status") == "unavailable"
+        else "; canonical inputs; ROIC definition unavailable"
+    )
 
     diversifier: float | None = None
     diversifier_note: str | None = None
@@ -461,7 +483,15 @@ def compute_need_rank(
         effort=effort,
         first_rejection_reason=reject,
         composite=composite,
-        version=1,
+        version=3,
+        financial_evidence=financial_evidence,
+        peer_source=peer_set.source_id if peer_set else "unavailable",
+        peer_source_as_of=peer_set.resolved_at if peer_set else None,
+        peer_membership_reasons=tuple(
+            f"{member}: {reason}" for member, reason in peer_set.members if member in names
+        )
+        if peer_set
+        else (),
     )
 
 
@@ -469,6 +499,10 @@ def need_rank_to_json(rank: NeedRank) -> dict[str, object]:
     """``NeedRank`` -> the JSON shape persisted at ``score_json['need_rank']``."""
     return {
         "v": rank.version,
+        "financial_evidence": rank.financial_evidence,
+        "peer_source": rank.peer_source,
+        "peer_source_as_of": rank.peer_source_as_of,
+        "peer_membership_reasons": list(rank.peer_membership_reasons),
         "eval_adjacency": rank.eval_adjacency,
         "adjacency_reasons": list(rank.adjacency_reasons),
         "diversifier": rank.diversifier,
@@ -509,7 +543,17 @@ def need_rank_from_json(raw: object) -> NeedRank | None:
             if isinstance(reasons_raw, list)
             else ()
         )
+        memberships = d.get("peer_membership_reasons")
+        membership_reasons = (
+            tuple(str(r) for r in cast("list[object]", memberships))
+            if isinstance(memberships, list)
+            else ()
+        )
         diversifier = d.get("diversifier")
+        financial_raw = d.get("financial_evidence")
+        financial_evidence = (
+            cast(dict[str, object], financial_raw) if isinstance(financial_raw, dict) else None
+        )
         return NeedRank(
             eval_adjacency=_as_float(d.get("eval_adjacency")),
             adjacency_reasons=reasons,
@@ -529,6 +573,10 @@ def need_rank_from_json(raw: object) -> NeedRank | None:
             ),
             composite=_as_float(d.get("composite")),
             version=_as_int(d.get("v")),
+            financial_evidence=financial_evidence,
+            peer_source=str(d.get("peer_source") or "unavailable"),
+            peer_source_as_of=str(d["peer_source_as_of"]) if d.get("peer_source_as_of") else None,
+            peer_membership_reasons=membership_reasons,
         )
     except (TypeError, ValueError):
         return None

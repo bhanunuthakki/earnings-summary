@@ -44,17 +44,10 @@ def test_foreign_filer_models_frozen_immutability() -> None:
         admitted_document_hashes=(),
     )
     with pytest.raises(ValidationError):
-        profile.reporting_currency = "USD"  # type: ignore[misc]
+        setattr(profile, "reporting_currency", "USD")
 
     with pytest.raises(ValidationError):
-        ForeignFilerProfile(
-            ticker="NVO",
-            country_of_origin="Denmark",
-            primary_form=ForeignFilingForm.FORM_20F,
-            cadence=ReportingCadence.QUARTERLY,
-            reporting_currency="DKK",
-            extra_field="invalid",  # type: ignore[call-arg]
-        )
+        ForeignFilerProfile.model_validate({**profile.model_dump(), "extra_field": "invalid"})
 
     receipt = ForeignNormalizationReceipt(
         ticker="NVO",
@@ -67,7 +60,7 @@ def test_foreign_filer_models_frozen_immutability() -> None:
         verified_at=datetime.now(UTC),
     )
     with pytest.raises(ValidationError):
-        receipt.facts_extracted_count = 5  # type: ignore[misc]
+        setattr(receipt, "facts_extracted_count", 5)
 
     # Reject non-hex 64-character hash pattern
     with pytest.raises(ValidationError):
@@ -109,122 +102,22 @@ def test_foreign_filer_models_frozen_immutability() -> None:
         )
 
 
-def test_foreign_20f_40f_and_asml_normalization() -> None:
-    """Assert NVO (DKK), BN (USD), and ASML (EUR) parse with exact native currency, canonical taxonomy, and hash coupling."""
-    normalizer = ForeignFilerNormalizer()
-
-    # 1. NVO 20-F in DKK with whitespace normalization
-    nvo_payload = b'{"facts": {"Revenues": 250000000000, "OperatingProfit": 100000000000}}'
-    nvo_receipt = normalizer.normalize_document(
-        "  nvo  ",
-        nvo_payload,
-        form=ForeignFilingForm.FORM_20F,
-        accession_number="0001193125-26-100001",
-        fiscal_year=2025,
-        period_start=date(2025, 1, 1),
-        period_end=date(2025, 12, 31),
-        requested_period="FY",
-        is_inline_xbrl=True,
-    )
-    assert nvo_receipt.disposition == InterimDisposition.ADMITTED_XBRL
-    assert nvo_receipt.facts_extracted_count == 2
-    assert len(nvo_receipt.facts) == 2
-    assert nvo_receipt.facts[0].currency == "DKK"
-    assert nvo_receipt.facts[0].canonical_concept == "revenue"
-    assert nvo_receipt.facts[0].is_canonical_mapped is True
-    assert nvo_receipt.facts[1].canonical_concept == "operating_income"
-    assert nvo_receipt.facts[1].is_canonical_mapped is True
-    assert nvo_receipt.facts[0].source_hash == nvo_receipt.document_hash
-    assert nvo_receipt.facts[1].source_hash == nvo_receipt.document_hash
-
-    # 2. BN 40-F in USD
-    bn_payload = b'{"facts": {"TotalRevenue": 95000000000, "NetIncome": 5000000000}}'
-    bn_receipt = normalizer.normalize_document(
-        "BN",
-        bn_payload,
-        form=ForeignFilingForm.FORM_40F,
-        accession_number="0001193125-26-200002",
-        fiscal_year=2025,
-        period_end=date(2025, 12, 31),
-        requested_period="FY",
-        is_inline_xbrl=True,
-    )
-    assert bn_receipt.disposition == InterimDisposition.ADMITTED_XBRL
-    assert bn_receipt.facts_extracted_count == 2
-    assert bn_receipt.facts[0].currency == "USD"
-    assert bn_receipt.facts[0].canonical_concept == "revenue"
-    assert bn_receipt.facts[1].canonical_concept == "net_income"
-
-    # 3. ASML 20-F/A in EUR
-    asml_payload = b'{"facts": {"Sales": 27500000000, "GrossProfit": 14000000000}}'
-    asml_receipt = normalizer.normalize_document(
-        "ASML",
-        asml_payload,
-        form=ForeignFilingForm.FORM_20FA,
-        accession_number="0001193125-26-250005",
-        fiscal_year=2025,
-        period_end=date(2025, 12, 31),
-        requested_period="FY",
-        is_inline_xbrl=True,
-    )
-    assert asml_receipt.disposition == InterimDisposition.ADMITTED_XBRL
-    assert asml_receipt.facts_extracted_count == 2
-    assert asml_receipt.facts[0].currency == "EUR"
-    assert asml_receipt.facts[0].canonical_concept == "revenue"
-    assert asml_receipt.facts[1].canonical_concept == "gross_profit"
-
-
-def test_unmapped_concept_emits_unmapped_flag() -> None:
-    """Assert unmapped foreign concepts set canonical_concept=None and is_canonical_mapped=False."""
-    normalizer = ForeignFilerNormalizer()
-    payload = b'{"facts": {"CustomForeignMetricXYZ": "1234567.890123"}}'
-    receipt = normalizer.normalize_document(
+@pytest.mark.parametrize("form", list(ForeignFilingForm))
+@pytest.mark.parametrize("payload", [b'{"facts":{"Revenues":100}}', b"<html>not XBRL</html>"])
+def test_unbound_raw_payload_cannot_claim_admission(
+    form: ForeignFilingForm, payload: bytes
+) -> None:
+    result = ForeignFilerNormalizer().normalize_document(
         "NVO",
         payload,
-        form=ForeignFilingForm.FORM_20F,
+        form=form,
         fiscal_year=2025,
         period_end=date(2025, 12, 31),
         is_inline_xbrl=True,
     )
-    assert receipt.disposition == InterimDisposition.ADMITTED_XBRL
-    assert receipt.facts_extracted_count == 1
-    fact = receipt.facts[0]
-    assert fact.concept == "CustomForeignMetricXYZ"
-    assert fact.canonical_concept is None
-    assert fact.is_canonical_mapped is False
-    assert fact.value == Decimal("1234567.890123")
-
-
-def test_malformed_inline_xbrl_fails_closed_to_degraded() -> None:
-    """Assert malformed or empty facts payloads fail closed to DEGRADED_UNSUPPORTED_FORMAT instead of empty ADMITTED_XBRL."""
-    normalizer = ForeignFilerNormalizer()
-
-    # Corrupt JSON bytes
-    corrupt_payload = b"<html>NOT JSON {corrupted"
-    receipt = normalizer.normalize_document(
-        "NVO",
-        corrupt_payload,
-        form=ForeignFilingForm.FORM_20F,
-        fiscal_year=2025,
-        period_end=date(2025, 12, 31),
-        is_inline_xbrl=True,
-    )
-    assert receipt.disposition == InterimDisposition.DEGRADED_UNSUPPORTED_FORMAT
-    assert receipt.facts_extracted_count == 0
-    assert "Failed parsing structured foreign facts" in receipt.reason
-
-    # Empty facts dictionary
-    empty_payload = b'{"facts": {}}'
-    receipt_empty = normalizer.normalize_document(
-        "NVO",
-        empty_payload,
-        form=ForeignFilingForm.FORM_20F,
-        fiscal_year=2025,
-        period_end=date(2025, 12, 31),
-        is_inline_xbrl=True,
-    )
-    assert receipt_empty.disposition == InterimDisposition.DEGRADED_UNSUPPORTED_FORMAT
-    assert receipt_empty.facts_extracted_count == 0
+    assert result.disposition == InterimDisposition.DEGRADED_UNSUPPORTED_FORMAT
+    assert result.facts_extracted_count == 0
+    assert result.facts == ()
 
 
 def test_unknown_ticker_rejection() -> None:
@@ -308,58 +201,22 @@ def test_semiannual_filer_dispositions() -> None:
         requested_period="H1",
         is_inline_xbrl=True,
     )
-    assert bhp_h1_receipt.disposition == InterimDisposition.ADMITTED_XBRL
-    assert bhp_h1_receipt.facts_extracted_count == 2
-    assert bhp_h1_receipt.facts[0].fiscal_period == "H1"
-    assert bhp_h1_receipt.facts[0].period_start == date(2025, 1, 1)
+    assert bhp_h1_receipt.disposition == InterimDisposition.DEGRADED_UNSUPPORTED_FORMAT
+    assert bhp_h1_receipt.facts_extracted_count == 0
 
 
-def test_admitted_governed_spreadsheet_hash_verification() -> None:
-    """Assert only exact admitted spreadsheet hashes are accepted for NU and unconfigured profiles reject spreadsheets."""
-    normalizer = ForeignFilerNormalizer()
-
-    nu_payload = b'{"facts": {"TotalRevenue": 3000000000}}'
-    actual_hash = compute_sha256_bytes(nu_payload)
-
-    # 1. Unadmitted hash -> DEGRADED_UNSUPPORTED_FORMAT
-    bad_receipt = normalizer.normalize_document(
+def test_allowlisted_hash_does_not_authorize_values() -> None:
+    content = b'{"facts":{"Revenues":100}}'
+    profile = FOREIGN_FILER_ROSTER["NU"].model_copy(
+        update={"admitted_document_hashes": (compute_sha256_bytes(content),)}
+    )
+    receipt = ForeignFilerNormalizer({"NU": profile}).normalize_document(
         "NU",
-        nu_payload,
+        content,
         form=ForeignFilingForm.ISSUER_IR_SPREADSHEET,
         fiscal_year=2026,
         period_end=date(2026, 3, 31),
+        requested_period="Q1",
     )
-    assert bad_receipt.disposition == InterimDisposition.DEGRADED_UNSUPPORTED_FORMAT
-    assert bad_receipt.facts_extracted_count == 0
-
-    # 2. Admitted hash -> ADMITTED_GOVERNED_SPREADSHEET
-    mock_roster = dict(FOREIGN_FILER_ROSTER)
-    mock_roster["NU"] = ForeignFilerProfile(
-        ticker="NU",
-        country_of_origin="Brazil",
-        primary_form=ForeignFilingForm.FORM_20F,
-        cadence=ReportingCadence.QUARTERLY,
-        reporting_currency="USD",
-        admitted_document_hashes=(actual_hash,),
-    )
-    custom_normalizer = ForeignFilerNormalizer(roster=mock_roster)
-    good_receipt = custom_normalizer.normalize_document(
-        "NU",
-        nu_payload,
-        form=ForeignFilingForm.ISSUER_IR_SPREADSHEET,
-        fiscal_year=2026,
-        period_end=date(2026, 3, 31),
-    )
-    assert good_receipt.disposition == InterimDisposition.ADMITTED_GOVERNED_SPREADSHEET
-    assert good_receipt.facts_extracted_count == 1
-
-    # 3. Profile with empty admitted hashes rejects spreadsheet entirely
-    nvo_spreadsheet = normalizer.normalize_document(
-        "NVO",
-        nu_payload,
-        form=ForeignFilingForm.ISSUER_IR_SPREADSHEET,
-        fiscal_year=2025,
-        period_end=date(2025, 12, 31),
-    )
-    assert nvo_spreadsheet.disposition == InterimDisposition.DEGRADED_UNSUPPORTED_FORMAT
-    assert nvo_spreadsheet.facts_extracted_count == 0
+    assert receipt.disposition == InterimDisposition.DEGRADED_UNSUPPORTED_FORMAT
+    assert not receipt.facts

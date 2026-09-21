@@ -6,18 +6,25 @@ This Layer-1 SOP governs deterministic discovery, validation, and persistence of
 forward-dated IR events for active tracked companies. The outcome is a source-linked,
 provenance-backed Forward agenda with explicit freshness state.
 
-This directive authorizes only its own draft. Implementation, migration, live writes,
-Scheduler registration, commit, and push require separate approvals. There is no LLM leg.
+Local implementation and isolated validation were authorized on 2026-09-19. Live
+writes, acquisition, Scheduler registration and activation remain separate actions.
+There is no LLM leg. The CLI defaults to dry-run; apply additionally requires
+`IR_EVENTS_APPLY_ENABLED=1` and an explicit database target.
 
-The current schema is not activation-ready:
+The captured-feed adapter reads current verified publisher `ir_events` authority
+revisions, canonical issuer bindings, and hash-verified immutable evidence blobs.
+Supported inputs are complete iCalendar feeds or HTML/JSON-LD `ItemList` feeds whose
+publisher count reconciles. Event identity, category and date must be explicit
+structured fields; unknown layouts/categories are unavailable, never empty. This
+adapter does not parse arbitrary announcement prose, fetch URLs, or claim actual
+issuer coverage without a retained source capture. Upstream governed IR capture owns
+network policy, robots, rate limits, retries, immutable bytes and capture renewal.
 
-- `record_investor_day` commits each row instead of joining a caller-owned batch;
-- `signals` lacks stable event identity, event kind, lifecycle revision, and source-
-  observation linkage;
-- `ux_signals_event` cannot represent distinct same-day events; and
-- `INSERT OR IGNORE` cannot reconcile reschedules or cancellations.
-
-The migration and batch-writer gate below must land before any live apply.
+Migration `0042_governed_ir_event_revisions` adds immutable revisions, atomic run
+receipts and identity-linked projections. The legacy provenance-free helper is
+rejected on governed schemas. Its pre-migration fixture compatibility path leaves
+commit ownership with its caller. `verify_calendars.py` checks earnings plus Forward
+reader parity, immutable revision linkage and source freshness.
 
 ## Supported event kinds
 
@@ -67,7 +74,7 @@ SourceTier = Literal[
 ]
 AttemptStatus = Literal[
     "ok", "not_found", "robots_denied", "rate_limited", "access_denied",
-    "contract_error", "transient_error", "unsupported",
+    "contract_error", "transient_error", "unsupported", "stale",
 ]
 Disposition = Literal[
     "inserted", "replayed", "superseded", "cancelled", "rejected", "conflict"
@@ -203,17 +210,18 @@ not provenance. Event truth requires immutable raw bytes and a source-observatio
 
 ## Checkpoint, resume, and lock
 
-Use `.tmp/ir_events/<run_id>/state.json`, atomically replaced after each surface/ticker.
-The Logical Idempotency Key is
-`ir_events_<Pacific date>_<roster sha12>_<policy sha12>` for a sweep. The roster and
-policy digest is a Content Identity; source publication/observation fields and
-raw-response digests form each Observation Version. `run_id` is the Attempt Identity
-and appends a unique start-time/random suffix to the logical key; it changes on retry.
-Checkpoint hashes,
-completed source keys, cursors, raw paths/hashes, typed candidates, telemetry, and ticker
-status. Resume only within 36 hours with matching hashes; otherwise start a new run.
-Never repeat a completed source key. Output over 100 KB or 2,000 lines goes to the run
-directory; stdout returns its path and typed summary.
+Captured-input ingestion uses full deterministic replay from retained source
+observations. It performs no acquisition and maintains no second filesystem cursor
+or checkpoint authority. Upstream acquisition retains its own resumable checkpoints.
+The Logical Idempotency Key (`run_id`) is
+`ir_events_<Pacific date>_<roster sha12>_<policy sha12>`; each invocation has a separate
+random `attempt_id`. `ir_event_runs` stores the applied typed receipt in the same
+transaction as the revisions and projections. A failed transaction leaves none of
+those writes committed; retry validates and replays the retained input, with exact
+revisions remaining idempotent. Dry-runs write no database receipt and cannot advance
+live freshness. Source observation time, not repeated run time, owns the 36-hour age.
+Outputs exceeding 100 KB or 2,000 lines are published once under
+`.tmp/ir_events/<run_id>/<attempt_id>.json`; stdout returns the path and typed summary.
 
 Discovery may parallelize read-only across tickers. Apply is one serialized batch:
 scheduled entrypoints use `JobLock(PROJECT_ROOT, 'ir-events-ingest',
@@ -227,15 +235,21 @@ scheduled entrypoints use `JobLock(PROJECT_ROOT, 'ir-events-ingest',
   globally empty result.
 - `partial`: any failed or unsupported source; retain successful updates and prior events
   for failed tickers, and never render empty.
-- `stale`: last complete receipt is older than 36 hours; render retained events with the
-  last-success timestamp.
-- `error/unavailable`: no complete receipt, unreadable store/schema, or hard stop; map to
-  `data-calendar-state='unavailable'`, not empty.
+- `stale`: source capture is older than 36 hours; render retained events with the
+  evidence timestamp. A repeated run cannot refresh old source bytes.
+- `error/unavailable`: no complete receipt, unreadable store/schema, or hard stop.
+  An unreadable store maps to `data-calendar-state='unavailable'`; readable retained
+  rows with missing/stale source coverage show `data-calendar-state='incomplete'`
+  and remain visible. Neither condition renders a verified empty calendar.
 - `disabled`: apply is off; dry-runs do not advance live freshness.
 
 Past events leave the active agenda but remain in canonical history.
 
 ## Failures and circuit breaker
+
+The transport rules below belong to upstream acquisition. The captured-input adapter
+makes no network request or transport retry. Its source-contract errors are terminal
+for that source; raw evidence remains preserved and partial/error receipts stay visible.
 
 - Timeout, reset, 429, or 5xx: honor `Retry-After` or use bounded exponential backoff.
   Allow three retries after the initial failure; the fourth consecutive failure

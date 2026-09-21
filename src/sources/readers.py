@@ -172,9 +172,13 @@ class ProviderNeutralDataReader:
             if stmt_file:
                 currency_packet = stmt_file.read_bytes()
             else:
-                currency_packet = json.dumps(
-                    [{"symbol": ticker_clean, "reportedCurrency": "USD"}]
-                ).encode("utf-8")
+                return ReaderUnavailableStatus(
+                    ticker=ticker_clean,
+                    provider=self.adapter.provider_name,
+                    data_type="analyst_estimates",
+                    reason="issuer_reporting_currency_evidence_unavailable",
+                    as_of=datetime.now(UTC),
+                )
             all_estimates = self.adapter.parse_estimates(
                 content,
                 ticker=ticker_clean,
@@ -244,7 +248,7 @@ class ProviderNeutralDataReader:
         ticker: str,
         *,
         adjustment: CorporateActionAdjustment = CorporateActionAdjustment.SPLIT_AND_DIVIDEND,
-        currency: str = "USD",
+        currency: str | None = None,
     ) -> AdjustedPriceSeries | ReaderUnavailableStatus:
         """Read and parse historical adjusted prices."""
         ticker_clean = ticker.upper().strip()
@@ -271,15 +275,22 @@ class ProviderNeutralDataReader:
             if profile_file.exists():
                 currency_packet = profile_file.read_bytes()
             else:
-                currency_packet = json.dumps(
-                    [{"symbol": ticker_clean, "currency": currency}]
-                ).encode("utf-8")
-            return self.adapter.parse_prices(
+                return ReaderUnavailableStatus(
+                    ticker=ticker_clean,
+                    provider=self.adapter.provider_name,
+                    data_type="adjusted_prices",
+                    reason="quote_currency_evidence_unavailable",
+                    as_of=datetime.now(UTC),
+                )
+            series = self.adapter.parse_prices(
                 content,
                 ticker=ticker_clean,
                 adjustment_method=adjustment,
                 currency_packet=currency_packet,
             )
+            if currency is not None and series.currency.value != currency.upper():
+                raise ValueError("requested currency disagrees with captured quote currency")
+            return series
         except Exception as e:
             return ReaderUnavailableStatus(
                 ticker=ticker_clean,

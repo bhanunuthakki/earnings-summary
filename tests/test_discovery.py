@@ -8,18 +8,17 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from pathlib import Path
 
 import pytest
+import run_discovery
 from alembic.config import Config
 
 from alembic import command
 from discovery.adjacency import (
-    _doc_index,  # pyright: ignore[reportPrivateUsage]
-    _phrase_in_doc,  # pyright: ignore[reportPrivateUsage]
     build_lexicon,
     mine_adjacency,
+    mine_news,
     normalize_phrase,
 )
 from discovery.screens import load_ticker_metrics, run_screens
@@ -32,9 +31,6 @@ from discovery.store import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import run_discovery  # noqa: E402
 
 _DDL = """
 CREATE TABLE tracked_companies (
@@ -297,18 +293,9 @@ def test_screens_pass_and_fail(repo: Path) -> None:
         repo / "data" / "historical" / "fmp",
         as_of=date(2026, 6, 11),
     )
-    by_ticker: dict[str, set[str]] = {}
-    for h in hits:
-        by_ticker.setdefault(h.ticker, set()).add(h.screen)
-    assert by_ticker["GOODCO"] == {"quality_compounder", "fcf_value", "growth_inflection"}
-    assert by_ticker["VALCO"] == {"fcf_value"}
-    assert "BADCO" not in by_ticker
-    assert "AAA" not in by_ticker  # portfolio names are not screened
-    assert "GHOST" not in by_ticker  # delisted profiles never screen in
-    assert "STALE" not in by_ticker  # frozen 2017 caches fail the freshness gate
-    detail = next(h.detail for h in hits if h.ticker == "GOODCO" and h.screen == "fcf_value")
-    assert "FCF yield 8.0%" in detail
-    assert "mcap $5.0B" in detail
+    # Provider caches alone cannot establish admitted company financials.
+    # Actual canonical positive coverage is exercised by test_discovery_financial_inputs.
+    assert hits == []
 
 
 # ----------------------------------------------------------------------------
@@ -360,10 +347,21 @@ def test_alt_token_requires_capitalization(repo: Path) -> None:
     assert klac.alt_token is None  # single-token names have no alt
     rio = next(p for p in lex if p.ticker == "RIO")
     assert rio.alt_token is None  # "rio" is too short
-    lower = _doc_index("we rely on marvell parts in production")
-    upper = _doc_index("We rely on Marvell parts in production")
-    assert not _phrase_in_doc(mrvl, lower, min_single=5)  # prose stays prose
-    assert _phrase_in_doc(mrvl, upper, min_single=5)
+    database = repo / "data" / "portfolio.db"
+    for name, expected in (("marvell", False), ("Marvell", True)):
+        with sqlite3.connect(database) as conn:
+            conn.execute("DELETE FROM news")
+            conn.execute(
+                "INSERT INTO news(ticker,headline,url,published_at) VALUES(?,?,?,?)",
+                (
+                    "AAA",
+                    f"We rely on {name} parts in production",
+                    "https://example.test/news",
+                    "2026-06-11",
+                ),
+            )
+        hits = mine_news(database, lex, ["AAA"])
+        assert any(hit.ticker == "MRVL" for hit in hits) is expected
 
 
 def test_lexicon_is_index_members_only(repo: Path) -> None:
@@ -415,13 +413,12 @@ def test_store_upsert_preserves_status(repo: Path) -> None:
 
 def test_discover_end_to_end(repo: Path) -> None:
     db = repo / "data" / "portfolio.db"
-    results = run_discovery.discover(repo)
+    results = run_discovery.discover(repo, db_path=repo / "data" / "portfolio.db")
     scores = {t: s for t, s, _n in results}
-    # Weighted, not counted: GOODCO = quality(1.0)+fcf(0.9)+growth(1.0) = 2.9;
+    # Raw-only financial caches cannot contribute canonical screen signals.
     # MRVL = watchlist(1.0)+transcript(0.7) = 1.7 (decay ~1.0 same-day).
-    assert scores["GOODCO"] == pytest.approx(2.9, abs=0.01)
+    assert "GOODCO" not in scores
     assert scores["MRVL"] == pytest.approx(1.7, abs=0.01)
-    assert scores["GOODCO"] > scores["MRVL"]
     # The raised entry bar (ENTRY_THRESHOLD 1.5) keeps weak singletons OUT:
     # VALCO = fcf(0.9)+news(0.5) = 1.4 and KLAC = watchlist(1.0) = 1.0 never
     # enter the queue as new names.
@@ -433,29 +430,23 @@ def test_discover_end_to_end(repo: Path) -> None:
 
     rows = list_candidates(db_path=db)
     by_ticker = {c.ticker: c for c in rows}
-    assert set(by_ticker) == {"GOODCO", "MRVL"}
+    assert set(by_ticker) == {"MRVL"}
     # score_json carries the per-class breakdown the panel peeks.
-    why = by_ticker["GOODCO"].score_json
-    assert why is not None and why["terms"] == {"screen": pytest.approx(2.9, abs=0.01)}
+    why = by_ticker["MRVL"].score_json
+    assert why is not None and why["terms"] == {"adjacency": pytest.approx(1.7, abs=0.01)}
     sources = {str(e.get("source")) for e in by_ticker["MRVL"].evidence}
     assert sources == {"adjacency:watchlist", "adjacency:transcript"}
 
-    # The typed signals landed (3 screen rows for GOODCO, 2 adjacency for MRVL).
-    goodco_sig = list_signals("GOODCO", db_path=db)
-    assert {s.source_key for s in goodco_sig} == {
-        "quality_compounder",
-        "fcf_value",
-        "growth_inflection",
-    }
-    assert all(s.signal_class == "screen" for s in goodco_sig)
+    # Adjacency remains an independent authority; unadmitted screens contribute no signal.
+    assert list_signals("GOODCO", db_path=db) == []
     mrvl_sig = list_signals("MRVL", db_path=db)
     assert {s.source_key for s in mrvl_sig} == {"watchlist", "transcript"}
 
     # Re-run refreshes without duplicating evidence OR signal rows.
-    run_discovery.discover(repo)
+    run_discovery.discover(repo, db_path=repo / "data" / "portfolio.db")
     again = list_candidates(db_path=db)
     assert len(again) == len(rows)
-    assert len(list_signals("GOODCO", db_path=db)) == 3
+    assert len(list_signals("GOODCO", db_path=db)) == 0
     mrvl = next(c for c in again if c.ticker == "MRVL")
     assert len(mrvl.evidence) == 2
 
@@ -465,7 +456,8 @@ def test_discover_populates_need_rank(repo: Path) -> None:
     augmentation in ``score_json`` — a sibling of the existing scoring
     ``terms``/``total`` keys, never replacing them."""
     db = repo / "data" / "portfolio.db"
-    run_discovery.discover(repo)
+    upsert_candidate(ticker="GOODCO", name="Good Co", score=9, evidence=[], db_path=db)
+    run_discovery.discover(repo, db_path=repo / "data" / "portfolio.db")
     by_ticker = {c.ticker: c for c in list_candidates(db_path=db)}
 
     goodco_why = by_ticker["GOODCO"].score_json
@@ -475,9 +467,10 @@ def test_discover_populates_need_rank(repo: Path) -> None:
     assert "terms" in goodco_why and "need_rank" in goodco_why
     rank = goodco_why["need_rank"]
     assert isinstance(rank, dict)
-    # GOODCO clears every GARP leg (rev YoY 30%, FCF yield 8%, ROIC 20%).
-    assert rank["garp"] == pytest.approx(2.0)
-    assert "growth at a reasonable FCF yield" in rank["garp_reason"]
+    # Unadmitted provider fundamentals cannot establish GARP legs.
+    assert rank["garp"] == 0
+    assert "no canonical fundamentals" in rank["garp_reason"]
+    assert rank["financial_evidence"] is not None
     assert rank["effort"] in ("light", "medium", "heavy")
     assert rank["first_rejection_reason"] is None  # GOODCO fails no gate
     assert isinstance(rank["composite"], (int, float))
@@ -489,7 +482,7 @@ def test_discover_populates_need_rank(repo: Path) -> None:
     mrvl_rank = mrvl_why["need_rank"]
     assert isinstance(mrvl_rank, dict)
     assert mrvl_rank["garp"] == 0.0
-    assert "no cached fundamentals" in mrvl_rank["garp_reason"]
+    assert "no canonical fundamentals" in mrvl_rank["garp_reason"]
 
 
 def test_discover_existing_below_threshold_is_refreshed(repo: Path) -> None:
@@ -498,17 +491,18 @@ def test_discover_existing_below_threshold_is_refreshed(repo: Path) -> None:
     db = repo / "data" / "portfolio.db"
     # Seed KLAC (watchlist-only, score ~1.0 < 1.5) as a pre-existing candidate.
     upsert_candidate(ticker="KLAC", name="KLA Corp", score=9.0, evidence=[], db_path=db)
-    run_discovery.discover(repo)
+    run_discovery.discover(repo, db_path=repo / "data" / "portfolio.db")
     klac = next(c for c in list_candidates(db_path=db) if c.ticker == "KLAC")
     assert klac.score == pytest.approx(1.0, abs=0.01)  # refreshed down, not skipped
     assert klac.score_json is not None
 
 
 def test_discover_skip_flags(repo: Path) -> None:
-    results = run_discovery.discover(repo, include_adjacency=False)
+    results = run_discovery.discover(
+        repo, db_path=repo / "data" / "portfolio.db", include_adjacency=False
+    )
     tickers = {t for t, _s, _n in results}
-    assert "GOODCO" in tickers
-    assert "MRVL" not in tickers
+    assert tickers == set()
 
 
 # ----------------------------------------------------------------------------

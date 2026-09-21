@@ -39,12 +39,14 @@ import math
 import os
 import queue
 import re
+import sqlite3
 import sys
 import threading
 import time
 import urllib.parse
 from collections import deque
 from collections.abc import Callable, Iterator
+from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import TracebackType
@@ -71,8 +73,6 @@ except ImportError:  # pragma: no cover - install hint
         file=sys.stderr,
     )
     sys.exit(1)
-
-import sqlite3
 
 from comments_server_alert_routes import AppContext, register_alert_routes
 from comments_server_attention_routes import (
@@ -287,6 +287,7 @@ from server_runtime.access import (
 )
 from server_runtime.streaming import drain_events
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from user_state.notes import AnalystNoteRow
 
 if TYPE_CHECKING:
     from discovery.store import CandidateRow
@@ -480,15 +481,10 @@ def _dcf_recompute_payload(inp: dcf_redesign.RedesignInputs) -> dict[str, object
 
 def _note_to_json(note: object) -> dict[str, object]:
     """AnalystNoteRow → JSON-safe dict for the /api/notes responses (P4.5)."""
-    from dataclasses import asdict
-    from datetime import datetime as _dt
-
-    from user_state.notes import AnalystNoteRow
-
     if not isinstance(note, AnalystNoteRow):
-        raise TypeError("note must be an analyst note")
+        raise TypeError("note must be an AnalystNoteRow")
     payload = asdict(note)
-    return {k: (v.isoformat() if isinstance(v, _dt) else v) for k, v in payload.items()}
+    return {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in payload.items()}
 
 
 def _opt_int(raw: object) -> int | None:
@@ -504,20 +500,14 @@ def _opt_int(raw: object) -> int | None:
 
 def _view_to_json(view: SavedViewRow) -> dict[str, object]:
     """SavedViewRow → JSON-safe dict for the /api/views responses (P5.1)."""
-    from dataclasses import asdict
-    from datetime import datetime as _dt
-
     payload = asdict(view)
-    return {k: (v.isoformat() if isinstance(v, _dt) else v) for k, v in payload.items()}
+    return {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in payload.items()}
 
 
 def _candidate_to_json(cand: CandidateRow) -> dict[str, object]:
     """CandidateRow → JSON-safe dict for the /api/discovery responses (P5.4)."""
-    from dataclasses import asdict
-    from datetime import datetime as _dt
-
     payload = asdict(cand)
-    return {k: (v.isoformat() if isinstance(v, _dt) else v) for k, v in payload.items()}
+    return {k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in payload.items()}
 
 
 # Lifecycle moves the OWNER may make from the queue UI / chat. ``building``
@@ -843,17 +833,20 @@ def create_app(
         else:
             new_correlation_id()
 
-    @app.before_request
-    def start_request_timer() -> None:
-        g.request_started_ns = time.perf_counter_ns()
-
-    @app.after_request
-    def invalidate_mutated_panels(response: Response) -> Response:
-        # Writers commit inside their handlers. Invalidate afterwards, including
-        # failures that may have partially written, so racing pre-commit reads
-        # cannot publish a fresh stale entry after the mutation completes.
+    def invalidate_mutation_cache() -> None:
         if request.method in ("GET", "HEAD", "OPTIONS"):
-            return response
+            return
+        # A mutation can affect several cached surfaces. Instead of
+        # evicting the whole 256-entry panel + work-os response cache, resolve
+        # the exact families that route's writes can staleness from the
+        # mutation-route registry (W6) and invalidate only those prefixes.
+        # Panel timing telemetry (/api/metrics/panel) and the operations
+        # attention routes are registered as declared no-ops (the latter
+        # invalidates at its own precise success moment inside the route). The
+        # registry is total over the non-GET route table — enforced by a test
+        # that walks app.url_map — and an unknown route resolves to None,
+        # which FAILS SAFE to a full clear() so new mutation routes can never
+        # serve a pre-mutation fragment.
         route_rule = cast(object, request.url_rule)
         families = resolve_mutation_families(getattr(route_rule, "rule", None))
         if families is None:
@@ -861,13 +854,25 @@ def create_app(
         else:
             for prefix in families:
                 panel_cache.invalidate_prefix(prefix)
-        return response
 
     @app.errorhandler(comments.CommentStoreReadError)
     def unavailable_comment_store(_error: comments.CommentStoreReadError):
         return _client_error(
             "comment store unavailable; original preserved; repair before retrying", 503
         )
+
+    @app.before_request
+    def start_request_timer() -> None:
+        g.request_started_ns = time.perf_counter_ns()
+        invalidate_mutation_cache()
+
+    @app.after_request
+    def invalidate_completed_mutation_cache(response: Response) -> Response:
+        # A concurrent GET may read old state after the initial invalidation.
+        # Evict its cached result or active reservation after writes finish,
+        # including error responses that may follow a partial mutation.
+        invalidate_mutation_cache()
+        return response
 
     @app.errorhandler(413)
     def request_too_large(_error: object):
@@ -1090,7 +1095,7 @@ def create_app(
             # of re-probing per request. External cron writes are not
             # invalidation events (parity with panel fragments today); HTTP
             # mutations evict only the cache families their route's registry
-            # entry declares in invalidate_mutated_panels.
+            # entry declares at mutation start and completion.
             if not getattr(g, "panel_cache_hit", False):
                 reservation = g.pop("panel_cache_reservation", None)
                 if isinstance(reservation, PanelCacheReservation):
@@ -3366,7 +3371,7 @@ def create_app(
         if not sym:
             return ({"error": "ticker required"}, 400)
         try:
-            rows = p3_data.load_peer_comp(sym, repo_root=repo_root)
+            rows = p3_data.load_peer_comp(sym, db_path=db_path, repo_root=repo_root)
         except Exception as exc:  # best-effort surface, never a 500
             _log_redacted_failure(f"peer lookup failed for {sym}", exc)
             return {

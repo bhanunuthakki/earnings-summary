@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from provenance.fact_plane_v2 import (
     CanonicalJSONObject,
@@ -50,6 +50,14 @@ class FactAdmissionError(RuntimeError):
         self.record_id: str = record_id
         self.disposition: AdmissionDisposition = disposition
         super().__init__(f"{reason_code}: {record_kind} {record_id!r} is not admissible")
+
+
+class ObservationUnavailableError(ValueError):
+    """A committed observation is absent from the requested cutoff."""
+
+    def __init__(self, observation_id: str) -> None:
+        self.observation_id = observation_id
+        super().__init__(f"committed observation {observation_id!r} does not exist")
 
 
 class _FrozenModel(BaseModel):
@@ -101,6 +109,7 @@ class ExactDerivationReference(_FrozenModel):
     input_basis: Literal["as_reported", "as_known"]
     input_observation_ids: tuple[str, ...]
     input_resolution_revision_ids: tuple[str | None, ...]
+    input_canonical_resolution_revision_ids: tuple[str | None, ...]
     canonical_input_digest_sha256: str
     derivation_basis_sha256: str
     formula_id: str
@@ -212,6 +221,29 @@ class ProvenanceBundle(_FrozenModel):
     evidence: ExactEvidenceReference | None
     derivation: ExactDerivationReference | None
     relations: tuple[FactRelationRecord, ...]
+
+
+class ProvenanceBundleFailure(_FrozenModel):
+    """The admitted reason a requested bundle is unavailable."""
+
+    reason_code: str
+    record_kind: PublicationMemberKind
+    record_id: str
+    disposition: AdmissionDisposition
+
+
+class ProvenanceBundleRead(_FrozenModel):
+    """One ordered batch result, with either a bundle or its admission failure."""
+
+    observation_id: str
+    bundle: ProvenanceBundle | None = None
+    failure: ProvenanceBundleFailure | None = None
+
+    @model_validator(mode="after")
+    def _has_exactly_one_outcome(self) -> ProvenanceBundleRead:
+        if (self.bundle is None) == (self.failure is None):
+            raise ValueError("a provenance bundle read needs exactly one outcome")
+        return self
 
 
 class FactReadModel:
@@ -436,7 +468,7 @@ class FactReadModel:
             (observation_id, cutoff, cutoff),
         )
         if row is None:
-            raise ValueError(f"committed observation {observation_id!r} does not exist")
+            raise ObservationUnavailableError(observation_id)
         loaded = self._load_observation(row)
         self._admit_observation_graph(loaded, cutoff=cutoff)
         cell = self.cell(str(row["fact_cell_id"]), cutoff=cutoff)
@@ -453,6 +485,116 @@ class FactReadModel:
             derivation=observation.derivation,
             relations=self.relations(observation_id, cutoff=cutoff),
         )
+
+    def provenance_bundles(
+        self,
+        observation_ids: tuple[str, ...],
+        *,
+        cutoff: datetime,
+    ) -> tuple[ProvenanceBundleRead, ...]:
+        """Eagerly read bundles under one snapshot with per-call verification reuse.
+
+        The verifier cache is deliberately confined to this non-yielding call.  Every
+        record still performs its publication-membership and clock checks; only an
+        already fully verified publication at this exact cutoff is reused.
+        """
+
+        if not observation_ids:
+            return ()
+        initial_changes = self._conn.total_changes
+        initial_factory = self._conn.row_factory
+        caller_transaction = self._conn.in_transaction
+        savepoint_active = False
+        completed = False
+        try:
+            if not caller_transaction:
+                self._conn.execute("BEGIN")
+            self._conn.execute("SAVEPOINT fact_read_model_batch_guard")
+            savepoint_active = True
+            reader = _BatchFactReadModel(self._conn)
+            results: list[ProvenanceBundleRead] = []
+            for observation_id in observation_ids:
+                try:
+                    bundle = reader.provenance_bundle(observation_id, cutoff=cutoff)
+                except FactAdmissionError as exc:
+                    results.append(
+                        ProvenanceBundleRead(
+                            observation_id=observation_id,
+                            failure=ProvenanceBundleFailure(
+                                reason_code=exc.reason_code,
+                                record_kind=exc.record_kind,
+                                record_id=exc.record_id,
+                                disposition=exc.disposition,
+                            ),
+                        )
+                    )
+                except ObservationUnavailableError as exc:
+                    results.append(
+                        ProvenanceBundleRead(
+                            observation_id=observation_id,
+                            failure=ProvenanceBundleFailure(
+                                reason_code="observation_unavailable_at_cutoff",
+                                record_kind="fact_observation",
+                                record_id=exc.observation_id,
+                                disposition="missing_provenance",
+                            ),
+                        )
+                    )
+                else:
+                    results.append(
+                        ProvenanceBundleRead(
+                            observation_id=observation_id,
+                            bundle=bundle,
+                        )
+                    )
+            self._assert_batch_read_state(
+                initial_changes=initial_changes,
+                initial_factory=initial_factory,
+            )
+            try:
+                self._conn.execute("RELEASE SAVEPOINT fact_read_model_batch_guard")
+            except sqlite3.OperationalError as exc:
+                raise RuntimeError("batch provenance read changed transaction state") from exc
+            savepoint_active = False
+            completed = True
+            return tuple(results)
+        finally:
+            state_error: RuntimeError | None = None
+            if caller_transaction:
+                if savepoint_active:
+                    try:
+                        self._conn.execute("ROLLBACK TO SAVEPOINT fact_read_model_batch_guard")
+                        self._conn.execute("RELEASE SAVEPOINT fact_read_model_batch_guard")
+                    except sqlite3.OperationalError:
+                        state_error = RuntimeError(
+                            "batch provenance read changed caller transaction"
+                        )
+                elif not self._conn.in_transaction:
+                    state_error = RuntimeError("batch provenance read changed caller transaction")
+            elif self._conn.in_transaction:
+                self._conn.rollback()
+            else:
+                state_error = RuntimeError("batch provenance read closed its read snapshot")
+            if self._conn.total_changes != initial_changes:
+                state_error = RuntimeError("batch provenance read changed database state")
+            if self._conn.row_factory is not initial_factory:
+                self._conn.row_factory = initial_factory
+                state_error = RuntimeError("batch provenance read changed row factory")
+            if state_error is not None and completed:
+                raise state_error
+
+    def _assert_batch_read_state(
+        self,
+        *,
+        initial_changes: int,
+        initial_factory: object,
+    ) -> None:
+        if self._conn.total_changes != initial_changes:
+            raise RuntimeError("batch provenance read changed database state")
+        if self._conn.row_factory is not initial_factory:
+            raise RuntimeError("batch provenance read changed row factory")
+        if self._conn.in_transaction is not True:
+            raise RuntimeError("batch provenance read changed transaction state")
 
     def _admit_observation_graph(
         self,
@@ -769,10 +911,22 @@ class FactReadModel:
         input_basis = str(row["input_basis"])
         if input_basis not in {"as_reported", "as_known"}:
             raise ValueError("derived observation has an invalid input basis")
-        edges = self._fetchall(
-            "SELECT input_observation_id,input_resolution_revision_id "
+        has_canonical_resolution = self._has_column(
+            "fact_derivation_input_edges_v2",
+            "input_canonical_resolution_revision_id",
+        )
+        edge_query = (
+            "SELECT input_observation_id,input_resolution_revision_id,"
+            "input_canonical_resolution_revision_id "
             "FROM fact_derivation_input_edges_v2 "
-            "WHERE output_observation_id = ? ORDER BY input_ordinal",
+            "WHERE output_observation_id = ? ORDER BY input_ordinal"
+            if has_canonical_resolution
+            else "SELECT input_observation_id,input_resolution_revision_id "
+            "FROM fact_derivation_input_edges_v2 "
+            "WHERE output_observation_id = ? ORDER BY input_ordinal"
+        )
+        edges = self._fetchall(
+            edge_query,
             (observation_id,),
         )
         return ExactDerivationReference(
@@ -787,6 +941,15 @@ class FactReadModel:
                     None
                     if item["input_resolution_revision_id"] is None
                     else str(item["input_resolution_revision_id"])
+                )
+                for item in edges
+            ),
+            input_canonical_resolution_revision_ids=tuple(
+                (
+                    None
+                    if not has_canonical_resolution
+                    or item["input_canonical_resolution_revision_id"] is None
+                    else str(item["input_canonical_resolution_revision_id"])
                 )
                 for item in edges
             ),
@@ -950,6 +1113,52 @@ class FactReadModel:
         names = tuple(item[0] for item in cursor.description)
         return tuple(dict(zip(names, tuple(row), strict=True)) for row in cursor.fetchall())
 
+    def _has_column(self, table: str, column: str) -> bool:
+        return any(
+            str(row[1]) == column
+            for row in self._conn.execute(f"PRAGMA table_info({table})").fetchall()  # nosec B608 -- fixed internal table names
+        )
+
     @staticmethod
     def _datetime(value: object) -> datetime:
         return datetime.fromisoformat(str(value))
+
+
+class _BatchFactReadModel(FactReadModel):
+    """Throwaway reader that memoizes full publication validation for one batch."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        super().__init__(conn)
+        self._publication_verifications: dict[
+            tuple[str, datetime], PublicationVerificationError | None
+        ] = {}
+
+    def _verify_publication(
+        self,
+        publication_id: str,
+        *,
+        cutoff: datetime,
+        requested_kind: PublicationMemberKind,
+        requested_id: str,
+    ) -> None:
+        key = (publication_id, _utc(cutoff))
+        cached = self._publication_verifications.get(key)
+        if key not in self._publication_verifications:
+            try:
+                verify_source_fact_publication(
+                    self._conn,
+                    publication_id=publication_id,
+                    cutoff=cutoff,
+                )
+            except PublicationVerificationError as exc:
+                cached = exc
+            else:
+                cached = None
+            self._publication_verifications[key] = cached
+        if cached is not None:
+            raise FactAdmissionError(
+                cached.reason_code,
+                record_kind=requested_kind,
+                record_id=requested_id,
+                disposition=cached.disposition,
+            ) from cached

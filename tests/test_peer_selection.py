@@ -1,9 +1,11 @@
-"""LLM-driven peer selection (directives/peer_selection_llm.md).
+"""Retained legacy shadow tests; active canonical peer tests live in test_canonical_peer_comp.
+
+LLM-driven peer selection (directives/peer_selection_llm.md).
 
 Three layers, pinned independently:
   * ``suggest_peers`` — the generator: schema-validate / dedupe / drop self &
     prose tickers; raise (don't silently empty) on unusable JSON.
-  * ``load_peer_comp`` merge — LLM-vouched names lead the FMP screen, the `why`
+  * ``load_peer_comp_legacy_shadow`` merge — LLM-vouched names lead the FMP screen, the `why`
     surfaces, corroboration ranks higher, and the S5 curation layers
     (peer_exclude / override) still win.
   * the mode-A eval — recall scoring + parse-failure handling.
@@ -15,37 +17,44 @@ unchanged FMP screen; these add the with-generator behavior on top.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import compute.peer_selection as ps  # noqa: E402
-from compute.peer_selection import (  # noqa: E402
+import compute.peer_selection as ps
+from compute.peer_selection import (
     PeerFetchOutcome,
     PeerSuggestion,
-    _fetch_peer_fundamentals,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
     extract_for_ticker,
     suggest_peers,
 )
-from evals.peer_selection import (  # noqa: E402
+from evals.peer_selection import (
     PeerCase,
     grade_peer_selection_case,
     load_peer_selection_golden,
     run_peer_selection_eval,
 )
-from llm.structured import StructuredParseError  # noqa: E402
-from net.client import (  # noqa: E402
+from llm.structured import StructuredParseError
+from net.client import (
     HttpCallError,
     HttpErrorKind,
     HttpJsonResponse,
     JsonValue,
 )
-from report.sections.p3_data import load_peer_comp  # noqa: E402
+from report.sections.p3_data import load_peer_comp_legacy_shadow
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+class FetchPeerFundamentals(Protocol):
+    def __call__(
+        self, peers: list[str], repo_root: Path, *, self_ticker: str
+    ) -> PeerFetchOutcome: ...
+
+
+# Literal private-name bridge retains the exact production function identity.
+_fetch_peer_fundamentals = cast(FetchPeerFundamentals, getattr(ps, "_fetch_peer_fundamentals"))
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -139,7 +148,7 @@ def test_suggest_peers_propagates_parse_failure(monkeypatch: pytest.MonkeyPatch)
 
 
 # ---------------------------------------------------------------------------
-# load_peer_comp — the merge (LLM seeds the pool, S5 stays intact)
+# load_peer_comp_legacy_shadow — the merge (LLM seeds the pool, S5 stays intact)
 # ---------------------------------------------------------------------------
 
 
@@ -186,7 +195,7 @@ def test_llm_peer_leads_with_why_and_thesis_tag(tmp_path: Path) -> None:
         tmp_path,
         suggestions=[{"ticker": "INTR", "name": "Inter & Co", "why": "LatAm digital bank"}],
     )
-    rows = load_peer_comp("NU", repo_root=repo)
+    rows = load_peer_comp_legacy_shadow("NU", repo_root=repo)
     tickers = [r.peer_ticker for r in rows]
     assert "INTR" in tickers
     intr = next(r for r in rows if r.peer_ticker == "INTR")
@@ -204,7 +213,7 @@ def test_corroborated_llm_peer_outranks_non_corroborated(tmp_path: Path) -> None
             {"ticker": "BIGB", "name": "Big Global Bank", "why": "diversified bank comp"},
         ],
     )
-    rows = load_peer_comp("NU", repo_root=repo)
+    rows = load_peer_comp_legacy_shadow("NU", repo_root=repo)
     tickers = [r.peer_ticker for r in rows]
     # BIGB is in BOTH the LLM set and the FMP screen → corroboration bonus →
     # it outranks INTR (LLM-only) despite identical industry/scale affinity.
@@ -217,7 +226,7 @@ def test_peer_exclude_drops_an_llm_suggestion(tmp_path: Path) -> None:
         suggestions=[{"ticker": "INTR", "name": "Inter & Co", "why": "digital bank"}],
         peer_exclude=["INTR"],
     )
-    tickers = {r.peer_ticker for r in load_peer_comp("NU", repo_root=repo)}
+    tickers = {r.peer_ticker for r in load_peer_comp_legacy_shadow("NU", repo_root=repo)}
     assert "INTR" not in tickers  # owner exclusion wins over the LLM
 
 
@@ -229,7 +238,7 @@ def test_override_still_gates_panel_with_llm_peers(tmp_path: Path) -> None:
         suggestions=[{"ticker": "INTR", "name": "Inter & Co", "why": "digital bank"}],
         peers_section_override={"action": "hide", "min_quality_peers": 1, "require_named": True},
     )
-    assert load_peer_comp("NU", repo_root=repo) == []
+    assert load_peer_comp_legacy_shadow("NU", repo_root=repo) == []
 
 
 def test_no_cache_is_unchanged_fmp_screen(tmp_path: Path) -> None:
@@ -243,7 +252,7 @@ def test_no_cache_is_unchanged_fmp_screen(tmp_path: Path) -> None:
         fmp / "BIGB_profile.json",
         _profile("Big Global Bank", "Financial Services", "Banks - Diversified", 60e9),
     )
-    rows = load_peer_comp("NU", repo_root=tmp_path)
+    rows = load_peer_comp_legacy_shadow("NU", repo_root=tmp_path)
     assert [r.peer_ticker for r in rows] == ["BIGB"]
     assert "thesis peer" not in rows[0].match_reasons
 
@@ -260,7 +269,7 @@ def test_metricless_thesis_peer_dropped_not_rendered_as_dashes(tmp_path: Path) -
             {"ticker": "GHST", "name": "Ghost Listing", "why": "no data anywhere"},
         ],
     )
-    rows = load_peer_comp("NU", repo_root=repo)
+    rows = load_peer_comp_legacy_shadow("NU", repo_root=repo)
     tickers = [r.peer_ticker for r in rows]
     assert "INTR" in tickers  # has a profile → metrics → renders
     assert "GHST" not in tickers  # metric-less thesis peer → dropped

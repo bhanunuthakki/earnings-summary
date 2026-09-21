@@ -93,6 +93,7 @@
       "language": "python",
       "entrypoints": [
         "src/sources/earnings_calendar.py",
+        "src/sources/canonical_financial_series.py",
         "src/sources/registry.py",
         "src/pipeline/source_policy.py"
       ],
@@ -128,6 +129,7 @@
       "language": "python",
       "entrypoints": [
         "src/compute/metrics_engine/engine.py",
+        "src/compute/metrics_engine/io.py",
         "src/compute/kpi_extract_summaries.py",
         "src/dcf/valuation.py"
       ],
@@ -163,13 +165,16 @@
       "language": "python",
       "entrypoints": [
         "src/synthesis/lenses/catalyst_calendar.py",
-        "src/macro_store.py"
+        "src/macro_store.py",
+        "src/research/qualitative_stress.py",
+        "execution/common_drawdown.py"
       ],
       "dependencies": [
         "financial_compute_engine"
       ],
       "test_commands": [
-        "pytest tests/test_advisor_memos.py -q"
+        "pytest tests/test_advisor_memos.py -q",
+        "pytest tests/test_qualitative_stress.py -q"
       ],
       "documentation": [
         "HOW_TO_USE_REPORTS.md"

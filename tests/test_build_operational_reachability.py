@@ -173,7 +173,12 @@ def test_actual_head_is_supported() -> None:
     assert graph.parser["source_sha256"]
     assert any(node.id == "execution/comments_server.py" for node in graph.nodes)
     assert graph.collection_status == "COMPLETE"
-    assert graph.closure_status == "PASS"
+    assert graph.closure_status == "PASS", {
+        "closure_reasons": graph.closure_reasons,
+        "diagnostics": [diagnostic.model_dump() for diagnostic in graph.diagnostics],
+        "parser": graph.parser,
+        "scanner_sha256": graph.scanner_sha256,
+    }
     assert graph.stats["production_unknown"] == 0
     assert graph.stats["production_unresolved"] == 0
     residual_source_edges = [
@@ -184,7 +189,15 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    assert len(graph.unknown_edges) == 100
+    assert len(graph.unknown_edges) == 112
+    assert (
+        sum(
+            edge.source == "tests/test_dcf_assumption_cli.py"
+            and edge.target == "<dynamic process entrypoint>"
+            for edge in graph.unknown_edges
+        )
+        == 2
+    )
     assert any(
         edge.source == "tests/test_release_retained_boundaries.py"
         and edge.target == "<dynamic process entrypoint>"

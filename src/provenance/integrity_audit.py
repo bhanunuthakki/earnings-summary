@@ -5204,12 +5204,15 @@ def _audit_fact_v2_derivation_inputs(
     findings: list[IntegrityFinding],
     options: AuditOptions,
 ) -> None:
+    if "fact_derivation_basis_commitments_v2" not in _table_names(conn):
+        return
     count = 0
     samples: list[str] = []
     cursor = conn.execute(
         "SELECT seal.derivation_seal_id,seal.output_observation_id,"
         "seal.input_count,seal.canonical_input_digest_sha256,"
         "edge.input_observation_id,edge.input_resolution_revision_id,"
+        "edge.input_canonical_resolution_revision_id,"
         "edge.input_role,edge.input_ordinal "
         "FROM fact_derivation_seals_v2 AS seal "
         "LEFT JOIN fact_derivation_input_edges_v2 AS edge "
@@ -5243,15 +5246,16 @@ def _audit_fact_v2_derivation_inputs(
                 expected_digest = str(row[3])
                 payload = []
             if row[4] is not None:
-                payload.append(
-                    {
-                        "input_observation_id": str(row[4]),
-                        "input_ordinal": int(row[7]),
-                        "input_resolution_revision_id": (None if row[5] is None else str(row[5])),
-                        "input_role": str(row[6]),
-                        "output_observation_id": output_id,
-                    }
-                )
+                item: dict[str, object] = {
+                    "input_observation_id": str(row[4]),
+                    "input_ordinal": int(row[8]),
+                    "input_resolution_revision_id": (None if row[5] is None else str(row[5])),
+                    "input_role": str(row[7]),
+                    "output_observation_id": output_id,
+                }
+                if row[6] is not None:
+                    item["input_canonical_resolution_revision_id"] = str(row[6])
+                payload.append(item)
     finish()
     _add(
         findings,
@@ -5279,18 +5283,81 @@ def _audit_fact_v2_derivation_inputs(
             "ON edge.output_observation_id = seal.output_observation_id "
             "JOIN fact_observations_v2 AS input "
             "ON input.observation_id = edge.input_observation_id "
+            "JOIN fact_derivation_basis_commitments_v2 AS basis "
+            "ON basis.derivation_seal_id = seal.derivation_seal_id "
             "LEFT JOIN fact_resolution_revisions_v2 AS resolution "
             "ON resolution.resolution_revision_id = "
             "edge.input_resolution_revision_id "
-            "WHERE input.knowledge_at > seal.knowledge_at "
-            "OR input.recorded_at > seal.recorded_at "
-            "OR input.effective_at > output.effective_at "
-            "OR edge.recorded_at > seal.recorded_at "
+            "LEFT JOIN canonical_fact_resolution_revisions AS canonical_resolution "
+            "ON canonical_resolution.canonical_resolution_revision_id = "
+            "edge.input_canonical_resolution_revision_id "
+            "LEFT JOIN canonical_fact_candidate_dispositions AS disposition "
+            "ON disposition.candidate_universe_id = "
+            "canonical_resolution.candidate_universe_id "
+            "AND disposition.observation_id = input.observation_id "
+            "AND disposition.source_fact_cell_id = input.fact_cell_id "
+            "AND disposition.eligibility = 'eligible' "
+            "LEFT JOIN fact_cell_canonical_binding_revisions AS binding "
+            "ON binding.binding_revision_id = disposition.binding_revision_id "
+            "AND binding.source_observation_id = input.observation_id "
+            "AND binding.fact_cell_id = input.fact_cell_id "
+            "AND binding.canonical_metric_cell_id = "
+            "canonical_resolution.canonical_metric_cell_id "
+            "AND binding.binding_status = 'bound' "
+            "LEFT JOIN canonical_metric_cells AS canonical_cell "
+            "ON canonical_cell.canonical_metric_cell_id = "
+            "canonical_resolution.canonical_metric_cell_id "
+            "LEFT JOIN canonical_fact_candidate_universe_revisions AS universe "
+            "ON universe.candidate_universe_id = "
+            "canonical_resolution.candidate_universe_id "
+            "AND universe.canonical_metric_cell_id = "
+            "canonical_resolution.canonical_metric_cell_id "
+            "WHERE julianday(input.knowledge_at) > julianday(seal.knowledge_at) "
+            "OR julianday(input.recorded_at) > julianday(seal.recorded_at) "
+            "OR julianday(input.effective_at) > julianday(output.effective_at) "
+            "OR julianday(edge.recorded_at) > julianday(seal.recorded_at) "
+            "OR (edge.input_resolution_revision_id IS NOT NULL AND "
+            "edge.input_canonical_resolution_revision_id IS NOT NULL) "
+            "OR (basis.input_basis = 'as_reported' AND ("
+            "edge.input_resolution_revision_id IS NOT NULL OR "
+            "edge.input_canonical_resolution_revision_id IS NOT NULL)) "
+            "OR (basis.input_basis = 'as_known' AND "
+            "edge.input_resolution_revision_id IS NULL AND "
+            "edge.input_canonical_resolution_revision_id IS NULL) "
             "OR (edge.input_resolution_revision_id IS NOT NULL AND "
             "(resolution.resolution_revision_id IS NULL "
+            "OR resolution.status <> 'resolved' "
             "OR resolution.selected_observation_id <> input.observation_id "
-            "OR resolution.knowledge_at > seal.knowledge_at "
-            "OR resolution.recorded_at > seal.recorded_at)) "
+            "OR resolution.fact_cell_id <> input.fact_cell_id "
+            "OR julianday(resolution.knowledge_at) > julianday(seal.knowledge_at) "
+            "OR julianday(resolution.recorded_at) > julianday(seal.recorded_at))) "
+            "OR (edge.input_canonical_resolution_revision_id IS NOT NULL AND ("
+            "canonical_resolution.canonical_resolution_revision_id IS NULL "
+            "OR canonical_resolution.status <> 'resolved' "
+            "OR canonical_resolution.selected_observation_id <> input.observation_id "
+            "OR disposition.candidate_disposition_id IS NULL "
+            "OR binding.binding_revision_id IS NULL "
+            "OR canonical_cell.canonical_metric_cell_id IS NULL "
+            "OR universe.candidate_universe_id IS NULL "
+            "OR julianday(input.recorded_at) > julianday(seal.knowledge_at) "
+            "OR julianday(canonical_resolution.knowledge_at) > "
+            "julianday(seal.knowledge_at) "
+            "OR julianday(canonical_resolution.recorded_at) > "
+            "julianday(seal.knowledge_at) "
+            "OR julianday(disposition.knowledge_at) > julianday(seal.knowledge_at) "
+            "OR julianday(disposition.recorded_at) > julianday(seal.knowledge_at) "
+            "OR julianday(binding.knowledge_at) > julianday(seal.knowledge_at) "
+            "OR julianday(binding.recorded_at) > julianday(seal.knowledge_at) "
+            "OR julianday(canonical_cell.knowledge_at) > julianday(seal.knowledge_at) "
+            "OR julianday(canonical_cell.recorded_at) > julianday(seal.knowledge_at) "
+            "OR julianday(universe.knowledge_at) > julianday(seal.knowledge_at) "
+            "OR julianday(universe.recorded_at) > julianday(seal.knowledge_at) "
+            "OR EXISTS (SELECT 1 FROM canonical_fact_resolution_revisions AS newer "
+            "WHERE newer.canonical_metric_cell_id = "
+            "canonical_resolution.canonical_metric_cell_id "
+            "AND julianday(newer.knowledge_at) <= julianday(seal.knowledge_at) "
+            "AND julianday(newer.recorded_at) <= julianday(seal.knowledge_at) "
+            "AND newer.revision > canonical_resolution.revision))) "
             "ORDER BY seal.derivation_seal_id,edge.input_observation_id"
         ),
     )

@@ -1,0 +1,8 @@
+{
+  "full": {"state": "full", "coverage_pct": 100.0, "top_two": ["demand_led_recession", "saas_multiple_compression"]},
+  "partial": {"state": "partial", "coverage_pct": 50.0, "top_two": ["saas_multiple_compression", "demand_led_recession"]},
+  "stale": {"state": "stale", "coverage_pct": 0.0, "top_two": []},
+  "unavailable": {"state": "unavailable", "coverage_pct": 0.0, "top_two": []},
+  "etf": {"state": "partial", "coverage_pct": 10.0, "top_two": ["demand_led_recession", "oil_supply_shock"]},
+  "paired": {"state": "partial", "coverage_pct": 100.0, "top_two": ["saas_multiple_compression", "rates_inflation_shock"]}
+}

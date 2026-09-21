@@ -8,6 +8,7 @@ DB substrate: a private copy of the fully migrated current schema.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Callable
@@ -710,7 +711,9 @@ def _seed_whatif_substrate(repo: Path) -> None:
     _chart("BBB", [m * 0.9 for m in market])
     _chart("DLO", [0.008 * _math.cos(i / 7.0) for i in range(200)])
     (repo / "data" / "portfolio_weights.json").write_text(
-        json.dumps({"computed_at": "2026-07-10T04:00:00", "weights": {"AAA": 0.6, "BBB": 0.4}}),
+        json.dumps(
+            {"computed_at": datetime.now(UTC).isoformat(), "weights": {"AAA": 0.6, "BBB": 0.4}}
+        ),
         encoding="utf-8",
     )
 
@@ -741,24 +744,41 @@ def test_peek_whatif_renders_before_after(client: FlaskClient, repo: Path) -> No
 
 
 def _seed_factor_exposures(repo: Path, rows: list[tuple[str, str, float]]) -> None:
-    """(ticker, factor, loading) rows into business_factor_exposures (C3),
-    is_latest=1 — the shape ``book_factor_vector``/``_ticker_factor_loadings``
-    read back. No LLM, no artifact cache — direct substrate seed."""
-    import sqlite3
+    """Synthetic loadings bound to actual thesis bytes and the current taxonomy."""
+    from risk_factors import FactorLoading, compute_input_sha, persist_exposures
 
-    conn = sqlite3.connect(str(repo / "data" / "portfolio.db"))
-    try:
-        now = "2026-07-24T00:00:00"
-        for ticker, factor, loading in rows:
-            conn.execute(
-                "INSERT INTO business_factor_exposures "
-                "(ticker, factor, loading, provenance, owner_edited, is_latest, "
-                "created_at, updated_at) VALUES (?, ?, ?, 'segment_derived', 0, 1, ?, ?)",
-                (ticker, factor, loading, now, now),
+    for ticker, factor, loading in rows:
+        thesis_path = repo / "micro_thesis" / "holdings" / f"{ticker}.json"
+        thesis_path.parent.mkdir(parents=True, exist_ok=True)
+        thesis_path.write_text(
+            json.dumps(
+                {
+                    "ticker": ticker,
+                    "name": "Synthetic company",
+                    "thesis": f"Synthetic exposure to {factor}.",
+                    "key_driver": factor,
+                    "tier_1_kpis": [
+                        {"name": "Synthetic metric", "break_condition": "falls below X"}
+                    ],
+                }
             )
-        conn.commit()
-    finally:
-        conn.close()
+        )
+        input_sha = compute_input_sha(
+            ticker,
+            geo_mix=None,
+            product_mix=None,
+            thesis_sha=hashlib.sha256(thesis_path.read_bytes()).hexdigest(),
+        )
+        assert (
+            persist_exposures(
+                ticker,
+                [FactorLoading(factor=factor, loading=loading, rationale="Synthetic fixture")],
+                provenance="thesis_derived",
+                input_sha=input_sha,
+                db_path=repo / "data" / "portfolio.db",
+            )
+            == 1
+        )
 
 
 def test_peek_whatif_renders_business_factor_shifts(client: FlaskClient, repo: Path) -> None:
@@ -782,6 +802,40 @@ def test_peek_whatif_renders_business_factor_shifts(client: FlaskClient, repo: P
     body = resp.data.decode()
     assert "top business-factor shifts" in body
     assert "LatAm consumer/FX" in body  # DLO's own factor enters the blend
+
+
+@pytest.mark.parametrize("invalidity", ["changed_thesis", "stale_holdings"])
+def test_peek_whatif_withholds_factor_shifts_without_current_lineage(
+    client: FlaskClient, repo: Path, invalidity: str
+) -> None:
+    from allocation.what_if import clear_caches
+
+    clear_caches()
+    _seed_whatif_substrate(repo)
+    _write_fit_cache(repo, ticker="DLO")
+    _seed_factor_exposures(
+        repo,
+        [
+            ("AAA", "digital ad spend", 0.8),
+            ("BBB", "digital ad spend", 0.2),
+            ("DLO", "LatAm consumer/FX", 0.9),
+        ],
+    )
+    if invalidity == "changed_thesis":
+        thesis = repo / "micro_thesis" / "holdings" / "DLO.json"
+        thesis.write_text(thesis.read_text() + "\n")
+    else:
+        (repo / "data" / "portfolio_weights.json").write_text(
+            json.dumps(
+                {
+                    "computed_at": (datetime.now(UTC) - timedelta(days=3)).isoformat(),
+                    "weights": {"AAA": 0.6, "BBB": 0.4},
+                }
+            )
+        )
+    response = client.get("/api/peek/whatif?ticker=DLO")
+    assert response.status_code == 200
+    assert "top business-factor shifts" not in response.data.decode()
 
 
 def test_peek_whatif_no_factor_substrate_renders_no_shift_section(

@@ -8,10 +8,8 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from pipeline.portfolio_panel import (  # pyright: ignore[reportPrivateUsage]
-    _add_trigger_advisories,
-    _position_guard_section,
-)
+from integrations.portfolio_tracker_client import PortfolioAnalytics
+from pipeline.portfolio_panel import compose_risk_page
 from position_guard import (
     CHECK_ADD,
     CHECK_BEAR,
@@ -19,9 +17,23 @@ from position_guard import (
     CHECK_THESIS,
     build_position_guard,
 )
-from position_guard_cache import to_cache_model
+from position_guard_cache import PositionGuardCacheModel, to_cache_model
 
 _NOW = datetime(2026, 7, 11, 12, 0, 0)
+
+
+def _guard_section(cache: PositionGuardCacheModel | None) -> str:
+    page = compose_risk_page(
+        PortfolioAnalytics(available=False, api_url="fixture"),
+        drawdown=None,
+        factor=None,
+        scenarios=[],
+        digest="",
+        position_guard=cache,
+    )
+    heading = "<h2>Naked-position gate</h2>"
+    assert heading in page
+    return page.split(heading, 1)[1].split("</section>", 1)[0] + heading
 
 
 def _make_db(tmp_path: Path) -> Path:
@@ -40,7 +52,7 @@ def _make_db(tmp_path: Path) -> Path:
     conn.execute("CREATE TABLE v_thesis_status (ticker TEXT, thesis_updated_at TEXT)")
     conn.execute(
         "CREATE TABLE position_entries ("
-        "id INTEGER PRIMARY KEY, ticker TEXT, entry_conviction TEXT, exit_date TEXT)"
+        "id INTEGER PRIMARY KEY, ticker TEXT, entry_conviction TEXT, exit_date TEXT, superseded_by_entry_id INTEGER)"
     )
     conn.commit()
     conn.close()
@@ -496,7 +508,7 @@ def test_missing_db_degrades_to_failed_checks_not_a_crash(tmp_path: Path) -> Non
 
 
 def test_position_guard_section_empty_state() -> None:
-    html = _position_guard_section(None)
+    html = _guard_section(None)
     assert "Naked-position gate" in html
     assert "NAKED POSITIONS: 0" in html
     assert "No weighted holdings to gate yet" in html
@@ -508,7 +520,7 @@ def test_position_guard_section_all_clear(tmp_path: Path) -> None:
     _fully_covered(db_path, tmp_path, "AAA")
     report = build_position_guard(db_path, tmp_path, now=_NOW)
     cache = to_cache_model(report, computed_at=_NOW)
-    html = _position_guard_section(cache)
+    html = _guard_section(cache)
     assert "NAKED POSITIONS: 0" in html
     assert "k-pill-ok" in html
     assert "Every held name clears the naked-position gate" in html
@@ -522,7 +534,7 @@ def test_position_guard_section_renders_violation_chip_and_table(tmp_path: Path)
     # No thesis, no downside rule -> two failing checks.
     report = build_position_guard(db_path, tmp_path, now=_NOW)
     cache = to_cache_model(report, computed_at=_NOW)
-    html = _position_guard_section(cache)
+    html = _guard_section(cache)
     assert "NAKED POSITIONS: 1" in html and "k-pill-bad" in html
     assert "FLKR: no downside rule + thesis stale" in html
     assert "encode an exit ladder" in html
@@ -549,8 +561,10 @@ def test_add_trigger_advisories_helper_only_returns_failing_high_conviction_rows
     # AAA: not high conviction -> add_trigger stays None, never an advisory.
     report = build_position_guard(db_path, tmp_path, now=_NOW)
     cache = to_cache_model(report, computed_at=_NOW)
-    advisories = _add_trigger_advisories(cache)
-    assert [r.ticker for r in advisories] == ["NU"]
+    html = _guard_section(cache)
+    assert "NU: high conviction, no add-rung encoded" in html
+    assert "MELI: high conviction, no add-rung encoded" not in html
+    assert "AAA: high conviction, no add-rung encoded" not in html
 
 
 def test_position_guard_section_renders_advisory_separately_from_violations(
@@ -565,7 +579,7 @@ def test_position_guard_section_renders_advisory_separately_from_violations(
     _insert_position_entry(db_path, "NU", conviction="high")
     report = build_position_guard(db_path, tmp_path, now=_NOW)
     cache = to_cache_model(report, computed_at=_NOW)
-    html = _position_guard_section(cache)
+    html = _guard_section(cache)
     assert "NAKED POSITIONS: 0" in html  # advisory never counted
     assert "k-pill-bad" not in html  # the summary pill stays k-pill-ok
     assert "NU: high conviction, no add-rung encoded" in html
@@ -579,5 +593,5 @@ def test_position_guard_section_omits_advisory_block_when_none_apply(tmp_path: P
     _fully_covered(db_path, tmp_path, "AAA")
     report = build_position_guard(db_path, tmp_path, now=_NOW)
     cache = to_cache_model(report, computed_at=_NOW)
-    html = _position_guard_section(cache)
+    html = _guard_section(cache)
     assert "Add-rung advisory" not in html

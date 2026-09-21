@@ -8,6 +8,7 @@ re-exports in ``workspace_html``."""
 
 from __future__ import annotations
 
+import json
 from io import StringIO
 
 from report.models import SectionStatus, ValuationBasisSection
@@ -20,6 +21,7 @@ from report.renderers.workspace_sections._shared import (
     _render_markdown,
     _xlink_html,
 )
+from ui.controls import prov_case, prov_drawer
 
 __all__ = [
     "_TIMES",
@@ -42,7 +44,7 @@ def _valuation_tab(body: StringIO, vb: ValuationBasisSection | None) -> None:
     `src/compute/valuation_basis.py` and `src/report/sections/valuation.py`.
     """
     body.write('<div class="tab-body">')
-    body.write('<div class="eyebrow">Valuation · Opus-picked multiple · 12Q context</div>')
+    body.write('<div class="eyebrow">Valuation · multiple and historical context</div>')
     if vb is None or vb.status != SectionStatus.OK:
         if vb is None:
             _empty_panel(
@@ -66,10 +68,25 @@ def _valuation_tab(body: StringIO, vb: ValuationBasisSection | None) -> None:
     body.write('<div class="valuation-headline-row">')
     body.write(
         '<div class="valuation-current">'
-        f'<div class="valuation-current-value">{_esc(vb.current_value_display or "—")}</div>'
+        f'<div class="valuation-current-value">{_esc(vb.current_value_display or ("Unavailable" if vb.current_basis else "—"))}</div>'
         '<div class="valuation-current-label">current</div>'
         "</div>"
     )
+    if vb.current_basis:
+        detail = f"Basis: {vb.current_basis.replace('_', ' ')}"
+        if vb.current_basis == "canonical_reported_ltm":
+            detail = "Reported trailing 12 months · captured market capitalization"
+        if vb.current_basis == "unsupported_annual_estimate_horizon":
+            detail = "Next annual fiscal period unavailable"
+            if vb.estimate_target_period_end:
+                detail += f" · Captured target ends {vb.estimate_target_period_end.isoformat()}"
+        if vb.current_basis == "fy1_estimate":
+            detail = "FY1: next annual fiscal period"
+            if vb.estimate_target_period_end:
+                detail += f" ending {vb.estimate_target_period_end.isoformat()}"
+        if vb.requested_multiple and vb.requested_multiple != vb.multiple_name:
+            detail += f" · Requested: {vb.requested_multiple}"
+        body.write(f'<div class="valuation-current-label">{_esc(detail)}</div>')
     if vb.historical_median is not None:
         body.write(
             '<div class="valuation-band">'
@@ -85,15 +102,24 @@ def _valuation_tab(body: StringIO, vb: ValuationBasisSection | None) -> None:
     # self-skips for P/B banks, EV/EBITDA, FCF multiples, and unprofitable /
     # negative-growth names).
     if vb.peg_ratio is not None:
+        peg_label = "FY1" if vb.current_basis == "fy1_estimate" else "NTM"
         growth_txt = f"{vb.peg_growth_pct:.1f}%" if vb.peg_growth_pct is not None else "—"
         pe_txt = vb.current_value_display or "—"
         body.write(
             '<div class="valuation-peg" '
-            f'title="PEG = {_esc(pe_txt)} P/E (NTM) &divide; {_esc(growth_txt)} forward EPS growth">'
+            f'title="PEG = {_esc(pe_txt)} P/E ({peg_label}) &divide; {_esc(growth_txt)} forward EPS growth">'
             f'<div class="valuation-peg-value">{vb.peg_ratio:.2f}</div>'
-            '<div class="valuation-peg-label">PEG (NTM)</div>'
+            f'<div class="valuation-peg-label">PEG ({peg_label})</div>'
             f'<div class="valuation-peg-sub">{_esc(pe_txt)} &divide; {_esc(growth_txt)} fwd EPS growth</div>'
             "</div>"
+        )
+    if vb.comparison_unavailable_reason:
+        body.write(
+            '<div class="valuation-verdict">Historical comparison unavailable: no comparable same-basis observations.</div>'
+        )
+    if vb.current_unavailable_reason:
+        body.write(
+            f'<div class="valuation-verdict">{_esc(vb.current_unavailable_reason.replace("_", " "))}</div>'
         )
     if vb.rich_cheap_verdict:
         body.write(f'<div class="valuation-verdict">{_esc(vb.rich_cheap_verdict)}</div>')
@@ -102,20 +128,38 @@ def _valuation_tab(body: StringIO, vb: ValuationBasisSection | None) -> None:
     # Sparkline of 12Q history. Drop None values — sparkline doesn't
     # handle them (NTM history has gaps for periods where the
     # forward-4Q realized series isn't fully on file).
-    hist_values = [h.value for h in vb.history if h.value is not None]
+    plotted_history = [
+        h
+        for h in vb.history
+        if vb.current_basis is None
+        or (h.basis == vb.current_basis and h.method == vb.current_method)
+    ]
+    hist_values = [h.value for h in plotted_history if h.value is not None]
     if hist_values:
         body.write(
             f'<div class="valuation-spark">{sparkline(hist_values, size=SparklineSize.VALUATION)}</div>'
         )
-        if vb.history:
+        if plotted_history:
             body.write(
                 '<div class="valuation-spark-axis">'
-                f"<span>{vb.history[0].period_end.isoformat() if vb.history[0].period_end else '—'}</span>"
-                f'<span class="muted">{len(vb.history)}q trailing</span>'
-                f"<span>{vb.history[-1].period_end.isoformat() if vb.history[-1].period_end else '—'}</span>"
+                f"<span>{plotted_history[0].period_end.isoformat() if plotted_history[0].period_end else '—'}</span>"
+                f'<span class="muted">{len(plotted_history)}q trailing</span>'
+                f"<span>{plotted_history[-1].period_end.isoformat() if plotted_history[-1].period_end else '—'}</span>"
                 "</div>"
             )
     body.write("</div>")  # /headline panel
+
+    if vb.source_context:
+        body.write(
+            prov_drawer(
+                "Source inputs and valuation basis",
+                prov_case(
+                    "Retained input manifest",
+                    rationale="Trailing P/E and P/FCF use canonical reported denominators. Other provider calculations remain unmigrated. FY1 estimates and historical proxies are distinct bases.",
+                    actual=json.dumps(vb.source_context, sort_keys=True, indent=2, default=str),
+                ),
+            )
+        )
 
     # Rationale panel.
     if vb.rationale:

@@ -12,6 +12,7 @@ Usage:  DCF_TICKER=AMZN python execution/refresh_dcf_assumptions.py
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from collections import defaultdict
@@ -47,8 +48,19 @@ def load_cache_records(name: str) -> list[dict[str, object]]:
     )
 
 
-def to_millions(value: object) -> float:
-    return value / 1e6 if isinstance(value, (int, float)) else 0.0
+def to_millions(value: object) -> float | None:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+    ):
+        return None
+    return value / 1e6
+
+
+def _format_millions(value: object) -> str:
+    scaled = to_millions(value)
+    return "?" if scaled is None else f"{scaled:,.0f}"
 
 
 income_records = load_cache_records(f"{TICKER}_income_statement_quarterly.json")
@@ -104,8 +116,35 @@ if not full:
 
 def fiscal_year_total(
     records: Mapping[tuple[int, str], Mapping[str, object]], field: str, year: int
-) -> float:
-    return sum(to_millions(records.get((year, period), {}).get(field)) for period in PERIODS)
+) -> float | None:
+    values = [to_millions(records.get((year, period), {}).get(field)) for period in PERIODS]
+    if any(value is None for value in values):
+        return None
+    return sum(value for value in values if value is not None)
+
+
+_REQUIRED_ACTUAL_FIELDS = {
+    "income": ("revenue", "operatingIncome", "netIncome"),
+    "cash_flow": ("capitalExpenditure", "depreciationAndAmortization"),
+}
+
+
+def _required_actual_issues() -> tuple[str, ...]:
+    issues: list[str] = []
+    sources = {"income": income_by_period, "cash_flow": cashflow_by_period}
+    for year in full[-3:]:
+        for period in PERIODS:
+            for statement, fields in _REQUIRED_ACTUAL_FIELDS.items():
+                record = sources[statement].get((year, period), {})
+                for field in fields:
+                    value = record.get(field)
+                    if (
+                        isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or not math.isfinite(float(value))
+                    ):
+                        issues.append(f"{statement}:FY{year}:{period}:{field}")
+    return tuple(issues)
 
 
 # --- context ---
@@ -119,12 +158,15 @@ lines = [
 lines.append("Recent fiscal-year actuals (reporting currency, $M):")
 for y in full[-3:]:
     rev = fiscal_year_total(income_by_period, "revenue", y)
-    if not rev:
+    if rev is None or rev == 0:
         continue
     oi = fiscal_year_total(income_by_period, "operatingIncome", y)
     ni = fiscal_year_total(income_by_period, "netIncome", y)
-    cap = abs(fiscal_year_total(cashflow_by_period, "capitalExpenditure", y))
+    cap_raw = fiscal_year_total(cashflow_by_period, "capitalExpenditure", y)
     da = fiscal_year_total(cashflow_by_period, "depreciationAndAmortization", y)
+    if oi is None or ni is None or cap_raw is None or da is None:
+        continue
+    cap = abs(cap_raw)
     lines.append(
         f"  FY{y}: revenue {rev:,.0f}  op-margin {oi / rev:.1%}  net-margin {ni / rev:.1%}  "
         f"capex {cap:,.0f} ({cap / rev:.1%} of rev)  D&A {da:,.0f}"
@@ -160,7 +202,9 @@ if fwd:
     for y in fwd:
         e = estimates_by_year[y]
         lines.append(
-            f"  {y}: revenue {to_millions(e.get('revenueAvg')):,.0f}  net-income {to_millions(e.get('netIncomeAvg')):,.0f}  EPS {e.get('epsAvg', '?')}"
+            f"  {y}: revenue {_format_millions(e.get('revenueAvg'))}  "
+            f"net-income {_format_millions(e.get('netIncomeAvg'))}  "
+            f"EPS {e.get('epsAvg', '?')}"
         )
 
 # thesis
@@ -234,6 +278,9 @@ def _segment_guard(value: object) -> tuple[bool, str]:
 
 
 def _call_dcf_assumptions() -> DcfAssumptionsPayload:
+    issues = _required_actual_issues()
+    if issues:
+        raise RuntimeError(f"required_actual_unavailable: {','.join(issues)}")
     decoded = call_llm_structured(
         PROMPT,
         purpose="dcf_assumptions",
@@ -250,6 +297,13 @@ def _call_dcf_assumptions() -> DcfAssumptionsPayload:
 
 
 def main() -> int:
+    issues = _required_actual_issues()
+    if issues:
+        print(
+            f"UNAVAILABLE\t{TICKER}\trequired_actual_unavailable\t{','.join(issues)}",
+            file=sys.stderr,
+        )
+        return 2
     result = _call_dcf_assumptions()
     data = cast("dict[str, object]", result.model_dump(mode="json"))
     data["_segment_keys"] = SEG_KEYS

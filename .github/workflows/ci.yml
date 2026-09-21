@@ -556,7 +556,7 @@ jobs:
           CHECK_BASE: ${{ steps.base.outputs.ref }}
         run: PYTHONPATH=src python -m quality.check_changed --base "$CHECK_BASE" --mode committed --check types
       - name: pyright and suppression ceilings — complete active population is exact
-        run: PYTHONPATH=src python execution/enforce_static_quality.py --pythonpath "$(command -v python)"
+        run: PYTHONPATH=src python execution/enforce_static_quality.py --pythonpath "$(command -v python)" --base "${{ steps.base.outputs.ref }}"
 
   security:
     needs: [changes]

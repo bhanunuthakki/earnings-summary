@@ -354,6 +354,102 @@ def test_dcf_assumptions_cannot_rewrite_owner_debt_scope(
     assert updated["opus_baseline"]["set_by"] == "purpose:dcf_assumptions"
 
 
+@pytest.mark.parametrize(
+    ("statement", "field", "bad_value"),
+    [
+        ("income", "operatingIncome", "not-a-number"),
+        ("income", "netIncome", float("nan")),
+        ("cash_flow", "capitalExpenditure", None),
+    ],
+)
+def test_dcf_assumptions_fail_before_model_or_cache_on_required_actual_gap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
+    capsys: pytest.CaptureFixture[str],
+    statement: str,
+    field: str,
+    bad_value: object,
+) -> None:
+    module = _load_dcf_module(tmp_path, monkeypatch, migrated_db)
+    records = module.income_by_period if statement == "income" else module.cashflow_by_period
+    latest = (module.full[-1], module.PERIODS[-1])
+    if bad_value is None:
+        records[latest].pop(field)
+    else:
+        records[latest][field] = bad_value
+    cache = tmp_path / "data" / "dcf_assumptions" / "TEST.json"
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    sentinel = '{"redesign":{"narrative":"keep"}}'
+    cache.write_text(sentinel, encoding="utf-8")
+
+    calls = 0
+
+    def unexpected(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        return _valid_dcf_payload()
+
+    monkeypatch.setattr(module, "call_llm_structured", unexpected)
+
+    assert module.main() == 2
+    assert calls == 0
+    assert cache.read_text(encoding="utf-8") == sentinel
+    error = capsys.readouterr().err
+    assert "required_actual_unavailable" in error
+    assert field in error
+
+
+def test_dcf_assumptions_fail_when_required_cash_flow_quarter_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
+) -> None:
+    module = _load_dcf_module(tmp_path, monkeypatch, migrated_db)
+    latest = (module.full[-1], module.PERIODS[-1])
+    module.cashflow_by_period.pop(latest)
+    calls = 0
+
+    def unexpected(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        return _valid_dcf_payload()
+
+    monkeypatch.setattr(module, "call_llm_structured", unexpected)
+
+    assert module.main() == 2
+    assert calls == 0
+    assert not (tmp_path / "data" / "dcf_assumptions").exists()
+
+
+def test_dcf_assumptions_preserve_reported_zero_actuals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
+) -> None:
+    module = _load_dcf_module(tmp_path, monkeypatch, migrated_db)
+    latest = (module.full[-1], module.PERIODS[-1])
+    module.income_by_period[latest]["operatingIncome"] = 0
+    module.cashflow_by_period[latest]["capitalExpenditure"] = 0
+
+    def valid(*_args: object, **_kwargs: object) -> object:
+        return _valid_dcf_payload()
+
+    monkeypatch.setattr(module, "call_llm_structured", valid)
+
+    assert module.main() == 0
+    assert (tmp_path / "data" / "dcf_assumptions" / "TEST.json").exists()
+
+
+def test_dcf_assumptions_render_optional_missing_estimates_as_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
+) -> None:
+    module = _load_dcf_module(tmp_path, monkeypatch, migrated_db)
+
+    assert module._format_millions(None) == "?"
+    assert module._format_millions("missing") == "?"
+    assert module._format_millions(float("inf")) == "?"
+    assert module._format_millions(0) == "0"
+
+
 def test_empty_pressure_evidence_renders_gap_without_empty_section(tmp_path: Path) -> None:
     diligence = tmp_path / "micro_thesis" / "diligence" / "NU.md"
     diligence.parent.mkdir(parents=True)

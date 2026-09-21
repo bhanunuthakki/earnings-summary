@@ -19,17 +19,27 @@ conversational doorway. Four seams:
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from collections.abc import Callable
+from datetime import date, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from ask.context import _portfolio_system_context
+from ask import context as ask_context
 from ask.packs import load_packs
 from llm.anchors import load_themes_anchor, load_worldview_anchor
+from macro_store import fetch_sensitivities, persist_rate_sensitivity
 from synthesis.insights import record_insight
 from synthesis.tenets import record_tenet, scope_key_for
+
+# Keep the exact internal prompt contract typed without suppressing private-use diagnostics.
+_portfolio_system_context = cast(
+    Callable[[Path, dict[str, list[str]]], str],
+    getattr(ask_context, "_portfolio_system_context"),
+)
 
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 
@@ -152,16 +162,26 @@ def _seed_macro(repo_root: Path) -> None:
         conn.execute(
             "INSERT INTO macro_sensitivities "
             "(ticker, series_id, beta, r_squared, lookback_window_days, computed_at) "
-            "VALUES ('NU', 'us_10y', -1.4, 0.21, 365, '2026-07-18T00:00:00')"
-        )
-        conn.execute(
-            "INSERT INTO macro_sensitivities "
-            "(ticker, series_id, beta, r_squared, lookback_window_days, computed_at) "
             "VALUES ('MELI', 'usd_cad', -2.3, 0.02, 365, '2026-07-18T00:00:00')"
         )
         conn.commit()
     finally:
         conn.close()
+    rates = [
+        (date.today() - timedelta(days=7 * (30 - i)), 4 + (i % 3) * 0.1 + i * 0.01)
+        for i in range(31)
+    ]
+    prices = [(day, 100 * math.exp(-1.4 * (level - 4))) for day, level in rates]
+    assert (
+        persist_rate_sensitivity(
+            ticker="NU",
+            series_id="us_10y",
+            ticker_prices=prices,
+            series_points=rates,
+            db_path=_db(repo_root),
+        )
+        is not None
+    )
 
 
 def test_macro_pack_levels_betas_and_stances(repo_root: Path) -> None:
@@ -178,7 +198,11 @@ def test_macro_pack_levels_betas_and_stances(repo_root: Path) -> None:
     assert len(items) == 1
     text = str(items[0]["text"])
     assert "us_10y=4.2" in text
-    assert "NU~us_10y" in text  # r²=0.21 clears the floor
+    assert "NU~us_10y" in text  # admitted v2 rate fit clears the r² floor
+    estimate = fetch_sensitivities(ticker="NU", db_path=_db(repo_root))[0]
+    assert estimate.input_sha is not None and estimate.input_sha in text
+    assert "log return per +100 bps; v2_rate_diff" in text
+    assert f"source {date.today().isoformat()}" in text
     assert "MELI" not in text  # r²=0.02 is noise, not exposure
     assert "macro:rates-duration" in text
     assert "rates to stay above 4%" in text
@@ -198,7 +222,8 @@ def test_macro_pack_reports_unknown_when_all_betas_weak(repo_root: Path) -> None
         conn.close()
     items = load_packs(["macro"], db_path=_db(repo_root), focus_tickers=[])
     text = str(items[0]["text"])
-    assert "UNKNOWN, not zero" in text
+    assert "sensitivity unavailable" in text
+    assert "not zero" in text
     assert "β=" not in text
 
 
