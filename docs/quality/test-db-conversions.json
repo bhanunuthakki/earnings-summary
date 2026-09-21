@@ -282,6 +282,26 @@
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
+      "path": "tests/test_filing_xbrl_fact_adapter.py",
+      "source_sha256": "c56217e2189f5f5366dc3c7b2c4a2a2d75c4878f281038bd728d300f5532ba6d",
+      "parity_receipt": {
+        "schema_version": "test-db-parity/v1",
+        "status": "PASS",
+        "invocation_id": "362d3b8fc052d63f3e270f1c5fcb26bad17e8c8f7b0102fa4f8fb2951b7248f5",
+        "path": "tests/test_filing_xbrl_fact_adapter.py",
+        "locator": {
+          "start_line": 303,
+          "start_col": 4,
+          "end_line": 303,
+          "end_col": 21
+        },
+        "source_sha256": "c56217e2189f5f5366dc3c7b2c4a2a2d75c4878f281038bd728d300f5532ba6d"
+      },
+      "owner_issue": "linear:BHA-104",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
+      "expires_at": "2027-01-01T00:00:00Z"
+    },
+    {
       "path": "tests/test_foreign_issuer_registry_bootstrap.py",
       "source_sha256": "b3d3af2d6ace7ab1e2ae73a6b8399a612baa04f6b80e1b99bf80c35852ae6a02",
       "parity_receipt": {
@@ -496,6 +516,26 @@
           "end_col": 34
         },
         "source_sha256": "eb5a8fa254fd6c60f3082ee87934aa5e7cde5f4b4a6f207742ab00764072a996"
+      },
+      "owner_issue": "linear:BHA-104",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
+      "expires_at": "2027-01-01T00:00:00Z"
+    },
+    {
+      "path": "tests/test_metric_ontology.py",
+      "source_sha256": "a3c7ba9dad946c72b648f8fbe806bce9d650314fdc86e2b8f0ffef569acc935d",
+      "parity_receipt": {
+        "schema_version": "test-db-parity/v1",
+        "status": "PASS",
+        "invocation_id": "7af1563bd0a3c88221c70bcec0c1a3adb5b251f0422453edaaf41115d7267ebc",
+        "path": "tests/test_metric_ontology.py",
+        "locator": {
+          "start_line": 91,
+          "start_col": 4,
+          "end_line": 91,
+          "end_col": 21
+        },
+        "source_sha256": "a3c7ba9dad946c72b648f8fbe806bce9d650314fdc86e2b8f0ffef569acc935d"
       },
       "owner_issue": "linear:BHA-104",
       "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
@@ -776,6 +816,26 @@
           "end_col": 61
         },
         "source_sha256": "a7e25ffa553b305087366243efa707739fde8dc59b232053a03743bb329c758d"
+      },
+      "owner_issue": "linear:BHA-104",
+      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
+      "expires_at": "2027-01-01T00:00:00Z"
+    },
+    {
+      "path": "tests/test_sec_companyfacts_capture.py",
+      "source_sha256": "277d34f9827c0f3c41a7f5be2e0f5a5383fe97d5b7e88b7445e8a39d67e54030",
+      "parity_receipt": {
+        "schema_version": "test-db-parity/v1",
+        "status": "PASS",
+        "invocation_id": "18d8a9ca18f2835f1b43cf7c4536508bcbac5f9988a42fb7bedb353b61fac7f9",
+        "path": "tests/test_sec_companyfacts_capture.py",
+        "locator": {
+          "start_line": 63,
+          "start_col": 4,
+          "end_line": 63,
+          "end_col": 21
+        },
+        "source_sha256": "277d34f9827c0f3c41a7f5be2e0f5a5383fe97d5b7e88b7445e8a39d67e54030"
       },
       "owner_issue": "linear:BHA-104",
       "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",

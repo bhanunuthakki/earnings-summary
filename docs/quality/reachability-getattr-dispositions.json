@@ -599,7 +599,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "d7c9dfe69a38170a3f78c5ebb9e61b5c01c04961b36bc2cac40de9ea61cd3e55",
+      "source_sha256": "ef6ddeea5fc66f52358029a7e701f90443a3ff105f400f0310a709acc53135a8",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
