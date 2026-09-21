@@ -79,6 +79,7 @@ DESIGN_FILES = {
 }
 DESIGN_FILE_PATTERNS = ("scripts/gen_design_*.py", "tests/test_design_*.py")
 CONDITIONAL_JOBS = {
+    "fast-signal": "code",
     "tests": "code",
     "design": "design",
     "quality": "python",
@@ -502,6 +503,7 @@ def _verify_command(args: argparse.Namespace) -> int:
     results = {
         "changes": args.changes_result,
         "public-boundary": args.public_boundary_result,
+        "fast-signal": args.fast_signal_result,
         "tests": args.tests_result,
         "design": args.design_result,
         "quality": args.quality_result,
