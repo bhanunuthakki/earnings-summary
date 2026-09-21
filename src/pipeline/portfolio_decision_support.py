@@ -195,7 +195,7 @@ def render_risk_budget_section(db_path: Path, repo_root: Path) -> str:
         f"Top10 weight: {_pct(snap.top10_weight_pct)} &middot; "
         f"Effective holdings: {_num(snap.effective_holdings, digits=1)}</p>"
         f"<p>Growth tilt: {_num(snap.growth_tilt)} &middot; "
-        f"Rate beta (10y): {_num(snap.rate_beta_10y)}</p>"
+        "Legacy rate sensitivity quarantined; use current versioned estimates.</p>"
         "</div></details>"
     )
 

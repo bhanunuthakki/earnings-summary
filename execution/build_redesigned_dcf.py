@@ -21,11 +21,11 @@ from __future__ import annotations
 
 import json
 import os
-import sqlite3
 import sys
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
-from datetime import date
+from contextlib import closing
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
@@ -56,12 +56,12 @@ from dcf import (
     country_risk,
     equity_bridge,
     fade_calibration,
-    primary_fact_overlay,
     segment_coverage,
 )
 from dcf import global_assumptions as global_dcf
 from dcf import redesign as redesign_mod
 from dcf.fiscal_periods import detect_fy_periods
+from sources.dcf_statements import read_dcf_statements
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
@@ -172,83 +172,31 @@ def ie(expr: str) -> str:
 
 
 # ----------------------------------------------------------------------------- data
-def load(stmt: str) -> list[dict[str, object]]:
-    p = FMP / f"{ticker}_{stmt}_quarterly.json"
-    return _RECORDS.validate_json(p.read_text(encoding="utf-8")) if p.exists() else []
-
-
-income_records, balance_records, cashflow_records = (
-    load("income_statement"),
-    load("balance_sheet"),
-    load("cash_flow"),
-)
-
-
-def _apply_primary_fact_overlay(
-    statement: primary_fact_overlay.Statement, records: list[dict[str, object]]
-) -> tuple[list[dict[str, object]], dict[str, object]]:
-    """Overlay exact primary facts without making the FMP cache a write target."""
-    detail: dict[str, object]
-    db_path = DATABASE_PATH
-    if not db_path.exists():
-        detail = {
-            "status": "degraded",
-            "degraded_reason": "portfolio database unavailable",
-            "applied": [],
-            "conflicts": [],
-            "rejected": [],
-        }
-        _emit_primary_fact_overlay(statement, detail)
-        return records, detail
-    try:
-        with connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY) as conn:
-            result = primary_fact_overlay.overlay_quarterly_records(
-                conn, ticker=ticker, statement=statement, records=records
-            )
-    except (OSError, sqlite3.Error) as error:
-        detail = {
-            "status": "degraded",
-            "degraded_reason": f"primary fact overlay unavailable: {error}",
-            "applied": [],
-            "conflicts": [],
-            "rejected": [],
-        }
-        _emit_primary_fact_overlay(statement, detail)
-        return records, detail
-    detail = result.to_provenance_dict()
-    _emit_primary_fact_overlay(statement, detail)
-    return result.records, detail
-
-
-def _emit_primary_fact_overlay(
-    statement: primary_fact_overlay.Statement, detail: dict[str, object]
-) -> None:
+with closing(
+    connect_sqlite(str(DATABASE_PATH), role=SQLiteConnectionRole.READ_ONLY)
+) as _statement_connection:
+    STATEMENT_INPUTS = read_dcf_statements(_statement_connection, ticker, as_of=datetime.now(UTC))
+STATEMENT_INPUTS.require_complete_actuals()
+income_records = STATEMENT_INPUTS.builder_records("income")
+balance_records = STATEMENT_INPUTS.builder_records("balance")
+cashflow_records = STATEMENT_INPUTS.builder_records("cash_flow")
+PRIMARY_FACT_OVERLAY = {
+    statement: STATEMENT_INPUTS.bridge_lineage(statement)
+    for statement in ("income", "balance", "cash_flow")
+}
+for _statement, _detail in PRIMARY_FACT_OVERLAY.items():
     print(
         json.dumps(
             {
                 "event": "dcf_primary_fact_overlay",
                 "ticker": ticker,
-                "statement": statement,
-                **detail,
+                "statement": _statement,
+                **_detail,
             },
             sort_keys=True,
         ),
         file=sys.stderr,
     )
-
-
-income_records, PRIMARY_FACT_OVERLAY_INCOME = _apply_primary_fact_overlay("income", income_records)
-balance_records, PRIMARY_FACT_OVERLAY_BALANCE = _apply_primary_fact_overlay(
-    "balance", balance_records
-)
-cashflow_records, PRIMARY_FACT_OVERLAY_CASH_FLOW = _apply_primary_fact_overlay(
-    "cash_flow", cashflow_records
-)
-PRIMARY_FACT_OVERLAY = {
-    "income": PRIMARY_FACT_OVERLAY_INCOME,
-    "balance": PRIMARY_FACT_OVERLAY_BALANCE,
-    "cash_flow": PRIMARY_FACT_OVERLAY_CASH_FLOW,
-}
 
 
 def _loadjson(name: str) -> list[dict[str, object]]:
@@ -316,11 +264,8 @@ for pos, (y, p) in enumerate(keys):
     fy_cols[y].append(2 + pos)
 _full = sorted(y for y, cs in fy_cols.items() if len(cs) == NPERIODS)
 if not _full:
-    # Too little FMP history to anchor a forecast — e.g. a name that IPO'd in the
-    # last few quarters, for which FMP returns no/partial quarterly statements
-    # (FRVO). Emit a clean SKIP like the dcf_applicable=false path below instead
-    # of indexing into an empty list.
-    _reason = "no quarterly FMP history" if not keys else "no complete fiscal year yet"
+    # The selected display window must still contain a complete admitted fiscal year.
+    _reason = "no canonical statement history" if not keys else "no complete fiscal year yet"
     print(f"SKIP\t{ticker}\t{_reason}\t(insufficient history for a DCF)")
     raise SystemExit(0)
 full_fys = [_full[-1]]  # consecutive run ending at the latest full FY (no gap years)
@@ -410,15 +355,16 @@ def fy_sum_raw(records_i: Mapping[tuple[int, str], dict[str, object]], field: st
     for p in PERIODS:
         r = records_i.get((y, p))
         v = (r or {}).get(field)
-        if isinstance(v, (int, float)):
-            tot += v / 1e6
+        if not isinstance(v, (int, float)):
+            raise ValueError(f"canonical DCF actual missing: {y} {p} {field}")
+        tot += v / 1e6
     return tot
 
 
 ly = full_fys[-1]
 rev_ly = fy_sum_raw(income_by_period, "revenue", ly)
 if rev_ly <= 0:
-    # Base-year revenue missing/zero (broken or empty FMP income data): every ratio
+    # Zero reported base-year revenue: every ratio
     # below divides by it. SKIP cleanly rather than crash through the ratio block.
     print(f"SKIP\t{ticker}\tbase-year revenue is zero\t(insufficient data for a DCF)")
     raise SystemExit(0)
@@ -449,12 +395,26 @@ if ANALYST_SEGS.valid:
     # Analyst split: each year's COMPLETE income-statement revenue apportioned by
     # base_pct. Like whole-company, this rebuilds from the full income statement
     # (never a fraction), and momentum/growth are driven by the block below.
-    for y in [full_fys[0] - 1, *full_fys]:
+    for y in [
+        *(
+            [full_fys[0] - 1]
+            if all((full_fys[0] - 1, p) in income_by_period for p in PERIODS)
+            else []
+        ),
+        *full_fys,
+    ]:
         _rev_y = fy_sum_raw(income_by_period, "revenue", y)
         for _name, _pct in ((s.name, s.base_pct) for s in ANALYST_SEGS.segments):
             seg_ann[y][_name] = _pct * _rev_y
 elif SINGLE_SEG:
-    for y in [full_fys[0] - 1, *full_fys]:
+    for y in [
+        *(
+            [full_fys[0] - 1]
+            if all((full_fys[0] - 1, p) in income_by_period for p in PERIODS)
+            else []
+        ),
+        *full_fys,
+    ]:
         seg_ann[y]["Total company"] = fy_sum_raw(income_by_period, "revenue", y)
 else:
     for (y, p), d in product_segments_by_period.items():
@@ -577,7 +537,7 @@ SBC_TERM = sbc_pct[-1]
 # vs Street's ~$147B), then the capex/D&A ratio converges to ~1.05x as the AI
 # build-out matures (Damodaran reinvestment normalization).
 # 2026 capex: AMZN guided ~$200B; everyone else defaults to last-year capex +10%.
-_capex_ly_M = abs(fy_sum_raw(cashflow_by_period, "capitalExpenditure", ly)) or (rev_ly * 0.05)
+_capex_ly_M = abs(fy_sum_raw(cashflow_by_period, "capitalExpenditure", ly))
 CAPEX_2026_M = 200_000.0 if ticker == "AMZN" else _capex_ly_M * 1.10
 _da_2026 = (cons_rev.get(FC_YEARS[0], rev_ly) * ratios_ly["da"]) or 1.0
 cda0 = CAPEX_2026_M / _da_2026
@@ -601,9 +561,6 @@ _debt_scope_raw = _redesign_assumptions.get("dcf_debt_scope", "interest_bearing_
 if _debt_scope_raw not in {"interest_bearing_debt_only", "debt_and_lease_obligations"}:
     raise RuntimeError(f"invalid redesign.dcf_debt_scope for {ticker}: {_debt_scope_raw!r}")
 DCF_DEBT_SCOPE = cast("equity_bridge.DebtScope", _debt_scope_raw)
-# The immutable Opus baseline (seeded once for passes predating provenance
-# tracking) — feeds the Cover "Assumptions by" line and the Assumptions sheet.
-_baseline = assumptions_doc.ensure_opus_baseline(cache)
 # WACC drivers: a block override wins over the FMP profile beta + textbook rf/ERP/Kd.
 # Resolved once and fed to BOTH the Monte Carlo base WACC and the Dashboard yellow
 # cells, so an edited beta/ERP survives a from-scratch rebuild (the round-trip is
@@ -780,6 +737,37 @@ print(
     ),
     file=sys.stderr,
 )
+# Historical invested-capital formulas reference these same exact cash/debt
+# perimeters. Reject a missing historical component before any ledger/output write.
+for _history_key in keys:
+    _history = balance_by_period[_history_key]
+    _history_end = _history.get("date")
+    _history_currency = _history.get("reportedCurrency")
+    if not isinstance(_history_end, str) or not isinstance(_history_currency, str):
+        raise ValueError(f"canonical DCF historical balance coordinate missing: {_history_key}")
+    if (
+        equity_bridge.resolve_primary_reported_aggregate(
+            _history,
+            aggregate_field=_cash_field,
+            overlay={"statements": PRIMARY_FACT_OVERLAY},
+            period_end=_history_end,
+            fiscal_period_type=_history_key[1],
+            currency=_history_currency,
+        )
+        is None
+        or equity_bridge.resolve_primary_debt_scope(
+            _history,
+            scope=DCF_DEBT_SCOPE,
+            overlay={"statements": PRIMARY_FACT_OVERLAY},
+            period_end=_history_end,
+            fiscal_period_type=_history_key[1],
+            currency=_history_currency,
+        )
+        is None
+    ):
+        raise ValueError(f"canonical DCF historical cash/debt scope unavailable: {_history_key}")
+# Seed the existing immutable assumption baseline only after actuals admission.
+_baseline = assumptions_doc.ensure_opus_baseline(cache)
 beta = BETA
 ke = RF + beta * ERP + CRP
 mktcap = price * shares_now
@@ -805,7 +793,7 @@ if ANALYST_SEGS.valid:
 
 # --- Per-name override (if the assumption refresh has run for this name) ---
 OPUS_BASIS, OPUS_METHOD = "EV/EBITDA", "Exit multiple"
-CURRENCY = _text((income_records[0].get("reportedCurrency") if income_records else None) or "USD")
+CURRENCY = _text(income_records[0]["reportedCurrency"])
 _FX_TO_USD = {
     "USD": 1.0,
     "DKK": 0.145,
@@ -864,7 +852,7 @@ if _redesign_assumptions.get("segments"):
     # Keep exit-multiple as the default method (user preference); Opus's perpetuity
     # pick stays available as the cross-check, not the headline.
     narr = _text(_redesign_assumptions.get("narrative") or narr)
-    if _redesign_assumptions.get("capex_pct_revenue_2026"):
+    if _redesign_assumptions.get("capex_pct_revenue_2026") is not None:
         CAPEX_2026_M = _number(_redesign_assumptions["capex_pct_revenue_2026"]) * (
             cons_rev.get(FC_YEARS[0], rev_ly) or rev_ly
         )
@@ -1189,7 +1177,11 @@ def write_pct(target_row: int, base_row: int, label: str = "    % of revenue") -
     global frow
     put(fs, frow, 1, label)
     for i in range(NQ):
-        put(fs, frow, 2 + i, ie(f"{col(i)}{target_row}/{col(i)}{base_row}"), fmt=PCT)
+        if (
+            fs.cell(target_row, 2 + i).value is not None
+            and fs.cell(base_row, 2 + i).value is not None
+        ):
+            put(fs, frow, 2 + i, ie(f"{col(i)}{target_row}/{col(i)}{base_row}"), fmt=PCT)
     frow += 1
 
 
@@ -1339,7 +1331,10 @@ for lab, fld in [
         lab, lambda i, k, f=fld: to_millions(cashflow_by_period.get(k, {}).get(f))
     )
 put(
-    fs, frow + 1, 1, "Blue = hardcoded actuals from FMP filings. Same-sheet ratios are formulas."
+    fs,
+    frow + 1,
+    1,
+    "Statement rows = admitted canonical facts; segment rows = legacy provider data. Blank = unavailable.",
 ).font = SUB
 LAST = col(NQ - 1)  # latest quarter column
 
@@ -2315,7 +2310,7 @@ put(cc, 1, 2, "Meaning", bold=True)
 put(cc, 2, 1, "Black")
 put(cc, 2, 2, "Formula-driven (same-sheet)")
 put(cc, 3, 1, "Blue").font = BLUE
-put(cc, 3, 2, "Hard-coded actuals (from FMP filings)")
+put(cc, 3, 2, "Actuals: canonical statements; legacy provider segments")
 yc2 = put(cc, 4, 1, "Yellow")
 yc2.fill = YEL
 yc2.font = BLUE
@@ -2349,7 +2344,7 @@ _assumptions_by = (
 for i, (k, v) in enumerate(
     [
         ("Last updated", date.today().isoformat()),
-        ("Data pulled (FMP)", qlabels[-1]),
+        ("Latest reported fiscal period", qlabels[-1]),
         ("Assumptions by", _assumptions_by),
     ]
 ):
@@ -2452,6 +2447,13 @@ for pos, name in enumerate(order):
 assumptions_doc.write_provenance_into(wb, _inp, cache, ticker=ticker, update_ledger=False)
 
 DEST.parent.mkdir(parents=True, exist_ok=True)
+_source_manifest = wb.create_sheet("Statement Evidence")
+_source_manifest.sheet_state = "hidden"
+_statement_json = STATEMENT_INPUTS.model_dump_json()
+# Excel cells have a bounded string size; preserve the complete manifest in
+# ordered chunks rather than truncate evidence or silently omit source cells.
+for _offset in range(0, len(_statement_json), 16000):
+    _source_manifest.append([_offset // 16000, _statement_json[_offset : _offset + 16000]])
 wb.save(str(DEST))
 _up = (full_value / price - 1) if price else 0.0
 _seg = "single" if SINGLE_SEG else str(len(PROD))

@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -23,12 +25,11 @@ import pytest
 if TYPE_CHECKING:
     from flask.testing import FlaskClient
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "execution"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-import comments_server  # noqa: E402
-from comments_server_panel_cache import (  # noqa: E402
+import comments_server
+from comments_server_panel_cache import (
     CLEAR_ALL,
     MUTATION_ROUTE_CACHE_REGISTRY,
 )
@@ -150,6 +151,75 @@ def test_state_change_invalidates_panel_response_cache(
     assert second.status_code == 200
     assert calls == 2
     assert b"render 2" in second.data
+
+
+@pytest.mark.parametrize("registered", [False, True])
+@pytest.mark.parametrize("get_finishes_first", [False, True])
+@pytest.mark.parametrize("mutation_status", [204, 500])
+def test_mutation_completion_rejects_concurrent_old_state(
+    client: FlaskClient,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    registered: bool,
+    get_finishes_first: bool,
+    mutation_status: int,
+) -> None:
+    from pipeline import dashboard_html
+
+    state_path = tmp_path / "cache-state.txt"
+    state_path.write_text("before", encoding="utf-8")
+    mutation_started = threading.Event()
+    allow_commit = threading.Event()
+    old_state_read = threading.Event()
+    allow_render = threading.Event()
+    route = "/test/concurrent-mutation"
+    if registered:
+        monkeypatch.setitem(MUTATION_ROUTE_CACHE_REGISTRY, route, ("/api/panel/actions",))
+
+    def mutate() -> tuple[str, int]:
+        mutation_started.set()
+        assert allow_commit.wait(5)
+        state_path.write_text("after", encoding="utf-8")
+        # An error response can follow a partial persisted mutation too.
+        return "", mutation_status
+
+    def render() -> str:
+        value = state_path.read_text(encoding="utf-8")
+        if value == "before":
+            old_state_read.set()
+            assert allow_render.wait(5)
+        return f"<section>{value}</section>"
+
+    def post() -> int:
+        with client.application.test_client() as worker:
+            return worker.post(route).status_code
+
+    def get() -> bytes:
+        with client.application.test_client() as worker:
+            response = worker.get("/api/panel/actions")
+            assert response.status_code == 200
+            return response.data
+
+    client.application.add_url_rule(route, "concurrent_mutation", mutate, methods=["POST"])
+    monkeypatch.setattr(dashboard_html, "render_actions_panel", render)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        mutation = pool.submit(post)
+        try:
+            assert mutation_started.wait(5)
+            reading = pool.submit(get)
+            assert old_state_read.wait(5)
+            if get_finishes_first:
+                allow_render.set()
+                assert reading.result(timeout=5) == b"<section>before</section>"
+            allow_commit.set()
+            assert mutation.result(timeout=5) == mutation_status
+            allow_render.set()
+            assert reading.result(timeout=5) == b"<section>before</section>"
+        finally:
+            allow_commit.set()
+            allow_render.set()
+    assert state_path.read_text(encoding="utf-8") == "after"
+    assert client.get("/api/panel/actions").data == b"<section>after</section>"
 
 
 # ---------------------------------------------------------------------------

@@ -84,6 +84,7 @@ def test_general_event_links_source_and_missing_source_is_explicit(tmp_path: Pat
             "Meta Investor Day",
             firm="Meta IR",
         )
+        conn.commit()
     finally:
         conn.close()
 
@@ -94,14 +95,15 @@ def test_general_event_links_source_and_missing_source_is_explicit(tmp_path: Pat
     assert '<span class="muted">Meta Investor Day · Source unavailable</span>' in html
 
 
-def test_general_calendar_empty_state_is_semantic(tmp_path: Path) -> None:
+def test_general_calendar_without_refresh_proof_is_incomplete(tmp_path: Path) -> None:
     db_path = tmp_path / "empty.db"
     signals_only(db_path)
     html = render_diet_panel(db_path, today=date(2026, 8, 10))
 
-    assert 'data-calendar-state="empty"' in html
+    assert 'data-calendar-state="incomplete"' in html
     assert 'role="status"' in html
-    assert "No investor days on the calendar" in html
+    assert 'data-calendar-state="empty"' not in html
+    assert "missing events do not imply cancellation" in html
 
 
 def test_general_calendar_unavailable_is_not_reported_as_empty(tmp_path: Path) -> None:

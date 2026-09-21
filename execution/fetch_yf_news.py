@@ -25,8 +25,8 @@ arrive nested under ``content`` with ``title``, ``pubDate`` (ISO-8601 Zulu),
 ``provider.displayName``, and a URL under ``canonicalUrl.url`` or
 ``clickThroughUrl.url``. Older yfinance builds returned a FLAT dict with
 ``title``/``link``/``publisher``/``providerPublishTime`` (epoch seconds), so
-both shapes are read — an unofficial API that drifts must degrade to [] rather
-than take the morning pipeline down with it (the `fetch_yf_grades` contract).
+both shapes are read. Transport failures remain explicit partial results; a
+successful empty response is distinct from an unavailable feed.
 """
 
 from __future__ import annotations
@@ -42,16 +42,19 @@ from typing import cast
 
 from pydantic import TypeAdapter
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT as PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT as PROJECT_ROOT
 
-from news.store import (  # noqa: E402
+from news.store import (
     SOURCE_FEED_YF_NEWS,
+    NewsFeedUnavailableError,
     NewsRow,
     upsert_news_rows,
 )
-from pipeline.row_validation import RowValidationDriftError, validate_provider_rows  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from pipeline.row_validation import RowValidationDriftError, validate_provider_rows
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # yfinance is HTTP-bound; the same worker count the grades feed uses.
 _WORKERS = 8
@@ -79,7 +82,9 @@ def _utc_stamp(value: object) -> str | None:
             dt = datetime.fromisoformat(text)
         except ValueError:
             return None
-        dt = dt.astimezone(UTC) if dt.tzinfo else dt.replace(tzinfo=UTC)
+        if dt.tzinfo is None:
+            return None
+        dt = dt.astimezone(UTC)
         return dt.strftime("%Y-%m-%d %H:%M:%S")
     return None
 
@@ -153,16 +158,17 @@ def rows_for_ticker(ticker: str, items: list[object], *, days: int) -> list[News
 
 
 def fetch_news_for_ticker(ticker: str, *, days: int = DEFAULT_DAYS) -> list[NewsRow]:
-    """One ticker's free journalism. Degrades to [] on ANY failure — yfinance
-    is an unofficial API and this feed must never block the pipeline."""
+    """Collect one ticker; an unavailable feed must not masquerade as empty."""
     try:
         import yfinance as yf
 
-        raw = cast("list[object]", yf.Ticker(ticker).news or [])
+        raw = cast(object, yf.Ticker(ticker).news)
     except Exception as exc:
-        _log("yf_news_fetch_failed", ticker=ticker, error=f"{type(exc).__name__}: {exc}"[:200])
-        return []
-    return rows_for_ticker(ticker, list(raw), days=days)
+        _log("yf_news_fetch_failed", ticker=ticker, error_type=type(exc).__name__)
+        raise NewsFeedUnavailableError("yf_news transport unavailable") from None
+    if not isinstance(raw, list):
+        raise NewsFeedUnavailableError("yf_news response is not an article array")
+    return rows_for_ticker(ticker, cast(list[object], raw), days=days)
 
 
 def fetch_many(
@@ -170,6 +176,7 @@ def fetch_many(
     *,
     days: int = DEFAULT_DAYS,
     fetcher: Callable[..., list[NewsRow]] | None = None,
+    unavailable_tickers: list[str] | None = None,
 ) -> list[NewsRow]:
     """Threaded fan-out over tickers (yfinance is HTTP-bound)."""
     call = fetcher or fetch_news_for_ticker
@@ -182,7 +189,9 @@ def fetch_many(
             except RowValidationDriftError:
                 raise
             except Exception as exc:
-                _log("yf_news_worker_failed", ticker=futures[fut], error=str(exc)[:200])
+                if unavailable_tickers is not None:
+                    unavailable_tickers.append(futures[fut])
+                _log("yf_news_worker_failed", ticker=futures[fut], error_type=type(exc).__name__)
     return out
 
 
@@ -213,12 +222,13 @@ def main(argv: list[str] | None = None) -> int:
         _log("yf_news_no_tickers")
         return 0
 
-    rows = fetch_many(tickers, days=args.days)
+    unavailable: list[str] = []
+    rows = fetch_many(tickers, days=args.days, unavailable_tickers=unavailable)
     _log("yf_news_fetched", tickers=len(tickers), rows=len(rows))
     if args.dry_run:
         for row in rows[:10]:
             print(f"{row.ticker:6s} {row.published_at}  {row.headline[:70]}")
-        return 0
+        return 2 if unavailable else 0
 
     from db import DB_PATH as _DB_PATH
 
@@ -231,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         conn.close()
     _log("yf_news_persisted", rows=len(rows), inserted=inserted, deduped=deduped)
-    return 0
+    return 2 if unavailable else 0
 
 
 if __name__ == "__main__":

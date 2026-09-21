@@ -146,6 +146,12 @@ class DerivedInputRef(BaseModel):
     period_end: str | None = None
     doc_id: int | None = None
     tier: str | None = None
+    observation_id: str | None = None
+    resolution_revision_id: str | None = None
+    fact_cell_id: str | None = None
+    metric_definition_revision_id: str | None = None
+    observation_payload_sha256: str | None = None
+    document_version_id: str | None = None
 
 
 class DerivedRef(BaseModel):

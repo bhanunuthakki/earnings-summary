@@ -1,70 +1,43 @@
-"""Grade pending predictions against realized ``kpi_facts``.
+"""Grade due predictions using uniquely bound, immutable KPI evidence.
 
-For each prediction whose ``target_period`` has passed and whose ``outcome`` is
-still ``'pending'``, resolve its ``kpi_name`` to the canonical
-``kpi_definitions`` row (via the shared ``kpi_resolver`` so a fragmented
-duplicate name can't shadow the populated series), find the realized value at —
-or nearest to — the target period, and compare it against ``target_value`` with
-the ``comparator`` (``eq`` / ``ge`` / ``le`` / ``gt`` / ``lt``). Writes
-``met`` / ``missed`` with a confidence + an audit note.
+Unbound definitions, incomparable or ambiguous periods, unknown units/currency,
+and unavailable source evidence leave the prediction pending with a logged
+reason. Existing comparison tolerances and date windows remain unchanged.
+Outcomes append an exact source/context manifest to retained notes. Concurrent
+or repeated grading cannot replace an already retained outcome.
 
-Anything we can't *confidently* match is LEFT pending — the grader never
-guesses: an unresolvable KPI, no realized fact within the period window, an
-unknown comparator, or a prediction with no structured target all stay pending
-and are tallied as skips.
-
-Why pending predictions pile up: like the sibling graders
-(``grade_decisions``, ``grade_bear_cases``) this is a manual / cron CLI, not
-auto-wired into the daily build — nothing graded the management-commitment
-backlog. Run it after a quarter reports to close the loop. (It is safe to
-re-run: ``grade`` is an idempotent UPDATE and already-graded rows drop out of
-``pending_for_grading``.)
-
-Usage:
-    python execution/grade_predictions.py
-    python execution/grade_predictions.py --ticker AMAT
-    python execution/grade_predictions.py --dry-run --verbose
-    python execution/grade_predictions.py --window-days 60 --limit 800
+Requires --db-path/--db or EARNINGS_SUMMARY_DB_PATH; checkout state is prohibited.
+Use --dry-run to calculate outcomes without writing outcomes or calibration.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import math
 import sqlite3
 import sys
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-# `eq` is guidance to a point estimate, so "met" needs a tolerance band rather
-# than exact equality: an absolute percentage-point band for percent-unit
-# metrics (a 48.4% guide delivered at 48.9% is "in line"), relative otherwise.
-_EQ_ABS_TOL_PCT = 1.0  # percentage points
-_EQ_REL_TOL = 0.05  # fraction of target
-# Quarters sit ~91 days apart, so a half-quarter window uniquely picks the
-# intended period_end while absorbing fiscal-vs-calendar target_period drift
-# (e.g. a 2025-06-30 target matching AMAT's 2025-07-27 fiscal close).
+import predictions_store
+from db_paths import configured_db_path, db_path_context, require_db_path
+from llm.calibration import CalibrationScore, record_score
+from llm.prompt_versions import prompt_version_for
+from sources.prediction_evidence import prediction_evidence
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+_EQ_ABS_TOL_PCT = 1.0
+_EQ_REL_TOL = 0.05
 _DEFAULT_WINDOW_DAYS = 45
-
-
-def _sync_db_path(repo_root: Path) -> None:
-    import db
-
-    db.PROJECT_ROOT = str(repo_root)
-    db.DATA_DIR = str(repo_root / "data")
-    db.DB_PATH = str(repo_root / "data" / "portfolio.db")
-    db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
-
-
-import predictions_store  # noqa: E402
-from compute.kpi_resolver import resolve_kpi_definition_name  # noqa: E402
-from llm.calibration import CalibrationScore, record_score  # noqa: E402
-from llm.prompt_versions import prompt_version_for  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 log = logging.getLogger("grade_predictions")
 
@@ -111,37 +84,6 @@ def grade_comparison(
             band = f"relΔ={diff / denom:.1%} tol={eq_rel_tol:.0%}"
         return ("met" if met else "missed", 0.7, f"{note} ({band})")
     return None
-
-
-def _realized_value(
-    conn: sqlite3.Connection,
-    ticker: str,
-    definition_name: str,
-    target_period: datetime,
-    window_days: int,
-) -> tuple[float, str, int | None] | None:
-    """Realized ``(value, period_end, source_doc_id)`` for this ticker +
-    definition at the ``kpi_facts`` period closest to ``target_period``, or
-    ``None`` when the nearest fact is outside ``window_days``. Prefers the
-    highest-confidence / most-recent fact at the matched period (handles
-    restated supersedes)."""
-    tp = target_period.date().isoformat()
-    row = conn.execute(
-        """
-        SELECT kf.value AS value, kf.period_end AS period_end, kf.source_doc_id AS doc_id,
-               ABS(julianday(kf.period_end) - julianday(?)) AS dist
-        FROM kpi_facts kf
-        JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
-        WHERE kf.ticker = ? AND kd.name = ?
-          AND kf.value IS NOT NULL AND kf.period_end IS NOT NULL
-        ORDER BY dist ASC, kf.confidence DESC, kf.id DESC
-        LIMIT 1
-        """,
-        (tp, ticker.upper(), definition_name),
-    ).fetchone()
-    if row is None or row["dist"] is None or float(row["dist"]) > window_days:
-        return None
-    return (float(row["value"]), str(row["period_end"]), row["doc_id"])
 
 
 def extraction_quality_score(tally: dict[str, int]) -> float | None:
@@ -207,6 +149,7 @@ def grade_pending(
     eq_rel_tol: float = _EQ_REL_TOL,
     as_of: datetime | None = None,
     record_calibration: bool = False,
+    db_path: Path | None = None,
 ) -> dict[str, int]:
     """Grade every past-due pending prediction we can confidently match against
     a realized fact. Returns a tally; leaves un-matchable rows pending.
@@ -215,10 +158,35 @@ def grade_pending(
     score for the extraction prompt is recorded for the run — see
     ``extraction_quality_score``. Off by default so existing callers/tests are
     unchanged; the scheduled grader opts in."""
-    db_path = repo_root / "data" / "portfolio.db"
-    pending = predictions_store.pending_for_grading(
+    db_path = require_db_path(db_path or configured_db_path(repo_root))
+    if db_path == (repo_root / "data" / "portfolio.db").resolve():
+        raise RuntimeError("The checkout-default portfolio database is prohibited")
+    if window_days < 0 or limit < 1:
+        raise ValueError("window_days must be nonnegative and limit positive")
+    if not all(math.isfinite(value) and value >= 0 for value in (eq_abs_tol_pct, eq_rel_tol)):
+        raise ValueError("comparison tolerances must be finite and nonnegative")
+    as_of = as_of or datetime.now(UTC)
+    if as_of.tzinfo is None:
+        raise ValueError("as_of must be timezone-aware")
+    with closing(connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)) as preflight:
+        preflight.execute("SELECT id, outcome FROM predictions LIMIT 0")
+    candidates = predictions_store.pending_for_grading(
         ticker=ticker, as_of=as_of, limit=limit, db_path=db_path
     )
+    pending: list[predictions_store.Prediction] = []
+    for candidate in candidates:
+        if candidate.made_at.tzinfo is None or candidate.made_at > as_of:
+            log.info(
+                {
+                    "event": "prediction_unavailable_at_cutoff",
+                    "id": candidate.id,
+                    "reason": "made_at_timezone_unavailable"
+                    if candidate.made_at.tzinfo is None
+                    else "prediction_not_yet_made",
+                }
+            )
+            continue
+        pending.append(candidate)
     tally: dict[str, int] = {
         "pending": len(pending),
         "graded": 0,
@@ -228,33 +196,67 @@ def grade_pending(
         "skipped_no_kpi": 0,
         "skipped_no_fact": 0,
         "skipped_bad_comparator": 0,
+        "skipped_unavailable_evidence": 0,
+        "skipped_write_failed": 0,
     }
     if not pending:
         return tally
     run_id = f"auto:grade_predictions:{(as_of or datetime.now(UTC)).date().isoformat()}"
-    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
         for p in pending:
-            if p.comparator is None or p.target_value is None or not p.kpi_name:
+            if (
+                p.comparator is None
+                or p.target_value is None
+                or not p.kpi_name
+                or p.target_period is None
+                or not math.isfinite(p.target_value)
+            ):
                 tally["skipped_unstructured"] += 1
                 continue
-            definition_name = resolve_kpi_definition_name(conn, p.ticker, p.kpi_name)
-            if not definition_name:
-                tally["skipped_no_kpi"] += 1
+            conn.execute("BEGIN")
+            try:
+                evidence = prediction_evidence(
+                    conn,
+                    ticker=p.ticker,
+                    kpi_name=p.kpi_name,
+                    target_period=p.target_period,
+                    target_unit=p.target_unit,
+                    kpi_concept_id=p.kpi_concept_id,
+                    as_of=as_of,
+                    window_days=window_days,
+                )
+            except (sqlite3.Error, ValueError) as exc:
+                log.warning(
+                    {
+                        "event": "prediction_evidence_unavailable",
+                        "id": p.id,
+                        "reason": type(exc).__name__,
+                    }
+                )
+                tally["skipped_unavailable_evidence"] += 1
                 continue
-            realized = (
-                _realized_value(conn, p.ticker, definition_name, p.target_period, window_days)
-                if p.target_period is not None
-                else None
-            )
-            if realized is None:
-                tally["skipped_no_fact"] += 1
+            finally:
+                conn.rollback()
+            point = evidence.point
+            if point is None:
+                reason = evidence.reason
+                tally[
+                    "skipped_" + reason
+                    if reason in {"no_kpi", "no_fact"}
+                    else "skipped_unavailable_evidence"
+                ] += 1
+                log.info({"event": "prediction_evidence_unavailable", "id": p.id, "reason": reason})
+                continue
+            realized = float(point.value)
+            if not math.isfinite(realized):
+                tally["skipped_unavailable_evidence"] += 1
                 continue
             graded = grade_comparison(
                 p.comparator,
                 p.target_value,
-                realized[0],
+                realized,
                 p.target_unit,
                 eq_abs_tol_pct=eq_abs_tol_pct,
                 eq_rel_tol=eq_rel_tol,
@@ -264,16 +266,48 @@ def grade_pending(
                 continue
             outcome, confidence, note = graded
             if not dry_run:
-                predictions_store.grade(
+                written = predictions_store.grade(
                     prediction_id=p.id,
                     outcome=cast("predictions_store.Outcome", outcome),
-                    realized_value=realized[0],
-                    realized_doc_id=realized[2],
+                    realized_value=realized,
+                    realized_doc_id=point.source_document_id,
                     outcome_confidence=confidence,
-                    notes=f"{note} @ {realized[1]} (def: {definition_name})",
+                    notes=(p.notes or "")
+                    + ("\n" if p.notes else "")
+                    + json.dumps(
+                        {
+                            "schema_version": "prediction-grading-evidence/v1",
+                            "as_of": as_of.isoformat(),
+                            "prediction_id": p.id,
+                            "target_period": p.target_period.isoformat(),
+                            "target_value": p.target_value,
+                            "target_concept_id": p.kpi_concept_id,
+                            "identity_source": "unique_bound_definition_from_name",
+                            "target_unit": p.target_unit,
+                            "comparator": p.comparator,
+                            "window_days": window_days,
+                            "eq_abs_tol_pct": eq_abs_tol_pct,
+                            "eq_rel_tol": eq_rel_tol,
+                            "definition_name": evidence.definition_name,
+                            "currency": evidence.currency,
+                            "definition": (
+                                None
+                                if evidence.definition is None
+                                else evidence.definition.model_dump(mode="json")
+                            ),
+                            "point": point.model_dump(mode="json"),
+                            "comparison": note,
+                        },
+                        sort_keys=True,
+                    ),
                     evaluator_run_id=run_id,
                     db_path=db_path,
+                    only_if_pending=True,
+                    expected_prediction=p,
                 )
+                if not written:
+                    tally["skipped_write_failed"] += 1
+                    continue
             tally["graded"] += 1
             tally[outcome] += 1
             log.debug(
@@ -290,11 +324,12 @@ def grade_pending(
     if record_calibration and not dry_run:
         # After the read/grade connection is closed, so the calibration write
         # uses its own connection without contending with this run's grading.
-        _record_extraction_calibration(tally, ticker=ticker, db_path=db_path)
+        with db_path_context(db_path):
+            _record_extraction_calibration(tally, ticker=ticker, db_path=db_path)
     return tally
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
@@ -313,35 +348,41 @@ def main() -> int:
         help="Do not record the extraction-quality calibration score for this run.",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
-    args = parser.parse_args()
+    parser.add_argument("--db-path", "--db", type=Path, default=None)
+    args = parser.parse_args(argv)
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     repo_root = args.repo_root.resolve()
-    _sync_db_path(repo_root)
 
-    tally = grade_pending(
-        repo_root,
-        ticker=args.ticker,
-        window_days=args.window_days,
-        limit=args.limit,
-        dry_run=args.dry_run,
-        eq_abs_tol_pct=args.eq_abs_tol_pct,
-        eq_rel_tol=args.eq_rel_tol,
-        record_calibration=not args.no_calibration,
-    )
+    try:
+        tally = grade_pending(
+            repo_root,
+            ticker=args.ticker,
+            window_days=args.window_days,
+            limit=args.limit,
+            dry_run=args.dry_run,
+            eq_abs_tol_pct=args.eq_abs_tol_pct,
+            eq_rel_tol=args.eq_rel_tol,
+            record_calibration=not args.no_calibration,
+            db_path=args.db_path,
+        )
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
+        log.error({"event": "prediction_grading_failed", "reason": type(exc).__name__})
+        return 2
     prefix = "[dry-run] " if args.dry_run else ""
     print(
         f"{prefix}Prediction grading complete · pending={tally['pending']} · "
         f"graded={tally['graded']} · met={tally['met']} · missed={tally['missed']} · "
         f"skipped(no_fact={tally['skipped_no_fact']}, no_kpi={tally['skipped_no_kpi']}, "
-        f"unstructured={tally['skipped_unstructured']}, bad_cmp={tally['skipped_bad_comparator']})"
+        f"unstructured={tally['skipped_unstructured']}, bad_cmp={tally['skipped_bad_comparator']}, "
+        f"unavailable_evidence={tally['skipped_unavailable_evidence']}, write_failed={tally['skipped_write_failed']})"
     )
     if tally["pending"] == 0:
         print("  (no predictions with an elapsed target_period are awaiting grading)")
-    return 0
+    return 1 if tally["skipped_write_failed"] else 0
 
 
 if __name__ == "__main__":

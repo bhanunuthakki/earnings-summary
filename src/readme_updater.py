@@ -16,10 +16,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from llm.prompt_registry import PromptTemplate, register
+from llm.contract import ContractStructuredResult, call_llm_structured_enveloped, schema_version
+from llm.envelope import LLMCapability, LLMRequestEnvelope, LLMResponseAttestation
+from llm.prompt_registry import PromptTemplate, register, template_meta
 from llm.structured import (
     StructuredCallResult,
-    call_llm_structured_with_raw,
     parse_json_payload,
 )
 from llm.untrusted import spotlight
@@ -145,6 +146,8 @@ class ReadmeUpdateAttempt(BaseModel):
     judge_response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     generator_raw_response: str = Field(min_length=1, max_length=250_000)
     judge_raw_response: str = Field(min_length=1, max_length=50_000)
+    generator_contract: LLMResponseAttestation | None = None
+    judge_contract: LLMResponseAttestation | None = None
 
 
 class ReadmeUpdateResult(BaseModel):
@@ -380,17 +383,29 @@ def _governed_call_with_raw(
     run_id: str | None,
     db_path: str | None,
     schema: TypeAdapter[object],
+    source_evidence_sha256: str,
     **_kwargs: object,
 ) -> StructuredCallResult[object]:
-    return call_llm_structured_with_raw(
-        prompt,
+    _template_id, version, _vars = template_meta(prompt)
+    if version is None:
+        raise ValueError("README generation requires a registered prompt")
+    request = LLMRequestEnvelope(
         purpose=purpose,
+        prompt=prompt,
+        prompt_version=version,
+        schema_version=schema_version(schema),
+        capabilities_required=(LLMCapability.STRUCTURED_OUTPUT,),
+        source_evidence_sha256=(source_evidence_sha256,),
+        trace_id=run_id,
+    )
+    return call_llm_structured_enveloped(
+        request,
+        prompt=prompt,
         scope=scope,
-        run_id=run_id,
         db_path=db_path,
         schema=schema,
         repair_prompt=lambda _error: prompt,
-    )
+    ).require_exchange()
 
 
 def _exchange_sha256(value: str) -> str:
@@ -441,6 +456,7 @@ def run_update_cycle(
             scope="meta_eval",
             run_id=run_id,
             db_path=db_path,
+            source_evidence_sha256=evidence_sha256(evidence),
             schema=_DRAFT_ADAPTER,
             expect="object",
             required_keys=("markdown_lines", "change_summary", "evidence_gaps"),
@@ -455,6 +471,7 @@ def run_update_cycle(
             scope="meta_eval",
             run_id=run_id,
             db_path=db_path,
+            source_evidence_sha256=evidence_sha256(evidence),
             schema=_JUDGE_ADAPTER,
             expect="object",
             required_keys=(
@@ -484,6 +501,16 @@ def run_update_cycle(
                 judge_response_sha256=_exchange_sha256(judge_exchange.raw_response),
                 generator_raw_response=generator_exchange.raw_response,
                 judge_raw_response=judge_exchange.raw_response,
+                generator_contract=(
+                    generator_exchange.contract.attestation()
+                    if isinstance(generator_exchange, ContractStructuredResult)
+                    else None
+                ),
+                judge_contract=(
+                    judge_exchange.contract.attestation()
+                    if isinstance(judge_exchange, ContractStructuredResult)
+                    else None
+                ),
             )
         )
         if approved:

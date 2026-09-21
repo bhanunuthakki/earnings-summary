@@ -18,6 +18,7 @@ Three layers:
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import os
 import shutil
@@ -35,12 +36,15 @@ import refresh_dcf
 from openpyxl.cell.cell import Cell
 
 from dcf import redesign
+from sources.dcf_statements import DcfStatementInputs
+from tests.fixtures.dcf_statements import seed_dcf_statements
 from tests.kpi_semantic_support import admit_all_kpi_facts
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 BUILDER = PROJECT_ROOT / "execution" / "build_redesigned_dcf.py"
 _OVERRIDE_TABLE_SQL = ""
+_DCF_SCHEMA_TEMPLATE: Path | None = None
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -48,8 +52,9 @@ def canonical_override_schema(
     migrated_db: Callable[..., Path], tmp_path_factory: pytest.TempPathFactory
 ) -> None:
     """Reuse the migrated override contract in the specialized bridge fixture."""
-    global _OVERRIDE_TABLE_SQL
+    global _OVERRIDE_TABLE_SQL, _DCF_SCHEMA_TEMPLATE
     template = migrated_db(tmp_path_factory.mktemp("dcf_schema") / "template.sqlite")
+    _DCF_SCHEMA_TEMPLATE = template
     with sqlite3.connect(template) as conn:
         row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='fact_overrides'"
@@ -70,24 +75,8 @@ REDESIGN_SHEETS = [
     "Valuation",
     "Sensitivity",
     "Monte Carlo",
+    "Statement Evidence",
 ]
-
-_DCF_RUNS_SCHEMA = """
-CREATE TABLE dcf_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker TEXT UNIQUE,
-    valuation_date TEXT, horizon_years INTEGER,
-    wacc REAL, terminal_growth REAL,
-    npv REAL, npv_per_share REAL, shares_outstanding REAL,
-    currency TEXT, notes TEXT, run_id TEXT,
-    live_price REAL, live_price_at TEXT, over_under_pct REAL,
-    mos_bar_used REAL, assumption_snapshot_json TEXT,
-    revenue_growths_json TEXT, fcf_margin REAL,
-    assumptions_sync_status TEXT, assumptions_synced_at TEXT
-    , input_sha256 TEXT, workbook_sha256 TEXT, engine_version TEXT,
-    inputs_as_of TEXT, provenance_json TEXT
-);
-"""
 
 
 # --------------------------------------------------------------------------- #
@@ -381,78 +370,43 @@ def test_from_dict_rejects_segment_without_growth() -> None:
 # --------------------------------------------------------------------------- #
 # Fixtures: write FMP, run the real builder
 # --------------------------------------------------------------------------- #
-def _write_primary_bridge_facts(
-    repo: Path, ticker: str, latest: dict[str, object], *, currency: str
+def _write_canonical_statement_facts(
+    repo: Path,
+    ticker: str,
+    income: list[dict[str, object]],
+    balance: list[dict[str, object]],
+    cashflow: list[dict[str, object]],
+    *,
+    currency: str,
+    canonical_bindings: bool = True,
 ) -> None:
-    conn = sqlite3.connect(repo / "data" / "portfolio.db")
-    conn.execute(_OVERRIDE_TABLE_SQL)
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS documents (
-            id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, source_type TEXT NOT NULL,
-            doc_type TEXT NOT NULL, source_url TEXT, file_path TEXT NOT NULL,
-            sha256 TEXT NOT NULL, fetched_at TEXT NOT NULL, fetch_status TEXT NOT NULL,
-            raw_bytes_size INTEGER NOT NULL, source_quality_tier TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS financial_facts (
-            id INTEGER PRIMARY KEY, ticker TEXT NOT NULL, period_end TEXT NOT NULL,
-            fiscal_period_type TEXT NOT NULL, line_item TEXT NOT NULL, value NUMERIC NOT NULL,
-            currency TEXT, unit TEXT NOT NULL, source_doc_id INTEGER NOT NULL, locator TEXT
-        );
-        CREATE VIEW IF NOT EXISTS v_financial_facts_resolved_current AS
-            SELECT * FROM financial_facts;
-        """
-    )
-    conn.execute(
-        "INSERT OR REPLACE INTO documents "
-        "(id,ticker,source_type,doc_type,source_url,file_path,sha256,fetched_at,"
-        "fetch_status,raw_bytes_size,source_quality_tier) VALUES "
-        "(1,?,'sec_xbrl','10-Q','https://www.sec.gov/example','fixture.xml',?,"
-        "'2026-01-15T00:00:00+00:00','ok',1,'sec_official')",
-        (ticker, "1" * 64),
-    )
-    conn.executemany(
-        "INSERT OR REPLACE INTO financial_facts "
-        "(id,ticker,period_end,fiscal_period_type,line_item,value,currency,unit,source_doc_id,locator) "
-        "VALUES (?,?,?,?,?,?,?,?,1,NULL)",
-        [
-            (
-                1,
+    assert _DCF_SCHEMA_TEMPLATE is not None
+    statements = {"income": income, "balance": balance, "cash_flow": cashflow}
+    digest = hashlib.sha256(
+        json.dumps([ticker, currency, canonical_bindings, statements], sort_keys=True).encode()
+    ).hexdigest()
+    cached = _DCF_SCHEMA_TEMPLATE.parent / f"{digest}.sqlite"
+    if not cached.exists():
+        shutil.copyfile(_DCF_SCHEMA_TEMPLATE, cached)
+        with sqlite3.connect(cached) as conn:
+            seed_dcf_statements(
+                conn,
                 ticker,
-                latest["date"],
-                latest["period"],
-                "cash_and_short_term_investments",
-                latest["cashAndShortTermInvestments"],
-                currency,
-                "actual",
-            ),
-            (
-                2,
-                ticker,
-                latest["date"],
-                latest["period"],
-                "total_debt",
-                latest["totalDebt"],
-                currency,
-                "actual",
-            ),
-            (
-                3,
-                ticker,
-                latest["date"],
-                latest["period"],
-                "finance_lease_liability",
-                latest.get("financeLeaseLiability", 0),
-                currency,
-                "actual",
-            ),
-        ],
-    )
-    conn.commit()
-    conn.close()
+                {"income": income, "balance": balance, "cash_flow": cashflow},
+                currency=currency,
+                canonical_bindings=canonical_bindings,
+            )
+    shutil.copyfile(cached, repo / "data" / "portfolio.db")
 
 
-def _write_fmp(repo: Path, ticker: str, *, currency: str = "USD", segments: bool = False) -> None:
+def _write_fmp(
+    repo: Path,
+    ticker: str,
+    *,
+    currency: str = "USD",
+    segments: bool = False,
+    canonical_bindings: bool = True,
+) -> None:
     """Minimal FMP fixture: 4 full fiscal years of growing quarterlies + a profile
     + forward estimates. Optionally a two-line product-segment file."""
     fmp = repo / "data" / "historical" / "fmp"
@@ -534,6 +488,10 @@ def _write_fmp(repo: Path, ticker: str, *, currency: str = "USD", segments: bool
         ),
         encoding="utf-8",
     )
+    (fmp / f"{ticker}_geo_segments_annual.json").write_text(
+        json.dumps([{"fiscalYear": 2025, "period": "FY", "data": {"United States": rev}}]),
+        encoding="utf-8",
+    )
     # Consensus sits comfortably ABOVE the last-FY actual (~1.6bn) and grows, the
     # realistic shape — so the model's seeded near-term growth is a smooth
     # continuation and the value-of-record tracks the builder's mirror tightly.
@@ -550,7 +508,9 @@ def _write_fmp(repo: Path, ticker: str, *, currency: str = "USD", segments: bool
         for y in range(2026, 2031)
     ]
     (fmp / f"{ticker}_analyst_estimates_annual.json").write_text(json.dumps(est), encoding="utf-8")
-    _write_primary_bridge_facts(repo, ticker, bal[-1], currency=currency)
+    _write_canonical_statement_facts(
+        repo, ticker, inc, bal, cf, currency=currency, canonical_bindings=canonical_bindings
+    )
 
 
 def _write_fmp_semiannual(repo: Path, ticker: str) -> None:
@@ -624,6 +584,10 @@ def _write_fmp_semiannual(repo: Path, ticker: str) -> None:
         ),
         encoding="utf-8",
     )
+    (fmp / f"{ticker}_geo_segments_annual.json").write_text(
+        json.dumps([{"fiscalYear": 2025, "period": "FY", "data": {"United States": rev}}]),
+        encoding="utf-8",
+    )
     # FY2025 actual = its two half-year revenues ($M); consensus continues ~8%/yr.
     base_fy_m = 400.0 * (1.03**7) + 400.0 * (1.03**8)  # the FY2025 Q2 + Q4 halves
     est = [
@@ -639,7 +603,7 @@ def _write_fmp_semiannual(repo: Path, ticker: str) -> None:
         for y in range(2026, 2031)
     ]
     (fmp / f"{ticker}_analyst_estimates_annual.json").write_text(json.dumps(est), encoding="utf-8")
-    _write_primary_bridge_facts(repo, ticker, bal[-1], currency="USD")
+    _write_canonical_statement_facts(repo, ticker, inc, bal, cf, currency="USD")
 
 
 def _build(repo: Path, ticker: str, dest: Path) -> float:
@@ -671,6 +635,9 @@ def built_usd(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, float]:
     """Build one USD single-segment workbook once; read-only tests share it."""
     repo = tmp_path_factory.mktemp("redesign_usd")
     _write_fmp(repo, "TESTCO")
+    # Generic actuals must reconstruct without provider-shaped statement caches.
+    for suffix in ("income_statement_quarterly", "balance_sheet_quarterly", "cash_flow_quarterly"):
+        (repo / "data" / "historical" / "fmp" / f"TESTCO_{suffix}.json").unlink()
     dest = repo / "dcf" / "TESTCO.xlsx"
     builder_value = _build(repo, "TESTCO", dest)
     return dest, builder_value
@@ -1027,10 +994,6 @@ def refresh_repo(tmp_path: Path) -> Path:
     """A repo_root with FMP, a dcf/ dir, and a dcf_runs DB — ready for refresh_one."""
     _write_fmp(tmp_path, "TESTCO", segments=True)
     (tmp_path / "dcf").mkdir()
-    conn = sqlite3.connect(str(tmp_path / "data" / "portfolio.db"))
-    conn.executescript(_DCF_RUNS_SCHEMA)
-    conn.commit()
-    conn.close()
     return tmp_path
 
 
@@ -1060,7 +1023,7 @@ def test_refresh_redesign_seeds_then_persists(
     row = conn.execute(
         "SELECT npv_per_share, live_price, input_sha256, workbook_sha256, "
         "engine_version, inputs_as_of, provenance_json "
-        "FROM dcf_runs WHERE ticker='TESTCO'"
+        "FROM dcf_runs WHERE ticker='TESTCO' AND is_latest=1"
     ).fetchone()
     conn.close()
     assert row is not None and row[0] is not None
@@ -1224,7 +1187,7 @@ def test_refresh_redesign_syncs_assumptions_json(
     # outcome remains durable and the assumptions mirror stays unchanged.
     conn = sqlite3.connect(str(db))
     srow = conn.execute(
-        "SELECT assumptions_sync_status, assumptions_synced_at FROM dcf_runs WHERE ticker='TESTCO'"
+        "SELECT assumptions_sync_status, assumptions_synced_at FROM dcf_runs WHERE ticker='TESTCO' AND is_latest=1"
     ).fetchone()
     conn.close()
     assert srow is not None and srow[0] == "synced" and srow[1]
@@ -1459,9 +1422,16 @@ def test_refresh_preserves_scenario_edits_and_recomputes_outputs(
     # dcf_runs carries the scenario range; BASE stays npv_per_share.
     conn = sqlite3.connect(str(db))
     row = conn.execute(
-        "SELECT npv_per_share, assumption_snapshot_json FROM dcf_runs WHERE ticker='TESTCO'"
+        "SELECT npv_per_share, assumption_snapshot_json FROM dcf_runs WHERE ticker='TESTCO' AND is_latest=1"
     ).fetchone()
+    history = conn.execute(
+        "SELECT is_latest,assumption_snapshot_json FROM dcf_runs WHERE ticker='TESTCO' ORDER BY id"
+    ).fetchall()
     conn.close()
+    assert [version[0] for version in history] == [0, 1]
+    assert json.loads(history[0][1])["scenarios"]["bull"][
+        "fair_value_per_share_usd"
+    ] == pytest.approx(pre_bull)
     assert row is not None
     snap = json.loads(row[1])
     sc = snap["scenarios"]
@@ -1563,7 +1533,7 @@ def test_refresh_persists_seeded_per_name_prior_and_skews_reward(
     conn = sqlite3.connect(str(db))
     row = conn.execute(
         "SELECT npv_per_share, live_price, assumption_snapshot_json "
-        "FROM dcf_runs WHERE ticker='TESTCO'"
+        "FROM dcf_runs WHERE ticker='TESTCO' AND is_latest=1"
     ).fetchone()
     conn.close()
     assert row is not None
@@ -1695,7 +1665,7 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
     m0 = base_inp.exit_multiple
     conn = sqlite3.connect(str(db))
     seeded = conn.execute(
-        "SELECT npv_per_share, provenance_json FROM dcf_runs WHERE ticker='TESTCO'"
+        "SELECT npv_per_share, provenance_json FROM dcf_runs WHERE ticker='TESTCO' AND is_latest=1"
     ).fetchone()
     assert seeded is not None
     npv0 = seeded[0]
@@ -1727,7 +1697,7 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
         },
     }
     conn.execute(
-        "UPDATE dcf_runs SET provenance_json=? WHERE ticker='TESTCO'",
+        "UPDATE dcf_runs SET provenance_json=? WHERE ticker='TESTCO' AND is_latest=1",
         (
             json.dumps(
                 {
@@ -1757,7 +1727,7 @@ def test_apply_edits_persists_without_rebuild_and_records_override(
     # dcf_runs re-persisted; the prior market quote was carried forward.
     conn = sqlite3.connect(str(db))
     row = conn.execute(
-        "SELECT npv_per_share, live_price, provenance_json FROM dcf_runs WHERE ticker='TESTCO'"
+        "SELECT npv_per_share, live_price, provenance_json FROM dcf_runs WHERE ticker='TESTCO' AND is_latest=1"
     ).fetchone()
     conn.close()
     assert row is not None
@@ -2179,7 +2149,9 @@ def test_gsheets_reingest_carries_dashboard_edit_to_dcf_runs(
     assert (repo / "dcf" / "TESTCO.xlsx").exists()  # placed at the canonical path
 
     conn = sqlite3.connect(str(repo / "data" / "portfolio.db"))
-    row = conn.execute("SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO'").fetchone()
+    row = conn.execute(
+        "SELECT npv_per_share FROM dcf_runs WHERE ticker='TESTCO' AND is_latest=1"
+    ).fetchone()
     conn.close()
     assert row is not None and row[0] is not None
     # The persisted value reflects the edited (higher) terminal margin.
@@ -2199,17 +2171,20 @@ def test_builder_reader_preserve_exact_cash_field_and_governed_debt_scope(
         if cash_equivalents_only:
             record["cashAndCashEquivalents"] = record.pop("cashAndShortTermInvestments")
     balance_path.write_text(json.dumps(balances))
-    with sqlite3.connect(repo / "data" / "portfolio.db") as conn:
-        conn.execute("UPDATE financial_facts SET value=130000000 WHERE line_item='total_debt'")
-        conn.execute(
-            "UPDATE financial_facts SET value=30000000 WHERE line_item='finance_lease_liability'"
-        )
-        if cash_equivalents_only:
-            conn.execute(
-                "UPDATE financial_facts SET line_item='cash_and_equivalents' "
-                "WHERE line_item='cash_and_short_term_investments'"
-            )
-        conn.commit()
+    # The same released debt-perimeter oracle now receives immutable canonical
+    # observations, not mutable financial_facts overlays.
+    for record in balances:
+        record["totalDebt"] = 130_000_000
+        record["financeLeaseLiability"] = 30_000_000
+    fmp = repo / "data" / "historical" / "fmp"
+    income = cast(
+        "list[dict[str, object]]",
+        json.loads((fmp / "TEST_income_statement_quarterly.json").read_text()),
+    )
+    cashflow = cast(
+        "list[dict[str, object]]", json.loads((fmp / "TEST_cash_flow_quarterly.json").read_text())
+    )
+    _write_canonical_statement_facts(repo, "TEST", income, balances, cashflow, currency="USD")
     dest = tmp_path / "TEST.xlsx"
     builder_value = _build(repo, "TEST", dest)
     inputs = redesign.read_inputs(dest)
@@ -2225,3 +2200,47 @@ def test_builder_reader_preserve_exact_cash_field_and_governed_debt_scope(
         assert expected_cash_label in labels
     finally:
         workbook.close()
+
+
+def test_generic_builder_rejects_raw_statements_without_canonical_bindings(tmp_path: Path) -> None:
+    _write_fmp(tmp_path, "TESTCO", canonical_bindings=False)
+    destination = tmp_path / "rejected.xlsx"
+    result = subprocess.run(
+        [sys.executable, str(BUILDER)],
+        env={
+            **os.environ,
+            "DCF_TICKER": "TESTCO",
+            "DCF_REPO_ROOT": str(tmp_path),
+            "DCF_DEST": str(destination),
+            "EARNINGS_SUMMARY_DB_PATH": str(tmp_path / "data" / "portfolio.db"),
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert not destination.exists()
+
+
+def test_workbook_retains_complete_canonical_statement_manifest(
+    built_usd: tuple[Path, float],
+) -> None:
+    path, _ = built_usd
+    wb = openpyxl.load_workbook(path)
+    try:
+        evidence = wb["Statement Evidence"]
+        assert evidence.sheet_state == "hidden"
+        payload = "".join(
+            str(evidence.cell(row, 2).value) for row in range(1, evidence.max_row + 1)
+        )
+        manifest = DcfStatementInputs.model_validate_json(payload)
+        manifest.require_complete_actuals()
+        assert manifest.ticker == "TESTCO"
+        assert len(manifest.cells) > 100
+        assert all(
+            cell.provenance and cell.definition_revision_id and cell.resolution_revision_id
+            for cell in manifest.cells
+        )
+    finally:
+        wb.close()

@@ -398,7 +398,6 @@ def country_risk_context_from_builder(
         if authority not in {
             "owner_override",
             "preserved_dashboard_override",
-            "systematic_default_zero",
             "systematic_geo",
         }:
             continue
@@ -412,10 +411,6 @@ def country_risk_context_from_builder(
         ):
             continue
         if authority == "systematic_geo" and source_record is None:
-            continue
-        if authority == "systematic_default_zero" and (
-            source_record is not None or float(premium) != 0.0
-        ):
             continue
         matches.append({key: value for key, value in payload.items() if key != "event"})
     return matches[0] if len(matches) == 1 else None
@@ -1808,7 +1803,6 @@ def prior_country_risk_context(db_path: Path, ticker: str) -> dict[str, object] 
     if authority not in {
         "owner_override",
         "preserved_dashboard_override",
-        "systematic_default_zero",
         "systematic_geo",
     }:
         return None
@@ -1824,10 +1818,6 @@ def prior_country_risk_context(db_path: Path, ticker: str) -> dict[str, object] 
         return None
     if authority == "systematic_geo" and source_record is None:
         return None
-    if authority == "systematic_default_zero" and (
-        source_record is not None or float(premium) != 0.0
-    ):
-        return None
     return dict(typed_context)
 
 
@@ -1836,7 +1826,7 @@ def country_risk_context_for_edit(
     *,
     ticker: str,
     effective_premium: float,
-) -> dict[str, object]:
+) -> dict[str, object] | None:
     """Retain exact systematic lineage only while the saved CRP is unchanged."""
     prior_premium = prior_context.get("premium") if prior_context is not None else None
     if (
@@ -1846,6 +1836,8 @@ def country_risk_context_for_edit(
         and float(prior_premium) == effective_premium
     ):
         return dict(prior_context)
+    if prior_context is None:
+        return None
     return {
         "schema_version": "dcf_country_risk_context.v1",
         "ticker": ticker.upper(),
@@ -1962,6 +1954,12 @@ def apply_edits(
         ticker=ticker,
         effective_premium=inp.country_risk_premium,
     )
+    if effective_country_context is None:
+        _unlink(staged_dest)
+        _unlink(staged_assumptions)
+        reason = "country_risk_context_unavailable"
+        sys.stderr.write(f"WARNING: {ticker}: {reason}\n")
+        return {"ticker": ticker, "status": "failed", "reason": reason}
     equity_bridge_receipt = equity_bridge_mod.build_equity_bridge_receipt(
         ticker=ticker,
         operating_value_usd_m=rv.operating_value_usd_m,

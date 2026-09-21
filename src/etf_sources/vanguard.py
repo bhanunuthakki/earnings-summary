@@ -161,7 +161,9 @@ def fetch(ticker: str) -> IssuerData | None:
             fp = cast("dict[str, object]", fund_profile)
             chars = IssuerCharacteristics(
                 source=SOURCE,
-                as_of=as_of,
+                # The holdings date belongs to a different response. This profile
+                # API publishes no corresponding characteristics date.
+                as_of=None,
                 name=_str(fp.get("longName")) or _str(fp.get("fundName")),
                 issuer="Vanguard",
                 expense_ratio=_pct_to_decimal(fp.get("expenseRatio")),

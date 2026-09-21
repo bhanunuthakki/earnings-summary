@@ -150,6 +150,12 @@ OPERATIONS_REGISTRY_SURFACE_DISPOSITIONS = (
 
 OPERATIONS_SNAPSHOT_SURFACE_DISPOSITIONS = (
     SurfaceDisposition(
+        field="data_coverage",
+        destination="linked_view",
+        targets=("settings",),
+        rationale="Headline attention includes the same FMP receipt and SEC evidence gaps detailed in Settings; unknown source freshness is explicit informational evidence.",
+    ),
+    SurfaceDisposition(
         field="snapshot_version",
         destination="internal",
         rationale="Versions the evidence envelope without making a health claim.",
@@ -232,6 +238,11 @@ OPERATIONS_AUXILIARY_SURFACE_DISPOSITIONS = (
     ),
     HOST_RUNTIME_DISPOSITION.model_copy(update={"field": "host_runtime_receipt"}),
     SurfaceDisposition(
+        field="data_coverage_summary",
+        destination="overview",
+        rationale="Mirrors linked Settings evidence gaps and unknown source freshness in the headline; never persists independent coverage state.",
+    ),
+    SurfaceDisposition(
         field="attention",
         destination="attention",
         rationale="The Attention tab owns safe, writer-governed lifecycle findings.",
@@ -297,6 +308,7 @@ class RuntimeRowView(_ViewModel):
 class OperationsPanelView(_ViewModel):
     observed_label: str
     attention_count: int
+    data_coverage_summary: str = "Coverage evidence unavailable"
     evidence_gap_count: int
     runtime_summary_tone: Tone
     tasks: tuple[TaskView, ...]
@@ -917,6 +929,7 @@ def build_operations_panel_view(
     attention_count += snapshot.services.state == "invalid"
     if readme_status is None or readme_status.state in {"rejected", "invalid"}:
         attention_count += 1
+    attention_count += snapshot.data_coverage.attention_count
     gap_states = {"missing", "stale", "unavailable"}
     evidence_gap_keys: set[tuple[str, str]] = set()
     for domain, observation in (
@@ -939,11 +952,16 @@ def build_operations_panel_view(
     evidence_gap_keys.update({("runtime", "backups"), ("runtime", "write_locks")})
     if readme_status is not None and readme_status.state in {"not_run", "stale"}:
         evidence_gap_keys.add(("governance", "readme"))
-    evidence_gap_count = len(evidence_gap_keys)
+    evidence_gap_count = len(evidence_gap_keys) + snapshot.data_coverage.unknown_freshness_count
     return OperationsPanelView(
         observed_label=_clock(snapshot.observed_at, prefix="Observed"),
         attention_count=attention_count
         + (host_attention_count(*host_runtime) if host_runtime else 0),
+        data_coverage_summary=(
+            f"Collection evidence: {snapshot.data_coverage.attention_count} gap(s) require attention. "
+            f"FMP receipt: {snapshot.data_coverage.fmp_state}; SEC storage: {snapshot.data_coverage.sec_state}. "
+            f"{snapshot.data_coverage.unknown_freshness_count} issuer(s) have a covered historical population with unknown current freshness. Details are in Settings."
+        ),
         evidence_gap_count=evidence_gap_count,
         runtime_summary_tone="ok" if attention_count == 0 and evidence_gap_count == 0 else "warn",
         tasks=tuple(
@@ -1093,6 +1111,7 @@ def _overview(view: OperationsPanelView) -> str:
         f'<article class="k-well"><div class="k-label">Service-owned</div><div class="stat-number">{service_owned}</div></article>'
         "</div>"
         '<div class="k-well k-well-warn"><div class="k-card-row-title">Attention is evidence-based</div>'
+        f"<p>{_html(view.data_coverage_summary)}</p>"
         f"<p>{view.attention_count} operational or governance observation(s) need attention. {view.evidence_gap_count} stale or missing evidence gap(s) remain visible as informational; current invalid or failed evidence requires action.</p></div>"
     )
 

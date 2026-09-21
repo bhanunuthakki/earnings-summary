@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import datetime
+from collections.abc import Callable, Mapping
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import pytest
 from pydantic import JsonValue
@@ -17,10 +19,9 @@ from compute.thesis_evaluator import (
     BreakRule,
     Comparator,
     KpiObservation,
+    RuleEvaluation,
     RuleTier,
     ThesisVerdict,
-    _fetch_kpi_history,
-    _rollup_status,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
     convert_unit,
     evaluate_rule,
     evaluate_ticker_thesis,
@@ -31,6 +32,17 @@ from compute.thesis_evaluator import (
 from models.facts import Unit
 from models.kpis import BreachStatus
 from provenance.overrides import KPI, OverrideAction, record_override
+from tests import test_source_fact_repository as foundation
+from tests.test_report_canonical_financials import seed_table
+
+_fetch_kpi_history = cast(
+    Callable[[sqlite3.Connection, str, str, int], list[KpiObservation] | None],
+    getattr(thesis_evaluator_module, "_fetch_kpi_history"),
+)
+_rollup_status = cast(
+    Callable[[list[RuleEvaluation]], BreachStatus],
+    getattr(thesis_evaluator_module, "_rollup_status"),
+)
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
@@ -865,7 +877,7 @@ def test_persist_verdict_preserves_existing_raw_json(
 # evaluator owns breach_status/last_updated, and the mirror tracks the file.
 
 
-def _write_holdings(tmp_path: Path, ticker: str, payload: dict[str, object]) -> None:
+def _write_holdings(tmp_path: Path, ticker: str, payload: Mapping[str, object]) -> None:
     (tmp_path / f"{ticker}.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -1060,7 +1072,7 @@ def test_load_holdings_spec_reads_break_rules_soft(tmp_path: Path) -> None:
 
 
 def test_evaluate_ticker_thesis_yellow_when_soft_rule_fires(
-    conn: sqlite3.Connection, tmp_path: Path
+    tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
     """When all hard rules are OK and one soft rule fires, overall = WARN (YELLOW).
 
@@ -1068,7 +1080,7 @@ def test_evaluate_ticker_thesis_yellow_when_soft_rule_fires(
     2Q, no hard threshold is hit, but the soft rule surfaces it.
     """
     payload = {
-        "ticker": "VEEV",
+        "ticker": "SYNTH",
         "thesis": "vertical-SaaS compounder",
         "break_rules_soft": [
             {
@@ -1081,7 +1093,7 @@ def test_evaluate_ticker_thesis_yellow_when_soft_rule_fires(
             }
         ],
     }
-    (tmp_path / "VEEV.json").write_text(json.dumps(payload), encoding="utf-8")
+    (tmp_path / "SYNTH.json").write_text(json.dumps(payload), encoding="utf-8")
     # 12 quarters: baseline year ~100, growth year +50%, then 3Q of decelerating growth.
     periods = [
         ("2022-03-31", 100.0),
@@ -1096,8 +1108,28 @@ def test_evaluate_ticker_thesis_yellow_when_soft_rule_fires(
         ("2024-06-30", 155.0),  # 3.3% YoY — decel 1000bps
         ("2024-09-30", 148.0),  # -1.3% YoY — decel 460bps
     ]
-    _seed_financial_fact(conn, "VEEV", "revenue", periods)
-    verdict = evaluate_ticker_thesis(conn, ticker="VEEV", holdings_dir=tmp_path)
+    with sqlite3.connect(migrated_db(tmp_path / "soft-rollup.db")) as conn:
+        conn.row_factory = sqlite3.Row
+        foundation.seed_foundation(conn)
+        seed_table(
+            conn,
+            [
+                (
+                    "revenue",
+                    date(
+                        date.fromisoformat(period_end).year,
+                        date.fromisoformat(period_end).month - 2,
+                        1,
+                    ).isoformat(),
+                    period_end,
+                    f"Q{index % 4 + 1}",
+                    str(value),
+                    "USD",
+                )
+                for index, (period_end, value) in enumerate(periods)
+            ],
+        )
+        verdict = evaluate_ticker_thesis(conn, ticker="SYNTH", holdings_dir=tmp_path)
     assert verdict.overall_status == BreachStatus.WARN
     assert len(verdict.soft_rule_results) == 1
     soft = verdict.soft_rule_results[0]

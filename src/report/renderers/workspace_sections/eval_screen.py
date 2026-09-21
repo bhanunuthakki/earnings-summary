@@ -8,12 +8,14 @@ re-exports in ``workspace_html``."""
 
 from __future__ import annotations
 
+import json
 from io import StringIO
 
 from report.models import EvaluationSnapshotSection, SectionStatus
 from report.renderers.workspace_sections._shared import _esc, _missing_panel, _panel_head
 from report.sections.p3_data import PeerCompRow
 from ui import living_grid as lg
+from ui.controls import prov_case, prov_drawer, prov_row
 
 __all__ = [
     "_eval_cell",
@@ -66,8 +68,93 @@ def _eval_screen_panels(
             body.write('<td class="num muted">—</td>')
         body.write("</tr>")
     body.write("</tbody></table></div></div>")
+    provenance = _evaluation_provenance(eval_snap)
+    if provenance:
+        body.write(prov_drawer("Sources and coverage", provenance))
 
     _peer_comp_panel(body, peer_comp or [])
+
+
+def _evaluation_provenance(section: EvaluationSnapshotSection) -> str:
+    projection = section.canonical_financial_table
+    by_id = (
+        {cell.canonical_metric_cell_id: cell for cell in projection.cells}
+        if projection is not None
+        else {}
+    )
+    items: list[str] = []
+    for coordinate, cell_ids in section.source_manifest.items():
+        cells = [by_id[cell_id] for cell_id in cell_ids if cell_id in by_id]
+        contexts: list[str] = []
+        for cell in cells:
+            if cell.provenance is None:
+                continue
+            observation = cell.provenance.observation
+            period = (
+                observation.period_end.date().isoformat()
+                if observation.period_start is None
+                else (
+                    f"{observation.period_start.date().isoformat()} to "
+                    f"{observation.period_end.date().isoformat()}"
+                )
+            )
+            locator = (
+                json.dumps(cell.provenance.evidence.source_locator.root, sort_keys=True)
+                if cell.provenance.evidence is not None
+                else "locator unavailable"
+            )
+            contexts.append(
+                "\n".join(
+                    (
+                        f"coordinate: {cell.display_coordinate or 'unplaced'}",
+                        f"period: {period}",
+                        f"currency/unit: {observation.currency or observation.unit_key}",
+                        f"source: {cell.source_kind or 'canonical reported'}",
+                        f"locator: {locator}",
+                        f"source URL: {cell.source_url or 'unavailable'}",
+                    )
+                )
+            )
+        items.append(
+            prov_case(
+                coordinate,
+                meta=f"{len(cells)} canonical source{'s' if len(cells) != 1 else ''}",
+                rationale="Exact admitted inputs used for this displayed value.",
+                actual="\n\n".join(contexts) or "Canonical source context unavailable",
+            )
+        )
+    for coordinate, reasons in section.unavailable_reasons.items():
+        items.append(
+            prov_row(
+                coordinate,
+                severity="warning",
+                note="Unavailable: " + ", ".join(reason.replace("_", " ") for reason in reasons),
+            )
+        )
+    market = section.market_context
+    if market is not None:
+        items.append(
+            prov_case(
+                "Captured market context",
+                meta=market.status,
+                rationale="Market price and capitalization remain separate from company-reported financial facts.",
+                expected="Fresh captured provider packet known by the report cutoff.",
+                actual=json.dumps(
+                    {
+                        "captured_at": market.captured_at.isoformat()
+                        if market.captured_at
+                        else None,
+                        "currency": market.currency,
+                        "document_version_id": market.document_version_id,
+                        "freshness": market.freshness_status,
+                        "reasons": market.reason_codes,
+                    },
+                    sort_keys=True,
+                    indent=2,
+                ),
+            )
+        )
+    return "".join(items)
 
 
 def _peer_comp_panel(body: StringIO, rows: list[PeerCompRow]) -> None:
@@ -127,26 +214,50 @@ def _peer_comp_panel(body: StringIO, rows: list[PeerCompRow]) -> None:
         body.write(
             f'<td class="num">{_fmt_usd_compact(r.market_cap_usd)}</td>'
             if r.market_cap_usd is not None
+            else '<td class="num muted">Unavailable</td>'
+            if r.source_evidence is not None
             else '<td class="num muted">—</td>'
         )
         body.write(
             f'<td class="num">{_fmt_usd_compact(r.revenue_ttm_usd)}</td>'
             if r.revenue_ttm_usd is not None
+            else '<td class="num muted">Unavailable</td>'
+            if r.source_evidence is not None
             else '<td class="num muted">—</td>'
         )
         body.write(
             f'<td class="num">{r.net_margin_ttm * 100:.1f}%</td>'
             if r.net_margin_ttm is not None
+            else '<td class="num muted">Unavailable</td>'
+            if r.source_evidence is not None
             else '<td class="num muted">—</td>'
         )
         body.write(
             f'<td class="num">{r.roic_ttm * 100:.1f}%</td>'
             if r.roic_ttm is not None
+            else '<td class="num muted">Unavailable</td>'
+            if r.source_evidence is not None
             else '<td class="num muted">—</td>'
         )
         body.write("</tr>")
     body.write("</tbody></table>")
     body.write(lg.grid_close())
+    source_rows = [row for row in rows if row.source_evidence is not None]
+    if source_rows:
+        body.write(
+            prov_drawer(
+                "Sources and coverage · ROIC unavailable",
+                "".join(
+                    prov_case(
+                        row.peer_ticker,
+                        rationale="; ".join(row.coverage_notes),
+                        expected="Governed membership and comparable canonical financial periods; current captured market context. Acquisition completeness and definition parity remain unverified.",
+                        actual=json.dumps(row.source_evidence, sort_keys=True, indent=2),
+                    )
+                    for row in source_rows
+                ),
+            )
+        )
     body.write("</div>")
 
 
@@ -155,7 +266,7 @@ def _eval_cell(v: float | None, unit: str, digits: int) -> str:
         return '<td class="num muted">—</td>'
     if unit == "%":
         return f'<td class="num">{v:.{digits}f}%</td>'
-    if unit.startswith("USD M") and abs(v) >= 1000:
+    if unit.endswith(" M") and abs(v) >= 1000:
         return f'<td class="num">{v / 1000:.1f}B</td>'
     return f'<td class="num">{v:,.{digits}f}</td>'
 

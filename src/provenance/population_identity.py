@@ -41,9 +41,15 @@ class PopulationIdentityRequest(_FrozenModel):
     apply: bool = False
     knowledge_cutoff: datetime
     operation_recorded_at: datetime
+    document_version_ids: tuple[str, ...] | None = Field(default=None, min_length=1, max_length=500)
 
     @model_validator(mode="after")
     def _ordered_clocks(self) -> Self:
+        if self.document_version_ids is not None and (
+            len(set(self.document_version_ids)) != len(self.document_version_ids)
+            or any(not item or item != item.strip() for item in self.document_version_ids)
+        ):
+            raise ValueError("document scope requires unique nonblank exact identities")
         if _utc(self.operation_recorded_at) < _utc(self.knowledge_cutoff):
             raise ValueError("operation_recorded_at must not precede knowledge_cutoff")
         return self
@@ -100,7 +106,13 @@ def populate_recorded_subject_bindings(
         "population-identity-input.v1",
         _canonical_json(recorded_ids),
     )
-    policy_config = {
+    if request.document_version_ids is not None:
+        input_commitment = _digest(
+            "population-identity-input.scoped.v1",
+            input_commitment,
+            _canonical_json(sorted(request.document_version_ids)),
+        )
+    policy_config: dict[str, object] = {
         "canonical_identity_sources": (
             "issuer_entities",
             "legacy_issuer_binding_revisions@K/O",
@@ -111,6 +123,8 @@ def populate_recorded_subject_bindings(
         "temporal_scope": {"knowledge_cutoff": knowledge, "observed_through": observed},
         "version": _POLICY_VERSION,
     }
+    if request.document_version_ids is not None:
+        policy_config["document_version_ids"] = tuple(sorted(request.document_version_ids))
     policy_sha = _digest(_canonical_json(policy_config))
     registry = ReportingEntityRegistry(conn)
     items: list[PopulationIdentityItem] = []
@@ -216,24 +230,36 @@ def _recorded_issuer_ids(
     conn: sqlite3.Connection,
     request: PopulationIdentityRequest,
 ) -> tuple[str, ...]:
-    return tuple(
-        str(row[0])
-        for row in conn.execute(
-            "SELECT DISTINCT version.issuer_id "
-            "FROM evidence_document_versions version "
-            "JOIN evidence_source_observations observation "
-            "ON observation.observation_id=version.observation_id "
-            "WHERE datetime(observation.observed_at)<=datetime(?) "
-            "AND datetime(observation.retrieved_at)<=datetime(?) "
-            "AND datetime(version.recorded_at)<=datetime(?) "
-            "ORDER BY version.issuer_id",
-            (
-                _db_time(request.knowledge_cutoff),
-                _db_time(request.operation_recorded_at),
-                _db_time(request.operation_recorded_at),
-            ),
+    scope_sql = ""
+    parameters: list[str] = [
+        _db_time(request.knowledge_cutoff),
+        _db_time(request.operation_recorded_at),
+        _db_time(request.operation_recorded_at),
+    ]
+    if request.document_version_ids is not None:
+        scope_sql = (
+            " AND version.document_version_id IN ("
+            + ",".join("?" for _ in request.document_version_ids)
+            + ")"
         )
-    )
+        parameters.extend(request.document_version_ids)
+    rows = conn.execute(
+        "SELECT version.document_version_id,version.issuer_id "
+        "FROM evidence_document_versions version "
+        "JOIN evidence_source_observations observation "
+        "ON observation.observation_id=version.observation_id "
+        "WHERE datetime(observation.observed_at)<=datetime(?) "
+        "AND datetime(observation.retrieved_at)<=datetime(?) "
+        "AND datetime(version.recorded_at)<=datetime(?) "
+        + scope_sql
+        + " ORDER BY version.issuer_id,version.document_version_id",
+        parameters,
+    ).fetchall()
+    if request.document_version_ids is not None and {str(row[0]) for row in rows} != set(
+        request.document_version_ids
+    ):
+        raise ValueError("selected document unavailable within identity cutoff")
+    return tuple(sorted({str(row[1]) for row in rows}))
 
 
 def _resolve_target(

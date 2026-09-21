@@ -138,9 +138,13 @@ def _decision_target(row: sqlite3.Row) -> LinkTarget:
 def _position_target(row: sqlite3.Row) -> LinkTarget:
     entry = str(row["entry_date"]) if row["entry_date"] else "opening unknown"
     exit_date = str(row["exit_date"]) if row["exit_date"] else None
+    superseded_by = row["superseded_by_entry_id"]
     label = f"{entry} -> {exit_date or 'open'}"
     conclusion: str | None = None
-    if exit_date is not None:
+    if superseded_by is not None:
+        conclusion = f"superseded by #{int(superseded_by)}"
+        label = f"{entry} -> {conclusion}"
+    elif exit_date is not None:
         conclusion = f"exited {exit_date}"
         if row["outcome_vs_thesis"]:
             conclusion += f", {row['outcome_vs_thesis']}"
@@ -149,7 +153,7 @@ def _position_target(row: sqlite3.Row) -> LinkTarget:
         target_id=int(row["id"]),
         ticker=str(row["ticker"]).upper(),
         label=label,
-        concluded=exit_date is not None,
+        concluded=exit_date is not None or superseded_by is not None,
         conclusion=conclusion,
     )
 
@@ -213,7 +217,7 @@ def linkable_targets_for_tickers(
         position_counts: dict[str, int] = {}
         for row in _safe_rows(
             conn,
-            f"SELECT * FROM position_entries WHERE user_id = ? AND ticker IN ({marks}) "
+            f"SELECT * FROM position_entries WHERE user_id = ? AND superseded_by_entry_id IS NULL AND ticker IN ({marks}) "
             "ORDER BY ticker, (exit_date IS NULL) DESC, COALESCE(exit_date, '') DESC, id DESC",
             (user_id, *normalized),
         ):

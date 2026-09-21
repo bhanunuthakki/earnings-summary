@@ -374,12 +374,14 @@ def _audit_snapshot(
     out_of_scope: tuple[OutOfScopeKpiFact, ...] = ()
     invalid_in_scope: tuple[InvalidInScopeKpiFact, ...] = ()
     if population_available:
+        membership = _current_membership(conn, effective_at=effective_at)
         series = tuple(
             _census_definition(
                 conn,
                 ticker=str(row["ticker"]),
                 definition_id=int(row["id"]),
                 definition_name=str(row["name"]),
+                membership=membership,
                 effective_at=effective_at,
                 known_at=known_at,
             )
@@ -606,49 +608,70 @@ def _active_portfolio_tickers(conn: sqlite3.Connection) -> tuple[str, ...]:
     )
 
 
+@dataclass(frozen=True)
+class _CurrentMembership:
+    raw: dict[tuple[str, int], tuple[int, ...]]
+    canonical: dict[tuple[str, int], tuple[int, ...]]
+    legacy: dict[tuple[str, int], tuple[int, ...]]
+
+
+def _current_membership(conn: sqlite3.Connection, *, effective_at: datetime) -> _CurrentMembership:
+    """Read each current authority once, not once per portfolio definition.
+
+    Keep raw rows without resolution authority visible. Uppercase issuer plus
+    exact definition ID remains the partition key, including malformed ownership
+    handled separately by the census's invalid-population disposition.
+    """
+    relation = canonical_fact_relation(conn, "kpi_facts").sql
+    semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+    semantic_identity = semantic_series_identity_sql(conn, fact_relation=relation)
+    cutoff = effective_at.isoformat()
+    portfolio = (
+        " AND UPPER(kf.ticker) IN (SELECT UPPER(ticker) FROM tracked_companies "
+        "WHERE list_type='portfolio' AND archived_at IS NULL) "
+    )
+
+    def partition(sql: str) -> dict[tuple[str, int], tuple[int, ...]]:
+        grouped: dict[tuple[str, int], list[int]] = {}
+        for row in conn.execute(sql, (cutoff,)):
+            key = (str(row[1]).upper(), int(row[2]))
+            grouped.setdefault(key, []).append(int(row[0]))
+        return {key: tuple(ids) for key, ids in grouped.items()}
+
+    # A NULL-filtered membership subquery scans unindexed successor IDs once.
+    raw = partition(
+        "SELECT kf.id,kf.ticker,kf.kpi_definition_id FROM kpi_facts kf "
+        "WHERE kf.id NOT IN (SELECT supersedes_id FROM kpi_facts "
+        "WHERE supersedes_id IS NOT NULL) AND datetime(kf.period_end)<=datetime(?)"
+        + portfolio
+        + "ORDER BY kf.id"
+    )
+    canonical = partition(
+        f"SELECT kf.id,kf.ticker,kf.kpi_definition_id FROM {relation} kf "
+        "WHERE datetime(kf.period_end)<=datetime(?)" + portfolio + "ORDER BY kf.id"
+    )
+    legacy = partition(
+        f"SELECT kf.id,kf.ticker,kf.kpi_definition_id FROM {relation} kf {semantic_join} "
+        f"WHERE datetime(kf.period_end)<=datetime(?) AND {semantic_where} "
+        f"AND {semantic_identity}" + portfolio + "ORDER BY kf.id"
+    )
+    return _CurrentMembership(raw=raw, canonical=canonical, legacy=legacy)
+
+
 def _census_definition(
     conn: sqlite3.Connection,
     *,
     ticker: str,
     definition_id: int,
     definition_name: str,
+    membership: _CurrentMembership,
     effective_at: datetime,
     known_at: datetime,
 ) -> KpiDefinitionShadowCensus:
-    relation = canonical_fact_relation(conn, "kpi_facts").sql
-    semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
-    semantic_identity = semantic_series_identity_sql(conn, fact_relation=relation)
-    cutoff = effective_at.isoformat()
-    raw_ids = tuple(
-        int(row[0])
-        for row in conn.execute(
-            "SELECT kf.id FROM kpi_facts kf "
-            "WHERE UPPER(kf.ticker)=UPPER(?) AND kf.kpi_definition_id=? "
-            "AND NOT EXISTS (SELECT 1 FROM kpi_facts successor "
-            "WHERE successor.supersedes_id=kf.id) "
-            "AND datetime(kf.period_end)<=datetime(?) ORDER BY kf.id",
-            (ticker, definition_id, cutoff),
-        )
-    )
-    canonical_current_ids = tuple(
-        int(row[0])
-        for row in conn.execute(
-            f"SELECT kf.id FROM {relation} kf "  # nosec B608 -- resolver-owned relation
-            "WHERE UPPER(kf.ticker)=UPPER(?) AND kf.kpi_definition_id=? "
-            "AND datetime(kf.period_end)<=datetime(?) ORDER BY kf.id",
-            (ticker, definition_id, cutoff),
-        )
-    )
-    legacy_ids = tuple(
-        int(row[0])
-        for row in conn.execute(
-            f"SELECT kf.id FROM {relation} kf {semantic_join} "  # nosec B608
-            "WHERE UPPER(kf.ticker)=UPPER(?) AND kf.kpi_definition_id=? "
-            f"AND datetime(kf.period_end)<=datetime(?) AND {semantic_where} "
-            f"AND {semantic_identity} ORDER BY kf.id",  # nosec B608
-            (ticker, definition_id, cutoff),
-        )
-    )
+    key = (ticker.upper(), definition_id)
+    raw_ids = membership.raw.get(key, ())
+    canonical_current_ids = membership.canonical.get(key, ())
+    legacy_ids = membership.legacy.get(key, ())
     resolution = resolve_revision_aware_kpi_series(
         conn,
         kpi_definition_id=definition_id,
@@ -765,8 +788,8 @@ def _out_of_scope_facts(
         for row in conn.execute(
             "SELECT fact.id,fact.ticker,fact.kpi_definition_id,"
             "datetime(fact.period_end) IS NULL AS invalid_period_end FROM kpi_facts fact "
-            "WHERE NOT EXISTS (SELECT 1 FROM kpi_facts successor "
-            "WHERE successor.supersedes_id=fact.id) "
+            "WHERE fact.id NOT IN (SELECT supersedes_id FROM kpi_facts "
+            "WHERE supersedes_id IS NOT NULL) "
             "AND (datetime(fact.period_end)<=datetime(?) OR datetime(fact.period_end) IS NULL) "
             "AND NOT EXISTS ("
             "SELECT 1 FROM tracked_companies company WHERE "
@@ -803,8 +826,8 @@ def _invalid_in_scope_facts(
             "JOIN tracked_companies company ON UPPER(company.ticker)=UPPER(fact.ticker) "
             "LEFT JOIN kpi_definitions definition ON definition.id=fact.kpi_definition_id "
             "WHERE company.list_type='portfolio' AND company.archived_at IS NULL "
-            "AND NOT EXISTS (SELECT 1 FROM kpi_facts successor "
-            "WHERE successor.supersedes_id=fact.id) "
+            "AND fact.id NOT IN (SELECT supersedes_id FROM kpi_facts "
+            "WHERE supersedes_id IS NOT NULL) "
             "AND (datetime(fact.period_end) IS NULL OR (datetime(fact.period_end)<=datetime(?) "
             "AND (definition.id IS NULL OR UPPER(definition.ticker)<>UPPER(fact.ticker)))) "
             "ORDER BY fact.id",

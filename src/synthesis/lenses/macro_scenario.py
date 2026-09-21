@@ -15,6 +15,7 @@ import logging
 from pathlib import Path
 from typing import cast
 
+from db_paths import resolve_db_path
 from llm.style import compose_brief_prompt, style_block_cache_token
 from llm_artifact_store import (
     Artifact,
@@ -106,16 +107,29 @@ def _ctx_macro_scenario(
         from macro_store import fetch_sensitivities
     except ImportError:
         return None
-    sens_objs = fetch_sensitivities(ticker=ticker, db_path=repo_root / "data" / "portfolio.db")
+    sens_objs = fetch_sensitivities(ticker=ticker, db_path=resolve_db_path(None))
     sens_rows: list[dict[str, object]] = [
         {
             "series_id": s.series_id,
             "beta": s.beta,
             "r_squared": s.r_squared,
             "lookback_window_days": s.lookback_window_days,
+            "metric_version": s.metric_version,
+            "shock_unit": s.shock_unit,
+            "input_sha": s.input_sha,
+            "source_as_of": s.source_as_of,
         }
         for s in sens_objs
     ]
+    sensitivities_text = (
+        format_sensitivities(sens_rows)
+        + "\n"
+        + "\n".join(
+            f"{s.series_id}: log return per +100 bps (divide bps by 100); {s.metric_version}; source {s.source_as_of}; input {s.input_sha}"
+            for s in sens_objs
+            if s.shock_unit == "percentage_point"
+        )
+    )
     dcf = load_dcf(ticker, repo_root)
     if dcf and dcf.get("sanity_flag"):
         dcf_summary = DCF_FLAGGED_NOTE
@@ -142,14 +156,14 @@ def _ctx_macro_scenario(
             "scenario_shocks_block": format_shocks(scenario_obj),
             "thesis_block": thesis_block(ticker, repo_root),
             "dcf_summary": dcf_summary,
-            "sensitivities_block": format_sensitivities(sens_rows),
+            "sensitivities_block": sensitivities_text,
             "latest_summary": latest,
         },
         cache_inputs=[
             ticker,
             scenario_id,
             sha8(format_shocks(scenario_obj)),
-            sha8(format_sensitivities(sens_rows)),
+            sha8(sensitivities_text),
             sha8(dcf_summary),
             sha8(latest),
         ],
@@ -169,7 +183,7 @@ def run_macro_scenario_lens(
     scenario_id = str(getattr(scenario_obj, "id", "scenario"))
     purpose = f"lens:macro_scenario:{scenario_id}"
     model = "claude-sonnet-4-6"
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = resolve_db_path(None)
 
     ctx = _ctx_macro_scenario(scenario_obj=scenario_obj, ticker=ticker, repo_root=repo_root)
     if ctx is None:

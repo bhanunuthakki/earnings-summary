@@ -1,221 +1,120 @@
-"""CLI entrypoint for foreign filer normalization and interim document classification.
+"""Publish exact captured foreign sources; dry-run by default, no acquisition.
 
-Evaluates foreign filer SEC forms (20-F, 40-F, 6-K) and issuer-IR packages,
-enforcing explicit currency, reporting cadence, and safe degradation policies.
-Emits structured JSON receipts to .tmp/foreign_normalization_receipt.json.
+The input manifest binds immutable document versions, expected native semantics,
+and an optional qualified offline SEC processor. Canonical semantic resolution
+remains a separate owner and is never inferred from source publication counts.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import sys
-from datetime import UTC, date, datetime
+import os
 from pathlib import Path
-from typing import Any
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC = PROJECT_ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from sources.foreign_filers import (  # noqa: E402
-    FOREIGN_FILER_ROSTER,
-    ForeignFilerNormalizer,
-    ForeignFilingForm,
-    InterimDisposition,
-    RequestedFiscalPeriod,
+from filings.inline_xbrl_processor import load_approved_processor_bundle_manifest
+from provenance.immutable_artifact import (
+    assert_artifact_unchanged,
+    population_database_lock_resources,
+    publish_text_no_clobber,
+    read_stable_artifact,
+    validate_population_database_target,
 )
+from runtime.job_runtime import JobLock, portfolio_db_path
+from sources.foreign_normalization_run import (
+    ForeignNormalizationManifest,
+    normalize_foreign_sources,
+)
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Normalize foreign filer SEC forms and IR documents."
-    )
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--db", type=Path)
+    parser.add_argument("--input-manifest", type=Path)
+    parser.add_argument("--apply", action="store_true")
     parser.add_argument(
         "--output-receipt",
         type=Path,
         default=PROJECT_ROOT / ".tmp" / "foreign_normalization_receipt.json",
-        help="Output receipt path (default: .tmp/foreign_normalization_receipt.json)",
     )
-    parser.add_argument("--json", action="store_true", help="Print receipt JSON to stdout")
-
-    args = parser.parse_args()
-    output_receipt: Path = args.output_receipt
-
-    normalizer = ForeignFilerNormalizer()
-    receipts: list[dict[str, Any]] = []
-
-    # Run canonical evaluation cohort across foreign roster
-    # Format: (ticker, form, payload, is_inline, accession, req_period, fiscal_year, period_end, expected_disposition)
-    test_cohort: list[
-        tuple[
-            str,
-            ForeignFilingForm,
-            bytes,
-            bool,
-            str,
-            RequestedFiscalPeriod,
-            int,
-            date,
-            InterimDisposition,
-        ]
-    ] = [
-        (
-            "NVO",
-            ForeignFilingForm.FORM_20F,
-            b'{"facts": {"Revenues": 250000000000, "OperatingProfit": 100000000000}}',
-            True,
-            "0001193125-26-100001",
-            "FY",
-            2025,
-            date(2025, 12, 31),
-            InterimDisposition.ADMITTED_XBRL,
-        ),
-        (
-            "BN",
-            ForeignFilingForm.FORM_40F,
-            b'{"facts": {"TotalRevenue": 95000000000, "NetIncome": 5000000000}}',
-            True,
-            "0001193125-26-200002",
-            "FY",
-            2025,
-            date(2025, 12, 31),
-            InterimDisposition.ADMITTED_XBRL,
-        ),
-        (
-            "ASML",
-            ForeignFilingForm.FORM_20FA,
-            b'{"facts": {"Sales": 27500000000, "GrossProfit": 14000000000}}',
-            True,
-            "0001193125-26-250005",
-            "FY",
-            2025,
-            date(2025, 12, 31),
-            InterimDisposition.ADMITTED_XBRL,
-        ),
-        (
-            "NU",
-            ForeignFilingForm.ISSUER_IR_SPREADSHEET,
-            b'{"facts": {"TotalRevenue": 3000000000, "NetIncome": 600000000}}',
-            False,
-            "NU-IR-2026-Q1",
-            "Q1",
-            2026,
-            date(2026, 3, 31),
-            InterimDisposition.ADMITTED_GOVERNED_SPREADSHEET,
-        ),
-        (
-            "BHP",
-            ForeignFilingForm.FORM_6K,
-            b'{"facts": {"Revenue": 28000000000, "Profit": 7000000000}}',
-            True,
-            "0001193125-26-400005",
-            "H1",
-            2025,
-            date(2025, 12, 31),
-            InterimDisposition.ADMITTED_XBRL,
-        ),
-        (
-            "WIX",
-            ForeignFilingForm.FORM_6K,
-            b"<html>Press Release: Q1 2026 Non-inline HTML</html>",
-            False,
-            "0001193125-26-300003",
-            "Q1",
-            2026,
-            date(2026, 3, 31),
-            InterimDisposition.REJECTED_NON_INLINE_HTML,
-        ),
-        (
-            "BHP",
-            ForeignFilingForm.FORM_6K,
-            b"<html>BHP Semiannual Release</html>",
-            False,
-            "0001193125-26-400004",
-            "Q1",
-            2025,
-            date(2025, 9, 30),
-            InterimDisposition.NOT_APPLICABLE_SEMIANNUAL,
-        ),
-    ]
-
-    all_cases_passed = True
-    for (
-        ticker,
-        form,
-        content,
-        is_inline,
-        accession,
-        req_period,
-        fy,
-        p_end,
-        expected_disp,
-    ) in test_cohort:
-        r = normalizer.normalize_document(
-            ticker,
-            content,
-            form=form,
-            accession_number=accession,
-            fiscal_year=fy,
-            period_end=p_end,
-            requested_period=req_period,
-            is_inline_xbrl=is_inline,
-        )
-        if r.disposition != expected_disp:
-            all_cases_passed = False
-        receipts.append(r.model_dump(mode="json"))
-
-    admitted_dispositions = {
-        InterimDisposition.ADMITTED_XBRL.value,
-        InterimDisposition.ADMITTED_GOVERNED_SPREADSHEET.value,
-        InterimDisposition.ADMITTED_STATEMENT_CACHE.value,
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+    summary: dict[str, object] = {
+        "status": "HOLD",
+        "total_tickers_evaluated": 0,
+        "receipts": [],
+        "reason_codes": ["captured_input_manifest_and_database_required"],
     }
-    admitted_count = sum(1 for r in receipts if r["disposition"] in admitted_dispositions)
-    rejected_count = sum(
-        1 for r in receipts if r["disposition"] == InterimDisposition.REJECTED_NON_INLINE_HTML.value
-    )
-    semiannual_na_count = sum(
-        1
-        for r in receipts
-        if r["disposition"] == InterimDisposition.NOT_APPLICABLE_SEMIANNUAL.value
-    )
-    degraded_count = sum(
-        1
-        for r in receipts
-        if r["disposition"] == InterimDisposition.DEGRADED_UNSUPPORTED_FORMAT.value
-    )
-
-    overall_status = "PASS" if all_cases_passed and degraded_count == 0 else "HOLD"
-
-    summary = {
-        "status": overall_status,
-        "verified_at": datetime.now(UTC).isoformat(),
-        "total_documents_processed": len(receipts),
-        "admitted_documents": admitted_count,
-        "rejected_non_inline_html": rejected_count,
-        "semiannual_not_applicable": semiannual_na_count,
-        "degraded_unsupported": degraded_count,
-        "roster_coverage": sorted(list({t[0] for t in test_cohort})),
-        "roster_tickers": list(FOREIGN_FILER_ROSTER.keys()),
-        "receipts": receipts,
-    }
-
-    output_receipt.parent.mkdir(parents=True, exist_ok=True)
-    output_receipt.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-
+    code = 1
+    try:
+        if args.db is not None and args.input_manifest is not None:
+            snapshot, payload = read_stable_artifact(args.input_manifest)
+            manifest = ForeignNormalizationManifest.model_validate_json(payload)
+            database = Path(os.path.abspath(args.db))
+            locks = ["foreign-normalization:" + str(database)]
+            if args.apply:
+                locks.extend(
+                    population_database_lock_resources(database, portfolio_db_path(PROJECT_ROOT))
+                )
+            for item in manifest.documents:
+                if item.accession_number:
+                    locks.append("filing-xbrl-accession:" + item.accession_number)
+            if manifest.processor:
+                approved = load_approved_processor_bundle_manifest(
+                    manifest.processor.bundle_manifest
+                )
+                locks.append("filing-xbrl-bundle:" + approved.manifest.manifest_sha256)
+                locks.append(
+                    "filing-xbrl-package-cache:"
+                    + str(
+                        Path(
+                            os.path.abspath(
+                                manifest.processor.runtime_root.parent / "filing-xbrl-package-cache"
+                            )
+                        )
+                    )
+                )
+            with JobLock(PROJECT_ROOT, "normalize-foreign-filings", locks):
+                database = validate_population_database_target(
+                    database, portfolio_db_path(PROJECT_ROOT)
+                )
+                assert_artifact_unchanged(snapshot)
+                conn = connect_sqlite(
+                    database,
+                    role=SQLiteConnectionRole.WRITER
+                    if args.apply
+                    else SQLiteConnectionRole.READ_ONLY,
+                    schema_preflight=bool(args.apply),
+                )
+                try:
+                    receipt = normalize_foreign_sources(
+                        conn,
+                        manifest,
+                        input_manifest_sha256=snapshot.file_sha256,
+                        apply=bool(args.apply),
+                    )
+                    summary = receipt.model_dump(mode="json")
+                    code = 0 if receipt.status == "DRY_RUN" else 1
+                finally:
+                    conn.close()
+    except Exception as exc:
+        summary["status"] = "HOLD"
+        summary["reason_codes"] = ["normalization_failed", type(exc).__name__]
+        code = 2
+    rendered = json.dumps(summary, sort_keys=True, indent=2)
+    publish_text_no_clobber(args.output_receipt, rendered)
     if args.json:
-        print(json.dumps(summary, indent=2))
+        print(rendered)
     else:
-        print(
-            f"Foreign filer normalization complete. Status: {summary['status']} "
-            f"({admitted_count} admitted, {rejected_count} rejected non-inline HTML, {semiannual_na_count} semiannual N/A)"
-        )
-        print(f"Receipt written to: {output_receipt}")
-
-    if overall_status != "PASS":
-        sys.exit(1)
+        print(f"Foreign source normalization: {summary['status']}. Receipt: {args.output_receipt}")
+    return code
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

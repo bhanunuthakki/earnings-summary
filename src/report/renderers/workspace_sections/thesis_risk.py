@@ -959,7 +959,13 @@ def _macro_sensitivity_panel(body: StringIO, rows: list[MacroSensitivityRow]) ->
     )
     for r in rows:
         body.write("<tr>")
-        body.write(f"<td>{_esc(_macro_series_label(r.series_id))}</td>")
+        label = _esc(_macro_series_label(r.series_id))
+        if r.shock_unit == "percentage_point":
+            label += (
+                f" · log return per +100 bps · {_esc(r.metric_version)}"
+                f" · source {_esc(r.source_as_of or 'unknown')} · input {_esc(r.input_sha or 'unknown')}"
+            )
+        body.write(f"<td>{label}</td>")
         body.write(f'<td class="num {_macro_beta_tone(r.beta)}">{r.beta:+.2f}</td>')
         r2 = (
             f"{r.r_squared:.2f}".lstrip("0")

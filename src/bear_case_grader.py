@@ -36,6 +36,7 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, Field, TypeAdapter
 
+from db_paths import db_path_context, require_db_path
 from llm.structured import StructuredParseError, call_llm_structured
 from llm.untrusted import spotlight
 from llm_artifact_store import history as artifact_history
@@ -67,14 +68,16 @@ class FailureMode:
     refutation_criteria: str
 
 
-def materialize_predictions(*, ticker: str, repo_root: Path, max_history: int = 8) -> int:
+def materialize_predictions(
+    *, ticker: str, repo_root: Path, max_history: int = 8, db_path: Path | str | None = None
+) -> int:
     """For every historical bear case for ticker, write its failure modes as
     rows in `predictions` (idempotent via predictions_store.record's natural key).
 
     Returns the count of newly-inserted predictions. Existing rows are skipped.
     """
     ticker = ticker.upper()
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = require_db_path(db_path)
     bears = artifact_history(ticker=ticker, purpose="bear_case", limit=max_history, db_path=db_path)
     inserted = 0
     for art in bears:
@@ -113,6 +116,7 @@ def grade_due_predictions(
     ticker: str,
     repo_root: Path,
     grade_age_quarters: int = DEFAULT_GRADE_AGE_QUARTERS,
+    db_path: Path | str | None = None,
 ) -> dict[str, int]:
     """Pull bear-case predictions whose target_period has passed and grade
     them via LLM. Returns count by outcome.
@@ -124,7 +128,7 @@ def grade_due_predictions(
     Cheap: typically 5-10 predictions per ticker per cycle, sub-$0.50.
     """
     ticker = ticker.upper()
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = require_db_path(db_path)
 
     cutoff = datetime.now(UTC) - timedelta(days=90 * grade_age_quarters)
     preds = prediction_history(
@@ -143,11 +147,12 @@ def grade_due_predictions(
         return {"met": 0, "missed": 0, "mixed": 0, "unfalsifiable": 0}
 
     # Load the corpus the grader will read against
-    corpus = _load_grading_corpus(ticker, repo_root)
+    corpus = _load_grading_corpus(ticker, repo_root, db_path=db_path)
 
     summary: dict[str, int] = {"met": 0, "missed": 0, "mixed": 0, "unfalsifiable": 0}
     for pred in due:
-        verdict = _grade_one_prediction(ticker=ticker, pred=pred, corpus=corpus)
+        with db_path_context(db_path):
+            verdict = _grade_one_prediction(ticker=ticker, pred=pred, corpus=corpus)
         if verdict is None:
             continue
         outcome = verdict.outcome
@@ -225,7 +230,7 @@ Definitions:
     return grade
 
 
-def _load_grading_corpus(ticker: str, repo_root: Path) -> dict[str, str]:
+def _load_grading_corpus(ticker: str, repo_root: Path, *, db_path: Path) -> dict[str, str]:
     """The data the grader reads against."""
     tmp = repo_root / ".tmp"
     summaries: list[tuple[str, str]] = []
@@ -237,7 +242,7 @@ def _load_grading_corpus(ticker: str, repo_root: Path) -> dict[str, str]:
         if len(summaries) >= 2:
             break
 
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = require_db_path(db_path)
     fin_lines: list[str] = []
     insider_lines: list[str] = []
     if db_path.exists():

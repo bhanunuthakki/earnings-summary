@@ -1,4 +1,6 @@
-"""P4.2 scored comparable selection (`p3_data.load_peer_comp`).
+"""Retained legacy shadow tests; active canonical peer tests live in test_canonical_peer_comp.
+
+P4.2 scored comparable selection (`p3_data.load_peer_comp_legacy_shadow`).
 
 The owner flagged the old behavior — first ``max_peers`` of FMP's
 alphabetical peer screen — as wrong (NU led with Barclays, NOW with Applied
@@ -13,7 +15,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from report.sections.p3_data import load_peer_comp
+from report.sections.p3_data import load_peer_comp_legacy_shadow
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -85,7 +87,7 @@ def _seed_repo(tmp_path: Path) -> Path:
 
 def test_named_rival_outranks_alphabetical_head(tmp_path: Path) -> None:
     repo = _seed_repo(tmp_path)
-    rows = load_peer_comp("NU", repo_root=repo)
+    rows = load_peer_comp_legacy_shadow("NU", repo_root=repo)
     tickers = [r.peer_ticker for r in rows]
     # ITUB (watchlist rival, accent-insensitive name match) ranks first even
     # though it sits third in FMP's alphabetical pool.
@@ -99,13 +101,13 @@ def test_named_rival_outranks_alphabetical_head(tmp_path: Path) -> None:
 
 def test_zero_affinity_candidate_dropped(tmp_path: Path) -> None:
     repo = _seed_repo(tmp_path)
-    rows = load_peer_comp("NU", repo_root=repo)
+    rows = load_peer_comp_legacy_shadow("NU", repo_root=repo)
     assert "AAAA" not in {r.peer_ticker for r in rows}
 
 
 def test_scale_proximity_breaks_industry_ties(tmp_path: Path) -> None:
     repo = _seed_repo(tmp_path)
-    rows = load_peer_comp("NU", repo_root=repo)
+    rows = load_peer_comp_legacy_shadow("NU", repo_root=repo)
     tickers = [r.peer_ticker for r in rows]
     # SMLB (industry + scale = 3) outranks BIGB (industry only = 2).
     assert tickers.index("SMLB") < tickers.index("BIGB")
@@ -114,7 +116,7 @@ def test_scale_proximity_breaks_industry_ties(tmp_path: Path) -> None:
 
 
 def test_no_peers_file_returns_empty(tmp_path: Path) -> None:
-    assert load_peer_comp("NU", repo_root=tmp_path) == []
+    assert load_peer_comp_legacy_shadow("NU", repo_root=tmp_path) == []
 
 
 def test_peers_without_profiles_score_zero_and_hide(tmp_path: Path) -> None:
@@ -122,7 +124,7 @@ def test_peers_without_profiles_score_zero_and_hide(tmp_path: Path) -> None:
     renderer then hides the panel instead of showing an unexplained list)."""
     fmp = tmp_path / "data" / "historical" / "fmp"
     _write_json(fmp / "XX_peers.json", ["YY", "ZZ"])
-    assert load_peer_comp("XX", repo_root=tmp_path) == []
+    assert load_peer_comp_legacy_shadow("XX", repo_root=tmp_path) == []
 
 
 def test_payload_identity_fallback_when_profile_missing(tmp_path: Path) -> None:
@@ -142,7 +144,7 @@ def test_payload_identity_fallback_when_profile_missing(tmp_path: Path) -> None:
         tmp_path / "micro_thesis" / "holdings" / "NU.json",
         {"competitive_watchlist": ["Itau Unibanco"]},
     )
-    rows = load_peer_comp("NU", repo_root=tmp_path)
+    rows = load_peer_comp_legacy_shadow("NU", repo_root=tmp_path)
     assert [r.peer_ticker for r in rows] == ["ITUB"]
     assert rows[0].peer_name == "Itaú Unibanco Holding S.A."
     assert rows[0].market_cap_usd == 60e9
@@ -156,7 +158,7 @@ def test_legacy_peerslist_payload_shape(tmp_path: Path) -> None:
     _write_json(fmp / "TT_peers.json", [{"symbol": "TT", "peersList": ["PP"]}])
     _write_json(fmp / "TT_profile.json", _profile("Target Co", "Technology", "Software", 10e9))
     _write_json(fmp / "PP_profile.json", _profile("Peer Co", "Technology", "Software", 12e9))
-    rows = load_peer_comp("TT", repo_root=tmp_path)
+    rows = load_peer_comp_legacy_shadow("TT", repo_root=tmp_path)
     assert [r.peer_ticker for r in rows] == ["PP"]
     assert "same industry" in rows[0].match_reasons
 
@@ -174,7 +176,7 @@ def test_tracked_peer_gets_relevance_boost(tmp_path: Path) -> None:
     conn.commit()
     conn.close()
 
-    rows = load_peer_comp("NU", repo_root=repo, db_path=db)
+    rows = load_peer_comp_legacy_shadow("NU", repo_root=repo, db_path=db)
     tickers = [r.peer_ticker for r in rows]
     bigb = next(r for r in rows if r.peer_ticker == "BIGB")
     assert "tracked" in bigb.match_reasons
@@ -208,7 +210,7 @@ def test_all_dash_unnamed_rows_dropped(tmp_path: Path) -> None:
         tmp_path / "micro_thesis" / "holdings" / "UBER.json",
         {"competitive_watchlist": ["Lyft"]},
     )
-    rows = load_peer_comp("UBER", repo_root=tmp_path)
+    rows = load_peer_comp_legacy_shadow("UBER", repo_root=tmp_path)
     tickers = [r.peer_ticker for r in rows]
     assert "GHST" not in tickers
     assert "LYFT" in tickers

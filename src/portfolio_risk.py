@@ -166,6 +166,7 @@ class FactorRollup:
     top_market: list[CrowdedName] = field(default_factory=list[CrowdedName])
     top_growth: list[CrowdedName] = field(default_factory=list[CrowdedName])
     top_crowding: list[CrowdedName] = field(default_factory=list[CrowdedName])
+    rate_evidence: tuple[str, ...] = ()
 
 
 def _weighted_mean(pairs: list[tuple[float, float]]) -> float | None:

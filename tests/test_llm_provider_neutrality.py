@@ -13,23 +13,29 @@ def test_request_envelope_immutability_and_validation() -> None:
     req = LLMRequestEnvelope(
         purpose="peer_selection",
         prompt="Find 5 peers for AAPL",
+        prompt_version="test-prompt-v1",
+        schema_version="test-schema-v1",
         temperature=0.2,
         max_tokens=1000,
     )
     assert req.purpose == "peer_selection"
     assert req.temperature == 0.2
-    assert req.prompt_version == "v1"
+    assert req.prompt_version == "test-prompt-v1"
 
     # Frozen model cannot be mutated
     with pytest.raises(ValidationError):
-        req.purpose = "bear_case"  # type: ignore[misc]
+        setattr(req, "purpose", "bear_case")
 
     # Extra fields forbidden
     with pytest.raises(ValidationError):
-        LLMRequestEnvelope(
-            purpose="peer_selection",
-            prompt="test",
-            unknown_arg="extra",  # type: ignore[call-arg]
+        LLMRequestEnvelope.model_validate(
+            {
+                "purpose": "peer_selection",
+                "prompt": "test",
+                "prompt_version": "v1",
+                "schema_version": "v1",
+                "unknown_arg": "extra",
+            }
         )
 
 

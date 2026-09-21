@@ -280,8 +280,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Hints refresh runs the fixed execution/schedule_pre_earnings_refresh.py script.",
-      "fingerprint": "faca040d5c156ed3fe16eb693c2ca87ce56bde1e469ec90c736f5ca6f7295402",
-      "line": 2053,
+      "fingerprint": "9dfae1e291cdf9f8012c56baee740a8c730f1eac52634b3a76637d0e7764f0c9",
+      "line": 2052,
       "path": "execution/refresh_cache.py",
       "targets": [
         "execution/schedule_pre_earnings_refresh.py"
@@ -290,8 +290,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_dispatch_one runs the fixed execution/save_fmp_data.py manifest command.",
-      "fingerprint": "3e088f37231c08eeb0ddc51ac4af57ee601b53eb53aac6c1b87b01e3a026404c",
-      "line": 2388,
+      "fingerprint": "673c834d01732b22103f9e613a2efa101b809783d84cf6fd79747ee3b7a23860",
+      "line": 2381,
       "path": "execution/refresh_cache.py",
       "targets": [
         "execution/save_fmp_data.py"
@@ -300,8 +300,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_spawn_background re-executes the fixed execution/refresh_cache.py run command.",
-      "fingerprint": "4bccb0cd85047bf3b3220d4e4645ffbe20dae03086b339dc93f69153b0c34e49",
-      "line": 2659,
+      "fingerprint": "c443ffd7d701d0d8bd8de080ca50d85f7329862850e9695f18eaa67bc36484fa",
+      "line": 2639,
       "path": "execution/refresh_cache.py",
       "targets": [
         "execution/refresh_cache.py"

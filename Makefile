@@ -55,7 +55,7 @@ lint-changed:  ## Lint only files changed vs BASE (the enforceable gate)
 	$(CHANGED_CHECK) --check lint
 
 typecheck:  ## Enforce exact descending whole-tree Pyright and suppression ceilings
-	PYTHONPATH=src $(PY) execution/enforce_static_quality.py --pythonpath $(PY)
+	PYTHONPATH=src $(PY) execution/enforce_static_quality.py --pythonpath $(PY) --base $(BASE)
 
 typecheck-changed:  ## pyright strict on files changed vs BASE (the enforceable gate)
 	$(CHANGED_CHECK) --check types
@@ -91,7 +91,7 @@ check: architecture-check format-changed lint-changed typecheck-changed typechec
 
 check-fast: architecture-check format-changed lint-changed typecheck-changed suppressions-changed test-changed  ## Fast inner-loop gate: architecture + format/lint/types/suppressions + changed-tests
 
-manifest-check:  ## Validate 11-project reconstruction inventory
+manifest-check:  ## Validate 13-project reconstruction inventory
 	$(PY) execution/verify_reconstruction_inventory.py
 
 calendar-check:  ## Validate earnings and research calendars end-to-end

@@ -507,7 +507,7 @@ def build_cockpit_rows(
     dcf_flagged = dcf_sanity_flags(conn)
     docs = _new_doc_counts(conn)
     evals = _latest_evaluations(conn)
-    kpi_facts = _tier1_kpi_deltas(conn, portfolio_tickers, as_of=ref.date())
+    kpi_facts = tier1_kpi_deltas(conn, portfolio_tickers, as_of=ref.date())
     # Fast path: precomputed cache written by the morning pipeline (stage 0d).
     # Falls back to the live DB scan when the cache is absent (fresh install,
     # test env, dev run without the morning pipeline).
@@ -870,7 +870,7 @@ def _latest_evaluations(
     return out
 
 
-def _tier1_kpi_deltas(
+def tier1_kpi_deltas(
     conn: sqlite3.Connection, tickers: set[str], as_of: date | None = None
 ) -> dict[str, list[KpiDelta]]:
     """Latest-vs-prior move per tier-1 KPI definition (portfolio names only).

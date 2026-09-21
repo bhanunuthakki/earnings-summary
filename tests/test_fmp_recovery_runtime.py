@@ -27,6 +27,7 @@ import execution.refresh_cache as refresh_cache
 from execution.save_fmp_data import TODAY, per_ticker_jobs
 from models.companies import ListType
 from pipeline.fmp_doc_index import classify_fmp_filename
+from pipeline.fmp_operations_view import read_fmp_operational_details
 from pipeline.fmp_recovery import (
     CircuitConfig,
     CircuitState,
@@ -62,8 +63,8 @@ class HeldCorpus(Protocol):
     def reread(self) -> tuple[bytes, os.stat_result]: ...
 
 
-REVISION = "0008_add_fmp_recovery"
-ACTIVE_REVISION = "0040_fmp_watchlist_recovery"
+REVISION = "0045_fmp_recovery_receipts"
+ACTIVE_REVISION = "head"
 NOW = datetime(2026, 8, 12, 9, 0, 0)
 CONTENT = "c" * 64
 
@@ -1539,6 +1540,13 @@ def test_due_probe_success_closes_circuit_then_drains_bounded_priority_work(
         )
 
         assert modes == [ExecutionMode.PROBE, ExecutionMode.LIVE, ExecutionMode.LIVE]
+        observed = read_fmp_operational_details(
+            connection, as_of=NOW + timedelta(hours=7), receipt_max_age=timedelta(hours=24)
+        )
+        assert observed.receipt_state == "fresh"
+        assert observed.latest_receipt is not None
+        assert observed.latest_receipt.fresh_count == 3
+        assert len(observed.latest_receipt.attempt_ids) == 3
         assert result.status is ReceiptStatus.FRESH
         assert result.exit_code == 0
         assert result.dispatch_count == 3

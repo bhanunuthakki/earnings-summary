@@ -12,6 +12,7 @@ section builders / fetchers don't hand-roll it. See
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Iterable
 from datetime import date, datetime
@@ -63,7 +64,7 @@ def upsert_etf_profile(conn: sqlite3.Connection, profile: EtfProfile) -> None:
             nav, price, premium_discount_pct,
             pe_ratio, pb_ratio, weighted_avg_mktcap_usd_m,
             characteristics_as_of, characteristics_source,
-            source, profile_fetched_at
+            source, profile_fetched_at, field_evidence_json
         ) VALUES (
             :ticker, :name, :issuer, :expense_ratio, :aum_usd_m, :inception_date,
             :asset_class, :benchmark_index, :domicile, :listed_exchange,
@@ -71,7 +72,7 @@ def upsert_etf_profile(conn: sqlite3.Connection, profile: EtfProfile) -> None:
             :nav, :price, :premium_discount_pct,
             :pe_ratio, :pb_ratio, :weighted_avg_mktcap_usd_m,
             :characteristics_as_of, :characteristics_source,
-            :source, :profile_fetched_at
+            :source, :profile_fetched_at, :field_evidence_json
         )
         ON CONFLICT(ticker) DO UPDATE SET
             name                  = excluded.name,
@@ -98,7 +99,8 @@ def upsert_etf_profile(conn: sqlite3.Connection, profile: EtfProfile) -> None:
             characteristics_source
                 = COALESCE(excluded.characteristics_source, etf_profile.characteristics_source),
             source                = excluded.source,
-            profile_fetched_at    = excluded.profile_fetched_at
+            profile_fetched_at    = excluded.profile_fetched_at,
+            field_evidence_json  = excluded.field_evidence_json
         """,
         {
             "ticker": profile.ticker.upper(),
@@ -128,6 +130,12 @@ def upsert_etf_profile(conn: sqlite3.Connection, profile: EtfProfile) -> None:
             "characteristics_source": profile.characteristics_source,
             "source": profile.source,
             "profile_fetched_at": profile.profile_fetched_at.isoformat(),
+            "field_evidence_json": json.dumps(
+                {
+                    key: value.model_dump(mode="json")
+                    for key, value in profile.field_evidence.items()
+                }
+            ),
         },
     )
 
@@ -168,6 +176,7 @@ def get_etf_profile(conn: sqlite3.Connection, ticker: str) -> EtfProfile | None:
         characteristics_source=row["characteristics_source"],
         source=row["source"],
         profile_fetched_at=datetime.fromisoformat(row["profile_fetched_at"]),
+        field_evidence=json.loads(row["field_evidence_json"]),
     )
 
 

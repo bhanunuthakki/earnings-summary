@@ -36,7 +36,6 @@ from signals.store import (
     SIGNAL_CONSENSUS_RATING,
     SignalRow,
     load_diet_signals,
-    record_investor_day,
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -85,7 +84,11 @@ def _seed_signals(db: Path) -> None:
             ],
         )
         conn.commit()
-        record_investor_day(conn, "META", datetime(2026, 9, 18).date(), "Analyst Day")
+        # Retained legacy event fixture; current ingestion requires publisher evidence.
+        conn.execute(
+            "INSERT INTO signals(ticker,signal_type,title,event_date,published_at,created_at,cadence) VALUES('META','investor_day','Analyst Day','2026-09-18','2026-09-01','2026-09-01','scheduled')"
+        )
+        conn.commit()
     finally:
         conn.close()
 

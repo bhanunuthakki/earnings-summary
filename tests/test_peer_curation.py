@@ -1,8 +1,6 @@
-# pyright: reportPrivateUsage=false
-#
-# Drives the curate_peers router directly (module-private) to pin its
-# pin/exclude/override behavior; the directive matches the repo convention.
-"""S5 — steerable peers: the curate_peers route + the re-evaluable override.
+"""Retained legacy shadow tests; active peers are covered by test_canonical_peer_comp.
+
+S5 — steerable peers: the curate_peers route + the re-evaluable override.
 
 The owner's "these are shit peers, remove this section unless you select
 better" is now ACTIONABLE, not a memo. ``curate_peers`` pins rivals into the
@@ -16,24 +14,31 @@ panel until enough credible comps qualify, then returns it on its own.
 from __future__ import annotations
 
 import json
-import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
+import process_report_comments as prc
 import pytest
+from pydantic import BaseModel
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import process_report_comments as prc  # noqa: E402
-
-import comments  # noqa: E402
-from report.sections.p3_data import (  # noqa: E402
+import comments
+from report.sections.p3_data import (
     PeerCompRow,
     evaluate_peers_override,
-    load_peer_comp,
+    load_peer_comp_legacy_shadow,
 )
+
+
+class PeerCurationRoute(Protocol):
+    def __call__(
+        self, repo_root: Path, ticker: str, c: comments.Comment, apply: bool
+    ) -> dict[str, object]: ...
+
+
+# Literal private-name bridges keep the exact production seams under test.
+route_curate_peers = cast(PeerCurationRoute, getattr(prc, "_route_curate_peers"))
+peer_curation_model = cast(type[BaseModel], getattr(prc, "_PeerCuration"))
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -57,14 +62,14 @@ def _profile(
 def _comment(text: str, key: str = "peer_comp") -> comments.Comment:
     return comments.Comment(
         id="c1",
-        anchor=comments.Anchor(type="peer_comp", key=key),  # pyright: ignore[reportArgumentType]
+        anchor=comments.Anchor(type="peer_comp", key=key),
         comment=text,
     )
 
 
-def _canned(payload: dict[str, object]):
+def _canned(payload: dict[str, object]) -> Callable[..., object]:
     def _f(*_a: object, **_k: object) -> object:
-        return prc._PeerCuration.model_validate(payload)
+        return peer_curation_model.model_validate(payload)
 
     return _f
 
@@ -96,7 +101,7 @@ def test_pins_append_to_watchlist_dedup(tmp_path: Path, monkeypatch: pytest.Monk
             }
         ),
     )
-    res = prc._route_curate_peers(tmp_path, "NU", _comment("pin HOOD"), apply=True)
+    res = route_curate_peers(tmp_path, "NU", _comment("pin HOOD"), apply=True)
     data = json.loads(path.read_text(encoding="utf-8"))
     # Append-only, case-insensitive dedupe — never drops a prior pin.
     assert data["competitive_watchlist"] == ["Itau Unibanco", "HOOD"]
@@ -113,7 +118,7 @@ def test_excludes_write_peer_exclude(tmp_path: Path, monkeypatch: pytest.MonkeyP
             {"pin": [], "exclude": ["BARC"], "hide_unless_quality": False, "diff_summary": "drop"}
         ),
     )
-    prc._route_curate_peers(tmp_path, "NU", _comment("drop Barclays"), apply=True)
+    route_curate_peers(tmp_path, "NU", _comment("drop Barclays"), apply=True)
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["peer_exclude"] == ["BARC"]
 
@@ -135,7 +140,7 @@ def test_conditional_persists_reevaluable_override(
             }
         ),
     )
-    res = prc._route_curate_peers(
+    res = route_curate_peers(
         tmp_path, "NU", _comment("remove this section unless you select better peers"), apply=True
     )
     ov = json.loads(path.read_text(encoding="utf-8"))["peers_section_override"]
@@ -154,7 +159,7 @@ def test_dry_run_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         "call_llm_structured",
         _canned({"pin": ["HOOD"], "exclude": [], "hide_unless_quality": True, "diff_summary": "x"}),
     )
-    prc._route_curate_peers(tmp_path, "NU", _comment("pin HOOD"), apply=False)
+    route_curate_peers(tmp_path, "NU", _comment("pin HOOD"), apply=False)
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["competitive_watchlist"] == ["A"]  # untouched
     assert "peers_section_override" not in data
@@ -169,7 +174,7 @@ def test_no_actionable_curation_touches_nothing(
         "call_llm_structured",
         _canned({"pin": [], "exclude": [], "hide_unless_quality": False, "diff_summary": "n/a"}),
     )
-    res = prc._route_curate_peers(tmp_path, "NU", _comment("nice section"), apply=True)
+    res = route_curate_peers(tmp_path, "NU", _comment("nice section"), apply=True)
     assert res["fields_touched"] == []
     assert "peer_exclude" not in json.loads(path.read_text(encoding="utf-8"))
 
@@ -225,7 +230,7 @@ def test_override_named_without_computed_multiples_is_not_quality() -> None:
 
 
 # ---------------------------------------------------------------------------
-# load_peer_comp — pool injection, exclusion, override re-evaluation
+# load_peer_comp_legacy_shadow — pool injection, exclusion, override re-evaluation
 # ---------------------------------------------------------------------------
 
 
@@ -273,7 +278,7 @@ def test_pinned_ticker_absent_from_pool_is_injected(tmp_path: Path) -> None:
         tmp_path / "data" / "historical" / "fmp" / "HOOD_profile.json",
         _profile("Robinhood Markets", "Financial Services", "Capital Markets", 40e9),
     )
-    rows = load_peer_comp("NU", repo_root=repo)
+    rows = load_peer_comp_legacy_shadow("NU", repo_root=repo)
     hood = next((r for r in rows if r.peer_ticker == "HOOD"), None)
     assert hood is not None  # injected even though the FMP pool omitted it
     assert "named rival" in hood.match_reasons
@@ -281,7 +286,7 @@ def test_pinned_ticker_absent_from_pool_is_injected(tmp_path: Path) -> None:
 
 def test_prose_name_pin_is_not_fabricated_into_a_ticker(tmp_path: Path) -> None:
     repo = _seed(tmp_path, watchlist=["Big Global Bank"])
-    rows = load_peer_comp("NU", repo_root=repo)
+    rows = load_peer_comp_legacy_shadow("NU", repo_root=repo)
     assert all(" " not in r.peer_ticker for r in rows)  # no "BIG GLOBAL BANK" pool ticker
     bigb = next(r for r in rows if r.peer_ticker == "BIGB")
     assert "named rival" in bigb.match_reasons  # still boosted via the name match
@@ -289,14 +294,14 @@ def test_prose_name_pin_is_not_fabricated_into_a_ticker(tmp_path: Path) -> None:
 
 def test_peer_exclude_drops_by_ticker(tmp_path: Path) -> None:
     repo = _seed(tmp_path, peer_exclude=["BIGB"])
-    tickers = {r.peer_ticker for r in load_peer_comp("NU", repo_root=repo)}
+    tickers = {r.peer_ticker for r in load_peer_comp_legacy_shadow("NU", repo_root=repo)}
     assert "BIGB" not in tickers
     assert "SMLB" in tickers
 
 
 def test_peer_exclude_drops_by_name(tmp_path: Path) -> None:
     repo = _seed(tmp_path, peer_exclude=["Big Global Bank"])
-    assert "BIGB" not in {r.peer_ticker for r in load_peer_comp("NU", repo_root=repo)}
+    assert "BIGB" not in {r.peer_ticker for r in load_peer_comp_legacy_shadow("NU", repo_root=repo)}
 
 
 def test_override_hides_panel_then_returns_when_pinned(tmp_path: Path) -> None:
@@ -308,10 +313,10 @@ def test_override_hides_panel_then_returns_when_pinned(tmp_path: Path) -> None:
     }
     # No named rivals → the screen's sector matches aren't "quality" → hidden.
     repo = _seed(tmp_path, override=override)
-    assert load_peer_comp("NU", repo_root=repo) == []
+    assert load_peer_comp_legacy_shadow("NU", repo_root=repo) == []
 
     # Pin two real in-pool rivals → they become named rivals with metrics → the
     # condition is satisfied and the panel returns on its own (no manual un-hide).
     repo2 = _seed(tmp_path, watchlist=["Big Global Bank", "Small Bank Co"], override=override)
-    rows = load_peer_comp("NU", repo_root=repo2)
+    rows = load_peer_comp_legacy_shadow("NU", repo_root=repo2)
     assert {r.peer_ticker for r in rows} == {"BIGB", "SMLB"}

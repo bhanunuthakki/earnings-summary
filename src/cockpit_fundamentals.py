@@ -1,306 +1,619 @@
-"""Precomputed per-ticker fundamentals for the cockpit evaluation table.
-
-Moves the ~1.2s _eval_fundamentals double-scan of financial_facts off the
-GET / render path by materialising results once per morning-pipeline run.
-The render calls read_materialized_fundamentals (a disk read) instead of the
-ROW_NUMBER() window over 726k rows.
-
-Pattern mirrors portfolio_weights.py:
-- materialize_fundamentals(conn, repo_root) → writes data/cockpit_fundamentals.json
-- read_materialized_fundamentals(repo_root) → reads it (render path, never the DB)
-- compute_from_db(conn) → the actual SQL scan; called by the materialiser and as
-  fallback when no cache exists (fresh install, test env, dev run without morning
-  pipeline).
-
-Materialization is atomic (temp file + os.replace). A missing or unreadable
-cache returns {} so the columns gracefully degrade to em-dashes, exactly as
-when financial_facts is absent.
-"""
+"""Canonical per-ticker fundamentals for the materialized cockpit cache."""
 
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
+
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from materialized_cache import cache_metadata, read_fresh_payload, write_payload_atomically
-from timeseries.loaders import reader_tier_join_sql, reader_tier_rank_sql
+from sources.canonical_financial_series import (
+    CanonicalFinancialObservation,
+    CanonicalFinancialReadError,
+    CanonicalFinancialSeries,
+    CanonicalFinancialSeriesReader,
+    FinancialCadence,
+    SeriesContinuity,
+    discover_canonical_financial_tickers,
+)
 
 __all__ = [
     "compute_from_db",
+    "compute_snapshot",
     "materialize_fundamentals",
     "read_materialized_fundamentals",
 ]
 
 _CACHE_REL: tuple[str, ...] = ("data", "cockpit_fundamentals.json")
-_CACHE_SCHEMA = "cockpit-fundamentals"
-
-# Half-year period-end spacing guard (Jun-30 ↔ Dec-31 is 181-184d).
+_CACHE_SCHEMA = "cockpit-fundamentals-canonical/v2"
+_SOURCE_AUTHORITY = "canonical_fact_resolution"
+_METRICS = ("revenue", "free_cash_flow", "operating_cash_flow", "capital_expenditure")
+_CADENCES = (
+    FinancialCadence.QUARTERLY,
+    FinancialCadence.SEMIANNUAL,
+    FinancialCadence.REPORTED_TTM,
+)
 _SEMI_ANNUAL_GAP_DAYS = (175, 200)
 
-# ---------------------------------------------------------------------------
-# SQL (mirrors the logic in _eval_fundamentals; reads financial_facts directly
-# to avoid the metrics/ratios view ROW_NUMBER() scan over ALL line items).
-#
-# Tier-aware winner pick: LEFT JOIN documents so the ROW_NUMBER() dedup orders
-# by (source_quality_tier rank, id) — the SAME contract the Series loaders
-# (timeseries.loaders.load_financial_series) enforce, so a deterministic SEC
-# XBRL row beats an FMP row for the same logical key regardless of insertion
-# order. The prior ``source_doc_id DESC`` pick was source-agnostic and, on the
-# ~162k FMP+SEC duplicated keys, silently preferred whichever doc happened to
-# have the higher id (usually the later-ingested FMP row). LEFT JOIN (not inner)
-# keeps facts whose source_doc_id has no documents row (legacy/orphaned) — they
-# rank 0 and lose only to a real tiered row. ``id DESC`` remains the within-tier
-# tiebreak (most-recently-ingested wins). The FY/Q4 dual-write edge is inert
-# here: fiscal_period_type is in the PARTITION key, so FY and Q4 never collide.
-# ---------------------------------------------------------------------------
 
-# {tier_rank} / {doc_join} are filled per-connection (compute_from_db) via
-# reader_tier_rank_sql / reader_tier_join_sql so a pre-0053 fixture DB without
-# the tier column (or without documents) degrades to the id-only pick.
-_QUARTER_FUNDAMENTALS_SQL = """
-WITH dedup AS (
-    SELECT ff.ticker AS ticker,
-           CAST(substr(ff.period_end, 1, 4) AS INTEGER) AS fiscal_year,
-           ff.fiscal_period_type AS fiscal_period_type,
-           ff.line_item AS line_item, ff.value AS value, ff.period_end AS period_end,
-           ROW_NUMBER() OVER (
-               PARTITION BY ff.ticker, CAST(substr(ff.period_end, 1, 4) AS INTEGER),
-                            ff.fiscal_period_type, ff.line_item
-               ORDER BY {tier_rank} DESC, ff.id DESC
-           ) AS rn
-    FROM financial_facts ff
-    {doc_join}
-    WHERE ff.fiscal_period_type LIKE 'Q%'
-      AND ff.line_item IN ('revenue', 'free_cash_flow', 'operating_cash_flow',
-                        'capital_expenditure')
-)
-SELECT ticker,
-       MAX(period_end) AS period_end,
-       MAX(CASE WHEN line_item = 'revenue' THEN value END) AS revenue,
-       MAX(CASE WHEN line_item = 'free_cash_flow' THEN value END) AS free_cash_flow,
-       MAX(CASE WHEN line_item = 'operating_cash_flow' THEN value END) AS operating_cash_flow,
-       MAX(CASE WHEN line_item = 'capital_expenditure' THEN value END) AS capex
-FROM dedup
-WHERE rn = 1
-GROUP BY ticker, fiscal_year, fiscal_period_type
-HAVING MAX(CASE WHEN line_item = 'revenue' THEN value END) IS NOT NULL
-ORDER BY ticker, period_end DESC
-"""
+class CockpitMetricResult(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-_TTM_FCF_MARGIN_SQL = """
-WITH dedup AS (
-    SELECT ff.ticker AS ticker,
-           CAST(substr(ff.period_end, 1, 4) AS INTEGER) AS fiscal_year,
-           ff.line_item AS line_item, ff.value AS value,
-           ROW_NUMBER() OVER (
-               PARTITION BY ff.ticker, CAST(substr(ff.period_end, 1, 4) AS INTEGER),
-                            ff.fiscal_period_type, ff.line_item
-               ORDER BY {tier_rank} DESC, ff.id DESC
-           ) AS rn
-    FROM financial_facts ff
-    {doc_join}
-    WHERE ff.fiscal_period_type = 'TTM'
-      AND ff.line_item IN ('revenue', 'free_cash_flow')
-)
-SELECT ticker,
-       CAST(MAX(CASE WHEN line_item = 'free_cash_flow' THEN value END) AS REAL)
-           / NULLIF(MAX(CASE WHEN line_item = 'revenue' THEN value END), 0) AS fcf_margin
-FROM dedup
-WHERE rn = 1
-GROUP BY ticker, fiscal_year
-ORDER BY ticker, fiscal_year
-"""
+    status: Literal["available", "unavailable"]
+    value_pct: float | None = None
+    reason_code: str | None = None
+    calculation_kind: Literal["reported", "calculated", "unavailable"]
+    lineage: dict[str, object]
+    source_manifests: dict[str, object]
+
+    @model_validator(mode="after")
+    def _status_shape(self) -> CockpitMetricResult:
+        if self.status == "available":
+            if self.value_pct is None or self.reason_code is not None or not self.lineage:
+                raise ValueError("available cockpit metric requires value and lineage")
+        elif self.value_pct is not None or self.reason_code is None:
+            raise ValueError("unavailable cockpit metric requires one reason and no value")
+        if not self.source_manifests:
+            raise ValueError("cockpit metric requires canonical source manifests")
+        return self
 
 
-# ---------------------------------------------------------------------------
-# Private helpers
-# ---------------------------------------------------------------------------
+class CockpitTickerFundamentals(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    ticker: str
+    status: Literal["available", "partial", "unavailable"]
+    revenue_yoy: CockpitMetricResult
+    fcf_margin: CockpitMetricResult
 
 
-def _safe_rows(conn: sqlite3.Connection, sql: str) -> list[sqlite3.Row]:
-    try:
-        cur = conn.execute(sql)
-    except sqlite3.OperationalError:
-        return []
-    cur.row_factory = sqlite3.Row
-    return cur.fetchall()
+class CockpitFundamentalsSnapshot(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
+    schema_version: Literal["canonical-cockpit-fundamentals/v2"] = (
+        "canonical-cockpit-fundamentals/v2"
+    )
+    cutoff: datetime
+    source_authority: Literal["canonical_fact_resolution"] = _SOURCE_AUTHORITY
+    status: Literal["complete"] = "complete"
+    ticker_universe: tuple[str, ...]
+    fundamentals: dict[str, CockpitTickerFundamentals]
 
-def _quarter_fcf(row: sqlite3.Row) -> float | None:
-    try:
-        if row["free_cash_flow"] is not None:
-            return float(row["free_cash_flow"])
-        ocf, capex = row["operating_cash_flow"], row["capex"]
-        if ocf is not None and capex is not None:
-            return float(ocf) + float(capex)
-    except (TypeError, ValueError):
-        return None
-    return None
+    @model_validator(mode="after")
+    def _bind_manifests(self) -> CockpitFundamentalsSnapshot:
+        if tuple(sorted(self.fundamentals)) != self.ticker_universe:
+            raise ValueError("cockpit ticker universe does not match fundamentals")
+        for ticker, item in self.fundamentals.items():
+            if item.ticker != ticker:
+                raise ValueError("cockpit ticker payload does not match universe key")
+            _validate_metric_manifests(
+                item.revenue_yoy,
+                ticker=ticker,
+                cutoff=self.cutoff,
+                allowed={
+                    _series_key("revenue", FinancialCadence.QUARTERLY),
+                    _series_key("revenue", FinancialCadence.SEMIANNUAL),
+                },
+                required={
+                    _series_key("revenue", FinancialCadence.QUARTERLY),
+                    _series_key("revenue", FinancialCadence.SEMIANNUAL),
+                },
+            )
+            _validate_metric_manifests(
+                item.fcf_margin,
+                ticker=ticker,
+                cutoff=self.cutoff,
+                allowed={
+                    _series_key(metric, cadence) for metric in _METRICS for cadence in _CADENCES
+                },
+                required={
+                    _series_key("revenue", FinancialCadence.REPORTED_TTM),
+                    _series_key("free_cash_flow", FinancialCadence.REPORTED_TTM),
+                },
+            )
+        return self
 
-
-def _semi_annual_pair(
-    rows: list[tuple[str, float, float | None]],
-    window: list[tuple[datetime, float, float]],
-) -> list[tuple[datetime, float, float]]:
-    if len(window) < 3:
-        return []
-    lo, hi = _SEMI_ANNUAL_GAP_DAYS
-    if not all(lo <= (window[i][0] - window[i + 1][0]).days <= hi for i in (0, 1)):
-        return []
-    newer, older = window[0][0], window[1][0]
-    for end, _, _ in rows:
-        try:
-            dt = datetime.fromisoformat(end[:10])
-        except ValueError:
-            continue
-        if older < dt < newer:
-            return []
-    return window[:2]
-
-
-def _ttm_fcf_margin(rows: list[tuple[str, float, float | None]]) -> float | None:
-    window: list[tuple[datetime, float, float]] = []
-    for end, rev, q_fcf in rows:
-        if q_fcf is None:
-            continue
-        try:
-            dt = datetime.fromisoformat(end[:10])
-        except ValueError:
-            continue
-        if window and window[-1][0] == dt:
-            continue
-        window.append((dt, rev, q_fcf))
-        if len(window) == 4:
-            break
-    if len(window) == 4 and (window[0][0] - window[-1][0]).days <= 330:
-        ttm = window
-    else:
-        ttm = _semi_annual_pair(rows, window)
-    if not ttm:
-        return None
-    rev_sum = sum(rev for _, rev, _ in ttm)
-    if rev_sum <= 0:
-        return None
-    return sum(f for _, _, f in ttm) / rev_sum * 100.0
+    def value_projection(self) -> dict[str, tuple[float | None, float | None]]:
+        return {
+            ticker: (item.revenue_yoy.value_pct, item.fcf_margin.value_pct)
+            for ticker, item in self.fundamentals.items()
+        }
 
 
 def _cache_path(repo_root: Path) -> Path:
     return repo_root.joinpath(*_CACHE_REL)
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+def _series_key(metric: str, cadence: FinancialCadence) -> str:
+    return f"{metric}:{cadence.value}"
+
+
+def _manifest(series: CanonicalFinancialSeries) -> dict[str, object]:
+    return series.manifest()
+
+
+def _lineage_observation_ids(value: object, *, key: str = "") -> set[str]:
+    if isinstance(value, dict):
+        mapping = cast("dict[object, object]", value)
+        found: set[str] = set()
+        for child_key, child in mapping.items():
+            found.update(_lineage_observation_ids(child, key=str(child_key)))
+        return found
+    if key.endswith("_observation_id") and isinstance(value, str):
+        return {value}
+    if key.endswith("_observation_ids") and isinstance(value, (list, tuple)):
+        sequence = cast("list[object] | tuple[object, ...]", value)
+        return {item for item in sequence if isinstance(item, str)}
+    if isinstance(value, (list, tuple)):
+        sequence = cast("list[object] | tuple[object, ...]", value)
+        found = set()
+        for child in sequence:
+            found.update(_lineage_observation_ids(child))
+        return found
+    return set()
+
+
+def _validate_metric_manifests(
+    result: CockpitMetricResult,
+    *,
+    ticker: str,
+    cutoff: datetime,
+    allowed: set[str],
+    required: set[str],
+) -> None:
+    keys = set(result.source_manifests)
+    if not required.issubset(keys) or not keys.issubset(allowed):
+        raise ValueError("cockpit metric contains an unexpected canonical series manifest")
+    known_observations: set[str] = set()
+    known_candidates: set[str] = set()
+    for key, raw in result.source_manifests.items():
+        if not isinstance(raw, dict):
+            raise ValueError("cockpit canonical series manifest must be an object")
+        series = CanonicalFinancialSeries.model_validate(raw)
+        expected = _series_key(series.metric, series.cadence)
+        if (
+            key != expected
+            or series.ticker != ticker
+            or series.cutoff != cutoff
+            or series.continuity is not SeriesContinuity.WINDOWED
+        ):
+            raise ValueError("cockpit canonical series manifest binding mismatch")
+        known_observations.update(item.observation_id for item in series.observations)
+        known_candidates.update(item.observation_id for item in series.candidates)
+    lineage_ids = _lineage_observation_ids(result.lineage)
+    if not lineage_ids.issubset(known_observations | known_candidates):
+        raise ValueError("cockpit lineage is not bound to its canonical manifests")
+    if result.status == "available" and not lineage_ids.issubset(known_observations):
+        raise ValueError("available cockpit lineage requires admitted observations")
+
+
+def _read_series(
+    reader: CanonicalFinancialSeriesReader,
+    metric: str,
+    cadence: FinancialCadence,
+) -> CanonicalFinancialSeries:
+    return reader.read(metric, cadence=cadence, continuity=SeriesContinuity.WINDOWED)
+
+
+def _same_coordinate(
+    left: CanonicalFinancialObservation, right: CanonicalFinancialObservation
+) -> bool:
+    return left.coordinate == right.coordinate
+
+
+def _observations_by_coordinate(
+    series: CanonicalFinancialSeries,
+) -> dict[tuple[object, ...], CanonicalFinancialObservation]:
+    return {item.coordinate: item for item in series.observations}
+
+
+def _unavailable_metric(
+    reason: str,
+    manifests: Mapping[str, object],
+    *,
+    lineage: dict[str, object] | None = None,
+) -> CockpitMetricResult:
+    return CockpitMetricResult(
+        status="unavailable",
+        reason_code=reason,
+        calculation_kind="unavailable",
+        lineage=lineage or {},
+        source_manifests=dict(manifests),
+    )
+
+
+def _available_metric(
+    value: Decimal,
+    manifests: Mapping[str, object],
+    *,
+    calculation_kind: Literal["reported", "calculated"],
+    lineage: dict[str, object],
+) -> CockpitMetricResult:
+    return CockpitMetricResult(
+        status="available",
+        value_pct=float(value),
+        calculation_kind=calculation_kind,
+        lineage=lineage,
+        source_manifests=dict(manifests),
+    )
+
+
+def _pick_discrete_revenue(
+    quarterly: CanonicalFinancialSeries,
+    semiannual: CanonicalFinancialSeries,
+) -> CanonicalFinancialSeries | None:
+    available = [item for item in (quarterly, semiannual) if item.status == "available"]
+    if len(available) != 1:
+        return None
+    return available[0]
+
+
+def _revenue_yoy(
+    quarterly: CanonicalFinancialSeries,
+    semiannual: CanonicalFinancialSeries,
+) -> CockpitMetricResult:
+    manifests = {
+        _series_key("revenue", FinancialCadence.QUARTERLY): _manifest(quarterly),
+        _series_key("revenue", FinancialCadence.SEMIANNUAL): _manifest(semiannual),
+    }
+    series = _pick_discrete_revenue(quarterly, semiannual)
+    if series is None:
+        reason = (
+            "ambiguous_supported_financial_cadence"
+            if quarterly.status == semiannual.status == "available"
+            else quarterly.reason_code or semiannual.reason_code or "revenue_series_unavailable"
+        )
+        return _unavailable_metric(reason, manifests)
+    rows = sorted(series.observations, key=lambda item: item.period_end, reverse=True)
+    if not rows or rows[0].value == 0:
+        return _unavailable_metric("revenue_yoy_latest_unavailable", manifests)
+    latest = rows[0]
+    for prior in rows[1:]:
+        age = (latest.period_end.date() - prior.period_end.date()).days
+        if 330 <= age <= 430 and prior.value != 0:
+            value = (latest.value / prior.value - Decimal(1)) * Decimal(100)
+            return _available_metric(
+                value,
+                manifests,
+                calculation_kind="calculated",
+                lineage={
+                    "formula": "(latest_revenue/prior_revenue-1)*100",
+                    "cadence": series.cadence.value,
+                    "latest_observation_id": latest.observation_id,
+                    "prior_observation_id": prior.observation_id,
+                },
+            )
+    return _unavailable_metric("revenue_yoy_comparable_period_unavailable", manifests)
+
+
+def _reported_ttm_margin(
+    revenue: CanonicalFinancialSeries,
+    fcf: CanonicalFinancialSeries,
+) -> CockpitMetricResult | None:
+    manifests = {
+        _series_key("revenue", FinancialCadence.REPORTED_TTM): _manifest(revenue),
+        _series_key("free_cash_flow", FinancialCadence.REPORTED_TTM): _manifest(fcf),
+    }
+    if revenue.status != "available" or fcf.status != "available":
+        blocking = next(
+            (
+                item.reason_code
+                for item in (revenue, fcf)
+                if item.reason_code not in {None, "exact_financial_concept_unavailable"}
+            ),
+            None,
+        )
+        return _unavailable_metric(blocking, manifests) if blocking else None
+    revenue_by_coordinate = _observations_by_coordinate(revenue)
+    common = [item for item in fcf.observations if item.coordinate in revenue_by_coordinate]
+    if not common:
+        return _unavailable_metric("reported_ttm_exact_period_mismatch", manifests)
+    latest_fcf = max(common, key=lambda item: item.period_end)
+    latest_revenue = revenue_by_coordinate[latest_fcf.coordinate]
+    if latest_revenue.value <= 0:
+        return _unavailable_metric("reported_ttm_revenue_nonpositive", manifests)
+    return _available_metric(
+        latest_fcf.value / latest_revenue.value * Decimal(100),
+        manifests,
+        calculation_kind="calculated",
+        lineage={
+            "formula": "reported_ttm_free_cash_flow/reported_ttm_revenue*100",
+            "revenue_observation_id": latest_revenue.observation_id,
+            "free_cash_flow_observation_id": latest_fcf.observation_id,
+        },
+    )
+
+
+def _period_fcf(
+    revenue: CanonicalFinancialObservation,
+    direct: CanonicalFinancialSeries,
+    operating: CanonicalFinancialSeries,
+    capex: CanonicalFinancialSeries,
+) -> tuple[Decimal | None, dict[str, object], str | None]:
+    direct_map = _observations_by_coordinate(direct) if direct.status == "available" else {}
+    direct_item = direct_map.get(revenue.coordinate)
+    if direct_item is not None:
+        return (
+            direct_item.value,
+            {
+                "kind": "reported",
+                "free_cash_flow_observation_id": direct_item.observation_id,
+            },
+            None,
+        )
+    rejected_direct = tuple(
+        candidate.observation_id for candidate in direct.candidates if candidate.occupies(revenue)
+    )
+    if rejected_direct:
+        return (
+            None,
+            {"rejected_direct_candidate_observation_ids": rejected_direct},
+            "direct_free_cash_flow_candidate_rejected",
+        )
+    if direct.status == "unavailable" and direct.reason_code not in {
+        "exact_financial_concept_unavailable",
+    }:
+        return None, {}, direct.reason_code or "direct_free_cash_flow_rejected"
+    operating_map = (
+        _observations_by_coordinate(operating) if operating.status == "available" else {}
+    )
+    capex_map = _observations_by_coordinate(capex) if capex.status == "available" else {}
+    operating_item = operating_map.get(revenue.coordinate)
+    capex_item = capex_map.get(revenue.coordinate)
+    if operating_item is not None and capex_item is not None:
+        return (
+            operating_item.value + capex_item.value,
+            {
+                "kind": "calculated",
+                "formula": "operating_cash_flow+capital_expenditure",
+                "operating_cash_flow_observation_id": operating_item.observation_id,
+                "capital_expenditure_observation_id": capex_item.observation_id,
+            },
+            None,
+        )
+    rejected = next(
+        (
+            item.reason_code
+            for item in (operating, capex)
+            if item.status == "unavailable"
+            and item.reason_code not in {None, "exact_financial_concept_unavailable"}
+        ),
+        None,
+    )
+    return None, {}, rejected
+
+
+def _discrete_margin(
+    revenue: CanonicalFinancialSeries,
+    direct: CanonicalFinancialSeries,
+    operating: CanonicalFinancialSeries,
+    capex: CanonicalFinancialSeries,
+) -> CockpitMetricResult:
+    manifests = {
+        _series_key("revenue", revenue.cadence): _manifest(revenue),
+        _series_key("free_cash_flow", revenue.cadence): _manifest(direct),
+        _series_key("operating_cash_flow", revenue.cadence): _manifest(operating),
+        _series_key("capital_expenditure", revenue.cadence): _manifest(capex),
+    }
+    rows: list[tuple[CanonicalFinancialObservation, Decimal, dict[str, object]]] = []
+    blocking_reason: str | None = None
+    blocking_lineage: dict[str, object] = {}
+    ordered_revenue = sorted(revenue.observations, key=lambda item: item.period_end, reverse=True)
+    for revenue_item in ordered_revenue:
+        fcf, lineage, rejected = _period_fcf(revenue_item, direct, operating, capex)
+        if rejected is not None:
+            blocking_reason = rejected
+            blocking_lineage = lineage
+            break
+        if fcf is not None:
+            rows.append((revenue_item, fcf, lineage))
+    if blocking_reason is not None:
+        return _unavailable_metric(blocking_reason, manifests, lineage=blocking_lineage)
+    selected: list[tuple[CanonicalFinancialObservation, Decimal, dict[str, object]]] = []
+    if revenue.cadence is FinancialCadence.QUARTERLY:
+        if len(rows) >= 4 and (rows[0][0].period_end - rows[3][0].period_end).days <= 330:
+            selected = rows[:4]
+        else:
+            return _unavailable_metric("four_quarter_fcf_window_unavailable", manifests)
+    else:
+        if len(rows) < 3:
+            return _unavailable_metric("corroborated_semiannual_fcf_window_unavailable", manifests)
+        lo, hi = _SEMI_ANNUAL_GAP_DAYS
+        if not all(
+            lo <= (rows[index][0].period_end - rows[index + 1][0].period_end).days <= hi
+            for index in (0, 1)
+        ):
+            return _unavailable_metric("semiannual_fcf_cadence_unavailable", manifests)
+        newer, older = rows[0][0].period_end, rows[1][0].period_end
+        if any(older < item.period_end < newer for item in ordered_revenue):
+            return _unavailable_metric("semiannual_intervening_period", manifests)
+        selected = rows[:2]
+    revenue_sum = sum((item[0].value for item in selected), Decimal(0))
+    if revenue_sum <= 0:
+        return _unavailable_metric("fcf_margin_revenue_nonpositive", manifests)
+    fcf_sum = sum((item[1] for item in selected), Decimal(0))
+    return _available_metric(
+        fcf_sum / revenue_sum * Decimal(100),
+        manifests,
+        calculation_kind="calculated",
+        lineage={
+            "formula": "sum(period_free_cash_flow)/sum(period_revenue)*100",
+            "cadence": revenue.cadence.value,
+            "periods": [
+                {
+                    "revenue_observation_id": item[0].observation_id,
+                    **item[2],
+                }
+                for item in selected
+            ],
+        },
+    )
+
+
+def _fcf_margin(
+    series: dict[tuple[str, FinancialCadence], CanonicalFinancialSeries],
+) -> CockpitMetricResult:
+    ttm_revenue = series["revenue", FinancialCadence.REPORTED_TTM]
+    ttm_fcf = series["free_cash_flow", FinancialCadence.REPORTED_TTM]
+    ttm_manifests = {
+        _series_key("revenue", FinancialCadence.REPORTED_TTM): _manifest(ttm_revenue),
+        _series_key("free_cash_flow", FinancialCadence.REPORTED_TTM): _manifest(ttm_fcf),
+    }
+    ttm = _reported_ttm_margin(
+        ttm_revenue,
+        ttm_fcf,
+    )
+    if ttm is not None:
+        return ttm
+    quarterly_revenue = series["revenue", FinancialCadence.QUARTERLY]
+    semiannual_revenue = series["revenue", FinancialCadence.SEMIANNUAL]
+    revenue = _pick_discrete_revenue(quarterly_revenue, semiannual_revenue)
+    if revenue is None:
+        manifests = {
+            _series_key("revenue", FinancialCadence.QUARTERLY): _manifest(quarterly_revenue),
+            _series_key("revenue", FinancialCadence.SEMIANNUAL): _manifest(semiannual_revenue),
+        }
+        reason = (
+            "ambiguous_supported_financial_cadence"
+            if quarterly_revenue.status == semiannual_revenue.status == "available"
+            else quarterly_revenue.reason_code
+            or semiannual_revenue.reason_code
+            or "revenue_series_unavailable"
+        )
+        return _unavailable_metric(reason, {**ttm_manifests, **manifests})
+    cadence = revenue.cadence
+    result = _discrete_margin(
+        revenue,
+        series["free_cash_flow", cadence],
+        series["operating_cash_flow", cadence],
+        series["capital_expenditure", cadence],
+    )
+    return result.model_copy(
+        update={"source_manifests": {**ttm_manifests, **result.source_manifests}}
+    )
+
+
+def _compute_ticker(
+    conn: sqlite3.Connection,
+    ticker: str,
+    cutoff: datetime,
+) -> CockpitTickerFundamentals:
+    reader = CanonicalFinancialSeriesReader(conn, ticker, cutoff=cutoff)
+    series = {
+        (metric, cadence): _read_series(reader, metric, cadence)
+        for metric in _METRICS
+        for cadence in _CADENCES
+    }
+    revenue_yoy = _revenue_yoy(
+        series["revenue", FinancialCadence.QUARTERLY],
+        series["revenue", FinancialCadence.SEMIANNUAL],
+    )
+    fcf_margin = _fcf_margin(series)
+    available_count = sum(item.status == "available" for item in (revenue_yoy, fcf_margin))
+    status: Literal["available", "partial", "unavailable"] = (
+        "available"
+        if available_count == 2
+        else "partial"
+        if available_count == 1
+        else "unavailable"
+    )
+    return CockpitTickerFundamentals(
+        ticker=ticker,
+        status=status,
+        revenue_yoy=revenue_yoy,
+        fcf_margin=fcf_margin,
+    )
+
+
+def compute_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    cutoff: datetime | None = None,
+) -> CockpitFundamentalsSnapshot:
+    """Compute one complete canonical snapshot or raise before publication."""
+    cutoff_at = cutoff or datetime.now(UTC)
+    if cutoff_at.tzinfo is None:
+        raise ValueError("cockpit fundamentals cutoff must be timezone-aware")
+    cutoff_at = cutoff_at.astimezone(UTC)
+    owns_snapshot = not conn.in_transaction
+    try:
+        if owns_snapshot:
+            conn.execute("BEGIN")
+        tickers = discover_canonical_financial_tickers(
+            conn,
+            metrics=_METRICS,
+            cadences=_CADENCES,
+            cutoff=cutoff_at,
+        )
+        fundamentals = {ticker: _compute_ticker(conn, ticker, cutoff_at) for ticker in tickers}
+        return CockpitFundamentalsSnapshot(
+            cutoff=cutoff_at,
+            ticker_universe=tickers,
+            fundamentals=fundamentals,
+        )
+    finally:
+        if owns_snapshot and conn.in_transaction:
+            conn.rollback()
 
 
 def compute_from_db(
     conn: sqlite3.Connection,
+    *,
+    cutoff: datetime | None = None,
 ) -> dict[str, tuple[float | None, float | None]]:
-    """(rev_yoy_pct, fcf_margin_pct) per ticker — direct DB scan.
-
-    Revenue YoY: latest quarterly row vs the first row at least ~11 months
-    older. FCF margin: TTM row when present, else summed from the newest four
-    quarterly rows (semi-annual reporters sum the newest two half-years).
-    Degrades to {} when financial_facts is absent.
-    """
-    tier_rank = reader_tier_rank_sql(conn)
-    doc_join = reader_tier_join_sql(conn)
-    ttm_sql = _TTM_FCF_MARGIN_SQL.format(tier_rank=tier_rank, doc_join=doc_join)
-    quarter_sql = _QUARTER_FUNDAMENTALS_SQL.format(tier_rank=tier_rank, doc_join=doc_join)
-
-    fcf: dict[str, float] = {}
-    for r in _safe_rows(conn, ttm_sql):
-        try:
-            if r["fcf_margin"] is not None:
-                fcf[str(r["ticker"]).upper()] = float(r["fcf_margin"]) * 100.0
-        except (TypeError, ValueError):
-            continue
-
-    by_ticker: dict[str, list[tuple[str, float, float | None]]] = {}
-    for r in _safe_rows(conn, quarter_sql):
-        try:
-            rev = float(r["revenue"])
-        except (TypeError, ValueError):
-            continue
-        by_ticker.setdefault(str(r["ticker"]).upper(), []).append(
-            (str(r["period_end"]), rev, _quarter_fcf(r))
-        )
-
-    out: dict[str, tuple[float | None, float | None]] = {}
-    for t, rows in by_ticker.items():
-        rev_yoy: float | None = None
-        if rows:
-            latest_end, latest_rev, _ = rows[0]
-            try:
-                latest_dt = datetime.fromisoformat(latest_end[:10])
-            except ValueError:
-                latest_dt = None
-            if latest_dt is not None and latest_rev:
-                for end, rev, _ in rows[1:]:
-                    try:
-                        dt = datetime.fromisoformat(end[:10])
-                    except ValueError:
-                        continue
-                    age = (latest_dt - dt).days
-                    if 330 <= age <= 430 and rev:
-                        rev_yoy = (latest_rev / rev - 1.0) * 100.0
-                        break
-        margin = fcf.get(t)
-        if margin is None:
-            margin = _ttm_fcf_margin(rows)
-        out[t] = (rev_yoy, margin)
-    for t, margin in fcf.items():
-        out.setdefault(t, (None, margin))
-    return out
+    """Compatibility projection for render fallback; canonical data only."""
+    try:
+        return compute_snapshot(conn, cutoff=cutoff).value_projection()
+    except (CanonicalFinancialReadError, sqlite3.Error, ValueError):
+        return {}
 
 
-def materialize_fundamentals(conn: sqlite3.Connection, repo_root: Path) -> int:
-    """Compute and write the fundamentals cache atomically.
-
-    Returns the number of tickers materialised. The cache is only overwritten
-    on a successful computation — a DB error leaves the last-good file intact.
-    """
-    data = compute_from_db(conn)
-    serialisable = {t: list(v) for t, v in data.items()}
+def materialize_fundamentals(
+    conn: sqlite3.Connection,
+    repo_root: Path,
+    *,
+    cutoff: datetime | None = None,
+) -> int:
+    """Atomically replace the cache only after a complete canonical read."""
+    snapshot = compute_snapshot(conn, cutoff=cutoff)
     payload: dict[str, object] = {
-        **cache_metadata(_CACHE_SCHEMA),
-        "fundamentals": serialisable,
+        **cache_metadata(_CACHE_SCHEMA, now=snapshot.cutoff),
+        "snapshot": snapshot.model_dump(mode="json"),
     }
-    path = _cache_path(repo_root)
-    write_payload_atomically(path, payload, prefix="cockpit_fundamentals.")
-    return len(data)
+    write_payload_atomically(_cache_path(repo_root), payload, prefix="cockpit_fundamentals.")
+    return len(snapshot.ticker_universe)
+
+
+def _read_cached_snapshot(repo_root: Path) -> CockpitFundamentalsSnapshot | None:
+    payload = read_fresh_payload(_cache_path(repo_root), schema=_CACHE_SCHEMA)
+    if not payload:
+        return None
+    raw = payload.get("snapshot")
+    computed_at = payload.get("computed_at")
+    if not isinstance(raw, dict) or not isinstance(computed_at, str):
+        return None
+    try:
+        snapshot = CockpitFundamentalsSnapshot.model_validate(raw)
+        envelope_cutoff = datetime.fromisoformat(computed_at.replace("Z", "+00:00"))
+        if envelope_cutoff.tzinfo is None:
+            envelope_cutoff = envelope_cutoff.replace(tzinfo=UTC)
+        else:
+            envelope_cutoff = envelope_cutoff.astimezone(UTC)
+    except ValueError:
+        return None
+    if envelope_cutoff != snapshot.cutoff.astimezone(UTC):
+        return None
+    return snapshot
 
 
 def read_materialized_fundamentals(
     repo_root: Path,
 ) -> dict[str, tuple[float | None, float | None]]:
-    """Read the cache; {} when absent, unreadable, or malformed.
-
-    This is the render path's only fundamentals source — a pure disk read,
-    never a DB query.
-    """
-    payload = read_fresh_payload(_cache_path(repo_root), schema=_CACHE_SCHEMA)
-    if not payload:
-        return {}
-    fund = payload.get("fundamentals")
-    if not isinstance(fund, dict):
-        return {}
-    out: dict[str, tuple[float | None, float | None]] = {}
-    for ticker, pair in cast("dict[str, object]", fund).items():
-        if not isinstance(pair, list) or len(cast("list[object]", pair)) != 2:
-            continue
-        rev_yoy_raw, fcf_margin_raw = cast("list[object]", pair)
-        rev_yoy: float | None = (
-            float(cast("float", rev_yoy_raw))
-            if isinstance(rev_yoy_raw, (int, float)) and not isinstance(rev_yoy_raw, bool)
-            else None
-        )
-        fcf_margin: float | None = (
-            float(cast("float", fcf_margin_raw))
-            if isinstance(fcf_margin_raw, (int, float)) and not isinstance(fcf_margin_raw, bool)
-            else None
-        )
-        out[str(ticker).upper()] = (rev_yoy, fcf_margin)
-    return out
+    """Read a complete, fresh canonical cache and project existing values."""
+    snapshot = _read_cached_snapshot(repo_root)
+    return {} if snapshot is None else snapshot.value_projection()

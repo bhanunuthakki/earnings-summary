@@ -11,6 +11,8 @@ from typing import TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
+from log_redact import redact_payload
+
 log = logging.getLogger(__name__)
 T = TypeVar("T")
 DEFAULT_REJECTION_DIR = Path(__file__).resolve().parents[2] / ".tmp" / "schema_rejections"
@@ -39,7 +41,7 @@ def _write_rejection(
         "raw": raw,
     }
     with destination.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, default=str, sort_keys=True) + "\n")
+        handle.write(json.dumps(redact_payload(record), sort_keys=True) + "\n")
 
 
 def validate_provider_rows(

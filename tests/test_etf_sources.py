@@ -22,25 +22,24 @@ from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from etf_sources import ingest as etf_ingest  # noqa: E402
-from etf_sources import nport, vanguard  # noqa: E402
-from etf_sources.issuer_registry import (  # noqa: E402
+from etf_sources import ingest as etf_ingest
+from etf_sources import nport, vanguard
+from etf_sources.issuer_registry import (
     IssuerCharacteristics,
     IssuerData,
     fetch_issuer_data,
 )
-from etf_sources.nport import (  # noqa: E402
+from etf_sources.nport import (
     FundRef,
     NportParseError,
-    _recent_nport_accessions,
-    _resolve_fund_from_payload,
     parse_nport,
 )
-from instrument_store import get_etf_holdings, get_etf_profile, upsert_etf_profile  # noqa: E402
-from models.instruments import EtfHolding, EtfProfile  # noqa: E402
+from instrument_store import get_etf_holdings, get_etf_profile, upsert_etf_profile
+from models.instruments import EtfHolding, EtfProfile
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -158,6 +157,7 @@ CREATE TABLE etf_profile (
     pe_ratio REAL, pb_ratio REAL, weighted_avg_mktcap_usd_m REAL,
     characteristics_as_of TEXT, characteristics_source TEXT,
     source TEXT NOT NULL DEFAULT 'fmp',
+    field_evidence_json TEXT NOT NULL DEFAULT '{}',
     profile_fetched_at TIMESTAMP NOT NULL
 );
 CREATE TABLE etf_holdings (
@@ -188,30 +188,54 @@ def etf_db(tmp_path: Path) -> Iterator[sqlite3.Connection]:
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_fund_from_payload() -> None:
-    ref = _resolve_fund_from_payload(FUND_MAP, "test")
+def _resolve_payload(
+    payload: object, ticker: str, monkeypatch: pytest.MonkeyPatch
+) -> FundRef | None:
+    def fake_get(*_args: object, **_kwargs: object) -> object:
+        return payload
+
+    monkeypatch.setattr(nport, "_sec_get", fake_get)
+    return nport.resolve_fund(ticker)
+
+
+def test_resolve_fund_from_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    ref = _resolve_payload(FUND_MAP, "test", monkeypatch)
     assert ref == FundRef(ticker="TEST", cik=2222222, series_id="S000068000", class_id="C000217000")
 
 
-def test_resolve_fund_missing_symbol_is_none() -> None:
-    assert _resolve_fund_from_payload(FUND_MAP, "NOPE") is None
+def test_resolve_fund_missing_symbol_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _resolve_payload(FUND_MAP, "NOPE", monkeypatch) is None
 
 
-def test_resolve_fund_malformed_payload_is_none() -> None:
-    assert _resolve_fund_from_payload({"data": "junk"}, "TEST") is None
-    assert _resolve_fund_from_payload(None, "TEST") is None
+def test_resolve_fund_malformed_payload_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert _resolve_payload({"data": "junk"}, "TEST", monkeypatch) is None
+    assert _resolve_payload(None, "TEST", monkeypatch) is None
 
 
-def test_recent_nport_accessions_sorted_and_filtered() -> None:
-    hits = _recent_nport_accessions(SUBMISSIONS)
-    assert [a for _, a, _ in hits] == ["0001-26-000003", "0001-26-000002"]
-    assert all(doc == "primary_doc.xml" for _, _, doc in hits)
+def _probed_urls(payload: object, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    urls: list[str] = []
+
+    def fake_get(url: str, *, user_agent: str, as_json: bool) -> object:
+        if as_json:
+            return payload
+        urls.append(url)
+        return None
+
+    monkeypatch.setattr(nport, "_sec_get", fake_get)
+    ref = FundRef(ticker="TEST", cik=2222222, series_id="S000068000", class_id="C000217000")
+    assert nport.fetch_latest_report(ref) is None
+    return urls
 
 
-def test_recent_nport_accessions_normalizes_xsl_rendered_path() -> None:
-    """EDGAR's submissions index lists the XSL-RENDERED path for NPORT-P
-    (serves HTML); the raw XML is the bare basename — caught by the AVDV
-    end-to-end (the rendered doc halted the parser)."""
+def test_recent_nport_accessions_sorted_and_filtered(monkeypatch: pytest.MonkeyPatch) -> None:
+    urls = _probed_urls(SUBMISSIONS, monkeypatch)
+    assert [url.rsplit("/", 2)[-2] for url in urls] == ["000126000003", "000126000002"]
+    assert all(url.endswith("/primary_doc.xml") for url in urls)
+
+
+def test_recent_nport_accessions_normalizes_xsl_rendered_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     payload = {
         "filings": {
             "recent": {
@@ -222,8 +246,9 @@ def test_recent_nport_accessions_normalizes_xsl_rendered_path() -> None:
             }
         }
     }
-    hits = _recent_nport_accessions(payload)
-    assert hits == [("2026-06-30", "0001-26-000009", "primary_doc.xml")]
+    assert _probed_urls(payload, monkeypatch) == [
+        nport.EDGAR_FILE_URL.format(cik_int=2222222, acc="000126000009", name="primary_doc.xml")
+    ]
 
 
 def test_fetch_latest_report_skips_html_rendering(
@@ -398,6 +423,7 @@ def test_vanguard_fetch_paginates_and_ranks(monkeypatch: pytest.MonkeyPatch) -> 
     assert data.characteristics is not None
     assert data.characteristics.expense_ratio == pytest.approx(0.0006)  # 0.06% → decimal
     assert data.characteristics.issuer == "Vanguard"
+    assert data.characteristics.as_of is None  # Holdings dates do not date profile fields.
 
 
 # ---------------------------------------------------------------------------
@@ -435,12 +461,28 @@ def _report(as_of: date = date(2026, 5, 31)) -> nport.NportReport:
     )
 
 
+def _no_data(*_args: object, **_kwargs: object) -> None:
+    return None
+
+
+def _report_data(*_args: object, **_kwargs: object) -> nport.NportReport:
+    return _report()
+
+
+def _no_prices(*_args: object, **_kwargs: object) -> list[tuple[date, float]]:
+    return []
+
+
+def _prices(*_args: object, **_kwargs: object) -> list[tuple[date, float]]:
+    return [(date(2026, 7, 9), 100.0)]
+
+
 def test_refresh_published_data_spine_and_idempotency(
     etf_db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(etf_ingest.nport, "fetch_holdings", lambda t, **kw: _report())
-    monkeypatch.setattr(etf_ingest, "fetch_issuer_data", lambda t: None)
-    monkeypatch.setattr(etf_ingest, "fetch_proxy_series", lambda t, period: [])
+    monkeypatch.setattr(etf_ingest.nport, "fetch_holdings", _report_data)
+    monkeypatch.setattr(etf_ingest, "fetch_issuer_data", _no_data)
+    monkeypatch.setattr(etf_ingest, "fetch_proxy_series", _no_prices)
 
     result = etf_ingest.refresh_published_data(etf_db, "TEST", tmp_path)
     assert result.nport_status == "ingested"
@@ -480,11 +522,13 @@ def test_refresh_published_data_issuer_overlay_and_prices(
             source="issuer:vanguard", expense_ratio=0.0006, name="Test EM ETF", issuer="Vanguard"
         ),
     )
-    monkeypatch.setattr(etf_ingest.nport, "fetch_holdings", lambda t, **kw: None)
-    monkeypatch.setattr(etf_ingest, "fetch_issuer_data", lambda t: overlay)
-    monkeypatch.setattr(
-        etf_ingest, "fetch_proxy_series", lambda t, period: [(date(2026, 7, 9), 100.0)]
-    )
+
+    def issuer_data(_ticker: str) -> IssuerData:
+        return overlay
+
+    monkeypatch.setattr(etf_ingest.nport, "fetch_holdings", _no_data)
+    monkeypatch.setattr(etf_ingest, "fetch_issuer_data", issuer_data)
+    monkeypatch.setattr(etf_ingest, "fetch_proxy_series", _prices)
 
     result = etf_ingest.refresh_published_data(etf_db, "TEST", tmp_path)
     assert result.nport_status == "unavailable"
@@ -538,8 +582,8 @@ def test_refresh_skips_price_fetch_when_closes_exist(
     from factor_proxies import store_proxy_series
 
     store_proxy_series(tmp_path, "TEST", [(date(2026, 7, 8), 99.0), (date(2026, 7, 9), 100.0)])
-    monkeypatch.setattr(etf_ingest.nport, "fetch_holdings", lambda t, **kw: None)
-    monkeypatch.setattr(etf_ingest, "fetch_issuer_data", lambda t: None)
+    monkeypatch.setattr(etf_ingest.nport, "fetch_holdings", _no_data)
+    monkeypatch.setattr(etf_ingest, "fetch_issuer_data", _no_data)
 
     def no_fetch(t: str, period: str) -> list[tuple[date, float]]:
         raise AssertionError("must not fetch when closes are on file")

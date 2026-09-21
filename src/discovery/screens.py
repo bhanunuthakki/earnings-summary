@@ -1,30 +1,17 @@
 """Factor screens over the tracked universe (master build P5.3).
 
-Deterministic and offline: the screening universe is
-``tracked_companies WHERE list_type='index_member'`` (~2,340 S&P 500 +
-Russell 2000 names) and every input comes from the LOCAL FMP caches under
-``data/historical/fmp/`` — ``{T}_profile.json`` (sector/industry/mcap),
-``{T}_key_metrics_quarterly.json`` (ROIC/ROE/FCF-yield/ND-EBITDA, ~25
-quarters), ``{T}_income_statement_quarterly.json`` (revenue/margin
-series). No network, no LLM; a name with no cache simply can't screen in
-(coverage today is ~97% of the universe).
+All financial screens use canonical resolved observations and exact calculation
+references. ROIC stays unavailable until its definition is selected. Raw vendor
+metrics are retained only as a dual-read shadow; they never supply screen values.
 
-Convention notes baked into the math:
-  * FMP stable-API ratio fields are FRACTIONS PER QUARTER (NU ROE 0.069 =
-    6.9% for the quarter) — TTM-ize by summing the last 4 quarters for
-    return/yield ratios; netDebtToEBITDA divides by ONE quarter's EBITDA,
-    so /4 approximates the TTM multiple.
-  * Revenue YoY compares the latest quarter against the same quarter a
-    year earlier from the income-statement series (date-sorted, gap-safe).
-  * A missing metric fails the conditions that need it — EXCEPT
-    net-debt/EBITDA, which is skipped when absent or non-positive-EBITDA
-    (banks/financials, where the multiple is meaningless).
-  * Index lists carry GHOSTS — the prod dry-run surfaced 61 delisted
-    names (Mentor Graphics, Apollo Education, ...) whose frozen caches
-    happily pass value screens on years-old numbers. Two gates: the
-    profile's ``isActivelyTrading`` flag (absent = assumed trading), and
-    a freshness cut — the latest income-statement quarter must be within
-    ``max_staleness_days`` of the run date.
+Deterministic and offline: the universe is tracked index members. Financial
+values cross the canonical resolver and retain observation/definition/period
+references; provider market context requires a hash-bound captured profile.
+Raw local FMP metrics are numerical shadows only, including their legacy
+quarter-summing conventions. Their availability or agreement does not prove
+canonical definition parity. Missing required inputs fail closed; optional
+leverage remains explicitly unavailable. The existing active-trading and
+reporting-period freshness gates still apply.
 
 Each screen returns the actual numbers as its evidence detail, so a
 candidate explains itself in the queue.
@@ -36,12 +23,25 @@ import json
 import logging
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
 from identity import DEFAULT_USER_ID
+from provenance.immutable_artifact import read_stable_artifact
+from sources.discovery_financial_inputs import (
+    financial_parity_receipt,
+    free_cash_flow_yield,
+    read_financial_inputs,
+)
+from sources.discovery_financials import (
+    GrowthFinancials,
+    growth_parity_receipt,
+    read_growth_financials,
+)
+from sources.discovery_market import read_market_context
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -65,6 +65,8 @@ class TickerMetrics:
     op_margin_ttm: float | None
     is_actively_trading: bool  # profile flag; absent = assumed True
     latest_income_date: str | None  # ISO date of the newest income quarter
+    market_cap_currency: str | None = None
+    source_hashes: dict[str, str] = field(default_factory=lambda: dict[str, str]())
 
 
 @dataclass(slots=True)
@@ -75,6 +77,7 @@ class ScreenHit:
     name: str | None
     screen: str
     detail: str
+    evidence: dict[str, object] | None = None
 
 
 def _pct(v: float | None) -> str:
@@ -108,7 +111,7 @@ def _screen_fcf_value(m: TickerMetrics) -> str | None:
         return None
     if m.rev_yoy is None or m.rev_yoy < 0.0:
         return None
-    if m.market_cap is None or m.market_cap < 2e9:
+    if m.market_cap_currency != "USD" or m.market_cap is None or m.market_cap < 2e9:
         return None
     return (
         f"FCF yield {_pct(m.fcf_yield_ttm)} TTM, ROIC {_pct(m.roic_ttm)}, "
@@ -146,14 +149,19 @@ SCREENS: dict[str, ScreenFn] = {
 # ---------------------------------------------------------------------------
 
 
-def _load_records(fmp_dir: Path, ticker: str, suffix: str) -> list[dict[str, object]]:
+def _load_records(
+    fmp_dir: Path, ticker: str, suffix: str, *, source_hashes: dict[str, str] | None = None
+) -> list[dict[str, object]]:
     """One cache file as a date-DESC-sorted record list; [] when absent/bad."""
     path = fmp_dir / f"{ticker.upper()}_{suffix}.json"
     if not path.exists():
         return []
     try:
-        raw: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        snapshot, content = read_stable_artifact(path)
+        raw: object = json.loads(content)
+        if source_hashes is not None:
+            source_hashes[path.name] = snapshot.file_sha256
+    except (OSError, ValueError, RuntimeError):
         return []
     if not isinstance(raw, list):
         return []
@@ -211,10 +219,11 @@ def _ttm_margin(records: list[dict[str, object]], num_key: str) -> float | None:
 
 def load_ticker_metrics(fmp_dir: Path, ticker: str, name: str | None) -> TickerMetrics:
     """Build the screenable bundle for one ticker from the local caches."""
-    profile_recs = _load_records(fmp_dir, ticker, "profile")
+    source_hashes: dict[str, str] = {}
+    profile_recs = _load_records(fmp_dir, ticker, "profile", source_hashes=source_hashes)
     profile = profile_recs[0] if profile_recs else {}
-    km = _load_records(fmp_dir, ticker, "key_metrics_quarterly")
-    inc = _load_records(fmp_dir, ticker, "income_statement_quarterly")
+    km = _load_records(fmp_dir, ticker, "key_metrics_quarterly", source_hashes=source_hashes)
+    inc = _load_records(fmp_dir, ticker, "income_statement_quarterly", source_hashes=source_hashes)
 
     nd_q = _num(km[0], "netDebtToEBITDA") if km else None
     sector_raw = profile.get("sector")
@@ -237,6 +246,7 @@ def load_ticker_metrics(fmp_dir: Path, ticker: str, name: str | None) -> TickerM
         op_margin_ttm=_ttm_margin(inc, "operatingIncome"),
         is_actively_trading=profile.get("isActivelyTrading") is not False,
         latest_income_date=latest_date or None,
+        source_hashes=source_hashes,
     )
 
 
@@ -252,6 +262,50 @@ def is_actively_trading(fmp_dir: Path, ticker: str) -> bool:
 # ---------------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------------
+
+
+def canonical_ticker_metrics(
+    conn: sqlite3.Connection, source_dir: Path, ticker: str, name: str | None, *, as_of: date
+) -> tuple[TickerMetrics, dict[str, object]]:
+    financials = read_financial_inputs(conn, ticker, as_of=as_of)
+    growth = read_growth_financials(conn, ticker, as_of=as_of)
+    market = read_market_context(conn, source_dir, ticker, as_of=as_of)
+    cash_yield = free_cash_flow_yield(financials, market)
+    legacy = load_ticker_metrics(source_dir, ticker, name)
+
+    def number(value: Decimal | None) -> float | None:
+        return float(value) if value is not None else None
+
+    refs = financials.revenue_yoy.references
+    latest = max((item.period_end for item in refs), default=None)
+    return TickerMetrics(
+        ticker=ticker.upper(),
+        name=name or market.name,
+        sector=market.sector,
+        industry=market.industry,
+        market_cap=number(market.market_cap) if market.status == "available" else None,
+        market_cap_currency=market.currency,
+        roic_ttm=number(financials.roic_ttm.value),
+        fcf_yield_ttm=number(cash_yield.value),
+        nd_to_ebitda_ttm=number(financials.net_debt_to_ebitda.value),
+        rev_yoy=number(financials.revenue_yoy.value),
+        rev_yoy_prior=number(growth.revenue_yoy_prior) if growth.status == "available" else None,
+        gross_margin_ttm=number(growth.gross_margin_ttm) if growth.status == "available" else None,
+        op_margin_ttm=number(financials.operating_margin_ttm.value),
+        is_actively_trading=market.actively_trading is not False,
+        latest_income_date=latest.isoformat() if latest else None,
+    ), {
+        "financials": financials.model_dump(mode="json"),
+        "market": market.model_dump(mode="json"),
+        "free_cash_flow_yield": cash_yield.model_dump(mode="json"),
+        "growth": growth.model_dump(mode="json"),
+        "dual_read_parity": financial_parity_receipt(
+            financials,
+            cash_yield,
+            legacy_values=(legacy.rev_yoy, legacy.op_margin_ttm, legacy.fcf_yield_ttm),
+            legacy_source_hashes=legacy.source_hashes,
+        ),
+    }
 
 
 def screening_universe(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> list[tuple[str, str]]:
@@ -284,9 +338,11 @@ def run_screens(
     user_id: str = DEFAULT_USER_ID,
     as_of: date | None = None,
     max_staleness_days: int = 400,
+    growth_coverage_sink: Callable[[GrowthFinancials], None] | None = None,
+    financial_coverage_sink: Callable[[str, dict[str, object]], None] | None = None,
 ) -> list[ScreenHit]:
-    """Screen the whole universe. Pure cache reads — a few seconds for ~2.3k
-    names; tickers without caches simply produce no hits. Ghost gates: a
+    """Screen the universe using canonical financial inputs and captured market context.
+    Missing or incomparable facts yield explicit unavailable coverage. Ghost gates: a
     profile flagged not-actively-trading is skipped outright, and so is a
     name whose newest income quarter predates ``as_of`` (default today) by
     more than ``max_staleness_days`` — frozen caches of delisted names
@@ -295,25 +351,99 @@ def run_screens(
     cutoff = ((as_of or date.today()) - timedelta(days=max_staleness_days)).isoformat()
     skipped_ghosts = 0
     universe = screening_universe(db_path, user_id=user_id)
-    for ticker, name in universe:
-        metrics = load_ticker_metrics(fmp_dir, ticker, name)
-        if not metrics.is_actively_trading or (
-            metrics.latest_income_date is not None and metrics.latest_income_date < cutoff
-        ):
-            skipped_ghosts += 1
-            continue
-        for screen_key, check in SCREENS.items():
-            detail = check(metrics)
-            if detail is not None:
-                hits.append(
-                    ScreenHit(ticker=ticker, name=metrics.name, screen=screen_key, detail=detail)
-                )
+    if not universe:
+        return hits
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    canonical_unavailable = 0
+    try:
+        for ticker, name in universe:
+            legacy_metrics = load_ticker_metrics(fmp_dir, ticker, name)
+            metrics, canonical_evidence = canonical_ticker_metrics(
+                conn, fmp_dir, ticker, name, as_of=as_of or date.today()
+            )
+            if financial_coverage_sink is not None:
+                financial_coverage_sink(ticker, canonical_evidence)
+            if not metrics.is_actively_trading:
+                skipped_ghosts += 1
+                continue
+            for screen_key, check in SCREENS.items():
+                candidate = metrics
+                evidence: dict[str, object] | None = canonical_evidence
+                if screen_key == "growth_inflection":
+                    resolved = GrowthFinancials.model_validate(canonical_evidence["growth"])
+                    if (
+                        resolved.latest_period_end is not None
+                        and resolved.latest_period_end.isoformat() < cutoff
+                    ):
+                        resolved = resolved.model_copy(
+                            update={
+                                "status": "degraded",
+                                "reason_codes": ("stale_latest_reporting_period",),
+                            }
+                        )
+                    if growth_coverage_sink is not None:
+                        growth_coverage_sink(resolved)
+                    if resolved.status != "available":
+                        canonical_unavailable += 1
+                        log.info(
+                            {
+                                "event": "discovery_growth_unavailable",
+                                "ticker": ticker,
+                                "reason_codes": resolved.reason_codes,
+                            }
+                        )
+                        continue
+                    candidate = replace(
+                        metrics,
+                        rev_yoy=float(resolved.revenue_yoy)
+                        if resolved.revenue_yoy is not None
+                        else None,
+                        rev_yoy_prior=float(resolved.revenue_yoy_prior)
+                        if resolved.revenue_yoy_prior is not None
+                        else None,
+                        gross_margin_ttm=float(resolved.gross_margin_ttm)
+                        if resolved.gross_margin_ttm is not None
+                        else None,
+                        latest_income_date=resolved.latest_period_end.isoformat()
+                        if resolved.latest_period_end
+                        else None,
+                    )
+                    evidence = resolved.model_dump(mode="json")
+                    evidence["dual_read_parity"] = growth_parity_receipt(
+                        resolved,
+                        legacy_values=(
+                            legacy_metrics.rev_yoy,
+                            legacy_metrics.rev_yoy_prior,
+                            legacy_metrics.gross_margin_ttm,
+                        ),
+                        legacy_source_hashes=legacy_metrics.source_hashes,
+                    )
+                if (
+                    candidate.latest_income_date is not None
+                    and candidate.latest_income_date < cutoff
+                ):
+                    skipped_ghosts += 1
+                    continue
+                detail = check(candidate)
+                if detail is not None:
+                    hits.append(
+                        ScreenHit(
+                            ticker=ticker,
+                            name=candidate.name,
+                            screen=screen_key,
+                            detail=detail,
+                            evidence=evidence,
+                        )
+                    )
+    finally:
+        conn.close()
     log.info(
         {
             "event": "discovery_screens_done",
             "universe": len(universe),
             "hits": len(hits),
             "skipped_ghosts": skipped_ghosts,
+            "canonical_growth_unavailable": canonical_unavailable,
         }
     )
     return hits

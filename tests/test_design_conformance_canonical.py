@@ -10,17 +10,14 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC))
-
-from execution import verify_design_conformance as design_verifier  # noqa: E402
-from ui import conformance_scan  # noqa: E402
-from ui import design_registry as registry  # noqa: E402
-from ui.conformance_scan import (  # noqa: E402
+from execution import verify_design_conformance as design_verifier
+from ui import conformance_scan
+from ui import design_registry as registry
+from ui.conformance_scan import (
     DIMENSIONS,
     css_text,
     discover_emitters,
@@ -33,7 +30,17 @@ from ui.conformance_scan import (  # noqa: E402
     scan_surface_evidence,
 )
 
-_scan_canary = design_verifier._scan_canary  # pyright: ignore[reportPrivateUsage]
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC = PROJECT_ROOT / "src"
+
+
+class _ScanCanary(Protocol):
+    def __call__(
+        self, canary_url: str | None, *, browser_canary: bool = False
+    ) -> design_verifier.CanaryResult: ...
+
+
+_scan_canary = cast(_ScanCanary, getattr(design_verifier, "_scan_canary"))
 
 EXPECTED_OLD_DIMENSIONS = {
     "color",
@@ -1552,7 +1559,7 @@ def test_nested_static_brace_specs_reconstruct_before_scanning(tmp_path: Path) -
 
 
 def test_registry_contract_is_versioned_for_importable_scanner() -> None:
-    assert registry.REGISTRY_VERSION == "1.12.0"
+    assert registry.REGISTRY_VERSION == "1.12.1"
     exemptions = {entry.surface: entry for entry in registry.PERMANENT_EXEMPTIONS}
     scanner = exemptions["ui/conformance_scan.py"]
     assert scanner.owner == "design-system"
@@ -1739,7 +1746,7 @@ def test_cli_canary_does_not_follow_redirects(tmp_path: Path) -> None:
             self.end_headers()
             self.wfile.write(b"<main>unexpected redirect target</main>")
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        def log_message(self, *args: object, **kwargs: object) -> None:
             return
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
@@ -1785,7 +1792,7 @@ def test_canary_fetch_has_an_absolute_wall_deadline() -> None:
                     break
                 time.sleep(0.25)
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        def log_message(self, *args: object, **kwargs: object) -> None:
             return
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), TrickleHandler)

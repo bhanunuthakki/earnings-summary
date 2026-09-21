@@ -15,22 +15,15 @@ import hashlib
 import json
 import shutil
 import sqlite3
-import sys
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from pipeline.dashboard_status import DashboardRow  # noqa: E402
-from pipeline.research_cockpit import (  # noqa: E402
+from pipeline.dashboard_status import DashboardRow
+from pipeline.research_cockpit import (
     CockpitRow,
-    _eval_fundamentals,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
-    _price_cell,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
-    _tier1_kpi_deltas,  # pyright: ignore[reportPrivateUsage]  # testing an internal seam
     attractiveness_breakdown,
     attractiveness_tone,
     build_cockpit_rows,
@@ -39,8 +32,9 @@ from pipeline.research_cockpit import (  # noqa: E402
     eval_attractiveness,
     latest_dcf_runs,
     render_research_cockpit,
+    tier1_kpi_deltas,
 )
-from provenance.evidence_ledger import (  # noqa: E402
+from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
     EvidenceLedger,
@@ -48,7 +42,9 @@ from provenance.evidence_ledger import (  # noqa: E402
     ExtractionRun,
     SourceObservation,
 )
-from report.renderers.numfmt import fmt_date  # noqa: E402
+from report.renderers.numfmt import fmt_date
+from tests import test_source_fact_repository as canonical_foundation
+from tests.test_report_canonical_financials import seed_table
 
 NOW = datetime.now(UTC)
 
@@ -383,6 +379,26 @@ def _by_ticker(rows_list: list[CockpitRow]) -> dict[str, CockpitRow]:
     return {r.base.ticker: r for r in rows_list}
 
 
+def _fundamentals_from_cockpit(
+    conn: sqlite3.Connection, repo_root: Path, *tickers: str
+) -> dict[str, tuple[float | None, float | None]]:
+    """Read the published cockpit projection for the requested evaluation names."""
+    for ticker in tickers:
+        conn.execute(
+            "INSERT OR IGNORE INTO tracked_companies "
+            "(user_id, ticker, name, list_type, instrument_type) "
+            "VALUES ('bhanu', ?, ?, 'evaluation', 'equity')",
+            (ticker, ticker),
+        )
+    conn.commit()
+    rows = build_cockpit_rows(conn, repo_root)["evaluation"]
+    by_ticker = _by_ticker(rows)
+    return {
+        ticker: (by_ticker[ticker].rev_yoy_pct, by_ticker[ticker].fcf_margin_pct)
+        for ticker in tickers
+    }
+
+
 # --------------------------------------------------------------------------- #
 # build_cockpit_rows
 # --------------------------------------------------------------------------- #
@@ -472,7 +488,7 @@ def test_tier1_kpi_deltas_fail_closed_on_active_override(
         """
     )
     try:
-        deltas = _tier1_kpi_deltas(conn, {"NU"})
+        deltas = tier1_kpi_deltas(conn, {"NU"})
     finally:
         conn.close()
     assert deltas == {}
@@ -516,7 +532,7 @@ def test_tier1_kpi_deltas_fail_closed_on_unadmitted_current_candidate(
         """
     )
     try:
-        assert _tier1_kpi_deltas(conn, {"NU"}) == {}
+        assert tier1_kpi_deltas(conn, {"NU"}) == {}
     finally:
         conn.close()
 
@@ -559,7 +575,7 @@ def test_tier1_kpi_query_does_not_scan_unrelated_fact_history(
 
     conn.set_progress_handler(count_progress, 100)
     try:
-        deltas = _tier1_kpi_deltas(conn, {"NU"}, as_of=NOW.date())
+        deltas = tier1_kpi_deltas(conn, {"NU"}, as_of=NOW.date())
     finally:
         conn.set_progress_handler(None, 0)
 
@@ -574,59 +590,91 @@ def test_build_kpi_deltas_only_for_portfolio(rows: dict[str, list[CockpitRow]]) 
     assert _by_ticker(rows["evaluation"])["V"].kpi_deltas == []
 
 
-def test_rule_tone_fuzzy_match() -> None:
-    """The evaluator's rule names and the KPI-definition names drift apart in
-    casing and unit suffixes on prod (AMZN matched 0 of 3 tier-1 defs, TSM's
-    live BREACH rendered a neutral gray chip) — a breached rule must still
-    tone its chip: exact match first, then case-insensitive, then token-set
-    (subset either way), worst status winning on ambiguity."""
-    from pipeline.research_cockpit import _rule_status_for  # pyright: ignore[reportPrivateUsage]
-
-    tones = {
-        "Gross Margin (GAAP)": "breach",
-        "AWS Operating Margin": "warn",
-        "FCF Margin (GAAP)": "ok",
-    }
-    # Exact, casefold, token-subset rungs.
-    assert _rule_status_for("Gross Margin (GAAP)", tones) == ("breach", "Gross Margin (GAAP)")
-    assert _rule_status_for("AWS operating margin", tones) == ("warn", "AWS Operating Margin")
-    assert _rule_status_for("Gross margin", tones) == ("breach", "Gross Margin (GAAP)")
-    # Unrelated names never match — no tone is better than a wrong tone.
-    assert _rule_status_for("Members YoY growth", tones) == ("", "")
-    # Ambiguous token matches take the WORST status — never hide a breach.
-    multi = {"Revenue YoY Growth (USD)": "ok", "Total Revenue YoY Growth (USD)": "breach"}
-    status, _rule = _rule_status_for("Revenue YoY growth", multi)
-    assert status == "breach"
+def _set_latest_rule_tones(conn: sqlite3.Connection, tones: dict[str, str]) -> None:
+    sequence = int(
+        conn.execute("SELECT COUNT(*) FROM thesis_evaluations WHERE ticker = 'NU'").fetchone()[0]
+    )
+    conn.execute(
+        "INSERT INTO thesis_evaluations (ticker, evaluated_at, overall_status, rule_evaluations_json) "
+        "VALUES ('NU', ?, 'warn', ?)",
+        (
+            _iso(NOW + timedelta(seconds=sequence + 1)),
+            json.dumps([{"kpi_name": name, "status": status} for name, status in tones.items()]),
+        ),
+    )
+    conn.commit()
 
 
-def test_toned_severity_first_under_cap() -> None:
-    """A breached tier-1 KPI must never be pushed out of the capped chip row
-    by bigger-but-benign moves (the old pure-magnitude sort dropped it)."""
-    from pipeline.research_cockpit import KpiDelta, _toned  # pyright: ignore[reportPrivateUsage]
-
-    def mk(name: str, latest: float) -> KpiDelta:
-        return KpiDelta(
-            name=name,
-            unit="usd",
-            latest_value=latest,
-            prior_value=10.0,
-            latest_period="2026-03-31",
-            prior_period="2025-12-31",
-            tone="neutral",
+def _add_tier1_pair(conn: sqlite3.Connection, *, name: str, prior: float, latest: float) -> None:
+    conn.execute(
+        "INSERT INTO kpi_definitions (ticker, name, unit, primary_source, threshold_tier) "
+        "VALUES ('NU', ?, 'usd', 'ir_pdf', 'tier_1_break')",
+        (name,),
+    )
+    definition_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    source_doc_id = int(conn.execute("SELECT id FROM documents ORDER BY id LIMIT 1").fetchone()[0])
+    for period, value in (("2025-12-31 00:00:00", prior), ("2026-03-31 00:00:00", latest)):
+        conn.execute(
+            "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, "
+            "kpi_definition_id, value, unit, source_doc_id) VALUES ('NU', ?, 'Q1', ?, ?, 'usd', ?)",
+            (period, definition_id, value, source_doc_id),
         )
+        fact_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+        conn.execute(
+            "INSERT INTO kpi_fact_semantic_contexts "
+            "(kpi_fact_id, revision, metric_name_as_reported, reported_period_end, period_role, "
+            "publication_lane, accounting_basis, consolidation_scope, dimensions_json, unit_scale, "
+            "status, reviewed_by, knowledge_at) "
+            "VALUES (?, 1, ?, ?, 'current', 'current_actual', 'gaap', 'consolidated', '{}', "
+            "'none', 'admitted', 'test', ?)",
+            (fact_id, name, period[:10], _iso(NOW)),
+        )
+    conn.commit()
 
-    deltas = [
-        mk("Neutral A", 20.0),
-        mk("Neutral B", 19.0),
-        mk("Neutral C", 18.0),
-        mk("Breached tiny", 10.1),
+
+def test_rule_tone_fuzzy_match(conn: sqlite3.Connection, repo_root: Path) -> None:
+    """Every fuzzy-match rung is observable through the published cockpit row."""
+    cases = [
+        ({"Monthly ARPAC (USD)": "breach"}, "bad", "Monthly ARPAC (USD)"),
+        ({"monthly arpac (usd)": "warn"}, "warn", "monthly arpac (usd)"),
+        ({"Monthly ARPAC": "breach"}, "bad", "Monthly ARPAC"),
+        ({"Members YoY growth": "breach"}, "neutral", ""),
     ]
-    out = _toned(deltas, {"Breached tiny": "breach"})
-    assert len(out) == 3
-    assert out[0].name == "Breached tiny"
-    assert out[0].tone == "bad"
-    assert out[0].tone_why == "break rule 'Breached tiny': breach"
-    assert [d.name for d in out[1:]] == ["Neutral A", "Neutral B"]
+    for tones, expected_tone, expected_rule in cases:
+        _set_latest_rule_tones(conn, tones)
+        row = _by_ticker(build_cockpit_rows(conn, repo_root)["portfolio"])["NU"]
+        arpac = next(delta for delta in row.kpi_deltas if delta.name == "Monthly ARPAC (USD)")
+        assert arpac.tone == expected_tone
+        expected_why = (
+            f"break rule '{expected_rule}': {tones[expected_rule]}" if expected_rule else ""
+        )
+        assert arpac.tone_why == expected_why
+
+    _add_tier1_pair(conn, name="Revenue YoY growth", prior=10.0, latest=12.0)
+    _set_latest_rule_tones(
+        conn,
+        {"Revenue YoY Growth (USD)": "ok", "Total Revenue YoY Growth (USD)": "breach"},
+    )
+    row = _by_ticker(build_cockpit_rows(conn, repo_root)["portfolio"])["NU"]
+    ambiguous = next(delta for delta in row.kpi_deltas if delta.name == "Revenue YoY growth")
+    assert ambiguous.tone == "bad"
+    assert ambiguous.tone_why == "break rule 'Total Revenue YoY Growth (USD)': breach"
+
+
+def test_toned_severity_first_under_cap(conn: sqlite3.Connection, repo_root: Path) -> None:
+    """A small breach stays ahead of larger neutral moves in the public capped row."""
+    for name, latest in (
+        ("Neutral A", 30.0),
+        ("Neutral B", 29.0),
+        ("Neutral C", 28.0),
+        ("Breached tiny", 10.1),
+    ):
+        _add_tier1_pair(conn, name=name, prior=10.0, latest=latest)
+    _set_latest_rule_tones(conn, {"Breached tiny": "breach"})
+    row = _by_ticker(build_cockpit_rows(conn, repo_root)["portfolio"])["NU"]
+    assert [delta.name for delta in row.kpi_deltas] == ["Breached tiny", "Neutral A", "Neutral B"]
+    assert row.kpi_deltas[0].tone == "bad"
+    assert row.kpi_deltas[0].tone_why == "break rule 'Breached tiny': breach"
 
 
 def test_tier1_future_period_facts_excluded(conn: sqlite3.Connection) -> None:
@@ -657,10 +705,10 @@ def test_tier1_future_period_facts_excluded(conn: sqlite3.Connection) -> None:
     )
     conn.commit()
     # No guard → the forward-dated row wins (proves it is present and would skew).
-    ungated = {d.name: d for d in _tier1_kpi_deltas(conn, {"NU"})["NU"]}
+    ungated = {d.name: d for d in tier1_kpi_deltas(conn, {"NU"})["NU"]}
     assert ungated["Monthly ARPAC (USD)"].latest_value == 88.0
     # With as_of=today → the future row is filtered; latest reverts to the Q1 actual.
-    gated = {d.name: d for d in _tier1_kpi_deltas(conn, {"NU"}, as_of=NOW.date())["NU"]}
+    gated = {d.name: d for d in tier1_kpi_deltas(conn, {"NU"}, as_of=NOW.date())["NU"]}
     assert gated["Monthly ARPAC (USD)"].latest_value == 12.4
 
 
@@ -747,33 +795,44 @@ def _seed_fact_quarters(
     c: sqlite3.Connection,
     ticker: str,
     periods: list[tuple[str, str, float, float | None, float | None, float | None]],
+    *,
+    populate: bool = True,
 ) -> None:
-    """financial_facts rows feeding the metrics/ratios views, one document per
-    call: (period_end, fiscal_period_type, revenue, ocf, capex, fcf)."""
-    c.execute(
-        "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
-        "fetched_at, fetch_status, raw_bytes_size) "
-        "VALUES (?, 'fmp', 'fmp_statements', ?, ?, ?, 'ok', 10)",
-        (
-            ticker,
-            f"data/{ticker}_facts.json",
-            hashlib.sha256(f"{ticker}:facts".encode()).hexdigest(),
-            _iso(NOW),
-        ),
-    )
-    doc_id = int(c.execute("SELECT last_insert_rowid()").fetchone()[0])
-    _bind_document_evidence(c, ticker=ticker, document_id=doc_id)
+    """Publish the legacy-shaped fixture through the canonical fact plane."""
+    seeded = c.execute(
+        "SELECT 1 FROM reporting_entities WHERE reporting_entity_id='reporting-1'"
+    ).fetchone()
+    if seeded is None:
+        canonical_foundation.seed_foundation(c)
+    gaps = [
+        abs(
+            (
+                datetime.fromisoformat(periods[index][0]).date()
+                - datetime.fromisoformat(periods[index + 1][0]).date()
+            ).days
+        )
+        for index in range(len(periods) - 1)
+        if periods[index][1] != "TTM" and periods[index + 1][1] != "TTM"
+    ]
+    semiannual = len(gaps) >= 2 and all(175 <= gap <= 200 for gap in gaps[:2])
+    canonical_rows: list[tuple[str, str, str, str, str, str]] = []
     items = ("revenue", "operating_cash_flow", "capital_expenditure", "free_cash_flow")
-    for period_end, fpt, *vals in periods:
-        for item, val in zip(items, vals, strict=True):
-            if val is None:
-                continue
-            c.execute(
-                "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, "
-                "line_item, value, unit, source_doc_id) VALUES (?, ?, ?, ?, ?, 'actual', ?)",
-                (ticker, period_end, fpt, item, val, doc_id),
-            )
-    c.commit()
+    for period_end, fiscal_period, *values in periods:
+        end = datetime.fromisoformat(period_end).date()
+        duration = 364 if fiscal_period == "TTM" else 181 if semiannual else 89
+        start = end - timedelta(days=duration)
+        for item, value in zip(items, values, strict=True):
+            if value is not None:
+                canonical_rows.append(
+                    (item, start.isoformat(), end.isoformat(), fiscal_period, str(value), "USD")
+                )
+    seed_table(
+        c,
+        canonical_rows,
+        ticker=ticker,
+        publication_prefix=f"cockpit-{ticker.lower()}",
+        populate=populate,
+    )
 
 
 def test_eval_fundamentals_ttm_margin_from_quarters(
@@ -793,7 +852,7 @@ def test_eval_fundamentals_ttm_margin_from_quarters(
             ("2025-03-31 00:00:00", "Q1", 100.0, None, None, 99.0),  # excluded
         ],
     )
-    rev_yoy, margin = _eval_fundamentals(conn)["V"]
+    rev_yoy, margin = _fundamentals_from_cockpit(conn, repo_root, "V")["V"]
     assert rev_yoy == pytest.approx(20.0)
     assert margin == pytest.approx(80.0 / 435.0 * 100.0)
     # …and it lands on the cockpit row end-to-end.
@@ -801,7 +860,7 @@ def test_eval_fundamentals_ttm_margin_from_quarters(
     assert v.fcf_margin_pct == pytest.approx(80.0 / 435.0 * 100.0)
 
 
-def test_eval_fundamentals_ttm_guards(conn: sqlite3.Connection) -> None:
+def test_eval_fundamentals_ttm_guards(conn: sqlite3.Connection, repo_root: Path) -> None:
     """A hole in the quarter window (endpoints a full year apart) or fewer
     than four FCF-bearing quarters -> no margin rather than a mislabeled one.
     (True half-year reporters take the 2-row fallback instead — see the
@@ -816,6 +875,7 @@ def test_eval_fundamentals_ttm_guards(conn: sqlite3.Connection) -> None:
             # 2025-06-30 missing -> the newest-4 window spans 365 days.
             ("2025-03-31 00:00:00", "Q1", 100.0, 25.0, -5.0, 20.0),
         ],
+        populate=False,
     )
     _seed_fact_quarters(
         conn,
@@ -826,12 +886,12 @@ def test_eval_fundamentals_ttm_guards(conn: sqlite3.Connection) -> None:
             ("2025-09-30 00:00:00", "Q3", 105.0, 20.0, -5.0, 15.0),
         ],
     )
-    out = _eval_fundamentals(conn)
+    out = _fundamentals_from_cockpit(conn, repo_root, "GAPQ", "FEWQ")
     assert out["GAPQ"] == (pytest.approx(20.0), None)
     assert out["FEWQ"][1] is None
 
 
-def test_eval_fundamentals_semi_annual_ttm(conn: sqlite3.Connection) -> None:
+def test_eval_fundamentals_semi_annual_ttm(conn: sqlite3.Connection, repo_root: Path) -> None:
     """Half-year reporters (BHP shape: FMP lands semi-annual periods in the
     Q2/Q4 slots, period-ends ~180d apart) fail the 4-row span guard but
     populate from the newest TWO rows; a missing free_cash_flow still derives
@@ -846,12 +906,14 @@ def test_eval_fundamentals_semi_annual_ttm(conn: sqlite3.Connection) -> None:
             ("2024-06-30 00:00:00", "Q4", 100.0, 25.0, -5.0, 20.0),
         ],
     )
-    rev_yoy, margin = _eval_fundamentals(conn)["SEMI"]
+    rev_yoy, margin = _fundamentals_from_cockpit(conn, repo_root, "SEMI")["SEMI"]
     assert rev_yoy == pytest.approx(120.0 / 105.0 * 100.0 - 100.0)
     assert margin == pytest.approx(45.0 / 230.0 * 100.0)
 
 
-def test_eval_fundamentals_semi_annual_fallback_guards(conn: sqlite3.Connection) -> None:
+def test_eval_fundamentals_semi_annual_fallback_guards(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
     """The 2-row fallback demands repeating half-year cadence. A quarterly
     series whose single hole leaves the newest two rows ~180d apart (HOLEQ),
     alternating FCF-less quarters that mimic the spacing but leave a raw row
@@ -867,6 +929,7 @@ def test_eval_fundamentals_semi_annual_fallback_guards(conn: sqlite3.Connection)
             ("2025-06-30 00:00:00", "Q2", 100.0, 25.0, -5.0, 20.0),
             ("2025-03-31 00:00:00", "Q1", 100.0, 25.0, -5.0, 20.0),
         ],
+        populate=False,
     )
     _seed_fact_quarters(
         conn,
@@ -878,6 +941,7 @@ def test_eval_fundamentals_semi_annual_fallback_guards(conn: sqlite3.Connection)
             ("2025-06-30 00:00:00", "Q2", 100.0, None, None, None),  # revenue only
             ("2025-03-31 00:00:00", "Q1", 100.0, 25.0, -5.0, 20.0),
         ],
+        populate=False,
     )
     _seed_fact_quarters(
         conn,
@@ -887,13 +951,15 @@ def test_eval_fundamentals_semi_annual_fallback_guards(conn: sqlite3.Connection)
             ("2025-06-30 00:00:00", "Q4", 110.0, 25.0, -5.0, 20.0),
         ],
     )
-    out = _eval_fundamentals(conn)
+    out = _fundamentals_from_cockpit(conn, repo_root, "HOLEQ", "ALTQ", "TWOH")
     assert out["HOLEQ"][1] is None
     assert out["ALTQ"][1] is None
     assert out["TWOH"][1] is None
 
 
-def test_eval_fundamentals_prefers_ratios_ttm_row(conn: sqlite3.Connection) -> None:
+def test_eval_fundamentals_prefers_ratios_ttm_row(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
     """A real TTM facts row (margin 25%) outranks the on-the-fly quarterly
     sum (~18.4%) when financial_facts carries one."""
     _seed_fact_quarters(
@@ -907,7 +973,7 @@ def test_eval_fundamentals_prefers_ratios_ttm_row(conn: sqlite3.Connection) -> N
             ("2025-06-30 00:00:00", "Q2", 100.0, 25.0, -5.0, 20.0),
         ],
     )
-    assert _eval_fundamentals(conn)["TTMQ"][1] == pytest.approx(25.0)
+    assert _fundamentals_from_cockpit(conn, repo_root, "TTMQ")["TTMQ"][1] == pytest.approx(25.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -1047,6 +1113,7 @@ def test_build_evaluation_sorted_by_attractiveness(
             ("2025-06-30 00:00:00", "Q2", 100.0, None, None, 20.0),
             ("2025-03-31 00:00:00", "Q1", 100.0, None, None, None),  # YoY base only
         ],
+        populate=False,
     )
     (repo_root / "data" / "valuation_basis" / "GOODE.json").write_text(
         json.dumps({"ticker": "GOODE", "peg_ratio": 0.8}), encoding="utf-8"
@@ -1122,7 +1189,7 @@ def test_compute_attractiveness_matches_row_and_guards(
 
 def test_price_cell_rounds_home_quotes_to_whole_dollars() -> None:
     base = DashboardRow("NU", "portfolio", None, None, None, 0, None)
-    html = _price_cell(CockpitRow(base=base, price=1234.56))
+    html = render_research_cockpit({"portfolio": [CockpitRow(base=base, price=1234.56)]})
     assert "$1,235" in html
     assert "$1,234.56" not in html
 

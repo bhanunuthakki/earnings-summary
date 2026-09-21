@@ -127,7 +127,13 @@ def render_diet_panel(
             "Information diet</h2>",
             _readouts_section(db_path, list_types, today, conn=conn),
             _stream_section(stream, list_types),
-            _agenda_section(list(agenda.rows), today, unavailable=agenda.unavailable),
+            _agenda_section(
+                list(agenda.rows),
+                today,
+                unavailable=agenda.unavailable,
+                freshness=agenda.freshness,
+                coverage_as_of=agenda.coverage_as_of,
+            ),
             _scaffold_note(),
             "</section>",
         ]
@@ -513,7 +519,14 @@ def _book_marker_html(list_type: str) -> str:
     return f' <span class="k-chip k-chip-mono" title="{escape(marker[1])}">{marker[0]}</span>'
 
 
-def _agenda_section(rows: list[SignalRow], today: date, *, unavailable: bool = False) -> str:
+def _agenda_section(
+    rows: list[SignalRow],
+    today: date,
+    *,
+    unavailable: bool = False,
+    freshness: str = "fresh",
+    coverage_as_of: str | None = None,
+) -> str:
     head = (
         '<div class="diet-sec"><h3 class="diet-sec-h" title="Upcoming investor + analyst '
         'days, soonest first — extends the earnings calendar.">Forward agenda</h3>'
@@ -523,6 +536,15 @@ def _agenda_section(rows: list[SignalRow], today: date, *, unavailable: bool = F
             head + '<p class="diet-empty" role="alert" data-calendar-state="unavailable">'
             "Calendar unavailable. The event store could not be read.</p></div>"
         )
+    if freshness != "fresh":
+        stamp = f" Evidence time: {escape(coverage_as_of)}." if coverage_as_of else ""
+        head += (
+            '<p class="diet-empty" role="status" data-calendar-state="incomplete">'
+            "Event source coverage is stale or incomplete. Retained events remain below; "
+            "missing events do not imply cancellation." + stamp + "</p>"
+        )
+        if not rows:
+            return head + "</div>"
     if not rows:
         return (
             head + '<p class="diet-empty" role="status" data-calendar-state="empty">'

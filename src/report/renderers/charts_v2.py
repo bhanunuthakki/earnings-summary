@@ -15,8 +15,10 @@ from __future__ import annotations
 import html
 import math
 from dataclasses import dataclass
+from datetime import date
 
 from report.renderers.workspace_charts import CHARTS_V2_CSS
+from sources.report_financials import annual_comparison_supported
 from ui.tokens import CHART_SERIES
 
 # 6-color colorblind-safe palette (Okabe-Ito ordering) — values owned by the
@@ -660,6 +662,28 @@ class MatrixRow:
     # Raw HTML appended after the escaped row label — the caller-built
     # clickable source chip. Caller owns escaping of its text content.
     label_suffix_html: str = ""
+    # Source-owned edge admission; None preserves unmigrated callers.
+    comparison_eligible_edges: list[bool] | None = None
+    # None preserves legacy callers; supplied but incomplete dates fail closed.
+    comparison_period_ends: list[date | None] | None = None
+
+    def comparison_available(self, start: int, end: int, periods_per_year: int = 4) -> bool:
+        edges = self.comparison_eligible_edges
+        dates = self.comparison_period_ends
+        return (
+            edges is None
+            or (
+                len(edges) == len(self.levels)
+                and 0 <= start < end < len(edges)
+                and all(edges[start + 1 : end + 1])
+            )
+        ) and (
+            dates is None
+            or (
+                len(dates) == len(self.levels)
+                and annual_comparison_supported(dates, start, end, periods_per_year)
+            )
+        )
 
 
 def yoy_heatmap_table(
@@ -762,7 +786,12 @@ def yoy_heatmap_table(
             j_full = start_display + j_display
             curr = row.levels[j_full]
             base = row.levels[j_full - period_stride] if j_full >= period_stride else None
-            pct = yoy(curr, base) if j_full >= period_stride else None
+            pct = (
+                yoy(curr, base)
+                if j_full >= period_stride
+                and row.comparison_available(j_full - period_stride, j_full, periods_per_year)
+                else None
+            )
             cell_title = ""
             if row.cell_titles is not None and j_full < len(row.cell_titles):
                 t = row.cell_titles[j_full]
@@ -787,7 +816,11 @@ def yoy_heatmap_table(
             if level_mode:
                 delta = (
                     row.levels[-1] - base
-                    if (base is not None and row.levels[-1] is not None)
+                    if (
+                        base is not None
+                        and row.levels[-1] is not None
+                        and row.comparison_available(n_total - 1 - q, n_total - 1, periods_per_year)
+                    )
                     else None
                 )
                 bg = heat_color(delta)
@@ -795,7 +828,9 @@ def yoy_heatmap_table(
                     f'<td class="cv2-matrix-cagr-cell" style="{bg}">{_fmt_level_delta(delta, row.unit)}</td>'
                 )
                 continue
-            if n_total > q:
+            if n_total > q and row.comparison_available(
+                n_total - 1 - q, n_total - 1, periods_per_year
+            ):
                 pct = cagr(row.levels[-1], base, q / periods_per_year)
                 noisy = is_noisy(pct, base, latest_val)
             else:

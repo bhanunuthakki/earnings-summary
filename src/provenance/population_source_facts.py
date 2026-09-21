@@ -85,7 +85,15 @@ class _FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class SourceFactDocumentScope(_FrozenModel):
+    """Exact issuer ticker and immutable input bytes selected for population."""
+
+    ticker: str = Field(pattern=r"^[A-Z0-9][A-Z0-9.-]{0,15}$")
+    document_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class SourceFactPopulationRequest(_FrozenModel):
+    document_scopes: tuple[SourceFactDocumentScope, ...] = Field(default=(), max_length=100)
     data_cutoff_at: datetime
     operation_recorded_at: datetime
     apply: bool = False
@@ -105,6 +113,9 @@ class SourceFactPopulationRequest(_FrozenModel):
 
     @model_validator(mode="after")
     def _request_contract(self) -> Self:
+        identities = [(scope.ticker, scope.document_sha256) for scope in self.document_scopes]
+        if len(identities) != len(set(identities)):
+            raise ValueError("population document scopes must be unique")
         if (self.input_commitment_sha256 is None) != (
             self.planned_output_commitment_sha256 is None
         ):
@@ -443,6 +454,10 @@ def populate_source_fact_plane(
                 ):
                     raise ValueError("source-fact run output changed after manifest verification")
                 with conn:
+                    # Establish the batch transaction before the repository's
+                    # savepoint: releasing an outermost savepoint commits it.
+                    if not conn.in_transaction:
+                        conn.execute("BEGIN IMMEDIATE")
                     receipt = repository.publish(publication)
             except Exception as exc:
                 raise SourceFactPopulationBatchError(
@@ -508,7 +523,7 @@ def _population_plan(
     original_row_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
     try:
-        manifest_header = {
+        manifest_header: dict[str, JsonValue] = {
             "commitment_format": "length_delimited_canonical_records.v1",
             "data_cutoff_at": _db_time(request.data_cutoff_at),
             "operation_recorded_at": _db_time(request.operation_recorded_at),
@@ -516,6 +531,13 @@ def _population_plan(
             "policy_config_sha256": policy_sha,
             "source_taxonomy_version": _SOURCE_TAXONOMY_VERSION,
         }
+        if request.document_scopes:
+            manifest_header["document_scopes"] = [
+                scope.model_dump(mode="json")
+                for scope in sorted(
+                    request.document_scopes, key=lambda scope: (scope.ticker, scope.document_sha256)
+                )
+            ]
         input_fold = _CommitmentFold(f"population-source-input.{_COMMITMENT_NAMESPACE_VERSION}")
         output_fold = _CommitmentFold(f"population-source-output.{_COMMITMENT_NAMESPACE_VERSION}")
         input_fold.add("manifest_header", manifest_header)
@@ -550,6 +572,23 @@ def _population_plan(
                 if reason is not None:
                     exclusions[reason] += 1
                     continue
+                if request.document_scopes and int(row["fact_revision"]) > 1:
+                    predecessors = conn.execute(
+                        "SELECT observation_id FROM fact_observation_revisions WHERE fact_table=? AND fact_row_id=? AND fact_revision<?",
+                        (
+                            str(row["fact_table"]),
+                            int(row["fact_row_id"]),
+                            int(row["fact_revision"]),
+                        ),
+                    )
+                    if any(
+                        _source_rows(conn, request, observation_id=str(previous[0])).fetchone()
+                        is None
+                        for previous in predecessors
+                    ):
+                        raise ValueError(
+                            "document scope omits retained revision lineage; include exact predecessor documents"
+                        )
                 eligible_count += 1
                 captured = _parse_required_datetime(row["captured_at"])
                 state = run_states.get(run_id)
@@ -678,6 +717,16 @@ def _source_rows(
 ) -> sqlite3.Cursor:
     filters = ""
     filter_params: list[object] = []
+    if request.document_scopes:
+        selectors: list[str] = []
+        for scope in request.document_scopes:
+            selectors.append(
+                "(document.ticker=? AND document.sha256=? AND version.blob_sha256=? AND run.input_sha256=?)"
+            )
+            filter_params.extend(
+                (scope.ticker, scope.document_sha256, scope.document_sha256, scope.document_sha256)
+            )
+        filters += " AND (" + " OR ".join(selectors) + ")"
     if extraction_run_id is not None:
         filters += " AND run.extraction_run_id=?"
         filter_params.append(extraction_run_id)

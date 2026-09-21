@@ -101,8 +101,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "Dynamic level selects only standard logging adapter methods.",
-      "fingerprint": "bfe2a10771782cb337719e64bb9dbf61839c30b5a96ca3b03358d1ffd7f549bf",
-      "line": 694,
+      "fingerprint": "03bf293148ab27f28ede6109c2ad5e573f599a56f26a4fd321ffa61ee4f9a7f4",
+      "line": 684,
       "path": "execution/comments_server.py",
       "targets": [
         "logging"
@@ -153,8 +153,8 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "489e0415306d0d90f2f45255e5da262bdb1a78482a6ddec91f5a02a7e7d9ef09",
-      "line": 799,
+      "fingerprint": "2c66d88e41d6de7c9df9b8639d0088273452911dd2fb748af07a18cd5ef98290",
+      "line": 785,
       "path": "execution/refresh_cache.py",
       "targets": [
         "kernel32"
@@ -163,8 +163,8 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "779b1a54414ad30bf2149ae4c3dd46a9360cacea309e611719fd9676d983a4c3",
-      "line": 803,
+      "fingerprint": "deca59aa469ca7308270ac22e0613ecc6f8f4d1f3b3421116928f4785881f129",
+      "line": 789,
       "path": "execution/refresh_cache.py",
       "targets": [
         "kernel32"
@@ -505,8 +505,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Seal parity compares only the 12 FactProjectionSeal fields in the adjacent literal tuple.",
-      "fingerprint": "df6a715a69c0501170e954bbfbb9c2754256e38f51b554307a8cd45f3d983051",
-      "line": 1945,
+      "fingerprint": "be9674a7f430e296c8f629e35ea192614bfb6ac258d330c0ca9e26f6839b7079",
+      "line": 1988,
       "path": "src/search/fact_projection.py",
       "targets": [
         "projection_run_id",

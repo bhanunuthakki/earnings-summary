@@ -201,10 +201,10 @@ def tone_text(db_path: Path, t: str) -> str:
 def kpi_text(conn: sqlite3.Connection, t: str, today: date) -> str:
     try:
         from pipeline.research_cockpit import (
-            _tier1_kpi_deltas,  # pyright: ignore[reportPrivateUsage]
+            tier1_kpi_deltas,
         )
 
-        deltas = _tier1_kpi_deltas(conn, {t}, as_of=today).get(t, [])
+        deltas = tier1_kpi_deltas(conn, {t}, as_of=today).get(t, [])
     except Exception:
         return ""
     deltas = sorted(deltas, key=lambda d: d.magnitude, reverse=True)[:10]

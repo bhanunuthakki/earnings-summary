@@ -22,13 +22,15 @@ from pathlib import Path
 from typing import Any
 
 try:  # direct script invocation
-    from _lib import add_database_argument, command_parser
+    from _lib import command_parser
 except ImportError:  # pragma: no cover - test/import path fallback
-    from execution._lib import add_database_argument, command_parser
+    from execution._lib import command_parser
 
 from calendar_clock import CALENDAR_TIME_ZONE, calendar_today
 from dashboard.upcoming import upcoming_earnings
 from expected_earnings import last_reported_by_ticker, upcoming_by_ticker
+from signals.ir_events import IREventObservation
+from signals.store import load_forward_agenda_result
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
@@ -40,17 +42,23 @@ class CalendarAuditResult:
     upcoming_expected_count: int
     past_reported_count: int
     upcoming_strip_items_count: int
+    forward_events_count: int
+    forward_freshness: str
     integrity_pass: bool
     issues: list[str]
     sample_upcoming: list[dict[str, Any]]
 
 
-def audit_calendars(db_path: Path, today: date | None = None) -> CalendarAuditResult:
+def audit_calendars(
+    db_path: Path, today: date | None = None, *, now: datetime | None = None
+) -> CalendarAuditResult:
     cur_today = today or calendar_today()
     issues: list[str] = []
     upcoming_by_t: dict[str, date] = {}
     last_by_t: dict[str, date] = {}
     tracked_count = 0
+    forward_count = 0
+    forward_freshness = "unavailable"
     sample_upcoming: list[dict[str, Any]] = []
 
     if not db_path.exists():
@@ -61,6 +69,8 @@ def audit_calendars(db_path: Path, today: date | None = None) -> CalendarAuditRe
             upcoming_expected_count=0,
             past_reported_count=0,
             upcoming_strip_items_count=0,
+            forward_events_count=0,
+            forward_freshness="unavailable",
             integrity_pass=False,
             issues=[f"Database path not found: {db_path}"],
             sample_upcoming=[],
@@ -125,6 +135,54 @@ def audit_calendars(db_path: Path, today: date | None = None) -> CalendarAuditRe
                     }
                 )
 
+            # General Forward calendar: reader parity, immutable revision linkage,
+            # explicit coverage and no collapsed distinct same-day events.
+            agenda = load_forward_agenda_result(db_path, on_or_after=cur_today, limit=1000, now=now)
+            forward_freshness = agenda.freshness
+            if agenda.unavailable:
+                issues.append("Forward event store unavailable")
+            if agenda.freshness != "fresh":
+                issues.append(
+                    f"Forward source coverage {agenda.freshness}: {agenda.coverage_reason}"
+                )
+            future = conn.execute(
+                "SELECT id,ticker,title,event_date,url,cadence,ir_event_id,ir_event_revision_id FROM signals "
+                "WHERE signal_type='investor_day' AND event_date >= ? ORDER BY event_date,id",
+                (cur_today.isoformat(),),
+            ).fetchall()
+            forward_count = len(future)
+            if forward_count > 1000:
+                issues.append("Forward verification exceeds bounded 1000-event reader sample")
+            elif {int(row["id"]) for row in future} != {row.id for row in agenda.rows}:
+                issues.append("Forward reader differs from stored upcoming events")
+            for event in future:
+                row = conn.execute(
+                    "SELECT observation_json FROM ir_event_revisions WHERE revision_id=? AND event_id=?",
+                    (event["ir_event_revision_id"], event["ir_event_id"]),
+                ).fetchone()
+                if row is None:
+                    issues.append(
+                        f"Forward event {event['id']} has no immutable revision provenance"
+                    )
+                    continue
+                observation = IREventObservation.model_validate_json(str(row[0]))
+                if observation.status == "cancelled" or (
+                    observation.ticker,
+                    observation.title,
+                    observation.event_date.isoformat(),
+                    observation.source_url,
+                    "scheduled",
+                ) != (
+                    event["ticker"],
+                    event["title"],
+                    event["event_date"],
+                    event["url"],
+                    event["cadence"],
+                ):
+                    issues.append(
+                        f"Forward event {event['id']} differs from retained publisher revision"
+                    )
+
         finally:
             conn.close()
     except Exception as e:
@@ -137,6 +195,8 @@ def audit_calendars(db_path: Path, today: date | None = None) -> CalendarAuditRe
         upcoming_expected_count=len(upcoming_by_t),
         past_reported_count=len(last_by_t),
         upcoming_strip_items_count=len(sample_upcoming),
+        forward_events_count=forward_count,
+        forward_freshness=forward_freshness,
         integrity_pass=len(issues) == 0,
         issues=issues,
         sample_upcoming=sample_upcoming,
@@ -145,7 +205,7 @@ def audit_calendars(db_path: Path, today: date | None = None) -> CalendarAuditRe
 
 def main(argv: list[str] | None = None) -> int:
     parser = command_parser("End-to-end calendar verification.")
-    add_database_argument(parser, flag="--db", default=Path("data/portfolio.db"))
+    parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--json", action="store_true", help="Emit JSON output")
     args = parser.parse_args(argv)
 
@@ -161,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Upcoming Earnings Rows: {result.upcoming_expected_count}")
         print(f"Past Reported Dates: {result.past_reported_count}")
         print(f"Upcoming Strip Items: {result.upcoming_strip_items_count}")
+        print(f"Forward Events: {result.forward_events_count} ({result.forward_freshness})")
         if result.issues:
             print("\nIssues:")
             for issue in result.issues:

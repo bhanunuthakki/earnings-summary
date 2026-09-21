@@ -27,35 +27,30 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
+from contextlib import nullcontext
 from datetime import date
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_DIR))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from macro_series import REGISTRY  # noqa: E402
-from macro_store import (  # noqa: E402
+from db_paths import db_path_context
+from macro_series import REGISTRY
+from macro_store import (
+    RATE_SERIES_IDS,
     compute_sensitivities,
     fetch_series,
+    persist_rate_sensitivity,
     upsert_sensitivity,
 )
+from run_lock import hold_run_lock
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 log = logging.getLogger("compute_macro_sensitivities")
 
 DEFAULT_LOOKBACK = 252
-
-
-def _sync_db_path(repo_root: Path) -> None:
-    import db
-
-    db.PROJECT_ROOT = str(repo_root)
-    db.DATA_DIR = str(repo_root / "data")
-    db.DB_PATH = str(repo_root / "data" / "portfolio.db")
-    db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
 
 
 def _load_ticker_prices(ticker: str, repo_root: Path) -> list[tuple[date, float]]:
@@ -90,9 +85,11 @@ def _load_ticker_prices(ticker: str, repo_root: Path) -> list[tuple[date, float]
             )
             if not isinstance(d_raw, str) or v_raw is None:
                 continue
+            if not isinstance(v_raw, (str, int, float)) or isinstance(v_raw, bool):
+                continue
             try:
                 d = date.fromisoformat(d_raw[:10])
-                v = float(cast("Any", v_raw))
+                v = float(v_raw)
             except (ValueError, TypeError):
                 continue
             if v <= 0:
@@ -149,16 +146,28 @@ def _run_one_ticker(
     )
     if not results or dry_run:
         return results
+    persisted: dict[str, tuple[float, float, int]] = {}
     for sid, (beta, r_sq, n) in results.items():
-        upsert_sensitivity(
-            ticker=ticker,
-            series_id=sid,
-            beta=beta,
-            r_squared=r_sq,
-            n_obs=n,
-            lookback_window_days=lookback_days,
-        )
-    return results
+        if sid in RATE_SERIES_IDS:
+            row_id = persist_rate_sensitivity(
+                ticker=ticker,
+                series_id=sid,
+                ticker_prices=prices,
+                series_points=series_data[sid],
+                lookback_days=lookback_days,
+            )
+        else:
+            row_id = upsert_sensitivity(
+                ticker=ticker,
+                series_id=sid,
+                beta=beta,
+                r_squared=r_sq,
+                n_obs=n,
+                lookback_window_days=lookback_days,
+            )
+        if row_id is not None:
+            persisted[sid] = (beta, r_sq, n)
+    return persisted
 
 
 def main() -> int:
@@ -175,6 +184,7 @@ def main() -> int:
     )
     parser.add_argument("--dry-run", action="store_true", help="Compute but don't persist.")
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument("--db-path", type=Path, default=os.environ.get("EARNINGS_SUMMARY_DB_PATH"))
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
@@ -183,7 +193,22 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     repo_root = args.repo_root.resolve()
-    _sync_db_path(repo_root)
+    if args.db_path is None or not Path(args.db_path).is_file():
+        parser.error(
+            "--db-path or EARNINGS_SUMMARY_DB_PATH must name an existing authoritative database"
+        )
+    with (
+        db_path_context(args.db_path),
+        (
+            nullcontext()
+            if args.dry_run
+            else hold_run_lock(args.db_path, owner="compute_macro_sensitivities")
+        ),
+    ):
+        return _run(args, repo_root)
+
+
+def _run(args: argparse.Namespace, repo_root: Path) -> int:
 
     tickers = _select_tickers(args)
     if not tickers:
@@ -209,7 +234,8 @@ def main() -> int:
             {
                 "lookback_days": args.lookback_days,
                 "tickers_processed": len(tickers),
-                "pairs_persisted": total_pairs,
+                "pairs_persisted": 0 if args.dry_run else total_pairs,
+                "pairs_computed_dry_run": total_pairs if args.dry_run else None,
                 "dry_run": args.dry_run,
                 "per_ticker": summary,
             },

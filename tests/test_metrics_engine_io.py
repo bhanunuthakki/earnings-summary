@@ -472,17 +472,21 @@ def test_compute_for_ticker_writes_derived_locator(conn: sqlite3.Connection) -> 
     assert kpi_fact["computed_from"] is not None
 
 
-def test_compute_for_ticker_revenue_yoy_is_10_percent(conn: sqlite3.Connection) -> None:
+def test_compute_for_ticker_does_not_use_legacy_revenue_for_yoy(
+    conn: sqlite3.Connection,
+) -> None:
     _seed_operating_company(conn, "TEST")
     _set_classification(conn, "TEST", "operating_company", "us_gaap")
     compute_for_ticker(conn, "TEST")
 
-    row = _latest_attempt(conn, "TEST", "revenue_yoy")
-    assert row["status"] == "ok"
-    kpi_fact = conn.execute(
-        "SELECT value FROM kpi_facts WHERE id = ?", (row["kpi_fact_id"],)
-    ).fetchone()
-    assert Decimal(str(kpi_fact["value"])) == Decimal("10.0")
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM metric_computation_attempts AS attempt "
+            "JOIN formula_definitions AS definition ON definition.id=attempt.formula_id "
+            "WHERE attempt.ticker='TEST' AND definition.formula_key='revenue_yoy'"
+        ).fetchone()[0]
+        == 0
+    )
 
 
 def test_compute_for_ticker_roe_uses_ttm_net_income(conn: sqlite3.Connection) -> None:

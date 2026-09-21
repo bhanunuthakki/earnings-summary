@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -54,8 +55,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--db-path",
         type=Path,
-        default=None,
-        help="Override the portfolio DB path (wins over --repo-root derivation).",
+        default=os.environ.get("EARNINGS_SUMMARY_DB_PATH"),
+        help="Explicit database or EARNINGS_SUMMARY_DB_PATH; no checkout fallback.",
     )
     parser.add_argument(
         "--dry-run",
@@ -71,14 +72,14 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     repo_root: Path = args.repo_root.resolve()
-    db_path: Path = (
-        args.db_path if args.db_path is not None else repo_root / "data" / "portfolio.db"
-    )
+    if args.db_path is None or not Path(args.db_path).is_file():
+        parser.error("--db-path or EARNINGS_SUMMARY_DB_PATH must name an existing database")
+    db_path = Path(args.db_path)
 
     from risk_factors import portfolio_tickers
 
     if args.dry_run:
-        tickers = portfolio_tickers(db_path)
+        tickers = portfolio_tickers(db_path, repo_root)
         for t in tickers:
             print(f"candidate: {t}", file=sys.stderr)
         print(
@@ -89,9 +90,11 @@ def main(argv: list[str] | None = None) -> int:
 
     from llm.cli import is_hard_stop
     from risk_factors import refresh_all
+    from run_lock import hold_run_lock
 
     try:
-        counts = refresh_all(db_path, repo_root)
+        with hold_run_lock(db_path, owner="refresh_business_factors"):
+            counts = refresh_all(db_path, repo_root)
     except Exception as exc:
         if is_hard_stop(exc):
             log.error(

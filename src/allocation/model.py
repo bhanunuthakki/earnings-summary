@@ -42,7 +42,13 @@ import numpy as np
 from allocation.book_risk import build_book_risk
 from dcf.latest import latest_dcf_rows_from_db
 from dcf.scenario_reward import scenario_reward
-from macro_store import Sensitivity, fetch_sensitivities, fetch_series
+from macro_store import (
+    RATE_SERIES_IDS,
+    SENSITIVITY_MAX_AGE_DAYS,
+    Sensitivity,
+    fetch_sensitivities,
+    fetch_series,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # The blend, in plain sight. Keys are factor ids used throughout; values are
@@ -69,7 +75,7 @@ FACTOR_LABELS: dict[str, str] = {
 SOFTMAX_TEMPERATURE = 1.0  # z-scale scores; ~e^3 spread between best and worst
 MACRO_BETA_LOOKBACK = 252  # preferred macro_sensitivities lookback_window_days
 MACRO_MOMENTUM_CAL_DAYS = 90  # macro momentum = log change over this window
-MACRO_STALE_DAYS = 45  # ignore a macro series whose latest point is older
+MACRO_STALE_DAYS = SENSITIVITY_MAX_AGE_DAYS  # ignore a macro series whose latest point is older
 # Beta-quality floor (2026-07-19 review): below these, a sensitivity is
 # regression noise, not exposure — it must not tilt the blend. The n floor is
 # 30, not 40: the standard 252-trading-day lookback yields ~36 aligned WEEKLY
@@ -466,7 +472,11 @@ def _series_momentum(db_path: Path, series_id: str) -> float | None:
         return None
     cutoff = latest.rate_date - timedelta(days=MACRO_MOMENTUM_CAL_DAYS)
     base = next((p for p in points if p.rate_date <= cutoff), None)
-    if base is None or base.value <= 0.0 or latest.value <= 0.0:
+    if base is None:
+        return None
+    if series_id in RATE_SERIES_IDS:
+        return latest.value - base.value
+    if base.value <= 0.0 or latest.value <= 0.0:
         return None
     return math.log(latest.value / base.value)
 

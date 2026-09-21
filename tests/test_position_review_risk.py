@@ -1,5 +1,5 @@
-"""The C7 risk-aware ``/review`` block — ``RiskContext`` + ``_build_risk_context``
-+ ``render_risk_lines`` + ``_risk_prompt_block``, and their wiring into
+"""The C7 risk-aware ``/review`` block — ``RiskContext`` + ``build_risk_context``
++ ``render_risk_lines`` + ``risk_prompt_block``, and their wiring into
 ``render_pre_analysis_chat``/``render_pre_analysis_plain``.
 
 Mirrors ``tests/test_position_review_capacity_block.py``'s shape and its
@@ -12,11 +12,12 @@ did before this block existed.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import sqlite3
 from dataclasses import replace
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -24,11 +25,11 @@ import pytest
 from advisor.position_review import (
     PreAnalysis,
     RiskContext,
-    _build_risk_context,
-    _risk_prompt_block,
+    build_risk_context,
     render_pre_analysis_chat,
     render_pre_analysis_plain,
     render_risk_lines,
+    risk_prompt_block,
 )
 
 _START = date(2024, 1, 1)
@@ -53,7 +54,8 @@ def _write_weights_cache(repo_root: Path, weights: dict[str, float]) -> None:
     cache = repo_root / "data" / "portfolio_weights.json"
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(
-        json.dumps({"computed_at": "2026-07-24T00:00:00", "weights": weights}), encoding="utf-8"
+        json.dumps({"computed_at": datetime.now(UTC).isoformat(), "weights": weights}),
+        encoding="utf-8",
     )
 
 
@@ -81,11 +83,22 @@ def _write_factor_exposures(db_path: Path, rows: list[tuple[str, str, float, boo
     conn.executescript(_FACTOR_DDL)
     now = "2026-07-24T00:00:00"
     for ticker, factor, loading, is_latest in rows:
+        from risk_factors import compute_input_sha
+
+        path = db_path.parent.parent / "micro_thesis" / "holdings" / f"{ticker}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"ticker": ticker, "thesis": "Synthetic business"}))
+        input_sha = compute_input_sha(
+            ticker,
+            geo_mix=None,
+            product_mix=None,
+            thesis_sha=hashlib.sha256(path.read_bytes()).hexdigest(),
+        )
         conn.execute(
             "INSERT INTO business_factor_exposures "
-            "(ticker, factor, loading, provenance, is_latest, created_at, updated_at) "
-            "VALUES (?, ?, ?, 'segment_derived', ?, ?, ?)",
-            (ticker, factor, loading, int(is_latest), now, now),
+            "(ticker, factor, loading, provenance, is_latest, created_at, updated_at, input_sha) "
+            "VALUES (?, ?, ?, 'segment_derived', ?, ?, ?, ?)",
+            (ticker, factor, loading, int(is_latest), now, now, input_sha),
         )
     conn.commit()
     conn.close()
@@ -97,7 +110,7 @@ def market() -> list[float]:
 
 
 # --------------------------------------------------------------------------- #
-# _build_risk_context — full read (all legs populated)
+# build_risk_context — full read (all legs populated)
 # --------------------------------------------------------------------------- #
 
 
@@ -120,7 +133,7 @@ def test_full_risk_context_populates_every_leg(tmp_path: Path, market: list[floa
         ],
     )
 
-    risk = _build_risk_context("NU", db_path, tmp_path)
+    risk = build_risk_context("NU", db_path, tmp_path)
 
     assert risk is not None
     assert risk.risk_share_pct is not None
@@ -151,7 +164,7 @@ def test_book_risk_share_matches_build_book_risk_directly(
     weights = {"NU": 0.15, "MELI": 0.10}
     _write_weights_cache(tmp_path, weights)
 
-    risk = _build_risk_context("NU", tmp_path / "does_not_exist.db", tmp_path)
+    risk = build_risk_context("NU", tmp_path / "does_not_exist.db", tmp_path)
     book = build_book_risk(tmp_path, list(weights), weights)
 
     assert risk is not None
@@ -178,11 +191,11 @@ def test_absent_business_factor_table_degrades_that_leg_only(
     db_path.parent.mkdir(parents=True, exist_ok=True)
     sqlite3.connect(str(db_path)).close()  # a real, empty DB — no tables at all
 
-    risk = _build_risk_context("NU", db_path, tmp_path)
+    risk = build_risk_context("NU", db_path, tmp_path)
 
     assert risk is not None
     assert risk.top_factors == ()
-    assert any("business_factor_exposures" in r for r in risk.degraded_reasons)
+    assert risk.factor_provenance and "missing_table" in risk.factor_provenance
     # The OTHER legs survived the table-absent leg's failure.
     assert risk.risk_share_pct is not None
     assert risk.event_scenarios == ("joint_latam",)
@@ -198,11 +211,11 @@ def test_no_database_on_file_degrades_factors_leg_cleanly(
     _write_chart(tmp_path, "MELI", list(market))
     _write_weights_cache(tmp_path, {"NU": 0.15, "MELI": 0.10})
 
-    risk = _build_risk_context("NU", tmp_path / "does_not_exist.db", tmp_path)
+    risk = build_risk_context("NU", tmp_path / "does_not_exist.db", tmp_path)
 
     assert risk is not None
     assert risk.top_factors == ()
-    assert any("no database on file" in r for r in risk.degraded_reasons)
+    assert risk.factor_provenance and "unavailable" in risk.factor_provenance
 
 
 def test_empty_weights_cache_degrades_book_risk_and_crowding_legs(tmp_path: Path) -> None:
@@ -210,8 +223,9 @@ def test_empty_weights_cache_degrades_book_risk_and_crowding_legs(tmp_path: Path
     both degrade (nothing to price against); a ticker outside every
     EVENT_SCENARIOS + no factor table still yields a fully-empty (None)
     context."""
-    risk = _build_risk_context("ZZZZ", tmp_path / "does_not_exist.db", tmp_path)
-    assert risk is None
+    risk = build_risk_context("ZZZZ", tmp_path / "does_not_exist.db", tmp_path)
+    assert risk is not None and risk.top_factors == ()
+    assert risk.factor_provenance is not None
 
 
 def test_ticker_not_in_priced_matrix_degrades_book_risk_leg(
@@ -224,9 +238,10 @@ def test_ticker_not_in_priced_matrix_degrades_book_risk_leg(
     _write_chart(tmp_path, "MELI", list(market))
     _write_weights_cache(tmp_path, {"NU": 0.15, "MELI": 0.10})
 
-    risk = _build_risk_context("AAPL", tmp_path / "does_not_exist.db", tmp_path)
+    risk = build_risk_context("AAPL", tmp_path / "does_not_exist.db", tmp_path)
 
-    assert risk is None  # nothing at all applies to AAPL in this fixture
+    assert risk is not None and risk.top_factors == ()
+    assert risk.factor_provenance is not None  # absence is explicit
 
 
 # --------------------------------------------------------------------------- #
@@ -266,7 +281,9 @@ _PRE_DEFAULT = PreAnalysis(
 
 
 def test_every_leg_degraded_yields_none(tmp_path: Path) -> None:
-    assert _build_risk_context("ZZZZ", tmp_path / "nope.db", tmp_path) is None
+    risk = build_risk_context("ZZZZ", tmp_path / "nope.db", tmp_path)
+    assert risk is not None and risk.factor_provenance is not None
+    assert "unavailable" in risk.factor_provenance
 
 
 def test_chat_render_byte_identical_risk_none_vs_empty_context() -> None:
@@ -332,16 +349,16 @@ def test_render_risk_lines_partial_context_only_renders_populated_bits() -> None
 
 
 # --------------------------------------------------------------------------- #
-# _risk_prompt_block — the verdict-prompt RISK line
+# risk_prompt_block — the verdict-prompt RISK line
 # --------------------------------------------------------------------------- #
 
 
-def test_risk_prompt_block_empty_for_none_and_empty_context() -> None:
-    assert _risk_prompt_block(None) == ""
-    assert _risk_prompt_block(RiskContext()) == ""
+def testrisk_prompt_block_empty_for_none_and_empty_context() -> None:
+    assert risk_prompt_block(None) == ""
+    assert risk_prompt_block(RiskContext()) == ""
 
 
-def test_risk_prompt_block_contains_factors_and_scenarios() -> None:
+def testrisk_prompt_block_contains_factors_and_scenarios() -> None:
     risk = RiskContext(
         risk_share_pct=14.0,
         corr_to_book=0.62,
@@ -349,7 +366,7 @@ def test_risk_prompt_block_contains_factors_and_scenarios() -> None:
         top_factors=(("Brazil consumer credit", 0.9), ("LatAm consumer/FX", 0.7)),
         event_scenarios=("joint_latam",),
     )
-    block = _risk_prompt_block(risk)
+    block = risk_prompt_block(risk)
     assert block.startswith("RISK:")
     assert "14% of book risk" in block
     assert "cluster: co-moves with NU" in block

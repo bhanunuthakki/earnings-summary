@@ -49,7 +49,7 @@ _FORM_JSON_DOC_TYPES = frozenset({"fmp_10k_json", "fmp_10q_json"})
 # _FORM_JSON_DOC_TYPES' section reader nor any other viewer; fell through to
 # render_fallback_page. This is the highest-volume financial_facts writer
 # family, so closing this gap is Phase A's biggest-volume target.
-_STATEMENT_JSON_DOC_TYPES = frozenset(
+STATEMENT_JSON_DOC_TYPES = frozenset(
     {
         "fmp_income_statement",
         "fmp_balance_sheet",
@@ -74,7 +74,7 @@ _PAGE_CSS = ""
 
 
 @dataclass(slots=True)
-class _DocRow:
+class SourceDocRow:
     id: int
     ticker: str
     doc_type: str
@@ -88,7 +88,7 @@ class _DocRow:
     sha256: str = ""
 
 
-def load_document(db_path: Path, doc_id: int) -> _DocRow | None:
+def load_document(db_path: Path, doc_id: int) -> SourceDocRow | None:
     """The documents row a viewer needs, schema-tolerant on pre-0075 DBs."""
     if not db_path.exists():
         return None
@@ -116,7 +116,7 @@ def load_document(db_path: Path, doc_id: int) -> _DocRow | None:
         conn.close()
     if row is None:
         return None
-    return _DocRow(
+    return SourceDocRow(
         id=int(row["id"]),
         ticker=str(row["ticker"]),
         doc_type=str(row["doc_type"]),
@@ -157,7 +157,7 @@ def _fragment(title: str, meta_html: str, body: str) -> str:
     )
 
 
-def _doc_meta_html(doc: _DocRow) -> str:
+def _doc_meta_html(doc: SourceDocRow) -> str:
     bits = [f'<span class="sv-meta">doc #{doc.id} · {escape(doc.doc_type)}</span>']
     if doc.accession_number:
         filed = f" · filed {escape(doc.filing_date)}" if doc.filing_date else ""
@@ -325,7 +325,7 @@ _JSON_PATH_RX = re.compile(r"^\[(\d+)\]\.(.+)$")
 
 
 def _render_statement_table(
-    doc: _DocRow,
+    doc: SourceDocRow,
     records: list[dict[str, object]],
     columns: list[str],
     *,
@@ -410,7 +410,7 @@ def render_statement_json_page(
     fields present in that record. None when the doc isn't one of this
     family or the file can't be parsed as a JSON array."""
     doc = load_document(db_path, doc_id)
-    if doc is None or doc.doc_type not in _STATEMENT_JSON_DOC_TYPES:
+    if doc is None or doc.doc_type not in STATEMENT_JSON_DOC_TYPES:
         return None
     path = repo_root / doc.file_path
     if not path.exists():

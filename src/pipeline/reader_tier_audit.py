@@ -176,35 +176,16 @@ def _canonical_value(db_path: Path, key: DuplicatedKey) -> float | None:
 
 
 def _financials_reader_value(conn: sqlite3.Connection, key: DuplicatedKey) -> float | None:
-    """The value ``report.sections.financials`` materializes for ``key``.
+    """Read the report section's public one-coordinate projection."""
+    from report.sections.financials import financials_reader_value
 
-    Imported lazily so the audit module doesn't pull the report layer at import
-    time. Maps the financials pivot column back to the fact line_item."""
-    import report.sections.financials as fin_section
-
-    col_map = fin_section._COL_TO_FACT_LINE_ITEM  # pyright: ignore[reportPrivateUsage]
-    load_annual = fin_section._load_annual  # pyright: ignore[reportPrivateUsage]
-    load_quarterly = fin_section._load_quarterly  # pyright: ignore[reportPrivateUsage]
-
-    fact_to_col = {v: k for k, v in col_map.items()}
-    col = fact_to_col.get(key.line_item)
-    if col is None:
-        return None  # not a column §3 renders — nothing to compare
-    rows = (
-        load_annual(conn, key.ticker)
-        if key.fiscal_period_type in _ANNUAL_FPTS
-        else load_quarterly(conn, key.ticker)
+    return financials_reader_value(
+        conn,
+        ticker=key.ticker,
+        line_item=key.line_item,
+        fiscal_period_type=key.fiscal_period_type,
+        period_end=key.period_end,
     )
-    for r in rows:
-        if str(r.get("period_end"))[:10] == key.period_end:
-            raw = r.get(col)
-            if raw is None:
-                return None
-            try:
-                return float(raw)  # type: ignore[arg-type]
-            except (TypeError, ValueError):
-                return None
-    return None
 
 
 def _values_diverge(a: float, b: float) -> bool:

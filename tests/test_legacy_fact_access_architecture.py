@@ -97,7 +97,6 @@ AUDITED_LEGACY_FACT_READS = {
     "execution/db_gc.py": 9,
     "execution/fix_kpi_series.py": 1,
     "execution/fmp_backpop.py": 1,
-    "execution/grade_predictions.py": 1,
     "execution/mark_kpi_cadence.py": 2,
     "execution/onboard_pending_tickers.py": 2,
     "execution/pressure_test_thesis.py": 1,
@@ -106,7 +105,6 @@ AUDITED_LEGACY_FACT_READS = {
     "src/allocation/eligibility.py": 1,
     "src/ask/grounding.py": 3,
     "src/bear_case_grader.py": 1,
-    "src/cockpit_fundamentals.py": 2,
     "src/competitive/holdings_sync.py": 1,
     "src/compute/fmp_derived_kpis.py": 1,
     # Shared fact-aware unit resolution moved this existing read out of the
@@ -118,7 +116,6 @@ AUDITED_LEGACY_FACT_READS = {
     "src/compute/segment_q4_derive.py": 1,
     "src/compute/segment_quarterly_10q.py": 1,
     "src/compute/segments.py": 1,
-    "src/compute/soft_rule_evaluator.py": 1,
     "src/credibility/observations.py": 3,
     "src/dcf/fact_drivers.py": 1,
     "src/decision_conditions.py": 4,
@@ -190,9 +187,19 @@ _TRANSITIONAL_READ_EXEMPTIONS = {
             ),
         ),
     ),
+    "src/timeseries/kpi_revision_shadow.py": (
+        _TransitionalReadExemption(
+            function_name="read_revision_kpi_points",
+            read_count=2,
+            retirement_criterion=(
+                "Retire after the immutable canonical KPI projection carries values with "
+                "effective-time and knowledge-time definition and semantic-context lineage."
+            ),
+        ),
+    ),
     "src/compute/kpi_revision_shadow_census.py": (
         _TransitionalReadExemption(
-            function_name="_census_definition",
+            function_name="_current_membership",
             read_count=2,
             retirement_criterion=(
                 "Retire after the immutable canonical projection can enumerate the complete "
@@ -418,6 +425,9 @@ def test_transitional_legacy_reader_exemptions_are_narrow_and_retirable() -> Non
             if relative == "src/pipeline/kpi_source_review.py":
                 assert exemption.function_name == "bind_source_reviewed_kpi_definition"
                 assert exemption.read_count == 2
+            elif relative == "src/timeseries/kpi_revision_shadow.py":
+                assert exemption.function_name == "read_revision_kpi_points"
+                assert exemption.read_count == 2
             elif relative != "src/compute/kpi_revision_shadow_census.py":
                 assert exemption.read_count == 1
             assert exemption.retirement_criterion.startswith("Retire after ")
@@ -435,7 +445,7 @@ def test_shadow_census_raw_reads_are_exact_and_extra_reads_remain_debt() -> None
         "read retirement."
     )
     assert tuple((item.function_name, item.read_count) for item in exemptions) == (
-        ("_census_definition", 2),
+        ("_current_membership", 2),
         ("_out_of_scope_facts", 2),
         ("_invalid_in_scope_facts", 2),
     )
@@ -448,5 +458,17 @@ def test_shadow_census_raw_reads_are_exact_and_extra_reads_remain_debt() -> None
     with_unapproved_read = ast.parse(
         source + "\ndef _unapproved_reader():\n    return 'SELECT id FROM kpi_facts'\n",
         filename=str(path),
+    )
+    assert _legacy_read_count_for_tree(relative, with_unapproved_read) == 1
+
+
+def test_shadow_reader_raw_reads_are_exact_and_extra_reads_remain_debt() -> None:
+    relative = "src/timeseries/kpi_revision_shadow.py"
+    source = (ROOT / relative).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    assert _read_count(tree) == 2
+    assert _legacy_read_count_for_tree(relative, tree) == 0
+    with_unapproved_read = ast.parse(
+        source + "\ndef _unapproved_reader():\n    return 'SELECT id FROM kpi_facts'\n"
     )
     assert _legacy_read_count_for_tree(relative, with_unapproved_read) == 1

@@ -65,7 +65,17 @@ def _complete_corpus(corpus: Path) -> None:
     _write(
         corpus,
         "WIX_price_chart_10y_div_adj.json",
-        [{"date": "2026-08-14", "open": 1, "high": 2, "low": 1, "close": 2, "volume": 3}],
+        [
+            {
+                "date": "2026-08-14",
+                "open": 1,
+                "high": 2,
+                "low": 1,
+                "close": 2,
+                "adjClose": 2,
+                "volume": 3,
+            }
+        ],
     )
     _write(corpus, "WIX_profile.json", [{"symbol": "WIX", "currency": "USD"}])
 

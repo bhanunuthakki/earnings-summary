@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
+
+import pytest
 
 from synthesis.wix_avdv_postmortem import (
     evaluate_wix_avdv_postmortem,
@@ -55,75 +60,98 @@ def _seed_postmortem_db(conn: sqlite3.Connection) -> None:
     )
 
 
-def test_evaluate_wix_avdv_postmortem_counterfactual_invariant(
+def test_evaluation_reports_missing_evidence_without_fabricated_exit(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
-    db_path = migrated_db(tmp_path / "postmortem_eval.db")
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    _seed_postmortem_db(conn)
-
-    result = evaluate_wix_avdv_postmortem(conn, entry_id=11)
-
-    assert result.ticker == "WIX"
-    assert result.position_entry_id == 11
-    assert result.exit_date == "2026-08-14"
-    assert result.exit_price == 85.0
-    assert result.outcome_vs_thesis == "broke"
-    # STRICT INVARIANT: AVDV comparison must be counterfactual_not_executed
-    assert result.avdv_status == "counterfactual_not_executed"
-    assert result.avdv_allocation_pct == 2.5444
-
-    # Verify all 4 factors separated
-    assert "Base44" in result.factor_attribution.selection
-    assert "2.5444%" in result.factor_attribution.sizing
-    assert "$85" in result.factor_attribution.timing
-    assert len(result.factor_attribution.price_luck) > 10
-
-    conn.close()
+    db_path = migrated_db(tmp_path / "unavailable.db")
+    with sqlite3.connect(db_path) as conn:
+        _seed_postmortem_db(conn)
+        conn.commit()
+        before = list(conn.iterdump())
+        result = evaluate_wix_avdv_postmortem(conn)
+        assert result.ticker == "WIX"
+        assert result.position_entry_id == 11
+        assert result.status == "unavailable"
+        assert "refreshed_holdings_proving_WIX_absent" in result.missing_evidence
+        assert result.avdv_status == "counterfactual_not_executed"
+        assert result.exit_date is None
+        assert result.exit_price is None
+        assert result.outcome_vs_thesis is None
+        assert result.exit_reason is None
+        assert result.lessons is None
+        assert result.factor_attribution is None
+        assert result.avdv_allocation_pct is None
+        assert list(conn.iterdump()) == before
 
 
-def test_persist_wix_avdv_postmortem_idempotency(
-    tmp_path: Path, migrated_db: Callable[..., Path]
+@pytest.mark.parametrize("force", [False, True])
+def test_unavailable_persistence_preserves_all_owner_records(
+    tmp_path: Path, migrated_db: Callable[..., Path], force: bool
 ) -> None:
-    db_path = migrated_db(tmp_path / "postmortem_persist.db")
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    _seed_postmortem_db(conn)
+    db_path = migrated_db(tmp_path / "preserve.db")
+    with sqlite3.connect(db_path) as conn:
+        _seed_postmortem_db(conn)
+        conn.commit()
+        result = evaluate_wix_avdv_postmortem(conn, entry_id=11)
+        # Neither a caller-supplied result nor force may impersonate evidence.
+        forged = result.model_copy(update={"exit_price": 85.0, "outcome_vs_thesis": "broke"})
+        before = list(conn.iterdump())
+        changes = conn.total_changes
+        with pytest.raises(ValueError, match="evidence"):
+            persist_wix_avdv_postmortem(conn, forged, force=force)
+        assert conn.total_changes == changes
+        assert list(conn.iterdump()) == before
 
-    result = evaluate_wix_avdv_postmortem(conn, entry_id=11)
 
-    # First persistence pass
-    ok1 = persist_wix_avdv_postmortem(conn, result, force=False)
-    conn.commit()
-    assert ok1 is True
+def test_unknown_entry_is_not_invented(tmp_path: Path, migrated_db: Callable[..., Path]) -> None:
+    with (
+        sqlite3.connect(migrated_db(tmp_path / "empty.db")) as conn,
+        pytest.raises(LookupError, match="WIX"),
+    ):
+        evaluate_wix_avdv_postmortem(conn)
 
-    # Verify position_entries is closed
-    row = conn.execute("SELECT * FROM position_entries WHERE id = 11").fetchone()
-    assert row["exit_date"] == "2026-08-14"
-    assert float(row["exit_price"]) == 85.0
-    assert row["outcome_vs_thesis"] == "broke"
-    assert row["exit_reason"] is not None
-    assert row["lessons"] is not None
 
-    # Verify analyst_notes created
-    notes = conn.execute("SELECT * FROM analyst_notes WHERE position_entry_id = 11").fetchall()
-    assert len(notes) == 1
-    assert "counterfactual_not_executed" in notes[0]["context_json"]
+@pytest.mark.parametrize("ticker", ["WIX", "OTHER"])
+def test_unverified_postmortem_cannot_close_or_overwrite(
+    tmp_path: Path, migrated_db: Callable[..., Path], ticker: str
+) -> None:
+    db_path = migrated_db(tmp_path / "guard.db")
+    with sqlite3.connect(db_path) as conn:
+        _seed_postmortem_db(conn)
+        conn.execute(
+            "UPDATE position_entries SET ticker=?, exit_reason='Owner capital allocation', "
+            "lessons='Owner lesson', outcome_vs_thesis='unrelated' WHERE id=11",
+            (ticker,),
+        )
+        conn.commit()
+        before = list(conn.iterdump())
+        if ticker == "OTHER":
+            with pytest.raises(ValueError, match="WIX"):
+                evaluate_wix_avdv_postmortem(conn, entry_id=11)
+        else:
+            result = evaluate_wix_avdv_postmortem(conn, entry_id=11)
+            with pytest.raises(ValueError, match="evidence"):
+                persist_wix_avdv_postmortem(conn, result, force=True)
+        assert list(conn.iterdump()) == before
 
-    # Verify brief_dirty flag flipped
-    tc = conn.execute("SELECT brief_dirty FROM tracked_companies WHERE ticker = 'WIX'").fetchone()
-    assert tc["brief_dirty"] == 1
 
-    # Second persistence pass (idempotency check)
-    ok2 = persist_wix_avdv_postmortem(conn, result, force=True)
-    conn.commit()
-    assert ok2 is True
-
-    # Ensure no duplicate notes created
-    notes_after = conn.execute(
-        "SELECT * FROM analyst_notes WHERE position_entry_id = 11"
-    ).fetchall()
-    assert len(notes_after) == 1
-
-    conn.close()
+@pytest.mark.parametrize("flags", [[], ["--dry-run"], ["--force"], ["--dry-run", "--force"]])
+def test_cli_holds_before_database_access(tmp_path: Path, flags: list[str]) -> None:
+    # Stage the real script in an isolated checkout shape so a regression can
+    # never touch the shared checkout or canonical runtime database.
+    script = tmp_path / "execution" / "run_wix_avdv_postmortem.py"
+    script.parent.mkdir()
+    original = Path(__file__).resolve().parents[1] / "execution" / script.name
+    script.write_bytes(original.read_bytes())
+    result = subprocess.run(
+        [sys.executable, str(script), *flags],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert json.loads(result.stdout)["status"] == "hold"
+    assert json.loads(result.stdout)["reason"] == "postmortem_evidence_unavailable"
+    assert not (tmp_path / "data").exists()
+    assert not list(tmp_path.rglob("*.db"))

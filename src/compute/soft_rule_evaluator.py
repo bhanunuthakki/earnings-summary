@@ -9,7 +9,7 @@ signals shouldn't roll up to RED (the thesis isn't broken yet) but they
 shouldn't be silent either.
 
 This module consumes `break_rules_soft` from the holdings JSON, evaluates each
-rule's predicate against financial_facts / kpi_facts, and returns per-rule
+rule's predicate against canonical financial observations / admitted KPI facts, and returns per-rule
 GREEN / YELLOW results. Hard rules still drive RED; soft rules drive YELLOW
 in the rollup.
 
@@ -53,7 +53,7 @@ import logging
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal, NamedTuple, cast
 
@@ -64,6 +64,12 @@ from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
 from provenance.overrides import active_scalar_override_map
+from sources.canonical_financial_series import (
+    CanonicalFinancialSeries,
+    CanonicalFinancialSeriesReader,
+    FinancialCadence,
+    SeriesContinuity,
+)
 
 log = logging.getLogger(__name__)
 
@@ -97,7 +103,7 @@ class PredicateType(StrEnum):
 
 
 class FactSource(StrEnum):
-    """Where to find the metric. `financial` → financial_facts.line_item;
+    """Where to find the metric. `financial` → canonical reported observations;
     `kpi` → kpi_facts JOIN kpi_definitions.name."""
 
     FINANCIAL = "financial"
@@ -147,6 +153,21 @@ class SoftRuleResult:
     evaluated_at: datetime
 
 
+@dataclass(frozen=True)
+class _EvaluationContext:
+    conn: sqlite3.Connection
+    ticker: str
+    financials: CanonicalFinancialSeriesReader
+
+
+def _read_financial(context: _EvaluationContext, metric: str) -> CanonicalFinancialSeries:
+    return context.financials.read(
+        metric,
+        cadence=FinancialCadence.QUARTERLY,
+        continuity=SeriesContinuity.STRICT_CONTIGUOUS,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Loader — parse the on-disk `break_rules_soft` array. Kept here (not in
 # thesis_evaluator.load_holdings_spec) so the soft-rule schema can evolve
@@ -184,8 +205,7 @@ def load_soft_rules(raw: list[Any] | None) -> list[SoftRule]:
 
 
 def _fetch_series(
-    conn: sqlite3.Connection,
-    ticker: str,
+    context: _EvaluationContext,
     metric: str,
     source: FactSource,
 ) -> list[tuple[datetime, float]]:
@@ -195,97 +215,66 @@ def _fetch_series(
     series-layer convention — FY/TTM aggregates double-count and would distort
     any series_decel / series_below check that assumes quarterly cadence.
 
-    Best-effort: if the underlying table is missing, returns []. The rule
-    will then evaluate to GREEN (insufficient data); a caller wanting a
-    harder signal should add a coverage check upstream.
+    Unavailable data returns []; public evaluation maps insufficient data to
+    UNRESOLVED and includes the canonical reader's reason in result details.
     """
     if source is FactSource.FINANCIAL:
+        result = _read_financial(context, metric)
+        return (
+            [(item.period_end, float(item.value)) for item in result.observations]
+            if result.status == "available"
+            else []
+        )
+    conn = context.conn
+    ticker = context.ticker
+    resolved_name = resolve_kpi_definition_name(conn, ticker, metric)
+    if resolved_name is None:
+        return []
+    if active_scalar_override_map(
+        conn, ticker=ticker, fact_kind=OVERRIDE_KPI, fact_key=resolved_name
+    ):
+        log.warning(
+            "soft_rule_kpi_unreviewed_override",
+            extra={"ticker": ticker.upper(), "kpi_name": resolved_name},
+        )
+        return []
+    fact_relation = canonical_fact_relation(conn, "kpi_facts")
+    semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+    semantic_where += " AND " + semantic_series_identity_sql(conn, fact_relation=fact_relation.sql)
+    if fact_relation.selection_mode == "legacy_pre_cutover":
         sql = (
-            "SELECT period_end, value FROM financial_facts "
-            "WHERE ticker = ? AND line_item = ? "
-            "AND fiscal_period_type IN ('Q1','Q2','Q3','Q4') "
-            "ORDER BY period_end ASC"
+            "WITH ranked AS ("  # nosec B608
+            "SELECT kf.id, kf.period_end, kf.fiscal_period_type, kf.value, "
+            "kf.kpi_definition_id, "
+            "ROW_NUMBER() OVER (PARTITION BY kf.kpi_definition_id, kf.period_end, "
+            "kf.fiscal_period_type ORDER BY kf.id DESC) AS rn "
+            f"FROM {fact_relation.sql} kf "
+            "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+            "WHERE kf.ticker = ? AND kd.name = ? "
+            "AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4')) "
+            "SELECT kf.period_end, kf.value "  # nosec B608
+            "FROM ranked kf "
+            f"{semantic_join} "
+            "WHERE kf.rn = 1 AND " + semantic_where + " ORDER BY kf.period_end ASC"
         )
-        params: tuple[Any, ...] = (ticker.upper(), metric)
     else:
-        resolved_name = resolve_kpi_definition_name(conn, ticker, metric)
-        if resolved_name is None:
-            return []
-        if active_scalar_override_map(
-            conn, ticker=ticker, fact_kind=OVERRIDE_KPI, fact_key=resolved_name
-        ):
-            log.warning(
-                "soft_rule_kpi_unreviewed_override",
-                extra={"ticker": ticker.upper(), "kpi_name": resolved_name},
-            )
-            return []
-        fact_relation = canonical_fact_relation(conn, "kpi_facts")
-        semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
-        semantic_where += " AND " + semantic_series_identity_sql(
-            conn, fact_relation=fact_relation.sql
+        sql = (
+            "SELECT kf.period_end, kf.value "  # nosec B608
+            f"FROM {fact_relation.sql} kf "
+            "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+            f"{semantic_join} "
+            "WHERE kf.ticker = ? AND kd.name = ? AND "
+            + semantic_where
+            + " AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4') "
+            "ORDER BY kf.period_end ASC"
         )
-        if fact_relation.selection_mode == "legacy_pre_cutover":
-            sql = (
-                "WITH ranked AS ("  # nosec B608
-                "SELECT kf.id, kf.period_end, kf.fiscal_period_type, kf.value, "
-                "kf.kpi_definition_id, "
-                "ROW_NUMBER() OVER (PARTITION BY kf.kpi_definition_id, kf.period_end, "
-                "kf.fiscal_period_type ORDER BY kf.id DESC) AS rn "
-                f"FROM {fact_relation.sql} kf "
-                "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
-                "WHERE kf.ticker = ? AND kd.name = ? "
-                "AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4')) "
-                "SELECT kf.period_end, kf.value "  # nosec B608
-                "FROM ranked kf "
-                f"{semantic_join} "
-                "WHERE kf.rn = 1 AND " + semantic_where + " ORDER BY kf.period_end ASC"
-            )
-        else:
-            sql = (
-                "SELECT kf.period_end, kf.value "  # nosec B608
-                f"FROM {fact_relation.sql} kf "
-                "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
-                f"{semantic_join} "
-                "WHERE kf.ticker = ? AND kd.name = ? AND "
-                + semantic_where
-                + " AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4') "
-                "ORDER BY kf.period_end ASC"
-            )
-        try:
-            rows = conn.execute(sql, (ticker.upper(), resolved_name)).fetchall()
-        except sqlite3.Error as exc:
-            log.warning({"event": "soft_rule_fetch_failed", "metric": metric, "error": str(exc)})
-            return []
-        out: list[tuple[datetime, float]] = []
-        for row in rows:
-            period_raw = row[0]
-            if isinstance(period_raw, str):
-                try:
-                    period = datetime.fromisoformat(period_raw)
-                except ValueError:
-                    try:
-                        period = datetime.strptime(period_raw[:10], "%Y-%m-%d")
-                    except ValueError:
-                        continue
-            elif isinstance(period_raw, datetime):
-                period = period_raw
-            else:
-                continue
-            try:
-                value = float(row[1])
-            except (TypeError, ValueError):
-                continue
-            out.append((period, value))
-        return out
     try:
-        rows = conn.execute(sql, params).fetchall()
+        rows = conn.execute(sql, (ticker.upper(), resolved_name)).fetchall()
     except sqlite3.Error as exc:
         log.warning({"event": "soft_rule_fetch_failed", "metric": metric, "error": str(exc)})
         return []
     out: list[tuple[datetime, float]] = []
     for row in rows:
-        # sqlite3.Row supports both index and key access; treat positionally
-        # to avoid coupling to row_factory configuration on the caller's conn.
         period_raw = row[0]
         if isinstance(period_raw, str):
             try:
@@ -332,40 +321,58 @@ def _has_unit_jump(prev_v: float, cur_v: float, *, ratio_limit: float = _UNIT_JU
 
 
 def _fetch_series_with_derived(
-    conn: sqlite3.Connection,
-    ticker: str,
+    context: _EvaluationContext,
     metric: str,
     source: FactSource,
     derived: str,
-) -> tuple[list[tuple[datetime, float]] | None, str | None]:
+) -> tuple[list[tuple[datetime, float]] | None, str | None, str | None]:
     """Return (series, None) on success, or (None, reason) when a data-quality
     guard blocks a `derived: "delta"` computation. `derived == "level"` (the
     default) always succeeds — it's the raw series, unguarded (existing
     predicates already tolerate a noisy level series; only a DELTA over a
     cumulative series risks manufacturing a nonsense number from a unit error).
     """
-    raw = _fetch_series(conn, ticker, metric, source)
+    raw = _fetch_series(context, metric, source)
+    source_reason = (
+        _read_financial(context, metric).reason_code if source is FactSource.FINANCIAL else None
+    )
     if derived == "level":
-        return raw, None
+        return raw, None, source_reason
     if derived != "delta":
         raise ValueError(f"unsupported derived transform: {derived!r}")
     if len(raw) < 2:
-        return [], None
+        return [], None, source_reason
     for (prev_p, prev_v), (cur_p, cur_v) in itertools.pairwise(raw):
         if cur_v < prev_v:
-            return None, (
-                f"non-monotonic {metric}: {cur_v:g} at {cur_p.date().isoformat()} < "
-                f"{prev_v:g} at {prev_p.date().isoformat()} — cumulative series should "
-                "not decrease; delta not computed"
+            return (
+                None,
+                (
+                    f"non-monotonic {metric}: {cur_v:g} at {cur_p.date().isoformat()} < "
+                    f"{prev_v:g} at {prev_p.date().isoformat()} — cumulative series should "
+                    "not decrease; delta not computed"
+                ),
+                source_reason,
             )
         if _has_unit_jump(prev_v, cur_v):
-            return None, (
-                f"unit discontinuity in {metric}: {prev_v:g} at {prev_p.date().isoformat()} "
-                f"-> {cur_v:g} at {cur_p.date().isoformat()} (>{_UNIT_JUMP_RATIO:g}x jump) — "
-                "likely a scale error; delta not computed"
+            return (
+                None,
+                (
+                    f"unit discontinuity in {metric}: {prev_v:g} at {prev_p.date().isoformat()} "
+                    f"-> {cur_v:g} at {cur_p.date().isoformat()} (>{_UNIT_JUMP_RATIO:g}x jump) — "
+                    "likely a scale error; delta not computed"
+                ),
+                source_reason,
             )
     deltas = [(cur_p, cur_v - prev_v) for (_, prev_v), (cur_p, cur_v) in itertools.pairwise(raw)]
-    return deltas, None
+    return deltas, None, source_reason
+
+
+def _financial_manifest(
+    context: _EvaluationContext, metric: str, source: FactSource
+) -> dict[str, object] | None:
+    if source is not FactSource.FINANCIAL:
+        return None
+    return _read_financial(context, metric).manifest()
 
 
 class _MetricSpec(NamedTuple):
@@ -423,9 +430,7 @@ class _PredOutcome:
     description: str  # fallback used when evidence_template is missing/unfillable
 
 
-def _eval_series_decel(
-    conn: sqlite3.Connection, ticker: str, params: dict[str, Any]
-) -> _PredOutcome:
+def _eval_series_decel(context: _EvaluationContext, params: dict[str, Any]) -> _PredOutcome:
     """YoY growth deceleration ≥ threshold_bps for `periods` consecutive quarters.
 
     Deceleration at Q is `YoY(Q-1) - YoY(Q)` in bps (positive = slowing). The
@@ -442,19 +447,33 @@ def _eval_series_decel(
     threshold_bps = float(_param(params, "threshold_bps"))
     if periods < 1:
         raise ValueError("series_decel periods must be >= 1")
-    series, guard_reason = _fetch_series_with_derived(conn, ticker, metric, source, derived)
+    series, guard_reason, source_reason = _fetch_series_with_derived(
+        context, metric, source, derived
+    )
+    manifest = _financial_manifest(context, metric, source)
     if series is None:
         return _PredOutcome(
             fired=None,
-            evidence_keys={"metric": metric, "derived": derived},
+            evidence_keys={
+                "metric": metric,
+                "derived": derived,
+                "source_manifest": manifest,
+            },
             description=f"unresolved: {guard_reason}",
         )
     if len(series) < periods + 5:
+        reason = source_reason or "insufficient_quarterly_history"
         return _PredOutcome(
             fired=None,
-            evidence_keys={"metric": metric, "have": len(series), "need": periods + 5},
+            evidence_keys={
+                "metric": metric,
+                "have": len(series),
+                "need": periods + 5,
+                "source_reason": reason,
+                "source_manifest": manifest,
+            },
             description=(
-                f"unresolved: insufficient data for series_decel({metric}): "
+                f"unresolved: {reason} for series_decel({metric}): "
                 f"have {len(series)} quarters, need {periods + 5}"
             ),
         )
@@ -463,11 +482,25 @@ def _eval_series_decel(
     yoy: list[tuple[datetime, float]] = []
     for idx in range(len(series) - periods - 1, len(series)):
         cur_period, cur_val = series[idx]
-        _, base_val = series[idx - 4]
+        base_period, base_val = series[idx - 4]
+        if abs((cur_period.date() - base_period.date()).days - 365) > 20:
+            return _PredOutcome(
+                fired=None,
+                evidence_keys={
+                    "metric": metric,
+                    "source_reason": "year_over_year_period_mismatch",
+                    "source_manifest": manifest,
+                },
+                description=f"unresolved: year-over-year period mismatch for {metric}",
+            )
         if base_val == 0:
             return _PredOutcome(
                 fired=None,
-                evidence_keys={"metric": metric, "zero_base_at": cur_period.isoformat()},
+                evidence_keys={
+                    "metric": metric,
+                    "zero_base_at": cur_period.isoformat(),
+                    "source_manifest": manifest,
+                },
                 description=f"unresolved: series_decel({metric}): zero base value blocks YoY",
             )
         growth_pct = (cur_val / base_val - 1.0) * 100.0
@@ -494,6 +527,7 @@ def _eval_series_decel(
             "prior_yoy_pct": round(yoy[-2][1], 2) if len(yoy) >= 2 else None,
             "decel_series_bps": [round(d, 0) for _, d in decels],
             "last_period": (last_decel[0].isoformat() if last_decel[0] else None),
+            "source_manifest": manifest,
         },
         description=(
             f"{metric} YoY decelerated by "
@@ -508,8 +542,7 @@ def _eval_series_decel(
 
 
 def _eval_series_threshold(
-    conn: sqlite3.Connection,
-    ticker: str,
+    context: _EvaluationContext,
     params: dict[str, Any],
     *,
     direction: Literal["below", "above"],
@@ -522,19 +555,33 @@ def _eval_series_threshold(
     periods = int(_param(params, "periods"))
     if periods < 1:
         raise ValueError(f"series_{direction} periods must be >= 1")
-    series, guard_reason = _fetch_series_with_derived(conn, ticker, metric, source, derived)
+    series, guard_reason, source_reason = _fetch_series_with_derived(
+        context, metric, source, derived
+    )
+    manifest = _financial_manifest(context, metric, source)
     if series is None:
         return _PredOutcome(
             fired=None,
-            evidence_keys={"metric": metric, "derived": derived},
+            evidence_keys={
+                "metric": metric,
+                "derived": derived,
+                "source_manifest": manifest,
+            },
             description=f"unresolved: {guard_reason}",
         )
     if len(series) < periods:
+        reason = source_reason or "insufficient_quarterly_history"
         return _PredOutcome(
             fired=None,
-            evidence_keys={"metric": metric, "have": len(series), "need": periods},
+            evidence_keys={
+                "metric": metric,
+                "have": len(series),
+                "need": periods,
+                "source_reason": reason,
+                "source_manifest": manifest,
+            },
             description=(
-                f"unresolved: insufficient data for series_{direction}({metric}): "
+                f"unresolved: {reason} for series_{direction}({metric}): "
                 f"have {len(series)} quarters, need {periods}"
             ),
         )
@@ -554,6 +601,7 @@ def _eval_series_threshold(
             "last_value": round(window[-1][1], 4),
             "values": [round(v, 4) for _, v in window],
             "last_period": window[-1][0].isoformat(),
+            "source_manifest": manifest,
         },
         description=(
             f"{metric} {direction} {threshold:g} for {periods} consecutive Q "
@@ -562,9 +610,7 @@ def _eval_series_threshold(
     )
 
 
-def _eval_ratio_breach(
-    conn: sqlite3.Connection, ticker: str, params: dict[str, Any]
-) -> _PredOutcome:
+def _eval_ratio_breach(context: _EvaluationContext, params: dict[str, Any]) -> _PredOutcome:
     """Ratio of two series vs a threshold for N consecutive quarters.
 
     `threshold` is a fraction (0.15 for 15%), to match the level the analyst
@@ -578,28 +624,96 @@ def _eval_ratio_breach(
     num_spec = _metric_spec(_param(params, "numerator"))
     den_spec = _metric_spec(_param(params, "denominator"))
     threshold = float(_param(params, "threshold"))
-    direction: Literal["below", "above"] = str(_param(params, "direction"))  # type: ignore[assignment]
-    if direction not in ("below", "above"):
-        raise ValueError(f"ratio_breach direction must be 'below' or 'above', got {direction!r}")
+    direction_raw = str(_param(params, "direction"))
+    if direction_raw not in ("below", "above"):
+        raise ValueError(
+            f"ratio_breach direction must be 'below' or 'above', got {direction_raw!r}"
+        )
+    direction = direction_raw
     periods = int(params.get("periods", 1))
     if periods < 1:
         raise ValueError("ratio_breach periods must be >= 1")
 
-    num_series, num_guard = _fetch_series_with_derived(
-        conn, ticker, num_spec.name, num_spec.source, num_spec.derived
+    num_series, num_guard, num_reason = _fetch_series_with_derived(
+        context, num_spec.name, num_spec.source, num_spec.derived
     )
-    den_series, den_guard = _fetch_series_with_derived(
-        conn, ticker, den_spec.name, den_spec.source, den_spec.derived
+    den_series, den_guard, den_reason = _fetch_series_with_derived(
+        context, den_spec.name, den_spec.source, den_spec.derived
     )
+    manifests = {
+        "numerator": _financial_manifest(context, num_spec.name, num_spec.source),
+        "denominator": _financial_manifest(context, den_spec.name, den_spec.source),
+    }
     if num_series is None or den_series is None:
         reason = num_guard if num_series is None else den_guard
         return _PredOutcome(
             fired=None,
-            evidence_keys={"numerator": num_spec.name, "denominator": den_spec.name},
+            evidence_keys={
+                "numerator": num_spec.name,
+                "denominator": den_spec.name,
+                "source_manifest": manifests,
+            },
             description=f"unresolved: {reason}",
         )
     num_map = {pe: v for pe, v in num_series}
     den_map = {pe: v for pe, v in den_series}
+    if num_spec.source is FactSource.FINANCIAL and den_spec.source is FactSource.FINANCIAL:
+        num_observations = _read_financial(context, num_spec.name).observations[-periods:]
+        den_observations = _read_financial(context, den_spec.name).observations[-periods:]
+        num_periods = [(item.period_start, item.period_end) for item in num_observations]
+        den_periods = [(item.period_start, item.period_end) for item in den_observations]
+        if num_periods != den_periods:
+            return _PredOutcome(
+                fired=None,
+                evidence_keys={
+                    "numerator": num_spec.name,
+                    "denominator": den_spec.name,
+                    "source_reason": "ratio_exact_period_mismatch",
+                    "source_manifest": manifests,
+                },
+                description=(
+                    f"unresolved: exact quarterly periods differ for ratio_breach("
+                    f"{num_spec.name}/{den_spec.name})"
+                ),
+            )
+        num_coordinates = [
+            (
+                item.fiscal_year,
+                item.fiscal_period,
+                item.reporting_entity_id,
+                item.currency,
+                item.unit,
+                item.accounting_basis,
+                item.consolidation_scope,
+            )
+            for item in num_observations
+        ]
+        den_coordinates = [
+            (
+                item.fiscal_year,
+                item.fiscal_period,
+                item.reporting_entity_id,
+                item.currency,
+                item.unit,
+                item.accounting_basis,
+                item.consolidation_scope,
+            )
+            for item in den_observations
+        ]
+        if num_coordinates != den_coordinates:
+            return _PredOutcome(
+                fired=None,
+                evidence_keys={
+                    "numerator": num_spec.name,
+                    "denominator": den_spec.name,
+                    "source_reason": "ratio_exact_coordinate_mismatch",
+                    "source_manifest": manifests,
+                },
+                description=(
+                    f"unresolved: exact quarterly coordinates differ for ratio_breach("
+                    f"{num_spec.name}/{den_spec.name})"
+                ),
+            )
     # Inner-join on period_end so we only compute the ratio where both sides
     # have a value — avoids a phantom "fired" when one side has stale data.
     paired = [
@@ -608,6 +722,7 @@ def _eval_ratio_breach(
         if den_map[pe] != 0
     ]
     if len(paired) < periods:
+        reason = num_reason or den_reason or "insufficient_paired_quarterly_history"
         return _PredOutcome(
             fired=None,
             evidence_keys={
@@ -615,9 +730,11 @@ def _eval_ratio_breach(
                 "denominator": den_spec.name,
                 "have": len(paired),
                 "need": periods,
+                "source_reason": reason,
+                "source_manifest": manifests,
             },
             description=(
-                f"unresolved: insufficient data for ratio_breach({num_spec.name}/{den_spec.name}): "
+                f"unresolved: {reason} for ratio_breach({num_spec.name}/{den_spec.name}): "
                 f"have {len(paired)} paired quarters, need {periods}"
             ),
         )
@@ -640,6 +757,7 @@ def _eval_ratio_breach(
             "last_ratio_pct": round(window[-1][1] * 100.0, 2),
             "ratios_pct": [round(r * 100.0, 2) for _, r in window],
             "last_period": window[-1][0].isoformat(),
+            "source_manifest": manifests,
         },
         description=(
             f"{num_spec.name} / {den_spec.name} {direction} {threshold * 100:.1f}% "
@@ -698,7 +816,7 @@ def _kleene_or(vals: list[bool | None]) -> bool | None:
     return False
 
 
-def _eval_compound(conn: sqlite3.Connection, ticker: str, params: dict[str, Any]) -> _PredOutcome:
+def _eval_compound(context: _EvaluationContext, params: dict[str, Any]) -> _PredOutcome:
     """AND / OR over child predicates, three-valued (Kleene) so an unresolved
     child never gets silently absorbed into a plain green/fired verdict.
 
@@ -717,7 +835,7 @@ def _eval_compound(conn: sqlite3.Connection, ticker: str, params: dict[str, Any]
     children: list[SoftRulePredicate] = []
     for entry in cast("list[Any]", children_raw):
         children.append(SoftRulePredicate.model_validate(entry))
-    child_outcomes = [_evaluate_predicate(conn, ticker, c) for c in children]
+    child_outcomes = [_evaluate_predicate(context, c) for c in children]
     child_fired = [c.fired for c in child_outcomes]
     fired = _kleene_and(child_fired) if op == "and" else _kleene_or(child_fired)
     fired_count = sum(1 for f in child_fired if f is True)
@@ -737,6 +855,11 @@ def _eval_compound(conn: sqlite3.Connection, ticker: str, params: dict[str, Any]
                     "type": c_def.type.value,
                     "fired": c_out.fired,
                     "description": c_out.description,
+                    **(
+                        {"source_manifest": c_out.evidence_keys["source_manifest"]}
+                        if "source_manifest" in c_out.evidence_keys
+                        else {}
+                    ),
                 }
                 for c_def, c_out in zip(children, child_outcomes, strict=True)
             ],
@@ -803,7 +926,7 @@ def _quarter_label(period: datetime) -> str:
     return f"Q{q}'{period.year % 100:02d}"
 
 
-def _eval_trajectory(conn: sqlite3.Connection, ticker: str, params: dict[str, Any]) -> _PredOutcome:
+def _eval_trajectory(context: _EvaluationContext, params: dict[str, Any]) -> _PredOutcome:
     """Linear-fit the last `lookback_prints` of `kpi_name` and project forward.
 
     Fires (WARN) when the fitted trend crosses `threshold` within
@@ -827,19 +950,33 @@ def _eval_trajectory(conn: sqlite3.Connection, ticker: str, params: dict[str, An
     if horizon < 1:
         raise ValueError("trajectory horizon_prints must be >= 1")
 
-    series, guard_reason = _fetch_series_with_derived(conn, ticker, kpi_name, source, derived)
+    series, guard_reason, source_reason = _fetch_series_with_derived(
+        context, kpi_name, source, derived
+    )
+    manifest = _financial_manifest(context, kpi_name, source)
     if series is None:
         return _PredOutcome(
             fired=None,
-            evidence_keys={"kpi_name": kpi_name, "derived": derived},
+            evidence_keys={
+                "kpi_name": kpi_name,
+                "derived": derived,
+                "source_manifest": manifest,
+            },
             description=f"unresolved: {guard_reason}",
         )
     if len(series) < lookback:
+        reason = source_reason or "insufficient_quarterly_history"
         return _PredOutcome(
             fired=None,
-            evidence_keys={"kpi_name": kpi_name, "have": len(series), "need": lookback},
+            evidence_keys={
+                "kpi_name": kpi_name,
+                "have": len(series),
+                "need": lookback,
+                "source_reason": reason,
+                "source_manifest": manifest,
+            },
             description=(
-                f"unresolved: insufficient data for trajectory({kpi_name}): "
+                f"unresolved: {reason} for trajectory({kpi_name}): "
                 f"have {len(series)} prints, need {lookback}"
             ),
         )
@@ -897,6 +1034,7 @@ def _eval_trajectory(conn: sqlite3.Connection, ticker: str, params: dict[str, An
             "trip_h": trip_h,
             "trip_value": round(trip_value, 4) if trip_value is not None else None,
             "already_violating": already_violating,
+            "source_manifest": manifest,
         },
         description=description,
     )
@@ -904,19 +1042,15 @@ def _eval_trajectory(conn: sqlite3.Connection, ticker: str, params: dict[str, An
 
 # Predicate handler type — closes over `direction` for series_below/above so the
 # two share one implementation without a runtime branch on each call.
-_PredHandler = Callable[[sqlite3.Connection, str, dict[str, Any]], _PredOutcome]
+_PredHandler = Callable[[_EvaluationContext, dict[str, Any]], _PredOutcome]
 
 
-def _series_below_handler(
-    conn: sqlite3.Connection, ticker: str, params: dict[str, Any]
-) -> _PredOutcome:
-    return _eval_series_threshold(conn, ticker, params, direction="below")
+def _series_below_handler(context: _EvaluationContext, params: dict[str, Any]) -> _PredOutcome:
+    return _eval_series_threshold(context, params, direction="below")
 
 
-def _series_above_handler(
-    conn: sqlite3.Connection, ticker: str, params: dict[str, Any]
-) -> _PredOutcome:
-    return _eval_series_threshold(conn, ticker, params, direction="above")
+def _series_above_handler(context: _EvaluationContext, params: dict[str, Any]) -> _PredOutcome:
+    return _eval_series_threshold(context, params, direction="above")
 
 
 _PREDICATE_DISPATCH: dict[PredicateType, _PredHandler] = {
@@ -929,14 +1063,12 @@ _PREDICATE_DISPATCH: dict[PredicateType, _PredHandler] = {
 }
 
 
-def _evaluate_predicate(
-    conn: sqlite3.Connection, ticker: str, pred: SoftRulePredicate
-) -> _PredOutcome:
+def _evaluate_predicate(context: _EvaluationContext, pred: SoftRulePredicate) -> _PredOutcome:
     """Dispatch one predicate to its handler. Closed-set — unknown types raise."""
     fn = _PREDICATE_DISPATCH.get(pred.type)
     if fn is None:
         raise ValueError(f"unsupported predicate type: {pred.type}")
-    return fn(conn, ticker, pred.params)
+    return fn(context, pred.params)
 
 
 # ---------------------------------------------------------------------------
@@ -983,24 +1115,15 @@ def _render_evidence(template: str | None, outcome: _PredOutcome) -> str:
         return outcome.description
 
 
-def evaluate_soft_rules(
-    ticker: str,
+def _evaluate_soft_rules_in_snapshot(
+    context: _EvaluationContext,
     rules: list[SoftRule],
-    conn: sqlite3.Connection,
+    now: datetime,
 ) -> list[SoftRuleResult]:
-    """Evaluate every soft rule for `ticker` and return per-rule results.
-
-    Errors in a single rule (invalid predicate, missing required param) are
-    logged and surfaced as UNRESOLVED — never GREEN — with the error in its
-    evidence, so a malformed rule stays visibly broken rather than reading as
-    "checked, all clear". Hard failures here must never break the thesis
-    evaluator pipeline; other rules in the same call still evaluate.
-    """
-    now = datetime.now()
     out: list[SoftRuleResult] = []
     for rule in rules:
         try:
-            outcome = _evaluate_predicate(conn, ticker, rule.predicate)
+            outcome = _evaluate_predicate(context, rule.predicate)
         except Exception as exc:
             log.warning(
                 {
@@ -1040,3 +1163,30 @@ def evaluate_soft_rules(
             )
         )
     return out
+
+
+def evaluate_soft_rules(
+    ticker: str,
+    rules: list[SoftRule],
+    conn: sqlite3.Connection,
+) -> list[SoftRuleResult]:
+    """Evaluate every soft rule at one aware cutoff and SQLite read snapshot.
+
+    Errors in a single rule are surfaced as UNRESOLVED without blocking the
+    remaining rules. A caller transaction is preserved; otherwise this function
+    owns and rolls back a read transaction after materializing all results.
+    """
+    cutoff = datetime.now(UTC)
+    owns_snapshot = not conn.in_transaction
+    try:
+        if owns_snapshot:
+            conn.execute("BEGIN")
+        context = _EvaluationContext(
+            conn=conn,
+            ticker=ticker,
+            financials=CanonicalFinancialSeriesReader(conn, ticker, cutoff=cutoff),
+        )
+        return _evaluate_soft_rules_in_snapshot(context, rules, cutoff)
+    finally:
+        if owns_snapshot and conn.in_transaction:
+            conn.rollback()

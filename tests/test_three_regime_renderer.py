@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -33,7 +37,7 @@ def test_three_regime_renderer_models_frozen_immutability() -> None:
         content_markdown="## Markdown",
     )
     with pytest.raises(ValidationError):
-        sec.currency = "EUR"  # type: ignore[misc]
+        setattr(sec, "currency", "EUR")
 
     out = SingleRegimeRenderOutput(
         ticker="RBRK",
@@ -49,7 +53,7 @@ def test_three_regime_renderer_models_frozen_immutability() -> None:
         sections=(sec,),
     )
     with pytest.raises(ValidationError):
-        out.two_pass_byte_identical = False  # type: ignore[misc]
+        setattr(out, "two_pass_byte_identical", False)
 
     receipt = ThreeRegimeRenderReceipt(
         run_id="run_1",
@@ -63,42 +67,39 @@ def test_three_regime_renderer_models_frozen_immutability() -> None:
         verified_at=datetime.now(UTC),
     )
     with pytest.raises(ValidationError):
-        receipt.status = "HOLD"  # type: ignore[misc]
+        setattr(receipt, "status", "HOLD")
 
 
-def test_two_pass_byte_identical_reproducibility() -> None:
-    """Assert renderer guarantees byte-identical reproducibility across multiple runs."""
-    renderer = ThreeRegimeDeterministicRenderer()
-    as_of = date(2026, 4, 30)
-
-    # Pass 1
-    out1 = renderer.render_ticker_regime("RBRK", SourceRegime.REGIME_2_COMBINED, as_of_date=as_of)
-    # Pass 2
-    out2 = renderer.render_ticker_regime("RBRK", SourceRegime.REGIME_2_COMBINED, as_of_date=as_of)
-
-    assert out1.html_sha256 == out2.html_sha256
-    assert out1.markdown_sha256 == out2.markdown_sha256
-    assert out1.sections_json_sha256 == out2.sections_json_sha256
-    assert out1.two_pass_byte_identical is True
+@pytest.mark.parametrize("tickers", [["META", "NU"], ["NO_SUCH_ISSUER"], []])
+def test_missing_sealed_inputs_cannot_certify_render(tickers: list[str]) -> None:
+    receipt = ThreeRegimeDeterministicRenderer().render_all_regimes_for_cohort(tickers)
+    assert receipt.status == "HOLD"
+    assert receipt.render_outputs == ()
+    assert receipt.total_render_outputs == 0
+    assert receipt.all_two_pass_verified is False
 
 
-def test_three_regime_cohort_rendering() -> None:
-    """Assert all 3 regimes are rendered cleanly for the full canary cohort."""
-    renderer = ThreeRegimeDeterministicRenderer()
-    cohort = ["META", "NU", "BN", "RBRK", "ASML", "WIX"]
-    receipt = renderer.render_all_regimes_for_cohort(cohort, as_of_date=date(2026, 4, 30))
+def test_single_render_refuses_unbound_financial_values() -> None:
+    with pytest.raises(ValueError, match="sealed source inputs"):
+        ThreeRegimeDeterministicRenderer().render_ticker_regime(
+            "NO_SUCH_ISSUER", SourceRegime.REGIME_2_COMBINED
+        )
 
-    assert receipt.status == "PASS"
-    assert receipt.total_tickers == 6
-    assert receipt.total_regimes == 3
-    assert receipt.total_render_outputs == 18
-    assert receipt.all_two_pass_verified is True
 
-    # Check section lineage and currency
-    for out in receipt.render_outputs:
-        assert out.sections_count == 2
-        for s in out.sections:
-            assert s.status == SectionRenderStatus.COMPLETE
-            assert s.regime == out.regime
-            assert s.currency == out.currency
-            assert s.source_lineage != ""
+def test_operational_cli_exits_nonzero_with_hold_receipt(tmp_path: Path) -> None:
+    receipt_path = tmp_path / "receipt.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "execution/render_three_regimes.py",
+            "--output-receipt",
+            str(receipt_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["status"] == "HOLD"
+    assert receipt["reason_codes"]

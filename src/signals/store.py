@@ -45,6 +45,7 @@ from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import Literal
 
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -243,6 +244,9 @@ class ForwardAgendaResult:
 
     rows: tuple[SignalRow, ...]
     unavailable: bool = False
+    freshness: Literal["fresh", "stale", "unavailable"] = "unavailable"
+    coverage_reason: str = "source_refresh_never_completed"
+    coverage_as_of: str | None = None
 
 
 _SELECT_COLS = (
@@ -255,21 +259,30 @@ def _row_to_signal(row: Sequence[object]) -> SignalRow:
     # Tolerates both select shapes: the 13-col legacy shape and the 14-col
     # quality-aware one (load_diet_signals falls back on a pre-0150 DB).
     quality = row[13] if len(row) > 13 else None
+    signal_id, weight, news_id = row[0], row[5], row[12]
+    if not isinstance(signal_id, (str, int, float, bytes)) or not isinstance(
+        weight, (str, int, float, bytes)
+    ):
+        raise ValueError("Signal ID and weight must be numeric")
+    if news_id is not None and not isinstance(news_id, (str, int, float, bytes)):
+        raise ValueError("Signal news ID must be numeric or null")
+    if quality is not None and not isinstance(quality, (str, int, float, bytes)):
+        raise ValueError("Signal quality must be numeric or null")
     return SignalRow(
-        id=int(row[0]),  # type: ignore[arg-type]
+        id=int(signal_id),
         ticker=str(row[1]),
         signal_type=str(row[2]),
         title=str(row[3]),
         published_at=str(row[4]),
-        weight=float(row[5]),  # type: ignore[arg-type]
+        weight=float(weight),
         cadence=str(row[6]),
         body=str(row[7]) if row[7] is not None else None,
         url=str(row[8]) if row[8] is not None else None,
         firm=str(row[9]) if row[9] is not None else None,
         event_date=str(row[10]) if row[10] is not None else None,
         source_feed=str(row[11]) if row[11] is not None else None,
-        news_id=int(row[12]) if row[12] is not None else None,  # type: ignore[arg-type]
-        quality_score=float(quality) if quality is not None else None,  # type: ignore[arg-type]
+        news_id=int(news_id) if news_id is not None else None,
+        quality_score=float(quality) if quality is not None else None,
     )
 
 
@@ -368,6 +381,7 @@ def load_forward_agenda_result(
     *,
     on_or_after: date,
     limit: int = 40,
+    now: datetime | None = None,
 ) -> ForwardAgendaResult:
     """The forward agenda: upcoming forward-dated signals (investor days),
     soonest first.
@@ -376,6 +390,9 @@ def load_forward_agenda_result(
     sort from the recency lane, which is exactly why the index is separate.
     Still non-decaying: the order depends on stored ``event_date``, never on a
     decay of ``now``."""
+    # The writer uses signal constants, so defer the receipt reader to avoid a module cycle.
+    from signals.ir_events import ir_calendar_coverage
+
     conn = _open_ro(db_path)
     if conn is None:
         return ForwardAgendaResult((), unavailable=True)
@@ -386,11 +403,20 @@ def load_forward_agenda_result(
             "ORDER BY event_date ASC, weight DESC, id ASC LIMIT ?",
             (SIGNAL_INVESTOR_DAY, on_or_after.isoformat(), int(limit)),
         ).fetchall()
+        try:
+            freshness, reason, as_of = ir_calendar_coverage(conn, now=now or datetime.now(UTC))
+        except (sqlite3.Error, ValueError):
+            freshness, reason, as_of = "unavailable", "source_receipt_unavailable", None
     except sqlite3.Error:
         return ForwardAgendaResult((), unavailable=True)
     finally:
         conn.close()
-    return ForwardAgendaResult(tuple(_row_to_signal(r) for r in rows))
+    return ForwardAgendaResult(
+        tuple(_row_to_signal(r) for r in rows),
+        freshness=freshness,
+        coverage_reason=reason,
+        coverage_as_of=as_of,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -487,15 +513,15 @@ def record_investor_day(
     weight: float | None = None,
     now: datetime | None = None,
 ) -> bool:
-    """Record one forward-dated investor/analyst day; return True iff inserted.
+    """Legacy-schema fixture helper; caller owns commit.
 
-    The writer the (fast-follow) IR-events scrape calls — an EXTENSION of the
-    existing ``expected_earnings`` calendar machinery into the typed signal
-    store, not a greenfield event table. Idempotent on ``ux_signals_event``
-    (ticker, signal_type, event_date), so re-scraping the same calendar is a
-    no-op. ``published_at`` is the discovery time (now); ``event_date`` is the
-    forward agenda date. Caller commits via this function.
+    Governed schemas require record_ir_events_batch and reject this provenance-
+    free interface. No production caller uses this compatibility function.
     """
+    if conn.execute(
+        "SELECT 1 FROM sqlite_schema WHERE name='ir_event_revisions' AND type='table'"
+    ).fetchone():
+        raise RuntimeError("governed IR events require record_ir_events_batch")
     stamp = _now_stamp(now)
     w = weight if weight is not None else DEFAULT_WEIGHTS[SIGNAL_INVESTOR_DAY]
     cur = conn.execute(
@@ -521,5 +547,4 @@ def record_investor_day(
             stamp,
         ),
     )
-    conn.commit()
     return bool(cur.rowcount and cur.rowcount > 0)

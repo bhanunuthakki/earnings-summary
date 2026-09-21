@@ -14,16 +14,21 @@ direct, calendar-quarter-keyed read makes the wrong label inert.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
-from report.models import SectionStatus
+from report.models import QuarterlyLineItem, SectionStatus
+from report.sections import financials
 from report.sections._common import quarter_label
-from report.sections.financials import (
-    _dedupe_by_calendar_quarter,  # pyright: ignore[reportPrivateUsage]
-    _load_annual,  # pyright: ignore[reportPrivateUsage]
-    _load_quarterly,  # pyright: ignore[reportPrivateUsage]
-    build,
+from report.sections.financials import build, build_legacy_shadow
+
+_Loader = Callable[[sqlite3.Connection, str], list[dict[str, object]]]
+_load_annual = cast(_Loader, getattr(financials, "_load_annual"))
+_load_quarterly = cast(_Loader, getattr(financials, "_load_quarterly"))
+_dedupe_by_calendar_quarter = cast(
+    Callable[[list[dict[str, object]]], list[dict[str, object]]],
+    getattr(financials, "_dedupe_by_calendar_quarter"),
 )
 
 _DDL = """
@@ -234,12 +239,10 @@ def test_load_annual_one_row_per_fiscal_year(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _series(section_line_items: object, name: str) -> dict[str, float | None]:
+def _series(section_line_items: list[QuarterlyLineItem], name: str) -> dict[str, float | None]:
     """{quarter_label: value} for the named quarterly line item."""
-    from report.models import QuarterlyLineItem
-
     assert isinstance(section_line_items, list)
-    for li in section_line_items:  # pyright: ignore[reportUnknownVariableType]
+    for li in section_line_items:
         assert isinstance(li, QuarterlyLineItem)
         if li.line_item == name:
             return dict(zip(li.quarters, li.values, strict=True))
@@ -252,7 +255,9 @@ def test_build_quarterly_series_unshifted_and_reconciles_to_annual(tmp_path: Pat
     _seed_offcal(conn)
     conn.close()
 
-    section = build("OFFCAL", tmp_path)
+    section = build_legacy_shadow("OFFCAL", tmp_path)
+    # Preserved old-calendar oracle; active canonical build is tested with
+    # actual admitted observations in test_report_canonical_financials.
 
     assert section.status == SectionStatus.OK
     # No dropped/duplicated quarters in the displayed labels.
