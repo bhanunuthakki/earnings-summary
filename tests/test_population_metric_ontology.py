@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import hashlib
@@ -11,12 +10,14 @@ from pathlib import Path
 from typing import Protocol, cast
 
 import pytest
-from alembic.config import Config
 
 import provenance.population_metric_ontology as population
-from alembic import command
+import tests.test_filing_xbrl_extraction_ledger as filing_fixtures
 from provenance.filing_xbrl_extraction_ledger import FilingXbrlExtractionLedger
-from provenance.filing_xbrl_fact_adapter import FilingXbrlNormalizedOutput
+from provenance.filing_xbrl_fact_adapter import (
+    FilingXbrlNormalizedOutput,
+    NormalizedFilingXbrlFact,
+)
 from provenance.metric_ontology import (
     BindingRevision,
     SourceObservationTaxonomyAssertion,
@@ -29,15 +30,21 @@ from provenance.population_metric_ontology import (
     populate_metric_ontology,
     verify_metric_ontology_receipt,
 )
-from tests.test_canonical_fact_resolution import ROOT, _resolution_database
-from tests.test_filing_xbrl_extraction_ledger import (
-    STAMP as SOURCE_STAMP,
+
+SOURCE_STAMP = filing_fixtures.STAMP
+_entry = cast(
+    Callable[..., NormalizedFilingXbrlFact],
+    getattr(filing_fixtures, "_entry"),
 )
-from tests.test_filing_xbrl_extraction_ledger import (
-    _entry,
-    _insert_extraction_run,
-    _output,
+_insert_extraction_run = cast(
+    Callable[[sqlite3.Connection, FilingXbrlNormalizedOutput], None],
+    getattr(filing_fixtures, "_insert_extraction_run"),
 )
+_output = cast(
+    Callable[..., FilingXbrlNormalizedOutput],
+    getattr(filing_fixtures, "_output"),
+)
+filing_xbrl_ledger_database = filing_fixtures.filing_xbrl_ledger_database
 
 _STAMP = datetime(2026, 7, 29, tzinfo=UTC)
 _OPERATION_STAMP = _STAMP + timedelta(hours=1)
@@ -377,6 +384,7 @@ def test_ontology_records_use_stable_source_clock() -> None:
 
 def test_population_replays_o1_objects_when_temporal_scope_advances(
     tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
     observed_o2 = SOURCE_STAMP + timedelta(hours=1)
     late_locator = {"path": "/xbrl/late"}
@@ -393,17 +401,8 @@ def test_population_replays_o1_objects_when_temporal_scope_advances(
         }
     )
     initial = _output((_entry(0, numeric_value=Decimal("100")),))
-    conn = _resolution_database(tmp_path, initial)
-    database_path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
-    conn.commit()
-    conn.close()
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
-    command.upgrade(config, "head")
-    conn = sqlite3.connect(database_path)
+    conn = filing_xbrl_ledger_database(tmp_path, initial, migrated_db)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
     try:
         FilingXbrlExtractionLedger(conn).publish(initial)
         first = populate_metric_ontology(
