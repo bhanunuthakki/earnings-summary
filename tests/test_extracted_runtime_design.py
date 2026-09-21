@@ -1,13 +1,59 @@
 """Extracted browser assets remain visible to the design census and contracts."""
 
+import ast
 from pathlib import Path
 
 import pytest
 
+from ui import conformance_scan
 from ui.conformance_scan import discover_emitters, dynamic_visual_digest, scan_surface_evidence
 from ui.design_registry import DYNAMIC_VISUAL_CONTRACTS, VISUAL_EMITTER_MANIFEST
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_census_skips_python_without_visual_lexical_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = tmp_path / "src" / "plain_data.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("ANSWER = 42\n", encoding="utf-8")
+    original_parse = conformance_scan.ast.parse
+
+    def guarded_parse(
+        source: str,
+        filename: str = "<unknown>",
+        mode: str = "exec",
+    ) -> ast.AST:
+        if source == "ANSWER = 42\n":
+            raise AssertionError("nonvisual source reached the AST parser")
+        return original_parse(source, filename=filename, mode=mode)
+
+    monkeypatch.setattr(conformance_scan.ast, "parse", guarded_parse)
+    assert discover_emitters(tmp_path) == ()
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_kind"),
+    [
+        ('BODY = ".card { color: var(--fg); }"\n', "python-css"),
+        ('def render(tag):\n    return f"<{tag}>ready</{tag}>"\n', "html"),
+        ('PATTERN = r"(?P<path>[^/]+)"\n', "svg"),
+        ("CSS = build_styles(tokens)\n", "python-css"),
+    ],
+)
+def test_census_prefilter_preserves_visual_syntax_families(
+    tmp_path: Path, source: str, expected_kind: str
+) -> None:
+    module = tmp_path / "src" / "surface.py"
+    module.parent.mkdir(parents=True)
+    module.write_text(source, encoding="utf-8")
+
+    discovered = discover_emitters(tmp_path)
+
+    assert len(discovered) == 1
+    assert discovered[0].path == "surface.py"
+    assert expected_kind in discovered[0].adapter_kinds
 
 
 @pytest.mark.parametrize("directory", ["src/pipeline", "execution"])

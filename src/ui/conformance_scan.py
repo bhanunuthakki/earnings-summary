@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import io
 import re
 import token as _token
 import tokenize
@@ -150,6 +151,26 @@ _RUNTIME_STYLESHEET_COLLECTION_SINK = re.compile(
     re.IGNORECASE,
 )
 _CSS_DECLARATION_SOURCE_HINT = re.compile(r"(?<!\{)\{(?!\{)\s*[-\w]+\s*:")
+_RUNTIME_VISUAL_SOURCE_HINTS = (
+    "adoptedstylesheets",
+    "attributestylemap",
+    "classname",
+    "classlist",
+    "createcontextualfragment",
+    "createelement",
+    "createhtmldocument",
+    "dangerouslysetinnerhtml",
+    "domparser",
+    "innerhtml",
+    "insertrule",
+    "outerhtml",
+    "replacesync",
+    "setattribute",
+    "sethtml",
+    "srcdoc",
+    "stylesheets",
+)
+_VISUAL_IDENTIFIER_HINTS = ("css", "html", "markup", "style", "stylesheet", "template")
 _DYNAMIC_CLASS_LIST = re.compile(
     r"\.classList\.(?:add|remove|toggle|replace)\s*\((?P<args>[^)\r\n]*)\)",
     re.IGNORECASE,
@@ -1035,6 +1056,43 @@ def _normalize_runtime_js_syntax(text: str) -> str:
     return re.sub(r"\?\.", ".", normalized)
 
 
+def _has_visual_source_hint(source: str) -> bool:
+    """Return whether Python source can reach a visual-emitter detector.
+
+    Discovery's authoritative checks still run for every candidate.  This
+    lexical gate only avoids parsing modules whose identifiers and string
+    tokens contain none of the inputs those checks consume.  False positives
+    are safe; malformed token streams fail open to the full parser.
+    """
+
+    string_tokens: list[str] = []
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(source).readline)
+        for item in tokens:
+            token_name = tokenize.tok_name.get(item.type, "")
+            if item.type == _token.NAME:
+                identifier = item.string.casefold()
+                if any(
+                    marker in identifier for marker in _VISUAL_IDENTIFIER_HINTS
+                ) or identifier.startswith(("render", "emit")):
+                    return True
+            elif item.type == _token.STRING or token_name == "FSTRING_MIDDLE":
+                string_tokens.append(item.string)
+    except (IndentationError, SyntaxError, UnicodeError, tokenize.TokenError):
+        return True
+
+    payload = _STRING_TOKEN_BOUNDARY.join(string_tokens)
+    payload_lower = payload.casefold()
+    return bool(
+        _contains_css_emitter(payload)
+        or _HTML_EMITTER.search(payload)
+        or _SVG_EMITTER.search(payload)
+        or "<{" in payload
+        or "</{" in payload
+        or any(marker in payload_lower for marker in _RUNTIME_VISUAL_SOURCE_HINTS)
+    )
+
+
 def _contains_css_emitter(text: str) -> bool:
     """Recognize a CSS declaration block without regex backtracking.
 
@@ -1118,6 +1176,8 @@ def discover_emitters(project_root: Path) -> tuple[DiscoveredEmitter, ...]:
         try:
             raw_source = path.read_text("utf-8")
             if suffix == ".py":
+                if not _has_visual_source_hint(raw_source):
+                    continue
                 try:
                     tree = ast.parse(raw_source, filename=str(path))
                 except SyntaxError:
