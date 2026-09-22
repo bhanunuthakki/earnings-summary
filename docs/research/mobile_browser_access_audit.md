@@ -3,7 +3,7 @@
 **Document ID:** `RESEARCH-2026-BHA-28-MOBILE-ACCESS`
 **Original inspection:** 2026-08-15
 **Evidence correction:** 2026-09-19
-**Status:** Desktop and emulated-phone hydration verified; physical-phone/network acceptance pending
+**Status:** Code-inspection proposal; phone/network acceptance pending
 
 ## Evidence boundary
 
@@ -91,22 +91,6 @@ on the same LAN and once from a remote network. Then exercise:
 No phone or remote-network result is recorded in this artifact. Split any
 observed connectivity or interaction defect into its owning implementation issue;
 do not treat proposed PWA metadata or CSS snippets as completed mobile support.
-
-### Bounded live browser observation, 2026-09-19
-
-The existing canonical private HTTPS route returned HTTP 200 in Chromium at
-1440×900 and 390×900 (touch/mobile emulation). Portfolio hydration completed with
-11 rows in approximately 5.0 and 2.8 seconds, respectively. Neither observation
-produced a page error or document-wide horizontal overflow. Screenshots were
-visually inspected after hydration; the narrow portfolio table retains horizontal
-scrolling within its container. Mutation requests were blocked by the test harness.
-Initial screenshots captured only the loading state and are not hydration evidence.
-
-Private receipts and screenshots are retained under
-`.tmp/completion-fixes-20260919/live-hydration-receipt.json` and
-`live-hydrated-{1440,390}.png`. This observed existing deployment is not evidence that
-the uncommitted repair candidate was deployed. Physical-device networking, the full
-research-task matrix and unauthorized-device denial remain unverified.
 
 ## Startup, health and recovery evidence
 
