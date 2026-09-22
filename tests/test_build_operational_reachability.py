@@ -186,8 +186,10 @@ def test_actual_head_is_supported() -> None:
         for edge in graph.unknown_edges
         if not edge.source.startswith(("tests/", "instruction_tests/"))
     ]
-    # The required-actuals CLI regression adds one hermetic subprocess edge.
-    assert len(graph.unknown_edges) == 111
+    # Test-sourced dynamic references stay tolerated (the residual assertion
+    # below is the production gate); the sandbox kit's drift test resolves every
+    # re-export through getattr to prove the kit never forks a control helper.
+    assert len(graph.unknown_edges) == 112
     assert (
         sum(
             edge.source == "tests/test_dcf_assumption_cli.py"

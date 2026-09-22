@@ -540,8 +540,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Conformance check runs the fixed execution/verify_design_conformance.py --check command.",
-      "fingerprint": "35b493e2d3bbbcc9cb25ae87a5226ccb7160edbeb1a230946eec85fd764bd734",
-      "line": 89,
+      "fingerprint": "eac8f2ac073867b7b5e2f243e522338d8f1fc1b4e09a11e268c3d5e9abe6136c",
+      "line": 100,
       "path": "scripts/check_design_sync.py",
       "targets": [
         "execution/verify_design_conformance.py"
@@ -793,8 +793,8 @@
     {
       "disposition": "external_process",
       "evidence": "The whole-tree gate invokes only the pinned Pyright executable with the checked-in configuration and selected project interpreter.",
-      "fingerprint": "1076274bc1d363db53ee92d283b0793d53560b190b28a70190b5092f08acd110",
-      "line": 256,
+      "fingerprint": "eca1914742ef7a21016cab88e9b920d50524b492670f92a4154492f195d22c2c",
+      "line": 262,
       "path": "src/quality/static_quality_gate.py",
       "targets": [
         "pyright"
@@ -803,8 +803,8 @@
     {
       "disposition": "external_process",
       "evidence": "The hidden-path parity scan invokes only the pinned Pyright executable over byte-identical temporary copies of tracked hidden Python files.",
-      "fingerprint": "f1fae0d7d3c21aa4db73f2906f0a6cb11f4b5f83a25ab39ce6bf44aefdb12ae6",
-      "line": 280,
+      "fingerprint": "33167f84fd599527d6ee72061372ad175cab91dffb96e917d93a7d66ea019eab",
+      "line": 286,
       "path": "src/quality/static_quality_gate.py",
       "targets": [
         "pyright"
@@ -914,7 +914,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "0de604d766c9d7500a2998caa9838b6a547c57942809d0e5a2890d3befbee8be",
+      "source_sha256": "3dc88d5e742b509c79d9b308ac832562f51d6eb4f459f6836e12333a9d17c150",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

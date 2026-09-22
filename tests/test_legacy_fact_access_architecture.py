@@ -37,12 +37,19 @@ _DIRECT_READ = re.compile(
 )
 
 # Pre-v2 mutation debt. New general production code must use SourceFactRepository.
+# src/viewspec/latency_benchmark.py is not a production data path: it is the
+# ViewSpec latency gate's synthetic-mode fixture generator, seeding a
+# disposable clone it creates itself (legacy projection rows plus the full
+# observation/resolution stack) so the read path can be timed at
+# representative scale. It never opens a configured, restored, or
+# checkout-default database for mutation.
 _DIRECT_MUTATION_DEBT = frozenset(
     {
         "execution/db_gc.py",
         "src/ir_pipeline/ingest.py",
         "src/pipeline/kpi_persistence.py",
         "src/pipeline/restatement_detector.py",
+        "src/viewspec/latency_benchmark.py",
     }
 )
 
@@ -147,7 +154,12 @@ AUDITED_LEGACY_FACT_READS = {
     "src/pipeline/kpi_semantics.py": 1,
     # One direct legacy financial-fact read moved behind the canonical relation
     # resolver; the frozen literal legacy-read debt therefore shrinks by one.
-    "src/timeseries/loaders.py": 4,
+    # The KPI pick-pair read joins raw kpi_facts to the per-connection
+    # materialized pick (winners of the resolved relation + admission +
+    # identity, built once per connection), so the raw read is
+    # provenance-equivalent to the resolved-relation read it replaced; the
+    # audited count grows by exactly that one read.
+    "src/timeseries/loaders.py": 5,
     "src/triggers/kpi_inflection.py": 1,
     "src/user_state/kpi_catalog.py": 1,
     "src/viewspec/engine.py": 1,

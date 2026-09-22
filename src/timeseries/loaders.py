@@ -36,12 +36,17 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from compute.kpi_resolver import semantic_series_identity_sql
+from compute.kpi_resolver import (
+    semantic_series_identity_anchor_sql,
+    semantic_series_identity_flat_sql,
+    semantic_series_identity_sql,
+)
 from compute.kpi_revision_shadow_census import verify_snapshot_evidence
 from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
@@ -123,6 +128,35 @@ def _open(
     except sqlite3.Error as exc:
         log.warning({"event": "timeseries_loader_open_failed", "error": str(exc)})
         return None
+
+
+@contextmanager
+def _borrowed_connection(
+    repo_root: Path | None,
+    db_path: Path | None,
+    conn: sqlite3.Connection | None,
+) -> Generator[sqlite3.Connection | None, None, None]:
+    """Yield a caller-owned connection as-is, or open and close a private one.
+
+    SQLite parses the whole schema on the first statement of a new connection,
+    which on this database costs about 15 ms — far more than any of these
+    queries. A caller loading many series (one ``execute_view`` run loads one
+    per ticker/metric pair) therefore passes a single connection and pays that
+    once. A borrowed connection is never closed here; its owner closes it.
+    """
+    if conn is not None:
+        yield conn
+        return
+    resolved = _resolve_db_path(repo_root, db_path)
+    if resolved is None:
+        yield None
+        return
+    private = _open(resolved)
+    try:
+        yield private
+    finally:
+        if private is not None:
+            private.close()
 
 
 def _parse_period_end(raw: object) -> datetime | None:
@@ -906,6 +940,7 @@ def load_financial_series_with_provenance(
     *,
     db_path: Path | None = None,
     period_types: Iterable[str] = DEFAULT_PERIOD_TYPES,
+    conn: sqlite3.Connection | None = None,
 ) -> list[SourcedObservation]:
     """`load_financial_series` + per-observation provenance in ONE query.
 
@@ -920,13 +955,25 @@ def load_financial_series_with_provenance(
     Requires the documents table (provenance is the point): returns []
     when it — or financial_facts — is missing. Columns absent on legacy
     schemas (locator/accession: 0075, tier: 0054) come back as None.
+
+    Pass ``conn`` to reuse one read-only connection across many series; see
+    :func:`_borrowed_connection` for why that matters.
     """
-    resolved = _resolve_db_path(repo_root, db_path)
-    if resolved is None:
-        return []
-    conn = _open(resolved)
-    if conn is None:
-        return []
+    with _borrowed_connection(repo_root, db_path, conn) as borrowed:
+        if borrowed is None:
+            return []
+        return _financial_series_with_provenance(
+            borrowed, ticker=ticker, line_item=line_item, period_types=period_types
+        )
+
+
+def _financial_series_with_provenance(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    line_item: str,
+    period_types: Iterable[str],
+) -> list[SourcedObservation]:
     period_list = list(period_types) or list(DEFAULT_PERIOD_TYPES)
     placeholders = ",".join("?" * len(period_list))
     try:
@@ -1012,8 +1059,93 @@ def load_financial_series_with_provenance(
             }
         )
         return []
-    finally:
-        conn.close()
+
+
+_KPI_SERIES_PICK_TABLE = "timeseries_kpi_pick"
+
+
+def _kpi_series_pick_table(
+    conn: sqlite3.Connection,
+    *,
+    fact_relation: str,
+    semantic_join: str,
+    semantic_where: str,
+    anchor_sql: str,
+    rank_expr: str,
+) -> str | None:
+    """The per-connection materialized KPI fact pick, or ``None``.
+
+    The row-correlated pick inside the KPI loaders — ``kf.id = (SELECT kf2.id
+    … ORDER BY tier DESC, id DESC LIMIT 1)`` — re-flattens the resolved fact
+    relation for EVERY outer row: one warm (ticker, kpi_name) pair cost
+    ~40 s on the 40-issuer synthetic benchmark. This table computes the same
+    winner ONCE per (ticker, kpi_definition_id, period_end,
+    fiscal_period_type) — one window pass over the resolved relation with
+    the same admission, identity, and tier-rank semantics (the identity
+    anchor joined once, not re-derived per row) — after which each pair read
+    is a join against raw ``kpi_facts`` rows by id (measured ~3.4 ms per
+    pair, identical rows to the correlated form).
+
+    A TEMP table so read-only connections can host it: SQLite temp tables
+    live in the connection's private temp database, never the (read-only)
+    main database. Per-connection lifetime is the staleness bound: loaders
+    borrow short-lived read-only connections whose main database is static
+    for the connection's life, so the pick cannot go stale under a live
+    reader.
+
+    ``kf.period_end IS NOT NULL`` mirrors the correlated equality
+    ``kf2.period_end = kf.period_end``, which can never match a NULL period;
+    without the guard the window would crown a NULL-period winner that the
+    correlated form excludes.
+
+    Returns ``None`` — callers keep the correlated pick — when materializing
+    fails; a half-built table is dropped best-effort so a later call on the
+    same connection retries cleanly.
+    """
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_temp_master WHERE type='table' AND name=?",
+        (_KPI_SERIES_PICK_TABLE,),
+    ).fetchone()
+    if exists is not None:
+        return _KPI_SERIES_PICK_TABLE
+    flat_identity = semantic_series_identity_flat_sql(conn)
+    try:
+        conn.execute(
+            f"""
+            CREATE TEMP TABLE {_KPI_SERIES_PICK_TABLE} AS
+            SELECT fact_id, ticker, kpi_definition_id, period_end, fiscal_period_type FROM (
+                SELECT kf.id AS fact_id, kf.ticker, kf.kpi_definition_id,
+                       kf.period_end, kf.fiscal_period_type,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY kf.ticker, kf.kpi_definition_id,
+                                        kf.period_end, kf.fiscal_period_type
+                           ORDER BY {rank_expr} DESC, kf.id DESC
+                       ) AS pick_rank
+                FROM {fact_relation} kf
+                JOIN documents d ON d.id = kf.source_doc_id
+                {semantic_join}
+                LEFT JOIN ({anchor_sql}) series_identity_anchor
+                  ON series_identity_anchor.definition_id = kf.kpi_definition_id
+                WHERE {semantic_where} AND {flat_identity}
+                  AND kf.period_end IS NOT NULL
+            ) WHERE pick_rank = 1
+            """
+        )
+        conn.execute(
+            f"CREATE INDEX {_KPI_SERIES_PICK_TABLE}_ticker_def "
+            f"ON {_KPI_SERIES_PICK_TABLE}(ticker, kpi_definition_id)"
+        )
+    except sqlite3.Error as exc:
+        log.warning(
+            {
+                "event": "timeseries_kpi_pick_materialize_failed",
+                "error": str(exc),
+            }
+        )
+        with suppress(sqlite3.Error):
+            conn.execute(f"DROP TABLE {_KPI_SERIES_PICK_TABLE}")
+        return None
+    return _KPI_SERIES_PICK_TABLE
 
 
 def load_kpi_series_with_provenance(
@@ -1024,6 +1156,7 @@ def load_kpi_series_with_provenance(
     db_path: Path | None = None,
     snapshot_manifest: Path | None = None,
     period_types: Iterable[str] = DEFAULT_PERIOD_TYPES,
+    conn: sqlite3.Connection | None = None,
 ) -> list[SourcedObservation]:
     """`load_kpi_series` + per-observation provenance in ONE query.
 
@@ -1033,25 +1166,71 @@ def load_kpi_series_with_provenance(
     `load_kpi_series`; same provenance payload shape as the financial
     loaders. Requires kpi_facts + kpi_definitions + documents; returns []
     when any is missing.
+
+    Pass ``conn`` to reuse one read-only connection across many series; see
+    :func:`_borrowed_connection` for why that matters.
+    """
+    if snapshot_manifest is not None:
+        return _evidence_gated_kpi_series_with_provenance(
+            repo_root,
+            db_path,
+            snapshot_manifest,
+            ticker=ticker,
+            kpi_name=kpi_name,
+            period_types=period_types,
+        )
+    with _borrowed_connection(repo_root, db_path, conn) as borrowed:
+        if borrowed is None:
+            return []
+        return _kpi_series_with_provenance(
+            borrowed, ticker=ticker, kpi_name=kpi_name, period_types=period_types
+        )
+
+
+def _evidence_gated_kpi_series_with_provenance(
+    repo_root: Path | None,
+    db_path: Path | None,
+    snapshot_manifest: Path,
+    *,
+    ticker: str,
+    kpi_name: str,
+    period_types: Iterable[str],
+) -> list[SourcedObservation]:
+    """Read a quiesced-immutable snapshot whose identity is proven either side.
+
+    The manifest must match before the read and remain identical after it, so
+    this path owns its connection and role outright: a borrowed connection may
+    be shared with ordinary read-only work and cannot carry that guarantee.
     """
     resolved = _resolve_db_path(repo_root, db_path)
     if resolved is None:
         return []
-    evidence = (
-        verify_snapshot_evidence(database_path=resolved, manifest_path=snapshot_manifest)
-        if snapshot_manifest is not None
-        else None
-    )
-    if evidence is not None and evidence.status != "manifest_matched":
+    evidence = verify_snapshot_evidence(database_path=resolved, manifest_path=snapshot_manifest)
+    if evidence.status != "manifest_matched":
         raise ValueError("immutable sourced reader requires a manifest-matched snapshot")
-    role = (
-        SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY
-        if evidence is not None
-        else SQLiteConnectionRole.READ_ONLY
-    )
-    conn = _open(resolved, role=role)
+    conn = _open(resolved, role=SQLiteConnectionRole.QUIESCED_IMMUTABLE_READ_ONLY)
     if conn is None:
         return []
+    try:
+        return _kpi_series_with_provenance(
+            conn, ticker=ticker, kpi_name=kpi_name, period_types=period_types
+        )
+    finally:
+        conn.close()
+        if (
+            verify_snapshot_evidence(database_path=resolved, manifest_path=snapshot_manifest)
+            != evidence
+        ):
+            raise RuntimeError("snapshot identity changed during sourced KPI read")
+
+
+def _kpi_series_with_provenance(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    kpi_name: str,
+    period_types: Iterable[str],
+) -> list[SourcedObservation]:
     period_list = list(period_types) or list(DEFAULT_PERIOD_TYPES)
     placeholders = ",".join("?" * len(period_list))
     try:
@@ -1091,15 +1270,7 @@ def load_kpi_series_with_provenance(
         )
         fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
         semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
-        semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
-        semantic_join2, semantic_where2 = semantic_admission_sql(
-            conn, fact_alias="kf2", context_alias="ksc2", fail_closed=True
-        )
-        semantic_identity2 = semantic_series_identity_sql(
-            conn, fact_alias="kf2", context_alias="ksc2", fact_relation=fact_relation
-        )
-        rows = conn.execute(
-            f"""
+        select_columns = f"""
             SELECT kf.period_end,
                    kf.value,
                    {unit_select},
@@ -1113,7 +1284,48 @@ def load_kpi_series_with_provenance(
                    d.source_url,
                    d.doc_type,
                    {accession_select},
-                   {tier_select}
+                   {tier_select}"""
+        anchor_sql = semantic_series_identity_anchor_sql(conn, fact_relation=fact_relation)
+        pick_table = (
+            _kpi_series_pick_table(
+                conn,
+                fact_relation=fact_relation,
+                semantic_join=semantic_join,
+                semantic_where=semantic_where,
+                anchor_sql=anchor_sql,
+                rank_expr=rank_expr,
+            )
+            if anchor_sql is not None
+            else None
+        )
+        if pick_table is not None:
+            # Same winners the correlated pick below computes per outer row,
+            # read straight off raw kpi_facts via the materialized pick.
+            rows = conn.execute(
+                f"""
+                {select_columns}
+                FROM kpi_facts kf
+                JOIN {pick_table} ksp ON ksp.fact_id = kf.id
+                JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
+                JOIN documents d ON d.id = kf.source_doc_id
+                WHERE kf.ticker = ?
+                  AND kd.name = ?
+                  AND kf.fiscal_period_type IN ({placeholders})
+                ORDER BY kf.period_end ASC
+                """,
+                (ticker.upper(), kpi_name, *period_list),
+            ).fetchall()
+            return _sourced_rows(rows, fact_table="kpi_facts")
+        semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
+        semantic_join2, semantic_where2 = semantic_admission_sql(
+            conn, fact_alias="kf2", context_alias="ksc2", fail_closed=True
+        )
+        semantic_identity2 = semantic_series_identity_sql(
+            conn, fact_alias="kf2", context_alias="ksc2", fact_relation=fact_relation
+        )
+        rows = conn.execute(
+            f"""
+            {select_columns}
             FROM {fact_relation} kf
             JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
             JOIN documents d ON d.id = kf.source_doc_id
@@ -1150,14 +1362,6 @@ def load_kpi_series_with_provenance(
             }
         )
         return []
-    finally:
-        conn.close()
-        if (
-            snapshot_manifest is not None
-            and verify_snapshot_evidence(database_path=resolved, manifest_path=snapshot_manifest)
-            != evidence
-        ):
-            raise RuntimeError("snapshot identity changed during sourced KPI read")
 
 
 def load_kpi_series(
@@ -1229,6 +1433,37 @@ def load_kpi_series(
         rank_expr = _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
         as_of_clause = "AND d.fetched_at <= ? " if as_of_cutoff is not None else ""
         as_of_params: tuple[object, ...] = (as_of_cutoff,) if as_of_cutoff is not None else ()
+        # The materialized pick has no as_of notion: only the uncutoff read
+        # (the default) can ride it; a replay cutoff keeps the correlated pick.
+        anchor_sql = semantic_series_identity_anchor_sql(conn, fact_relation=fact_relation)
+        pick_table = (
+            _kpi_series_pick_table(
+                conn,
+                fact_relation=fact_relation,
+                semantic_join=semantic_join,
+                semantic_where=semantic_where,
+                anchor_sql=anchor_sql,
+                rank_expr=rank_expr,
+            )
+            if anchor_sql is not None and as_of_cutoff is None
+            else None
+        )
+        if pick_table is not None:
+            rows = conn.execute(
+                f"""
+                SELECT kf.period_end, kf.value
+                FROM kpi_facts kf
+                JOIN {pick_table} ksp ON ksp.fact_id = kf.id
+                JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
+                JOIN documents d ON d.id = kf.source_doc_id
+                WHERE kf.ticker = ?
+                  AND kd.name = ?
+                  AND kf.fiscal_period_type IN ({placeholders})
+                ORDER BY kf.period_end ASC
+                """,
+                (ticker.upper(), kpi_name, *period_list),
+            ).fetchall()
+            return _rows_to_series(rows)
         rows = conn.execute(
             f"""
             SELECT kf.period_end, kf.value
@@ -1497,6 +1732,7 @@ def load_segment_junction_series_with_provenance(
     db_path: Path | None = None,
     period_types: Iterable[str] = DEFAULT_PERIOD_TYPES,
     as_of_date: date | datetime | str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> list[SourcedObservation]:
     """`load_segment_junction_series` + per-period document provenance.
 
@@ -1510,15 +1746,34 @@ def load_segment_junction_series_with_provenance(
     Best-effort and never drops values for want of provenance: a missing
     ``documents`` table yields the same value series with ``source`` =
     'unknown' rather than []. Returns [] only when the segment tables / DB are
-    missing (matching the value loader)."""
+    missing (matching the value loader).
+
+    Pass ``conn`` to reuse one read-only connection across many series; see
+    :func:`_borrowed_connection` for why that matters."""
     if not dims:
         return []
-    resolved = _resolve_db_path(repo_root, db_path)
-    if resolved is None:
-        return []
-    conn = _open(resolved)
-    if conn is None:
-        return []
+    with _borrowed_connection(repo_root, db_path, conn) as borrowed:
+        if borrowed is None:
+            return []
+        return _segment_junction_series_with_provenance(
+            borrowed,
+            ticker=ticker,
+            dims=dims,
+            metric=metric,
+            period_types=period_types,
+            as_of_date=as_of_date,
+        )
+
+
+def _segment_junction_series_with_provenance(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    dims: list[tuple[str, str]],
+    metric: str,
+    period_types: Iterable[str],
+    as_of_date: date | datetime | str | None,
+) -> list[SourcedObservation]:
     period_list = list(period_types) or list(DEFAULT_PERIOD_TYPES)
     period_placeholders = ",".join("?" * len(period_list))
     as_of_cutoff = _normalize_as_of(as_of_date)
@@ -1634,8 +1889,6 @@ def load_segment_junction_series_with_provenance(
             }
         )
         return []
-    finally:
-        conn.close()
 
 
 def load_segment_series(

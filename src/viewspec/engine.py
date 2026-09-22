@@ -25,13 +25,19 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
 from urllib.parse import unquote
 
-from compute.kpi_resolver import kpi_group_key, semantic_series_identity_sql
+from compute.kpi_resolver import (
+    kpi_group_key,
+    semantic_series_identity_anchor_sql,
+    semantic_series_identity_flat_sql,
+    semantic_series_identity_sql,
+)
 from dcf.forecast_series import (
     ForecastOverlay,
     ForecastSemanticCoordinate,
@@ -352,6 +358,7 @@ def _load_row_data(
     repo_root: Path | None,
     overrides: _ScalarOverrideMap,
     kpi_resolution: _KpiResolution,
+    conn: sqlite3.Connection | None = None,
 ) -> tuple[dict[_Bucket, ViewCell], str | None]:
     """One (ticker, metric) series as {bucket: level cell} + the unit hint.
 
@@ -367,7 +374,12 @@ def _load_row_data(
         if metric.domain == "fin":
             load_key = metric.key
             sourced = load_financial_series_with_provenance(
-                ticker, load_key, repo_root, db_path=db_path, period_types=period_types
+                ticker,
+                load_key,
+                repo_root,
+                db_path=db_path,
+                period_types=period_types,
+                conn=conn,
             )
         else:
             # The kpi token is a de-fragmented representative — resolve it to
@@ -379,7 +391,12 @@ def _load_row_data(
                 kpi_group_key(metric.key), metric.key
             )
             sourced = load_kpi_series_with_provenance(
-                ticker, load_key, repo_root, db_path=db_path, period_types=period_types
+                ticker,
+                load_key,
+                repo_root,
+                db_path=db_path,
+                period_types=period_types,
+                conn=conn,
             )
         for ob in sourced:
             b = _to_bucket(ob.period_end.year, ob.period_end.month, cadence)
@@ -410,12 +427,19 @@ def _load_row_data(
             cadence,
             db_path=db_path,
             repo_root=repo_root,
+            conn=conn,
         )
     # seg: period-level provenance — the junction joins documents through
     # segment_periods.source_doc_id, so each cell chips its source document.
     dims = [(metric.dim_type or "", metric.dim_name or "")]
     seg_sourced = load_segment_junction_series_with_provenance(
-        ticker, dims, metric.key, repo_root, db_path=db_path, period_types=period_types
+        ticker,
+        dims,
+        metric.key,
+        repo_root,
+        db_path=db_path,
+        period_types=period_types,
+        conn=conn,
     )
     for obs in seg_sourced:
         b = _to_bucket(obs.period_end.year, obs.period_end.month, cadence)
@@ -454,22 +478,29 @@ def _load_detail_row_data(
     *,
     db_path: Path | None,
     repo_root: Path | None,
+    conn: sqlite3.Connection | None = None,
 ) -> tuple[dict[_Bucket, ViewCell], str | None]:
     """Load explicitly typed, source-backed legacy analytical families.
 
     These tables are not treated as a generic SQL escape hatch. Each adapter
     names its period/value/provenance contract and fails closed when the source
     document needed for a chip is unavailable.
+
+    A borrowed ``conn`` is reused and left open; its owner closes it.
     """
 
-    resolved = db_path or (repo_root / "data" / "portfolio.db" if repo_root else None)
-    if resolved is None or not resolved.exists() or metric.dim_type is None:
+    if metric.dim_type is None:
         return {}, None
-    try:
-        conn = connect_sqlite(resolved, role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return {}, None
-    conn.row_factory = sqlite3.Row
+    borrowed = conn is not None
+    if conn is None:
+        resolved = db_path or (repo_root / "data" / "portfolio.db" if repo_root else None)
+        if resolved is None or not resolved.exists():
+            return {}, None
+        try:
+            conn = connect_sqlite(resolved, role=SQLiteConnectionRole.READ_ONLY)
+        except sqlite3.Error:
+            return {}, None
+        conn.row_factory = sqlite3.Row
     cells: dict[_Bucket, ViewCell] = {}
     unit: str | None = None
     try:
@@ -576,7 +607,8 @@ def _load_detail_row_data(
     except sqlite3.Error:
         return {}, None
     finally:
-        conn.close()
+        if not borrowed:
+            conn.close()
     return cells, unit
 
 
@@ -662,8 +694,9 @@ def _kpi_name_resolution(
     """``{TICKER: {kpi_group_key: that ticker's richest stored name}}`` so a
     de-fragmented representative token resolves to each ticker's own variant.
 
-    Read ONCE per view (one query per ticker) and only when the spec carries a
-    kpi metric — a no-op otherwise. Within a ticker's group the name with the
+    Read ONCE per view (ONE query for every requested ticker) and only when
+    the spec carries a kpi metric — a no-op otherwise. Within a ticker's
+    group the name with the
     MOST observations wins (load the fullest series), ties broken shortest then
     alphabetical. Best-effort: missing DB / kpi tables yield an empty map (the
     engine then loads each kpi token literally).
@@ -680,30 +713,55 @@ def _kpi_name_resolution(
     except sqlite3.Error:
         return {}
     conn.row_factory = sqlite3.Row
+    tickers = tuple(dict.fromkeys(t.upper() for t in spec.tickers))
     out: _KpiResolution = {}
+    if not tickers:
+        return out
     try:
-        for ticker in dict.fromkeys(t.upper() for t in spec.tickers):
-            try:
-                fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
-                semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+        try:
+            fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
+            semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
+            # Same flat identity form as _grouped_kpi_catalog: one joined
+            # anchor relation instead of a correlated re-derivation per row —
+            # and ONE query for every requested ticker, so the anchor's window
+            # pass over the resolved relation runs once per view, not once per
+            # ticker (the per-ticker form re-derived it per ticker: ~11 s of a
+            # 12.8 s view on the 40-issuer synthetic benchmark).
+            anchor_sql = semantic_series_identity_anchor_sql(conn, fact_relation=fact_relation)
+            if anchor_sql is None:
+                identity_join = ""
                 semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
-                rows = conn.execute(
-                    "SELECT kd.name AS name, COUNT(*) AS n "
-                    f"FROM {fact_relation} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
-                    f"{semantic_join} WHERE kf.ticker = ? AND {semantic_where} "
-                    f"AND {semantic_identity} GROUP BY kd.name",
-                    (ticker,),
-                ).fetchall()
-            except (RuntimeError, sqlite3.Error):
-                continue
-            by_key: dict[str, list[tuple[str, int]]] = {}
-            for r in rows:
-                name = str(r["name"])
-                by_key.setdefault(kpi_group_key(name), []).append((name, int(r["n"])))
-            out[ticker] = {
+            else:
+                identity_join = (
+                    f"LEFT JOIN ({anchor_sql}) series_identity_anchor "
+                    "ON series_identity_anchor.definition_id = kf.kpi_definition_id"
+                )
+                semantic_identity = semantic_series_identity_flat_sql(conn)
+            marks = ",".join("?" * len(tickers))
+            rows = conn.execute(
+                "SELECT kf.ticker AS ticker, kd.name AS name, COUNT(*) AS n "
+                f"FROM {fact_relation} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+                f"{semantic_join} {identity_join} WHERE kf.ticker IN ({marks}) "
+                f"AND {semantic_where} AND {semantic_identity} "
+                "GROUP BY kf.ticker, kd.name",
+                tickers,
+            ).fetchall()
+        except (RuntimeError, sqlite3.Error):
+            return out
+        by_ticker: dict[str, dict[str, list[tuple[str, int]]]] = {}
+        for r in rows:
+            ticker = str(r["ticker"])
+            name = str(r["name"])
+            by_ticker.setdefault(ticker, {}).setdefault(kpi_group_key(name), []).append(
+                (name, int(r["n"]))
+            )
+        out = {
+            ticker: {
                 key: min(cands, key=lambda c: (-c[1], len(c[0]), c[0]))[0]
                 for key, cands in by_key.items()
             }
+            for ticker, by_key in by_ticker.items()
+        }
     finally:
         conn.close()
     return out
@@ -717,6 +775,39 @@ def _to_bucket(year: int, month: int, cadence: str) -> _Bucket:
 
 def _lookback(bucket: _Bucket, years: int) -> _Bucket:
     return (bucket[0] - years, bucket[1])
+
+
+@contextmanager
+def _view_connection(
+    db_path: Path | None,
+    repo_root: Path | None,
+) -> Generator[sqlite3.Connection | None, None, None]:
+    """One read-only connection for every series a view loads, or None.
+
+    SQLite parses the whole schema on a connection's first statement —
+    about 15 ms on the canonical database, far more than any single series
+    query. ``execute_view`` loads one series per ticker/metric pair, so
+    sharing one connection pays that fixed cost once per view instead of
+    once per pair. Best-effort like the loaders underneath: an
+    unresolvable or missing DB yields None (the loaders degrade to []),
+    never raises, and always closes what it opens.
+    """
+    resolved = db_path
+    if resolved is None and repo_root is not None:
+        resolved = repo_root / "data" / "portfolio.db"
+    if resolved is None or not resolved.exists():
+        yield None
+        return
+    try:
+        conn = connect_sqlite(resolved, role=SQLiteConnectionRole.READ_ONLY)
+    except sqlite3.Error:
+        yield None
+        return
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def execute_view(
@@ -735,37 +826,43 @@ def execute_view(
     # resolution (representative token -> each ticker's own variant).
     overrides = _active_scalar_overrides(spec.tickers, db_path=db_path, repo_root=repo_root)
     kpi_resolution = _kpi_name_resolution(spec, db_path=db_path, repo_root=repo_root)
-    # Metric-major ordering: the same metric's tickers sit adjacent, which is
-    # the comparison the pivot exists for.
-    for metric in spec.metrics:
-        for ticker in spec.tickers:
-            try:
-                cells, unit = _load_row_data(
-                    ticker,
-                    metric,
-                    spec.cadence,
-                    db_path=db_path,
-                    repo_root=repo_root,
-                    overrides=overrides,
-                    kpi_resolution=kpi_resolution,
-                )
-            except _IncompatibleDetailSeriesError as exc:
-                warnings.append(f"{ticker}: {metric.token()} omitted: {exc}")
-                continue
-            if not cells:
-                warnings.append(f"{ticker}: no data for {unquote(metric.token())}")
-                continue
-            if metric.domain == "detail":
-                warnings.append(
-                    f"{ticker}: {metric.token()} is source-backed legacy detail; "
-                    "canonical observation and definition admission are pending"
-                )
-                if metric.dim_type == "customer" and spec.cadence == "quarterly":
-                    warnings.append(
-                        f"{ticker}: quarterly customer concentration uses issuer fiscal-quarter "
-                        "labels because the legacy source does not retain calendar period_end"
+    # One connection for every series this view loads. SQLite parses the whole
+    # schema on a connection's first statement, so a per-series connection would
+    # pay that once per ticker/metric pair instead of once per view.
+    with _view_connection(db_path, repo_root) as series_conn:
+        # Metric-major ordering: the same metric's tickers sit adjacent, which is
+        # the comparison the pivot exists for.
+        for metric in spec.metrics:
+            for ticker in spec.tickers:
+                try:
+                    cells, unit = _load_row_data(
+                        ticker,
+                        metric,
+                        spec.cadence,
+                        db_path=db_path,
+                        repo_root=repo_root,
+                        overrides=overrides,
+                        kpi_resolution=kpi_resolution,
+                        conn=series_conn,
                     )
-            raw_rows.append((ticker, metric, cells, unit))
+                except _IncompatibleDetailSeriesError as exc:
+                    warnings.append(f"{ticker}: {metric.token()} omitted: {exc}")
+                    continue
+                if not cells:
+                    warnings.append(f"{ticker}: no data for {unquote(metric.token())}")
+                    continue
+                if metric.domain == "detail":
+                    warnings.append(
+                        f"{ticker}: {metric.token()} is source-backed legacy detail; "
+                        "canonical observation and definition admission are pending"
+                    )
+                    if metric.dim_type == "customer" and spec.cadence == "quarterly":
+                        warnings.append(
+                            f"{ticker}: quarterly customer concentration uses issuer "
+                            "fiscal-quarter labels because the legacy source does not retain "
+                            "calendar period_end"
+                        )
+                raw_rows.append((ticker, metric, cells, unit))
 
     forecast_overlays: list[tuple[str, MetricRef, ForecastOverlay, str | None]] = []
     display_buckets = set(
@@ -1179,12 +1276,26 @@ def _grouped_kpi_catalog(
     try:
         fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
         semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
-        semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
+        # Flat identity: the per-definition anchor as one joined relation
+        # (~19x faster than the correlated predicate on aggregate queries,
+        # identical rows). Legacy schemas without the identity columns keep
+        # the correlated predicate, which degrades to 1=1 there anyway.
+        anchor_sql = semantic_series_identity_anchor_sql(conn, fact_relation=fact_relation)
+        if anchor_sql is None:
+            identity_join = ""
+            semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
+        else:
+            identity_join = (
+                f"LEFT JOIN ({anchor_sql}) series_identity_anchor "
+                "ON series_identity_anchor.definition_id = kf.kpi_definition_id"
+            )
+            semantic_identity = semantic_series_identity_flat_sql(conn)
         rows = conn.execute(
             f"""
             SELECT kd.name AS name, kf.ticker AS ticker, COUNT(*) AS obs{origin_select}
             FROM {fact_relation} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
             {semantic_join}
+            {identity_join}
             WHERE kf.ticker IN ({marks}) AND {semantic_where} AND {semantic_identity}
             GROUP BY kd.name, kf.ticker
             """,

@@ -19,6 +19,16 @@ dev = [
     "pyright==1.1.414",
     "basedpyright>=1.10",
 ]
+# The Streamlit analytics deep-dive sandbox (explore-sandbox/): a read-only,
+# deterministic catalog→ViewSpec surface beside the Flask cockpit. Nothing in
+# src/ or execution/ imports streamlit — the sandbox app and its kit are the
+# only consumers, and the kit itself stays streamlit-free so its drift test
+# runs in every checkout. Install with `pip install -e .[sandbox]`.
+# Run: `streamlit run explore-sandbox/analytics_deep_dive.py`.
+sandbox = [
+    "streamlit>=1.40",
+    "pandas>=2",
+]
 # IR-document discovery (execution/refresh_ir_kpis.py --discover): a headless
 # browser renders the JS results-center to resolve hash-keyed document URLs.
 # Install with `pip install -e .[ir] && playwright install chromium`.
@@ -111,13 +121,21 @@ include = [
     "src",
     "tests",
 ]
-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived"]
+# `explore-sandbox` is an optional-dependency surface: streamlit arrives only
+# with `.[sandbox]`, never in the hash-pinned lock the ceiling gate installs.
+# Unresolved there, every `st.*` result becomes Unknown and `st.stop()` loses
+# its NoReturn narrowing, so checking it reports an import cascade instead of
+# defects (it is wholly clean once streamlit resolves). `extraPaths` keeps it
+# checkable locally after `pip install -e .[sandbox]`; its parity is gated by
+# tests/test_explore_sandbox_kit.py and scripts/check_design_sync.py.
+exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived", "explore-sandbox"]
 # `execution` is an import root too: its CLIs import each other as top-level
 # modules (e.g. `import refresh_dcf`) and tests import them (`import comments_server`)
 # after a runtime sys.path.insert. Listing it here lets pyright resolve those —
 # without it every such import is an unresolved-import error with a cascade of
-# Unknowns behind it.
-extraPaths = ["src", "execution", "scratch", "cron"]
+# Unknowns behind it. `explore-sandbox` is there for the same reason: the
+# sandbox app and its kit import each other as top-level modules.
+extraPaths = ["src", "execution", "scratch", "cron", "explore-sandbox"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false
@@ -149,8 +167,15 @@ include = [
     "src",
     "tests",
 ]
-exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived"]
-extraPaths = ["src", "execution", "scratch", "cron"]
+# `explore-sandbox` is an optional-dependency surface: streamlit arrives only
+# with `.[sandbox]`, never in the hash-pinned lock the ceiling gate installs.
+# Unresolved there, every `st.*` result becomes Unknown and `st.stop()` loses
+# its NoReturn narrowing, so checking it reports an import cascade instead of
+# defects (it is wholly clean once streamlit resolves). `extraPaths` keeps it
+# checkable locally after `pip install -e .[sandbox]`; its parity is gated by
+# tests/test_explore_sandbox_kit.py and scripts/check_design_sync.py.
+exclude = ["venv", ".tmp", ".cache", "data", "transcripts", "ir_documents", "scratch", "alembic/versions", "alembic/versions_archived", "explore-sandbox"]
+extraPaths = ["src", "execution", "scratch", "cron", "explore-sandbox"]
 pythonVersion = "3.11"
 typeCheckingMode = "all"
 reportMissingTypeStubs = false

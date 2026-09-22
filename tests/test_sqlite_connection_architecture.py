@@ -79,6 +79,11 @@ INTENTIONAL_DIRECT_SQLITE_CONNECT_CALLS = {
     # Coverage reconciliation is a read-only observation CLI over an explicit
     # URI; routing it through the writer runtime would change its contract.
     "execution/reconcile_issuer_document_coverage.py": 1,
+    # ViewSpec latency benchmark's synthetic mode owns a disposable clone it
+    # creates itself: one writer connection to fixture-load it (WAL while
+    # seeding) and one read-only URI census of the loaded state. Central
+    # writer policy must not govern a benchmark's throwaway database.
+    "src/viewspec/latency_benchmark.py": 2,
 }
 SQLITE_RUNTIME_CALLS = 2
 

@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from scripts.gen_design_controls import check as check_generated_controls
 from scripts.gen_design_tokens import check as check_generated_tokens
+from scripts.gen_streamlit_theme import check as check_streamlit_theme
 from ui.tokens import CHROME_TOKENS, PALETTE_DARK, SPACING_SCALE, TYPE_SCALE
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -80,6 +81,16 @@ def generated_control_failures() -> list[str]:
         []
         if check_generated_controls()
         else ["generated React controls drifted from src/ui/controls.py"]
+    )
+
+
+def streamlit_theme_failures() -> list[str]:
+    """Token parity for the Streamlit sandbox theme, same policy as the
+    React token layer: generated artifacts must match ``src/ui/tokens.py``."""
+    return (
+        []
+        if check_streamlit_theme()
+        else ["generated Streamlit sandbox theme drifted from src/ui/tokens.py"]
     )
 
 
@@ -187,6 +198,7 @@ def main() -> int:
     if not check_generated_tokens():
         failures.append("generated React tokens drifted from src/ui/tokens.py")
     failures.extend(generated_control_failures())
+    failures.extend(streamlit_theme_failures())
     failures.extend(conformance_receipt_failures())
     failures.extend(work_os_contract_failures())
     if failures:

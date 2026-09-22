@@ -1,0 +1,9 @@
+# GENERATED from src/ui/tokens.py — do not hand-edit.
+# Regenerate: python scripts/gen_streamlit_theme.py
+
+[theme]
+base = "dark"
+primaryColor = "#8aa8ff"
+backgroundColor = "#090a0c"
+secondaryBackgroundColor = "#18191d"
+textColor = "#f4f3ef"
