@@ -29,6 +29,8 @@ def render_overview_panel(
         + (upcoming_html or "")
         + "</div>"
         + '<div id="cc-cockpit-live">'
+        # The overview drill-through keeps both cockpit tables; the Evaluation
+        # table no longer carries the retired scalar Score/Fit columns.
         + render_research_cockpit(rows_by_list)
         + "</div>"
         + render_tier_coverage_strip(coverage or {})

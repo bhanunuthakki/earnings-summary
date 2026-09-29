@@ -227,8 +227,6 @@ def test_dcf_math_and_numeric_fields_fail_closed(
         "MELI",
         fair_value=fair_value,
         dcf_price=dcf_price,
-        score=float("nan"),
-        fit=float("inf"),
         sharpe_delta_bps=float("nan"),
         held_weight=float("inf"),
     )
@@ -236,8 +234,6 @@ def test_dcf_math_and_numeric_fields_fail_closed(
     item = evaluation.build_work_os_evaluation([row], tmp_path, conn).items[0]
 
     assert item.dcf_upside_pct == pytest.approx(expected)
-    assert item.score is None
-    assert item.fit is None
     assert item.sharpe_delta_bps is None
     assert item.held_weight_pct is None
 
@@ -277,13 +273,11 @@ def test_malformed_artifacts_and_missing_position_schema_degrade_without_connect
     assert "dcf_route_unavailable" in payload.warnings
 
 
-def test_unreviewed_dcf_and_large_machine_explanations_fail_closed(
+def test_unreviewed_dcf_fails_closed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     conn = sqlite3.connect(":memory:")
-    machine_ref = "a" * 64
-    oversized = f"Evidence {machine_ref} " + ("detail " * 20_000)
 
     def empty_brief_builder(*args: object, **kwargs: object) -> BriefLibraryResponse:
         return _brief_response()
@@ -291,25 +285,18 @@ def test_unreviewed_dcf_and_large_machine_explanations_fail_closed(
     monkeypatch.setattr(evaluation, "build_brief_library", empty_brief_builder)
 
     item = evaluation.build_work_os_evaluation(
-        [
-            _row(
-                "MELI",
-                score_why=oversized,
-                fit_why=oversized,
-                dcf_unreviewed=True,
-            )
-        ],
+        [_row("MELI", dcf_unreviewed=True)],
         tmp_path,
         conn,
     ).items[0]
 
     assert item.dcf_upside_pct is None
-    assert item.score_why is not None
-    assert item.fit_why is not None
-    assert len(item.score_why) <= 320
-    assert len(item.fit_why) <= 320
-    assert machine_ref not in item.score_why
-    assert "source reference" in item.score_why
+
+
+def test_retired_scalar_compatibility_fields_are_absent_from_v2_model() -> None:
+    retired = {"score", "score_why", "score_partial", "fit", "fit_why", "fit_partial"}
+
+    assert retired.isdisjoint(evaluation.WorkOsEvaluationItem.model_fields)
 
 
 def test_invalid_machine_reference_ticker_is_omitted_before_serialization(

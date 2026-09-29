@@ -2,7 +2,7 @@
   // comments_server_content_routes.  Full-page detail never upgrades an
   // arbitrary prototype callback or an unregistered endpoint into navigation.
   const WORK_OS_FULL_PAGE_PEEK_PATHS = [
-    new RegExp('^/api/peek/(?:alerts|news-events|documents|score|earnings-prep|earnings-readout|fit|investment-profile|portfolio-impact|weekly-packet|whatif|etf_workup|discovery-compare)$'),
+    new RegExp('^/api/peek/(?:alerts|news-events|documents|earnings-prep|earnings-readout|investment-profile|portfolio-impact|weekly-packet|whatif|etf_workup|discovery-compare)$'),
     new RegExp('^/api/peek/(?:alert/[0-9]+|ticker/[A-Za-z0-9.=-]+|memo/[a-z_]+|review/[A-Za-z0-9.=-]+|provenance(?:/[A-Za-z0-9_:-]+)?)$'),
     new RegExp('^/api/governed-alerts/[1-9][0-9]*/evidence$'),
     new RegExp('^/source/[0-9]+$')

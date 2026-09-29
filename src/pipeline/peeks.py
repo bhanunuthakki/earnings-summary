@@ -52,15 +52,7 @@ from dashboard._card import render_alert_card
 from dashboard.evidence_drawer import load_brief_provenance
 from identity import DEFAULT_USER_ID
 from models.facts import DerivedInputRef, DerivedRef, FactLocator, LocatorKind, VendorFieldRef
-from pipeline.research_cockpit import (
-    AttractivenessBreakdown,
-    AttractivenessFactor,
-    attractiveness_tone,
-    compute_attractiveness,
-    latest_dcf_runs,
-    next_earnings,
-    profile_quote,
-)
+from pipeline.research_cockpit import latest_dcf_runs, next_earnings, profile_quote
 from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
 from pipeline.source_viewers import (
     STATEMENT_JSON_DOC_TYPES,
@@ -85,14 +77,12 @@ __all__ = [
     "render_discovery_compare_peek",
     "render_earnings_readout_peek",
     "render_fact_provenance_peek",
-    "render_fit_peek",
     "render_investment_profile_peek",
     "render_memo_peek",
     "render_new_docs_peek",
     "render_portfolio_impact_peek",
     "render_provenance_peek",
     "render_review_peek",
-    "render_score_peek",
     "render_ticker_peek",
     "render_what_if_peek",
 ]
@@ -451,127 +441,7 @@ def _pending_alert_count(conn: sqlite3.Connection, ticker: str) -> int:
     return int(row[0]) if row else 0
 
 
-# ----------------------------------------------------------------------------
-# Next-dollar score breakdown (cockpit Score chip)
-# ----------------------------------------------------------------------------
-
-# Band multipliers run [0.5, 1.8] (see research_cockpit's _*_BANDS); the bar
-# maps that span to [0, 100]% so a lifting factor reads visibly fuller than a
-# dragging one. Mirrors the constants by value, not by import — these are the
-# render layer's, not the scorer's.
-_BAR_MIN, _BAR_MAX = 0.5, 1.8
-
-
-def render_score_peek(conn: sqlite3.Connection, repo_root: Path, ticker: str) -> str | None:
-    """The next-dollar attractiveness breakdown for an evaluation name — the
-    click-through behind the cockpit's Score chip. One row per factor (DCF
-    upside · Revenue growth · FCF margin · PEG) with the band multiplier and
-    the input it scored, then the product that makes the chip's number, then a
-    legend. Reuses :func:`research_cockpit.compute_attractiveness` so the peek
-    and the cockpit row read the same inputs and can't disagree. None when the
-    ticker isn't a tracked, non-archived name (the route 404s)."""
-    t = ticker.strip().upper()
-    caption = "Next-dollar attractiveness"
-    bd: AttractivenessBreakdown | None
-    if _is_etf(conn, t):
-        # ETFs score on fund factors (risk-adj return · expense · factor
-        # premium · basket valuation) from the Stage 0f cache — the render
-        # path never runs the Sharpe window / style OLS (mirrors the fit peek).
-        from etf_score_cache import read_materialized_etf_scores
-
-        bd = read_materialized_etf_scores(repo_root).get(t)
-        caption = "Next-dollar attractiveness (ETF factors)"
-    else:
-        bd = compute_attractiveness(conn, repo_root, ticker)
-    if bd is None:
-        return None
-    tone = attractiveness_tone(bd.score)
-    head = (
-        '<div class="cc-score-head">'
-        f'<span class="cc-score-cap">{caption}</span>'
-        f'<span class="cc-score-big score-{tone or "mid"}">{bd.score:.2f}</span>'
-        "</div>"
-    )
-    rows = "".join(_score_factor_row(f) for f in bd.factors)
-    product = " &times; ".join(f"{f.multiplier:.2f}" for f in bd.factors)
-    formula = f'<div class="cc-score-formula">1.00 &times; {product} = <b>{bd.score:.2f}</b></div>'
-    legend_bits = ["&times;&gt;1 lifts", "&times;&lt;1 drags"]
-    if bd.partial:
-        legend_bits.append("missing input scores &times;0.85")
-    legend = f'<div class="cc-score-legend">{" · ".join(legend_bits)}</div>'
-    foot = (
-        f'<div class="cc-peek-foot"><a href="/ticker/{escape(t, quote=True)}">'
-        "open the evaluation report &rarr;</a></div>"
-    )
-    return (
-        f'<div class="cc-score">{head}'
-        f'<div class="cc-score-rows">{rows}</div>'
-        f"{formula}{legend}</div>{foot}<style>{_SCORE_CSS}</style>"
-    )
-
-
-def _is_etf(conn: sqlite3.Connection, ticker: str) -> bool:
-    """Instrument-kind check for the score peek's ETF branch; a pre-0044
-    substrate (missing column) reads as equity, the established default."""
-    try:
-        row = conn.execute(
-            "SELECT instrument_type FROM tracked_companies WHERE UPPER(ticker) = ? LIMIT 1",
-            (ticker,),
-        ).fetchone()
-    except sqlite3.Error:
-        return False
-    return bool(row) and str(row[0] or "").lower() == "etf"
-
-
-def _factor_row_html(
-    label: str, multiplier: float, detail: str, missing: bool, *, bar_min: float, bar_max: float
-) -> str:
-    """One breakdown-peek factor row: label · the input it scored · a multiplier
-    bar · the multiplier. Shared by the Score and Fit peeks (their factors carry
-    the same shape); a missing input shows "no data" and no bar. ``bar_min`` /
-    ``bar_max`` scale the bar to the factor family's multiplier range."""
-    if missing:
-        return (
-            '<div class="cc-score-row cc-score-row-missing">'
-            f'<span class="cc-score-label">{escape(label)}</span>'
-            '<span class="cc-score-detail muted">no data</span>'
-            '<span class="cc-score-bar"></span>'
-            f'<span class="cc-score-mult mult-mid">&times;{multiplier:.2f}</span>'
-            "</div>"
-        )
-    tone = "pos" if multiplier > 1.0 else "neg" if multiplier < 1.0 else "mid"
-    pct = max(0.0, min(100.0, (multiplier - bar_min) / (bar_max - bar_min) * 100.0))
-    bar = (
-        '<span class="cc-score-bar">'
-        f'<span class="cc-score-fill bar-{tone}" style="width:{pct:.0f}%"></span></span>'
-    )
-    return (
-        '<div class="cc-score-row">'
-        f'<span class="cc-score-label">{escape(label)}</span>'
-        f'<span class="cc-score-detail">{escape(detail)}</span>'
-        f"{bar}"
-        f'<span class="cc-score-mult mult-{tone}">&times;{multiplier:.2f}</span>'
-        "</div>"
-    )
-
-
-def _score_factor_row(f: AttractivenessFactor) -> str:
-    return _factor_row_html(
-        f.label, f.multiplier, f.detail, f.missing, bar_min=_BAR_MIN, bar_max=_BAR_MAX
-    )
-
-
 _SCORE_CSS = RESEARCH_PANEL_STYLE.removeprefix("<style>").removesuffix("</style>")
-
-
-# ----------------------------------------------------------------------------
-# Portfolio-fit breakdown (cockpit Fit chip)
-# ----------------------------------------------------------------------------
-
-# Fit multipliers are centered on 1.0 over a tighter range than the score's
-# (~0.8 to 1.25); the bar maps [0.7, 1.3] to [0, 100]% so a lift reads fuller
-# than a drag. Reuses the cc-score-* layout (the breakdown anatomy is identical).
-_FIT_BAR_MIN, _FIT_BAR_MAX = 0.7, 1.3
 
 
 def render_investment_profile_peek(item: object) -> str | None:
@@ -732,112 +602,8 @@ def render_portfolio_impact_peek(item: object) -> str | None:
     )
 
 
-def render_fit_peek(repo_root: Path, ticker: str) -> str | None:
-    """The portfolio-fit breakdown for an evaluation name — the click-through
-    behind the cockpit's Fit chip. One row per factor (Marginal Sharpe ·
-    Diversification · Factor fit · Sector fit) with the band multiplier and the
-    reading it scored, then the product that makes the chip's number. Read from
-    the materialized ``candidate_fit.json`` (the same cache the chip's number
-    came from — never recomputed on the render path). None when the ticker has no
-    cached fit (the route 404s)."""
-    from allocation.candidate_fit import fit_tone
-    from candidate_fit_cache import read_materialized_candidate_fit
-
-    t = ticker.strip().upper()
-    cf = read_materialized_candidate_fit(repo_root).get(t)
-    if cf is None:
-        return None
-    from candidate_fit_cache import read_materialized_fit_meta
-
-    meta = read_materialized_fit_meta(repo_root)
-    target_block = meta.get("target")
-    target_active = (
-        isinstance(target_block, dict)
-        and cast("dict[str, object]", target_block).get("source") == "intent"
-    )
-
-    tone = fit_tone(cf.fit)
-    big_tone = "score-hi" if tone == "hi" else "score-warn" if tone == "lo" else "mid"
-    head = (
-        '<div class="cc-score-head">'
-        '<span class="cc-score-cap">Portfolio fit to the held book</span>'
-        f'<span class="cc-score-big {big_tone}">{cf.fit:.2f}</span>'
-        "</div>"
-    )
-    degraded_html = (
-        '<div class="cc-fit-degraded">&#9888; book context degraded: '
-        + escape(" · ".join(cf.degraded))
-        + "</div>"
-        if cf.degraded
-        else ""
-    )
-    rows = "".join(
-        _factor_row_html(
-            f.label, f.multiplier, f.detail, f.missing, bar_min=_FIT_BAR_MIN, bar_max=_FIT_BAR_MAX
-        )
-        for f in cf.factors
-    )
-    product = " &times; ".join(f"{f.multiplier:.2f}" for f in cf.factors)
-    formula = f'<div class="cc-score-formula">1.00 &times; {product} = <b>{cf.fit:.2f}</b></div>'
-
-    # Fit v2: the target group — only when an owner intent (not the book
-    # default) is active; under the default the gaps are zero by construction
-    # and the group would be noise.
-    target_html = ""
-    if target_active and cf.target_factors and cf.fit_target is not None:
-        target_rows = "".join(
-            _factor_row_html(
-                f.label,
-                f.multiplier,
-                f.detail,
-                f.missing,
-                bar_min=_FIT_BAR_MIN,
-                bar_max=_FIT_BAR_MAX,
-            )
-            for f in cf.target_factors
-        )
-        narrative = ""
-        if isinstance(target_block, dict):
-            raw_narr = cast("dict[str, object]", target_block).get("narrative")
-            if isinstance(raw_narr, str) and raw_narr.strip():
-                narrative = f' title="{escape(raw_narr.strip(), quote=True)}"'
-        target_html = (
-            f'<div class="cc-fit-group"{narrative}>vs your positioning target</div>'
-            f'<div class="cc-score-rows">{target_rows}</div>'
-            f'<div class="cc-score-formula">{cf.fit:.2f} &times; '
-            + " &times; ".join(f"{f.multiplier:.2f}" for f in cf.target_factors)
-            + f" = <b>{cf.fit_target:.2f}</b> (fit to target)</div>"
-        )
-
-    # ΔSR + correlation-trend strip, and the doorway into the full what-if.
-    strip_bits: list[str] = []
-    if cf.sharpe_delta_bps is not None:
-        strip_bits.append(f"&Delta;SR at 3% = <b>{cf.sharpe_delta_bps:+.0f}bp</b> (modeled book)")
-    if cf.corr_trend is not None and cf.corr_recent is not None:
-        arrow = {"rising": "&uarr;", "falling": "&darr;", "stable": "&rarr;"}[cf.corr_trend]
-        strip_bits.append(f"corr trend {arrow} {cf.corr_trend} (63d {cf.corr_recent:+.2f})")
-    strip = f'<div class="cc-fit-strip">{" · ".join(strip_bits)}</div>' if strip_bits else ""
-
-    legend_bits = ["&times;&gt;1 accretive", "&times;&lt;1 dilutive"]
-    if cf.partial:
-        legend_bits.append("missing factor scores neutral")
-    legend = f'<div class="cc-score-legend">{" · ".join(legend_bits)}</div>'
-    tq = escape(t, quote=True)
-    foot = (
-        f'<div class="cc-peek-foot">'
-        f'<a class="k-chip k-chip-btn" data-peek-url="/api/peek/whatif?ticker={tq}" '
-        f'data-peek-title="What-if · {tq}" href="/ticker/{tq}">full what-if workup &rarr;</a>'
-        f' <a href="/ticker/{tq}">open the evaluation report &rarr;</a></div>'
-    )
-    return (
-        f'<div class="cc-score">{head}{degraded_html}'
-        f'<div class="cc-score-rows">{rows}</div>'
-        f"{formula}{target_html}{strip}{legend}</div>{foot}<style>{_SCORE_CSS}</style>"
-    )
-
-
 # ----------------------------------------------------------------------------
-# What-if peek (cockpit ΔSR chip + the fit peek's doorway)
+# What-if peek (direct risk-adjusted contribution)
 # ----------------------------------------------------------------------------
 
 
@@ -1885,8 +1651,8 @@ def render_derived_peek(
     §2.5): the formula header, then one row per input.
 
     A DERIVED input becomes a ``data-peek-url`` doorway (clicking re-fetches
-    the SAME dispatcher one level deeper — the existing self-referential peek
-    pattern ``render_fit_peek``'s footer link already uses) rather than being
+    the SAME dispatcher one level deeper — the established self-referential
+    peek pattern the retained peek fragments already use) rather than being
     eagerly rendered here, so a wide/deep tree costs O(inputs-at-this-level),
     not an exponential eager walk. A LEAF input (any other concrete kind, or
     an unresolvable/legacy reference) renders its own evidence INLINE instead

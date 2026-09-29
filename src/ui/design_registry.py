@@ -1082,7 +1082,7 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/cron_health_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
         "pipeline/explore_panel.py": "fc1dd2e109d4f31a63e523c6f6ba3bc016b10b1faa443d32240e35fabed2fa8c",  # pragma: allowlist secret
         "pipeline/model_eval_panel.py": "f4af1f25d2641ba46a64a043073730df7b11ef1e96f3b3ad4d71801e17c3e983",  # pragma: allowlist secret
-        "pipeline/peeks.py": "02f325abd05b440ba3efcede16e7ee446036926b0edabae9bbd11a9a34021a4b",  # pragma: allowlist secret
+        "pipeline/peeks.py": "7fbafbddbf7948c8f1f05feb6b7805006e295d5bbd3bc62275f9cfa6acc83908",  # pragma: allowlist secret
         "pipeline/performance_risk_panel.py": "f4399458107940b948664fe2e664892e2390d0f100cc1ad6f300e5233e2dd831",  # pragma: allowlist secret
         "pipeline/portfolio_panel.py": "40bb72a454e55db7fdced77d585085713bc682fd68625dd204a7ddc311273e65",  # pragma: allowlist secret
         "pipeline/portfolio_styles.py": "397f25bbb814a248a8c887faf5ac75284c69d2e22336f7cb04c7b7d020f72ab6",  # pragma: allowlist secret

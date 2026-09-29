@@ -303,23 +303,8 @@ def test_cockpit_etf_row_uses_cached_score_and_pill(
     assert avuv.attractiveness is not None
     assert avuv.attractiveness_why is not None and avuv.attractiveness_why.startswith("ret ")
     html = render_research_cockpit(rows)
-    # The ETF pill is the workup peek's doorway (PR 8).
+    # The ETF pill is the workup peek's doorway (PR 8). The retired Score chip
+    # (and its /api/peek/score doorway) no longer renders.
     assert ">ETF</a>" in html
     assert "data-peek-url='/api/peek/etf_workup?ticker=AVUV'" in html
-    assert "data-peek-url='/api/peek/score?ticker=AVUV'" in html
-
-
-def test_score_peek_branches_to_cached_etf_breakdown(
-    etf_env: tuple[sqlite3.Connection, Path],
-) -> None:
-    from pipeline.peeks import render_score_peek
-
-    conn, repo = etf_env
-    # Uncached ETF → 404-shaped None (never a live Sharpe/OLS on the render path).
-    assert render_score_peek(conn, repo, "AVUV") is None
-    materialize_etf_scores(conn, repo)
-    html = render_score_peek(conn, repo, "AVUV")
-    assert html is not None
-    assert "ETF factors" in html
-    for label in ("Risk-adj return", "Expense drag", "Factor premium", "Basket valuation"):
-        assert label in html
+    assert "data-peek-url='/api/peek/score?ticker=AVUV'" not in html
