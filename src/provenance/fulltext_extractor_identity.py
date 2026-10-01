@@ -39,7 +39,7 @@ BASE_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(
 )
 # Deliberate PDF-only promotion of the reviewed requirements.lock runtime.
 # Readers must never select authority from their ambient installed parser.
-PDF_FULLTEXT_PYPDF_VERSION = "6.16.2"
+PDF_FULLTEXT_PYPDF_VERSION = "6.19.0"
 PDF_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(
     name=FULLTEXT_EXTRACTOR_NAME,
     code_version=f"fulltext-evidence-backfill@5-pdf-runtime;pypdf={PDF_FULLTEXT_PYPDF_VERSION}",
