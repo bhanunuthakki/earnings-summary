@@ -324,7 +324,6 @@
     "execution/sync_ir_source_inventory.py",
     "execution/sync_issuer_registry.py",
     "execution/sync_position_lifecycle.py",
-    "execution/sync_thesis_state.py",
     "execution/track_comp_metrics.py",
     "execution/track_evaluation_names.py",
     "execution/tracker_v1_parity.py",
