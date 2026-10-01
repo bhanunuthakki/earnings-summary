@@ -240,18 +240,36 @@ def test_replay_reduction_rejects_duplicate_builder_paths() -> None:
     assert not parse_source("test_db", duplicate.model_dump_json().encode(), "a" * 40).semantic_pass
 
 
-def test_replay_reduction_pin_matches_checked_baseline() -> None:
-    path = Path(__file__).resolve().parents[1] / "docs/quality/test-db-patterns-baseline.json"
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    count = sum(
-        any(str(evidence).startswith("call:upgrade") for evidence in item["evidence"])
-        for item in payload["database_builders"]
+# BHA-104's accepted reduction denominator is the test-db receipt measured at
+# subject beb90404, added by 48352f44. The checked-in bundle is re-collected at
+# newer subjects, so the denominator is anchored to that immutable blob; the
+# current receipt is only held to the reduction direction.
+ACCEPTED_BASELINE_BLOB = "3cab2fae6f728fd74bef6d0c241d906c4b8c9798"  # pragma: allowlist secret -- accepted denominator blob
+ACCEPTED_BASELINE_SUBJECT = "beb90404738e4abd1014f93ad2d87aed1d06160b"  # pragma: allowlist secret -- accepted denominator subject
+CHECKED_BASELINE_PATH = "docs/quality/test-db-patterns-baseline.json"
+
+
+def _call_upgrade_builders(audit: _TestDbAudit) -> int:
+    return sum(
+        any(str(evidence).startswith("call:upgrade") for evidence in builder.evidence)
+        for builder in audit.database_builders
     )
-    assert (
-        payload["scoped_commit"]
-        == "beb90404738e4abd1014f93ad2d87aed1d06160b"  # pragma: allowlist secret -- pinned checked-in baseline subject
-    )
-    assert count == TEST_DB_REPLAY_BASELINE_FILES
+
+
+def test_replay_reduction_pin_matches_accepted_baseline() -> None:
+    root = Path(__file__).resolve().parents[1]
+    blob = subprocess.run(
+        ["git", "cat-file", "blob", ACCEPTED_BASELINE_BLOB],
+        cwd=root,
+        capture_output=True,
+        check=True,
+    ).stdout
+    accepted = _TestDbAudit.model_validate_json(blob)
+    assert accepted.scoped_commit == ACCEPTED_BASELINE_SUBJECT
+    assert _call_upgrade_builders(accepted) == TEST_DB_REPLAY_BASELINE_FILES
+
+    current = _TestDbAudit.model_validate_json((root / CHECKED_BASELINE_PATH).read_bytes())
+    assert _call_upgrade_builders(current) <= TEST_DB_REPLAY_BASELINE_FILES
     assert verify_registry() is True
 
 

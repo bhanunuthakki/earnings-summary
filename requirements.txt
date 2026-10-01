@@ -9,6 +9,10 @@ lxml>=5.2.0
 # Security floor: CVE-2026-25645 (fixed 2.33.0). The floor
 # stops dev/prod from resolving a known-vulnerable build.
 requests>=2.33.0
+# Security floor: urllib3 is how requests reaches the untrusted-fetch path.
+# Keep it past CVE-2026-97687, CVE-2026-97688 and CVE-2026-97689 (fixed 2.8.0);
+# nothing constrained it, so the lock simply went stale behind the fix.
+urllib3>=2.8.0
 python-dotenv
 # AES-256-GCM backup envelopes (also transitively used by Google auth).
 # Security floor: CVE-2026-69247 is fixed in 50.0.0.
@@ -28,6 +32,10 @@ defusedxml>=0.7.1
 # (CVE-2023-33733, cleared by 4.x).
 reportlab>=4.0.0
 mcp
+# Security floor: pyjwt arrives transitively through mcp. Keep it past the
+# 2.13.0 CVE stream (CVE-2026-101917 and CVE-2026-102267 through
+# CVE-2026-102274, all fixed in 2.14.0).
+pyjwt>=2.14.0
 # Provider adapters use the per-purpose routing owned by src/llm/cli.py.
 # The Claude CLI is installed separately; Python SDKs below support the SDK
 # and batch adapters. See directives/model_eval_loop.md for routing changes.
