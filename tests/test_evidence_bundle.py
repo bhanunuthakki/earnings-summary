@@ -244,7 +244,7 @@ def test_replay_reduction_rejects_duplicate_builder_paths() -> None:
 # subject beb90404, added by 48352f44. The checked-in bundle is re-collected at
 # newer subjects, so the denominator is anchored to that immutable blob; the
 # current receipt is only held to the reduction direction.
-ACCEPTED_BASELINE_BLOB = "3cab2fae6f728fd74bef6d0c241d906c4b8c9798"
+ACCEPTED_BASELINE_BLOB = "3cab2fae6f728fd74bef6d0c241d906c4b8c9798"  # pragma: allowlist secret -- accepted denominator blob
 ACCEPTED_BASELINE_SUBJECT = "beb90404738e4abd1014f93ad2d87aed1d06160b"  # pragma: allowlist secret -- accepted denominator subject
 CHECKED_BASELINE_PATH = "docs/quality/test-db-patterns-baseline.json"
 
