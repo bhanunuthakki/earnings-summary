@@ -3,13 +3,13 @@
   "kind": "hard_gate",
   "key": "repository_gates",
   "state": "fail",
-  "subject_commit": "beb90404738e4abd1014f93ad2d87aed1d06160b",
+  "subject_commit": "97d18cf9351a3977066db4ac229fbd36e6b2d10c",
   "generator_path": "src/quality/admission_policy.py",
-  "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
+  "generator_sha256": "b2c98b954b710f06f3d3bbc9d278c450c7aa2734032c834ea128fb9e13d03cc9",
   "sources": [
     {
       "path": "docs/quality/roadmap-reconciliation.json",
-      "sha256": "bb93929cf4668042b5440ca8a81f3164c3b5d288213e66d351186e3fbf14c869",
+      "sha256": "e0bc255cf67960e816cd4d6d1cdb2ee2623d1a828c51abeeacbb41bfb4697d2e",
       "schema_version": "roadmap-reconciliation-v1"
     }
   ]
