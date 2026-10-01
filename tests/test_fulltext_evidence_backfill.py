@@ -31,6 +31,7 @@ from provenance.evidence_ledger import (
 )
 from provenance.fulltext_backfill import FullTextBackfillRequest, backfill_fulltext_evidence
 from provenance.fulltext_extractor_identity import (
+    PDF_FULLTEXT_PYPDF_VERSION,
     PDF_TABLE_EXTRACTOR_NAME,
     pdf_table_extractor_code_version,
 )
@@ -1223,7 +1224,7 @@ def test_pdf_emits_one_page_anchored_node_per_substantive_page(
         return _Reader()
 
     monkeypatch.setattr(pypdf, "PdfReader", _reader)
-    monkeypatch.setattr(pypdf, "__version__", "6.16.2")
+    monkeypatch.setattr(pypdf, "__version__", PDF_FULLTEXT_PYPDF_VERSION)
     conn, repo_root = _connection(tmp_path, suffix=".pdf", content=b"not-a-real-pdf")
     try:
         result = backfill_fulltext_evidence(conn, _request(repo_root, apply=True))
@@ -1507,7 +1508,7 @@ def test_promoted_pdf_run_preserves_legacy_and_has_distinct_replay_identity(
         resolve_fulltext_extractor_identity,
     )
 
-    _install_versioned_pdf_reader(monkeypatch, "6.16.2")
+    _install_versioned_pdf_reader(monkeypatch, PDF_FULLTEXT_PYPDF_VERSION)
     conn, repo_root = _connection(tmp_path, suffix=".pdf", content=b"retained-pdf")
     try:
         # Reproduce the historical writer identity; its immutable rows must survive.
@@ -1536,7 +1537,7 @@ def test_promoted_pdf_run_preserves_legacy_and_has_distinct_replay_identity(
         assert all(row in nodes for row in old_nodes)
         assert len(runs) == len(old_runs) + 1
         current = resolve_fulltext_extractor_identity("report.pdf", "application/pdf")
-        assert "pypdf=6.16.2" in current.code_version
+        assert f"pypdf={PDF_FULLTEXT_PYPDF_VERSION}" in current.code_version
         assert current.idempotency_namespace != BASE_FULLTEXT_EXTRACTOR.idempotency_namespace
         # A reader's ambient package cannot revoke or reinterpret existing proof.
         monkeypatch.setattr(pypdf, "__version__", "6.15.0")
@@ -1571,7 +1572,7 @@ def test_pdf_coverage_requires_exact_promoted_identity(
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     register_sqlite_integrity_functions(conn)
-    _install_versioned_pdf_reader(monkeypatch, "6.16.2")
+    _install_versioned_pdf_reader(monkeypatch, PDF_FULLTEXT_PYPDF_VERSION)
     recorded_at = datetime(2026, 7, 20, 12)
     try:
         conn.execute(
@@ -1656,7 +1657,7 @@ def test_pdf_coverage_requires_exact_promoted_identity(
         assert current.target_status_counts == {"extracted": 1}
         assert current.assessments_created == 1
         assert (
-            "pypdf=6.16.2"
+            f"pypdf={PDF_FULLTEXT_PYPDF_VERSION}"
             in resolve_fulltext_extractor_identity("report.html", "application/pdf").code_version
         )
         assert (
