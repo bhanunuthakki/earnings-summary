@@ -454,8 +454,8 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr reads only _COMPARE_METRIC_ROWS TickerMetrics fields.",
-      "fingerprint": "0fec1b17df87ec7901c8bc0c5ff29b40f5d9b9a084750f47aedba926958b0316",
-      "line": 2183,
+      "fingerprint": "6dc3224b96d501764786f2821d3183b286a5a1cb2c45afeeb9660c86b1f255ca",
+      "line": 1949,
       "path": "src/pipeline/peeks.py",
       "targets": [
         "_COMPARE_METRIC_ROWS"
@@ -665,13 +665,12 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "b3fe66b899641b9a847dc68a1ff2f6729fcbef8c9d03ee5612b6f4dd22fcb60c",
+      "source_sha256": "59bc7ba95acfd715500ad2d3ad877c112b435a8f9a23a1c688e9b277914faecf",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
     "scanner_sha256": "dffd867eda03733d7e0d9581dd6b8730d6c09f0a1b3d3245bba00b3c28e208db",
     "schema_version": "operational-reachability-raw/v1"
   },
-  "schema_version": "reachability-getattr-dispositions/v2",
-  "source_sha256": "59bc7ba95acfd715500ad2d3ad877c112b435a8f9a23a1c688e9b277914faecf"
+  "schema_version": "reachability-getattr-dispositions/v2"
 }
