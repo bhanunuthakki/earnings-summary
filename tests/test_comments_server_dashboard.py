@@ -200,7 +200,8 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # +1 self-hosted webfont route serving the Work OS shell's vendored
     # Google Fonts binaries (see src/ui/vendor/fonts/README.md).
     # +2 fixed, read-only tracker bridge endpoints retained from the live runtime.
-    assert len(rules) == 176
+    # -2 retired score/fit presentation peeks.
+    assert len(rules) == 174
     assert rules["tracker_read_health"] == "/portfolio-tracker/api/v1/health"
     assert rules["tracker_read_snapshot"] == "/portfolio-tracker/api/v1/portfolio-snapshot"
     for rule in client.application.url_map.iter_rules():
@@ -239,11 +240,9 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
             "peek_review",
             "peek_provenance",
             "peek_documents",
-            "peek_score",
             "peek_earnings_prep",
             "peek_earnings_readout",
             "peek_news_events",
-            "peek_fit",
             "peek_whatif",
             "peek_etf_workup",
             "peek_discovery_compare",
@@ -284,11 +283,9 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
         "peek_review": "/api/peek/review/<ticker>",
         "peek_provenance": "/api/peek/provenance",
         "peek_documents": "/api/peek/documents",
-        "peek_score": "/api/peek/score",
         "peek_earnings_prep": "/api/peek/earnings-prep",
         "peek_earnings_readout": "/api/peek/earnings-readout",
         "peek_news_events": "/api/peek/news-events",
-        "peek_fit": "/api/peek/fit",
         "peek_whatif": "/api/peek/whatif",
         "peek_etf_workup": "/api/peek/etf_workup",
         "peek_discovery_compare": "/api/peek/discovery-compare",
@@ -324,6 +321,18 @@ def test_replaced_compatibility_routes_are_absent(client: FlaskClient) -> None:
     assert client.post("/api/ask", json={"query": "legacy"}).status_code == 404
     assert client.get("/api/cockpit").status_code == 404
     assert client.get("/api/cron-health").status_code == 404
+    assert client.get("/api/peek/score?ticker=NU").status_code == 404
+    assert client.get("/api/peek/fit?ticker=NU").status_code == 404
+
+
+def test_retired_scalar_peeks_are_absent_from_full_page_allowlist(client: FlaskClient) -> None:
+    body = client.get("/").get_data(as_text=True)
+    full_page_allowlist = body.split("const WORK_OS_FULL_PAGE_PEEK_PATHS = [", 1)[1].split("];", 1)[
+        0
+    ]
+
+    assert "score" not in full_page_allowlist
+    assert "fit" not in full_page_allowlist
 
 
 def test_dashboard_page_returns_shell(client: FlaskClient) -> None:

@@ -290,19 +290,6 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             mimetype="text/html",
         )
 
-    @app.route("/api/peek/score", methods=["GET"])
-    def peek_score():
-        from pipeline.peeks import render_score_peek
-
-        html = render_score_peek(
-            context.get_read_db(),
-            repo_root,
-            request.args.get("ticker") or "",
-        )
-        if html is None:
-            abort(404)
-        return Response(html, mimetype="text/html")
-
     @app.route("/api/peek/earnings-prep", methods=["GET"])
     def peek_earnings_prep():
         from pipeline.peeks import render_earnings_prep_peek
@@ -347,15 +334,6 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             artifact_id=artifact_id,
             conn=context.get_read_db(),
         )
-        if html is None:
-            abort(404)
-        return Response(html, mimetype="text/html")
-
-    @app.route("/api/peek/fit", methods=["GET"])
-    def peek_fit():
-        from pipeline.peeks import render_fit_peek
-
-        html = render_fit_peek(repo_root, request.args.get("ticker") or "")
         if html is None:
             abort(404)
         return Response(html, mimetype="text/html")

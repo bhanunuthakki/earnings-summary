@@ -1151,16 +1151,13 @@ def test_build_evaluation_sorted_by_attractiveness(
     # Portfolio: attention order (NU warn > AAA ok), scores never computed.
     assert [r.base.ticker for r in built["portfolio"]] == ["NU", "AAA"]
     assert all(r.attractiveness is None for r in built["portfolio"])
-    # The strong name renders a hi-tone chip with the full math in its hover
-    # (the kit outline-mono chip + ok tone).
+    # The retired scalar Score/Fit chips must not reappear in the cockpit
+    # fragment, and their peek doorways are gone with them.
     html = render_research_cockpit(built)
-    assert "k-chip k-chip-mono k-chip-ok" in html
-    assert ">3.48</a>" in html  # the chip is a peek doorway <a>, not a <span>
-    assert "x peg 1.20 (0.8) = 3.48" in html
-    # …and the chip is a peek doorway: click opens the breakdown, /ticker is
-    # the real href, the why stays in the hover title.
-    assert "data-peek-url='/api/peek/score?ticker=GOODE'" in html
-    assert "href='/ticker/GOODE'" in html
+    assert ">Score<" not in html
+    assert ">Fit<" not in html
+    assert "/api/peek/score" not in html
+    assert "/api/peek/fit" not in html
 
 
 def test_compute_attractiveness_matches_row_and_guards(
@@ -1228,8 +1225,7 @@ def test_ticker_cell_uses_ticker_label_with_direct_holding_href(
     # still rides the <td>'s title (unchanged from before this migration).
     assert "k-tick-name" not in html
     # The old bare-anchor / redirect-hop shape is gone for the primary ticker
-    # cell (the score/fit/ΔSR peek chips still legitimately use /ticker/<T> —
-    # that assertion lives in test_compute_attractiveness_matches_*).
+    # cell (the ΔSR peek chip still legitimately uses /ticker/<T>).
     assert "<a href='/ticker/NU'>NU</a>" not in html
 
 
@@ -1367,24 +1363,6 @@ def test_render_thin_evaluation_variant(rows: dict[str, list[CockpitRow]]) -> No
     assert html.count("Tier-1 moves") == 1
 
 
-def test_render_eval_score_column(rows: dict[str, list[CockpitRow]]) -> None:
-    """The Score column exists only in the thin/evaluation table; V (every
-    factor missing) renders a low-tone dashed partial chip whose hover names
-    all four n/a factors."""
-    html = render_research_cockpit(rows)
-    # The header is now a living-grid sortable <th> (label + sort indicator span),
-    # so the column reads ">Score<span …" rather than ">Score</th>".
-    assert html.count(">Score<") == 1
-    assert "sortBy('score','num')" in html  # the column is a living-grid sortable header
-    # The Fit column sits beside Score (thin table only); with no candidate_fit
-    # cache the fixture's V carries no fit, so its cell is the muted em-dash.
-    assert html.count(">Fit<") == 1
-    assert "k-chip k-chip-mono chip-partial" in html
-    assert ">0.52</a>" in html
-    assert "dcf 0.85 (n/a) x growth 0.85 (n/a) x fcf 0.85 (n/a) x peg 0.85 (n/a) = 0.52" in html
-    assert "/api/peek/fit" not in html  # no cache → no fit chip (only the CSS class is present)
-
-
 def test_build_attaches_fit_from_cache(conn: sqlite3.Connection, repo_root: Path) -> None:
     """An evaluation row picks up its portfolio-fit scalars from the
     materialized candidate_fit.json; the chip then renders as a peek doorway."""
@@ -1426,11 +1404,11 @@ def test_build_attaches_fit_from_cache(conn: sqlite3.Connection, repo_root: Path
     assert "sharpe 1.12" in (v.fit_why or "")
     # Portfolio rows never carry a fit (the cache is evaluation-only).
     assert all(r.fit is None for r in build_cockpit_rows(conn, repo_root)["portfolio"])
-    # And it renders the fit chip as a /api/peek/fit doorway (the kit ok chip).
+    # The retired Fit chip no longer renders in the cockpit; the row keeps the
+    # fit scalars only for the versioned evaluation projection.
     html = render_research_cockpit(build_cockpit_rows(conn, repo_root))
-    assert "k-chip k-chip-mono k-chip-ok" in html  # 1.15 >= 1.10
-    assert "data-peek-url='/api/peek/fit?ticker=V'" in html
-    assert ">1.15</a>" in html
+    assert "data-peek-url='/api/peek/fit?ticker=V'" not in html
+    assert ">Fit<" not in html
 
 
 def _write_fit_cache_v2(
@@ -1493,43 +1471,17 @@ def _write_fit_cache_v2(
     )
 
 
-def test_render_fit_v2_target_chip_and_dsr_column(
-    conn: sqlite3.Connection, repo_root: Path
-) -> None:
-    """With an ACTIVE intent target the Fit chip shows fit-to-target with the
-    tgt marker; the ΔSR column renders as a what-if peek doorway and sorts."""
+def test_render_sharpe_delta_column(conn: sqlite3.Connection, repo_root: Path) -> None:
+    """The retained ΔSR column renders as a what-if peek doorway and sorts; the
+    retired Fit chip does not reappear even with a v2 candidate-fit cache."""
     _write_fit_cache_v2(repo_root, target_source="intent")
     html = render_research_cockpit(build_cockpit_rows(conn, repo_root))
-    assert ">1.29<sup>tgt</sup></a>" in html  # fit-to-target shown, marked
     assert html.count(">ΔSR<") == 1
     assert "sortBy('dsr','num')" in html
     assert "data-peek-url='/api/peek/whatif?ticker=V'" in html
     assert ">+12bp</a>" in html
-    assert "Fit computed with degraded book context" not in html  # clean book → no banner
-
-
-def test_render_fit_v2_book_default_is_v1_identical(
-    conn: sqlite3.Connection, repo_root: Path
-) -> None:
-    """Under the book-default target (no saved intent) the chip is the plain
-    fit number — no tgt marker, no behavior change vs v1."""
-    _write_fit_cache_v2(repo_root, target_source="book_default")
-    html = render_research_cockpit(build_cockpit_rows(conn, repo_root))
-    assert ">1.29<" not in html  # fit_target hidden under the default
-    assert ">1.15</a>" in html
-    assert "<sup>tgt</sup>" not in html
-
-
-def test_render_fit_v2_degraded_is_loud(conn: sqlite3.Connection, repo_root: Path) -> None:
-    """A degraded book context renders the warn chip with the ! glyph, the
-    reasons in the hover, and the one-line banner above the table."""
-    reasons = ["tracker offline and no risk snapshot — book Sharpe unknown"]
-    _write_fit_cache_v2(repo_root, target_source="intent", degraded=reasons)
-    html = render_research_cockpit(build_cockpit_rows(conn, repo_root))
-    assert "cockpit-degraded" in html
-    assert "Fit computed with degraded book context" in html
-    assert "BOOK CONTEXT DEGRADED" in html
-    assert ">! 1.29<sup>tgt</sup></a>" in html
+    assert ">Fit<" not in html
+    assert "/api/peek/fit" not in html
 
 
 def test_render_escapes_company_name(rows: dict[str, list[CockpitRow]]) -> None:

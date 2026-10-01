@@ -41,7 +41,6 @@ EvaluationInstrument = Literal["company", "etf"]
 ThesisSource = Literal["micro_thesis", "position_entry", "unavailable"]
 
 _EXCERPT_LIMIT = 320
-_EXPLANATION_LIMIT = 320
 _NAME_LIMIT = 160
 _EXCERPT_SUFFIX = "…"
 _MACHINE_REFERENCE_RE = re.compile(r"\b(?:sha256:)?[a-f0-9]{40,}\b", re.IGNORECASE)
@@ -109,14 +108,6 @@ class WorkOsEvaluationItem(BaseModel):
     ticker: str = Field(min_length=1, max_length=12, pattern=r"^[A-Z0-9][A-Z0-9.\-]{0,11}$")
     name: str = Field(max_length=_NAME_LIMIT)
     instrument_type: EvaluationInstrument
-    # Internal compatibility only: retired composites must not reach API hydration.
-    # Delete these fields after 2026-09-28 unless a reviewed design restores them.
-    score: float | None = Field(default=None, exclude=True)
-    score_why: str | None = Field(default=None, max_length=_EXPLANATION_LIMIT, exclude=True)
-    score_partial: bool = Field(default=False, exclude=True)
-    fit: float | None = Field(default=None, exclude=True)
-    fit_why: str | None = Field(default=None, max_length=_EXPLANATION_LIMIT, exclude=True)
-    fit_partial: bool = Field(default=False, exclude=True)
     sharpe_delta_bps: float | None = None
     held_weight_pct: float | None = None
     dcf_upside_pct: float | None = None
@@ -139,18 +130,6 @@ class WorkOsEvaluationItem(BaseModel):
         """Descriptive alias for callers that do not use the compact API key."""
 
         return self.source
-
-    @property
-    def why(self) -> str | None:
-        """Compatibility alias for the score explanation."""
-
-        return self.score_why
-
-    @property
-    def partial(self) -> bool:
-        """Compatibility alias for the score's partial-data marker."""
-
-        return self.score_partial
 
 
 class WorkOsEvaluationHydration(BaseModel):
@@ -371,12 +350,6 @@ def _bounded_human_text(value: str, *, limit: int) -> str:
     return boundary.rstrip() + _EXCERPT_SUFFIX
 
 
-def _bounded_optional(value: str | None, *, limit: int) -> str | None:
-    if value is None or not value.strip():
-        return None
-    return _bounded_human_text(value, limit=limit)
-
-
 def _bounded_excerpt(value: str) -> str:
     return _bounded_human_text(value, limit=_EXCERPT_LIMIT)
 
@@ -570,15 +543,6 @@ def build_work_os_evaluation(
                 ticker=ticker,
                 name=_bounded_human_text((row.name or ticker).strip() or ticker, limit=_NAME_LIMIT),
                 instrument_type=instrument_type,
-                score=_finite(row.attractiveness),
-                score_why=_bounded_optional(
-                    row.attractiveness_why,
-                    limit=_EXPLANATION_LIMIT,
-                ),
-                score_partial=row.attractiveness_partial,
-                fit=_finite(row.fit),
-                fit_why=_bounded_optional(row.fit_why, limit=_EXPLANATION_LIMIT),
-                fit_partial=row.fit_partial,
                 sharpe_delta_bps=sharpe_delta_bps,
                 held_weight_pct=held_weight_pct,
                 dcf_upside_pct=dcf_upside_pct,

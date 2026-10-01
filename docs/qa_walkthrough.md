@@ -331,19 +331,18 @@ Budget gating is **DB, not env**: `llm_budgets`/`llm_budget_alerts` (migration 0
 
 ## Research cockpit (Home main tables)
 
-**Reach:** `http://127.0.0.1:7421/` Portfolio Cockpit. It hydrates once from `GET /api/work-os/portfolio`; there is no background cockpit polling. **Preconditions:** :7421 server; `data/portfolio.db` with `tracked_companies`; on-disk FMP caches (`data/historical/fmp/<T>_profile.json`, `_earnings_calendar.json`), `data/valuation_basis/<T>.json` for PEG; morning-pipeline caches (`fundamentals`, `candidate_fit.json`) optional — falls back to live DB scan / no Fit chip.
+**Reach:** `http://127.0.0.1:7421/` Portfolio Cockpit. It hydrates once from `GET /api/work-os/portfolio`; there is no background cockpit polling. **Preconditions:** :7421 server; `data/portfolio.db` with `tracked_companies`; on-disk FMP caches (`data/historical/fmp/<T>_profile.json`, `_earnings_calendar.json`), `data/valuation_basis/<T>.json` for PEG; morning-pipeline caches (`fundamentals`, `candidate_fit.json`) optional — falls back to live DB scan.
 
-**Renders (top→bottom):** `<section class='list-section cockpit-section'>` "Portfolio (N)" then "Evaluation (N)". Each: living-grid filter bar ("Filter by ticker / name…", "N holdings"/"N evaluations" count), then table. Portfolio columns: Ticker (link `/ticker/<T>`, company name in `title`) · Thesis (k-pill verdict badge, breach/warn rule names + "evaluated Xh ago" in hover) · Tier-1 moves (up to 3 `k-chip` KPI-delta buttons, largest movers first, toned by break-rule status, `data-ask-q` doorway, values/periods in hover) · Price (`$X.XX +Y%`, "last FMP quote …" hover) · vs DCF FV (signed %, recomputed `live/fair−1`; `neg` tone when price above FV; hover "DCF FV $A vs $B — run DATE") · PEG · Next ER (date; `er-soon` warn tone ≤7d; "in Nd"/"today" hover) · Inbox (pill cluster, see actions) · ops dot (`●` ok/warn/bad; FMP>3d/14d or build>10d/30d; hover "FMP Xd ago · build Yd ago · transcript …"). Portfolio sorted by attention (breach → pending alerts → new docs → ticker). Evaluation table (thin, tighter padding, no Tier-1 column): adds Score (next-dollar attractiveness chip, factor math verbatim in hover, dashed border = partial data) and Fit chips + Rev YoY / FCF mgn columns; sorted score-descending. Below cockpit: tier-coverage strip (`render_tier_coverage_strip`).
+**Renders (top→bottom):** `<section class='list-section cockpit-section'>` "Portfolio (N)" then "Evaluation (N)". Each: living-grid filter bar ("Filter by ticker / name…", "N holdings"/"N evaluations" count), then table. Portfolio columns: Ticker (link `/ticker/<T>`, company name in `title`) · Thesis (k-pill verdict badge, breach/warn rule names + "evaluated Xh ago" in hover) · Tier-1 moves (up to 3 `k-chip` KPI-delta buttons, largest movers first, toned by break-rule status, `data-ask-q` doorway, values/periods in hover) · Price (`$X.XX +Y%`, "last FMP quote …" hover) · vs DCF FV (signed %, recomputed `live/fair−1`; `neg` tone when price above FV; hover "DCF FV $A vs $B — run DATE") · PEG · Next ER (date; `er-soon` warn tone ≤7d; "in Nd"/"today" hover) · Inbox (pill cluster, see actions) · ops dot (`●` ok/warn/bad; FMP>3d/14d or build>10d/30d; hover "FMP Xd ago · build Yd ago · transcript …"). Portfolio sorted by attention (breach → pending alerts → new docs → ticker). Evaluation table (thin, tighter padding, no Tier-1 column): adds ΔSR (modeled-book Sharpe change chip, what-if peek in hover) · Rev YoY · FCF mgn columns. The retired scalar Score/Fit chips are gone (BHA-102); the Evaluation surface is owned by `GET /api/work-os/evaluation` (`evaluation_surface.v2`). Below cockpit: tier-coverage strip (`render_tier_coverage_strip`).
 
 ### Actions
 | Affordance | Trigger | Expected result | Edge/degraded states | Pri |
 |---|---|---|---|---|
-| Column header (`.lg-sortable`) | click / Enter | Alpine `sortBy(key,type)` re-orders rows client-side; arrow indicator + `aria-sort` update | Header tooltips on Score/Fit/RevYoY/FCF explain the column | P1 |
+| Column header (`.lg-sortable`) | click / Enter | Alpine `sortBy(key,type)` re-orders rows client-side; arrow indicator + `aria-sort` update | Header tooltips on ΔSR/RevYoY/FCF explain the column | P1 |
 | Filter bar input | type | Rows filtered by ticker + company name (`data_text`) | Empty result shows 0-count | P1 |
 | Ticker cell | click | Navigate `/ticker/<T>` full workspace page | — | P0 |
 | Tier-1 KPI chip | click | `data-ask-q` opens Ask dock with "`<metric>` for `<T>`, last 12 quarters" (chart) | No deltas → muted "—"; needs 2 non-superseded facts with `period_end ≤ today` | P0 |
-| Score chip (eval) | click | Peek popover `GET /api/peek/score?ticker=T` — factor breakdown (DCF upside · Rev growth · FCF margin · PEG multipliers); middle-click → `/ticker/<T>` | Missing score → "—"; partial data → dashed chip; hover title = full factor math `dcf 1.50 (+32.0% upside) x … = 2.1` | P1 |
-| Fit chip (eval) | click | Peek `GET /api/peek/fit?ticker=T`; toned ok(>1)/warn(<1) | Absent candidate_fit cache → no chip ("—") | P1 |
+| ΔSR chip (eval) | click | Peek `GET /api/peek/whatif?ticker=T` (before/after modeled-book Sharpe); toned ok(≥+5bp)/warn(≤−5bp) | No `sharpe_delta_bps` → "—" | P1 |
 | "N alerts" pill (bad tone) | click | Peek `GET /api/peek/alerts?ticker=T&status=pending` in place; real href `/feed?ticker=T&status=pending` for middle-click | Only renders when pending_alerts>0; singular/plural label | P0 |
 | "N new docs" pill (accent) | click | Peek `GET /api/peek/documents?ticker=T`; href `/#holding=T` | Requires `tc.last_built_at` set; julianday bridge for both timestamp spellings | P1 |
 | "N comments" pill (warn) | — | Static pill, hover "open report comments" — no doorway | — | P2 |
@@ -356,7 +355,7 @@ Budget gating is **DB, not env**: `llm_budgets`/`llm_budget_alerts` (migration 0
 - Partial DB (missing `dcf_runs`/`thesis_evaluations`/`kpi_facts` tables) → sparser row, all enrichment cells "—", no 500 (`_safe_rows` swallows `OperationalError`).
 - Missing profile JSON → Price "—"; PEG cache absent → "—"; negative/zero PEG treated missing.
 - Guidance rows with future `period_end` excluded from Tier-1 deltas (as_of filter).
-- Evaluation row with no inputs at all → score = 0.85⁴ ≈ 0.52 chip still renders (dashed), sinks below full-data names.
+- Evaluation row with no inputs at all → cells degrade to "—"; the retired Score/Fit chips never render.
 - fv gap recomputed, not read from `over_under_pct` — verify BN/NU (bank/holdco writer names) show consistent sign.
 
 ## Inbox rail (Home)
