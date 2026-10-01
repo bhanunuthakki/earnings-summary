@@ -15,10 +15,9 @@ from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from execution import sync_thesis_state as sync
 
-from execution import sync_thesis_state as sync  # noqa: E402
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _conn() -> sqlite3.Connection:
