@@ -474,8 +474,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Write path reads only _METRIC_COLUMNS snapshot fields.",
-      "fingerprint": "e81cd6c8893a1ead8fa4590563767ddfb7e86d83513c1c5962212c16cd19073e",
-      "line": 263,
+      "fingerprint": "826f3c2ac62559ee8566e92735330808319a3b0810018b010affb60965b4a5bc",
+      "line": 265,
       "path": "src/portfolio_risk_snapshot_store.py",
       "targets": [
         "_METRIC_COLUMNS"
@@ -658,6 +658,17 @@
         "llm_cost_usd",
         "operator_time_seconds"
       ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "The parameterized reporting-date regression selects only the two literal quarter and annual cell readers declared in its pytest parameter table.",
+      "fingerprint": "e252ddb5e4049a27d98f84a5b6aacac9e228665b46b2bb0bde8ec8c405f1e759",
+      "line": 220,
+      "path": "tests/test_metrics_engine_io.py",
+      "targets": [
+        "_build_quarter_cells",
+        "_build_annual_cells"
+      ]
     }
   ],
   "graph_provenance": {
@@ -665,7 +676,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "59bc7ba95acfd715500ad2d3ad877c112b435a8f9a23a1c688e9b277914faecf",
+      "source_sha256": "75ca97008245fae1a801d718f1810553acb2b1bd54d2b41d18ce22a541419810",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

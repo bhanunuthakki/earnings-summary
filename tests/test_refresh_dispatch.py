@@ -9,15 +9,17 @@ Two layers:
 from __future__ import annotations
 
 import io
+import json
 import sqlite3
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TextIO
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "execution"))
+import pytest
 
-from refresh_dispatch import STEP_NAMES, Plan, build_plan, execute
+from execution import refresh_dispatch as rd
+from execution.refresh_dispatch import STEP_NAMES, Plan, build_plan, execute
 
 
 def _seed_fmp(db_path: Path, ticker: str, last_pulled: str) -> None:
@@ -40,10 +42,15 @@ def _seed_fmp(db_path: Path, ticker: str, last_pulled: str) -> None:
         )
         """
     )
-    conn.execute(
-        "INSERT INTO fmp_endpoint_status (ticker, endpoint, period, status, last_pulled) "
-        "VALUES (?, 'income-statement', 'annual', 'ok', ?)",
-        (ticker.upper(), last_pulled),
+    conn.executemany(
+        "INSERT INTO fmp_endpoint_status "
+        "(ticker, endpoint, period, status, record_count, last_pulled) "
+        "VALUES (?, ?, ?, 'ok', 12, ?)",
+        [
+            (ticker.upper(), endpoint, period, last_pulled)
+            for endpoint in ("income-statement", "balance-sheet-statement", "cashflow-statement")
+            for period in ("annual", "quarter")
+        ],
     )
     conn.commit()
     conn.close()
@@ -135,6 +142,183 @@ def test_plan_stale_respects_custom_window(tmp_path: Path) -> None:
         now=datetime(2026, 5, 18, tzinfo=UTC),
     )
     assert plan.skip_fmp is False
+
+
+@pytest.mark.parametrize(
+    "endpoint", ["income-statement", "balance-sheet-statement", "cashflow-statement"]
+)
+@pytest.mark.parametrize("period", ["annual", "quarter"])
+def test_plan_requires_every_statement_receipt(tmp_path: Path, endpoint: str, period: str) -> None:
+    db = tmp_path / "p.db"
+    _seed_fmp(db, "NU", "2026-05-15T01:00:00")
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "DELETE FROM fmp_endpoint_status WHERE endpoint = ? AND period = ?", (endpoint, period)
+        )
+    assert not build_plan(
+        ticker="NU", mode="stale", db_path=db, now=datetime(2026, 5, 18, tzinfo=UTC)
+    ).skip_fmp
+
+
+@pytest.mark.parametrize(
+    ("status", "record_count", "last_pulled"),
+    [
+        ("error", 12, "2026-05-17T00:00:00"),
+        ("empty", 0, "2026-05-17T00:00:00"),
+        ("ok", 0, "2026-05-17T00:00:00"),
+        ("ok", None, "2026-05-17T00:00:00"),
+        ("ok", 12, "2026-05-01T00:00:00"),
+        ("ok", 12, "2026-05-19T00:00:00"),
+        ("ok", 12, "invalid"),
+        ("ok", 12, None),
+    ],
+)
+def test_recent_unrelated_pull_cannot_hide_unusable_statement(
+    tmp_path: Path, status: str, record_count: int | None, last_pulled: str | None
+) -> None:
+    db = tmp_path / "p.db"
+    _seed_fmp(db, "NU", "2026-05-15T01:00:00")
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE fmp_endpoint_status SET status=?, record_count=?, last_pulled=? "
+            "WHERE endpoint='cashflow-statement' AND period='annual'",
+            (status, record_count, last_pulled),
+        )
+        conn.execute(
+            "INSERT INTO fmp_endpoint_status (ticker, endpoint, period, status, record_count, last_pulled) "
+            "VALUES ('NU', 'profile', '', 'ok', 1, '2026-05-17T23:00:00')"
+        )
+    assert not build_plan(
+        ticker="NU", mode="stale", db_path=db, now=datetime(2026, 5, 18, tzinfo=UTC)
+    ).skip_fmp
+
+
+def test_freshness_reports_oldest_required_capture_with_timezone(tmp_path: Path) -> None:
+    db = tmp_path / "p.db"
+    _seed_fmp(db, "NU", "2026-05-15T01:00:00")
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE fmp_endpoint_status SET last_pulled='2026-05-10T20:00:00-07:00' "
+            "WHERE endpoint='income-statement' AND period='quarter'"
+        )
+    plan = build_plan(ticker="nu", mode="stale", db_path=db, now=datetime(2026, 5, 18, tzinfo=UTC))
+    assert plan.skip_fmp
+    assert plan.skip_fmp_reason == "fresh last_pulled=2026-05-11T03:00:00+00:00"
+
+
+def test_missing_receipt_table_refreshes_without_exception(tmp_path: Path) -> None:
+    db = tmp_path / "p.db"
+    db.touch()
+    assert not build_plan(ticker="NU", mode="stale", db_path=db).skip_fmp
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_cli_resolves_database_before_planning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    explicit: bool,
+) -> None:
+    database = tmp_path / "approved.db"
+    _seed_fmp(database, "NU", datetime.now(UTC).isoformat())
+    resolved: list[Path | str | None] = []
+
+    def resolver(override: Path | str | None = None) -> Path:
+        resolved.append(override)
+        return database
+
+    monkeypatch.setattr(rd, "require_db_path", resolver, raising=False)
+    argv = ["refresh_dispatch.py", "--ticker", "NU", "--plan-only"]
+    if explicit:
+        argv += ["--db", str(database)]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert rd.main() == 0
+    assert resolved == [database if explicit else None]
+    assert '"skip_fmp": true' in capsys.readouterr().out
+
+
+def test_cli_rejects_unavailable_database_before_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    def resolver(override: Path | str | None = None) -> Path:
+        raise RuntimeError("configured database required")
+
+    monkeypatch.setattr(rd, "require_db_path", resolver, raising=False)
+    monkeypatch.setattr(sys, "argv", ["refresh_dispatch.py", "--ticker", "NU", "--plan-only"])
+    with pytest.raises(RuntimeError, match="configured database required"):
+        rd.main()
+
+
+def test_cli_database_mismatch_refuses_before_any_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    database = tmp_path / "approved.db"
+    _seed_fmp(database, "NU", datetime.now(UTC).isoformat())
+    executed: list[Plan] = []
+
+    def executor(plan: Plan, *, project_root: Path, state_root: Path) -> int:
+        del project_root, state_root
+        executed.append(plan)
+        return 0
+
+    monkeypatch.setattr(rd, "execute", executor)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "refresh_dispatch.py",
+            "--ticker",
+            "NU",
+            "--mode",
+            "full",
+            "--db",
+            str(database),
+            "--state-root",
+            str(tmp_path / "different-state"),
+        ],
+    )
+    assert rd.main() == 3
+    assert executed == []
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt == {"status": "refused", "reason_code": "database_state_root_mismatch"}
+
+
+def test_cli_database_redirect_to_same_authority_executes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    authority = tmp_path / "authority"
+    authority.mkdir()
+    database = authority / "portfolio.db"
+    _seed_fmp(database, "NU", datetime.now(UTC).isoformat())
+    state_root = tmp_path / "runtime"
+    state_root.mkdir()
+    try:
+        (state_root / "data").symlink_to(authority, target_is_directory=True)
+    except OSError:
+        pytest.skip("Directory symlink creation is unavailable on this test host")
+    executed: list[Path] = []
+
+    def executor(plan: Plan, *, project_root: Path, state_root: Path) -> int:
+        del plan, project_root
+        executed.append(state_root)
+        return 0
+
+    monkeypatch.setattr(rd, "execute", executor)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "refresh_dispatch.py",
+            "--ticker",
+            "NU",
+            "--mode",
+            "full",
+            "--db",
+            str(database),
+            "--state-root",
+            str(state_root),
+        ],
+    )
+    assert rd.main() == 0
+    assert executed == [state_root.resolve()]
 
 
 # ---- execute tests -------------------------------------------------------

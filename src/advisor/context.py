@@ -28,6 +28,8 @@ from pathlib import Path
 from typing import cast
 
 from calibration_guard import is_confident, rate_phrase, rate_phrase_ci
+from db_paths import require_db_path
+from dcf.readiness import load_valuation_readiness
 from decision_calibration import (
     CalibrationStats,
     Expectancy,
@@ -80,6 +82,8 @@ class TickerValuation:
     # placeholder ("STUB: needs user-authored thesis") — never a researched
     # name, so the swap screen must not crown it "best alternative".
     stub_thesis: bool = False
+    evidence_ready: bool = False
+    evidence_reasons: tuple[str, ...] = ("valuation_evidence_unassessed",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,10 +126,10 @@ def _dcf_age_ok(dcf_date: str | None, *, max_age_days: int, today: datetime) -> 
         run = datetime.fromisoformat(dcf_date[:10]).replace(tzinfo=UTC)
     except ValueError:
         return False
-    return (today - run).days <= max_age_days
+    return 0 <= (today - run).days <= max_age_days
 
 
-def load_valuations(
+def _load_valuations(
     conn: sqlite3.Connection,
 ) -> tuple[dict[str, TickerValuation], dict[str, TickerValuation]]:
     """(holdings, candidates) valuation maps from the latest DCF run per ticker,
@@ -157,6 +161,7 @@ def load_valuations(
         list_type = lists.get(t)
         if list_type is None or fv is None or px is None or fv <= 0 or px <= 0:
             continue
+        readiness = load_valuation_readiness(conn, t, as_of=datetime.now(UTC))
         val = TickerValuation(
             ticker=t,
             upside_pct=(fv / px - 1.0) * 100.0,
@@ -164,12 +169,28 @@ def load_valuations(
             list_type=list_type,
             verdict=verdicts.get(t),
             stub_thesis=t in stub_tickers,
+            evidence_ready=readiness.ready,
+            evidence_reasons=readiness.reason_codes,
         )
         if list_type == "portfolio":
             holdings[t] = val
         elif list_type in _CANDIDATE_LISTS:
             candidates[t] = val
     return holdings, candidates
+
+
+def load_valuations(
+    conn: sqlite3.Connection,
+) -> tuple[dict[str, TickerValuation], dict[str, TickerValuation]]:
+    """Read amounts and their evidence in one caller-preserving read snapshot."""
+    owns_snapshot = not conn.in_transaction
+    try:
+        if owns_snapshot:
+            conn.execute("BEGIN")
+        return _load_valuations(conn)
+    finally:
+        if owns_snapshot and conn.in_transaction:
+            conn.rollback()
 
 
 def screen_swap_candidates(
@@ -196,7 +217,8 @@ def screen_swap_candidates(
     eligible = [
         c
         for c in candidates_val.values()
-        if c.verdict != "breach"
+        if c.evidence_ready
+        and c.verdict != "breach"
         and not c.stub_thesis
         and c.upside_pct <= max_upside_pct
         and _dcf_age_ok(c.dcf_date, max_age_days=max_dcf_age_days, today=today)
@@ -204,7 +226,7 @@ def screen_swap_candidates(
     best = max(eligible, key=lambda c: c.upside_pct) if eligible else None
     out: list[SwapCandidate] = []
     for h in holdings_val.values():
-        if best is None:
+        if best is None or not h.evidence_ready:
             continue
         margin = best.upside_pct - h.upside_pct
         out.append(
@@ -229,14 +251,16 @@ def build_advisor_context(
     *,
     user_id: str = DEFAULT_USER_ID,
     api_url: str | None = None,
+    db_path: Path | None = None,
 ) -> AdvisorContext:
     """Fetch + assemble everything one memo run reads. Tracker failures
     degrade (the established client contract); DB reads tolerate missing
     tables via the underlying readers."""
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = require_db_path(db_path)
     conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
+        conn.execute("BEGIN")
         holdings = portfolio_holdings(conn)
         verdicts = latest_verdicts(conn)
         dcf_gaps = latest_dcf_runs(conn)
@@ -299,6 +323,8 @@ def holdings_block(ctx: AdvisorContext) -> str:
             f"DCF upside {_fmt(upside.upside_pct if upside else None, '+.0f', '%')}",
             f"window alpha {_fmt(r.alpha_usd, '+,.0f')}",
         ]
+        if upside is not None and not upside.evidence_ready:
+            bits.append("valuation evidence blocked: " + ", ".join(upside.evidence_reasons))
         if r.mismatch_reasons:
             bits.append(f"tension: {'; '.join(r.mismatch_reasons[:2])}")
         lines.append(f"- **{r.ticker}** — " + " · ".join(bits))
@@ -352,7 +378,9 @@ def candidates_block(ctx: AdvisorContext, *, top_n: int = 8, max_dcf_age_days: i
     fresh = [
         c
         for c in ctx.candidates_val.values()
-        if c.verdict != "breach"
+        if c.evidence_ready
+        and c.verdict != "breach"
+        and not c.stub_thesis
         and c.upside_pct <= IMPLAUSIBLE_UPSIDE_PCT
         and _dcf_age_ok(c.dcf_date, max_age_days=max_dcf_age_days, today=today)
     ]
@@ -369,6 +397,11 @@ def candidates_block(ctx: AdvisorContext, *, top_n: int = 8, max_dcf_age_days: i
         )
     if len(lines) == 1:
         lines.append("- (no fresh external DCF runs)")
+    blocked = [c for c in ctx.candidates_val.values() if not c.evidence_ready]
+    for c in blocked[:top_n]:
+        lines.append(
+            f"- **{c.ticker}** — valuation evidence blocked: " + ", ".join(c.evidence_reasons)
+        )
     if n_implausible:
         lines.append(
             f"- ({n_implausible} name(s) excluded: DCF upside > +{IMPLAUSIBLE_UPSIDE_PCT:.0f}% "

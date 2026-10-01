@@ -12,6 +12,8 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from allocation.eligibility import (
     CHECK_CANDIDATE_FIT,
     CHECK_DIRECTIONAL_HYPOTHESIS,
@@ -25,6 +27,25 @@ from allocation.eligibility import (
     assess_universe,
     cash_assessment,
 )
+from dcf.readiness import ValuationReadiness
+
+
+@pytest.fixture(autouse=True)
+def admitted_valuation_evidence(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate the eight independent checks with explicitly admitted synthetic evidence.
+
+    Real persisted-evidence rejection is covered in test_allocation_evidence_gate.
+    The scalar schemas below deliberately do not model the provenance ledger.
+    """
+
+    def admitted(conn: sqlite3.Connection, ticker: str, *, as_of: datetime) -> ValuationReadiness:
+        del conn
+        return ValuationReadiness(
+            ticker=ticker, evaluated_at=as_of.isoformat(), ready=True, status="ready"
+        )
+
+    monkeypatch.setattr("allocation.eligibility.load_valuation_readiness", admitted)
+
 
 TICKER = "EVAL"
 PORTFOLIO_TICKER = "HELD"

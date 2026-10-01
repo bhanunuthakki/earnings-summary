@@ -294,11 +294,16 @@ def _next_dollar_model_rows(context: AdvisorContext) -> list[dict[str, object]]:
     """
     eligible: dict[str, float] = {}
     for t, v in context.candidates_val.items():
-        if v.stub_thesis or v.verdict == "breach" or v.upside_pct > IMPLAUSIBLE_UPSIDE_PCT:
+        if (
+            not v.evidence_ready
+            or v.stub_thesis
+            or v.verdict == "breach"
+            or v.upside_pct > IMPLAUSIBLE_UPSIDE_PCT
+        ):
             continue
         eligible[t] = v.upside_pct
     for t, v in context.holdings_val.items():
-        if t in eligible or v.stub_thesis or v.verdict == "breach":
+        if not v.evidence_ready or t in eligible or v.stub_thesis or v.verdict == "breach":
             continue
         eligible[t] = v.upside_pct
     ranked = sorted(eligible.items(), key=lambda kv: kv[1], reverse=True)
@@ -318,6 +323,10 @@ def generate_next_dollar_memo(
     a skipped MemoResult."""
     db_path = repo_root / "data" / "portfolio.db"
     context = ctx or build_advisor_context(repo_root, user_id=user_id, api_url=api_url)
+    if not _next_dollar_model_rows(context):
+        return MemoResult(
+            ok=False, kind="next_dollar", skipped_reason="valuation_evidence_not_ready"
+        )
     prompt = _NEXT_DOLLAR_PROMPT.format(
         book=book_block(context),
         holdings=holdings_block(context),

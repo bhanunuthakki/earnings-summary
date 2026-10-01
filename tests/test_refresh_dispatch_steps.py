@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """PR C — refresh dispatcher step selection (--steps/--skip-step) + --force.
 
 The budget track already owns --force-budget-bypass; this covers the per-step
@@ -10,15 +9,13 @@ from __future__ import annotations
 
 import io
 import sqlite3
-import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TextIO
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
+from execution import refresh_dispatch as rd
 
-import refresh_dispatch as rd  # noqa: E402
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 class _Result:
@@ -34,12 +31,20 @@ def _managed_target(argv: list[str]) -> Path:
 
 
 def _fresh_db(tmp_path: Path) -> Path:
-    """A DB whose FMP pull is 'now' — so stale mode would skip fmp."""
+    """All statement receipts are fresh relative to the tests' fixed June 1 clock."""
     db = tmp_path / "portfolio.db"
     conn = sqlite3.connect(str(db))
-    conn.execute("CREATE TABLE fmp_endpoint_status (ticker TEXT, last_pulled TIMESTAMP)")
     conn.execute(
-        "INSERT INTO fmp_endpoint_status VALUES ('NU', ?)", (datetime.now(UTC).isoformat(),)
+        "CREATE TABLE fmp_endpoint_status (ticker TEXT, endpoint TEXT, period TEXT, "
+        "status TEXT, record_count INTEGER, last_pulled TIMESTAMP)"
+    )
+    conn.executemany(
+        "INSERT INTO fmp_endpoint_status VALUES ('NU', ?, ?, 'ok', 12, ?)",
+        [
+            (endpoint, period, "2026-05-31T12:00:00+00:00")
+            for endpoint in ("income-statement", "balance-sheet-statement", "cashflow-statement")
+            for period in ("annual", "quarter")
+        ],
     )
     conn.commit()
     conn.close()
@@ -133,12 +138,29 @@ def test_execute_skips_fmp_when_fresh(tmp_path: Path) -> None:
 
 
 def test_new_step_builders_point_at_the_right_clis() -> None:
-    state_root = PROJECT_ROOT / "state"
-    news = rd._argv_news(PROJECT_ROOT, state_root, "NU")
-    assert _managed_target(news).name == "fetch_news.py"
-    assert "--tickers" in news and "NU" in news
-    assert _managed_target(rd._argv_dcf(PROJECT_ROOT, state_root, "NU")).name == "refresh_dcf.py"
-    assert (
-        _managed_target(rd._argv_thesis_eval(PROJECT_ROOT, state_root, "NU")).name
-        == "run_thesis_evaluator.py"
+    commands: list[list[str]] = []
+
+    def runner(argv: list[str], *, out: TextIO) -> _Result:
+        del out
+        commands.append(argv)
+        return _Result()
+
+    plan = rd.build_plan(
+        ticker="NU", mode="full", db_path=Path("nope.db"), steps=["news", "dcf", "thesis_eval"]
     )
+    assert (
+        rd.execute(
+            plan,
+            project_root=PROJECT_ROOT,
+            state_root=PROJECT_ROOT / "state",
+            runner=runner,
+            out=io.StringIO(),
+        )
+        == 0
+    )
+    assert [_managed_target(argv).name for argv in commands] == [
+        "fetch_news.py",
+        "refresh_dcf.py",
+        "run_thesis_evaluator.py",
+    ]
+    assert "--tickers" in commands[0] and "NU" in commands[0]

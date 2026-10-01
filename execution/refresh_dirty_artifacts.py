@@ -16,7 +16,7 @@ has elapsed. This script:
      reached so daily cron never blows the budget.
 
 Designed for cron use:
-  python execution/refresh_dirty_artifacts.py --execute --max-cost-usd 5
+  cron/run_refresh_dirty_artifacts.bat
 
 The --max-cost-usd safeguard short-circuits if cumulative cost in the run
 exceeds the cap — protects the subscription / API spend.
@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sqlite3
 import subprocess
 import sys
@@ -35,18 +36,18 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from llm_artifact_store import Artifact, drain_dirty  # noqa: E402
-from log_redact import redact  # noqa: E402
-from native_artifact_projection import (  # noqa: E402
+from db_paths import configured_db_path, require_db_path
+from llm_artifact_store import Artifact, DirtyQueueReadError, drain_dirty
+from log_redact import redact
+from native_artifact_projection import (
     PROJECTABLE_NATIVE_PURPOSES,
     NativeArtifactProjectionError,
     project_native_artifact,
 )
-from runtime.python_process import managed_python_argv  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from runtime.python_process import managed_python_argv
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 log = logging.getLogger("refresh_dirty_artifacts")
 
@@ -302,12 +303,13 @@ def _managed_job_argv(job: _PendingJob, cwd: Path) -> list[str]:
     return managed_python_argv(cwd, job.argv[1], *job.argv[2:])
 
 
-def _run_subprocess(job: _PendingJob, cwd: Path) -> dict[str, object]:
+def _run_subprocess(job: _PendingJob, cwd: Path, db_path: Path) -> dict[str, object]:
     """Invoke one regenerator. Captures exit + tail stderr; never raises."""
     try:
         proc = subprocess.run(
             _managed_job_argv(job, cwd),
             cwd=str(cwd),
+            env={**os.environ, "EARNINGS_SUMMARY_DB_PATH": str(db_path)},
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -578,7 +580,7 @@ def _execute_jobs(
                 "accrued_cost_usd": round(accrued, 4),
             }
         )
-        result = _run_subprocess(job, cwd=repo_root)
+        result = _run_subprocess(job, cwd=repo_root, db_path=db_path)
         exit_code = result.get("exit_code")
         if exit_code != 0:
             failed += 1
@@ -651,7 +653,7 @@ def main() -> int:
         "--repo-root",
         type=Path,
         default=PROJECT_ROOT,
-        help="Repo root containing data/portfolio.db.",
+        help="Code root; the portfolio database follows EARNINGS_SUMMARY_DB_PATH when set.",
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
@@ -684,21 +686,38 @@ def main() -> int:
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
+    if args.limit <= 0:
+        parser.error("--limit must be a positive integer")
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    db_path = args.repo_root / "data" / "portfolio.db"
+    try:
+        db_path = require_db_path(configured_db_path(args.repo_root))
+    except (OSError, RuntimeError):
+        print(
+            json.dumps({"code": "dirty_queue_unavailable", "phase": "db_authority"}),
+            file=sys.stderr,
+        )
+        return 3
     queue_checked_at = datetime.now(UTC)
 
-    artifacts = drain_dirty(limit=args.limit, db_path=db_path, now=queue_checked_at)
+    try:
+        artifacts = drain_dirty(
+            limit=args.limit, db_path=db_path, now=queue_checked_at, strict=True
+        )
+    except DirtyQueueReadError:
+        print(
+            json.dumps({"code": "dirty_queue_unavailable", "phase": "queue_read"}), file=sys.stderr
+        )
+        return 3
     breakdown = _aggregate_breakdown(artifacts)
-    total = sum(count for _t, _p, count in breakdown)
-    if total == 0:
+    total = len(artifacts)
+    if not artifacts:
         log.info({"event": "drain_idle", "total_dirty": 0})
-        print("No dirty artifacts. Pipeline is fresh.")
+        print("No dirty or expired artifacts in the queue.")
         return 0
 
     log.info({"event": "drain_start", "total_dirty": total, "execute": args.execute})

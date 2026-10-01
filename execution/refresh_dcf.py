@@ -63,7 +63,7 @@ from dcf import persist as persist_mod
 from dcf import redesign as redesign_mod
 from dcf import reverse as reverse_mod
 from dcf import universe as universe_mod
-from dcf.provenance import DcfInputProvenance
+from dcf.provenance import DcfInputProvenance, input_clock_summary
 from runtime.python_process import managed_python_prefix
 from sources import registry as source_calls_registry
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -129,6 +129,7 @@ def _source_file(
             "sha256": _sha256_file(path),
             "bytes": stat.st_size,
             "observed_at": observed_at.isoformat(),
+            "clock_kind": "file_modified",
         },
         observed_at,
     )
@@ -280,6 +281,7 @@ def build_dcf_provenance(
         engine_version=DCF_ENGINE_VERSION,
         inputs_as_of=max(observed_times, default=datetime(1970, 1, 1, tzinfo=UTC)),
         detail={
+            "input_clocks": input_clock_summary(sources, market_observed_at=normalized_live_at),
             "market_price": market_price,
             "sources": sources,
             "primary_fact_overlay": dict(primary_fact_overlay) if primary_fact_overlay else None,

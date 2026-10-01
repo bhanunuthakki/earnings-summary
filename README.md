@@ -14,6 +14,9 @@ five-reported-quarter IR/text-transcript bound. Byte capture, parsing, completen
 and semantic verification are separate proof stages; a successful download is not
 decision-grade evidence. See [the pipeline policy](directives/data_pipeline_dag.md).
 
+For inherited branches, pending PRs and valuation freshness/recovery boundaries,
+see [the pipeline reconciliation handoff](docs/architecture/pipeline_reconciliation.md).
+
 ## Quick start
 
 Use Python 3.11 or later and install the project plus development dependencies:
