@@ -772,3 +772,63 @@ expectations outside the selected accessions in the supplied inventories. These
 are selection progress fields, not whole-inventory or extraction completeness.
 Authority-omitted locators retain their existing coverage dispositions; this
 selector does not manufacture locators, source coverage, or canonical admission.
+
+### MELI H1 displayed-statement source population
+
+`execution/publish_meli_reported_statements.py` is a manual, source-only operation:
+
+```
+python execution/publish_meli_reported_statements.py --db <configured-db> \
+  --inventory-key <sealed-sec-inventory-key> --accession <accession> \
+  --document-version-id <captured-primary-version> --fulltext-run-id <qualified-html-run> \
+  --content-root <approved-retained-blob-root> [--apply]
+```
+
+Dry-run is the default. Its separate `meli-h1-displayed-statements.v1` recipe closes
+exactly 18 members: current/prior H1 Commerce, consolidated, Fintech and Credit
+revenues, operating income, D&A and productive-asset expenditures; June 30 gross
+loans and current/noncurrent operating leases; and current H1 diluted weighted
+average shares. FY annual values, TTM, net cash, economic allocations, model-role
+bindings and assumptions are outside this operation. The existing three-member
+NIMAL/liquidity/debt publisher keeps its recipe and immutable identities.
+
+The publisher reuses the qualified native HTML hierarchy/replay and captured
+primary-filing authority. It reads displayed rows, headers, subsections and
+footnotes only. It does not invoke the held filing-native XBRL processor or use
+inline tags/contexts as evidence of taxonomy qualification. Source concepts use a
+separate `issuer-reported-statement` namespace with complete displayed
+business/product/geography scope in hash-bound definitions and locators.
+XBRL dimensions remain empty; no invented axis/member or canonical equivalence is
+admitted. A later reviewed mapping must establish any relationship to an XBRL
+series. Current/prior H1 are durations; gross loans and leases are instants.
+Diluted shares remain a count under the explicit share-data exception, never a
+million-scaled amount. Source cash-flow parentheses are retained; the explicitly
+named expenditure measure uses their positive payment magnitude, with the signed
+normalization multiplier and convention committed. No sum is invented.
+
+Every published fact retains raw display tokens, source node locators, table
+headers, US GAAP preparation evidence, applicable USD/unit declaration, exact
+period and definition commitments. Local header/scope changes, basic-vs-diluted
+ambiguity, gross-vs-net substitutions and conflicting consolidated presentations
+are rejected. Same-byte replay verifies and reuses the original publication.
+Apply atomically appends source observations and all 18 captured/rejected
+dispositions; a partial population is visible and does not become complete.
+Exit 0 means the named population is captured, 2 means partial/rejected, and 3
+means invalid/unavailable prerequisites. None means whole-filing coverage,
+canonical admission, valuation readiness or scenario acceptance.
+
+No scheduler, interactive Operations control, provider call or automatic retry
+is added. Explicit database/content roots remain mandatory. Reconstruction is
+owned by the tracked CLI, typed publisher, shared native-evidence loader and
+source-authentic isolated fixtures; the reconstruction manifest lists this CLI
+and its focused test. Tests use real migrated publication authorities; they
+never create checkout-local production state. The retained full-filing research
+rehearsal is separate from canonical acquisition/admission proof. Later model
+binding must explicitly preserve the requested shares/NIMAL duration; matching
+period-end alone does not decide owner policy.
+
+Delivery dependency: this displayed-source population does not replace the
+periodic-filing XBRL disposition seal or satisfy the current full-inventory
+corpus/processing contract. Model-scope qualification and restoration of the
+held native XBRL lane remain unresolved prerequisites. This operation is not a
+route around their applicability, corpus or completeness guards.

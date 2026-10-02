@@ -54,7 +54,7 @@ def _sha(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def _seed(
+def seed_reported_html(
     conn: sqlite3.Connection, root: Path, raw: bytes, *, document_accession: str = ACCESSION
 ) -> ReportedTableRequest:
     seed_foundation(conn)
@@ -328,7 +328,9 @@ def test_source_fixture_commitment() -> None:
 def test_real_authorities_dry_run_apply_replay(
     database: sqlite3.Connection, tmp_path: Path
 ) -> None:
-    request = _seed(database, tmp_path, (FIXTURES / "h1-2026-snippet.html").read_bytes())
+    request = seed_reported_html(
+        database, tmp_path, (FIXTURES / "h1-2026-snippet.html").read_bytes()
+    )
     before = database.total_changes
     dry = publish_meli_reported_tables(database, request)
     assert database.total_changes == before
@@ -366,7 +368,9 @@ def test_real_authorities_dry_run_apply_replay(
 def test_publication_normalizes_units_with_replayable_raw_lineage(
     database: sqlite3.Connection, tmp_path: Path
 ) -> None:
-    request = _seed(database, tmp_path, (FIXTURES / "h1-2026-snippet.html").read_bytes())
+    request = seed_reported_html(
+        database, tmp_path, (FIXTURES / "h1-2026-snippet.html").read_bytes()
+    )
     result = publish_meli_reported_tables(database, request.model_copy(update={"apply": True}))
     rows = database.execute(
         "SELECT c.concept_name,c.unit_key,o.numeric_value,o.raw_lexical_value,o.source_locator_json "
@@ -413,7 +417,7 @@ def test_values_are_parsed_not_asserted(database: sqlite3.Connection, tmp_path: 
         .replace(b"19.4", b"18.7")
         .replace(b"6,751", b"6,700")
     )
-    request = _seed(database, tmp_path, raw)
+    request = seed_reported_html(database, tmp_path, raw)
     result = publish_meli_reported_tables(database, request)
     assert result.source_population_complete
     assert result.population[0].numeric_value == "18.7"
@@ -455,7 +459,7 @@ def test_semantic_changes_get_closed_rejected_receipts(
 ) -> None:
     raw = (FIXTURES / "h1-2026-snippet.html").read_bytes()
     assert old in raw
-    request = _seed(database, tmp_path, raw.replace(old, new))
+    request = seed_reported_html(database, tmp_path, raw.replace(old, new))
     result = publish_meli_reported_tables(database, request.model_copy(update={"apply": True}))
     item = next(p for p in result.population if p.metric == metric)
     assert item.status == "rejected" and item.reason_code == reason
@@ -470,7 +474,9 @@ def test_semantic_changes_get_closed_rejected_receipts(
 def test_tampered_bytes_fail_before_any_publication(
     database: sqlite3.Connection, tmp_path: Path
 ) -> None:
-    request = _seed(database, tmp_path, (FIXTURES / "h1-2026-snippet.html").read_bytes())
+    request = seed_reported_html(
+        database, tmp_path, (FIXTURES / "h1-2026-snippet.html").read_bytes()
+    )
     (tmp_path / "source.html").write_text("changed")
     before = database.total_changes
     with pytest.raises(ValueError, match="byte commitment"):
@@ -481,7 +487,9 @@ def test_tampered_bytes_fail_before_any_publication(
 def test_native_target_ignores_corrupt_global_checkpoint(
     database: sqlite3.Connection, tmp_path: Path
 ) -> None:
-    request = _seed(database, tmp_path, (FIXTURES / "h1-2026-snippet.html").read_bytes())
+    request = seed_reported_html(
+        database, tmp_path, (FIXTURES / "h1-2026-snippet.html").read_bytes()
+    )
     state = tmp_path / ".tmp" / "fulltext-evidence-backfill" / "evidence-native-state.json"
     state.parent.mkdir(parents=True, exist_ok=True)
     state.write_text("deliberately invalid global checkpoint")
@@ -542,7 +550,9 @@ def test_cli_missing_database_is_unavailable(
 def test_native_coordinate_taint_is_rejected(database: sqlite3.Connection, tmp_path: Path) -> None:
     from provenance.evidence_ledger import EvidenceLocator, EvidenceNode
 
-    request = _seed(database, tmp_path, (FIXTURES / "h1-2026-snippet.html").read_bytes())
+    request = seed_reported_html(
+        database, tmp_path, (FIXTURES / "h1-2026-snippet.html").read_bytes()
+    )
     row = database.execute(
         "SELECT text,locator_json FROM evidence_nodes WHERE extraction_run_id=? AND node_kind='table_cell' LIMIT 1",
         (request.fulltext_run_id,),
@@ -573,7 +583,7 @@ def test_ambiguous_duplicate_row_is_rejected(database: sqlite3.Connection, tmp_p
     target = source.index("NIMAL </span>")
     start, end = source.rfind("<tr", 0, target), source.index("</tr>", target) + len("</tr>")
     raw = (source[:end] + source[start:end] + source[end:]).encode()
-    request = _seed(database, tmp_path, raw)
+    request = seed_reported_html(database, tmp_path, raw)
     result = publish_meli_reported_tables(database, request)
     assert result.population[0].reason_code == "row_missing_or_ambiguous"
     assert result.captured_count == 2
@@ -594,7 +604,9 @@ def test_missing_or_cross_document_authority_fails_closed(
     value: str,
     reason: str,
 ) -> None:
-    request = _seed(database, tmp_path, (FIXTURES / "h1-2026-snippet.html").read_bytes())
+    request = seed_reported_html(
+        database, tmp_path, (FIXTURES / "h1-2026-snippet.html").read_bytes()
+    )
     before = database.total_changes
     with pytest.raises(ValueError, match=reason):
         publish_meli_reported_tables(
@@ -610,7 +622,9 @@ def test_publication_failure_rolls_back_scoped_nodes(
 ) -> None:
     from provenance.source_fact_repository import SourceFactPublication, SourceFactRepository
 
-    request = _seed(database, tmp_path, (FIXTURES / "h1-2026-snippet.html").read_bytes())
+    request = seed_reported_html(
+        database, tmp_path, (FIXTURES / "h1-2026-snippet.html").read_bytes()
+    )
 
     def fail(_self: SourceFactRepository, _publication: SourceFactPublication) -> None:
         raise ValueError("injected publication failure")
@@ -636,7 +650,7 @@ def test_publication_failure_rolls_back_scoped_nodes(
 def test_inventory_cannot_relabel_document_accession(
     database: sqlite3.Connection, tmp_path: Path
 ) -> None:
-    request = _seed(
+    request = seed_reported_html(
         database,
         tmp_path,
         (FIXTURES / "h1-2026-snippet.html").read_bytes(),

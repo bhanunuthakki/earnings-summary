@@ -58,13 +58,15 @@
       "entrypoints": [
         "execution/run_morning_pipeline.py",
         "execution/refresh_expected_earnings.py",
-        "execution/refresh_cache.py"
+        "execution/refresh_cache.py",
+        "execution/publish_meli_reported_statements.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
-        "pytest tests/test_pipeline*.py -q"
+        "pytest tests/test_pipeline*.py -q",
+        "pytest tests/test_meli_reported_statements.py -q"
       ],
       "documentation": [
         "AGENTS.md",

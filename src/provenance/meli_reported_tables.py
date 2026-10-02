@@ -124,25 +124,25 @@ class ReportedTableResult(_Closed):
     exact_replay: bool = False
 
 
-class _Node(_Closed):
+class ReportedTableNode(_Closed):
     node_id: str
     kind: str
     text: str
     locator: EvidenceLocator
 
 
-class _Evidence(_Closed):
+class ReportedTableEvidence(_Closed):
     issuer_id: str
     source_url: str
     blob_sha256: str
     source: str
     period_start: datetime
     period_end: datetime
-    nodes: tuple[_Node, ...]
+    nodes: tuple[ReportedTableNode, ...]
     recorded_at: datetime
 
 
-class _RejectedError(ValueError):
+class ReportedTableRejectionError(ValueError):
     """A source population member that cannot be safely interpreted."""
 
 
@@ -154,7 +154,7 @@ def _json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
-def _clean(value: str) -> str:
+def clean_reported_text(value: str) -> str:
     return " ".join(html.unescape(value).split())
 
 
@@ -163,7 +163,9 @@ def _time(value: object) -> datetime:
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
 
-def _load_evidence(conn: sqlite3.Connection, request: ReportedTableRequest) -> _Evidence:
+def load_reported_table_evidence(
+    conn: sqlite3.Connection, request: ReportedTableRequest
+) -> ReportedTableEvidence:
     try:
         package = load_captured_sec_filing_package(
             conn, inventory_key=request.inventory_key, accession_number=request.accession_number
@@ -235,7 +237,7 @@ def _load_evidence(conn: sqlite3.Connection, request: ReportedTableRequest) -> _
         "SELECT node_id,node_kind,text,locator_json,locator_sha256 FROM evidence_nodes WHERE extraction_run_id=? ORDER BY node_id",
         (request.fulltext_run_id,),
     ).fetchall()
-    nodes: list[_Node] = []
+    nodes: list[ReportedTableNode] = []
     for node_id, kind, text, locator_json, locator_sha in rows:
         if locator_json is None:
             raise ValueError("native node lacks locator")
@@ -248,11 +250,13 @@ def _load_evidence(conn: sqlite3.Connection, request: ReportedTableRequest) -> _
             or source[locator.char_start : locator.char_end] != str(text)
         ):
             raise ValueError("native text does not replay from source bytes")
-        nodes.append(_Node(node_id=str(node_id), kind=str(kind), text=str(text), locator=locator))
+        nodes.append(
+            ReportedTableNode(node_id=str(node_id), kind=str(kind), text=str(text), locator=locator)
+        )
     verify_native_html_replay(
         raw, primary.source_url, tuple((n.kind, n.text, n.locator) for n in nodes)
     )
-    return _Evidence(
+    return ReportedTableEvidence(
         issuer_id=primary.issuer_id,
         source_url=primary.source_url,
         blob_sha256=primary.blob_sha256,
@@ -264,12 +268,16 @@ def _load_evidence(conn: sqlite3.Connection, request: ReportedTableRequest) -> _
     )
 
 
-def _ordered(nodes: tuple[_Node, ...] | list[_Node]) -> list[_Node]:
+def _ordered(
+    nodes: tuple[ReportedTableNode, ...] | list[ReportedTableNode],
+) -> list[ReportedTableNode]:
     return sorted(nodes, key=lambda n: (n.locator.char_start or 0, n.node_id))
 
 
-def _cells(evidence: _Evidence, table: str, row: int) -> list[tuple[str, tuple[_Node, ...]]]:
-    groups: dict[int, list[_Node]] = {}
+def reported_table_cells(
+    evidence: ReportedTableEvidence, table: str, row: int
+) -> list[tuple[str, tuple[ReportedTableNode, ...]]]:
+    groups: dict[int, list[ReportedTableNode]] = {}
     for node in evidence.nodes:
         loc = node.locator
         if (
@@ -282,14 +290,14 @@ def _cells(evidence: _Evidence, table: str, row: int) -> list[tuple[str, tuple[_
     return [
         (text, tuple(_ordered(nodes)))
         for _, nodes in sorted(groups.items())
-        if (text := _clean("".join(n.text for n in _ordered(nodes))))
+        if (text := clean_reported_text("".join(n.text for n in _ordered(nodes))))
     ]
 
 
 def _row(
-    evidence: _Evidence, metric: Metric
-) -> tuple[str, int, list[tuple[str, tuple[_Node, ...]]]]:
-    groups: dict[tuple[str, int], dict[int, list[_Node]]] = {}
+    evidence: ReportedTableEvidence, metric: Metric
+) -> tuple[str, int, list[tuple[str, tuple[ReportedTableNode, ...]]]]:
+    groups: dict[tuple[str, int], dict[int, list[ReportedTableNode]]] = {}
     for node in evidence.nodes:
         loc = node.locator
         if (
@@ -301,26 +309,30 @@ def _row(
             groups.setdefault((loc.table_name, loc.table_row_index), {}).setdefault(
                 loc.table_column_index, []
             ).append(node)
-    matches: list[tuple[str, int, list[tuple[str, tuple[_Node, ...]]]]] = []
+    matches: list[tuple[str, int, list[tuple[str, tuple[ReportedTableNode, ...]]]]] = []
     for (table, row), columns in groups.items():
         cells = [
             (text, tuple(_ordered(nodes)))
             for _, nodes in sorted(columns.items())
-            if (text := _clean("".join(n.text for n in _ordered(nodes))))
+            if (text := clean_reported_text("".join(n.text for n in _ordered(nodes))))
         ]
         if cells and cells[0][0] == _LABELS[metric]:
             matches.append((table, row, cells))
     if len(matches) != 1:
-        raise _RejectedError("row_missing_or_ambiguous")
+        raise ReportedTableRejectionError("row_missing_or_ambiguous")
     return matches[0]
 
 
-def _passage(
-    evidence: _Evidence, phrase: str, *, after: int | None = None, before: int | None = None
-) -> tuple[_Node, ...]:
+def reported_table_passage(
+    evidence: ReportedTableEvidence,
+    phrase: str,
+    *,
+    after: int | None = None,
+    before: int | None = None,
+) -> tuple[ReportedTableNode, ...]:
     # Span elements split management definitions. Reassemble only one native DOM
     # parent; never stitch unrelated pages or matches together.
-    groups: dict[str, list[_Node]] = {}
+    groups: dict[str, list[ReportedTableNode]] = {}
     for node in evidence.nodes:
         loc = node.locator
         if node.kind != "passage" or loc.filing_section_key_raw is None or loc.char_start is None:
@@ -334,14 +346,14 @@ def _passage(
     matches = [
         tuple(_ordered(nodes))
         for nodes in groups.values()
-        if phrase in _clean("".join(n.text for n in _ordered(nodes)))
+        if phrase in clean_reported_text("".join(n.text for n in _ordered(nodes)))
     ]
     if len(matches) != 1:
-        raise _RejectedError("definition_missing_or_ambiguous")
+        raise ReportedTableRejectionError("definition_missing_or_ambiguous")
     return matches[0]
 
 
-def _extract(evidence: _Evidence, metric: Metric) -> TableDisposition:
+def _extract(evidence: ReportedTableEvidence, metric: Metric) -> TableDisposition:
     table, row, cells = _row(evidence, metric)
     header = [
         n
@@ -351,9 +363,9 @@ def _extract(evidence: _Evidence, metric: Metric) -> TableDisposition:
         and n.locator.table_row_index is not None
         and n.locator.table_row_index < row
     ]
-    period_headers = [text for text, _ in _cells(evidence, table, 2)]
-    year_headers = [text for text, _ in _cells(evidence, table, 3)]
-    unit_headers = [text for text, _ in _cells(evidence, table, 4)]
+    period_headers = [text for text, _ in reported_table_cells(evidence, table, 2)]
+    year_headers = [text for text, _ in reported_table_cells(evidence, table, 3)]
+    unit_headers = [text for text, _ in reported_table_cells(evidence, table, 4)]
     year = evidence.period_end.year
     numeric = [
         (text, nodes) for text, nodes in cells[1:] if re.fullmatch(r"\d[\d,]*(?:\.\d+)?", text)
@@ -366,8 +378,8 @@ def _extract(evidence: _Evidence, metric: Metric) -> TableDisposition:
             or len(numeric) != 4
             or sum(text == "%" for text, _ in cells) != 4
         ):
-            raise _RejectedError("unsupported_period_or_unit_columns")
-        definitions = _passage(
+            raise ReportedTableRejectionError("unsupported_period_or_unit_columns")
+        definitions = reported_table_passage(
             evidence,
             _NIMAL_DEFINITION,
             after=max(n.locator.char_start or 0 for _, ns in cells for n in ns),
@@ -379,23 +391,25 @@ def _extract(evidence: _Evidence, metric: Metric) -> TableDisposition:
             or year_headers != ["(In millions)"]
             or len(numeric) != 2
         ):
-            raise _RejectedError("unsupported_period_or_unit_columns")
-        currency_nodes = _passage(evidence, _CURRENCY_DEFINITION)
+            raise ReportedTableRejectionError("unsupported_period_or_unit_columns")
+        currency_nodes = reported_table_passage(evidence, _CURRENCY_DEFINITION)
         if metric == "available_cash_and_investments":
             after = max(n.locator.char_start or 0 for _, ns in cells for n in ns)
             definitions = tuple(
-                n for phrase in _CASH_DEFINITIONS for n in _passage(evidence, phrase, after=after)
+                n
+                for phrase in _CASH_DEFINITIONS
+                for n in reported_table_passage(evidence, phrase, after=after)
             )
         else:
-            definitions = _passage(
+            definitions = reported_table_passage(
                 evidence,
                 _DEBT_DEFINITION,
                 before=min(n.locator.char_start or 0 for _, ns in cells for n in ns),
             )
             table_labels = {
-                _cells(evidence, table, i)[0][0]
+                reported_table_cells(evidence, table, i)[0][0]
                 for i in range(1, row)
-                if _cells(evidence, table, i)
+                if reported_table_cells(evidence, table, i)
             }
             if not {
                 "Current Loans payable and other financial liabilities",
@@ -403,13 +417,13 @@ def _extract(evidence: _Evidence, metric: Metric) -> TableDisposition:
                 "Current Operating lease liabilities",
                 "Non-current Operating lease liabilities",
             }.issubset(table_labels):
-                raise _RejectedError("debt_reconciliation_scope_missing")
+                raise ReportedTableRejectionError("debt_reconciliation_scope_missing")
         definitions += currency_nodes
         unit, currency, start = "USD_millions", "USD", None
     lexical, value_nodes = numeric[0]
     value = Decimal(lexical.replace(",", ""))
     if metric == "nimal" and value > 100:
-        raise _RejectedError("percentage_out_of_range")
+        raise ReportedTableRejectionError("percentage_out_of_range")
     source_nodes = tuple(
         dict.fromkeys(n.node_id for n in (*header, *(n for _, ns in cells for n in ns)))
     )
@@ -420,7 +434,7 @@ def _extract(evidence: _Evidence, metric: Metric) -> TableDisposition:
                 "recipe": _RECIPE,
                 "metric": metric,
                 "label": _LABELS[metric],
-                "wording": [_clean(n.text) for n in definitions],
+                "wording": [clean_reported_text(n.text) for n in definitions],
                 "unit": unit,
                 "basis": "management",
                 "period_kind": "duration" if start else "instant",
@@ -478,7 +492,7 @@ def publish_meli_reported_tables(
 def _publish_in_snapshot(
     conn: sqlite3.Connection, request: ReportedTableRequest
 ) -> ReportedTableResult:
-    evidence = _load_evidence(conn, request)
+    evidence = load_reported_table_evidence(conn, request)
     identity = {
         "recipe": _RECIPE,
         "document": request.document_version_id,
@@ -502,7 +516,7 @@ def _publish_in_snapshot(
     for metric in _METRICS:
         try:
             population.append(_extract(evidence, metric))
-        except _RejectedError as error:
+        except ReportedTableRejectionError as error:
             population.append(
                 TableDisposition(
                     metric=metric,
