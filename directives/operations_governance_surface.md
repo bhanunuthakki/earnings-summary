@@ -279,6 +279,19 @@ that live legacy values have been replaced. No new scheduled window is added.
 
 ### Collection evidence read surface
 
+The manual SEC filing-inventory collector reads `EDGAR_USER_AGENT` from the process
+environment first, then reads only that key from the configured project env file on
+each invocation. An absent contact uses the existing public default. The collector
+does not import other private settings into its process environment. SEC 401/403
+hard stops return a stable `blocked`/`sec_inventory_hard_stop` JSON result with
+`retryable: false` and exit 2; the existing identity hold remains distinct. This
+status does not by itself identify the cause. A selected contact with header
+controls, non-Latin1 characters, or a nonblank length outside 8–512 characters is
+rejected before transport with `blocked`/`sec_contact_configuration_invalid`,
+`retryable: false` and exit 2; neither contact value nor a value-bearing cause is
+emitted. This does not retry acquisition, assert source coverage, or add a
+scheduled action.
+
 Settings distinguishes authorization from observed SEC coverage. Portfolio, evaluation,
 and watchlist retain automatic source authorization. A sealed SEC inventory defines the
 listed native-filing population; immutable document/source identities, exact-byte location
