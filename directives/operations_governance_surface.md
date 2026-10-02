@@ -772,3 +772,36 @@ expectations outside the selected accessions in the supplied inventories. These
 are selection progress fields, not whole-inventory or extraction completeness.
 Authority-omitted locators retain their existing coverage dispositions; this
 selector does not manufacture locators, source coverage, or canonical admission.
+
+### SEC inventory duty scope and retained accession dispositions
+
+`sync_sec_filing_inventory.py` retains the entire parsed SEC submissions population,
+including administrative, ownership and registration filings. Existing
+`governed-reporting-package-scope@4` selects only periodic/current-report roots and
+their package attachments for expected-document duty binding. A governed root with
+no primary locator remains `authority_unavailable`; it is not filtered away.
+Unclassified forms remain visible and add a failed required scope-validation
+component, so their inventory cannot acquire a complete seal.
+
+Apply preserves a hash-bound `sec_inventory_duty_scope.v1` JSON manifest as an
+existing evidence blob and `sec_inventory_scope_derived` source observation,
+linked by a required `other` inventory component. It contains every accession and
+its typed policy disposition, canonical and SEC issuer identities, parser issues,
+required component names, and the actual parent source observation IDs/hashes.
+This is a software-derived routing receipt, not a SEC HTTP response, document
+version, reported financial fact, or extraction/admission receipt. Reconstructing
+it compares the complete parser population and ledger-bound parent hashes.
+Dry-run and apply both count the required derived component and any failed scope
+validation component; only apply returns its persisted observation ID and digest.
+
+Manifest content excludes wall-clock generation time. Exact parent observations,
+policy and parsed inputs reuse the original derived observation and its first
+local capture clocks; those clocks never replace the referenced SEC acquisition
+clocks. A new SEC capture remains a new input even if bytes match. The existing
+immutable snapshot/revision contract is unchanged: reusing a revision for a
+changed capture fails closed and requires an explicit next revision. Previously
+captured raw evidence and failed execution receipts are retained after a routing
+failure; no successful snapshot or revision is inferred from those raw captures.
+No source duty taxonomy, schema, provider, schedule or financial readiness rule
+changes. Mixed-inventory tests use the actual migrated ledger and duty bindings;
+network responses alone are synthetic fixtures.

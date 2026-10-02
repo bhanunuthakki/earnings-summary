@@ -56,6 +56,12 @@ from provenance.inventory_identity import (
     issuer_registry_available,
     resolve_sec_inventory_subject,
 )
+from provenance.sec_inventory_scope import (
+    SCOPE_MANIFEST_VERSION,
+    FilingScopeDisposition,
+    ScopeSource,
+    SecInventoryScopeManifest,
+)
 from provenance.source_coverage_reconcile import (
     ExpectedDocumentImport,
     ExplicitAbsence,
@@ -503,6 +509,8 @@ class SyncResult(BaseModel):
     issue_codes: tuple[str, ...]
     snapshot_id: str | None = None
     records_created: int = Field(default=0, ge=0)
+    scope_manifest_observation_id: str | None = None
+    scope_manifest_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 def _event(event: str, **fields: object) -> None:
@@ -555,6 +563,7 @@ def _capture_component(
     recorded_at: datetime,
     media_type: str = "application/json",
     source_kind: str = "sec_submissions",
+    collector_code_version: str = _COLLECTOR,
 ) -> str:
     _RetrievedBody(body=body, observed_at=observed_at, retrieved_at=retrieved_at)
     if recorded_at.tzinfo is None or recorded_at < retrieved_at:
@@ -607,7 +616,7 @@ def _capture_component(
                 observed_at=observed_at,
                 retrieved_at=retrieved_at,
                 retrieval_config_sha256=config_sha,
-                collector_code_version=_COLLECTOR,
+                collector_code_version=collector_code_version,
             )
         )
     location_id = (
@@ -636,6 +645,49 @@ def _capture_component(
                 recorded_at=recorded_at,
             )
         )
+    return observation_id
+
+
+def capture_scope_manifest(
+    conn: sqlite3.Connection,
+    *,
+    body: bytes,
+    url: str,
+    blob_root: Path,
+    config_sha: str,
+    captured_at: datetime,
+) -> str:
+    """Reuse an exact semantic derivation; its first capture clock is not SEC retrieval."""
+    rows = conn.execute(
+        "SELECT observation_id,observed_at,retrieved_at FROM evidence_source_observations "
+        "WHERE source_kind=? AND source_url=? AND blob_sha256=? "
+        "AND retrieval_config_sha256=? AND collector_code_version=?",
+        (
+            "sec_inventory_scope_derived",
+            url,
+            hashlib.sha256(body).hexdigest(),
+            config_sha,
+            SCOPE_MANIFEST_VERSION,
+        ),
+    ).fetchall()
+    if len(rows) > 1:
+        raise ValueError("scope manifest has ambiguous prior captures")
+    observed_at = datetime.fromisoformat(str(rows[0][1])) if rows else captured_at
+    retrieved_at = datetime.fromisoformat(str(rows[0][2])) if rows else captured_at
+    observation_id = _capture_component(
+        conn,
+        body=body,
+        url=url,
+        blob_root=blob_root,
+        config_sha=config_sha,
+        observed_at=observed_at,
+        retrieved_at=retrieved_at,
+        recorded_at=captured_at,
+        source_kind="sec_inventory_scope_derived",
+        collector_code_version=SCOPE_MANIFEST_VERSION,
+    )
+    if rows and observation_id != str(rows[0][0]):
+        raise ValueError("scope manifest prior identity differs from immutable capture")
     return observation_id
 
 
@@ -1087,13 +1139,52 @@ def _dump_inventory_contract_failure(
     return manifest_path
 
 
+def build_scope_dispositions(
+    *, issuer_id: str, filing_scope: FilingPackageScope
+) -> tuple[FilingScopeDisposition, ...]:
+    """Canonical issuer projection of the owning policy's complete partition."""
+    dispositions = (
+        *(
+            FilingScopeDisposition(
+                filing=item.model_copy(update={"issuer_id": issuer_id}),
+                disposition="governed_reporting",
+                reason_code="governed_reporting_form",
+            )
+            for item in filing_scope.package_eligible
+        ),
+        *(
+            FilingScopeDisposition(
+                filing=item.model_copy(update={"issuer_id": issuer_id}),
+                disposition="inventory_only",
+                reason_code="outside_governed_reporting_policy",
+            )
+            for item in filing_scope.inventory_only
+        ),
+        *(
+            FilingScopeDisposition(
+                filing=item.model_copy(update={"issuer_id": issuer_id}),
+                disposition="unclassified",
+                reason_code="unknown_sec_form",
+            )
+            for item in filing_scope.unclassified
+        ),
+    )
+    return tuple(sorted(dispositions, key=lambda item: item.filing.accession_number))
+
+
 def build_expected_documents(
     *,
     issuer_id: str,
     filings: tuple[SecFilingInventoryEntry, ...],
     packages: tuple[ParsedSecFilingPackage, ...],
 ) -> tuple[ExpectedDocumentImport, ...]:
-    """Build the accession root and every separately addressable package child."""
+    """Build governed accession duties and every addressable package child.
+
+    The full authoritative inventory is retained by the separate scope manifest.
+    """
+
+    if any(filing.form_type.strip().upper() not in PACKAGE_ELIGIBLE_FORMS for filing in filings):
+        raise ValueError("expected documents require governed reporting filings")
 
     period_ends: dict[str, datetime | None] = {}
     for filing in filings:
@@ -1375,6 +1466,7 @@ def _run_inventory(
                 "collector": _COLLECTOR,
                 "package_limit": int(args.package_limit),
                 "package_scope_policy_version": _PACKAGE_SCOPE_POLICY_VERSION,
+                "duty_scope_manifest_version": SCOPE_MANIFEST_VERSION,
                 "retrieval_config_sha256": config_sha,
             },
             sort_keys=True,
@@ -1559,7 +1651,11 @@ def _run_inventory(
                 unclassified_form_types=unclassified_form_types,
                 attachment_count=attachment_count,
                 component_count=(
-                    len(parsed.required_component_names) + len(package_collection.components)
+                    len(parsed.required_component_names)
+                    + len(package_collection.components)
+                    + 1  # Required software-derived scope manifest, also present in apply.
+                    + bool(parsed.issues)
+                    + bool(filing_scope.unclassified)
                 ),
                 deferred_accession_count=package_collection.deferred_accession_count,
                 package_failure_count=len(package_failures),
@@ -1633,9 +1729,87 @@ def _run_inventory(
                     ordinal=len(components),
                 )
             )
+        # This local derivation preserves the *entire* SEC accession universe;
+        # it is not an additional SEC response or company-reported statement.
+        source_inputs: list[ScopeSource] = []
+        for name, observation_id in (
+            (f"CIK{cik}.json", root_observation),
+            *sorted(observation_by_name.items()),
+        ):
+            row = conn.execute(
+                "SELECT blob_sha256 FROM evidence_source_observations WHERE observation_id=?",
+                (observation_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("scope authority observation is absent")
+            source_inputs.append(
+                ScopeSource(
+                    component_name=name,
+                    source_observation_id=observation_id,
+                    blob_sha256=str(row[0]),
+                )
+            )
+        dispositions = build_scope_dispositions(issuer_id=issuer_id, filing_scope=filing_scope)
+        manifest = SecInventoryScopeManifest(
+            policy_version=_PACKAGE_SCOPE_POLICY_VERSION,
+            inventory_key=f"{issuer_id}:sec-submissions",
+            issuer_id=issuer_id,
+            ticker=ticker,
+            source_issuer_id=parsed.issuer_id,
+            primary_component_name=f"CIK{cik}.json",
+            root_source_observation_id=root_observation,
+            required_component_names=parsed.required_component_names,
+            source_inputs=tuple(source_inputs),
+            filings=dispositions,
+            parsing_issues=parsed.issues,
+        )
+        manifest.verify_reconstruction(
+            parsed=parsed,
+            source_inputs=tuple(source_inputs),
+            expected_dispositions=dispositions,
+            policy_version=_PACKAGE_SCOPE_POLICY_VERSION,
+        )
+        manifest_body = manifest.encoded()
+        scope_manifest_sha256 = hashlib.sha256(manifest_body).hexdigest()
+        manifest_url = f"urn:sec-inventory-duty-scope:sha256:{scope_manifest_sha256}"
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            scope_observation = capture_scope_manifest(
+                conn,
+                body=manifest_body,
+                url=manifest_url,
+                blob_root=args.blob_root,
+                config_sha=inventory_config_sha,
+                captured_at=now,
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        components.append(
+            InventoryComponentImport(
+                component_key="software-derived-duty-scope",
+                component_kind="other",
+                source_url=manifest_url,
+                source_observation_id=scope_observation,
+                outcome="succeeded",
+                ordinal=len(components),
+            )
+        )
+        if filing_scope.unclassified:
+            components.append(
+                InventoryComponentImport(
+                    component_key="governed-scope-validation",
+                    component_kind="other",
+                    source_url=manifest_url,
+                    outcome="failed",
+                    failure_reason="unclassified_filing_form",
+                    ordinal=len(components),
+                )
+            )
         expected_documents = build_expected_documents(
             issuer_id=issuer_id,
-            filings=parsed.filings,
+            filings=filing_scope.package_eligible,
             packages=package_collection.packages,
         )
         request = SourceCoverageImport(
@@ -1683,6 +1857,8 @@ def _run_inventory(
         ),
         snapshot_id=coverage.snapshot_id,
         records_created=coverage.records_created,
+        scope_manifest_observation_id=scope_observation,
+        scope_manifest_sha256=scope_manifest_sha256,
     )
     if completed is not None:
         completed(result)
