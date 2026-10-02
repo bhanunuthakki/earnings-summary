@@ -92,7 +92,12 @@ class SecInventoryScopeManifest(_Closed):
         return self
 
     def verify_reconstruction(
-        self, *, parsed: ParsedSecInventory, source_inputs: tuple[ScopeSource, ...]
+        self,
+        *,
+        parsed: ParsedSecInventory,
+        source_inputs: tuple[ScopeSource, ...],
+        expected_dispositions: tuple[FilingScopeDisposition, ...],
+        policy_version: str,
     ) -> None:
         """Compare against the complete parser output and ledger-bound parent hashes."""
         expected = tuple(
@@ -106,6 +111,8 @@ class SecInventoryScopeManifest(_Closed):
             or self.parsing_issues != parsed.issues
             or tuple(item.filing for item in self.filings) != expected
             or self.source_inputs != source_inputs
+            or self.filings != expected_dispositions
+            or self.policy_version != policy_version
         ):
             raise ValueError("scope manifest differs from complete authoritative inputs")
 

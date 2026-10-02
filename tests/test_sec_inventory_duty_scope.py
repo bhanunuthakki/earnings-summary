@@ -20,12 +20,29 @@ from provenance.issuer_registry_bootstrap import (
     BootstrapRequest,
     bootstrap_issuer_reporting_registry,
 )
-from provenance.sec_inventory_scope import SecInventoryScopeManifest
+from provenance.sec_inventory_scope import ScopeSource, SecInventoryScopeManifest
 
 STAMP = datetime(2026, 10, 1, tzinfo=UTC)
 
 
 class _Clock(datetime):
+    def __new__(
+        cls,
+        year: int,
+        month: int,
+        day: int,
+        hour: int = 0,
+        minute: int = 0,
+        second: int = 0,
+        microsecond: int = 0,
+        tzinfo: tzinfo | None = None,
+        *,
+        fold: int = 0,
+    ) -> datetime:
+        # SQLite adapts the exact built-in type; changing now() must not turn
+        # normal fiscal-period constructors into an unsupported subclass.
+        return datetime(year, month, day, hour, minute, second, microsecond, tzinfo, fold=fold)
+
     @classmethod
     def fromisoformat(cls, date_string: str) -> datetime:
         return datetime.fromisoformat(date_string)
@@ -217,17 +234,61 @@ def test_mixed_inventory_applies_real_duty_bindings_and_exact_replay(
         parsed = parse_sec_submissions_inventory(
             cik="1001", ticker="ACME", primary_body=root, historical=()
         )
-        scope.verify_reconstruction(parsed=parsed, source_inputs=scope.source_inputs)
+        expected_dispositions = sync.build_scope_dispositions(
+            issuer_id=scope.issuer_id,
+            filing_scope=sync.partition_filing_package_scope(parsed.filings),
+        )
+        scope.verify_reconstruction(
+            parsed=parsed,
+            source_inputs=scope.source_inputs,
+            expected_dispositions=expected_dispositions,
+            policy_version="governed-reporting-package-scope@4",
+        )
         # Reconstruction refuses omitted accessions or substituted parent hashes.
         with pytest.raises(ValueError, match="complete authoritative inputs"):
             scope.model_copy(update={"filings": scope.filings[:-1]}).verify_reconstruction(
-                parsed=parsed, source_inputs=scope.source_inputs
+                parsed=parsed,
+                source_inputs=scope.source_inputs,
+                expected_dispositions=expected_dispositions,
+                policy_version="governed-reporting-package-scope@4",
             )
         altered_sources = (scope.source_inputs[0].model_copy(update={"blob_sha256": "a" * 64}),)
         with pytest.raises(ValueError, match="complete authoritative inputs"):
-            scope.verify_reconstruction(parsed=parsed, source_inputs=altered_sources)
+            scope.verify_reconstruction(
+                parsed=parsed,
+                source_inputs=altered_sources,
+                expected_dispositions=expected_dispositions,
+                policy_version="governed-reporting-package-scope@4",
+            )
+        # A self-consistent reason/disposition pair still cannot change owner policy.
+        changed_disposition = scope.filings[0].model_copy(
+            update={
+                "disposition": "inventory_only",
+                "reason_code": "outside_governed_reporting_policy",
+            }
+        )
+        tampered = scope.model_copy(update={"filings": (changed_disposition, *scope.filings[1:])})
+        with pytest.raises(ValueError, match="complete authoritative inputs"):
+            tampered.verify_reconstruction(
+                parsed=parsed,
+                source_inputs=scope.source_inputs,
+                expected_dispositions=expected_dispositions,
+                policy_version="governed-reporting-package-scope@4",
+            )
         payload_fields = scope.model_dump()
-        payload_fields["root_source_observation_id"] = "different-observation"
+        payload_fields["root_source_observation_id"] = "history-observation"
+        payload_fields["required_component_names"] = (
+            *scope.required_component_names,
+            "history.json",
+        )
+        payload_fields["source_inputs"] = (
+            *scope.source_inputs,
+            ScopeSource(
+                component_name="history.json",
+                source_observation_id="history-observation",
+                blob_sha256="b" * 64,
+            ),
+        )
         with pytest.raises(ValidationError, match="primary source component"):
             SecInventoryScopeManifest.model_validate(payload_fields)
         payload_fields = scope.model_dump()

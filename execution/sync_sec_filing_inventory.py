@@ -1139,6 +1139,39 @@ def _dump_inventory_contract_failure(
     return manifest_path
 
 
+def build_scope_dispositions(
+    *, issuer_id: str, filing_scope: FilingPackageScope
+) -> tuple[FilingScopeDisposition, ...]:
+    """Canonical issuer projection of the owning policy's complete partition."""
+    dispositions = (
+        *(
+            FilingScopeDisposition(
+                filing=item.model_copy(update={"issuer_id": issuer_id}),
+                disposition="governed_reporting",
+                reason_code="governed_reporting_form",
+            )
+            for item in filing_scope.package_eligible
+        ),
+        *(
+            FilingScopeDisposition(
+                filing=item.model_copy(update={"issuer_id": issuer_id}),
+                disposition="inventory_only",
+                reason_code="outside_governed_reporting_policy",
+            )
+            for item in filing_scope.inventory_only
+        ),
+        *(
+            FilingScopeDisposition(
+                filing=item.model_copy(update={"issuer_id": issuer_id}),
+                disposition="unclassified",
+                reason_code="unknown_sec_form",
+            )
+            for item in filing_scope.unclassified
+        ),
+    )
+    return tuple(sorted(dispositions, key=lambda item: item.filing.accession_number))
+
+
 def build_expected_documents(
     *,
     issuer_id: str,
@@ -1716,32 +1749,7 @@ def _run_inventory(
                     blob_sha256=str(row[0]),
                 )
             )
-        dispositions = (
-            *(
-                FilingScopeDisposition(
-                    filing=item.model_copy(update={"issuer_id": issuer_id}),
-                    disposition="governed_reporting",
-                    reason_code="governed_reporting_form",
-                )
-                for item in filing_scope.package_eligible
-            ),
-            *(
-                FilingScopeDisposition(
-                    filing=item.model_copy(update={"issuer_id": issuer_id}),
-                    disposition="inventory_only",
-                    reason_code="outside_governed_reporting_policy",
-                )
-                for item in filing_scope.inventory_only
-            ),
-            *(
-                FilingScopeDisposition(
-                    filing=item.model_copy(update={"issuer_id": issuer_id}),
-                    disposition="unclassified",
-                    reason_code="unknown_sec_form",
-                )
-                for item in filing_scope.unclassified
-            ),
-        )
+        dispositions = build_scope_dispositions(issuer_id=issuer_id, filing_scope=filing_scope)
         manifest = SecInventoryScopeManifest(
             policy_version=_PACKAGE_SCOPE_POLICY_VERSION,
             inventory_key=f"{issuer_id}:sec-submissions",
@@ -1752,10 +1760,15 @@ def _run_inventory(
             root_source_observation_id=root_observation,
             required_component_names=parsed.required_component_names,
             source_inputs=tuple(source_inputs),
-            filings=tuple(sorted(dispositions, key=lambda item: item.filing.accession_number)),
+            filings=dispositions,
             parsing_issues=parsed.issues,
         )
-        manifest.verify_reconstruction(parsed=parsed, source_inputs=tuple(source_inputs))
+        manifest.verify_reconstruction(
+            parsed=parsed,
+            source_inputs=tuple(source_inputs),
+            expected_dispositions=dispositions,
+            policy_version=_PACKAGE_SCOPE_POLICY_VERSION,
+        )
         manifest_body = manifest.encoded()
         scope_manifest_sha256 = hashlib.sha256(manifest_body).hexdigest()
         manifest_url = f"urn:sec-inventory-duty-scope:sha256:{scope_manifest_sha256}"
