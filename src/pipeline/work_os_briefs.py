@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 import sqlite3
+from datetime import date
 from pathlib import Path
 from typing import Literal
 
@@ -37,6 +38,12 @@ _PERIOD_PATTERNS = (
     re.compile(r"^Q([1-4])\s+(\d{4})$", re.IGNORECASE),
     re.compile(r"^(\d{4})\s+Q([1-4])$", re.IGNORECASE),
 )
+_DRAFT_NAME = re.compile(
+    r"^(?P<ticker>[A-Z]{1,6})-(?P<quarter>Q[1-4])-(?P<fy>FY)?"
+    r"(?P<year>20\d{2})-(?P<phase>pre|post)-DRAFT\.md$"
+)
+_DRAFT_PACKET = re.compile(r"^earnings-briefs-(20\d{2}-\d{2}-\d{2})$")
+_DRAFT_MAX_BYTES = 200_000
 
 
 def _compact_period(value: str | None) -> str | None:
@@ -229,7 +236,7 @@ def _current_coverage_roles(
 
 
 def _earnings_artifacts(conn: sqlite3.Connection | None) -> tuple[_EarningsArtifactRow, ...]:
-    """Load the latest current pre/post artifact per ticker and purpose.
+    """Load the latest current pre/post artifact per ticker, purpose, and period.
 
     Missing or pre-artifact schemas fail closed to an empty tuple. This keeps
     the indexed full-brief library usable during migrations while never
@@ -246,7 +253,7 @@ def _earnings_artifacts(conn: sqlite3.Connection | None) -> tuple[_EarningsArtif
                 SELECT a.id, UPPER(a.ticker) AS ticker, a.purpose,
                        a.fiscal_period, a.generated_at,
                        ROW_NUMBER() OVER (
-                           PARTITION BY UPPER(a.ticker), a.purpose
+                           PARTITION BY UPPER(a.ticker), a.purpose, date(a.fiscal_period)
                            ORDER BY datetime(a.generated_at) DESC, a.id DESC
                        ) AS artifact_rank
                 FROM llm_artifacts AS a
@@ -299,6 +306,84 @@ def _earnings_artifacts(conn: sqlite3.Connection | None) -> tuple[_EarningsArtif
         except ValidationError:
             continue
     return tuple(projected)
+
+
+def _working_draft_files(repo_root: Path) -> tuple[tuple[Path, date, re.Match[str]], ...]:
+    research_root = repo_root / "output" / "research"
+    if not research_root.is_dir():
+        return ()
+    found: list[tuple[Path, date, re.Match[str]]] = []
+    for packet in research_root.glob("earnings-briefs-*"):
+        packet_match = _DRAFT_PACKET.fullmatch(packet.name)
+        if packet_match is None or packet.is_symlink() or not packet.is_dir():
+            continue
+        marker = packet / "BRIEF_LIBRARY_VISIBLE"
+        if marker.is_symlink() or not marker.is_file():
+            continue
+        try:
+            packet_date = date.fromisoformat(packet_match.group(1))
+        except ValueError:
+            continue
+        for path in packet.glob("*-DRAFT.md"):
+            name_match = _DRAFT_NAME.fullmatch(path.name)
+            if name_match is None or path.is_symlink() or not path.is_file():
+                continue
+            try:
+                if path.stat().st_size > _DRAFT_MAX_BYTES:
+                    continue
+            except OSError:
+                continue
+            found.append((path, packet_date, name_match))
+    return tuple(found)
+
+
+def _working_draft_id(repo_root: Path, path: Path) -> str:
+    relative = path.relative_to(repo_root).as_posix()
+    return "draft-" + hashlib.sha256(relative.encode("utf-8")).hexdigest()[:20]
+
+
+def resolve_working_draft(repo_root: Path, artifact_id: str) -> Path | None:
+    """Resolve only bounded, named private drafts under the report output root."""
+
+    if not re.fullmatch(r"draft-[0-9a-f]{20}", artifact_id):
+        return None
+    for path, _, _ in _working_draft_files(repo_root):
+        if _working_draft_id(repo_root, path) == artifact_id:
+            return path
+    return None
+
+
+def _working_draft_items(
+    repo_root: Path, roles: dict[str, CoverageRole]
+) -> tuple[BriefLibraryItem, ...]:
+    items: list[BriefLibraryItem] = []
+    for path, packet_date, name in _working_draft_files(repo_root):
+        ticker = name.group("ticker")
+        phase = name.group("phase")
+        period = f"{name.group('quarter')} {name.group('fy') or ''}{name.group('year')}"
+        kind: ArtifactKind = "pre_earnings" if phase == "pre" else "post_earnings"
+        title = f"{ticker} {period} {_ARTIFACT_KIND_LABELS[kind]} · Working draft"
+        artifact_id = _working_draft_id(repo_root, path)
+        route = f"/api/peek/earnings-draft?artifact_id={artifact_id}"
+        items.append(
+            BriefLibraryItem(
+                artifact_id=artifact_id,
+                ticker=ticker,
+                title=title,
+                artifact_kind=kind,
+                coverage_role=roles.get(ticker, "unknown"),
+                fiscal_period_label=period,
+                report_date=packet_date.isoformat(),
+                generated_at=f"{packet_date.isoformat()}T00:00:00Z",
+                reader_mode="peek",
+                status="degraded",
+                open_url=route,
+                body_url=None,
+                standalone_url=route,
+                section_count=0,
+            )
+        )
+    return tuple(items)
 
 
 def _peek_descriptor(
@@ -442,9 +527,12 @@ def build_brief_library(
     index = load_report_artifact_index(repo_root)
     current = latest_report_artifacts(index)
     earnings_rows = _earnings_artifacts(conn)
-    all_tickers = {artifact.ticker.upper() for artifact in current} | {
-        row.ticker.strip().upper() for row in earnings_rows
-    }
+    draft_tickers = {name.group("ticker") for _, _, name in _working_draft_files(repo_root)}
+    all_tickers = (
+        {artifact.ticker.upper() for artifact in current}
+        | draft_tickers
+        | {row.ticker.strip().upper() for row in earnings_rows}
+    )
     current_roles, company_names = _current_company_info(conn, all_tickers)
     full_items = tuple(
         build_brief_descriptor(
@@ -465,9 +553,10 @@ def build_brief_library(
         )
         is not None
     )
+    draft_items = _working_draft_items(repo_root, current_roles)
     universe = tuple(
         sorted(
-            (*full_items, *peek_items),
+            (*full_items, *peek_items, *draft_items),
             key=lambda item: (item.generated_at, item.artifact_id),
             reverse=True,
         )

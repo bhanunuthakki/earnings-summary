@@ -201,7 +201,8 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # Google Fonts binaries (see src/ui/vendor/fonts/README.md).
     # +2 fixed, read-only tracker bridge endpoints retained from the live runtime.
     # -2 retired score/fit presentation peeks.
-    assert len(rules) == 174
+    # +1 read-only degraded earnings draft peek.
+    assert len(rules) == 175
     assert rules["tracker_read_health"] == "/portfolio-tracker/api/v1/health"
     assert rules["tracker_read_snapshot"] == "/portfolio-tracker/api/v1/portfolio-snapshot"
     for rule in client.application.url_map.iter_rules():
