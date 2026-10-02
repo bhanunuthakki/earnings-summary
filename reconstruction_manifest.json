@@ -58,17 +58,23 @@
       "entrypoints": [
         "execution/run_morning_pipeline.py",
         "execution/refresh_expected_earnings.py",
-        "execution/refresh_cache.py"
+        "execution/refresh_cache.py",
+        "execution/plan_analysis_evidence_scope.py",
+        "src/provenance/analysis_scope.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
-        "pytest tests/test_pipeline*.py -q"
+        "pytest tests/test_pipeline*.py -q",
+        "pytest tests/test_analysis_scope.py tests/test_analysis_scope_processing.py tests/test_analysis_scope_corpus.py tests/test_analysis_scope_cli.py tests/test_analysis_scope_isolation.py -q"
       ],
       "documentation": [
         "AGENTS.md",
-        "directives/data_pipeline_dag.md"
+        "directives/data_pipeline_dag.md",
+        "directives/data_provenance.md",
+        "directives/operations_governance_surface.md",
+        "DEFINITIONS.md"
       ],
       "version_ownership": "Git commit SHA & execution script CLI parameter specifications",
       "backup_ownership": "Git version control (code) and ephemeral checkpoint state in .tmp/ (excluded from static backup)",
@@ -82,7 +88,8 @@
         "All scripts use typed CLI arguments and Pydantic models",
         "Outputs >100KB or >2000 lines write to .tmp/",
         "Scripts log JSON-lines to stderr and return data on stdout",
-        "Orchestration is resumable via .tmp/ checkpoint state"
+        "Orchestration is resumable via .tmp/ checkpoint state",
+        "Analysis Evidence Scope selects immutable purpose-specific evidence without weakening capture, processing, financial admission, or full-population readiness"
       ],
       "exit_ready_boundary": "Pure Python CLI entrypoints with standard library argparse/typer; independent of proprietary orchestration engines"
     },

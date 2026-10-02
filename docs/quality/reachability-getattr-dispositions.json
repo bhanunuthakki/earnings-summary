@@ -483,6 +483,31 @@
     },
     {
       "disposition": "closed_literal_set",
+      "evidence": "resolve_analysis_coverage iterates only the fixed literal source-identity field tuple and reads each field from the schema-validated frozen ExpectedDocument. The attribute name is not supplied by a request or source document; the value is compared with captured metadata and is not invoked.",
+      "fingerprint": "3a313085326009b5b80f88cf211415a649bb96ffb38aa97f4b7ec58b78b5982e",
+      "line": 443,
+      "path": "src/provenance/analysis_scope.py",
+      "targets": [
+        "issuer_id",
+        "document_type",
+        "form_type",
+        "accession_number",
+        "source_url"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "resolve_analysis_coverage iterates only the fixed literal period_start/period_end tuple on the schema-validated frozen ExpectedDocument. These reads enforce exact source-period equality; they perform no dynamic dispatch or resource selection.",
+      "fingerprint": "8e2c5c7fcce98e054615e3435ec0bfb723323d8426e43622b85e0789b764ca7a",
+      "line": 446,
+      "path": "src/provenance/analysis_scope.py",
+      "targets": [
+        "period_start",
+        "period_end"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
       "evidence": "getattr projects only _DISPOSITION_COLUMNS fields.",
       "fingerprint": "dedf20b2e0c84ce6b6486f8c8b65f89c4321adf4b8188cc24c03bd45b6c204c1",
       "line": 220,
@@ -676,7 +701,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "9f7e6be6c6e92716fc4bd3f241346b6606798565bb64f0b47ef469a587bd691d",
+      "source_sha256": "42918c612ef659344afb4377576136953b836950fbf415564ad60004415e0a13",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

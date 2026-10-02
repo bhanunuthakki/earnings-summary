@@ -486,12 +486,43 @@ These are the owner-facing verbs that are allowed to mutate durable state. A lab
 **Subsumes.** Processing result, lane disposition, and extraction outcome.
 **Current admission boundary.** `filing_xbrl` can succeed only through the exact native 0242 extraction-disposition seal and its verified Source Fact Publication. Every other applicable lane fails closed until a native closure adapter can recompute its ordered outputs and final seal; synthetic or caller-attested commitments never admit.
 
+## Analysis Evidence Scope
+
+**Definition.** An immutable selection of the documents required for one declared
+analysis purpose and issuer. It binds the required reporting periods, explicit
+related accessions and reasons, knowledge cutoff, observation cutoff, and one
+complete authoritative SEC inventory with its component commitment. Every expected
+document in that inventory has a role: research document, required package
+dependency, or outside the analysis with an explicit reason.
+**Lives in.** `AnalysisScopeRequest`, `AnalysisEvidenceScope`,
+`src/provenance/analysis_scope.py`, and
+`execution/plan_analysis_evidence_scope.py`. The immutable CLI artifact, Document
+Processing Scope, and Research Universe retain the full receipt. The corpus key
+and selection configuration digest bind it; the corpus manifest does not retain
+the full receipt or selection configuration.
+**Contract.** All selected package members must be captured before qualification.
+Only primary filings enter the research text collection. Required periodic filings
+include their known amendments. Related current reports require explicit accession
+selection; unavailable amendment linkage is not guessed. Outside archive gaps stay
+visible and do not block unrelated selected work. New operations require the current
+inventory. Stored-artifact verification reconstructs the inventory visible at the
+receipt's original observation cutoff and cannot skip an incomplete newer inventory
+already visible then. Scoped processing and research coordinates include the scope
+identity; a scoped artifact does not count as full-population completion.
+**Not to be confused with.** Source acquisition completeness, financial-fact
+admission, a Document Processing Snapshot, or model readiness. The receipt selects
+evidence; it does not prove capture, extraction, financial meaning, or valuation.
+
 ## Document Processing Snapshot
 
 **Definition.** An exhaustive, ordered, hash-sealed set containing every applicable Document Processing Obligation and its one verified Document Processing Disposition as known at one explicit cutoff.
 **Lives in.** `document_processing_snapshot_headers`, `document_processing_snapshot_members`, `document_processing_snapshot_seals`, and `src/provenance/research_snapshot.py`.
 **Not to be confused with.** A current processing dashboard or a caller-supplied document list; membership is derived internally and cannot change when later evidence arrives.
 **Subsumes.** Processing completeness seal and document readiness snapshot.
+**Analysis boundary.** When present, an Analysis Evidence Scope defines the exact
+primary document set. Every applicable processing obligation for that set remains
+required, including `filing_xbrl`; required package dependencies must also be
+captured. Unscoped snapshots retain their full-population contract.
 
 ## Native Processing Evidence Seal
 
@@ -512,6 +543,11 @@ These are the owner-facing verbs that are allowed to mutate durable state. A lab
 **Lives in.** `research_snapshot_headers`, `research_snapshot_members`, `research_snapshot_seals`, and `src/provenance/research_snapshot.py`.
 **Not to be confused with.** A database backup, current-view query, or generated research report; it is the reproducible admission boundary those consumers must cite.
 **Subsumes.** Research evidence snapshot and research-readiness seal.
+**Analysis boundary.** When present, the Analysis Evidence Scope identity is part
+of the terminal coordinate with issuer and knowledge/observation cutoffs. Processing,
+corpus, and Research Universe must contain the same exact primary document set.
+Different scopes remain separate; retrieval mode changes cannot replace a terminal
+within the same scope.
 
 ## Research Snapshot Admission
 

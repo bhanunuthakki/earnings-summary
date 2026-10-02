@@ -11,11 +11,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from log_redact import redact  # noqa: E402
-from provenance.immutable_artifact import (  # noqa: E402
+from log_redact import redact
+from provenance.analysis_scope import AnalysisEvidenceScope
+from provenance.immutable_artifact import (
     ImmutableArtifactConflictError,
     ImmutableArtifactSnapshot,
     assert_artifact_unchanged,
@@ -26,11 +29,11 @@ from provenance.immutable_artifact import (  # noqa: E402
     require_no_reparse_points,
     validate_population_database_target,
 )
-from provenance.population_cli_harness import (  # noqa: E402
+from provenance.population_cli_harness import (
     parse_timezone_aware_datetime,
     validate_protected_receipt_path,
 )
-from provenance.population_document_processing import (  # noqa: E402
+from provenance.population_document_processing import (
     DocumentProcessingOperationReceipt,
     DocumentProcessingPopulationRequest,
     DocumentProcessingPopulationResult,
@@ -43,12 +46,12 @@ from provenance.population_document_processing import (  # noqa: E402
     verify_document_processing_receipt,
     verify_document_processing_receipt_current,
 )
-from runtime.job_runtime import (  # noqa: E402
+from runtime.job_runtime import (
     JobAlreadyRunningError,
     JobLock,
     portfolio_db_path,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 DocumentPhase = Literal["obligations", "dispositions", "snapshots", "all"]
 
@@ -81,6 +84,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--admission-receipt", type=Path)
     parser.add_argument("--prior-checkpoint-receipt", type=Path)
+    parser.add_argument(
+        "--analysis-scope", type=Path, help="Verified analysis selection for a dry-run"
+    )
     return parser
 
 
@@ -226,7 +232,9 @@ def load_document_processing_receipt_artifact(
     return snapshot, receipt
 
 
-def _request_from_args(args: argparse.Namespace) -> DocumentProcessingPopulationRequest:
+def _request_from_args(
+    args: argparse.Namespace, analysis_scope: AnalysisEvidenceScope | None = None
+) -> DocumentProcessingPopulationRequest:
     return DocumentProcessingPopulationRequest(
         cutoff_at=args.cutoff_at,
         operation_recorded_at=args.operation_recorded_at,
@@ -236,6 +244,7 @@ def _request_from_args(args: argparse.Namespace) -> DocumentProcessingPopulation
         max_obligations=args.max_obligations,
         input_commitment_sha256=args.input_commitment_sha256,
         plan_commitment_sha256=args.plan_commitment_sha256,
+        analysis_scope=analysis_scope,
     )
 
 
@@ -270,6 +279,9 @@ def _revision(conn: sqlite3.Connection) -> str:
 
 
 def _execute(args: argparse.Namespace) -> DocumentProcessingOperationReceipt:
+    scope_path: Path | None = getattr(args, "analysis_scope", None)
+    if args.apply and scope_path is not None:
+        raise ValueError("apply uses the analysis scope embedded in its admission receipt")
     if args.apply and args.admission_receipt is None:
         raise ValueError("--apply requires --admission-receipt")
     if not args.apply and args.admission_receipt is not None:
@@ -291,7 +303,9 @@ def _execute(args: argparse.Namespace) -> DocumentProcessingOperationReceipt:
             )
 
     input_paths = tuple(
-        path for path in (args.admission_receipt, args.prior_checkpoint_receipt) if path is not None
+        path
+        for path in (args.admission_receipt, args.prior_checkpoint_receipt, scope_path)
+        if path is not None
     )
     receipt_path = validate_receipt_path(
         args.receipt,
@@ -311,6 +325,12 @@ def _execute(args: argparse.Namespace) -> DocumentProcessingOperationReceipt:
         prior_snapshot: ImmutableArtifactSnapshot | None = None
         admission: DocumentProcessingOperationReceipt | None = None
         prior: DocumentProcessingOperationReceipt | None = None
+        scope_snapshot: ImmutableArtifactSnapshot | None = None
+        analysis_scope: AnalysisEvidenceScope | None = None
+        if scope_path is not None:
+            scope_snapshot, scope_payload = read_stable_artifact(scope_path)
+            analysis_scope = AnalysisEvidenceScope.model_validate_json(scope_payload)
+            require_canonical_text_artifact(scope_snapshot, analysis_scope.model_dump_json())
         if args.admission_receipt is not None:
             admission_snapshot, admission = load_document_processing_receipt_artifact(
                 args.admission_receipt
@@ -336,7 +356,7 @@ def _execute(args: argparse.Namespace) -> DocumentProcessingOperationReceipt:
             )
             expected_revision = admission.alembic_revision
         else:
-            request = _request_from_args(args)
+            request = _request_from_args(args, analysis_scope)
             expected_revision = None
         if prior is not None:
             validate_checkpoint_resume(
@@ -384,6 +404,8 @@ def _execute(args: argparse.Namespace) -> DocumentProcessingOperationReceipt:
                     "immutable receipt destination belongs to another operation"
                 )
             stored = load_document_processing_receipt(conn, operation_id) if request.apply else None
+            if scope_snapshot is not None:
+                assert_artifact_unchanged(scope_snapshot)
             if stored is not None:
                 if existing_output is not None and existing_output[1] != stored:
                     raise ImmutableArtifactConflictError(
@@ -394,6 +416,8 @@ def _execute(args: argparse.Namespace) -> DocumentProcessingOperationReceipt:
                     assert_artifact_unchanged(admission_snapshot)
                 if prior_snapshot is not None:
                     assert_artifact_unchanged(prior_snapshot)
+                if scope_snapshot is not None:
+                    assert_artifact_unchanged(scope_snapshot)
                 conn.rollback()
                 receipt = stored
             else:
@@ -413,6 +437,8 @@ def _execute(args: argparse.Namespace) -> DocumentProcessingOperationReceipt:
                     assert_artifact_unchanged(admission_snapshot)
                 if prior_snapshot is not None:
                     assert_artifact_unchanged(prior_snapshot)
+                if scope_snapshot is not None:
+                    assert_artifact_unchanged(scope_snapshot)
                 if _database_file_identity(database_path) != file_identity:
                     raise ValueError("document-processing database file identity changed")
                 if database_instance_id(conn) != instance_id:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Literal, Self, cast
 
@@ -18,6 +19,7 @@ from pydantic import (
     model_validator,
 )
 
+from provenance.analysis_scope import AnalysisEvidenceScope, require_analysis_documents
 from provenance.population_completeness import (
     PopulationArtifactSetCommitment,
     PopulationPlaneVerification,
@@ -63,6 +65,9 @@ class ResearchSnapshotPopulationRequest(_FrozenModel):
     apply: bool = False
     input_commitment_sha256: str | None = None
     plan_commitment_sha256: str | None = None
+    analysis_scope: AnalysisEvidenceScope | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator("input_commitment_sha256", "plan_commitment_sha256")
     @classmethod
@@ -77,7 +82,16 @@ class ResearchSnapshotPopulationRequest(_FrozenModel):
     def _commitment_contract(self) -> Self:
         if (self.input_commitment_sha256 is None) != (self.plan_commitment_sha256 is None):
             raise ValueError("population commitments must be supplied together")
-        if self.apply and self.issuer_ids and self.input_commitment_sha256 is None:
+        if self.analysis_scope is not None and self.issuer_ids not in (
+            (),
+            (self.analysis_scope.request.issuer_id,),
+        ):
+            raise ValueError("analysis research request must use its declared issuer")
+        if (
+            self.apply
+            and (self.issuer_ids or self.analysis_scope is not None)
+            and self.input_commitment_sha256 is None
+        ):
             raise ValueError("a subset apply requires population commitments")
         return self
 
@@ -132,6 +146,7 @@ def verify_research_snapshots(
             "WHERE datetime(header.cutoff_at)=datetime(?) "
             "AND datetime(header.recorded_at)=datetime(?) "
             "AND datetime(seal.sealed_at)=datetime(?) "
+            "AND json_extract(header.request_json,'$.research_universe.analysis_scope') IS NULL "
             "ORDER BY header.research_snapshot_id"
         ),
         params=(_db_time(knowledge), _db_time(observed), _db_time(observed)),
@@ -155,6 +170,7 @@ def verify_research_snapshots(
             "AND datetime(universe.recorded_at)=datetime(?) "
             "AND datetime(header.recorded_at)=datetime(?) "
             "AND datetime(seal.sealed_at)=datetime(?) "
+            "AND json_extract(header.request_json,'$.research_universe.analysis_scope') IS NULL "
             "ORDER BY universe.issuer_id,universe.research_snapshot_id"
         ),
         params=(
@@ -177,6 +193,7 @@ def verify_research_snapshots(
         "AND datetime(universe.recorded_at)=datetime(?) "
         "AND datetime(header.recorded_at)=datetime(?) "
         "AND datetime(seal.sealed_at)=datetime(?) "
+        "AND json_extract(header.request_json,'$.research_universe.analysis_scope') IS NULL "
         "GROUP BY universe.issuer_id HAVING COUNT(*)<>1 LIMIT 1",
         (
             _db_time(knowledge),
@@ -200,6 +217,8 @@ def verify_research_snapshots(
 def populate_research_snapshots(
     conn: sqlite3.Connection,
     request: ResearchSnapshotPopulationRequest,
+    *,
+    before_publish: Callable[[], None] | None = None,
 ) -> ResearchSnapshotPopulationResult:
     """Build every ready issuer snapshot and retain exact blocker codes."""
 
@@ -214,7 +233,11 @@ def populate_research_snapshots(
         discovered = _issuer_ids(conn, cutoff, recorded)
         if not discovered:
             raise ResearchSnapshotPlanError("research_snapshot_expected_universe_empty")
-        requested = tuple(sorted(set(request.issuer_ids)))
+        requested = (
+            (request.analysis_scope.request.issuer_id,)
+            if request.analysis_scope is not None
+            else tuple(sorted(set(request.issuer_ids)))
+        )
         issuers = requested or discovered
         unknown = sorted(set(requested) - set(discovered))
         status_by_issuer: dict[str, IssuerResearchSnapshotStatus] = {
@@ -245,6 +268,7 @@ def populate_research_snapshots(
                     cutoff,
                     observed_through=recorded,
                     projection_mode=request.projection_mode,
+                    analysis_scope=request.analysis_scope,
                 )
                 _require_unambiguous_terminal(conn, plan)
                 plans[issuer_id] = plan
@@ -274,10 +298,13 @@ def populate_research_snapshots(
 
         input_commitment = _population_input_commitment(
             cutoff,
-            discovered,
+            discovered
+            if request.analysis_scope is None
+            else tuple(issuer_id for issuer_id in issuers if issuer_id in discovered),
             issuers,
             commitment_entries,
             projection_mode=request.projection_mode,
+            analysis_scope=request.analysis_scope,
         )
         plan_commitment = _population_plan_commitment(
             request,
@@ -299,12 +326,19 @@ def populate_research_snapshots(
                         (plan.research_snapshot_id,),
                     ).fetchone()
                     with conn:
+                        # A released publisher savepoint must remain inside this transaction.
+                        if not conn.in_transaction:
+                            conn.execute("BEGIN")
+                        if before_publish is not None:
+                            before_publish()
                         _require_unambiguous_terminal(conn, plan)
                         admission = (
                             verify_research_snapshot(conn, plan.research_snapshot_id)
                             if existing is not None
                             else build_research_snapshot(conn, plan)
                         )
+                        if before_publish is not None:
+                            before_publish()
                     created += int(existing is None)
                     status_by_issuer[issuer_id] = status_by_issuer[issuer_id].model_copy(
                         update={"research_snapshot_sha256": (admission.member_set_sha256)}
@@ -325,7 +359,9 @@ def populate_research_snapshots(
             statuses=ordered,
             input_commitment_sha256=input_commitment,
             plan_commitment_sha256=plan_commitment,
-            output_commitment_sha256=_output_commitment(conn, cutoff),
+            output_commitment_sha256=_output_commitment(
+                conn, cutoff, analysis_scope=request.analysis_scope, observed_through=recorded
+            ),
         )
     finally:
         conn.row_factory = original_row_factory
@@ -338,6 +374,7 @@ def assemble_research_snapshot_request(
     *,
     observed_through: datetime | None = None,
     projection_mode: ProjectionMode = "semantic",
+    analysis_scope: AnalysisEvidenceScope | None = None,
 ) -> ResearchSnapshotRequest:
     """Assemble one exact issuer request or raise one stable blocker."""
 
@@ -345,13 +382,25 @@ def assemble_research_snapshot_request(
     observed = cutoff if observed_through is None else _utc(observed_through)
     if observed < cutoff:
         raise ValueError("observed_through must not precede cutoff_at")
-    processing_snapshot_id, documents = _processing_coordinate(conn, issuer_id, cutoff, observed)
+    required_documents = (
+        require_analysis_documents(conn, analysis_scope, cutoff, observed)
+        if analysis_scope is not None
+        else None
+    )
+    if analysis_scope is not None and issuer_id != analysis_scope.request.issuer_id:
+        raise ValueError("analysis research issuer differs from its evidence scope")
+    processing_snapshot_id, documents = _processing_coordinate(
+        conn, issuer_id, cutoff, observed, analysis_scope=analysis_scope
+    )
+    if required_documents is not None and documents != required_documents:
+        raise ValueError("analysis processing documents differ from its evidence scope")
     reporting_entities = _reporting_entities(conn, issuer_id, documents)
     manifest_id = select_exact_corpus_coordinate(
         conn,
         documents,
         cutoff,
         observed_through=observed,
+        analysis_scope=analysis_scope,
     )
     lexical_id, vector_id, promotion_id = select_retrieval_coordinates(
         conn,
@@ -390,6 +439,8 @@ def assemble_research_snapshot_request(
     # Preserve retained semantic identities; lexical-only requests are a distinct namespace.
     if projection_mode == "lexical_only":
         identity_payload["projection_mode"] = projection_mode
+    if analysis_scope is not None:
+        identity_payload["analysis_scope_id"] = analysis_scope.scope_id
     research_snapshot_id = "research-snapshot:" + _digest(identity_payload)
     return ResearchSnapshotRequest(
         research_snapshot_id=research_snapshot_id,
@@ -399,6 +450,7 @@ def assemble_research_snapshot_request(
             reporting_entity_ids=reporting_entities,
             document_version_ids=documents,
             source_obligation_revision_ids=obligation_ids,
+            analysis_scope=analysis_scope,
         ),
         processing_snapshot_ids=(processing_snapshot_id,),
         corpus_bundles=(
@@ -432,7 +484,9 @@ def _require_unambiguous_terminal(
         "AND datetime(universe.recorded_at)=datetime(?) "
         "AND datetime(header.recorded_at)=datetime(?) "
         "AND datetime(seal.sealed_at)=datetime(?) "
-        "AND header.research_snapshot_id<>? LIMIT 1",
+        "AND header.research_snapshot_id<>? "
+        "AND json_extract(header.request_json,'$.research_universe.analysis_scope.scope_id') IS ? "
+        "LIMIT 1",
         (
             request.research_universe.issuer_id,
             _db_time(request.cutoff_at),
@@ -440,6 +494,9 @@ def _require_unambiguous_terminal(
             _db_time(request.recorded_at),
             _db_time(request.recorded_at),
             request.research_snapshot_id,
+            None
+            if request.research_universe.analysis_scope is None
+            else request.research_universe.analysis_scope.scope_id,
         ),
     ).fetchone()
     if conflict is not None:
@@ -544,6 +601,7 @@ def _verify_terminal_research_requests(
         "AND datetime(universe.recorded_at)=datetime(?) "
         "AND datetime(header.recorded_at)=datetime(?) "
         "AND datetime(seal.sealed_at)=datetime(?) "
+        "AND json_extract(header.request_json,'$.research_universe.analysis_scope') IS NULL "
         "ORDER BY universe.issuer_id,header.research_snapshot_id",
         (
             _db_time(knowledge),
@@ -609,6 +667,8 @@ def _processing_coordinate(
     issuer_id: str,
     cutoff: datetime,
     observed: datetime,
+    *,
+    analysis_scope: AnalysisEvidenceScope | None = None,
 ) -> tuple[str, tuple[str, ...]]:
     rows = conn.execute(
         "SELECT DISTINCT header.processing_snapshot_id "
@@ -622,6 +682,7 @@ def _processing_coordinate(
         "WHERE document.issuer_id=? AND datetime(header.cutoff_at)=datetime(?) "
         "AND datetime(header.recorded_at)<=datetime(?) "
         "AND datetime(seal.sealed_at)<=datetime(?) "
+        "AND json_extract(header.scope_json,'$.analysis_scope.scope_id') IS ? "
         "ORDER BY datetime(header.recorded_at) DESC,"
         "datetime(seal.sealed_at) DESC,header.processing_snapshot_id DESC",
         (
@@ -629,6 +690,7 @@ def _processing_coordinate(
             _db_time(cutoff),
             _db_time(observed),
             _db_time(observed),
+            None if analysis_scope is None else analysis_scope.scope_id,
         ),
     ).fetchall()
     if not rows:
@@ -678,6 +740,7 @@ def select_exact_corpus_coordinate(
     cutoff: datetime,
     *,
     observed_through: datetime | None = None,
+    analysis_scope: AnalysisEvidenceScope | None = None,
 ) -> str:
     observed = cutoff if observed_through is None else _utc(observed_through)
     rows = conn.execute(
@@ -690,8 +753,16 @@ def select_exact_corpus_coordinate(
         "AND datetime(manifest.knowledge_cutoff)=datetime(?) "
         "AND datetime(manifest.recorded_at)<=datetime(?) "
         "AND datetime(seal.sealed_at)<=datetime(?) "
+        "AND ((? IS NULL AND substr(manifest.corpus_key,1,15)<>'analysis-scope:') "
+        "OR manifest.corpus_key=?) "
         "ORDER BY manifest.revision DESC,manifest.manifest_id",
-        (_db_time(cutoff), _db_time(observed), _db_time(observed)),
+        (
+            _db_time(cutoff),
+            _db_time(observed),
+            _db_time(observed),
+            None if analysis_scope is None else analysis_scope.scope_id,
+            None if analysis_scope is None else "analysis-scope:" + analysis_scope.scope_sha256,
+        ),
     ).fetchall()
     expected = frozenset(documents)
     matches: list[str] = []
@@ -1161,19 +1232,21 @@ def _population_input_commitment(
     issuer_inputs: list[dict[str, object]],
     *,
     projection_mode: ProjectionMode = "semantic",
+    analysis_scope: AnalysisEvidenceScope | None = None,
 ) -> str:
-    return _digest(
-        {
-            "cutoff_at": _db_time(cutoff),
-            "projection_mode": projection_mode,
-            "expected_issuer_ids": list(expected_issuer_ids),
-            "selected_issuer_ids": list(selected_issuer_ids),
-            "issuer_inputs": sorted(
-                issuer_inputs,
-                key=lambda item: str(item["issuer_id"]),
-            ),
-        }
-    )
+    material: dict[str, object] = {
+        "cutoff_at": _db_time(cutoff),
+        "projection_mode": projection_mode,
+        "expected_issuer_ids": list(expected_issuer_ids),
+        "selected_issuer_ids": list(selected_issuer_ids),
+        "issuer_inputs": sorted(
+            issuer_inputs,
+            key=lambda item: str(item["issuer_id"]),
+        ),
+    }
+    if analysis_scope is not None:
+        material["analysis_scope_sha256"] = analysis_scope.scope_sha256
+    return _digest(material)
 
 
 def _population_plan_commitment(
@@ -1182,15 +1255,16 @@ def _population_plan_commitment(
     input_commitment: str,
     selected_issuer_ids: tuple[str, ...],
 ) -> str:
-    return _digest(
-        {
-            "cutoff_at": _db_time(request.cutoff_at),
-            "input_commitment_sha256": input_commitment,
-            "projection_mode": request.projection_mode,
-            "operation_recorded_at": _db_time(request.operation_recorded_at),
-            "selected_issuer_ids": list(selected_issuer_ids),
-        }
-    )
+    material: dict[str, object] = {
+        "cutoff_at": _db_time(request.cutoff_at),
+        "input_commitment_sha256": input_commitment,
+        "projection_mode": request.projection_mode,
+        "operation_recorded_at": _db_time(request.operation_recorded_at),
+        "selected_issuer_ids": list(selected_issuer_ids),
+    }
+    if request.analysis_scope is not None:
+        material["analysis_scope_sha256"] = request.analysis_scope.scope_sha256
+    return _digest(material)
 
 
 def _verify_commitments(
@@ -1277,15 +1351,31 @@ def _json_scalar(value: object) -> object:
     return value
 
 
-def _output_commitment(conn: sqlite3.Connection, cutoff: datetime) -> str:
+def _output_commitment(
+    conn: sqlite3.Connection,
+    cutoff: datetime,
+    *,
+    analysis_scope: AnalysisEvidenceScope | None = None,
+    observed_through: datetime | None = None,
+) -> str:
+    observed = observed_through if analysis_scope is not None else None
     rows = conn.execute(
         "SELECT header.research_snapshot_id,seal.member_set_sha256 "
         "FROM research_snapshot_headers header "
         "JOIN research_snapshot_seals seal "
         "ON seal.research_snapshot_id=header.research_snapshot_id "
         "WHERE datetime(header.cutoff_at)=datetime(?) "
+        "AND json_extract(header.request_json,'$.research_universe.analysis_scope.scope_id') IS ? "
+        "AND (? IS NULL OR (datetime(header.recorded_at)<=datetime(?) "
+        "AND datetime(seal.sealed_at)<=datetime(?))) "
         "ORDER BY header.research_snapshot_id",
-        (_db_time(cutoff),),
+        (
+            _db_time(cutoff),
+            None if analysis_scope is None else analysis_scope.scope_id,
+            None if observed is None else _db_time(observed),
+            None if observed is None else _db_time(observed),
+            None if observed is None else _db_time(observed),
+        ),
     ).fetchall()
     return _digest([list(row) for row in rows])
 
