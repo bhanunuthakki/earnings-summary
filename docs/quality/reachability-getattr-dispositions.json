@@ -43,8 +43,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-growth scenario attribute tuple.",
-      "fingerprint": "88e05586aa34d3077908dbc8dfe2701e3ff3fed4cf06df76016a075ed090e065",
-      "line": 451,
+      "fingerprint": "79bd1cf7d3f4f553e98c50f05ed23fb27d9edf82f5412d7b135c7126a37eac68",
+      "line": 299,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_near",
@@ -55,8 +55,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-growth scenario attribute tuple.",
-      "fingerprint": "45b5873dbfebf1d1479b6674e00377d0eb14cb913bacc012269adf807c862ef5",
-      "line": 453,
+      "fingerprint": "f3ad888b8348eebdcf911fb470361342a7fe799eafd51a8734706295ce3db547",
+      "line": 301,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_term",
@@ -67,8 +67,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-margin scenario attribute tuple.",
-      "fingerprint": "8b9f69bcd4af30059183e4d0310f215afa7f04b44af60e0b151569523f3fb9ce",
-      "line": 455,
+      "fingerprint": "eb1a16ea0bf0c4f4bdffbcf1cffc032a95e767b0666895661ef9be207c2c189f",
+      "line": 303,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_near",
@@ -79,8 +79,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-margin scenario attribute tuple.",
-      "fingerprint": "6e170cd8aa6c4c72264e5f1c4cb773a923e0a25718558027ce6a696ebe3bb9ed",
-      "line": 457,
+      "fingerprint": "48f5f648c1c8d5f31d7afeb1b395acd5a70660c6242963400719ab377e4eb8cb",
+      "line": 305,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_term",
@@ -676,7 +676,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "053e81bf11d8802c80f3a41a1c74facca30bff2f025b81380953be4d0dea5604",
+      "source_sha256": "2292b64440480c694b04fa382d20eadc2b4fe08cadbd8683bc62ba56389c5278",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
