@@ -74,9 +74,11 @@ def test_dcf_refresh_binds_work_and_source_ledger_to_configured_database(
         *,
         workbook_override: Path | None,
         valuation_year: int,
+        meli_assumptions_path: Path | None,
     ) -> dict[str, object]:
         assert ticker == "TEST"
         assert repo_root == root.resolve()
+        assert meli_assumptions_path is None
         refresh_paths.append(db_path)
         return {"ticker": ticker, "status": "synthetic"}
 

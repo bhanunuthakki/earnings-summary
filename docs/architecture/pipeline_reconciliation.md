@@ -104,3 +104,24 @@ Deploy only a validated candidate after reconciling active work. Recheck runtime
 source identity, route setup, schema compatibility and exact failed checkpoints;
 preserve existing logs and immutable evidence. No scheduler state, provider
 subscription, production database or active checkout is changed by this branch.
+
+## October 1, 2026 follow-up checkpoint (Pacific time)
+
+The primary Mac checkout is clean on `codex/reconciled-pipeline-updates` at
+`ed484809ec48147bbe830f390609533f1c508f14`, which includes the merged MELI
+three-row source publisher. The installed Windows application remains at
+`7bcb09497d0aef92e358d0a7f3573f4dba262880`; merged source is not proof of
+Windows deployment. The native filing-XBRL qualification change is preserved
+separately at `58cb98427f5e9700a0886dd006015e99da9ce46b` and
+`codex/parked/xbrl-native-qualification-20261001`. Its complete native kit is
+still on HOLD after a Windows DLL initialization error (1114); no XBRL fact
+write or processor approval follows from that candidate.
+
+The canonical host's post-restoration check found the prior 44-task roster,
+37 enabled tasks and no retained pause latch. FMP is externally disabled by the
+owner's policy file; code merge does not reactivate it. The merged source publisher
+covers exactly three reported MELI table rows, not the 28 operands required by
+the separate MELI valuation recipe. No current MELI valuation or allocation
+eligibility is accepted. A next session must compare the installed host source,
+its typed source/admission receipts and the reviewed assumptions/scenario package
+before claiming recovery or resuming a live refresh.

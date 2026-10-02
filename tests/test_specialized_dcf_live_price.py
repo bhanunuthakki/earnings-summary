@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Governed price resolution shared by every specialized DCF archetype."""
 
 from __future__ import annotations
@@ -13,19 +12,18 @@ from typing import cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "execution"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import build_bank_dcf as bank  # noqa: E402
-import build_fintech_sotp as fintech  # noqa: E402
-import build_meli_platform_dcf as meli  # noqa: E402
-import build_nu_platform_dcf as nu  # noqa: E402
+import build_bank_dcf as bank
+import build_fintech_sotp as fintech
+import build_meli_platform_dcf as meli
+import build_nu_platform_dcf as nu
 
-from dcf import specialized_price  # noqa: E402
-from dcf.persist import DcfRunRow  # noqa: E402
-from sources import price as price_source  # noqa: E402
-from sources.price import LivePrice  # noqa: E402
+from dcf import specialized_price
+from dcf.persist import DcfRunRow
+from sources import price as price_source
+from sources.price import LivePrice
 
 
 def _provenance_connection() -> sqlite3.Connection:
@@ -417,7 +415,37 @@ def test_fintech_global_assumption_receipt_records_degraded_capm_fallback(
     assumptions_path.write_text(json.dumps({"derive_ke_capm": 1}), encoding="utf-8")
     monkeypatch.setattr(fintech, "REPO", tmp_path)
 
-    assumptions = fintech._load("SOFI")
+    captured: list[fintech.Sotp] = []
+
+    def capture_build(assumptions: fintech.Sotp, _destination: Path) -> None:
+        captured.append(assumptions)
+
+    def no_persist(
+        _assumptions: fintech.Sotp,
+        _equity: float,
+        _value_per_share: float,
+        _quote: specialized_price.SpecializedPriceObservation | None = None,
+        **_kwargs: object,
+    ) -> bool:
+        return False
+
+    def fixture_price(
+        _root: Path,
+        _ticker: str,
+        **_kwargs: object,
+    ) -> specialized_price.SpecializedPriceObservation:
+        return specialized_price.SpecializedPriceObservation(
+            price=10.0, observed_at=None, source_name="synthetic_fixture"
+        )
+
+    monkeypatch.setattr(fintech, "T", "SOFI")
+    monkeypatch.setattr(fintech, "DEST", tmp_path / "isolated.xlsx")
+    monkeypatch.setattr(fintech, "build", capture_build)
+    monkeypatch.setattr(fintech, "persist_dcf_run", no_persist)
+    monkeypatch.setattr(fintech, "resolve_specialized_price", fixture_price)
+    assert fintech.main() == 0
+    assert len(captured) == 1
+    assumptions = captured[0]
 
     assert assumptions.global_assumption_source["status"] == "missing_database"
     assert assumptions.global_assumption_source["effective_fields"] == [
@@ -486,6 +514,7 @@ def test_nu_entrypoint_threads_one_observation_through_model_and_persistence(
 
 def test_meli_entrypoint_threads_one_observation_through_model_and_persistence(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     observation = specialized_price.SpecializedPriceObservation(
         price=42.5,
@@ -496,8 +525,45 @@ def test_meli_entrypoint_threads_one_observation_through_model_and_persistence(
     assumptions = meli.Assum(derive_capm=0)
     captured: list[tuple[float, specialized_price.SpecializedPriceObservation | None]] = []
 
-    def load_assumptions(_ticker: str) -> meli.Assum:
-        return assumptions
+    # Isolate the input-admission boundary: this test verifies quote threading,
+    # while test_meli_input_evidence exercises receipt admission and rejection.
+    from dcf.input_evidence import ModelInputReceipt, ModelInputRequest
+
+    assert observation.observed_at is not None
+    proof = ModelInputReceipt(
+        recipe="test-boundary",
+        request=ModelInputRequest(
+            recipe="test-boundary",
+            ticker="MELI",
+            research_snapshot_id="fixture",
+            financial_period_end=observation.observed_at.date(),
+            facts={},
+            assumptions={},
+        ),
+        verified_at=observation.observed_at,
+        snapshot_member_sha256="a" * 64,
+        effective_inputs_sha256="b" * 64,
+        required_keys=(),
+        inputs=(),
+        inventory_snapshot_ids=(),
+    )
+    db = tmp_path / "explicit.db"
+    db.touch()
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db))
+    monkeypatch.setenv("DCF_PROMOTE_DEST", str(tmp_path / "live.xlsx"))
+    monkeypatch.setattr(meli, "DEST", tmp_path / "staged.xlsx")
+
+    artifact_path = tmp_path / "approved-state.json"
+    artifact_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("DCF_MELI_ASSUMPTIONS_PATH", str(artifact_path))
+
+    def load_assumptions(
+        _ticker: str, *, db_path: Path, assumptions_path: Path, expected_sha256: str | None = None
+    ) -> tuple[meli.Assum, ModelInputReceipt]:
+        assert db_path == db
+        assert assumptions_path == artifact_path
+        assert expected_sha256 is None
+        return assumptions, proof
 
     def resolve_price(
         _root: Path,
@@ -526,11 +592,15 @@ def test_meli_entrypoint_threads_one_observation_through_model_and_persistence(
         _mirror: meli.Mirror,
         _holdings: dict[str, object] | None,
         price_observation: specialized_price.SpecializedPriceObservation | None,
+        **kwargs: object,
     ) -> bool:
+        assert kwargs["input_receipt"] is proof
+        assert kwargs["db_path"] == db
+        assert kwargs["assumptions_path"] == artifact_path
         captured.append((model_inputs.price, price_observation))
         return True
 
-    monkeypatch.setattr(meli, "load_assumptions", load_assumptions)
+    monkeypatch.setattr(meli, "load_verified_assumptions", load_assumptions)
     monkeypatch.setattr(meli, "resolve_specialized_price", resolve_price)
     monkeypatch.setattr(meli, "_load_holdings", no_holdings)
     monkeypatch.setattr(meli, "build", no_build)

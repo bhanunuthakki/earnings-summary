@@ -63,6 +63,8 @@ from dcf import persist as persist_mod
 from dcf import redesign as redesign_mod
 from dcf import reverse as reverse_mod
 from dcf import universe as universe_mod
+from dcf.input_evidence import InputEvidenceError, ModelInputRequest
+from dcf.meli_inputs import RECIPE as MELI_INPUT_RECIPE
 from dcf.provenance import DcfInputProvenance, input_clock_summary
 from runtime.python_process import managed_python_prefix
 from sources import registry as source_calls_registry
@@ -469,6 +471,7 @@ def main() -> int:
             db_path,
             workbook_override=args.workbook,
             valuation_year=args.valuation_year,
+            meli_assumptions_path=args.meli_assumptions_path,
         )
         results.append(result)
     print(json.dumps(results, indent=2, default=str))
@@ -504,6 +507,12 @@ def _parse_args() -> argparse.Namespace:
         default=date.today().year,
         help="Cutoff year: > this is forecast, <= is actuals. Default: current calendar year.",
     )
+    p.add_argument(
+        "--meli-assumptions-path",
+        type=Path,
+        default=None,
+        help="Explicit reviewed MELI input artifact; no repo/data or DB-directory fallback.",
+    )
     return p.parse_args()
 
 
@@ -524,6 +533,49 @@ def dcf_maintained_universe(repo_root: Path) -> list[str]:
     return universe_mod.dcf_universe(repo_root)
 
 
+def _meli_authority(repo_root: Path, path: Path) -> tuple[Path, str]:
+    """Pin routing to one validated package; local explicit conflicts are errors."""
+    try:
+        path = path.resolve(strict=True)
+        source_bytes = path.read_bytes()
+    except OSError as exc:
+        raise InputEvidenceError("assumptions_authority_unavailable") from exc
+    try:
+        payload = json.loads(source_bytes)
+        request = ModelInputRequest.model_validate(payload.get("input_evidence"))
+    except (ValueError, AttributeError) as exc:
+        raise InputEvidenceError("model_input_request_missing_or_invalid") from exc
+    if request.recipe != MELI_INPUT_RECIPE:
+        raise InputEvidenceError("model_input_recipe_mismatch")
+    for hint_path, nested in (
+        (repo_root / "micro_thesis" / "holdings" / "MELI.json", False),
+        (repo_root / "data" / "dcf_assumptions" / "MELI.json", True),
+    ):
+        if not hint_path.exists():
+            continue
+        try:
+            raw: object = json.loads(hint_path.read_bytes())
+            if not isinstance(raw, dict):
+                raise ValueError("not an object")
+            hint = cast(dict[str, object], raw)
+            if nested:
+                if "redesign" not in hint:
+                    continue
+                raw_nested = hint["redesign"]
+                if not isinstance(raw_nested, dict):
+                    raise ValueError("invalid redesign")
+                hint = cast(dict[str, object], raw_nested)
+            if "valuation_model" not in hint:
+                continue
+            if hint["valuation_model"] != "meli_platform_sotp":
+                raise InputEvidenceError("meli_assumptions_family_conflict")
+        except InputEvidenceError:
+            raise
+        except (OSError, ValueError) as exc:
+            raise InputEvidenceError("meli_family_hint_missing_or_invalid") from exc
+    return path, hashlib.sha256(source_bytes).hexdigest()
+
+
 def refresh_one(
     ticker: str,
     repo_root: Path,
@@ -531,6 +583,7 @@ def refresh_one(
     *,
     workbook_override: Path | None = None,
     valuation_year: int,
+    meli_assumptions_path: Path | None = None,
 ) -> dict[str, object]:
     """Refresh one ticker's redesigned DCF. Returns a structured result dict.
 
@@ -547,6 +600,13 @@ def refresh_one(
       - "meli_platform_sotp"  -> the MELI Commerce/Fintech SOTP (`_refresh_meli_sotp`).
       - "new"/"none"/unknown  -> skip, surfacing any Opus-proposed new-model spec.
     """
+    if ticker.upper() == "MELI":
+        raw_path = os.environ.get("DCF_MELI_ASSUMPTIONS_PATH", "").strip()
+        explicit_path = meli_assumptions_path or (Path(raw_path) if raw_path else None)
+        if explicit_path is not None:
+            return _refresh_meli_sotp(
+                ticker, repo_root, db_path=db_path, assumptions_path=explicit_path
+            )
     model, suggestion = _valuation_model(repo_root, ticker)
     if model == "bank_excess_return":
         return _refresh_bank(ticker, repo_root)
@@ -557,7 +617,9 @@ def refresh_one(
     if model == "platform_dcf":
         return _refresh_platform(ticker, repo_root)
     if model == "meli_platform_sotp":
-        return _refresh_meli_sotp(ticker, repo_root)
+        return _refresh_meli_sotp(
+            ticker, repo_root, db_path=db_path, assumptions_path=meli_assumptions_path
+        )
     if model != "fcff_dcf":
         # "new" (Opus proposed an archetype the pipeline doesn't have yet), "none",
         # or an unknown model string — no template to run.
@@ -818,7 +880,9 @@ def _refresh_platform(ticker: str, repo_root: Path) -> dict[str, object]:
     }
 
 
-def _refresh_meli_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
+def _refresh_meli_sotp(
+    ticker: str, repo_root: Path, *, db_path: Path, assumptions_path: Path | None
+) -> dict[str, object]:
     """Build the MELI sum-of-the-parts platform DCF
     (``execution/build_meli_platform_dcf.py``) to ``dcf/<T>.xlsx`` — values
     Commerce + Fintech-payments as operating FCFF (@ WACC) and the Mercado Pago
@@ -827,6 +891,21 @@ def _refresh_meli_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
     marketplace and a capital-consuming lending book. The builder computes the
     value-of-record and upserts ``dcf_runs`` itself, like the platform/bank
     builders."""
+    if assumptions_path is None:
+        raw = os.environ.get("DCF_MELI_ASSUMPTIONS_PATH", "").strip()
+        assumptions_path = Path(raw) if raw else None
+    if assumptions_path is None:
+        return {
+            "ticker": ticker.upper(),
+            "status": "error",
+            "reason": "explicit_assumptions_authority_required",
+        }
+    try:
+        if ticker.upper() != "MELI":
+            raise InputEvidenceError("meli_input_recipe_ticker_mismatch")
+        assumptions_path, authority_sha256 = _meli_authority(repo_root, assumptions_path)
+    except InputEvidenceError as exc:
+        return {"ticker": ticker.upper(), "status": "error", "reason": str(exc)}
     t = ticker.upper()
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
     tmp = dest.parent / f"{dest.stem}.rebuild.xlsx"
@@ -837,6 +916,9 @@ def _refresh_meli_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
         DCF_REPO_ROOT=str(repo_root),
         DCF_DEST=str(tmp),
         DCF_PROMOTE_DEST=str(dest),
+        EARNINGS_SUMMARY_DB_PATH=str(db_path),
+        DCF_MELI_ASSUMPTIONS_PATH=str(assumptions_path),
+        DCF_MELI_ASSUMPTIONS_SHA256=authority_sha256,
     )
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_MELI_SOTP_BUILDER)],

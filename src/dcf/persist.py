@@ -75,6 +75,8 @@ class DcfRunRow:
     assumptions_synced_at: datetime | None = None
     provenance: DcfInputProvenance | None = None
     forecast_points: tuple[ForecastSeriesPoint, ...] = ()
+    # Optional exact calculation clock; legacy callers retain the SQL default.
+    calculated_at: datetime | None = None
 
 
 PromotionStatus = Literal["verified", "unverified", "not_applicable", "missing"]
@@ -600,6 +602,10 @@ def upsert(
     (the bespoke archetype builders) keep working on either schema.
     """
     _validate_input_cutoff(row)
+    if row.calculated_at is not None and (
+        row.calculated_at.tzinfo is None or row.calculated_at.utcoffset() is None
+    ):
+        raise ValueError("DCF calculated_at must be timezone-aware")
     has_sync = _has_sync_columns(conn)
     if (row.assumptions_sync_status or row.assumptions_synced_at) and not has_sync:
         raise sqlite3.OperationalError(
@@ -672,6 +678,10 @@ def upsert(
         ":live_price, :live_price_at, :over_under_pct, :mos_bar_used, "
         ":assumption_snapshot_json, '[]', 0"
     )
+    if row.calculated_at is not None:
+        base_cols += ", created_at"
+        base_vals += ", :created_at"
+        params["created_at"] = row.calculated_at.isoformat(timespec="microseconds")
     provenance_cols = (
         ", input_sha256, workbook_sha256, engine_version, inputs_as_of, provenance_json"
         if has_provenance
@@ -768,7 +778,7 @@ def build_assumption_snapshot(
     forecast_years: list[int],
     wacc: float,
     terminal_multiple: float,
-    diluted_shares_M: float,  # noqa: N803 - serialized schema and keyword API use _M units
+    diluted_shares_m: float,
     workbook_path: str,
     pv_fcf_stream: float,
     pv_terminal: float,
@@ -782,7 +792,7 @@ def build_assumption_snapshot(
         "workbook_path": workbook_path,
         "wacc": wacc,
         "terminal_multiple": terminal_multiple,
-        "diluted_shares_M": diluted_shares_M,
+        "diluted_shares_M": diluted_shares_m,
         "forecast_years": forecast_years,
         "fcf_stream_M": fcf_stream,
         "pv_fcf_stream_M": pv_fcf_stream,

@@ -5,7 +5,7 @@
     "alembic": 0,
     "cron": 0,
     "evals": 0,
-    "execution": 336,
+    "execution": 318,
     "instruction_tests": 0,
     "scripts": 0,
     "src": 307,
@@ -61,7 +61,7 @@
     "alembic": 1,
     "cron": 15,
     "evals": 0,
-    "execution": 1106,
+    "execution": 1097,
     "instruction_tests": 0,
     "scripts": 4,
     "src": 15,
@@ -74,7 +74,7 @@
     "src/compute": 2,
     "src/credibility": 0,
     "src/dashboard": 5,
-    "src/dcf": 1,
+    "src/dcf": 0,
     "src/discovery": 0,
     "src/etf_sources": 0,
     "src/evals": 3,
@@ -110,6 +110,6 @@
     "src/ui": 0,
     "src/user_state": 1,
     "src/viewspec": 0,
-    "tests": 1074
+    "tests": 1061
   }
 }

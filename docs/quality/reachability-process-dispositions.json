@@ -310,8 +310,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_bank runs the fixed _BANK_BUILDER via managed_python_prefix.",
-      "fingerprint": "e617ab926ea0497f18b7a72a48f7a4fa4ad72817bee0c860417e2c1c7469008d",
-      "line": 667,
+      "fingerprint": "9c08e7cd7ae19c3810333e4128cb6f3823879cffd856d1218efbc26a2cb2b9ad",
+      "line": 729,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_bank_dcf.py"
@@ -320,8 +320,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_holdco runs the fixed _HOLDCO_BUILDER via managed_python_prefix.",
-      "fingerprint": "886f843e1e1073b110f43b7ae7da3af1cb77546e3b6a2abea2acd18ef5382e86",
-      "line": 704,
+      "fingerprint": "021d703aa04133d3fc4613ae8702710be35bb2d6532215e52b66c8ef4e3d8cb2",
+      "line": 766,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_holdco_sotp.py"
@@ -330,8 +330,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_fintech_sotp runs the fixed _FINTECH_BUILDER via managed_python_prefix.",
-      "fingerprint": "e5fb13336817beb3de81965eca3a913be40105c47c6852c7317f9d7883dd60bd",
-      "line": 749,
+      "fingerprint": "2944eb76b5e9a9d188cd12267dc0863c837d2be5cbd1115076fb2516fb501a59",
+      "line": 811,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_fintech_sotp.py"
@@ -340,8 +340,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_platform runs the fixed _PLATFORM_BUILDER via managed_python_prefix.",
-      "fingerprint": "86affac02c41ca4bd720c132ac1842d667b1398f01ebb9621b914cb8e62f3d02",
-      "line": 794,
+      "fingerprint": "5c0cae3712f494bc3420c69601fcb9ac05a67556902c208f7d141e85159504a3",
+      "line": 856,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_nu_platform_dcf.py"
@@ -350,8 +350,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_meli_sotp runs the fixed _MELI_SOTP_BUILDER via managed_python_prefix.",
-      "fingerprint": "8342c13523a8aa40e98d449836a632ce831a483692299bc18fe5522f6de1d54d",
-      "line": 841,
+      "fingerprint": "6182f5a600c3de18cf50c1191d00cf11fad25c58f763627b3ac1f7efe4b1e1bf",
+      "line": 923,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_meli_platform_dcf.py"
@@ -360,8 +360,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_builder runs the fixed _BUILDER_SCRIPT via managed_python_prefix.",
-      "fingerprint": "af6b781010242012ef6b6b68e53cb9c67f437ab507f07e49c64c3b3e1c173f64",
-      "line": 890,
+      "fingerprint": "639d5cd0ff8bce5506eec3140e7b5004f961e6d666a70a4a04dbc82d37ca294a",
+      "line": 972,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_redesigned_dcf.py"
@@ -925,7 +925,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "053e81bf11d8802c80f3a41a1c74facca30bff2f025b81380953be4d0dea5604",
+      "source_sha256": "2292b64440480c694b04fa382d20eadc2b4fe08cadbd8683bc62ba56389c5278",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
