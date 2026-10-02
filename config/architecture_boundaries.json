@@ -80,7 +80,6 @@
     "execution/capture_architecture_measurement.py",
     "execution/capture_compatibility_evidence.py",
     "execution/capture_coverage_report.py",
-    "execution/capture_expected_sec_documents.py",
     "execution/capture_ir_authority_surfaces.py",
     "execution/capture_issuer_document_inventory.py",
     "execution/capture_observed_ir_documents.py",
