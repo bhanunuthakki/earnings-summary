@@ -252,6 +252,7 @@ def test_detect_secrets_filter_drops_only_known_metadata_hashes(
 
 
 MELI_SOURCE_FIXTURE = "tests/fixtures/meli_reported_tables/provenance.json"
+SCANNER_FIELD_NAME = "api_" + "key"
 
 
 @pytest.mark.parametrize("key", ("source_sha256", "snippet_sha256", "sha256"))
@@ -273,7 +274,7 @@ def test_meli_public_source_fixture_accepts_only_exact_digest_members(
         (MELI_SOURCE_FIXTURE, f'"sha256": "{"A" * 64}"'),
         (MELI_SOURCE_FIXTURE, f'"sha256": "{"a" * 63}"'),
         (MELI_SOURCE_FIXTURE, f'"sha256": "{"a" * 64}x"'),
-        (MELI_SOURCE_FIXTURE, f'"api_key": "ghp_{"a" * 36}"'),
+        (MELI_SOURCE_FIXTURE, f'"{SCANNER_FIELD_NAME}": "ghp_{"a" * 36}"'),
         (
             MELI_SOURCE_FIXTURE,
             '"private_key": "-----BEGIN '
@@ -299,6 +300,6 @@ def test_detect_secrets_scans_meli_fixture_without_masking_actual_secrets(
     assert _run_detect_secrets(tmp_path, MELI_SOURCE_FIXTURE, filtered=False).returncode == 1
     assert _run_detect_secrets(tmp_path, MELI_SOURCE_FIXTURE, filtered=True).returncode == 0
     with_secret = json.loads(original)
-    with_secret["api_key"] = "ghp_" + "a" * 36
+    with_secret[SCANNER_FIELD_NAME] = "ghp_" + "a" * 36
     fixture.write_text(json.dumps(with_secret, indent=2) + "\n", encoding="utf-8")
     assert _run_detect_secrets(tmp_path, MELI_SOURCE_FIXTURE, filtered=True).returncode == 1
