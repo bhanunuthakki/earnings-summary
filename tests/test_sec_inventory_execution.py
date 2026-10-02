@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Callable
@@ -224,14 +225,117 @@ def test_incompatible_timed_checkpoint_blocks_cli_before_source_network(
         )
         == 2
     )
-    assert json.loads(capsys.readouterr().out) == {
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {
         "outcome": "blocked",
         "reason_code": "sec_inventory_checkpoint_invalid",
         "retryable": False,
     }
+    assert str(run_root) not in captured.out + captured.err
     assert state_path.read_text(encoding="utf-8") == state
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("defect", ["missing", "tampered", "future"])
+def test_invalid_timed_response_blocks_cli_before_source_network(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    defect: str,
+) -> None:
+    db = migrated_db(tmp_path / "inventory.db")
+    monkeypatch.setattr(sync, "PROJECT_ROOT", tmp_path)
+    run_root = tmp_path / "checkpoint" / "0000000001"
+    response_root = run_root / "responses"
+    response_root.mkdir(parents=True)
+    index = b"valid index"
+    manifest = b"valid manifest"
+    index_sha = hashlib.sha256(index).hexdigest()
+    manifest_sha = hashlib.sha256(manifest).hexdigest()
+    (response_root / index_sha).write_bytes(index)
+    if defect == "tampered":
+        (response_root / manifest_sha).write_bytes(b"tampered manifest")
+    elif defect == "future":
+        (response_root / manifest_sha).write_bytes(manifest)
+    before_manifest = (
+        (response_root / manifest_sha).read_bytes()
+        if (response_root / manifest_sha).exists()
+        else None
+    )
+    past = datetime.now(UTC) - timedelta(days=1)
+    manifest_clock = past + timedelta(days=2) if defect == "future" else past
+    config_sha = hashlib.sha256(
+        json.dumps(
+            {
+                "collector": cast(str, getattr(sync, "_COLLECTOR")),
+                "timeout": cast(tuple[int, int], getattr(sync, "_TIMEOUT")),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    state_path = run_root / "state.v2.json"
+    state = json.dumps(
+        {
+            "cik": "0000000001",
+            "retrieval_config_sha256": config_sha,
+            "collector_code_version": cast(str, getattr(sync, "_COLLECTOR")),
+            "entries": [
+                {
+                    "accession_number": "0000000001-26-000001",
+                    "index_sha256": index_sha,
+                    "index_observed_at": past.isoformat(),
+                    "index_retrieved_at": past.isoformat(),
+                    "manifest_sha256": manifest_sha,
+                    "manifest_observed_at": manifest_clock.isoformat(),
+                    "manifest_retrieved_at": manifest_clock.isoformat(),
+                }
+            ],
+        }
+    )
+    state_path.write_text(state, encoding="utf-8")
+
+    def no_network(*_args: object, **_kwargs: object) -> NoReturn:
+        raise AssertionError("invalid retained response must block before source network")
+
+    monkeypatch.setattr(requests.Session, "get", no_network)
+    assert (
+        sync.main(
+            [
+                "--db",
+                str(db),
+                "--ticker",
+                "ACME",
+                "--cik",
+                "1",
+                "--revision",
+                "1",
+                "--package-checkpoint-root",
+                str(tmp_path / "checkpoint"),
+                "--apply",
+            ]
+        )
+        == 2
+    )
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {
+        "outcome": "blocked",
+        "reason_code": "sec_inventory_checkpoint_invalid",
+        "retryable": False,
+    }
+    assert str(run_root) not in captured.out + captured.err
+    assert state_path.read_text(encoding="utf-8") == state
+    assert (response_root / index_sha).read_bytes() == index
+    assert (
+        (response_root / manifest_sha).read_bytes()
+        if (response_root / manifest_sha).exists()
+        else None
+    ) == before_manifest
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM evidence_content_blobs").fetchone()[0] == 0
 
 
 def test_inventory_success_receipt_binds_real_reconciled_snapshot(

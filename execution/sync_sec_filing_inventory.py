@@ -942,6 +942,25 @@ def _read_timed_component(
     )
 
 
+def _preflight_timed_checkpoint(
+    run_root: Path, checkpoint: _TimedPackageCheckpoint, *, preflight_at: datetime
+) -> None:
+    """Verify every retained v2 response before any new source acquisition."""
+
+    for entry in checkpoint.entries:
+        for component_kind in ("index", "manifest"):
+            try:
+                response = _read_timed_component(run_root, entry, component_kind)
+            except (OSError, RuntimeError, ValueError):
+                raise SecCheckpointConfigurationError(
+                    "SEC timed package response is unavailable or corrupt"
+                ) from None
+            if response is not None and response.retrieved_at > preflight_at:
+                raise SecCheckpointConfigurationError(
+                    "SEC timed package response clock is in the future"
+                )
+
+
 def _store_timed_package_checkpoint_component(
     *,
     run_root: Path,
@@ -1350,10 +1369,11 @@ def _run_inventory(
     # source request or evidence write. Package collection validates again at use.
     package_run_root = args.package_checkpoint_root / cik
     _load_package_checkpoint(package_run_root / "state.json", cik=cik)
-    _load_timed_package_checkpoint(
+    checkpoint = _load_timed_package_checkpoint(
         package_run_root / "state.v2.json", cik=cik, retrieval_config_sha256=config_sha
     )
     started = datetime.now(UTC)
+    _preflight_timed_checkpoint(package_run_root, checkpoint, preflight_at=started)
     canonical_issuer_id: str | None = None
     identity_conn = connect_sqlite(
         args.db,
