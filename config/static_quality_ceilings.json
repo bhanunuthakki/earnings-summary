@@ -96,7 +96,7 @@
     "src/redteam": 0,
     "src/report": 14,
     "src/research": 2,
-    "src/runtime": 3,
+    "src/runtime": 0,
     "src/search": 0,
     "src/server_runtime": 0,
     "src/signals": 0,
@@ -110,6 +110,6 @@
     "src/ui": 0,
     "src/user_state": 1,
     "src/viewspec": 0,
-    "tests": 1059
+    "tests": 1057
   }
 }
