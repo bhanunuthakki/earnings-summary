@@ -671,3 +671,29 @@ MELI refresh action now fails closed for inconsistent derived scenarios, preserv
 an existing workbook. `tests/test_meli_scenario_consistency.py` verifies the failure
 cases and a mathematically coherent synthetic case; emission/parity tests retain
 coherent isolated fixtures.
+
+### Explicit lexical-only research snapshot population
+
+`execution/populate_research_snapshots.py --projection-mode lexical_only` is an
+explicit, provider-free retrieval projection choice. The default `semantic` mode
+still requires an exact vector projection and embedding promotion; missing evidence
+never selects lexical-only automatically. This choice concerns retrieval only:
+issuer/source acquisition, processing completeness, financial semantic admission,
+canonical fact resolution, exact corpus membership, and lexical sealing remain
+required under the existing authorities. It does not complete missing facts,
+refresh a forecast, or approve scenarios.
+
+Preview with the approved explicit `--db`, `--cutoff-at`, `--recorded-at` and optional
+`--issuer-id`. For apply, repeat that scope and `--projection-mode`, pass the returned
+`--input-commitment-sha256` and `--plan-commitment-sha256`, and add `--apply` through
+the existing managed SQLite bootstrap. Both commitments bind the selected mode;
+a mode switch refuses the old pins before writes. Lexical-only requests omit vector
+and promotion coordinates and have distinct identities; retained semantic identities
+are unchanged. There is still exactly one terminal per issuer and K/O scope:
+`research_snapshot_terminal_scope_conflict` blocks a second terminal, including a
+mode switch. This operation does not supersede an existing terminal or alter that
+universe policy. Replay verifies the existing seal through the public source verifier;
+terminal verification infers the persisted mode, reassembles that exact request, and
+performs the same lineage checks. No schema, store, service, schedule, provider, or
+new dashboard action is introduced. A preview is an assembly plan, not a successful
+sealed-source verification receipt.
