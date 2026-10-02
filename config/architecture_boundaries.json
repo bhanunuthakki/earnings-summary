@@ -209,7 +209,6 @@
     "execution/populate_canonical_resolution.py",
     "execution/populate_document_processing.py",
     "execution/populate_metric_ontology.py",
-    "execution/populate_research_snapshots.py",
     "execution/populate_retrieval_runtime.py",
     "execution/populate_source_fact_plane.py",
     "execution/portfolio_readiness_receipt.py",
