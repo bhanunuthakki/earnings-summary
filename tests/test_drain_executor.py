@@ -42,7 +42,10 @@ def _load_module() -> Any:
 
 
 @pytest.fixture
-def executor() -> Any:
+def executor(monkeypatch: pytest.MonkeyPatch) -> Any:
+    # Each test supplies a disposable repo/DB; an inherited deployment path
+    # must not override it. Authority tests explicitly configure their own path.
+    monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
     return _load_module()
 
 

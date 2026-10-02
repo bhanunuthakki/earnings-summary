@@ -27,6 +27,7 @@ import comments_server
 import pytest
 from flask.testing import FlaskClient
 
+import advisor.context as advisor_context
 import advisor.socratic as socratic_mod
 from advisor.context import AdvisorContext, TickerValuation, calibration_block
 from advisor.socratic import (
@@ -617,8 +618,17 @@ def client(
 ) -> Iterator[FlaskClient]:
     db_path = _build_db(tmp_path, migrated_db)
 
-    # The flow builds its context against the test repo root; keep it offline-
-    # deterministic by mocking only the LLM boundary.
+    # Context uses the disposable DB and typed offline tracker responses.
+    # A mocked LLM alone does not prevent tracker network requests.
+    def offline_live(**_kwargs: object) -> LivePortfolio:
+        return LivePortfolio(available=False, api_url="https://tracker.invalid")
+
+    def offline_analytics(**_kwargs: object) -> PortfolioAnalytics:
+        return PortfolioAnalytics(available=False, api_url="https://tracker.invalid")
+
+    monkeypatch.setattr(advisor_context, "fetch_live_portfolio", offline_live)
+    monkeypatch.setattr(advisor_context, "fetch_portfolio_analytics", offline_analytics)
+
     def routed(prompt: str, **k: object) -> str:
         if k.get("purpose") == "advisor_socratic_questions":
             return "1. Your read?\n2. Horizon?\n3. What breaks it?"
