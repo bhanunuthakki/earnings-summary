@@ -20,11 +20,11 @@ Schema (list of events, FMP's native shape):
     ]
 
 Usage:
-  python execution/fetch_fmp_earnings_calendar.py --ticker NVO
-  python execution/fetch_fmp_earnings_calendar.py --all          # active universe
-  python execution/fetch_fmp_earnings_calendar.py --portfolio
-  python execution/fetch_fmp_earnings_calendar.py --watchlist
-  python execution/fetch_fmp_earnings_calendar.py --evaluation
+  python execution/sqlite_bootstrap.py execution/fetch_fmp_earnings_calendar.py --ticker NVO
+  python execution/sqlite_bootstrap.py execution/fetch_fmp_earnings_calendar.py --all          # active universe
+  python execution/sqlite_bootstrap.py execution/fetch_fmp_earnings_calendar.py --portfolio
+  python execution/sqlite_bootstrap.py execution/fetch_fmp_earnings_calendar.py --watchlist
+  python execution/sqlite_bootstrap.py execution/fetch_fmp_earnings_calendar.py --evaluation
 """
 
 import argparse
@@ -34,18 +34,13 @@ import sys
 from pathlib import Path
 from typing import cast
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-SRC_DIR = os.path.join(PROJECT_ROOT, "src")
+import db
+from net.client import FMP_CLIENT, HttpCallError, JsonShape, JsonValue, require_fmp_admission
+from runtime.secrets import load_project_env
+
+PROJECT_ROOT = str(Path(__file__).resolve().parents[1])
 DATA_DIR = os.path.join(PROJECT_ROOT, "data", "historical", "fmp")
-sys.path.append(SRC_DIR)
-
-import db  # noqa: E402
-from net.client import FMP_CLIENT, HttpCallError, JsonShape, JsonValue  # noqa: E402
-from runtime.secrets import load_project_env  # noqa: E402
-
-load_project_env(Path(PROJECT_ROOT))
-FMP_API_KEY = os.environ.get("FMP_API_KEY")
+FMP_API_KEY: str | None = None
 
 DATA_TYPE = "earnings_calendar"
 DEFAULT_LIMIT = 12
@@ -53,6 +48,10 @@ DEFAULT_LIMIT = 12
 
 def fetch_earnings(symbol: str, limit: int) -> list[dict[str, JsonValue]] | None:
     try:
+        require_fmp_admission()
+        if FMP_API_KEY is None:
+            load_project_env(Path(PROJECT_ROOT))
+            require_fmp_admission()
         response = FMP_CLIENT.get_json(
             "earnings",
             params={"symbol": symbol, "limit": limit},
@@ -60,7 +59,7 @@ def fetch_earnings(symbol: str, limit: int) -> list[dict[str, JsonValue]] | None
             expected=JsonShape.ARRAY,
         )
     except HttpCallError as exc:
-        label = f"HTTP {exc.status_code}" if exc.status_code is not None else "Error"
+        label = f"HTTP {exc.status_code}" if exc.status_code is not None else exc.kind.value
         print(f"  [{label}] {symbol}: {exc}", file=sys.stderr)
         return None
     payload = response.payload
@@ -124,6 +123,18 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    try:
+        require_fmp_admission()
+        if FMP_API_KEY is None:
+            load_project_env(Path(PROJECT_ROOT))
+            require_fmp_admission()
+    except HttpCallError as exc:
+        print(
+            json.dumps({"event": "fmp_calendar_unavailable", "reason": exc.kind.value}),
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     # FMP's /stable/earnings endpoint requires a paid subscription; on the free
     # tiers (FMP_TIER=basic|free) it 402s for every ticker, burning real
     # server-side quota uncoordinated with refresh_cache's daily budget ledger
@@ -140,8 +151,8 @@ def main() -> None:
         )
         sys.exit(0)
 
-    if not FMP_API_KEY:
-        print("Error: FMP_API_KEY not set in .env", file=sys.stderr)
+    if not (os.environ.get("FMP_API_KEY") if FMP_API_KEY is None else FMP_API_KEY):
+        print("Error: FMP_API_KEY not set in configured environment", file=sys.stderr)
         sys.exit(1)
 
     tickers = select_tickers(args)

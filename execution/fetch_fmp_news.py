@@ -22,9 +22,9 @@ via zoneinfo) and the NewsRow validator is the backstop. A record whose date
 can't be parsed is DROPPED (never timestamp-fabricated).
 
 Usage:
-    python execution/fetch_fmp_news.py
-    python execution/fetch_fmp_news.py --tickers GOOG AMZN META
-    python execution/fetch_fmp_news.py --db-path /tmp/x.db --days 2 --limit 50
+    python execution/sqlite_bootstrap.py execution/fetch_fmp_news.py
+    python execution/sqlite_bootstrap.py execution/fetch_fmp_news.py --tickers GOOG AMZN META
+    python execution/sqlite_bootstrap.py execution/fetch_fmp_news.py --db-path /tmp/x.db --days 2 --limit 50
 """
 
 from __future__ import annotations
@@ -42,22 +42,19 @@ from zoneinfo import ZoneInfo
 
 from pydantic import TypeAdapter, ValidationError
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from db import ACTIVE_LIST_TYPES_SQL, DB_PATH  # noqa: E402
-from models.fmp_payloads import FmpStockNewsRecord  # noqa: E402
-from net.client import FMP_CLIENT, HttpCallError, HttpErrorKind, JsonShape  # noqa: E402
-from news.store import SOURCE_FEED_FMP, NewsRow, upsert_news_rows  # noqa: E402
-from pipeline.row_validation import (  # noqa: E402
+from db import ACTIVE_LIST_TYPES_SQL, DB_PATH
+from models.fmp_payloads import FmpStockNewsRecord
+from net.client import FMP_CLIENT, HttpCallError, HttpErrorKind, JsonShape, require_fmp_admission
+from news.store import SOURCE_FEED_FMP, NewsRow, upsert_news_rows
+from pipeline.row_validation import (
     RowValidationDriftError,
     validate_provider_rows,
 )
-from runtime.secrets import load_project_env  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from runtime.secrets import load_project_env
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-load_project_env(PROJECT_ROOT)
-FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+FMP_API_KEY: str | None = None
 
 FMP_NEWS_ENDPOINT = "https://financialmodelingprep.com/stable/news/stock"
 _EASTERN = ZoneInfo("America/New_York")
@@ -79,9 +76,11 @@ class FmpNewsResult(NamedTuple):
     """Per-ticker FMP fetch outcome.
 
     ``status`` / ``body`` are the raw HTTP result the dispatcher's
-    ``_fmp_refused`` predicate reads (status 0 = network failure). ``rows`` are
+    ``_fmp_refused`` predicate reads (status 0 = no HTTP response). ``rows`` are
     the validated + mapped NewsRows (empty unless a 200 carried real articles).
     ``error`` is a human-readable reason when something went wrong, else None.
+    ``error_kind`` preserves local admission denials so they cannot authorize
+    the dispatcher's paid fallback.
     """
 
     ticker: str
@@ -89,6 +88,7 @@ class FmpNewsResult(NamedTuple):
     body: object
     rows: list[NewsRow]
     error: str | None
+    error_kind: HttpErrorKind | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ def fetch_news_for_ticker(
     *,
     days: int = DEFAULT_DAYS,
     limit: int = DEFAULT_LIMIT,
-    api_key: str = "",
+    api_key: str | None = None,
 ) -> FmpNewsResult:
     """Fetch + validate + map recent news for one ticker (does NOT persist).
 
@@ -215,6 +215,10 @@ def fetch_news_for_ticker(
         "page": "0",
     }
     try:
+        require_fmp_admission()
+        if api_key is None:
+            load_project_env(PROJECT_ROOT)
+            require_fmp_admission()
         response = FMP_CLIENT.get_json(
             "news/stock",
             params=params,
@@ -232,7 +236,7 @@ def fetch_news_for_ticker(
             error = f"network: {exc}"
         else:
             error = f"HTTP {status}" if status else str(exc)
-        return FmpNewsResult(ticker, status, exc.payload, [], error)
+        return FmpNewsResult(ticker, status, exc.payload, [], error, exc.kind)
 
     status = response.status_code
     body = response.payload
@@ -286,7 +290,16 @@ def default_tickers(db_path: str) -> list[str]:
 def run(tickers: list[str], *, db_path: str, days: int, limit: int) -> int:
     """Fetch every ticker (concurrently), persist all rows through one
     connection, and return an exit code (1 if any ticker errored, else 0)."""
-    if not FMP_API_KEY:
+    try:
+        require_fmp_admission()
+        if FMP_API_KEY is None:
+            load_project_env(PROJECT_ROOT)
+            require_fmp_admission()
+    except HttpCallError as exc:
+        _log("fmp_news_unavailable", reason=exc.kind.value)
+        return 1
+    api_key = os.environ.get("FMP_API_KEY", "") if FMP_API_KEY is None else FMP_API_KEY
+    if not api_key:
         _log("fmp_news_error", message="FMP_API_KEY not set in environment")
         return 1
     if not tickers:
@@ -297,7 +310,7 @@ def run(tickers: list[str], *, db_path: str, days: int, limit: int) -> int:
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures: dict[Future[FmpNewsResult], str] = {
             executor.submit(
-                fetch_news_for_ticker, ticker, days=days, limit=limit, api_key=FMP_API_KEY
+                fetch_news_for_ticker, ticker, days=days, limit=limit, api_key=api_key
             ): ticker
             for ticker in tickers
         }
@@ -352,7 +365,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--db-path",
         default=None,
-        help="Override the portfolio DB path (default: data/portfolio.db).",
+        help="Override the configured portfolio DB path.",
     )
     parser.add_argument(
         "--days", type=int, default=DEFAULT_DAYS, help="FMP from/to window in days."

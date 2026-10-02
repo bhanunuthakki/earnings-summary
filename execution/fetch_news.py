@@ -24,7 +24,10 @@ All feeds map into one validated NewsRow and write through a single
 ``upsert_news_rows`` call, so ``(ticker, url)`` dedup means a story seen twice
 by one feed is stored once.
 
-The refusal predicate (``fmp_refused``) is source-policy-agnostic: every way FMP
+Owner-disabled or invalid FMP admission never triggers automatic paid fallback;
+explicit manual websearch remains independent.
+
+The HTTP refusal predicate (``fmp_refused``) is source-policy-agnostic: every way FMP
 withholds news — 401/402/403/429/5xx, OR the HTTP-200-with-a-non-array-body
 gotcha — routes to the fallback, while a genuine empty array ``[]`` ("no news in
 window") does NOT (so quiet tickers never burn an Opus call). See
@@ -69,6 +72,7 @@ except ModuleNotFoundError:
 from competitive.sec_watch import check_s1_watch, load_watches
 from db import DB_PATH
 from llm.cli import is_hard_stop
+from net.client import HttpCallError, HttpErrorKind
 from news.store import (
     NewsFeedUnavailableError,
     NewsRow,
@@ -151,6 +155,15 @@ def _collect_for_ticker(
             ticker, days=days, limit=limit, api_key=fmpnews.FMP_API_KEY
         )
         rows.extend(res.rows)
+        error_kind = res.error_kind
+        if error_kind is not None and error_kind in {
+            HttpErrorKind.PROVIDER_DISABLED_BY_OWNER,
+            HttpErrorKind.PROVIDER_ADMISSION_INVALID,
+        }:
+            _log("news_fmp_unavailable_no_fallback", ticker=ticker, reason=error_kind.value)
+            raise HttpCallError(
+                kind=error_kind, message=res.error or error_kind.value, retryable=False
+            )
         if source == "fmp":
             return rows
         # auto: fall back to WebSearch+LLM only when FMP actually refused AND
@@ -278,6 +291,7 @@ def collect_primary(
     per_ticker_timeout_s: float = _TICKER_TIMEOUT_S,
     websearch_eligible: frozenset[str] | None = None,
     on_rows: Callable[[str, list[NewsRow]], None] | None = None,
+    unavailable_feeds: list[str] | None = None,
 ) -> list[NewsRow]:
     """Collect every ticker's primary-policy rows (FMP, or its WebSearch+Opus
     fallback on refusal) under bounded concurrency and a hard per-ticker time
@@ -323,6 +337,11 @@ def collect_primary(
         for future, ticker in futures.items():
             try:
                 ticker_rows = future.result(timeout=per_ticker_timeout_s)
+            except HttpCallError as exc:
+                if unavailable_feeds is not None:
+                    unavailable_feeds.append(f"fmp:{exc.kind.value}")
+                _log("news_primary_unavailable", ticker=ticker, reason=exc.kind.value)
+                ticker_rows = []
             except FutureTimeoutError:
                 _log(
                     "news_primary_ticker_timeout",
@@ -444,7 +463,7 @@ def run(
 ) -> int:
     """Collect every ticker under the source policy, add the additive feeds,
     persisting INCREMENTALLY throughout. Returns 0 for a completed attempt,
-    1 for a persistence failure, and 2 when Yahoo collection was unavailable.
+    1 for a persistence failure, and 2 when a provider collection was unavailable.
     Valid rows survive partial collection failures.
 
     Shape (2026-07-19 review): the old collect-everything-then-one-upsert run
@@ -499,6 +518,7 @@ def run(
             limit=limit,
             websearch_eligible=eligible,
             on_rows=_persist,
+            unavailable_feeds=unavailable_feeds,
         )
 
         # Diet scoring runs HERE — after the primary rows are safe but before

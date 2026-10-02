@@ -3,7 +3,8 @@ REM Daily 05:45 — two steps, one log:
 REM   1. Refresh data/historical/fmp/<TICKER>_earnings_calendar.json for every
 REM      active ticker. While the FMP subscription is lapsed the stable
 REM      /earnings endpoint 402s and this step fails — that is expected; the
-REM      cache simply stays at its last good state.
+REM      cache simply stays at its last good state. An owner-disabled provider
+REM      is refused locally, without an authentication probe.
 REM   2. Materialize the canonical expected_earnings table from the
 REM      FMP-cache -> yfinance preference stack (refresh_expected_earnings.py).
 REM      Runs even when step 1 fails, so the home strip / cockpit / portfolio-
@@ -25,10 +26,13 @@ set LOG_FILE=%LOG_DIR%\fetch_fmp_earnings_calendar_%TS%.log
 
 cd /d "%PROJECT_ROOT%"
 call "%PROJECT_ROOT%\cron\run_python.bat" "fetch-fmp-earnings-calendar" "portfolio-db" execution\fetch_fmp_earnings_calendar.py --all > "%LOG_FILE%" 2>&1
+set "FMP_RC=%ERRORLEVEL%"
 call "%PROJECT_ROOT%\cron\run_python.bat" "refresh-expected-earnings" "portfolio-db" execution\refresh_expected_earnings.py >> "%LOG_FILE%" 2>&1
 set "RC=%ERRORLEVEL%"
+if not "%FMP_RC%"=="0" set "RC=%FMP_RC%"
 
-REM Propagate the job's exit code. Without this the script ended on
+REM Retain step 1 failure even if fallback succeeds; otherwise use step 2.
+REM Without propagation the script ended on
 REM `endlocal` and ALWAYS returned 0, so Task Scheduler recorded
 REM "Last Result: 0" even for a job that failed outright.
 endlocal & exit /b %RC%

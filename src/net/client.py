@@ -16,12 +16,14 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from types import TracebackType
 from typing import TypeAlias, cast
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 from uuid import uuid4
 
 import requests
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
 from requests.adapters import HTTPAdapter
 
 from log_redact import redact
@@ -51,6 +53,8 @@ _FMP_RATES_PER_SECOND: Mapping[str, float] = {
 class HttpErrorKind(StrEnum):
     """Stable failure taxonomy for callers choosing halt vs degradation."""
 
+    PROVIDER_DISABLED_BY_OWNER = "provider_disabled_by_owner"
+    PROVIDER_ADMISSION_INVALID = "provider_admission_invalid"
     AUTH = "auth"
     PLAN = "plan"
     RATE_LIMIT = "rate_limit"
@@ -87,6 +91,60 @@ class HttpCallError(RuntimeError):
         self.retryable = retryable
         self.status_code = status_code
         self.payload = payload
+
+
+class _FmpAdmission(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    schema_version: int = Field(strict=True, ge=1, le=1)
+    enabled: StrictBool
+
+
+def require_fmp_admission() -> None:
+    """Re-read explicit nonsecret owner policy; never probe disabled providers.
+
+    The approved environment loader supplies the path. An absent setting keeps
+    legacy behavior; a configured but unusable policy fails closed.
+    """
+    configured = os.environ.get("EARNINGS_SUMMARY_FMP_POLICY_FILE")
+    if configured is None:
+        return
+    try:
+        path = Path(configured)
+        if not configured.strip() or not path.is_absolute():
+            raise ValueError("absolute path required")
+        if path.resolve().is_relative_to(Path(__file__).resolve().parents[2]):
+            raise ValueError("policy must be external")
+        with path.open("rb") as handle:
+            raw = handle.read(4097)
+        if len(raw) > 4096:
+            raise ValueError("policy exceeds bound")
+        policy = _FmpAdmission.model_validate_json(raw)
+    except (OSError, ValueError, ValidationError):
+        raise HttpCallError(
+            kind=HttpErrorKind.PROVIDER_ADMISSION_INVALID,
+            message="FMP provider_admission_invalid: configured owner policy is unavailable or invalid",
+            retryable=False,
+        ) from None
+    if not policy.enabled:
+        raise HttpCallError(
+            kind=HttpErrorKind.PROVIDER_DISABLED_BY_OWNER,
+            message="FMP provider_disabled_by_owner",
+            retryable=False,
+        ) from None
+
+
+def _admit_fmp_redirect(response: requests.Response, **kwargs: object) -> requests.Response:
+    """Requests invokes this before following each redirect, including later hops."""
+    if response.is_redirect:
+        target = urlsplit(urljoin(response.url, response.headers["Location"]))
+        host = (target.hostname or "").lower().rstrip(".")
+        if host == "financialmodelingprep.com" or host.endswith(".financialmodelingprep.com"):
+            try:
+                require_fmp_admission()
+            except HttpCallError:
+                response.close()
+                raise
+    return response
 
 
 @dataclass(frozen=True, slots=True)
@@ -390,7 +448,7 @@ class HttpClient:
             else None
         )
         parsed = urlsplit(url)
-        host = (parsed.hostname or "").lower()
+        host = (parsed.hostname or "").lower().rstrip(".")
         path = parsed.path or "/"
         if parsed.scheme not in {"http", "https"} or not host:
             raise ValueError("url must be an absolute HTTP(S) URL")
@@ -402,7 +460,14 @@ class HttpClient:
         policy = retry or self._retry
         retryable_method = normalized_method in policy.retry_methods
         for attempt in range(1, policy.max_attempts + 1):
+            is_fmp = host == "financialmodelingprep.com" or host.endswith(
+                ".financialmodelingprep.com"
+            )
+            if is_fmp:
+                require_fmp_admission()
             self._rate_budget.acquire(host)
+            if is_fmp:
+                require_fmp_admission()
             started = time.monotonic()
             try:
                 response = self._session.request(
@@ -411,6 +476,9 @@ class HttpClient:
                     params=params,
                     headers=request_headers,
                     timeout=timeout or self._timeout,
+                    hooks={
+                        "response": [*self._session.hooks.get("response", []), _admit_fmp_redirect]
+                    },
                 )
             except requests.RequestException as exc:
                 if attempt_hook is not None:
@@ -567,6 +635,7 @@ class FmpClient:
         parsed = urlsplit(url)
         if parsed.scheme != "https" or parsed.hostname != "financialmodelingprep.com":
             raise ValueError("FMP URL must use https://financialmodelingprep.com")
+        require_fmp_admission()
         # Project dotenv files may be loaded after this module is imported.
         # Re-read the tier immediately before reserving the provider budget.
         self._http.set_host_rate(
