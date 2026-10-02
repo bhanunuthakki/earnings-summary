@@ -537,22 +537,36 @@ def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEv
     original_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
     try:
-        npv_column = "npv" if "npv" in columns else "NULL"
-        row = conn.execute(
-            f"""
+        # SQLite parameters bind values, not optional column identifiers. Keep
+        # both legacy-schema variants static and read the chosen row once.
+        query = (
+            """
             SELECT id, ticker, created_at, valuation_date, engine_version,
                    input_sha256, workbook_sha256, inputs_as_of,
                    live_price, live_price_at, npv_per_share, over_under_pct,
-                   sanity_flag, assumption_snapshot_json, provenance_json, {npv_column} AS npv
+                   sanity_flag, assumption_snapshot_json, provenance_json, npv
             FROM dcf_runs
             WHERE UPPER(ticker) = ?
               AND COALESCE(is_latest, 1) = 1
               AND COALESCE(segment_name, '') = ''
             ORDER BY created_at DESC, id DESC
             LIMIT 1
-            """,
-            (normalized_ticker,),
-        ).fetchone()
+            """
+            if "npv" in columns
+            else """
+            SELECT id, ticker, created_at, valuation_date, engine_version,
+                   input_sha256, workbook_sha256, inputs_as_of,
+                   live_price, live_price_at, npv_per_share, over_under_pct,
+                   sanity_flag, assumption_snapshot_json, provenance_json, NULL AS npv
+            FROM dcf_runs
+            WHERE UPPER(ticker) = ?
+              AND COALESCE(is_latest, 1) = 1
+              AND COALESCE(segment_name, '') = ''
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """
+        )
+        row = conn.execute(query, (normalized_ticker,)).fetchone()
     except sqlite3.Error:
         return DcfGradeEvidence(
             status="invalid",

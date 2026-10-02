@@ -427,3 +427,36 @@ def test_nonfinite_nested_json_evidence_fails_closed() -> None:
 
     assert evidence.status == "invalid"
     assert evidence.invalid_reason == "assumption_snapshot_invalid"
+
+
+@pytest.mark.parametrize("has_npv_column", [False, True])
+def test_optional_npv_schema_preserves_single_run_and_literal_ticker(has_npv_column: bool) -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        _schema(conn)
+        if has_npv_column:
+            conn.execute("ALTER TABLE dcf_runs ADD COLUMN npv REAL")
+        conn.executemany(
+            "INSERT INTO dcf_runs (id,ticker,created_at,is_latest,segment_name,"
+            "assumption_snapshot_json,provenance_json,npv_per_share) VALUES (?,?,?,?,?,?,?,?)",
+            [
+                (1, "MELI", "2026-10-01T12:00:00", 0, None, "{}", "{}", 100),
+                (2, "MELI", "2026-10-01T11:00:00", 1, None, "{}", "{}", 200),
+                (3, "MELI", "2026-10-01T12:00:00", 1, "Commerce", "{}", "{}", 300),
+                (4, "NU", "2026-10-01T12:00:00", 1, None, "{}", "{}", 400),
+                (5, "MELI", "2026-10-01T11:00:00", 1, None, "{}", "{}", 500),
+            ],
+        )
+        if has_npv_column:
+            conn.execute("UPDATE dcf_runs SET npv = id * 1000")
+        factory = conn.row_factory
+        evidence = load_dcf_grade_evidence(conn, "meli")
+        assert evidence.status == "available"
+        assert evidence.run_id == 5
+        assert evidence.npv_per_share == 500
+        assert evidence.npv == (5000 if has_npv_column else None)
+        assert conn.row_factory is factory
+        assert load_dcf_grade_evidence(conn, "MELI' OR 1=1 --").status == "missing"
+        assert conn.execute("SELECT count(*) FROM dcf_runs").fetchone()[0] == 5
+    finally:
+        conn.close()
