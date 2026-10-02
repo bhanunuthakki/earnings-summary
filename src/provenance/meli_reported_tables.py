@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 from provenance.evidence_ledger import EvidenceLedger, EvidenceLocator, EvidenceNode, ExtractionRun
 from provenance.evidence_native_candidates import (
@@ -43,7 +43,8 @@ from provenance.source_fact_repository import (
     SourceFactRepository,
 )
 
-_RECIPE = "meli-10q-current-h1-reported-tables.v1"
+_RECIPE = "meli-10q-current-h1-reported-tables.v2"
+_NORMALIZATION_RECIPE = "meli-reported-unit-normalization.v1"
 _NAME = "meli-reported-tables"
 _CIK = "0001099590"
 Metric = Literal["nimal", "available_cash_and_investments", "total_debt_and_leases"]
@@ -102,13 +103,16 @@ class TableDisposition(_Closed):
     source_definition_sha256: str | None = None
     unit_key: str | None = None
     currency: str | None = None
+    normalized_unit_key: Literal["USD", "ratio"] | None = None
+    normalized_numeric_value: str | None = None
+    normalization_multiplier: str | None = None
     period_start: datetime | None = None
     period_end: datetime
 
 
 class ReportedTableResult(_Closed):
     mode: Literal["dry_run", "apply"]
-    recipe: Literal["meli-10q-current-h1-reported-tables.v1"] = _RECIPE
+    recipe: Literal["meli-10q-current-h1-reported-tables.v2"] = _RECIPE
     document_version_id: str
     extraction_run_id: str
     population: tuple[TableDisposition, ...]
@@ -423,6 +427,11 @@ def _extract(evidence: _Evidence, metric: Metric) -> TableDisposition:
             }
         )
     )
+    # Scale conversion follows the exact retained table header. It changes only
+    # representation; source tokens/units stay in the disposition and locator.
+    normalized_unit, multiplier = (
+        ("ratio", Decimal("0.01")) if metric == "nimal" else ("USD", Decimal("1000000"))
+    )
     # The numeric cell comes first so the observation's locator is the value's
     # exact span, with all supporting headers/definitions retained separately.
     source_nodes = tuple(dict.fromkeys((*[n.node_id for n in value_nodes], *source_nodes)))
@@ -437,6 +446,9 @@ def _extract(evidence: _Evidence, metric: Metric) -> TableDisposition:
         source_definition_sha256=definition_sha,
         unit_key=unit,
         currency=currency,
+        normalized_unit_key=normalized_unit,
+        normalized_numeric_value=format(value * multiplier, "f"),
+        normalization_multiplier=str(multiplier),
         period_start=start,
         period_end=evidence.period_end,
     )
@@ -552,14 +564,39 @@ def _publish_in_snapshot(
                 source_node is None
                 or item.unit_key is None
                 or item.source_definition_sha256 is None
+                or item.numeric_value is None
+                or item.raw_lexical_value is None
+                or item.normalized_unit_key is None
+                or item.normalized_numeric_value is None
+                or item.normalization_multiplier is None
             ):
                 raise ValueError("captured disposition has incomplete source identity")
+            normalization: dict[str, JsonValue] = {
+                "recipe": _NORMALIZATION_RECIPE,
+                "raw_unit_key": item.unit_key,
+                "raw_numeric_value": item.numeric_value,
+                "raw_lexical_value": item.raw_lexical_value,
+                "target_unit_key": item.normalized_unit_key,
+                "multiplier": item.normalization_multiplier,
+                "normalized_numeric_value": item.normalized_numeric_value,
+            }
+            normalized_definition_sha = _sha(
+                _json(
+                    {
+                        "raw_source_definition_sha256": item.source_definition_sha256,
+                        "normalization_recipe": _NORMALIZATION_RECIPE,
+                        "raw_unit_key": item.unit_key,
+                        "target_unit_key": item.normalized_unit_key,
+                        "multiplier": item.normalization_multiplier,
+                    }
+                )
+            )
             cell_id = "meli-table-cell:" + _sha(
                 _json(
                     {
                         "entity": subject.reporting_entity_id,
                         "metric": item.metric,
-                        "definition": item.source_definition_sha256,
+                        "definition": normalized_definition_sha,
                         "end": item.period_end.isoformat(),
                         "start": None
                         if item.period_start is None
@@ -567,7 +604,7 @@ def _publish_in_snapshot(
                     }
                 )
             )
-            taxonomy_version = "source-definition:" + item.source_definition_sha256
+            taxonomy_version = "source-definition:" + normalized_definition_sha
             cell = FactCellV2(
                 fact_cell_id=cell_id,
                 idempotency_key=cell_id,
@@ -583,7 +620,7 @@ def _publish_in_snapshot(
                 period_end=item.period_end,
                 fiscal_year=item.period_end.year,
                 fiscal_period="H1" if item.period_start else "Q2",
-                unit_key=item.unit_key,
+                unit_key=item.normalized_unit_key,
                 currency=item.currency,
                 effective_at=item.period_end,
                 knowledge_at=stamp,
@@ -597,7 +634,9 @@ def _publish_in_snapshot(
                     ),
                     "source_node_ids": list(item.source_node_ids),
                     "definition_node_ids": list(item.definition_node_ids),
-                    "source_definition_sha256": item.source_definition_sha256,
+                    "source_definition_sha256": normalized_definition_sha,
+                    "raw_source_definition_sha256": item.source_definition_sha256,
+                    "normalization": normalization,
                     "recipe": _RECIPE,
                     "fulltext_run_id": request.fulltext_run_id,
                 }
@@ -608,7 +647,7 @@ def _publish_in_snapshot(
                 fact_cell_id=cell_id,
                 observation_kind="reported",
                 value_kind="numeric",
-                numeric_value=item.numeric_value,
+                numeric_value=item.normalized_numeric_value,
                 raw_lexical_value=item.raw_lexical_value,
                 method_name=_NAME,
                 method_version=_RECIPE,

@@ -363,6 +363,49 @@ def test_real_authorities_dry_run_apply_replay(
     assert all(json.loads(row[0])["definition_node_ids"] for row in anchors)
 
 
+def test_publication_normalizes_units_with_replayable_raw_lineage(
+    database: sqlite3.Connection, tmp_path: Path
+) -> None:
+    request = _seed(database, tmp_path, (FIXTURES / "h1-2026-snippet.html").read_bytes())
+    result = publish_meli_reported_tables(database, request.model_copy(update={"apply": True}))
+    rows = database.execute(
+        "SELECT c.concept_name,c.unit_key,o.numeric_value,o.raw_lexical_value,o.source_locator_json "
+        "FROM fact_cells_v2 c JOIN fact_observations_v2 o ON o.fact_cell_id=c.fact_cell_id "
+        "ORDER BY c.concept_name"
+    ).fetchall()
+    expected = {
+        "nimal": ("ratio", "0.194", "percent", "19.4", "0.01"),
+        "available_cash_and_investments": ("USD", "6751000000", "USD_millions", "6751", "1000000"),
+        "total_debt_and_leases": ("USD", "13176000000", "USD_millions", "13176", "1000000"),
+    }
+    assert len(rows) == len(expected)
+    for concept, unit, value, lexical, locator_raw in rows:
+        target_unit, target_value, raw_unit, raw_value, factor = expected[concept]
+        assert (unit, value) == (target_unit, target_value)
+        locator = json.loads(locator_raw)
+        assert locator["normalization"] == {
+            "recipe": "meli-reported-unit-normalization.v1",
+            "raw_unit_key": raw_unit,
+            "raw_numeric_value": raw_value,
+            "raw_lexical_value": lexical,
+            "target_unit_key": target_unit,
+            "multiplier": factor,
+            "normalized_numeric_value": target_value,
+        }
+        assert locator["raw_source_definition_sha256"] != locator["source_definition_sha256"]
+        assert locator["definition_node_ids"] and locator["source_node_ids"]
+    assert result.recipe == "meli-10q-current-h1-reported-tables.v2"
+    # Published normalized units do not overwrite source wording or presentation.
+    assert [(p.numeric_value, p.unit_key) for p in result.population] == [
+        ("19.4", "percent"),
+        ("6751", "USD_millions"),
+        ("13176", "USD_millions"),
+    ]
+    changes = database.total_changes
+    replay = publish_meli_reported_tables(database, request.model_copy(update={"apply": True}))
+    assert replay.exact_replay and database.total_changes == changes
+
+
 def test_values_are_parsed_not_asserted(database: sqlite3.Connection, tmp_path: Path) -> None:
     raw = (
         (FIXTURES / "h1-2026-snippet.html")

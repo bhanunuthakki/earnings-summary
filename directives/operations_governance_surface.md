@@ -558,9 +558,15 @@ provider. Its current recipe supports a June 30 10-Q whose table explicitly repo
 six-month duration (a missing SEC capture start date is derived from that header, and a
 conflicting start date fails) and exactly
 three current-period rows: H1 NIMAL, issuer-reconciled available cash and investments,
-and total debt including operating leases. It preserves reported percent and USD-millions
-units; no DCF unit conversion, cash allocation, lease adjustment, or financial estimate is
-performed. A changed/missing/ambiguous header, definition, row, or scope is rejected.
+and total debt including operating leases. Recipe v2 retains the raw percent and
+USD-millions values, units, source tokens, table headers and definition commitments.
+Its versioned representation conversion publishes ratio (percent ×0.01) and USD
+(USD-millions ×1,000,000), with raw/normalized values and the exact multiplier in
+each immutable source locator and a distinct source-definition/cell identity.
+Dry-run dispositions expose both representations. No analyst cash allocation,
+lease adjustment, canonical admission, or financial estimate is performed.
+Prior recipe observations remain immutable. A changed/missing/ambiguous header,
+definition, row, or scope is rejected.
 
 The CLI emits a closed three-member captured/rejected population. Apply appends the
 scoped extraction's disposition nodes and `SourceFactRepository` publication atomically;
