@@ -697,3 +697,30 @@ terminal verification infers the persisted mode, reassembles that exact request,
 performs the same lineage checks. No schema, store, service, schedule, provider, or
 new dashboard action is introduced. A preview is an assembly plan, not a successful
 sealed-source verification receipt.
+
+### Bounded accession capture
+
+`execution/capture_expected_sec_documents.py --accession-number <SEC-accession>`
+selects exact dashed accession numbers within the supplied current, completely
+sealed authoritative SEC inventory keys. Repeat the flag for at most 250 unique
+accessions. Omission retains the existing inventory-wide ordering and batch limit.
+Unknown accessions or accessions crossing multiple supplied inventory/issuer
+identities are errors before network, checkpoint writes or apply receipts.
+Already captured accessions remain valid selectors and can yield zero new work.
+
+Use the same task id and selector for dry-run/apply/resume. New checkpoint scope
+hashes bind inventory keys, current snapshot IDs and the accession selection;
+a changed scope requires a new task id. Existing unfiltered checkpoints retain
+exact-byte replay, but cannot be repurposed as filtered checkpoints. Raw response
+storage and hash validation are unchanged. Apply receipts bind the actual selected
+expected-document IDs, not the entire inventory. Validated selections pin a
+checkpoint even when no documents remain; selected-mode logical request identity
+also includes the scope hash so empty accession requests cannot collapse together.
+
+Results name `selection_scope` and `accession_numbers`. `has_more` describes
+pending capturable documents within that scope beyond this batch;
+`pending_outside_selection` separately counts currently pending capturable
+expectations outside the selected accessions in the supplied inventories. These
+are selection progress fields, not whole-inventory or extraction completeness.
+Authority-omitted locators retain their existing coverage dispositions; this
+selector does not manufacture locators, source coverage, or canonical admission.

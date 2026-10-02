@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
@@ -10,6 +11,7 @@ from pathlib import Path
 
 import pytest
 import requests
+from pydantic import ValidationError
 
 from execution import capture_expected_sec_documents as cli
 from pipeline.sec_operations_view import read_sec_coverage_state
@@ -816,11 +818,14 @@ def test_cli_defaults_to_read_only_dry_run(
             str(tmp_path / "cli-blobs"),
             "--task-id",
             "cli-dry-run",
+            "--accession-number",
+            "0000000001-26-000001",
         ]
     )
     captured = capsys.readouterr()
     assert exit_code == 0
     assert '"mode":"dry_run"' in captured.out
+    assert '"selection_scope":"accessions"' in captured.out
     assert "sec_native_capture_completed" in captured.err
     assert not (tmp_path / "cli-blobs").exists()
 
@@ -867,5 +872,310 @@ def test_interrupted_apply_retains_running_without_terminal_success(
         assert company.executions[0].receipt.result is None
         assert company.executions[0].population_matches
         assert company.coverage_status != "Covered / freshness unknown"
+    finally:
+        conn.close()
+
+
+FIRST = "0000000001-26-000001"
+SECOND = "0000000001-26-000002"
+
+
+def _second(conn: sqlite3.Connection) -> None:
+    SourceCoverageLedger(conn).persist(
+        ExpectedDocument(
+            expected_document_id="expected-second",
+            idempotency_key="expected-second",
+            snapshot_id="inventory-snapshot",
+            expected_document_key="issuer-acme:" + SECOND,
+            issuer_id="issuer-acme",
+            ticker="ACME",
+            source_kind="sec_filing",
+            document_type="filing",
+            form_type="10-Q",
+            accession_number=SECOND,
+            source_url="https://www.sec.gov/Archives/edgar/data/1/000000000126000002/second.htm",
+            primary_document="second.htm",
+            period_start=None,
+            period_end=STAMP,
+            filing_at=STAMP,
+            expected_at=None,
+            expectation_basis="authoritative",
+            recorded_at=STAMP,
+        )
+    )
+    conn.commit()
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        (FIRST, FIRST),
+        ("000000000126000001",),
+        (" 0000000001-26-000001",),
+        ("x' OR 1=1 --",),
+        tuple(f"0000000001-26-{i:06d}" for i in range(251)),
+    ],
+)
+def test_selector_is_exact_unique_and_bounded(tmp_path: Path, values: tuple[str, ...]) -> None:
+    payload = _request(tmp_path, apply=False).model_dump()
+    payload["accession_numbers"] = values
+    with pytest.raises(ValidationError):
+        SecNativeCaptureRequest.model_validate(payload)
+
+
+def test_only_selected_accession_captured_and_receipt_bound(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    try:
+        _second(conn)
+        req = SecNativeCaptureRequest.model_validate(
+            {**_request(tmp_path, apply=False).model_dump(), "accession_numbers": (SECOND,)}
+        )
+        session = FakeSession([FakeResponse()])
+        preview = capture_expected_sec_documents(conn, req, session=session)
+        assert session.calls == [
+            "https://www.sec.gov/Archives/edgar/data/1/000000000126000002/second.htm"
+        ]
+        assert [x.expected_document_id for x in preview.items] == ["expected-second"]
+        assert preview.selection_scope == "accessions" and preview.accession_numbers == (SECOND,)
+        assert not preview.has_more and preview.pending_outside_selection == 1
+        apply_session = FakeSession([])
+        result = capture_expected_sec_documents(
+            conn, req.model_copy(update={"apply": True}), session=apply_session
+        )
+        assert apply_session.calls == [] and result.fetched == 1
+        receipt = read_sec_executions(conn, ticker="ACME")[0]
+        assert receipt.scope.expected_document_ids == ("expected-second",)
+        assert receipt.scope.snapshot_ids == ("inventory-snapshot",)
+        assert receipt.result is not None and receipt.result.captured == 1
+        remaining, more = load_expected_sec_documents(
+            conn, inventory_keys=(INVENTORY_KEY,), limit=10
+        )
+        assert [x.expected_document_id for x in remaining] == ["expected-10k"] and not more
+        completed = capture_expected_sec_documents(
+            conn, req.model_copy(update={"apply": True}), session=FakeSession([])
+        )
+        assert completed.considered == 0 and completed.pending_outside_selection == 1
+    finally:
+        conn.close()
+
+
+def test_unknown_selector_refuses_without_network_checkpoint_or_receipt(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    try:
+        req = SecNativeCaptureRequest.model_validate(
+            {**_request(tmp_path, apply=True).model_dump(), "accession_numbers": (SECOND,)}
+        )
+        session = FakeSession([])
+        before = conn.total_changes
+        with pytest.raises(SecNativeCaptureError, match="unknown or ambiguous"):
+            capture_expected_sec_documents(conn, req, session=session)
+        assert not session.calls and conn.total_changes == before
+        assert not req.checkpoint_root.exists()
+    finally:
+        conn.close()
+
+
+def test_checkpoint_cannot_change_selector_or_reuse_legacy_filtered(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    try:
+        _second(conn)
+        req = SecNativeCaptureRequest.model_validate(
+            {**_request(tmp_path, apply=False).model_dump(), "accession_numbers": (FIRST,)}
+        )
+        capture_expected_sec_documents(conn, req, session=FakeSession([FakeResponse()]))
+        state = req.checkpoint_root / req.task_id / "state.json"
+        before = state.read_bytes()
+        for accessions in [(SECOND,), ()]:
+            with pytest.raises(SecNativeCaptureError, match="selection scope differs"):
+                capture_expected_sec_documents(
+                    conn,
+                    req.model_copy(update={"accession_numbers": accessions, "apply": True}),
+                    session=FakeSession([]),
+                )
+            assert state.read_bytes() == before
+        payload = json.loads(before)
+        payload.pop("scope_sha256")
+        state.write_text(json.dumps(payload))
+        with pytest.raises(SecNativeCaptureError, match="legacy checkpoint"):
+            capture_expected_sec_documents(conn, req, session=FakeSession([]))
+        # Existing unfiltered legacy replay still consumes retained exact bytes.
+        result = capture_expected_sec_documents(
+            conn,
+            req.model_copy(update={"accession_numbers": (), "apply": True}),
+            session=FakeSession([FakeResponse()]),
+        )
+        assert result.fetched == 2
+    finally:
+        conn.close()
+
+
+def test_multiple_accessions_have_selected_batch_has_more(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    try:
+        _second(conn)
+        selected, more = load_expected_sec_documents(
+            conn, inventory_keys=(INVENTORY_KEY,), accession_numbers=(SECOND, FIRST), limit=1
+        )
+        assert len(selected) == 1 and more
+        assert selected[0].accession_number == FIRST
+    finally:
+        conn.close()
+
+
+def test_cross_inventory_selectors_bind_unambiguously(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    try:
+        cursor = conn.execute(
+            "SELECT * FROM source_inventory_snapshots WHERE snapshot_id='inventory-snapshot'"
+        )
+        snapshot = SourceInventorySnapshot.model_validate(
+            dict(zip((column[0] for column in cursor.description), cursor.fetchone(), strict=True))
+        )
+        SourceCoverageLedger(conn).persist(
+            snapshot.model_copy(
+                update={
+                    "snapshot_id": "other-snapshot",
+                    "idempotency_key": "other-snapshot",
+                    "inventory_key": "other-inventory",
+                }
+            )
+        )
+        cursor = conn.execute(
+            "SELECT * FROM source_inventory_components WHERE component_id='inventory-component'"
+        )
+        component = InventoryComponent.model_validate(
+            dict(zip((column[0] for column in cursor.description), cursor.fetchone(), strict=True))
+        ).model_copy(
+            update={
+                "snapshot_id": "other-snapshot",
+                "component_id": "other-component",
+                "idempotency_key": "other-component",
+            }
+        )
+        sealstore = SourceInventorySealStore(conn)
+        sealstore.persist(component)
+        sealstore.persist(
+            InventorySeal(
+                snapshot_id="other-snapshot",
+                expected_component_count=1,
+                component_digest_sha256=component_digest((component,)),
+                completion_status="complete",
+                sealed_at=STAMP,
+            )
+        )
+        cursor = conn.execute(
+            "SELECT * FROM expected_documents WHERE expected_document_id='expected-10k'"
+        )
+        expected = ExpectedDocument.model_validate(
+            dict(zip((column[0] for column in cursor.description), cursor.fetchone(), strict=True))
+        )
+        SourceCoverageLedger(conn).persist(
+            expected.model_copy(
+                update={
+                    "expected_document_id": "other-expected",
+                    "idempotency_key": "other-expected",
+                    "snapshot_id": "other-snapshot",
+                    "expected_document_key": "other-key",
+                    "accession_number": SECOND,
+                    "source_url": "https://www.sec.gov/Archives/edgar/data/1/000000000126000002/second.htm",
+                    "primary_document": "second.htm",
+                }
+            )
+        )
+        conn.commit()
+        candidates, more = load_expected_sec_documents(
+            conn,
+            inventory_keys=(INVENTORY_KEY, "other-inventory"),
+            accession_numbers=(FIRST, SECOND),
+            limit=10,
+        )
+        assert not more and {x.expected_document_id for x in candidates} == {
+            "expected-10k",
+            "other-expected",
+        }
+        # A second current inventory claiming the same accession must not silently fan out.
+        SourceCoverageLedger(conn).persist(
+            expected.model_copy(
+                update={
+                    "expected_document_id": "duplicate-expected",
+                    "idempotency_key": "duplicate-expected",
+                    "snapshot_id": "other-snapshot",
+                    "expected_document_key": "duplicate-key",
+                }
+            )
+        )
+        conn.commit()
+        with pytest.raises(SecNativeCaptureError, match="unknown or ambiguous"):
+            load_expected_sec_documents(
+                conn,
+                inventory_keys=(INVENTORY_KEY, "other-inventory"),
+                accession_numbers=(FIRST,),
+                limit=10,
+            )
+    finally:
+        conn.close()
+
+
+def test_zero_work_still_pins_selector_and_receipt_identity(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    try:
+        _second(conn)
+        capture_expected_sec_documents(
+            conn,
+            _request(tmp_path, apply=True, task_id="seed"),
+            session=FakeSession([FakeResponse(), FakeResponse()]),
+        )
+        request = SecNativeCaptureRequest.model_validate(
+            {
+                **_request(tmp_path, apply=False, task_id="empty").model_dump(),
+                "accession_numbers": (FIRST,),
+            }
+        )
+        preview = capture_expected_sec_documents(conn, request, session=FakeSession([]))
+        assert preview.considered == 0
+        checkpoint = request.checkpoint_root / request.task_id / "state.json"
+        assert checkpoint.exists()
+        before = checkpoint.read_bytes()
+        for selector in [(SECOND,), ()]:
+            with pytest.raises(SecNativeCaptureError, match="selection scope differs"):
+                capture_expected_sec_documents(
+                    conn,
+                    request.model_copy(update={"accession_numbers": selector, "apply": True}),
+                    session=FakeSession([]),
+                )
+            assert checkpoint.read_bytes() == before
+        capture_expected_sec_documents(
+            conn, request.model_copy(update={"apply": True}), session=FakeSession([])
+        )
+        first_receipt = read_sec_executions(conn, ticker="ACME")[0]
+        # Separate checkpoint roots permit isolated requests with the same task label.
+        # Even when selected document IDs are empty, their accession intents differ.
+        other = request.model_copy(
+            update={
+                "checkpoint_root": tmp_path / "other-checkpoints",
+                "accession_numbers": (SECOND,),
+                "apply": True,
+            }
+        )
+        capture_expected_sec_documents(conn, other, session=FakeSession([]))
+        second_receipt = read_sec_executions(conn, ticker="ACME")[0]
+        assert (
+            first_receipt.scope.expected_document_ids
+            == second_receipt.scope.expected_document_ids
+            == ()
+        )
+        assert first_receipt.request_id != second_receipt.request_id
     finally:
         conn.close()

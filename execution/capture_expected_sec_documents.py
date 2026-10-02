@@ -7,7 +7,6 @@ Dry run is the default: it fetches and checkpoints raw responses under
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import sys
@@ -16,19 +15,21 @@ from typing import cast
 
 import requests
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT, command_parser
+except ImportError:
+    from execution._lib import PROJECT_ROOT, command_parser
 
-from provenance.sec_native_capture import (  # noqa: E402
+from provenance.sec_native_capture import (
     SecNativeCaptureHardStopError,
     SecNativeCaptureRequest,
     SecNativeCaptureResult,
     SessionLike,
     capture_expected_sec_documents,
 )
-from runtime.job_runtime import JobLock  # noqa: E402
-from sec_identity import sec_user_agent  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from runtime.job_runtime import JobLock
+from sec_identity import sec_user_agent
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def _event(event: str, **fields: object) -> None:
@@ -36,7 +37,7 @@ def _event(event: str, **fields: object) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = command_parser(__doc__)
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument(
         "--inventory-key",
@@ -54,6 +55,12 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=PROJECT_ROOT / "data" / "evidence" / "blobs",
     )
+    parser.add_argument(
+        "--accession-number",
+        action="append",
+        default=[],
+        help="Capture only these exact accessions; repeat up to 250 times",
+    )
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--batch-size", type=int, default=25)
     parser.add_argument("--max-document-bytes", type=int, default=100_000_000)
@@ -67,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     request = SecNativeCaptureRequest(
         inventory_keys=tuple(args.inventory_key),
+        accession_numbers=tuple(args.accession_number),
         checkpoint_root=args.checkpoint_root,
         blob_root=args.blob_root,
         task_id=args.task_id,

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import tempfile
 import time
@@ -107,6 +108,7 @@ class SecNativeCaptureRequest(_ClosedModel):
     """Validated authority and operational controls for one bounded capture."""
 
     inventory_keys: tuple[str, ...] = Field(min_length=1)
+    accession_numbers: tuple[str, ...] = Field(default=(), max_length=250)
     checkpoint_root: Path
     blob_root: Path
     task_id: str = Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -127,6 +129,19 @@ class SecNativeCaptureRequest(_ClosedModel):
         if len(normalized) != len(set(normalized)):
             raise ValueError("inventory keys must be unique")
         return normalized
+
+    @field_validator("accession_numbers")
+    @classmethod
+    def _accessions(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _validated_accessions(value)
+
+
+def _validated_accessions(values: tuple[str, ...]) -> tuple[str, ...]:
+    if len(values) > 250 or len(set(values)) != len(values):
+        raise ValueError("accession selectors must be unique and bounded to 250")
+    if any(re.fullmatch(r"[0-9]{10}-[0-9]{2}-[0-9]{6}", value) is None for value in values):
+        raise ValueError("accession selector must use exact SEC dashed format")
+    return tuple(sorted(values))
 
 
 class ExpectedSecDocument(_ClosedModel):
@@ -198,6 +213,7 @@ class CaptureCheckpointEntry(_ClosedModel):
 
 class CaptureCheckpoint(_ClosedModel):
     task_id: str
+    scope_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     entries: tuple[CaptureCheckpointEntry, ...] = ()
     updated_at: datetime
 
@@ -238,6 +254,9 @@ class CapturedSecPackageMember(_ClosedModel):
 
 class SecNativeCaptureResult(_ClosedModel):
     task_id: str
+    selection_scope: Literal["inventory", "accessions"] = "inventory"
+    accession_numbers: tuple[str, ...] = ()
+    pending_outside_selection: int = Field(default=0, ge=0)
     mode: Literal["dry_run", "apply"]
     inventory_keys: tuple[str, ...]
     considered: int = Field(ge=0)
@@ -326,14 +345,15 @@ def load_expected_sec_documents(
     *,
     inventory_keys: tuple[str, ...],
     limit: int,
+    accession_numbers: tuple[str, ...] = (),
 ) -> tuple[tuple[ExpectedSecDocument, ...], bool]:
     """Load only current, completely sealed, authoritative SEC expectations."""
 
-    placeholders = ", ".join("?" for _ in inventory_keys)
+    accession_numbers = _validated_accessions(accession_numbers)
     inventory_rows = conn.execute(
-        "SELECT inventory_key, source_kind FROM v_source_inventory_sealed_complete "  # nosec B608 -- trusted internal SQL shape; values remain bound
-        f"WHERE inventory_key IN ({placeholders}) ORDER BY inventory_key",
-        inventory_keys,
+        "SELECT inventory_key, source_kind FROM v_source_inventory_sealed_complete "
+        "WHERE inventory_key IN (SELECT value FROM json_each(?)) ORDER BY inventory_key",
+        (json.dumps(inventory_keys),),
     ).fetchall()
     found = {str(row[0]): str(row[1]) for row in inventory_rows}
     missing = sorted(set(inventory_keys) - set(found))
@@ -349,8 +369,27 @@ def load_expected_sec_documents(
             "SEC-native capture refuses non-SEC inventories: " + ", ".join(wrong_kind)
         )
 
+    if accession_numbers:
+        identities = conn.execute(
+            "SELECT DISTINCT expected.accession_number,inventory.inventory_key,expected.issuer_id "
+            "FROM v_expected_documents_current expected "
+            "JOIN v_source_inventory_sealed_complete inventory "
+            "ON inventory.snapshot_id=expected.snapshot_id "
+            "WHERE inventory.inventory_key IN (SELECT value FROM json_each(?)) "
+            "AND expected.accession_number IN (SELECT value FROM json_each(?)) "
+            "AND expected.source_kind='sec_filing' AND expected.expectation_basis='authoritative'",
+            (json.dumps(inventory_keys), json.dumps(accession_numbers)),
+        ).fetchall()
+        if any(
+            sum(str(row[0]) == accession for row in identities) != 1
+            for accession in accession_numbers
+        ):
+            raise SecNativeCaptureError(
+                "accession selector is unknown or ambiguous in sealed inventories"
+            )
+
     rows = conn.execute(
-        "SELECT expected.expected_document_id, expected.snapshot_id, inventory.inventory_key, "  # nosec B608 -- trusted internal SQL shape; values remain bound
+        "SELECT expected.expected_document_id, expected.snapshot_id, inventory.inventory_key, "
         "expected.expected_document_key, expected.issuer_id, expected.ticker, "
         "expected.document_type, expected.form_type, expected.accession_number, "
         "expected.source_url, expected.primary_document, expected.period_start, "
@@ -360,7 +399,8 @@ def load_expected_sec_documents(
         "ON inventory.snapshot_id = expected.snapshot_id "
         "LEFT JOIN v_source_coverage_current AS coverage "
         "ON coverage.expected_document_id = expected.expected_document_id "
-        f"WHERE inventory.inventory_key IN ({placeholders}) "
+        "WHERE inventory.inventory_key IN (SELECT value FROM json_each(?)) "
+        "AND (? = 0 OR expected.accession_number IN (SELECT value FROM json_each(?))) "
         "AND expected.source_kind = 'sec_filing' "
         "AND expected.expectation_basis = 'authoritative' "
         "AND expected.source_url IS NOT NULL "
@@ -369,7 +409,12 @@ def load_expected_sec_documents(
         "NOT IN ('captured', 'extracted', 'indexed')) "
         "ORDER BY inventory.inventory_key, expected.expected_document_key "
         "LIMIT ?",
-        (*inventory_keys, limit + 1),
+        (
+            json.dumps(inventory_keys),
+            len(accession_numbers),
+            json.dumps(accession_numbers),
+            limit + 1,
+        ),
     ).fetchall()
     candidates: list[ExpectedSecDocument] = []
     for row in rows[:limit]:
@@ -400,6 +445,62 @@ def load_expected_sec_documents(
     return tuple(candidates), len(rows) > limit
 
 
+def _capture_scope(
+    conn: sqlite3.Connection, request: SecNativeCaptureRequest
+) -> tuple[CaptureCheckpoint, str, int]:
+    snapshots = tuple(
+        str(row[0])
+        for row in conn.execute(
+            "SELECT snapshot_id FROM v_source_inventory_sealed_complete "
+            "WHERE inventory_key IN (SELECT value FROM json_each(?)) ORDER BY snapshot_id",
+            (json.dumps(request.inventory_keys),),
+        )
+    )
+    scope_sha = hashlib.sha256(
+        json.dumps(
+            {
+                "inventory_keys": sorted(request.inventory_keys),
+                "snapshot_ids": snapshots,
+                "accession_numbers": request.accession_numbers,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    checkpoint = _load_checkpoint(
+        request.checkpoint_root / request.task_id / "state.json", request.task_id
+    )
+    if checkpoint.scope_sha256 is not None and checkpoint.scope_sha256 != scope_sha:
+        raise SecNativeCaptureError("capture checkpoint selection scope differs from request")
+    if (
+        checkpoint.scope_sha256 is None
+        and checkpoint.entries
+        and (
+            request.accession_numbers
+            or any(entry.snapshot_id not in snapshots for entry in checkpoint.entries)
+        )
+    ):
+        raise SecNativeCaptureError("legacy checkpoint cannot be rebound to a new selection scope")
+    if checkpoint.scope_sha256 is None:
+        checkpoint = checkpoint.model_copy(update={"scope_sha256": scope_sha})
+        _write_checkpoint(request.checkpoint_root / request.task_id / "state.json", checkpoint)
+    pending_outside = 0
+    if request.accession_numbers:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM v_expected_documents_current expected "
+            "JOIN v_source_inventory_sealed_complete inventory ON inventory.snapshot_id=expected.snapshot_id "
+            "LEFT JOIN v_source_coverage_current coverage ON coverage.expected_document_id=expected.expected_document_id "
+            "WHERE inventory.inventory_key IN (SELECT value FROM json_each(?)) "
+            "AND expected.accession_number NOT IN (SELECT value FROM json_each(?)) "
+            "AND expected.source_kind='sec_filing' AND expected.expectation_basis='authoritative' "
+            "AND expected.source_url IS NOT NULL AND expected.primary_document IS NOT NULL "
+            "AND (coverage.coverage_status IS NULL OR coverage.coverage_status NOT IN ('captured','extracted','indexed'))",
+            (json.dumps(request.inventory_keys), json.dumps(request.accession_numbers)),
+        ).fetchone()
+        pending_outside = int(row[0]) if row else 0
+    return checkpoint, scope_sha, pending_outside
+
+
 def capture_expected_sec_documents(
     conn: sqlite3.Connection,
     request: SecNativeCaptureRequest,
@@ -411,10 +512,19 @@ def capture_expected_sec_documents(
         conn,
         inventory_keys=request.inventory_keys,
         limit=request.batch_size,
+        accession_numbers=request.accession_numbers,
     )
+    checkpoint, scope_sha, pending_outside = _capture_scope(conn, request)
     if not request.apply:
         return _capture_batch(
-            conn, request, session=session, candidates=candidates, has_more=has_more
+            conn,
+            request,
+            session=session,
+            candidates=candidates,
+            has_more=has_more,
+            checkpoint=checkpoint,
+            scope_sha256=scope_sha,
+            pending_outside_selection=pending_outside,
         )
     inventory_scope = conn.execute(
         "SELECT snapshot_id,ticker FROM v_source_inventory_sealed_complete WHERE inventory_key IN (SELECT value FROM json_each(?)) ORDER BY inventory_key",
@@ -428,11 +538,23 @@ def capture_expected_sec_documents(
         expected_document_ids=tuple(item.expected_document_id for item in candidates),
     )
     started = begin_sec_execution(
-        conn, request_key=request.task_id, scope=scope, now=datetime.now(UTC)
+        conn,
+        request_key=f"{request.task_id}:{scope_sha}"
+        if request.accession_numbers
+        else request.task_id,
+        scope=scope,
+        now=datetime.now(UTC),
     )
     try:
         result = _capture_batch(
-            conn, request, session=session, candidates=candidates, has_more=has_more
+            conn,
+            request,
+            session=session,
+            candidates=candidates,
+            has_more=has_more,
+            checkpoint=checkpoint,
+            scope_sha256=scope_sha,
+            pending_outside_selection=pending_outside,
         )
     except Exception as exc:
         if conn.in_transaction:
@@ -483,10 +605,12 @@ def _capture_batch(
     session: SessionLike,
     candidates: tuple[ExpectedSecDocument, ...],
     has_more: bool,
+    checkpoint: CaptureCheckpoint,
+    scope_sha256: str,
+    pending_outside_selection: int,
 ) -> SecNativeCaptureResult:
     run_root = request.checkpoint_root / request.task_id
     checkpoint_path = run_root / "state.json"
-    checkpoint = _load_checkpoint(checkpoint_path, request.task_id)
     checkpoint_entries = {item.expected_document_id: item for item in checkpoint.entries}
     items: list[tuple[ExpectedSecDocument, CaptureCheckpointEntry]] = []
     network_requests_made = 0
@@ -506,6 +630,7 @@ def _capture_batch(
             checkpoint_entries[candidate.expected_document_id] = entry
             checkpoint = CaptureCheckpoint(
                 task_id=request.task_id,
+                scope_sha256=scope_sha256,
                 entries=tuple(
                     sorted(checkpoint_entries.values(), key=lambda item: item.expected_document_id)
                 ),
@@ -540,6 +665,7 @@ def _capture_batch(
             checkpoint_path,
             CaptureCheckpoint(
                 task_id=request.task_id,
+                scope_sha256=scope_sha256,
                 entries=tuple(
                     sorted(checkpoint_entries.values(), key=lambda item: item.expected_document_id)
                 ),
@@ -559,6 +685,9 @@ def _capture_batch(
 
     return SecNativeCaptureResult(
         task_id=request.task_id,
+        selection_scope="accessions" if request.accession_numbers else "inventory",
+        accession_numbers=request.accession_numbers,
+        pending_outside_selection=pending_outside_selection,
         mode="apply" if request.apply else "dry_run",
         inventory_keys=request.inventory_keys,
         considered=len(item_results),
