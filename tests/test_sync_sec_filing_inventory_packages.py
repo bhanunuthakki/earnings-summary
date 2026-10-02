@@ -1049,16 +1049,16 @@ def test_expected_document_preserves_authority_omitted_attachment_without_locato
     assert dict(omitted.absence.reason_details)["locator_status"] == "authority_omitted"
 
 
-def test_expected_documents_preserve_inventory_only_accession_roots() -> None:
+def test_expected_duties_refuse_inventory_only_roots_preserved_in_scope_manifest() -> None:
     governed = _filing("0000001001-25-000001", "report.htm", form_type="10-K")
     registration = _filing("0000001001-25-000002", "prospectus.htm", form_type="424B5")
     ownership = _filing("0000001001-25-000003", "ownership.xml", form_type="4")
 
-    documents = sync.build_expected_documents(
-        issuer_id=governed.issuer_id,
-        filings=(governed, registration, ownership),
-        packages=(),
-    )
-
-    assert [document.form_type for document in documents] == ["10-K", "424B5", "4"]
-    assert all(document.document_type == "filing" for document in documents)
+    # Full-inventory preservation belongs to the snapshot's derived scope
+    # manifest, not an invented registration/ownership reporting obligation.
+    with pytest.raises(ValueError, match="require governed reporting"):
+        sync.build_expected_documents(
+            issuer_id=governed.issuer_id,
+            filings=(governed, registration, ownership),
+            packages=(),
+        )
