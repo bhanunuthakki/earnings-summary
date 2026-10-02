@@ -876,6 +876,89 @@ def test_expected_documents_keep_accession_parentage_for_every_package_child(
     )
 
 
+@pytest.mark.parametrize("form_type", ["10-Q", "10-Q/A", "10-K", "10-K/A"])
+def test_periodic_sec_report_date_reaches_primary_and_financial_package_expectations(
+    form_type: str,
+) -> None:
+    filing = _filing("0000001001-26-000001", "report.htm", form_type=form_type).model_copy(
+        update={"filing_date": "2026-08-01", "report_date": "2026-06-30"}
+    )
+    package = ParsedSecFilingPackage(
+        cik="0000001001",
+        accession_number=filing.accession_number,
+        form_type=form_type,
+        primary_document="report.htm",
+        index_url="https://www.sec.gov/Archives/edgar/data/1001/000000100126000001/index.json",
+        filing_manifest_url=(
+            "https://www.sec.gov/Archives/edgar/data/1001/000000100126000001/"
+            "0000001001-26-000001-index.html"
+        ),
+        attachments=(
+            SecFilingPackageAttachment(
+                attachment_id="a" * 64,
+                parent_accession_number=filing.accession_number,
+                filename="report.htm",
+                declared_type=form_type,
+                sequence=1,
+                description="Periodic report",
+                index_media_icon="text.gif",
+                byte_size=1000,
+                last_modified_at=None,
+                source_url=filing.primary_document_url,
+                locator_status="available",
+                role="primary_document",
+                inventory_presence="matched",
+            ),
+            SecFilingPackageAttachment(
+                attachment_id="b" * 64,
+                parent_accession_number=filing.accession_number,
+                filename="financial.zip",
+                declared_type="Financial Report",
+                sequence=2,
+                description="Financial report",
+                index_media_icon="text.gif",
+                byte_size=500,
+                last_modified_at=None,
+                source_url=(
+                    "https://www.sec.gov/Archives/edgar/data/1001/000000100126000001/financial.zip"
+                ),
+                locator_status="available",
+                role="financial_report",
+                inventory_presence="matched",
+            ),
+        ),
+    )
+
+    documents = sync.build_expected_documents(
+        issuer_id=filing.issuer_id, filings=(filing,), packages=(package,)
+    )
+
+    assert [item.document_type for item in documents] == ["filing", "sec_financial_report"]
+    assert all(item.period_end == datetime(2026, 6, 30, tzinfo=UTC) for item in documents)
+    assert all(item.period_start is None for item in documents)
+    assert all(item.filing_at == datetime(2026, 8, 1) for item in documents)
+
+
+@pytest.mark.parametrize("report_date", [None, "", "20260630", "2026-02-30", "2026-06-30Z"])
+def test_missing_or_invalid_periodic_report_date_never_becomes_filing_date(
+    report_date: str | None,
+) -> None:
+    filing = _filing("0000001001-26-000001", "report.htm", form_type="10-Q").model_copy(
+        update={"filing_date": "2026-08-01", "report_date": report_date}
+    )
+    if report_date in (None, ""):
+        documents = sync.build_expected_documents(
+            issuer_id=filing.issuer_id, filings=(filing,), packages=()
+        )
+        assert documents[0].period_end is None
+        assert documents[0].filing_at == datetime(2026, 8, 1)
+    else:
+        with pytest.raises(SecInventoryContractError, match="invalid reportDate"):
+            sync.build_expected_documents(
+                issuer_id=filing.issuer_id, filings=(filing,), packages=()
+            )
+
+
 def test_expected_document_preserves_missing_sec_primary_as_authority_unavailable() -> None:
     filing = SecFilingInventoryEntry(
         issuer_id="sec-cik:0000001001",
