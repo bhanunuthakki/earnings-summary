@@ -501,3 +501,45 @@ dirty-artifact child database handoff and strict queue availability checks tight
 existing execution contracts without adding a task, schedule or write lane.
 Focused preflight, dispatcher and artifact regression tests establish this
 no-surface-change disposition.
+
+
+### FMP owner admission
+
+The shared FMP adapter and shared HTTP FMP lane read the nonsecret policy named by
+`EARNINGS_SUMMARY_FMP_POLICY_FILE` before admission and each network attempt.
+The path must be absolute and outside the deployed code root. The bounded JSON
+schema is exactly `{"schema_version":1,"enabled":false}` (or `true`). An unset
+setting preserves existing admission; a configured missing, invalid or unreadable
+file fails closed. Local denials are typed nonretryable `provider_disabled_by_owner`
+or `provider_admission_invalid`, never an authentication failure or fabricated HTTP
+attempt. Redirect targets use the same check, including redirects from other hosts.
+There is no automatic provider probe to reverse an owner opt-out.
+
+Activation belongs to the existing external environment authority resolved by
+`runtime.secrets.project_env_file`, not a checkout config or a new policy database.
+The managed job runner loads that environment before copying it into each child;
+the dashboard loads it through `configure_runtime_db` at startup. An already-running
+service needs its approved restart to acquire a newly added pointer. The loader
+preserves existing process variables (`override=False`), so activation must verify
+that the effective pointer agrees with the reviewed external file; setting a Machine
+or NSSM variable alone does not prove child propagation. Once loaded, policy-file
+content changes apply to subsequent admission checks without restarting. Replace
+that file atomically; incomplete updates deliberately block. This code change does
+not activate the flag, restart an owner, or change schedules or credentials.
+
+Automatic news collection does not turn an owner/config denial into per-ticker paid
+web discovery, even when the fallback scope includes that ticker. Explicit manual
+`--source websearch` and independently configured additive feeds/scoring retain their
+existing policy. Calendar `--force` overrides the subscription-tier gate only. Its
+wrapper still runs expected-earnings fallback, and retains a nonzero first-step exit
+rather than reporting fallback success as overall success. Retained FMP caches are
+not deleted or relabeled as freshly acquired issuer facts.
+
+Disposition: the CLI's typed denial and existing job failure surface are primary;
+there is no new dashboard action or provider-health badge. Existing source readiness,
+source receipts and Operations registry remain authoritative; this flag proves no
+source completeness. Dedicated FMP fetchers use `FMP_CLIENT`; the macro FMP seam
+is already disabled. Raw third-party transports outside this shared adapter are not
+a host-wide network firewall and must use this same admission boundary if an FMP
+lane is added. Hermetic transport, news and calendar fixtures cover denial and hot
+changes; the BAT execution fixture additionally requires Windows qualification.

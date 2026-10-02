@@ -152,8 +152,6 @@
     "execution/fetch_etf_data.py",
     "execution/fetch_etf_published_data.py",
     "execution/fetch_factor_proxies.py",
-    "execution/fetch_fmp_earnings_calendar.py",
-    "execution/fetch_fmp_news.py",
     "execution/fetch_ir_documents.py",
     "execution/fetch_ir_from_urls.py",
     "execution/fetch_macro_series.py",
