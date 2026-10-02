@@ -543,3 +543,46 @@ is already disabled. Raw third-party transports outside this shared adapter are 
 a host-wide network firewall and must use this same admission boundary if an FMP
 lane is added. Hermetic transport, news and calendar fixtures cover denial and hot
 changes; the BAT execution fixture additionally requires Windows qualification.
+
+### Native MELI reported-table source publication
+
+`backfill_fulltext_evidence.py --source-lane evidence_native --document-version-id <id>`
+is an exact-document operation. It neither reads nor advances the global batch checkpoint;
+other captured documents remain untouched. Legacy `--document-id` remains a separate lane.
+
+`publish_meli_reported_tables.py` is a bounded manual source-publication CLI, with dry-run as
+the default and `--apply` as its explicit append boundary. It requires an explicit database,
+current sealed SEC inventory/accession, primary native document version, qualified native
+HTML extraction run, and allowed local content roots. It never acquires data or calls a
+provider. Its current recipe supports a June 30 10-Q whose table explicitly reports the
+six-month duration (a missing SEC capture start date is derived from that header, and a
+conflicting start date fails) and exactly
+three current-period rows: H1 NIMAL, issuer-reconciled available cash and investments,
+and total debt including operating leases. Recipe v2 retains the raw percent and
+USD-millions values, units, source tokens, table headers and definition commitments.
+Its versioned representation conversion publishes ratio (percent ×0.01) and USD
+(USD-millions ×1,000,000), with raw/normalized values and the exact multiplier in
+each immutable source locator and a distinct source-definition/cell identity.
+Dry-run dispositions expose both representations. No analyst cash allocation,
+lease adjustment, canonical admission, or financial estimate is performed.
+Prior recipe observations remain immutable. A changed/missing/ambiguous header,
+definition, row, or scope is rejected.
+
+The CLI emits a closed three-member captured/rejected population. Apply appends the
+scoped extraction's disposition nodes and `SourceFactRepository` publication atomically;
+an identical rerun reuses the immutable publication. Exit 0 means all three source members
+were captured, exit 2 means a partial/rejected population, and exit 3 means unavailable
+prerequisites or invalid evidence. The seal closes only this named population: it does not
+upgrade whole-document extraction coverage, claim canonical metric admission, or make a
+valuation eligible. Source-definition commitments preserve management wording and exact
+native evidence locators. Effective-dated ontology definition/mapping/binding, canonical
+resolution, approved model-role assignment, remaining reported inputs and dated model
+assumption/scenario review remain separate producer and consumer prerequisites.
+
+Disposition: deliberate exclusion from interactive Operations controls. The existing Jobs,
+Sources, Data and Actions registries remain unchanged; no scheduler, managed service or
+background retry is added. CLI diagnostics and immutable scoped publication receipts own
+this manual operation. `tests/test_meli_reported_tables.py` verifies native identity,
+raw-byte/locator replay, semantic rejection, dry-run, append/replay and absence of fabricated
+legacy documents or canonical-admission claims. Existing full-text tests retain the global
+batch behavior. No browser or service change is made.

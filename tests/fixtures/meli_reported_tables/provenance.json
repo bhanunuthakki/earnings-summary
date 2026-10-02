@@ -1,0 +1,48 @@
+{
+  "purpose": "Source-authentic, bounded public filing excerpts for isolated synthetic tests; not an admitted document or live state. Wrapping html/body is synthetic.",
+  "source_url": "https://www.sec.gov/Archives/edgar/data/1099590/000109959026000023/meli-20260630.htm",
+  "source_sha256": "b605310e398baa79b50ea488075c32d6522d8966438135cf25e8fa9f2a448924",
+  "snippet_sha256": "37adb2fa7e54c5f24a55f98638f6dfc9a138f725390a2049b64a37b6cef6ef32",
+  "fragments": [
+    {
+      "decoded_char_start": 798991,
+      "decoded_char_end": 799730,
+      "sha256": "3ef92ddae5d05fb25e9e6a97cc993173043f2219d4674800ede23ff6adbe6e83"
+    },
+    {
+      "decoded_char_start": 2752203,
+      "decoded_char_end": 2781400,
+      "sha256": "67e508853fd67d22e8d8dadd7c4bd025c1ef24109812efa1b5283d9fb96e83ca"
+    },
+    {
+      "decoded_char_start": 2786042,
+      "decoded_char_end": 2787039,
+      "sha256": "dfb41259c24dfeda43b2c6a400cee917da3cbf42b2a7a90eb1fa07bb4d10dfa4"
+    },
+    {
+      "decoded_char_start": 2812808,
+      "decoded_char_end": 2814086,
+      "sha256": "6ecf6c8c512578add2e208454ad5e2fb2ee0d7be0b60e311fdbd0aa97deaa73c"
+    },
+    {
+      "decoded_char_start": 2815514,
+      "decoded_char_end": 2831414,
+      "sha256": "66929f5836a808f5a4836222e87f46979664b1542c8c1a96e120ee66e5c37a07"
+    },
+    {
+      "decoded_char_start": 2831420,
+      "decoded_char_end": 2831840,
+      "sha256": "892fce879f726845a96e7d1dba2e532413fbb96122c5b614ea9b4723eee972a3"
+    },
+    {
+      "decoded_char_start": 2831840,
+      "decoded_char_end": 2832257,
+      "sha256": "8a29e6344ae52492b2837322cd0589c452f9b7d8c8f48e435e69d371a7ec9123"
+    },
+    {
+      "decoded_char_start": 2832257,
+      "decoded_char_end": 2832742,
+      "sha256": "52cf9468ed2a8dedf1b14281f0a45c7125df793ca6f0fec39a04439c305c903c"
+    }
+  ]
+}
