@@ -317,6 +317,9 @@ def _working_draft_files(repo_root: Path) -> tuple[tuple[Path, date, re.Match[st
         packet_match = _DRAFT_PACKET.fullmatch(packet.name)
         if packet_match is None or packet.is_symlink() or not packet.is_dir():
             continue
+        marker = packet / "BRIEF_LIBRARY_VISIBLE"
+        if marker.is_symlink() or not marker.is_file():
+            continue
         try:
             packet_date = date.fromisoformat(packet_match.group(1))
         except ValueError:

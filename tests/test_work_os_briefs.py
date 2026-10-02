@@ -180,6 +180,13 @@ def test_source_linked_working_draft_is_visible_but_degraded(
         "[unsafe](javascript:alert(1)) <script>alert(1)</script>",
         encoding="utf-8",
     )
+    assert not any(
+        item.artifact_id.startswith("draft-")
+        for item in build_brief_library(work_os_app_repo).items
+    )
+    (packet / "BRIEF_LIBRARY_VISIBLE").write_text(
+        "Private working drafts only.\n", encoding="utf-8"
+    )
 
     payload = work_os_client.get("/api/work-os/briefs").get_json()
     draft = next(item for item in payload["items"] if item["ticker"] == "NU")
