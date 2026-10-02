@@ -382,8 +382,8 @@ def test_stage_rejects_source_symlink(tmp_path: Path) -> None:
     private_root = tmp_path / "private"
     private_root.mkdir()
 
-    rejection = "symlink or reparse" if os.name == "nt" else "must be a direct canonical path"
-    with pytest.raises(TranscriptStagingError, match=rejection):
+    # Canonical-path validation rejects this alias before native handle opening.
+    with pytest.raises(TranscriptStagingError, match="must be a direct canonical path"):
         stage_transcript_artifact(
             link,
             private_root,

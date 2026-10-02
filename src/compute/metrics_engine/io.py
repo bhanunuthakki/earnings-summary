@@ -37,7 +37,7 @@ import json
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
@@ -519,6 +519,12 @@ def upsert_formula_definitions(conn: sqlite3.Connection) -> dict[tuple[str, int]
     return out
 
 
+def _reporting_period_end(raw: object) -> datetime:
+    """Treat a fiscal period end as a calendar date, never a timezone instant."""
+    parsed = raw if isinstance(raw, date) else datetime.fromisoformat(str(raw))
+    return datetime.combine(parsed.date() if isinstance(parsed, datetime) else parsed, time.min)
+
+
 def _build_quarter_cells(
     conn: sqlite3.Connection, ticker: str, standard: AccountingStandard
 ) -> list[QuarterCell]:
@@ -554,8 +560,7 @@ def _build_quarter_cells(
 
     grouped: dict[tuple[datetime, str], dict[str, object]] = {}
     for row in period_rows:
-        pe_raw = row["period_end"]
-        pe = datetime.fromisoformat(pe_raw) if isinstance(pe_raw, str) else pe_raw
+        pe = _reporting_period_end(row["period_end"])
         key = (pe, row["fiscal_period_type"])
         grouped[key] = {"period_end": pe, "fiscal_period_type": row["fiscal_period_type"]}
 
@@ -572,13 +577,12 @@ def _build_quarter_cells(
               AND d.file_path NOT LIKE '%_annual.json'
               AND ff.line_item IN ({placeholders})
               AND ff.fiscal_period_type IN ('Q1','Q2','Q3','Q4')
-            ORDER BY ff.period_end ASC, {tier_rank} ASC, ff.id ASC
+            ORDER BY {tier_rank} ASC, ff.id ASC
             """,
             (ticker.upper(), *fields),
         )
         for row in cur.fetchall():
-            pe_raw = row["period_end"]
-            pe = datetime.fromisoformat(pe_raw) if isinstance(pe_raw, str) else pe_raw
+            pe = _reporting_period_end(row["period_end"])
             key = (pe, row["fiscal_period_type"])
             bucket = grouped.setdefault(
                 key, {"period_end": pe, "fiscal_period_type": row["fiscal_period_type"]}
@@ -656,8 +660,7 @@ def _build_annual_cells(
 
     grouped: dict[datetime, dict[str, object]] = {}
     for row in period_rows:
-        pe_raw = row["period_end"]
-        pe = datetime.fromisoformat(pe_raw) if isinstance(pe_raw, str) else pe_raw
+        pe = _reporting_period_end(row["period_end"])
         grouped[pe] = {"period_end": pe, "fiscal_period_type": "FY"}
 
     if fields:
@@ -672,13 +675,12 @@ def _build_annual_cells(
               AND d.file_path NOT LIKE '%_ttm.json'
               AND ff.line_item IN ({placeholders})
               AND ff.fiscal_period_type = 'FY'
-            ORDER BY ff.period_end ASC, {tier_rank} ASC, ff.id ASC
+            ORDER BY {tier_rank} ASC, ff.id ASC
             """,
             (ticker.upper(), *fields),
         )
         for row in cur.fetchall():
-            pe_raw = row["period_end"]
-            pe = datetime.fromisoformat(pe_raw) if isinstance(pe_raw, str) else pe_raw
+            pe = _reporting_period_end(row["period_end"])
             bucket = grouped.setdefault(pe, {"period_end": pe, "fiscal_period_type": "FY"})
             field_name = str(row["line_item"])
             bucket[field_name] = Decimal(str(row["value"]))

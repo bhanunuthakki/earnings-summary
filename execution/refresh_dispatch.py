@@ -8,7 +8,8 @@ stream output from.
 Two modes:
 
     --mode full   : run every standard refresh step
-    --mode stale  : skip FMP if pulled in the last 7 days. Cheaper steps
+    --mode stale  : skip FMP only if all annual/quarterly core statement
+                    receipts are successful, nonempty and fresh. Cheaper steps
                     (transcripts / IR-summarize / KPI / SayDo / build)
                     always run because they're either idempotent skips
                     on a file-exists check or low-cost LLM calls.
@@ -25,10 +26,10 @@ to a browser drawer without buffering surprises:
     [dispatch] all_done rc=0
 
 Usage:
-    python execution/refresh_dispatch.py --ticker NU
-    python execution/refresh_dispatch.py --ticker NU --mode full
-    python execution/refresh_dispatch.py --ticker NU --stale-fmp-days 3
-    python execution/refresh_dispatch.py --ticker NU --plan-only   # print plan, no work
+    python execution/sqlite_bootstrap.py execution/refresh_dispatch.py --ticker NU
+    python execution/sqlite_bootstrap.py execution/refresh_dispatch.py --ticker NU --mode full
+    python execution/sqlite_bootstrap.py execution/refresh_dispatch.py --ticker NU --stale-fmp-days 3
+    python execution/sqlite_bootstrap.py execution/refresh_dispatch.py --ticker NU --plan-only   # print plan, no work
 """
 
 from __future__ import annotations
@@ -43,12 +44,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, Protocol, TextIO
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from db_paths import require_db_path
+from pipeline.cadence_policy import STATEMENT_STALE_DAYS
+from runtime.python_process import managed_python_argv
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-from pipeline.cadence_policy import STATEMENT_STALE_DAYS  # noqa: E402
-from runtime.python_process import managed_python_argv  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 Mode = Literal["full", "stale"]
 
@@ -168,39 +169,58 @@ def build_plan(
 def _check_fmp_freshness(
     *, db_path: Path, ticker: str, stale_days: int, now: datetime
 ) -> tuple[datetime | None, str | None]:
-    """Return (last_pulled_dt, reason_if_skip).
+    """Skip only when every core statement has a usable recent receipt.
 
-    If MAX(fmp_endpoint_status.last_pulled) is within `stale_days`, returns
-    that timestamp + a "fresh" reason string. Otherwise (no rows or older
-    than the threshold), returns (None, None) signaling "run the FMP step."
+    Receipt keys/status match save_fmp_data.py, including its canonical
+    ``cashflow-statement`` spelling. Unrelated pulls cannot establish statement
+    coverage. The oldest required capture bounds freshness for the whole fetch.
     """
     if not db_path.exists():
         return (None, None)
+    required = {
+        (endpoint, period)
+        for endpoint in ("income-statement", "balance-sheet-statement", "cashflow-statement")
+        for period in ("annual", "quarter")
+    }
     conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
-        row = conn.execute(
-            "SELECT MAX(last_pulled) AS last_pulled FROM fmp_endpoint_status WHERE ticker = ?",
+        rows = conn.execute(
+            "SELECT endpoint, period, status, record_count, last_pulled "
+            "FROM fmp_endpoint_status WHERE ticker = ?",
             (ticker.upper(),),
-        ).fetchone()
+        ).fetchall()
+    except sqlite3.OperationalError:
+        # A missing/older receipt schema cannot justify skipping acquisition.
+        return (None, None)
     finally:
         conn.close()
 
-    if row is None or row["last_pulled"] is None:
-        return (None, None)
-
-    try:
-        # SQLite stores naive ISO strings; treat as UTC for the freshness window.
-        last_pulled = datetime.fromisoformat(str(row["last_pulled"]).replace(" ", "T"))
-        if last_pulled.tzinfo is None:
-            last_pulled = last_pulled.replace(tzinfo=UTC)
-    except ValueError:
-        return (None, None)
-
+    now = now.replace(tzinfo=UTC) if now.tzinfo is None else now.astimezone(UTC)
     threshold = now - timedelta(days=stale_days)
-    if last_pulled >= threshold:
-        return (last_pulled, f"fresh last_pulled={last_pulled.isoformat()}")
-    return (None, None)
+    captures: dict[tuple[str, str], datetime] = {}
+    for row in rows:
+        key = (row["endpoint"], row["period"])
+        if key not in required:
+            continue
+        count = row["record_count"]
+        if row["status"] != "ok" or not isinstance(count, int) or count <= 0:
+            return (None, None)
+        try:
+            captured = datetime.fromisoformat(str(row["last_pulled"]).replace(" ", "T"))
+        except ValueError:
+            return (None, None)
+        captured = (
+            captured.replace(tzinfo=UTC) if captured.tzinfo is None else captured.astimezone(UTC)
+        )
+        if not threshold <= captured <= now:
+            return (None, None)
+        captures[key] = captured
+
+    if captures.keys() != required:
+        return (None, None)
+    oldest = min(captures.values())
+    return (oldest, f"fresh last_pulled={oldest.isoformat()}")
 
 
 # ---------------------------------------------------------------------------
@@ -440,8 +460,8 @@ def main() -> int:
     parser.add_argument(
         "--db",
         type=Path,
-        default=PROJECT_ROOT / "data" / "portfolio.db",
-        help="Path to portfolio.db (default: %(default)s)",
+        default=None,
+        help="Explicit portfolio database; otherwise use the approved configured database.",
     )
     parser.add_argument(
         "--state-root",
@@ -452,10 +472,11 @@ def main() -> int:
     args = parser.parse_args()
 
     steps = [s for s in args.steps.split(",")] if args.steps else None
+    db_path = require_db_path(args.db)
     plan = build_plan(
         ticker=args.ticker.upper(),
         mode=args.mode,
-        db_path=args.db,
+        db_path=db_path,
         stale_fmp_days=args.stale_fmp_days,
         force_budget_bypass=args.force_budget_bypass,
         force=args.force,
@@ -467,7 +488,13 @@ def main() -> int:
         print(json.dumps(asdict(plan), indent=2))
         return 0
 
-    return execute(plan, project_root=PROJECT_ROOT, state_root=args.state_root.resolve())
+    state_root = args.state_root.resolve()
+    # Legacy children derive this path themselves. Refuse a different authority
+    # before starting any child; plan-only inspection never executes the plan.
+    if db_path != (state_root / "data" / "portfolio.db").resolve():
+        print(json.dumps({"status": "refused", "reason_code": "database_state_root_mismatch"}))
+        return 3
+    return execute(plan, project_root=PROJECT_ROOT, state_root=state_root)
 
 
 if __name__ == "__main__":

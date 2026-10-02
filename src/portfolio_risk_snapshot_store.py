@@ -205,15 +205,17 @@ class RiskBudgetSnapshot(BaseModel):
         return reasons
 
 
-def _open(db_path: Path | str | None) -> sqlite3.Connection | None:
-    """Open the DB read-write if it exists and carries the snapshot table."""
+def _open(
+    db_path: Path | str | None, *, role: SQLiteConnectionRole = SQLiteConnectionRole.WRITER
+) -> sqlite3.Connection | None:
+    """Open the existing snapshot store with the caller's explicit access role."""
     if db_path is None or not Path(db_path).exists():
         return None
     try:
         # This cache intentionally supports the historical 0105/0185/0199
         # table contracts below; requiring the checkout head here would make
         # its documented best-effort compatibility branches unreachable.
-        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=False)
+        conn = connect_sqlite(db_path, role=role, schema_preflight=False)
         conn.row_factory = sqlite3.Row
         present = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
@@ -369,7 +371,7 @@ def read_history(
     """History captures for ``user_id``, newest first. ``since`` (ISO string)
     floors the window. [] on a pre-0185 DB / any failure â€” degrade-don't-crash
     like every reader here. Workstream C8's drift trigger reads this."""
-    conn = _open(db_path)
+    conn = _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     if conn is None:
         return []
     try:
@@ -408,7 +410,7 @@ def history_has_sha(
     """True when the history already carries a capture with this content hash
     â€” the scheduled writer's "already done" check (PRD Â§7.1: re-running the
     same input does not duplicate history). False on pre-0186 DBs / failure."""
-    conn = _open(db_path)
+    conn = _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     if conn is None:
         return False
     try:
@@ -430,7 +432,7 @@ def read_latest_snapshot(
 ) -> RiskSnapshot | None:
     """The last-known snapshot for ``user_id``, or ``None`` when none exists /
     the DB is unavailable."""
-    conn = _open(db_path)
+    conn = _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     if conn is None:
         return None
     try:

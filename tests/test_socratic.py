@@ -19,7 +19,7 @@ Layers:
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -27,6 +27,7 @@ import comments_server
 import pytest
 from flask.testing import FlaskClient
 
+import advisor.context as advisor_context
 import advisor.socratic as socratic_mod
 from advisor.context import AdvisorContext, TickerValuation, calibration_block
 from advisor.socratic import (
@@ -39,6 +40,7 @@ from advisor.socratic import (
     read_current_prelude,
 )
 from advisor.store import AdvisorMemoRow, get_memo
+from db_paths import db_path_context
 from decision_calibration import CalibrationStats, ConvictionBucket
 from dispatch_registry import Job, Registry
 from integrations.portfolio_tracker_client import (
@@ -613,11 +615,20 @@ def client(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     migrated_db: Callable[..., Path],
-) -> FlaskClient:
-    _build_db(tmp_path, migrated_db)
+) -> Iterator[FlaskClient]:
+    db_path = _build_db(tmp_path, migrated_db)
 
-    # The flow builds its context against the test repo root; keep it offline-
-    # deterministic by mocking only the LLM boundary.
+    # Context uses the disposable DB and typed offline tracker responses.
+    # A mocked LLM alone does not prevent tracker network requests.
+    def offline_live(**_kwargs: object) -> LivePortfolio:
+        return LivePortfolio(available=False, api_url="https://tracker.invalid")
+
+    def offline_analytics(**_kwargs: object) -> PortfolioAnalytics:
+        return PortfolioAnalytics(available=False, api_url="https://tracker.invalid")
+
+    monkeypatch.setattr(advisor_context, "fetch_live_portfolio", offline_live)
+    monkeypatch.setattr(advisor_context, "fetch_portfolio_analytics", offline_analytics)
+
     def routed(prompt: str, **k: object) -> str:
         if k.get("purpose") == "advisor_socratic_questions":
             return "1. Your read?\n2. Horizon?\n3. What breaks it?"
@@ -628,8 +639,10 @@ def client(
     # subprocess (execution/run_socratic_questions.py) — the non-spawning
     # registry records the job without forking, matching
     # tests/test_advisor_memos.py's pattern for every other job-backed route.
-    app = comments_server.create_app(tmp_path, registry=_NonSpawningRegistry())
-    return app.test_client()
+    # Match production bootstrap for implicit readers, scoped to this fixture.
+    with db_path_context(db_path):
+        app = comments_server.create_app(tmp_path, registry=_NonSpawningRegistry())
+        yield app.test_client()
 
 
 def test_socratic_questions_action_starts_job(client: FlaskClient) -> None:

@@ -37,6 +37,10 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 log = logging.getLogger(__name__)
 
 
+class DirtyQueueReadError(RuntimeError):
+    """The dirty-artifact queue could not be read reliably."""
+
+
 @dataclass(slots=True)
 class Artifact:
     """One artifact row as the public API sees it. JSON columns are decoded."""
@@ -669,6 +673,7 @@ def drain_dirty(
     limit: int = 50,
     db_path: Path | str | None = None,
     now: datetime | None = None,
+    strict: bool = False,
 ) -> list[Artifact]:
     """Return up to `limit` artifacts that need regeneration.
 
@@ -679,10 +684,14 @@ def drain_dirty(
     Both paths land in the same drain queue so callers don't have to run
     two separate sweeps. Caller regenerates them via the purpose-specific
     generator + upsert; dirty=0 + a fresh expires_at are written on the new
-    row.
+    row. Optional callers retain best-effort empty results; operational
+    drains set ``strict`` so unavailable or drifted queue and roster state
+    fails closed.
     """
     conn = _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     if conn is None:
+        if strict:
+            raise DirtyQueueReadError("dirty queue database or table unavailable")
         return []
     now_iso = (now if now is not None else datetime.now(UTC)).isoformat()
     try:
@@ -690,6 +699,8 @@ def drain_dirty(
         has_tracked = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='tracked_companies'"
         ).fetchone()
+        if has_tracked is None and strict:
+            raise DirtyQueueReadError("tracked company roster unavailable")
         membership_filter = ""
         if has_tracked is not None:
             membership_filter = """
@@ -719,10 +730,16 @@ def drain_dirty(
         ).fetchall()
         return [_row_to_artifact(r) for r in rows]
     except sqlite3.Error as exc:
+        if strict:
+            raise DirtyQueueReadError("dirty queue query failed") from exc
         # Best-effort: a drifted schema degrades to "nothing to drain" rather
         # than crashing the drain cron (see read_current for rationale).
         log.warning({"event": "artifact_drain_dirty_failed", "error": str(exc)})
         return []
+    except (IndexError, TypeError, ValueError) as exc:
+        if strict:
+            raise DirtyQueueReadError("dirty queue row could not be decoded") from exc
+        raise
     finally:
         conn.close()
 

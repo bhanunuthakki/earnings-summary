@@ -52,6 +52,7 @@ from allocation.candidate_fit import CandidateFit
 from allocation.digest import allocation_payload_sha
 from compute.thesis_evaluator import HoldingsSpec, load_holdings_spec
 from dcf.latest import LatestDcfRow, latest_dcf_row
+from dcf.readiness import load_valuation_readiness
 from models.companies import ListType
 from pipeline.queries import tracked_companies_for_user
 from portfolio_risk_snapshot_store import read_latest_snapshot
@@ -165,6 +166,11 @@ def _ro_conn(db_path: Path) -> sqlite3.Connection | None:
     except sqlite3.Error:
         return None
     conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("BEGIN")
+    except sqlite3.Error:
+        conn.close()
+        return None
     return conn
 
 
@@ -221,6 +227,8 @@ def _check_price_freshness(
         return EligibilityCheck(False, f"live_price_at unparseable ({raw_at!r})"), str(raw_at)
     age_days = (now - dt).days
     asof = str(raw_at)
+    if age_days < 0:
+        return EligibilityCheck(False, "price timestamp is in the future"), asof
     if age_days > PRICE_STALE_DAYS:
         return (
             EligibilityCheck(
@@ -498,13 +506,29 @@ def cash_assessment(*, now: datetime | None = None) -> DecisionReadyAssessment:
 def assess_eligibility(
     db_path: Path, repo_root: Path, ticker: str, *, list_type: ListType | str
 ) -> DecisionReadyAssessment:
+    """Own and close the read snapshot even when an unexpected reader fails."""
+    conn = _ro_conn(db_path)
+    try:
+        return _assess_eligibility(conn, db_path, repo_root, ticker, list_type=list_type)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _assess_eligibility(
+    conn: sqlite3.Connection | None,
+    db_path: Path,
+    repo_root: Path,
+    ticker: str,
+    *,
+    list_type: ListType | str,
+) -> DecisionReadyAssessment:
     """The eight-check §7.3 read for one security. Never raises: a missing
     DB/cache/file degrades the checks that depend on it to a blocking
     failure, never a crash and never a silent pass."""
     upper = ticker.upper()
     lt = list_type.value if isinstance(list_type, ListType) else str(list_type)
     now = datetime.now(UTC).replace(tzinfo=None)
-    conn = _ro_conn(db_path)
     # Lazy to break the package-init cycle:
     # candidate_fit_cache -> allocation.candidate_fit -> allocation.__init__
     # -> allocation.eligibility. The cache is only needed by this I/O entrypoint.
@@ -524,7 +548,16 @@ def assess_eligibility(
     if not price_check.passed:
         blocking.append(price_check.reason)
 
+    valuation_evidence: dict[str, object] = {}
     dcf_check, dcf_asof = _check_usable_dcf(dcf_row)
+    if conn is not None:
+        readiness = load_valuation_readiness(conn, upper, as_of=now.replace(tzinfo=UTC))
+        valuation_evidence = readiness.model_dump(mode="json", exclude={"evaluated_at"})
+        if not readiness.ready:
+            dcf_check = EligibilityCheck(
+                False,
+                dcf_check.reason + "; valuation evidence: " + ", ".join(readiness.reason_codes),
+            )
     checks[CHECK_USABLE_DCF] = dcf_check
     if dcf_asof:
         source_freshness["dcf"] = dcf_asof
@@ -582,13 +615,11 @@ def assess_eligibility(
     if not prov_check.passed:
         blocking.append(prov_check.reason)
 
-    if conn is not None:
-        conn.close()
-
     payload = {
         "ticker": upper,
         "list_type": lt,
         "source_freshness": source_freshness,
+        "valuation_evidence": valuation_evidence,
         "checks": {k: {"passed": v.passed, "reason": v.reason} for k, v in checks.items()},
     }
     return DecisionReadyAssessment(

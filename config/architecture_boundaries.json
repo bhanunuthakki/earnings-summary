@@ -249,8 +249,6 @@
     "execution/refresh_cache.py",
     "execution/refresh_candidate_fit.py",
     "execution/refresh_dcf.py",
-    "execution/refresh_dirty_artifacts.py",
-    "execution/refresh_dispatch.py",
     "execution/refresh_expected_earnings.py",
     "execution/refresh_ir_kpis_all.py",
     "execution/refresh_news.py",

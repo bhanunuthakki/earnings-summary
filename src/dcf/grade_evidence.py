@@ -163,7 +163,7 @@ def _status_from(detail: dict[str, object] | None, key: str, *, fallback: str) -
 
 
 def _project_primary_fact_overlay(value: object) -> dict[str, object] | None:
-    """Keep status/counts only; historical fact rows belong to the source ledger."""
+    """Keep status/counts and exact input IDs; fact values remain in the source ledger."""
     if not isinstance(value, dict):
         return None
     overlay = cast("dict[str, object]", value)
@@ -186,6 +186,21 @@ def _project_primary_fact_overlay(value: object) -> dict[str, object] | None:
                 entries = item.get(key)
                 if isinstance(entries, list):
                     summary[f"{key}_count"] = len(cast("list[object]", entries))
+                    if key == "applied":
+                        summary["applied_references"] = [
+                            {
+                                field: entry[field]
+                                for field in (
+                                    "reported_observation_id",
+                                    "period_end",
+                                    "line_item",
+                                    "resolution_id",
+                                )
+                                if field in entry
+                            }
+                            for entry in cast("list[object]", entries)
+                            if isinstance(entry, dict)
+                        ]
             statement_summary[name] = summary
         projected["statements"] = statement_summary
     return projected
@@ -203,7 +218,13 @@ def _project_snapshot(snapshot: dict[str, object]) -> dict[str, object]:
 def _project_provenance(provenance: dict[str, object]) -> dict[str, object]:
     """Bound provenance to conclusion-driving receipts and source digests."""
     projected: dict[str, object] = {}
-    for key in ("ticker", "inputs_as_of_status", "market_price", "country_risk_context"):
+    for key in (
+        "ticker",
+        "inputs_as_of_status",
+        "input_clocks",
+        "market_price",
+        "country_risk_context",
+    ):
         if key in provenance:
             projected[key] = provenance[key]
 
@@ -224,6 +245,7 @@ def _project_provenance(provenance: dict[str, object]) -> dict[str, object]:
                     "sha256",
                     "bytes",
                     "observed_at",
+                    "clock_kind",
                     "influences_calculation",
                 )
                 if key in source
@@ -510,6 +532,7 @@ def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEv
             missing_columns=missing_columns,
         )
 
+    original_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
     try:
         row = conn.execute(
@@ -533,6 +556,8 @@ def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEv
             ticker=normalized_ticker,
             invalid_reason="row_query_failed",
         )
+    finally:
+        conn.row_factory = original_factory
     if row is None:
         return DcfGradeEvidence(status="missing", ticker=normalized_ticker)
 

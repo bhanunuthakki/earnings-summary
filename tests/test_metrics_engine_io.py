@@ -9,15 +9,18 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from typing import cast
 
 import pytest
 
+from compute.metrics_engine import io as metrics_io
 from compute.metrics_engine.engine import ComputedValue
 from compute.metrics_engine.inputs import CanonicalConcept
 from compute.metrics_engine.io import (
+    QuarterCell,
     compute_for_ticker,
     derived_monetary_currency,
     persist_attempt,
@@ -162,6 +165,65 @@ def _insert_fact(
         "VALUES (?, ?, ?, ?, ?, 'USD', 'actual', ?)",
         (ticker, period_end, fpt, line_item, value, source_doc_id),
     )
+
+
+@pytest.mark.parametrize(
+    ("period_type", "reader_name"),
+    [("Q2", "_build_quarter_cells"), ("FY", "_build_annual_cells")],
+)
+def test_period_end_encodings_share_reporting_date_and_preserve_source_rank(
+    conn: sqlite3.Connection,
+    period_type: str,
+    reader_name: str,
+) -> None:
+    ticker = "MIXED"
+    earlier = datetime(2025, 3, 31) if period_type == "Q2" else datetime(2024, 12, 31)
+    latest = datetime(2025, 6, 30) if period_type == "Q2" else datetime(2025, 12, 31)
+    earlier_doc = _insert_doc(conn, ticker, earlier)
+    official_doc = _insert_doc(conn, ticker, latest)
+    normalized_doc = _insert_doc(conn, ticker, latest)
+    conn.execute(
+        "UPDATE documents SET source_quality_tier = 'sec_official' WHERE id = ?",
+        (official_doc,),
+    )
+    _insert_fact(
+        conn,
+        ticker=ticker,
+        period_end=earlier,
+        fpt="Q1" if period_type == "Q2" else "FY",
+        line_item="revenue",
+        value="100",
+        source_doc_id=earlier_doc,
+    )
+    _insert_fact(
+        conn,
+        ticker=ticker,
+        period_end=latest.replace(tzinfo=timezone(timedelta(hours=14))),
+        fpt=period_type,
+        line_item="revenue",
+        value="200",
+        source_doc_id=official_doc,
+    )
+    _insert_fact(
+        conn,
+        ticker=ticker,
+        period_end=latest,
+        fpt=period_type,
+        line_item="revenue",
+        value="999",
+        source_doc_id=normalized_doc,
+    )
+    conn.commit()
+
+    reader = cast(
+        "Callable[[sqlite3.Connection, str, AccountingStandard], list[QuarterCell]]",
+        getattr(metrics_io, reader_name),
+    )
+    cells = reader(conn, ticker, AccountingStandard.US_GAAP)
+    assert len(cells) == 2
+    assert [cell.period_end for cell in cells] == [earlier, latest]
+    assert cells[-1].values[CanonicalConcept.REVENUE] == Decimal("200")
+    assert cells[-1].doc_ids[CanonicalConcept.REVENUE] == official_doc
 
 
 def test_derived_currency_reads_only_exact_lineage_inputs(conn: sqlite3.Connection) -> None:

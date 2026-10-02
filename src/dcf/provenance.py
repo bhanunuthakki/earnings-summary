@@ -68,6 +68,7 @@ def _source_record(
             "sha256": _sha256_file(path),
             "bytes": stat.st_size,
             "observed_at": observed_at.isoformat(),
+            "clock_kind": "file_modified",
             "influences_calculation": influences_calculation,
         },
         observed_at,
@@ -78,6 +79,39 @@ def build_file_source_record(path: Path, *, role: str, repo_root: Path) -> dict[
     """Capture an immutable receipt before a mutable file input is overwritten."""
     captured = _source_record(path, role=role, repo_root=repo_root)
     return None if captured is None else captured[0]
+
+
+def input_clock_summary(
+    sources: Sequence[Mapping[str, object]], *, market_observed_at: datetime | None
+) -> dict[str, object]:
+    """Describe clock roles without promoting file metadata to issuer evidence."""
+    observed: list[datetime] = []
+    for source in sources:
+        if (
+            source.get("influences_calculation") is False
+            or source.get("role") == "calculation_workbook"
+        ):
+            continue
+        raw = source.get("observed_at")
+        if not isinstance(raw, str):
+            continue
+        try:
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed.tzinfo is not None:
+            observed.append(parsed.astimezone(UTC))
+    return {
+        "schema_version": "dcf_input_clocks.v1",
+        "legacy_inputs_as_of_semantics": "latest_input_observation_cutoff_not_financial_freshness",
+        "market_observed_at": market_observed_at.isoformat() if market_observed_at else None,
+        "non_market_latest_observed_at": max(observed).isoformat() if observed else None,
+        "non_market_clock_semantics": "source_metadata_not_issuer_reporting_period",
+        "financial_period_end": None,
+        "financial_input_completeness": "unverified",
+        "semantic_admission": "unverified",
+        "assumption_reviewed_at": None,
+    }
 
 
 def build_file_provenance(
@@ -192,6 +226,7 @@ def build_file_provenance(
         inputs_as_of=max(observed_times, default=datetime(1970, 1, 1, tzinfo=UTC)),
         detail={
             "ticker": ticker.upper(),
+            "input_clocks": input_clock_summary(sources, market_observed_at=normalized_live_at),
             "sources": sources,
             "market_price": market_price,
             "inputs_as_of_status": "observed" if observed_times else "unavailable",

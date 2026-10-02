@@ -192,6 +192,8 @@ def _val(
         list_type=list_type,
         verdict=verdict,
         stub_thesis=stub,
+        evidence_ready=True,
+        evidence_reasons=(),
     )
 
 
@@ -587,3 +589,19 @@ def test_advisor_memo_action_starts_job(client: FlaskClient) -> None:
     assert payload["stream_url"].startswith("/actions/stream/")
     assert client.post("/actions/advisor-memo", json={"kind": "bogus"}).status_code == 400
     assert client.post("/actions/advisor-memo", json={}).status_code == 400
+
+
+def test_next_dollar_spends_nothing_on_unassessed_valuation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    holding = TickerValuation("MELI", 20, "2026-10-01", "portfolio", "ok")
+    candidate = TickerValuation("NU", 60, "2026-10-01", "evaluation", "ok")
+    ctx = _ctx(tmp_path, {"MELI": holding}, {"NU": candidate})
+
+    def forbidden(*args: object, **kwargs: object) -> str:
+        pytest.fail("Blocked valuation must not trigger an allocation LLM call")
+
+    monkeypatch.setattr(memos_mod, "call_llm", forbidden)
+    result = generate_next_dollar_memo(tmp_path, ctx=ctx)
+    assert not result.ok
+    assert result.skipped_reason == "valuation_evidence_not_ready"

@@ -98,12 +98,24 @@ def resolve_db_path(override: Path | str | None) -> Path | None:
 
 def require_db_path(override: Path | str | None = None) -> Path:
     """Resolve an existing explicit/configured DB; never invent checkout state."""
-    resolved = resolve_db_path(override)
+    candidate = resolve_db_path(override)
     checkout_default = Path(__file__).resolve().parents[1] / "data" / "portfolio.db"
-    if resolved is None:
+    if candidate is None:
         raise RuntimeError("An explicit or configured portfolio database is required")
-    resolved = resolved.expanduser().resolve()
-    if resolved == checkout_default.resolve():
+    candidate = candidate.expanduser()
+    # Compare the named path before following junctions. On the canonical Windows
+    # host runtime/data is a junction to the separately configured state root;
+    # resolving both paths first would reject that explicit authority as local.
+    if os.path.normcase(os.path.abspath(candidate)) == os.path.normcase(
+        os.path.abspath(checkout_default)
+    ):
+        raise RuntimeError("The checkout-default portfolio database is prohibited")
+    resolved = candidate.resolve()
+    redirected_default = (
+        checkout_default.parent.is_symlink()
+        or getattr(checkout_default.parent, "is_junction", lambda: False)()
+    )
+    if not redirected_default and resolved == checkout_default.resolve():
         raise RuntimeError("The checkout-default portfolio database is prohibited")
     if not resolved.is_file():
         raise FileNotFoundError("The configured portfolio database is unavailable")

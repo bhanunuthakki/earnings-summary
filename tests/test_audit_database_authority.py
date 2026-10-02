@@ -173,6 +173,43 @@ def test_explicit_fixture_named_portfolio_database_is_allowed(tmp_path: Path) ->
     assert require_db_path(fixture) == fixture
 
 
+def test_explicit_canonical_target_allowed_beside_junctioned_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import db_paths
+
+    runtime = tmp_path / "runtime"
+    (runtime / "src").mkdir(parents=True)
+    canonical_data = tmp_path / "canonical" / "data"
+    canonical_data.mkdir(parents=True)
+    database = canonical_data / "portfolio.db"
+    sqlite3.connect(database).close()
+    (runtime / "data").symlink_to(canonical_data, target_is_directory=True)
+    monkeypatch.setattr(db_paths, "__file__", str(runtime / "src" / "db_paths.py"))
+
+    with pytest.raises(RuntimeError, match="checkout"):
+        db_paths.require_db_path(runtime / "data" / "portfolio.db")
+    assert db_paths.require_db_path(database) == database
+
+
+def test_alias_to_ordinary_checkout_database_is_still_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import db_paths
+
+    checkout = tmp_path / "checkout"
+    (checkout / "src").mkdir(parents=True)
+    (checkout / "data").mkdir()
+    database = checkout / "data" / "portfolio.db"
+    sqlite3.connect(database).close()
+    alias = tmp_path / "alias.db"
+    alias.symlink_to(database)
+    monkeypatch.setattr(db_paths, "__file__", str(checkout / "src" / "db_paths.py"))
+
+    with pytest.raises(RuntimeError, match="checkout"):
+        db_paths.require_db_path(alias)
+
+
 def test_artifact_cli_propagates_database_to_subprocesses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

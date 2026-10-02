@@ -486,3 +486,18 @@ unavailable computation rather than a derived value. This adds no operator
 action, scheduler, managed service, source acquisition permission, or
 production activation; the Operations registry and visible workspace contracts
 remain unchanged.
+
+### Valuation evidence preflight and artifact database handoff
+
+`execution/valuation_preflight.py` is an internal read-only diagnostic over the
+existing persisted valuation and canonical fact readers. It takes an explicit or
+configured database authority and reports typed blocked/unavailable reasons; it
+performs no acquisition, model promotion, job enablement or provider retry.
+It is deliberately excluded from interactive operator controls: it has no
+mutation capability or independent runtime-health claim. Allocation/advisor gates
+consume the same evidence projection. The canonical Operations registry and Jobs,
+Sources, Data and Actions projections remain unchanged. Dispatcher freshness and
+dirty-artifact child database handoff and strict queue availability checks tighten
+existing execution contracts without adding a task, schedule or write lane.
+Focused preflight, dispatcher and artifact regression tests establish this
+no-surface-change disposition.

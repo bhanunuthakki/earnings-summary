@@ -5,7 +5,7 @@ Covers the executor wiring that operationalizes the TTL policy:
   * --execute fires the right argv per (ticker, purpose) and dedupes shared CLIs
   * --max-cost-usd halts gracefully (exit 0) once the ledger cost crosses
     the cap, leaving the rest of the queue unprocessed
-  * empty queue exits cleanly with a "fresh pipeline" message
+  * empty queue exits cleanly with a scoped queue message
   * unmapped purposes log a warning and are skipped rather than crashing
 
 Subprocess invocations are mocked; the LLM cost query is exercised against a
@@ -42,12 +42,15 @@ def _load_module() -> Any:
 
 
 @pytest.fixture
-def executor() -> Any:
+def executor(monkeypatch: pytest.MonkeyPatch) -> Any:
+    # Each test supplies a disposable repo/DB; an inherited deployment path
+    # must not override it. Authority tests explicitly configure their own path.
+    monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
     return _load_module()
 
 
 def _make_portfolio_db(db_path: Path) -> sqlite3.Connection:
-    """Build an llm_artifacts + llm_calls schema mirroring migrations 0034/0035/0043.
+    """Build the roster, artifact, and call tables used by the drain.
 
     Returns an open connection the caller must close. Sufficient column set for
     the executor's two SQL queries (dirty-breakdown + cost-sum).
@@ -55,6 +58,11 @@ def _make_portfolio_db(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.executescript(
         """
+        CREATE TABLE tracked_companies (
+            ticker TEXT PRIMARY KEY,
+            list_type TEXT NOT NULL,
+            archived_at TEXT
+        );
         CREATE TABLE llm_artifacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ticker TEXT,
@@ -113,6 +121,10 @@ def _insert_dirty(
     dirty: int = 1,
     expires_at: str | None = None,
 ) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO tracked_companies (ticker, list_type) VALUES (?, 'portfolio')",
+        (ticker,),
+    )
     conn.execute(
         """
         INSERT INTO llm_artifacts (ticker, scope, purpose, input_sha256,
@@ -311,6 +323,42 @@ def test_execute_invokes_correct_subprocess(
     )
     assert expected_bear in argvs
     assert expected_desc in argvs
+
+
+def test_execute_uses_configured_database_for_queue_and_child(
+    executor: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo_root = tmp_path / "runtime"
+    (repo_root / "data").mkdir(parents=True)
+    local_conn = _make_portfolio_db(repo_root / "data" / "portfolio.db")
+    local_conn.close()
+    external_db = tmp_path / "canonical" / "portfolio.db"
+    external_db.parent.mkdir()
+    conn = _make_portfolio_db(external_db)
+    try:
+        _insert_dirty(conn, ticker="MELI", purpose="saydo_filter")
+    finally:
+        conn.close()
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(external_db))
+
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def capture_run(argv: list[str], **kwargs: object) -> _FakeCompleted:
+        calls.append((argv, kwargs))
+        return _FakeCompleted(returncode=1, stderr="synthetic failure")
+
+    monkeypatch.setattr(executor.subprocess, "run", capture_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["refresh_dirty_artifacts.py", "--repo-root", str(repo_root), "--execute"],
+    )
+
+    assert executor.main() == 1
+    assert len(calls) == 1
+    argv, kwargs = calls[0]
+    assert argv[-4:] == ["--ticker", "MELI", "--regenerate-purpose", "saydo_filter"]
+    assert cast("dict[str, str]", kwargs["env"])["EARNINGS_SUMMARY_DB_PATH"] == str(external_db)
 
 
 def test_execute_dedupes_shared_cli_for_one_ticker(
@@ -861,7 +909,7 @@ def test_empty_queue_exits_cleanly(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """No dirty/expired rows → 'No dirty artifacts. Pipeline is fresh.' + exit 0.
+    """No dirty/expired rows exits zero without claiming the whole pipeline is fresh.
     Subprocess.run must never be called."""
     repo_root = tmp_path
     (repo_root / "data").mkdir()
@@ -887,7 +935,175 @@ def test_empty_queue_exits_cleanly(
     rc = executor.main()
     captured = capsys.readouterr()
     assert rc == 0
-    assert "No dirty artifacts" in captured.out
+    assert "No dirty or expired artifacts in the queue" in captured.out
+    assert "Pipeline is fresh" not in captured.out
+    assert fake_run.calls == []
+
+
+@pytest.mark.parametrize("failure", ["missing_db", "missing_table", "drifted_table"])
+def test_queue_read_failure_is_not_reported_as_idle(
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    failure: str,
+) -> None:
+    """An unavailable queue fails closed without creating checkout state or children."""
+    repo_root = tmp_path / "checkout"
+    repo_root.mkdir()
+    configured_db = tmp_path / "canonical" / "portfolio.db"
+    if failure in {"missing_table", "drifted_table"}:
+        configured_db.parent.mkdir()
+        conn = sqlite3.connect(configured_db)
+        try:
+            if failure == "missing_table":
+                conn.execute("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)")
+            else:
+                conn.execute("CREATE TABLE llm_artifacts (id INTEGER PRIMARY KEY)")
+            conn.commit()
+        finally:
+            conn.close()
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(configured_db))
+
+    fake_run = _CapturingFakeRun()
+    monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["refresh_dirty_artifacts.py", "--repo-root", str(repo_root), "--execute"],
+    )
+
+    rc = executor.main()
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "dirty_queue_unavailable" in captured.err
+    assert "No dirty" not in captured.out
+    assert "Pipeline is fresh" not in captured.out
+    assert fake_run.calls == []
+    assert not (repo_root / "data" / "portfolio.db").exists()
+    if failure == "missing_db":
+        assert not configured_db.exists()
+
+
+def test_missing_roster_fails_closed_before_children(
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repo_root = tmp_path
+    (repo_root / "data").mkdir()
+    db_path = repo_root / "data" / "portfolio.db"
+    conn = _make_portfolio_db(db_path)
+    try:
+        _insert_dirty(conn, ticker="META", purpose="bear_case")
+        conn.execute("DROP TABLE tracked_companies")
+        conn.commit()
+    finally:
+        conn.close()
+    fake_run = _CapturingFakeRun()
+    monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["refresh_dirty_artifacts.py", "--repo-root", str(repo_root), "--execute"],
+    )
+
+    assert executor.main() == 3
+    captured = capsys.readouterr()
+    assert "dirty_queue_unavailable" in captured.err
+    assert "No dirty" not in captured.out
+    assert fake_run.calls == []
+
+
+def test_strict_drain_only_returns_active_portfolio_or_evaluation_tickers(
+    executor: Any,
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "portfolio.db"
+    conn = _make_portfolio_db(db_path)
+    try:
+        for ticker in ("GOOG", "META", "NU", "LLY"):
+            _insert_dirty(conn, ticker=ticker, purpose="bear_case")
+        conn.execute(
+            "UPDATE tracked_companies SET archived_at = '2026-09-01' WHERE ticker = 'META'"
+        )
+        conn.execute("UPDATE tracked_companies SET list_type = 'index_member' WHERE ticker = 'NU'")
+        conn.execute("DELETE FROM tracked_companies WHERE ticker = 'LLY'")
+        conn.commit()
+    finally:
+        conn.close()
+
+    rows = executor.drain_dirty(db_path=db_path, strict=True)
+    assert [row.ticker for row in rows] == ["GOOG"]
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+def test_nonpositive_limit_is_rejected_before_queue_read(
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    limit: int,
+) -> None:
+    """LIMIT 0 and negative limits must never masquerade as an empty queue."""
+    fake_run = _CapturingFakeRun()
+    monkeypatch.setattr(executor.subprocess, "run", fake_run)
+
+    def _unexpected_queue_read(**_kwargs: object) -> list[object]:
+        pytest.fail("invalid limit reached the queue reader")
+
+    monkeypatch.setattr(executor, "drain_dirty", _unexpected_queue_read)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "refresh_dirty_artifacts.py",
+            "--repo-root",
+            str(tmp_path),
+            "--limit",
+            str(limit),
+            "--execute",
+        ],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        executor.main()
+    assert exc_info.value.code == 2
+    captured = capsys.readouterr()
+    assert "--limit must be a positive integer" in captured.err
+    assert "No dirty" not in captured.out
+    assert fake_run.calls == []
+    assert not (tmp_path / "data" / "portfolio.db").exists()
+
+
+def test_non_ticker_queue_row_is_not_reported_as_idle(
+    executor: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Synthesis rows remain queued even though no ticker regenerator can run."""
+    repo_root = tmp_path
+    (repo_root / "data").mkdir()
+    conn = _make_portfolio_db(repo_root / "data" / "portfolio.db")
+    try:
+        conn.execute(
+            """INSERT INTO llm_artifacts
+               (ticker, scope, purpose, input_sha256, prompt_version, dirty)
+               VALUES (NULL, 'portfolio', 'bear_case', 'sha', 'v1', 1)"""
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    fake_run = _CapturingFakeRun()
+    monkeypatch.setattr(executor.subprocess, "run", fake_run)
+    monkeypatch.setattr(sys, "argv", ["refresh_dirty_artifacts.py", "--repo-root", str(repo_root)])
+
+    assert executor.main() == 0
+    captured = capsys.readouterr()
+    assert "Dirty artifact refresh manifest (1 rows)" in captured.out
+    assert "No dirty or expired artifacts" not in captured.out
     assert fake_run.calls == []
 
 
