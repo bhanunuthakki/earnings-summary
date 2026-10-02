@@ -129,6 +129,7 @@ def build_file_provenance(
     source_records: Sequence[Mapping[str, object]] = (),
     workbook_locator_path: Path | None = None,
     equity_direct_archetype: EquityDirectValuationArchetype | None = None,
+    model_input_receipt: Mapping[str, object] | None = None,
 ) -> DcfInputProvenance:
     """Build durable file-based lineage without treating the mutable DB as input.
 
@@ -216,6 +217,8 @@ def build_file_provenance(
         "workbook_sha256": workbook_sha256,
         "equity_bridge_receipt": equity_bridge_receipt,
     }
+    if model_input_receipt is not None:
+        canonical["model_input_receipt"] = dict(model_input_receipt)
     encoded = json.dumps(
         canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     )
@@ -228,6 +231,11 @@ def build_file_provenance(
             "ticker": ticker.upper(),
             "input_clocks": input_clock_summary(sources, market_observed_at=normalized_live_at),
             "sources": sources,
+            **(
+                {"model_input_receipt": dict(model_input_receipt)}
+                if model_input_receipt is not None
+                else {}
+            ),
             "market_price": market_price,
             "inputs_as_of_status": "observed" if observed_times else "unavailable",
             **(

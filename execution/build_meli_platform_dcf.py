@@ -21,26 +21,29 @@ consumes — the capital intensity an FCFF model can't see. The operating side f
 growth on the same CONVEX curve as the redesigned FCFF engine
 (``dcf.redesign.GROWTH_FADE_CURVATURE``), so the two models speak the same language.
 
-Base case grounded in MELI's FY2025 10-K segment note (Commerce $16,294M + Fintech
-$12,599M = $28,893M total, reconciling exactly), with Fintech split into
-payments/services (~$6,741M, capital-light) and credit/financial income (~$5,858M,
-the lending book). Segment operating margins are modelling assumptions (MELI
-reports profit by geography, not by Commerce/Fintech), anchored so the blend tracks
-the consolidated 11.1% → high-teens path. Every driver is editable; a Python mirror
-is the value-of-record and matches the in-sheet formulas exactly.
+Historical defaults are retained solely for isolated draft calculations. Verified
+refreshes use canonical reported fiscal operands and an explicitly selected,
+dated reviewed forecast artifact; no historical seed is promoted as current.
+Non-credit Fintech includes installment and investment income where admitted
+source definitions place them outside the separate credit portfolio. Segment
+operating margins remain explicit forecasts because MELI reports profit by
+geography, not Commerce/Fintech.
 
-Env (like build_nu_platform_dcf.py): DCF_TICKER, DCF_DEST, DCF_REPO_ROOT. Values in
-$M; shares in millions. Discount rates carry the revenue-weighted Damodaran country
-risk premium (``dcf.country_risk``), consistent with the FCFF engine.
+Verified refresh requires DCF_MELI_ASSUMPTIONS_PATH and the configured database,
+plus staged DCF_DEST/DCF_PROMOTE_DEST. The artifact owns the reviewed effective
+discount rates; implicit cached CAPM recalculation is disabled in this route.
+DCF_PERSIST=0 permits only a labeled, non-promoting .tmp draft. Values are $M;
+shares are millions.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
-from dataclasses import asdict, dataclass, field, replace
-from datetime import date
+from dataclasses import asdict, replace
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -49,40 +52,56 @@ from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
-T = os.environ.get("DCF_TICKER", "MELI")
-DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
-
 # Import co-located package code (this script's repo), NOT REPO/src — REPO points
 # at the DATA repo (which may be a different checkout, e.g. a worktree's data lives
 # in the main repo), so resolving code from it would load a stale/foreign copy.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
-from dcf import reverse_valuation as reverse_valuation_mod  # noqa: E402
-from dcf.artifact_promotion import (  # noqa: E402
+from db_paths import configured_db_path, require_db_path
+from dcf import reverse_valuation as reverse_valuation_mod
+from dcf.artifact_promotion import (
     ArtifactPromotion,
     live_path_from_env,
     promotion_from_env,
 )
-from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
-from dcf.specialized_price import (  # noqa: E402
+from dcf.input_evidence import (
+    InputEvidenceError,
+    ModelInputReceipt,
+    ModelInputRequest,
+)
+from dcf.meli_inputs import (
+    ASSUMPTION_KEYS,
+    effective_numeric_inputs,
+    prepare_meli_inputs,
+    verify_meli_inputs,
+)
+from dcf.meli_model import Assum as Assum
+from dcf.meli_model import Mirror as Mirror
+from dcf.meli_model import mirror as mirror
+from dcf.provenance import build_file_provenance, schema_supports_provenance
+from dcf.specialized_price import (
     SpecializedPriceObservation,
     price_seed_source_files,
     resolve_specialized_price,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 try:  # persistence is best-effort -- the workbook builds without a DB
-    from dcf import persist as persist_mod
+    from dcf import persist as _persist_module
 except ImportError:  # pragma: no cover
-    persist_mod = None  # type: ignore[assignment]
+    persist_mod = None
+else:
+    persist_mod = _persist_module
 try:  # global macro assumptions + country risk -- best-effort; in-code defaults else
-    from dcf import country_risk
-    from dcf import global_assumptions as global_dcf
+    from dcf import country_risk as _country_risk_module
+    from dcf import global_assumptions as _global_assumptions_module
 except ImportError:  # pragma: no cover
-    country_risk = None  # type: ignore[assignment]
-    global_dcf = None  # type: ignore[assignment]
+    country_risk = None
+    global_dcf = None
+else:
+    country_risk = _country_risk_module
+    global_dcf = _global_assumptions_module
 
 # Growth fade curvature — kept identical to the redesigned FCFF engine so the two
 # models decelerate growth the same way (convex, front-loaded). Imported when the
@@ -92,9 +111,15 @@ try:
 except ImportError:  # pragma: no cover
     _CURVATURE = 2.0
 try:  # scenario emission (Monthly Red Team PR8) -- best-effort like persistence
-    from dcf import redesign as redesign_mod
+    from dcf import redesign as _redesign_module
 except ImportError:  # pragma: no cover
-    redesign_mod = None  # type: ignore[assignment]
+    redesign_mod = None
+else:
+    redesign_mod = _redesign_module
+
+REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
+T = os.environ.get("DCF_TICKER", "MELI")
+DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 
 YELLOW = PatternFill("solid", fgColor="FFF2CC")
 HEAD_FILL = PatternFill("solid", fgColor="1F2937")
@@ -107,198 +132,6 @@ USD0 = "#,##0"
 NUM1 = "0.0"
 NUM2 = "0.00"
 MULT = '0.0"x"'
-
-
-@dataclass
-class Assum:
-    """Base case grounded in MELI's FY2025 10-K segment note. All $M; shares in
-    millions. Growth fades CONVEXLY near→terminal; margins/NIMAL ramp linearly."""
-
-    # ---- Commerce (3P marketplace + ads + 1P + logistics) — operating FCFF ----
-    comm_rev0: float = 16294.0  # FY2025 Commerce net revenue
-    comm_g_near: float = 0.22  # near-term growth (GMV + ads + 1P), fades convexly
-    comm_g_term: float = 0.05
-    comm_margin_near: float = 0.12  # EBIT margin Y1 (compressed: free-shipping, 1P, AI invest)
-    comm_margin_term: float = 0.20  # mature margin (logistics density + ads mix)
-
-    # ---- Fintech-payments (acquiring, float, fees) — operating FCFF, capital-light ----
-    fpay_rev0: float = 6741.0  # FY2025 Fintech ex-credit (services $6,678M + product $63M)
-    fpay_g_near: float = 0.26
-    fpay_g_term: float = 0.06
-    fpay_margin_near: float = 0.16
-    fpay_margin_term: float = 0.26  # capital-light take-rate + float economics
-
-    # ---- shared operating drivers ----
-    da_pct: float = 0.04  # D&A as % of operating revenue
-    capex_pct_near: float = 0.055  # logistics build-out heavy early
-    capex_pct_term: float = 0.035
-    nwc_pct: float = 0.02  # working-capital draw on incremental operating revenue
-    tax: float = 0.28
-    op_exit_ebitda_mult: float = 12.0  # terminal EV/EBITDA on the operating block
-    wacc: float = 0.135  # operating discount rate (set from CAPM+CRP when derive_capm)
-
-    # ---- Fintech-credit (Mercado Pago credit book) — excess-return / FCFE ----
-    cb0: float = 13000.0  # credit portfolio Y0 ($M, ~FY2025 end; Q1'26 $14.6B)
-    cbg_near: float = 0.34  # book growth (credit card + consumer), fades convexly
-    cbg_term: float = 0.08
-    nimal_near: float = 0.178  # net interest margin AFTER losses (Q1'26 17.8%)
-    nimal_term: float = 0.150  # PM floor; card-mix compresses the spread
-    credit_opex_ratio: float = 0.05  # credit-specific opex (origination/servicing) as % of book
-    cap_ratio: float = 0.15  # required equity / credit book
-    credit_ke: float = 0.16  # cost of equity for the lending franchise (riskier)
-    credit_g_term: float = 0.08
-    credit_terminal_roe: float = 0.25  # sustainable ROE on the credit book
-
-    # ---- bridge / discounting ----
-    net_cash: float = 0.0  # corporate net cash EXCL. credit funding + payment float (editable)
-    g_term: float = 0.045  # operating perpetuity-cross-check growth (~risk-free)
-    years: int = 10
-    shares: float = 50.697  # diluted shares (M)
-    price: float = 1684.0
-
-    # ---- opt-in CAPM discount rates from the editable global rf/ERP + country CRP ----
-    # When derive_capm != 0, wacc and credit_ke are recomputed from rf + beta*erp + crp
-    # so a dashboard macro change flows through. Off by default (explicit scalars win).
-    beta_op: float = 1.30
-    beta_credit: float = 1.55
-    country_risk_premium: float = 0.0  # filled from dcf.country_risk at load when 0
-    derive_capm: int = 1
-    global_assumption_source: dict[str, object] = field(default_factory=dict, repr=False)
-    country_risk_source: dict[str, object] = field(default_factory=dict, repr=False)
-    price_seed_source: str = field(default="model_seed", repr=False)
-    price_seed_path: str | None = field(default=None, repr=False)
-
-
-def _interp(near: float, term: float, t: int, n: int) -> float:
-    """Linear ramp from ``near`` (year 1) to ``term`` (year n)."""
-    return near if n <= 1 else near + (term - near) * (t - 1) / (n - 1)
-
-
-def _fade(near: float, term: float, t: int, n: int) -> float:
-    """Convex growth fade: ``term + (near-term)*((n-t)/(n-1))**curvature``.
-
-    Year 1 = near, year n = term, front-loaded deceleration — identical in shape
-    to ``dcf.redesign``'s fade so the SOTP operating block and the FCFF engine
-    decelerate the same way.
-    """
-    if n <= 1:
-        return near
-    frac = ((n - t) / (n - 1)) ** _CURVATURE
-    return term + (near - term) * frac
-
-
-@dataclass
-class Row:
-    t: int
-    # operating
-    comm_rev: float
-    fpay_rev: float
-    op_rev: float
-    op_ebit: float
-    op_da: float
-    op_capex: float
-    op_fcff: float
-    # credit
-    cb: float
-    credit_ni: float
-    reqcap: float
-    credit_fcfe: float
-    # discounting
-    df_op: float
-    df_cr: float
-
-
-@dataclass
-class Mirror:
-    rows: list[Row] = field(default_factory=list)
-    pv_op_fcff: float = 0.0
-    op_terminal_ev: float = 0.0
-    pv_op_terminal: float = 0.0
-    operating_ev: float = 0.0
-    pv_credit_fcfe: float = 0.0
-    credit_terminal: float = 0.0
-    pv_credit_terminal: float = 0.0
-    credit_equity_value: float = 0.0
-    equity_value: float = 0.0
-    vps: float = 0.0
-    # cross-checks
-    op_terminal_revenue: float = 0.0
-    credit_terminal_roe: float = 0.0
-    terminal_blended_op_margin: float = 0.0
-
-
-def mirror(s: Assum) -> Mirror:
-    n = s.years
-    m = Mirror()
-    comm_p, fpay_p, op_rev_p = s.comm_rev0, s.fpay_rev0, s.comm_rev0 + s.fpay_rev0
-    cb_p = s.cb0
-    reqcap_p = s.cap_ratio * s.cb0
-    for t in range(1, n + 1):
-        # --- operating: Commerce + Fintech-payments -> FCFF ---
-        comm_rev = comm_p * (1 + _fade(s.comm_g_near, s.comm_g_term, t, n))
-        fpay_rev = fpay_p * (1 + _fade(s.fpay_g_near, s.fpay_g_term, t, n))
-        op_rev = comm_rev + fpay_rev
-        op_ebit = comm_rev * _interp(
-            s.comm_margin_near, s.comm_margin_term, t, n
-        ) + fpay_rev * _interp(s.fpay_margin_near, s.fpay_margin_term, t, n)
-        op_da = op_rev * s.da_pct
-        op_capex = op_rev * _interp(s.capex_pct_near, s.capex_pct_term, t, n)
-        op_dnwc = (op_rev - op_rev_p) * s.nwc_pct
-        op_fcff = op_ebit * (1 - s.tax) + op_da - op_capex - op_dnwc
-        df_op = 1 / (1 + s.wacc) ** t
-
-        # --- credit book: NIMAL spread, capital-charged -> FCFE ---
-        cb = cb_p * (1 + _fade(s.cbg_near, s.cbg_term, t, n))
-        avg_book = (cb + cb_p) / 2.0
-        nimal = _interp(s.nimal_near, s.nimal_term, t, n)
-        credit_pretax = avg_book * (nimal - s.credit_opex_ratio)
-        credit_ni = credit_pretax * (1 - s.tax)
-        reqcap = s.cap_ratio * cb
-        credit_fcfe = credit_ni - (reqcap - reqcap_p)
-        df_cr = 1 / (1 + s.credit_ke) ** t
-
-        m.rows.append(
-            Row(
-                t,
-                comm_rev,
-                fpay_rev,
-                op_rev,
-                op_ebit,
-                op_da,
-                op_capex,
-                op_fcff,
-                cb,
-                credit_ni,
-                reqcap,
-                credit_fcfe,
-                df_op,
-                df_cr,
-            )
-        )
-        m.pv_op_fcff += op_fcff * df_op
-        m.pv_credit_fcfe += credit_fcfe * df_cr
-        comm_p, fpay_p, op_rev_p, cb_p, reqcap_p = comm_rev, fpay_rev, op_rev, cb, reqcap
-
-    last = m.rows[-1]
-    # operating terminal: EV/EBITDA exit on terminal operating EBITDA
-    m.op_terminal_ev = (last.op_ebit + last.op_da) * s.op_exit_ebitda_mult
-    m.pv_op_terminal = m.op_terminal_ev * last.df_op
-    m.operating_ev = m.pv_op_fcff + m.pv_op_terminal
-
-    # credit terminal: sustainable Gordon on credit NI (reinvest g/ROE)
-    ni_n1 = last.credit_ni * (1 + s.credit_g_term)
-    m.credit_terminal = (
-        ni_n1 * (1 - s.credit_g_term / s.credit_terminal_roe) / (s.credit_ke - s.credit_g_term)
-    )
-    m.pv_credit_terminal = m.credit_terminal * last.df_cr
-    m.credit_equity_value = m.pv_credit_fcfe + m.pv_credit_terminal
-
-    m.equity_value = m.operating_ev + s.net_cash + m.credit_equity_value
-    m.vps = m.equity_value / s.shares if s.shares else 0.0
-    m.op_terminal_revenue = last.op_rev
-    m.credit_terminal_roe = (last.credit_ni / last.reqcap) if last.reqcap else 0.0
-    m.terminal_blended_op_margin = (last.op_ebit / last.op_rev) if last.op_rev else 0.0
-    return m
 
 
 def reverse_valuation(s: Assum, m: Mirror) -> dict[str, object] | None:
@@ -335,13 +168,22 @@ def reverse_valuation(s: Assum, m: Mirror) -> dict[str, object] | None:
     ).to_snapshot_dict()
 
 
-def load_assumptions(ticker: str) -> Assum:
+def load_assumptions(ticker: str, *, db_path: Path | None = None) -> Assum:
     """Assum defaults overridden by data/bank_assumptions/<T>_sotp.json, then the
     editable global tax + (opt-in) CAPM-derived discount rates with the
     revenue-weighted Damodaran country risk premium."""
     s = Assum()
-    db = REPO / "data" / "portfolio.db"
-    global_loaded = global_dcf.load_with_provenance(db_path=db) if global_dcf is not None else None
+    try:
+        db = require_db_path(db_path)
+    except (RuntimeError, OSError):
+        if db_path is not None:
+            raise
+        db = None  # explicitly isolated draft: no checkout database fallback
+    global_loaded = (
+        global_dcf.load_with_provenance(db_path=db)
+        if global_dcf is not None and db is not None
+        else None
+    )
     if global_loaded is not None:
         s.global_assumption_source = global_loaded.source_record
         s.tax = global_loaded.assumptions.tax_rate
@@ -394,13 +236,17 @@ def load_assumptions(ticker: str) -> Assum:
     prof = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
     if prof.exists():
         try:
-            d: Any = json.loads(prof.read_text(encoding="utf-8"))
-            if isinstance(d, list):
-                d = d[0] if d else {}
-            if isinstance(d, dict) and d.get("price"):
-                s.price = float(d["price"])
-                s.price_seed_source = "fmp_profile"
-                s.price_seed_path = f"data/historical/fmp/{ticker}_profile.json"
+            raw_profile: object = json.loads(prof.read_text(encoding="utf-8"))
+            if isinstance(raw_profile, list):
+                profiles = cast("list[object]", raw_profile)
+                raw_profile = profiles[0] if profiles else {}
+            if isinstance(raw_profile, dict):
+                profile = cast("dict[str, object]", raw_profile)
+                price = profile.get("price")
+                if isinstance(price, (int, float, str)) and price:
+                    s.price = float(price)
+                    s.price_seed_source = "fmp_profile"
+                    s.price_seed_path = f"data/historical/fmp/{ticker}_profile.json"
         except (OSError, json.JSONDecodeError, ValueError, KeyError):
             pass
     return s
@@ -470,6 +316,8 @@ def scenarios_block(s: Assum, m: Mirror, holdings: dict[str, object] | None) -> 
     unchanged. Requires ``redesign_mod`` (caller gates on it)."""
     import dataclasses as _dc
 
+    if redesign_mod is None:
+        raise RuntimeError("MELI scenario calculation requires the redesign module")
     bull_d = redesign_mod.BULL_SEED
     bear_d = redesign_mod.thesis_bear_seed(holdings)
     provenance = "thesis" if redesign_mod.parse_thesis_bear_deltas(holdings) is not None else "seed"
@@ -559,6 +407,8 @@ def build(s: Assum, m: Mirror, dest: Path, holdings: dict[str, object] | None = 
     ``scenarios_block``."""
     wb = openpyxl.Workbook()
     dash = wb.active
+    if not isinstance(dash, Worksheet):
+        raise RuntimeError("MELI workbook requires an active worksheet")
     dash.title = "Dashboard"
     mod = wb.create_sheet("Model")
     val = wb.create_sheet("Valuation")
@@ -841,6 +691,9 @@ def persist_dcf_run(
     price_observation: SpecializedPriceObservation | None = None,
     *,
     artifact_promotion: ArtifactPromotion | None = None,
+    db_path: Path | None = None,
+    input_receipt: ModelInputReceipt | None = None,
+    assumptions_path: Path | None = None,
 ) -> bool:
     """``holdings=None`` (the pre-PR10 2-arg call shape every test/caller uses)
     loads ``micro_thesis/holdings/<T>.json`` itself, same as before. ``main()``
@@ -848,9 +701,24 @@ def persist_dcf_run(
     file edit can never make the sheet and the persisted snapshot disagree —
     a ticker with genuinely no holdings JSON still resolves to ``None`` either
     way, so this collapses "not passed" and "no holdings on file" safely."""
-    db = REPO / "data" / "portfolio.db"
-    if persist_mod is None or not db.exists() or not m.vps:
+    if input_receipt is None:
+        raise InputEvidenceError("model_input_receipt_required")
+    if assumptions_path is None or input_receipt.assumptions_source_path != str(
+        assumptions_path.resolve()
+    ):
+        raise InputEvidenceError("explicit_assumptions_authority_required")
+    try:
+        current_source_hash = hashlib.sha256(assumptions_path.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise InputEvidenceError("assumptions_authority_unavailable") from exc
+    if current_source_hash != input_receipt.assumptions_source_sha256:
+        raise InputEvidenceError("assumptions_authority_changed_after_review")
+    db = require_db_path(db_path)
+    if persist_mod is None or not m.vps:
         return False
+    recomputed = mirror(s)
+    if recomputed != m:
+        raise InputEvidenceError("model_output_input_mismatch")
     if holdings is None:
         holdings = _load_holdings(T)
     mos: object = holdings.get("mos_bar") if holdings else None
@@ -861,6 +729,8 @@ def persist_dcf_run(
     live_workbook = live_path_from_env(DEST)
     snap_payload: dict[str, object] = {
         "model": "meli_platform_sotp",
+        "effective_model_inputs": effective_numeric_inputs(asdict(s)),
+        "financial_period_end": input_receipt.request.financial_period_end.isoformat(),
         "value_per_share": m.vps,
         "operating_ev_m": m.operating_ev,
         "credit_equity_value_m": m.credit_equity_value,
@@ -873,7 +743,9 @@ def persist_dcf_run(
         "country_risk_premium": s.country_risk_premium,
         "workbook": str(live_workbook),
         "assumption_provenance": {
-            "authority": f"data/bank_assumptions/{T}_sotp.json",
+            "authority": str(assumptions_path.resolve()),
+            "sha256": current_source_hash,
+            "rates": "dated_reviewed_effective_vector",
             "workbook_capture": "unsupported",
             "sync_status": "not_applicable",
         },
@@ -896,7 +768,7 @@ def persist_dcf_run(
         live_price_at=observed_at,
         live_price_source=price_source,
         source_files=(
-            (REPO / "data" / "bank_assumptions" / f"{T}_sotp.json", "owner_assumptions"),
+            (assumptions_path, "owner_assumptions"),
             (REPO / "micro_thesis" / "holdings" / f"{T}.json", "holding_policy"),
             *(
                 price_seed_source_files(REPO, price_observation)
@@ -908,6 +780,7 @@ def persist_dcf_run(
             record for record in (s.global_assumption_source, s.country_risk_source) if record
         ),
         equity_direct_archetype="platform_sotp",
+        model_input_receipt=input_receipt.model_dump(mode="json"),
     )
     row = persist_mod.DcfRunRow(
         ticker=T,
@@ -924,27 +797,105 @@ def persist_dcf_run(
         assumption_snapshot_json=snap,
         notes=f"workbook={live_workbook.name} (MELI sum-of-the-parts platform DCF)",
         provenance=provenance,
+        calculated_at=datetime.now(UTC),
     )
     with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
+        if not conn.in_transaction:
+            conn.execute("BEGIN IMMEDIATE")
+        verify_meli_inputs(
+            conn,
+            input_receipt,
+            effective_inputs=effective_numeric_inputs(asdict(s)),
+            as_of=datetime.now(UTC),
+        )
         if not schema_supports_provenance(conn):
-            sys.stderr.write(
-                json.dumps(
-                    {
-                        "event": "dcf_provenance_not_persisted",
-                        "ticker": T,
-                        "reason": "database schema lacks provenance columns",
-                    }
-                )
-                + "\n"
-            )
-            row = replace(row, provenance=None)
+            raise InputEvidenceError("model_input_receipt_schema_unavailable")
         if artifact_promotion is None:
             return persist_mod.upsert(conn, row)
         return persist_mod.upsert(conn, row, artifact_promotion=artifact_promotion)
 
 
+def load_verified_assumptions(
+    ticker: str, *, db_path: Path, assumptions_path: Path
+) -> tuple[Assum, ModelInputReceipt]:
+    """Read one explicit reviewed artifact; no repo/data or DB-directory fallback.
+
+    This vector records effective forecast rates. Refreshing CAPM or other
+    forecast choices requires a new dated review, not implicit cache loading.
+    """
+    if ticker != "MELI":
+        raise InputEvidenceError("meli_input_recipe_ticker_mismatch")
+    try:
+        source_bytes = assumptions_path.read_bytes()
+        request_payload = json.loads(source_bytes)
+        request = ModelInputRequest.model_validate(request_payload.get("input_evidence"))
+    except (OSError, ValueError, AttributeError) as exc:
+        raise InputEvidenceError("model_input_request_missing_or_invalid") from exc
+    s = Assum()
+    for key, assumption in request.assumptions.items():
+        if key not in ASSUMPTION_KEYS:
+            raise InputEvidenceError("assumption_population_mismatch")
+        setattr(
+            s, key, int(assumption.value) if key in {"years", "derive_capm"} else assumption.value
+        )
+    # In verified builds no historical seed is offered as a current quote.
+    s.price = 0.0
+    s.price_seed_source = "unavailable"
+    with connect_sqlite(require_db_path(db_path), role=SQLiteConnectionRole.READ_ONLY) as conn:
+        conn.execute("BEGIN")
+        values, receipt = prepare_meli_inputs(
+            conn,
+            request,
+            effective_inputs=effective_numeric_inputs(asdict(s)),
+            as_of=datetime.now(UTC),
+        )
+    for key, value in values.items():
+        setattr(s, key, int(value) if key in {"years", "derive_capm"} else value)
+    return s, receipt.model_copy(
+        update={
+            "assumptions_source_path": str(assumptions_path.resolve()),
+            "assumptions_source_sha256": hashlib.sha256(source_bytes).hexdigest(),
+        }
+    )
+
+
 def main() -> int:
-    s = load_assumptions(T)
+    draft = os.environ.get("DCF_PERSIST", "1") != "1"
+    artifact_promotion = promotion_from_env(DEST)
+    if draft:
+        if artifact_promotion is not None or not DEST.resolve().is_relative_to(
+            (REPO / ".tmp").resolve()
+        ):
+            raise InputEvidenceError("draft_destination_must_be_isolated_tmp")
+    elif artifact_promotion is None or DEST.resolve() == live_path_from_env(DEST).resolve():
+        raise InputEvidenceError("atomic_artifact_promotion_required_use_refresh_dcf")
+    db_path = None if draft else require_db_path(configured_db_path(REPO))
+    input_receipt: ModelInputReceipt | None = None
+    assumptions_path: Path | None = None
+    if draft:
+        s = load_assumptions(T)
+        sys.stderr.write(
+            json.dumps(
+                {
+                    "event": "meli_isolated_draft",
+                    "input_status": "unverified_defaults_or_assumptions",
+                    "promotion_allowed": False,
+                    "draft_input_source": str(
+                        REPO / "data" / "bank_assumptions" / f"{T}_sotp.json"
+                    ),
+                }
+            )
+            + "\n"
+        )
+    else:
+        assert db_path is not None
+        raw_assumptions_path = os.environ.get("DCF_MELI_ASSUMPTIONS_PATH", "").strip()
+        if not raw_assumptions_path:
+            raise InputEvidenceError("explicit_assumptions_authority_required")
+        assumptions_path = Path(raw_assumptions_path)
+        s, input_receipt = load_verified_assumptions(
+            T, db_path=db_path, assumptions_path=assumptions_path
+        )
     price_observation = resolve_specialized_price(
         REPO,
         T,
@@ -959,7 +910,6 @@ def main() -> int:
     # never two that could drift on a mid-run file edit.
     holdings = _load_holdings(T)
     build(s, m, DEST, holdings)
-    artifact_promotion = promotion_from_env(DEST)
     if os.environ.get("DCF_PERSIST", "1") != "1":
         persisted = False
     elif artifact_promotion is not None:
@@ -969,9 +919,20 @@ def main() -> int:
             holdings,
             price_observation,
             artifact_promotion=artifact_promotion,
+            db_path=db_path,
+            input_receipt=input_receipt,
+            assumptions_path=assumptions_path,
         )
     else:
-        persisted = persist_dcf_run(s, m, holdings, price_observation)
+        persisted = persist_dcf_run(
+            s,
+            m,
+            holdings,
+            price_observation,
+            db_path=db_path,
+            input_receipt=input_receipt,
+            assumptions_path=assumptions_path,
+        )
     up = (m.vps / s.price - 1) if s.price else 0.0
     print(
         f"RESULT\t{T}\tvalue/sh=${m.vps:,.2f}\tprice=${s.price:,.2f}\tupside={up:+.0%}"

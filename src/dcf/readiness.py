@@ -7,6 +7,7 @@ financial inputs. Existing valuation amounts remain available for display.
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal, cast
@@ -14,6 +15,8 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict
 
 from dcf.grade_evidence import DcfGradeEvidence, load_dcf_grade_evidence
+from dcf.input_evidence import InputEvidenceError, ModelInputReceipt
+from dcf.meli_inputs import effective_numeric_inputs, model_output, verify_meli_inputs
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import (
     FactAdmissionError,
@@ -34,6 +37,8 @@ class FinancialInputEvidence(BaseModel):
     knowledge_at: str | None = None
     recorded_at: str | None = None
     document_version_id: str | None = None
+    document_recorded_at: str | None = None
+    extraction_completed_at: str | None = None
 
 
 class ValuationReadiness(BaseModel):
@@ -53,8 +58,8 @@ class ValuationReadiness(BaseModel):
     market_status: Literal["current", "stale", "missing", "invalid"] = "missing"
     financial_period_end: str | None = None
     financial_inputs: tuple[FinancialInputEvidence, ...] = ()
-    financial_input_completeness: Literal["unverified"] = "unverified"
-    latest_reporting_period_status: Literal["unverified"] = "unverified"
+    financial_input_completeness: Literal["verified", "unverified"] = "unverified"
+    latest_reporting_period_status: Literal["verified", "unverified"] = "unverified"
     assumption_reviewed_at: str | None = None
     source_clocks: tuple[dict[str, object], ...] = ()
 
@@ -172,6 +177,43 @@ def _admit_input(
         )
 
 
+def _legacy_inputs(
+    conn: sqlite3.Connection,
+    ticker: str,
+    cutoff: datetime,
+    evidence: DcfGradeEvidence,
+    reasons: list[str],
+) -> tuple[FinancialInputEvidence, ...]:
+    references = _fact_references(evidence)
+    canonical_inputs: dict[str, GrowthFactReference] = {}
+    if references:
+        history = read_financial_history(
+            conn,
+            ticker,
+            as_of=cutoff.date(),
+            concepts=(
+                "revenue",
+                "gross_profit",
+                "operating_income",
+                "free_cash_flow",
+                "net_income",
+            ),
+        )
+        canonical_inputs = {item.observation_id: item for item in history.references}
+        reasons.extend(history.reason_codes)
+    reader = FactReadModel(conn)
+    resolver = CanonicalFactResolutionEngine(conn)
+    ontology = MetricOntology(conn)
+    inputs = tuple(
+        _admit_input(reader, resolver, ontology, item, cutoff, canonical_inputs)
+        for item in references
+    )
+    if not inputs:
+        reasons.append("financial_input_lineage_missing")
+    reasons.extend(item.reason_code for item in inputs if item.reason_code is not None)
+    return inputs
+
+
 def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> ValuationReadiness:
     evidence = load_dcf_grade_evidence(conn, ticker)
     if evidence.status != "available":
@@ -218,41 +260,71 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
         reasons.append("model_calculation_timestamp_unverified")
     elif calculated_at > cutoff:
         reasons.append("model_calculation_after_cutoff")
-    references = _fact_references(evidence)
-    canonical_inputs: dict[str, GrowthFactReference] = {}
-    if references:
-        history = read_financial_history(
-            conn,
-            ticker,
-            as_of=cutoff.date(),
-            concepts=(
-                "revenue",
-                "gross_profit",
-                "operating_income",
-                "free_cash_flow",
-                "net_income",
-            ),
+    verified_population = False
+    assumption_reviewed_at: str | None = None
+    inputs: tuple[FinancialInputEvidence, ...] = ()
+    raw_receipt = (evidence.provenance or {}).get("model_input_receipt")
+    if ticker == "MELI" and raw_receipt is not None:
+        try:
+            receipt = ModelInputReceipt.model_validate(raw_receipt)
+            snapshot = evidence.assumption_snapshot or {}
+            if snapshot.get("model") != "meli_platform_sotp":
+                raise InputEvidenceError("input_recipe_engine_mismatch")
+            effective = effective_numeric_inputs(_mapping(snapshot.get("effective_model_inputs")))
+            verified = verify_meli_inputs(conn, receipt, effective_inputs=effective, as_of=cutoff)
+            if receipt.verified_at > cutoff or (
+                calculated_at and receipt.verified_at > calculated_at
+            ):
+                raise InputEvidenceError("model_input_receipt_after_calculation")
+            inputs = tuple(
+                FinancialInputEvidence(
+                    observation_id=item.reference.observation_id,
+                    status="admitted",
+                    period_end=item.period_end.isoformat(),
+                    document_version_id=item.document_version_id,
+                    knowledge_at=item.knowledge_at.isoformat(),
+                    recorded_at=item.recorded_at.isoformat(),
+                    document_recorded_at=item.document_recorded_at.isoformat()
+                    if item.document_recorded_at
+                    else None,
+                    extraction_completed_at=item.extraction_completed_at.isoformat()
+                    if item.extraction_completed_at
+                    else None,
+                )
+                for item in verified.inputs
+            )
+            verified_population = True
+            replay = model_output(effective)
+            for key, stored in (
+                ("vps", evidence.npv_per_share),
+                ("equity_value", evidence.npv),
+                ("vps", snapshot.get("value_per_share")),
+                ("equity_value", snapshot.get("equity_value_m")),
+                ("operating_ev", snapshot.get("operating_ev_m")),
+                ("credit_equity_value", snapshot.get("credit_equity_value_m")),
+            ):
+                expected = replay[key]
+                if (
+                    not isinstance(expected, (float, int))
+                    or not isinstance(stored, (float, int))
+                    or not math.isclose(expected, stored, rel_tol=1e-9, abs_tol=1e-6)
+                ):
+                    raise InputEvidenceError("persisted_model_output_replay_mismatch")
+            if receipt.request.assumption_review is not None:
+                assumption_reviewed_at = receipt.request.assumption_review.reviewed_at.isoformat()
+            reasons.append("scenario_acceptance_unverified")
+        except sqlite3.Error:
+            reasons.append("model_input_receipt_query_failed")
+        except (ValueError, RuntimeError) as exc:
+            reasons.append(
+                str(exc) if isinstance(exc, InputEvidenceError) else "model_input_receipt_invalid"
+            )
+    else:
+        inputs = _legacy_inputs(conn, ticker, cutoff, evidence, reasons)
+    if not verified_population:
+        reasons.extend(
+            ("financial_input_completeness_unverified", "latest_reporting_period_unverified")
         )
-        canonical_inputs = {item.observation_id: item for item in history.references}
-        reasons.extend(history.reason_codes)
-    reader = FactReadModel(conn)
-    resolver = CanonicalFactResolutionEngine(conn)
-    ontology = MetricOntology(conn)
-    inputs = tuple(
-        _admit_input(reader, resolver, ontology, item, cutoff, canonical_inputs)
-        for item in references
-    )
-    if not inputs:
-        reasons.append("financial_input_lineage_missing")
-    reasons.extend(item.reason_code for item in inputs if item.reason_code is not None)
-    # No existing DCF receipt proves the required population or latest issuer
-    # filing coverage. Successful admission of a subset must not fill that gap.
-    reasons.extend(
-        (
-            "financial_input_completeness_unverified",
-            "latest_reporting_period_unverified",
-        )
-    )
     sources = (evidence.provenance or {}).get("sources")
     source_clocks: list[dict[str, object]] = []
     for raw_source in _items(sources):
@@ -268,7 +340,17 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
     return ValuationReadiness(
         ticker=ticker,
         evaluated_at=cutoff.isoformat(),
-        status="failed" if any(item.status == "failed" for item in inputs) else "degraded",
+        ready=verified_population and not reasons,
+        status=(
+            "ready"
+            if verified_population and not reasons
+            else "failed"
+            if any(item.status == "failed" for item in inputs)
+            or "model_input_receipt_query_failed" in reasons
+            else "degraded"
+        ),
+        financial_input_completeness="verified" if verified_population else "unverified",
+        latest_reporting_period_status="verified" if verified_population else "unverified",
         reason_codes=tuple(dict.fromkeys(reasons)),
         run_id=evidence.run_id,
         input_sha256=evidence.input_sha256,
@@ -279,6 +361,7 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
         market_status=market_status,
         financial_period_end=max(periods, default=None),
         financial_inputs=inputs,
+        assumption_reviewed_at=assumption_reviewed_at,
         source_clocks=tuple(source_clocks),
     )
 
@@ -288,8 +371,8 @@ def load_valuation_readiness(
 ) -> ValuationReadiness:
     """Assess persisted evidence under one read snapshot; no writes/network/fallback.
 
-    Current receipts cannot certify financial-input population completeness, so
-    they are explicitly degraded rather than being made eligible by fresh quotes.
+    Legacy receipts remain degraded. MELI recipe receipts are reconstructed against
+    current canonical admission and source coverage before eligibility is granted.
     This API is for consumption of an existing run, not permission to build its
     replacement. It does not erase or mutate the stored valuation.
     """

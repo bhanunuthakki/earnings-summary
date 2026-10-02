@@ -469,6 +469,7 @@ def main() -> int:
             db_path,
             workbook_override=args.workbook,
             valuation_year=args.valuation_year,
+            meli_assumptions_path=args.meli_assumptions_path,
         )
         results.append(result)
     print(json.dumps(results, indent=2, default=str))
@@ -504,6 +505,12 @@ def _parse_args() -> argparse.Namespace:
         default=date.today().year,
         help="Cutoff year: > this is forecast, <= is actuals. Default: current calendar year.",
     )
+    p.add_argument(
+        "--meli-assumptions-path",
+        type=Path,
+        default=None,
+        help="Explicit reviewed MELI input artifact; no repo/data or DB-directory fallback.",
+    )
     return p.parse_args()
 
 
@@ -531,6 +538,7 @@ def refresh_one(
     *,
     workbook_override: Path | None = None,
     valuation_year: int,
+    meli_assumptions_path: Path | None = None,
 ) -> dict[str, object]:
     """Refresh one ticker's redesigned DCF. Returns a structured result dict.
 
@@ -557,7 +565,9 @@ def refresh_one(
     if model == "platform_dcf":
         return _refresh_platform(ticker, repo_root)
     if model == "meli_platform_sotp":
-        return _refresh_meli_sotp(ticker, repo_root)
+        return _refresh_meli_sotp(
+            ticker, repo_root, db_path=db_path, assumptions_path=meli_assumptions_path
+        )
     if model != "fcff_dcf":
         # "new" (Opus proposed an archetype the pipeline doesn't have yet), "none",
         # or an unknown model string — no template to run.
@@ -818,7 +828,9 @@ def _refresh_platform(ticker: str, repo_root: Path) -> dict[str, object]:
     }
 
 
-def _refresh_meli_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
+def _refresh_meli_sotp(
+    ticker: str, repo_root: Path, *, db_path: Path, assumptions_path: Path | None
+) -> dict[str, object]:
     """Build the MELI sum-of-the-parts platform DCF
     (``execution/build_meli_platform_dcf.py``) to ``dcf/<T>.xlsx`` — values
     Commerce + Fintech-payments as operating FCFF (@ WACC) and the Mercado Pago
@@ -827,6 +839,23 @@ def _refresh_meli_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
     marketplace and a capital-consuming lending book. The builder computes the
     value-of-record and upserts ``dcf_runs`` itself, like the platform/bank
     builders."""
+    if assumptions_path is None:
+        raw = os.environ.get("DCF_MELI_ASSUMPTIONS_PATH", "").strip()
+        assumptions_path = Path(raw) if raw else None
+    if assumptions_path is None:
+        return {
+            "ticker": ticker.upper(),
+            "status": "error",
+            "reason": "explicit_assumptions_authority_required",
+        }
+    try:
+        assumptions_path = assumptions_path.resolve(strict=True)
+    except OSError:
+        return {
+            "ticker": ticker.upper(),
+            "status": "error",
+            "reason": "assumptions_authority_unavailable",
+        }
     t = ticker.upper()
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
     tmp = dest.parent / f"{dest.stem}.rebuild.xlsx"
@@ -837,6 +866,8 @@ def _refresh_meli_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
         DCF_REPO_ROOT=str(repo_root),
         DCF_DEST=str(tmp),
         DCF_PROMOTE_DEST=str(dest),
+        EARNINGS_SUMMARY_DB_PATH=str(db_path),
+        DCF_MELI_ASSUMPTIONS_PATH=str(assumptions_path),
     )
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_MELI_SOTP_BUILDER)],

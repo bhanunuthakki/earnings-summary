@@ -52,6 +52,7 @@ class DcfGradeEvidence(BaseModel):
     inputs_as_of: str | None = None
     live_price: float | None = None
     live_price_at: str | None = None
+    npv: float | None = None
     npv_per_share: float | None = None
     over_under_pct: float | None = None
     sanity_flag: str | None = None
@@ -222,6 +223,7 @@ def _project_provenance(provenance: dict[str, object]) -> dict[str, object]:
         "ticker",
         "inputs_as_of_status",
         "input_clocks",
+        "model_input_receipt",
         "market_price",
         "country_risk_context",
     ):
@@ -535,12 +537,13 @@ def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEv
     original_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
     try:
+        npv_column = "npv" if "npv" in columns else "NULL"
         row = conn.execute(
-            """
+            f"""
             SELECT id, ticker, created_at, valuation_date, engine_version,
                    input_sha256, workbook_sha256, inputs_as_of,
                    live_price, live_price_at, npv_per_share, over_under_pct,
-                   sanity_flag, assumption_snapshot_json, provenance_json
+                   sanity_flag, assumption_snapshot_json, provenance_json, {npv_column} AS npv
             FROM dcf_runs
             WHERE UPPER(ticker) = ?
               AND COALESCE(is_latest, 1) = 1
@@ -667,6 +670,7 @@ def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEv
         inputs_as_of=str(row["inputs_as_of"]) if row["inputs_as_of"] is not None else None,
         live_price=live_price,
         live_price_at=live_price_at,
+        npv=float(row["npv"]) if row["npv"] is not None else None,
         npv_per_share=(float(row["npv_per_share"]) if row["npv_per_share"] is not None else None),
         over_under_pct=(
             float(row["over_under_pct"]) if row["over_under_pct"] is not None else None

@@ -502,7 +502,6 @@ existing execution contracts without adding a task, schedule or write lane.
 Focused preflight, dispatcher and artifact regression tests establish this
 no-surface-change disposition.
 
-
 ### FMP owner admission
 
 The shared FMP adapter and shared HTTP FMP lane read the nonsecret policy named by
@@ -586,3 +585,59 @@ this manual operation. `tests/test_meli_reported_tables.py` verifies native iden
 raw-byte/locator replay, semantic rejection, dry-run, append/replay and absence of fabricated
 legacy documents or canonical-admission claims. Existing full-text tests retain the global
 batch behavior. No browser or service change is made.
+
+### MELI verified refresh: explicit assumptions artifact
+
+The existing MELI refresh operation now requires a separately configured reviewed
+assumptions artifact. Pass `--meli-assumptions-path <approved-state-file>` to
+`execution/refresh_dcf.py --ticker MELI`, or set `DCF_MELI_ASSUMPTIONS_PATH`.
+The existing explicit/configured database authority remains separate. The
+subprocess receives both authorities unchanged; it never infers an artifact root
+from the database parent or falls back to checkout `data/` or a runtime junction.
+The exact artifact path and content hash are retained in model provenance.
+
+A verified artifact contains an `input_evidence` request with exact canonical
+reported-fact references, a sealed research snapshot and the complete effective
+forecast vector (including discount rates). Existing producers must first admit
+reported observations, governed metric definitions and bindings, then seal the
+resolution/research snapshots with current acquisition and extraction coverage.
+The fixed MELI recipe computes TTM values from reported fiscal-year/current-YTD/
+prior-YTD operands and computes non-credit fintech revenue and the corporate cash
+bridge explicitly. Those calculations are not admitted as reported facts. Metric
+definitions must prove the supported fiscal calendar, financial scope and unit;
+unknown or mismatched definitions fail closed. No automatic role binder or
+production fact bootstrap is provided by this change.
+
+The artifact also requires a dated review bound to the exact actuals and effective
+forecast vector, with explicit NIMAL, aggregate-profit, D&A and capital-spending
+comparators and variance rationales. The cash bridge uses the issuer's available
+cash/investments and total-debt reconciliation pools. Current and non-current
+operating-lease liabilities are separately reported inputs; their sum is a model
+calculation removed from total debt because native FCFF expenses rent. Finance
+leases remain inside financial debt pending their capex/D&A treatment. Credit
+cash, operating cash reserves and credit-funding debt allocations are explicit
+reviewed assumptions, never reported surplus or non-credit balances. Allocations
+must be nonnegative; cash allocations together cannot exceed the disclosed cash
+pool, and credit-funding debt cannot exceed total debt less operating leases.
+Their pool comparators and rationales are part of the same dated review. The net
+bridge is available cash minus credit cash and operating reserve, minus financial
+debt, plus allocated credit-funding debt. This retains owner/analyst forecasts as
+assumptions rather than treating source freshness as approval. The numerical
+engine and original scenario formulas remain unchanged. Model output is replayed
+against its inputs before persistence and by readiness consumers. The owning
+upsert retains MELI's timezone-aware calculation timestamp with microseconds;
+readiness retains strict ordering against the earlier input verification clock,
+without tolerating future inputs to accommodate SQL timestamp truncation. Missing or
+changed artifacts, incomplete coverage, unadmitted inputs, absent review or a
+replay mismatch block verified promotion. A verified base model still reports
+`scenario_acceptance_unverified` and is ineligible for allocation; it does not
+certify bear/bull assumptions or probabilities. Draft calculations retain their
+separate labeled, non-promoting `.tmp/` path.
+
+This tightens the existing internal refresh contract; it adds no Operations
+button, schedule, source-acquisition permission, provider invocation or production
+activation. The focused MELI recipe tests exercise real publication, ontology,
+binding and resolution authorities; source-package completeness is an explicitly
+isolated boundary in those fixtures, with separate inventory checks. Routing,
+provenance, model-replay and readiness tests cover the changed contract. Passing
+those tests is not a claim that the production source population is complete.

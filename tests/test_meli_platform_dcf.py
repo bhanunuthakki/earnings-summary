@@ -131,12 +131,17 @@ def test_refresh_routes_meli_to_sotp_builder(
     )
     db_path = tmp_path / "synthetic.db"
     db_path.touch()
+    assumptions_path = tmp_path / "approved-state" / "MELI_sotp.json"
+    assumptions_path.parent.mkdir()
+    assumptions_path.write_text("{}", encoding="utf-8")
     calls: list[list[str]] = []
 
     def run_builder(
         command: list[str], *, env: dict[str, str], **_: object
     ) -> subprocess.CompletedProcess[str]:
         calls.append(command)
+        assert env["EARNINGS_SUMMARY_DB_PATH"] == str(db_path)
+        assert env["DCF_MELI_ASSUMPTIONS_PATH"] == str(assumptions_path.resolve())
         Path(env["DCF_PROMOTE_DEST"]).parent.mkdir(parents=True, exist_ok=True)
         Path(env["DCF_PROMOTE_DEST"]).touch()
         return subprocess.CompletedProcess(command, 0, stdout="RESULT dcf_runs=ok\n", stderr="")
@@ -147,7 +152,17 @@ def test_refresh_routes_meli_to_sotp_builder(
     monkeypatch.setattr(refresh_dcf, "configured_db_path", configured_path)
     monkeypatch.setattr(refresh_dcf.subprocess, "run", run_builder)
     monkeypatch.setattr(
-        sys, "argv", ["refresh_dcf.py", "--ticker", "MELI", "--repo-root", str(tmp_path)]
+        sys,
+        "argv",
+        [
+            "refresh_dcf.py",
+            "--ticker",
+            "MELI",
+            "--repo-root",
+            str(tmp_path),
+            "--meli-assumptions-path",
+            str(assumptions_path),
+        ],
     )
 
     assert refresh_dcf.main() == 0
@@ -250,7 +265,9 @@ def test_main_fails_before_workbook_persistence_with_infinite_geography(
         annual=[{"fiscalYear": 2025, "period": "FY", "data": {"Brazil": float("inf")}}],
         quarterly=[],
     )
-    destination = tmp_path / "MELI.xlsx"
+    destination = tmp_path / ".tmp" / "MELI.xlsx"
+    destination.parent.mkdir()
+    monkeypatch.setenv("DCF_PERSIST", "0")
     sentinel = b"existing-workbook-must-survive"
     destination.write_bytes(sentinel)
     monkeypatch.setattr(meli, "REPO", tmp_path)
@@ -263,3 +280,24 @@ def test_main_fails_before_workbook_persistence_with_infinite_geography(
         meli.main()
 
     assert destination.read_bytes() == sentinel
+
+
+def test_meli_refresh_requires_explicit_artifact_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DCF_MELI_ASSUMPTIONS_PATH", raising=False)
+    # A plausible artifact beside the DB must never become implicit authority.
+    (tmp_path / "MELI_sotp.json").write_text("{}", encoding="utf-8")
+
+    def forbidden_child(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("Missing artifact authority must fail before any child execution")
+
+    monkeypatch.setattr(refresh_dcf.subprocess, "run", forbidden_child)
+    holding = tmp_path / "micro_thesis" / "holdings" / "MELI.json"
+    holding.parent.mkdir(parents=True)
+    holding.write_text(json.dumps({"valuation_model": "meli_platform_sotp"}))
+    result = refresh_dcf.refresh_one(
+        "MELI", tmp_path, tmp_path / "configured.db", valuation_year=2026
+    )
+    assert result["status"] == "error"
+    assert result["reason"] == "explicit_assumptions_authority_required"
