@@ -107,6 +107,10 @@ def test_sec_hard_stop_is_structured_nonretryable_and_never_exposes_contact(
         ("file", "research\nbad@example.test"),
         ("process", "research 😀@example.test"),
         ("file", "research 😀@example.test"),
+        ("process", "short"),
+        ("file", "short"),
+        ("process", "x" * 513),
+        ("file", "x" * 513),
     ],
 )
 def test_invalid_contact_blocks_inventory_before_transport_without_disclosure(

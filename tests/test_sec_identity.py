@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from execution import capture_expected_sec_documents as capture_cli
 from sec_identity import DEFAULT_USER_AGENT, SecContactConfigurationError, sec_user_agent
 
 
@@ -67,8 +68,12 @@ def test_public_default_only_when_contact_absent(
     [
         ("process", "research\r\nbad@example.test"),
         ("process", "research 😀@example.test"),
+        ("process", "short"),
+        ("process", "x" * 513),
         ("file", "research\nbad@example.test"),
         ("file", "research 😀@example.test"),
+        ("file", "short"),
+        ("file", "x" * 513),
     ],
 )
 def test_invalid_selected_contact_fails_opaque_without_fallback(
@@ -88,3 +93,32 @@ def test_invalid_selected_contact_fails_opaque_without_fallback(
     assert contact not in str(raised.value)
     assert raised.value.__cause__ is None
     assert raised.value.__context__ is None
+
+
+@pytest.mark.parametrize("contact", ["short", "x" * 513])
+def test_invalid_contact_never_reaches_native_capture_request_or_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    contact: str,
+) -> None:
+    monkeypatch.setenv("EDGAR_USER_AGENT", contact)
+    monkeypatch.setenv("EARNINGS_SUMMARY_ENV_FILE", str(tmp_path / "unused.env"))
+
+    def no_typed_request(**_kwargs: object) -> None:
+        raise AssertionError("invalid contact reached typed capture request")
+
+    monkeypatch.setattr(capture_cli, "SecNativeCaptureRequest", no_typed_request)
+    with pytest.raises(SecContactConfigurationError) as raised:
+        capture_cli.main(
+            [
+                "--db",
+                str(tmp_path / "unused.db"),
+                "--inventory-key",
+                "synthetic-inventory",
+                "--task-id",
+                "synthetic",
+            ]
+        )
+    assert contact not in str(raised.value)
+    assert capsys.readouterr() == ("", "")

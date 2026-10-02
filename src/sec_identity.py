@@ -44,7 +44,10 @@ class SecContactConfigurationError(ValueError):
 def _valid_contact(value: str) -> str:
     if any(ord(char) < 32 or 127 <= ord(char) <= 159 or ord(char) > 255 for char in value):
         raise SecContactConfigurationError
-    return value.strip()
+    contact = value.strip()
+    if contact and not 8 <= len(contact) <= 512:
+        raise SecContactConfigurationError
+    return contact
 
 
 def sec_user_agent() -> str:
