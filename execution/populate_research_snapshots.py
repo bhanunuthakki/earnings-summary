@@ -8,15 +8,17 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT, command_parser
+except ImportError:
+    from execution._lib import PROJECT_ROOT, command_parser
 
-from provenance.population_research_snapshots import (  # noqa: E402
+from provenance.population_research_snapshots import (
     ResearchSnapshotPopulationRequest,
     populate_research_snapshots,
 )
-from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from runtime.job_runtime import JobAlreadyRunningError, JobLock
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def _datetime(value: str) -> datetime:
@@ -37,6 +39,7 @@ def _run(args: argparse.Namespace) -> int:
                 operation_recorded_at=args.operation_recorded_at,
                 issuer_ids=tuple(args.issuer_id),
                 apply=args.apply,
+                projection_mode=args.projection_mode,
                 input_commitment_sha256=args.input_commitment_sha256,
                 plan_commitment_sha256=args.plan_commitment_sha256,
             ),
@@ -48,7 +51,7 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = command_parser(__doc__)
     parser.add_argument("--db", type=Path, required=True)
     parser.add_argument("--cutoff-at", type=_datetime, required=True)
     parser.add_argument(
@@ -57,6 +60,12 @@ def main(argv: list[str] | None = None) -> int:
         dest="operation_recorded_at",
         type=_datetime,
         required=True,
+    )
+    parser.add_argument(
+        "--projection-mode",
+        choices=("semantic", "lexical_only"),
+        default="semantic",
+        help="Explicit retrieval mode; semantic requires vector and promotion evidence.",
     )
     parser.add_argument("--issuer-id", action="append", default=[])
     parser.add_argument("--input-commitment-sha256")

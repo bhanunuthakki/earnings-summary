@@ -44,6 +44,8 @@ _REPORTING_FAMILIES = (
     "issuer_presentations",
     "operating_company_periodic",
 )
+ProjectionMode = Literal["semantic", "lexical_only"]
+
 _RESEARCH_SELECTION_POLICY = "research-snapshot-terminal-at-k-observed-through-o.v1"
 
 
@@ -57,6 +59,7 @@ class ResearchSnapshotPopulationRequest(_FrozenModel):
         validation_alias=AliasChoices("operation_recorded_at", "recorded_at")
     )
     issuer_ids: tuple[str, ...] = ()
+    projection_mode: ProjectionMode = "semantic"
     apply: bool = False
     input_commitment_sha256: str | None = None
     plan_commitment_sha256: str | None = None
@@ -91,6 +94,7 @@ class IssuerResearchSnapshotStatus(_FrozenModel):
 
 class ResearchSnapshotPopulationResult(_FrozenModel):
     mode: Literal["dry_run", "apply"]
+    projection_mode: ProjectionMode = "semantic"
     issuer_count: int
     ready_issuer_count: int
     blocked_issuer_count: int
@@ -240,7 +244,9 @@ def populate_research_snapshots(
                     issuer_id,
                     cutoff,
                     observed_through=recorded,
+                    projection_mode=request.projection_mode,
                 )
+                _require_unambiguous_terminal(conn, plan)
                 plans[issuer_id] = plan
                 commitment_entries.append(_request_input_manifest(conn, plan))
                 status_by_issuer[issuer_id] = IssuerResearchSnapshotStatus(
@@ -271,6 +277,7 @@ def populate_research_snapshots(
             discovered,
             issuers,
             commitment_entries,
+            projection_mode=request.projection_mode,
         )
         plan_commitment = _population_plan_commitment(
             request,
@@ -292,6 +299,7 @@ def populate_research_snapshots(
                         (plan.research_snapshot_id,),
                     ).fetchone()
                     with conn:
+                        _require_unambiguous_terminal(conn, plan)
                         admission = (
                             verify_research_snapshot(conn, plan.research_snapshot_id)
                             if existing is not None
@@ -309,6 +317,7 @@ def populate_research_snapshots(
         ordered = tuple(status_by_issuer[issuer_id] for issuer_id in sorted(status_by_issuer))
         return ResearchSnapshotPopulationResult(
             mode="apply" if request.apply else "dry_run",
+            projection_mode=request.projection_mode,
             issuer_count=len(ordered),
             ready_issuer_count=sum(item.ready for item in ordered),
             blocked_issuer_count=sum(not item.ready for item in ordered),
@@ -328,6 +337,7 @@ def assemble_research_snapshot_request(
     cutoff_at: datetime,
     *,
     observed_through: datetime | None = None,
+    projection_mode: ProjectionMode = "semantic",
 ) -> ResearchSnapshotRequest:
     """Assemble one exact issuer request or raise one stable blocker."""
 
@@ -348,6 +358,7 @@ def assemble_research_snapshot_request(
         manifest_id,
         cutoff,
         observed_through=observed,
+        projection_mode=projection_mode,
     )
     ontology_id = _ontology_coordinate(conn, cutoff, observed)
     resolution_id = _resolution_coordinate(
@@ -376,6 +387,9 @@ def assemble_research_snapshot_request(
         "processing_snapshot_id": processing_snapshot_id,
         "source_fact_publication_ids": list(publication_ids),
     }
+    # Preserve retained semantic identities; lexical-only requests are a distinct namespace.
+    if projection_mode == "lexical_only":
+        identity_payload["projection_mode"] = projection_mode
     research_snapshot_id = "research-snapshot:" + _digest(identity_payload)
     return ResearchSnapshotRequest(
         research_snapshot_id=research_snapshot_id,
@@ -402,6 +416,34 @@ def assemble_research_snapshot_request(
         cutoff_at=cutoff,
         recorded_at=observed,
     )
+
+
+def _require_unambiguous_terminal(
+    conn: sqlite3.Connection, request: ResearchSnapshotRequest
+) -> None:
+    """One issuer/K/O cannot acquire a second terminal in another mode."""
+    conflict = conn.execute(
+        "SELECT 1 FROM research_snapshot_universe_commitments universe "
+        "JOIN research_snapshot_headers header "
+        "ON header.research_snapshot_id=universe.research_snapshot_id "
+        "JOIN research_snapshot_seals seal "
+        "ON seal.research_snapshot_id=header.research_snapshot_id "
+        "WHERE universe.issuer_id=? AND datetime(universe.cutoff_at)=datetime(?) "
+        "AND datetime(universe.recorded_at)=datetime(?) "
+        "AND datetime(header.recorded_at)=datetime(?) "
+        "AND datetime(seal.sealed_at)=datetime(?) "
+        "AND header.research_snapshot_id<>? LIMIT 1",
+        (
+            request.research_universe.issuer_id,
+            _db_time(request.cutoff_at),
+            _db_time(request.recorded_at),
+            _db_time(request.recorded_at),
+            _db_time(request.recorded_at),
+            request.research_snapshot_id,
+        ),
+    ).fetchone()
+    if conflict is not None:
+        raise ResearchSnapshotPlanError("research_snapshot_terminal_scope_conflict")
 
 
 def _require_schema(conn: sqlite3.Connection) -> None:
@@ -516,11 +558,27 @@ def _verify_terminal_research_requests(
         raise ValueError("research snapshot terminal issuer set differs from expected K,O scope")
     for row in rows:
         issuer_id = str(row["issuer_id"])
+        try:
+            persisted = ResearchSnapshotRequest.model_validate_json(str(row["request_json"]))
+        except ValueError as exc:
+            raise ValueError(
+                "research snapshot terminal request differs from assembled K,O request"
+            ) from exc
+        modes = {
+            "lexical_only" if bundle.vector_index_run_id is None else "semantic"
+            for bundle in persisted.corpus_bundles
+        }
+        if len(modes) != 1:
+            raise ValueError("research snapshot terminal projection mode is ambiguous")
+        projection_mode: ProjectionMode = (
+            "lexical_only" if modes == {"lexical_only"} else "semantic"
+        )
         request = assemble_research_snapshot_request(
             conn,
             issuer_id,
             knowledge,
             observed_through=observed,
+            projection_mode=projection_mode,
         )
         request_json = canonical_json(request)
         universe_json = canonical_json(
@@ -663,7 +721,8 @@ def select_retrieval_coordinates(
     cutoff: datetime,
     *,
     observed_through: datetime | None = None,
-) -> tuple[str, str, str]:
+    projection_mode: ProjectionMode = "semantic",
+) -> tuple[str, str | None, str | None]:
     observed = cutoff if observed_through is None else _utc(observed_through)
     by_kind: dict[str, list[sqlite3.Row]] = {}
     for row in conn.execute(
@@ -677,6 +736,8 @@ def select_retrieval_coordinates(
     vector_rows = by_kind.get("vector", [])
     if not lexical_rows:
         raise ResearchSnapshotPlanError("lexical_projection_seal_missing_or_ambiguous")
+    if projection_mode == "lexical_only":
+        return str(lexical_rows[0]["index_run_id"]), None, None
     if not vector_rows:
         raise ResearchSnapshotPlanError("vector_projection_seal_missing_or_ambiguous")
     lexical = lexical_rows[0]
@@ -1098,10 +1159,13 @@ def _population_input_commitment(
     expected_issuer_ids: tuple[str, ...],
     selected_issuer_ids: tuple[str, ...],
     issuer_inputs: list[dict[str, object]],
+    *,
+    projection_mode: ProjectionMode = "semantic",
 ) -> str:
     return _digest(
         {
             "cutoff_at": _db_time(cutoff),
+            "projection_mode": projection_mode,
             "expected_issuer_ids": list(expected_issuer_ids),
             "selected_issuer_ids": list(selected_issuer_ids),
             "issuer_inputs": sorted(
@@ -1122,6 +1186,7 @@ def _population_plan_commitment(
         {
             "cutoff_at": _db_time(request.cutoff_at),
             "input_commitment_sha256": input_commitment,
+            "projection_mode": request.projection_mode,
             "operation_recorded_at": _db_time(request.operation_recorded_at),
             "selected_issuer_ids": list(selected_issuer_ids),
         }
