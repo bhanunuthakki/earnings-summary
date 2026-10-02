@@ -14,6 +14,8 @@ import requests
 from pydantic import ValidationError
 
 from execution import capture_expected_sec_documents as cli
+from execution import sync_sec_filing_inventory as inventory_cli
+from filings.sec_submissions_inventory import SecFilingInventoryEntry
 from pipeline.sec_operations_view import read_sec_coverage_state
 from provenance.evidence_ledger import (
     ContentBlob,
@@ -125,6 +127,7 @@ def _conn(
     migrated_db: Callable[..., Path],
     *,
     source_url: str = SOURCE_URL,
+    expected_period_end: datetime | None = datetime(2025, 12, 31, tzinfo=UTC),
 ) -> sqlite3.Connection:
     path = tmp_path / "sec-native-capture.db"
     migrated_db(path)
@@ -229,7 +232,7 @@ def _conn(
             source_url=source_url,
             primary_document="acme-20251231x10k.htm",
             period_start=None,
-            period_end=datetime(2025, 12, 31, tzinfo=UTC),
+            period_end=expected_period_end,
             filing_at=datetime(2026, 2, 10, tzinfo=UTC),
             expected_at=None,
             expectation_basis="authoritative",
@@ -302,6 +305,49 @@ def _request(
         batch_size=10,
         minimum_request_interval_seconds=0,
     )
+
+
+def test_sec_report_date_flows_through_expected_document_to_native_capture_and_replay(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    filing = SecFilingInventoryEntry(
+        issuer_id="issuer-acme",
+        ticker="ACME",
+        accession_number="0000000001-26-000001",
+        form_type="10-K",
+        filing_date="2026-02-10",
+        report_date="2025-12-31",
+        accepted_at=None,
+        primary_document="acme-20251231x10k.htm",
+        primary_document_url=SOURCE_URL,
+        source_component_name="CIK0000000001.json",
+    )
+    expected = inventory_cli.build_expected_documents(
+        issuer_id=filing.issuer_id, filings=(filing,), packages=()
+    )[0]
+    assert expected.period_end == datetime(2025, 12, 31, tzinfo=UTC)
+    conn = _conn(tmp_path, migrated_db, expected_period_end=expected.period_end)
+    try:
+        request = _request(tmp_path, apply=False)
+        preview = capture_expected_sec_documents(
+            conn, request, session=FakeSession([FakeResponse()])
+        )
+        assert preview.fetched == 1
+        applied = capture_expected_sec_documents(
+            conn, request.model_copy(update={"apply": True}), session=FakeSession([])
+        )
+        assert applied.fetched == 1
+        replay = capture_expected_sec_documents(
+            conn, request.model_copy(update={"apply": True}), session=FakeSession([])
+        )
+        assert replay.considered == 0
+        version = conn.execute(
+            "SELECT period_start,period_end FROM evidence_document_versions"
+        ).fetchone()
+        assert version is not None and version[0] is None
+        assert datetime.fromisoformat(str(version[1])) == expected.period_end
+    finally:
+        conn.close()
 
 
 def test_fetch_candidates_exclude_authority_omitted_locators(

@@ -11,11 +11,14 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from datetime import date
 from typing import Literal, Self, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _ACCESSION = re.compile(r"^\d{10}-\d{2}-\d{6}$")
+_REPORT_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+_PERIODIC_REPORT_FORMS = frozenset({"10-K", "10-K/A", "10-Q", "10-Q/A"})
 _SUBMISSIONS_BASE = "https://data.sec.gov/submissions"
 _ARCHIVE_BASE = "https://www.sec.gov/Archives/edgar/data"
 _REQUIRED_COLUMNS = (
@@ -83,6 +86,30 @@ class SecFilingInventoryEntry(_Closed):
     primary_document: str | None
     primary_document_url: str | None
     source_component_name: str
+
+
+def periodic_report_date(entry: SecFilingInventoryEntry) -> date | None:
+    """Return only the SEC-declared period end of a qualified periodic filing.
+
+    Submissions omit some historical report dates. An absent value stays unknown;
+    the filing and acceptance dates are never reporting-period substitutes.
+    """
+    if (
+        entry.form_type not in _PERIODIC_REPORT_FORMS
+        or entry.report_date is None
+        or not entry.report_date.strip()
+    ):
+        return None
+    if _REPORT_DATE.fullmatch(entry.report_date) is None:
+        raise SecInventoryContractError(
+            f"{entry.source_component_name} accession {entry.accession_number} has invalid reportDate"
+        )
+    try:
+        return date.fromisoformat(entry.report_date)
+    except ValueError as exc:
+        raise SecInventoryContractError(
+            f"{entry.source_component_name} accession {entry.accession_number} has invalid reportDate"
+        ) from exc
 
 
 class ParsedSecInventory(_Closed):
@@ -258,24 +285,24 @@ def _parse_columns(
             raise SecInventoryContractError(
                 f"{component_name} row {index} has empty form or filingDate"
             )
-        result.append(
-            SecFilingInventoryEntry(
-                issuer_id=issuer_id,
-                ticker=ticker,
-                accession_number=accession,
-                form_type=form,
-                filing_date=filing_date,
-                report_date=_optional(columns["reportDate"][index]),
-                accepted_at=_optional(columns["acceptanceDateTime"][index]),
-                primary_document=primary or None,
-                primary_document_url=(
-                    None
-                    if not primary
-                    else f"{_ARCHIVE_BASE}/{int(cik)}/{accession.replace('-', '')}/{primary}"
-                ),
-                source_component_name=component_name,
-            )
+        entry = SecFilingInventoryEntry(
+            issuer_id=issuer_id,
+            ticker=ticker,
+            accession_number=accession,
+            form_type=form,
+            filing_date=filing_date,
+            report_date=_optional(columns["reportDate"][index]),
+            accepted_at=_optional(columns["acceptanceDateTime"][index]),
+            primary_document=primary or None,
+            primary_document_url=(
+                None
+                if not primary
+                else f"{_ARCHIVE_BASE}/{int(cik)}/{accession.replace('-', '')}/{primary}"
+            ),
+            source_component_name=component_name,
         )
+        periodic_report_date(entry)
+        result.append(entry)
     return result
 
 

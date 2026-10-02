@@ -40,6 +40,7 @@ from filings.sec_submissions_inventory import (
     advertised_historical_components,
     historical_component_url,
     parse_sec_submissions_inventory,
+    periodic_report_date,
 )
 from provenance.evidence_ledger import (
     ContentBlob,
@@ -1094,6 +1095,15 @@ def build_expected_documents(
 ) -> tuple[ExpectedDocumentImport, ...]:
     """Build the accession root and every separately addressable package child."""
 
+    period_ends: dict[str, datetime | None] = {}
+    for filing in filings:
+        report_date = periodic_report_date(filing)
+        period_ends[filing.accession_number] = (
+            None
+            if report_date is None
+            else datetime(report_date.year, report_date.month, report_date.day, tzinfo=UTC)
+        )
+
     expected_documents: list[ExpectedDocumentImport] = [
         ExpectedDocumentImport(
             expected_document_key=f"{issuer_id}:{filing.accession_number}",
@@ -1103,6 +1113,7 @@ def build_expected_documents(
             accession_number=filing.accession_number,
             source_url=filing.primary_document_url,
             primary_document=filing.primary_document,
+            period_end=period_ends[filing.accession_number],
             filing_at=datetime.fromisoformat(filing.filing_date),
             expectation_basis="authoritative",
             absence=(
@@ -1164,6 +1175,11 @@ def build_expected_documents(
                     accession_number=package.accession_number,
                     source_url=attachment.source_url,
                     primary_document=attachment.filename,
+                    period_end=(
+                        period_ends[package.accession_number]
+                        if document_type == "sec_financial_report"
+                        else None
+                    ),
                     filing_at=datetime.fromisoformat(filing.filing_date),
                     expectation_basis="authoritative",
                     absence=ExplicitAbsence(

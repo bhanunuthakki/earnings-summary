@@ -731,6 +731,23 @@ sealed-source verification receipt.
 
 ### Bounded accession capture
 
+For 10-K, 10-K/A, 10-Q and 10-Q/A, the SEC submissions `reportDate` is the
+source-declared reporting-period end. The inventory parser accepts it only as a
+real `YYYY-MM-DD` calendar date; the expected primary filing and financial-report
+package children carry that date at UTC midnight as `period_end`. SEC submissions
+does not establish `period_start`, which remains unknown. A blank `reportDate`
+remains unknown and cannot qualify a consumer requiring a dated filing. Filing
+date and acceptance time never substitute for the reporting period. Other forms,
+including 20-F and 40-F, are outside this narrowly qualified mapping.
+
+The expected-document payload, including `period_end`, is committed in the
+immutable inventory snapshot. A corrected mapping requires a new inventory
+revision and a new capture checkpoint scope; retained SEC responses keep their
+original acquisition identity and collector version. Already captured identical
+filing bytes with conflicting period metadata fail native replay and require a
+separately governed immutable correction, not an in-place date update. This
+mapping adds no automatic capture, operator control or valuation admission.
+
 `execution/capture_expected_sec_documents.py --accession-number <SEC-accession>`
 selects exact dashed accession numbers within the supplied current, completely
 sealed authoritative SEC inventory keys. Repeat the flag for at most 250 unique

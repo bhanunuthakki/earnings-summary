@@ -122,6 +122,25 @@ def test_parallel_column_mismatch_fails_closed() -> None:
         )
 
 
+@pytest.mark.parametrize("report_date", ["20260630", "2026-02-30", "2026-06-30Z"])
+def test_periodic_report_date_must_be_an_exact_calendar_date(report_date: str) -> None:
+    columns = _columns(["0000001001-26-000001"], forms=["10-Q/A"])
+    columns["reportDate"] = [report_date]
+    with pytest.raises(SecInventoryContractError, match="invalid reportDate"):
+        parse_sec_submissions_inventory(
+            cik="1001", ticker="ACME", primary_body=_root(columns, []), historical=()
+        )
+
+
+def test_missing_periodic_report_date_remains_unknown_in_source_inventory() -> None:
+    columns = _columns(["0000001001-26-000001"], forms=["10-Q"])
+    columns["reportDate"] = [""]
+    parsed = parse_sec_submissions_inventory(
+        cik="1001", ticker="ACME", primary_body=_root(columns, []), historical=()
+    )
+    assert parsed.filings[0].report_date is None
+
+
 def test_duplicate_accession_conflict_is_material_and_not_silently_selected() -> None:
     root = _root(_columns(["0000001001-25-000001"]), [])
     conflicting = _columns(
