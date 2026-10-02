@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar, cast
 
@@ -394,6 +395,7 @@ def test_package_collection_resumes_content_addressed_checkpoint(
         filings=(first, second),
         checkpoint_root=tmp_path,
         package_limit=1,
+        retrieval_config_sha256="a" * 64,
         capture_response=None,
     )
 
@@ -419,6 +421,7 @@ def test_package_collection_resumes_content_addressed_checkpoint(
         filings=(first, second),
         checkpoint_root=tmp_path,
         package_limit=1,
+        retrieval_config_sha256="a" * 64,
         capture_response=None,
     )
 
@@ -429,6 +432,277 @@ def test_package_collection_resumes_content_addressed_checkpoint(
     assert resumed.deferred_accession_count == 0
     assert first_calls == [first_index_url, first_submission_url]
     assert second_calls == [second_index_url, second_submission_url]
+
+
+def test_legacy_checkpoint_refetches_and_preserves_untimed_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    filing = _filing("0000001001-25-000001", "first.htm")
+    index_url, index, manifest_url, manifest = _bodies(filing)
+    run_root = tmp_path / "0000001001"
+    old_index = b"legacy index bytes"
+    old_manifest = b"legacy manifest bytes"
+    old_index_sha = sync.hashlib.sha256(old_index).hexdigest()
+    old_manifest_sha = sync.hashlib.sha256(old_manifest).hexdigest()
+    response_root = run_root / "responses"
+    response_root.mkdir(parents=True)
+    (response_root / old_index_sha).write_bytes(old_index)
+    (response_root / old_manifest_sha).write_bytes(old_manifest)
+    legacy = json.dumps(
+        {
+            "cik": "0000001001",
+            "entries": [
+                {
+                    "accession_number": filing.accession_number,
+                    "index_sha256": old_index_sha,
+                    "manifest_sha256": old_manifest_sha,
+                }
+            ],
+        }
+    )
+    (run_root / "state.json").write_text(legacy, encoding="utf-8")
+    fetched: list[str] = []
+    responses = {index_url: index, manifest_url: manifest}
+
+    def fetch(_session: requests.Session, url: str, _agent: str) -> bytes:
+        fetched.append(url)
+        return responses[url]
+
+    monkeypatch.setattr(sync, "_fetch", fetch)
+    result = sync.collect_filing_packages(
+        session=requests.Session(),
+        user_agent="research@example.com",
+        cik="0000001001",
+        filings=(filing,),
+        checkpoint_root=tmp_path,
+        package_limit=1,
+        retrieval_config_sha256="a" * 64,
+        capture_response=None,
+    )
+
+    assert len(result.packages) == 1
+    assert fetched == [index_url, manifest_url]
+    assert (run_root / "state.json").read_text(encoding="utf-8") == legacy
+    assert (response_root / old_index_sha).read_bytes() == old_index
+    assert (response_root / old_manifest_sha).read_bytes() == old_manifest
+    timed = json.loads((run_root / "state.v2.json").read_text(encoding="utf-8"))
+    assert timed["entries"][0]["index_retrieved_at"]
+    assert timed["entries"][0]["manifest_retrieved_at"]
+
+
+def test_timed_checkpoint_reuse_keeps_original_response_clocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    filing = _filing("0000001001-25-000001", "first.htm")
+    index_url, index, manifest_url, manifest = _bodies(filing)
+    responses = {index_url: index, manifest_url: manifest}
+    clocks = iter(datetime(2026, 9, 30, 12, minute, tzinfo=UTC) for minute in range(2))
+    monkeypatch.setattr(sync, "_utc_now", lambda: next(clocks))
+
+    def fetch(_session: requests.Session, url: str, _agent: str) -> bytes:
+        return responses[url]
+
+    monkeypatch.setattr(sync, "_fetch", fetch)
+    captures: list[tuple[str, datetime, datetime]] = []
+
+    def capture(
+        _body: bytes, url: str, _media_type: str, observed_at: datetime, retrieved_at: datetime
+    ) -> str:
+        captures.append((url, observed_at, retrieved_at))
+        return url
+
+    def collect() -> None:
+        sync.collect_filing_packages(
+            session=requests.Session(),
+            user_agent="research@example.com",
+            cik="0000001001",
+            filings=(filing,),
+            checkpoint_root=tmp_path,
+            package_limit=1,
+            retrieval_config_sha256="a" * 64,
+            capture_response=capture,
+        )
+
+    collect()
+    first = tuple(captures)
+    assert first == (
+        (
+            index_url,
+            datetime(2026, 9, 30, 12, 0, tzinfo=UTC),
+            datetime(2026, 9, 30, 12, 0, tzinfo=UTC),
+        ),
+        (
+            manifest_url,
+            datetime(2026, 9, 30, 12, 1, tzinfo=UTC),
+            datetime(2026, 9, 30, 12, 1, tzinfo=UTC),
+        ),
+    )
+    captures.clear()
+
+    def no_fetch(*_args: object) -> bytes:
+        raise AssertionError("timed checkpoint reuse must not refetch")
+
+    monkeypatch.setattr(sync, "_fetch", no_fetch)
+    collect()
+    assert tuple(captures) == first
+
+
+def test_timed_checkpoint_without_valid_clocks_fails_before_fetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    filing = _filing("0000001001-25-000001", "first.htm")
+    run_root = tmp_path / "0000001001"
+    run_root.mkdir()
+    (run_root / "state.v2.json").write_text(
+        json.dumps(
+            {
+                "cik": "0000001001",
+                "entries": [
+                    {
+                        "accession_number": filing.accession_number,
+                        "index_sha256": "a" * 64,
+                        "index_observed_at": "2026-09-30T12:00:00",
+                        "index_retrieved_at": "2026-09-30T12:00:00",
+                        "manifest_sha256": "b" * 64,
+                        "manifest_observed_at": "2026-09-30T12:01:00Z",
+                        "manifest_retrieved_at": "2026-09-30T12:01:00Z",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def no_fetch(*_args: object) -> bytes:
+        raise AssertionError("invalid checkpoint must fail before network")
+
+    monkeypatch.setattr(sync, "_fetch", no_fetch)
+    with pytest.raises(sync.SecCheckpointConfigurationError, match="checkpoint is invalid"):
+        sync.collect_filing_packages(
+            session=requests.Session(),
+            user_agent="research@example.com",
+            cik="0000001001",
+            filings=(filing,),
+            checkpoint_root=tmp_path,
+            package_limit=1,
+            retrieval_config_sha256="a" * 64,
+            capture_response=None,
+        )
+
+
+def test_manifest_hard_stop_preserves_index_and_retries_only_missing_component(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    filing = _filing("0000001001-25-000001", "first.htm")
+    index_url, index, manifest_url, manifest = _bodies(filing)
+    calls: list[str] = []
+
+    def first_fetch(_session: requests.Session, url: str, _agent: str) -> bytes:
+        calls.append(url)
+        if url == manifest_url:
+            raise HardStopError("synthetic hard stop")
+        return index
+
+    monkeypatch.setattr(sync, "_fetch", first_fetch)
+    with pytest.raises(HardStopError):
+        sync.collect_filing_packages(
+            session=requests.Session(),
+            user_agent="research@example.com",
+            cik="0000001001",
+            filings=(filing,),
+            checkpoint_root=tmp_path,
+            package_limit=1,
+            retrieval_config_sha256="a" * 64,
+            capture_response=None,
+        )
+    assert calls == [index_url, manifest_url]
+    run_root = tmp_path / "0000001001"
+    saved = json.loads((run_root / "state.v2.json").read_text(encoding="utf-8"))
+    entry = saved["entries"][0]
+    assert entry["index_sha256"] == sync.hashlib.sha256(index).hexdigest()
+    assert entry["index_retrieved_at"]
+    assert entry["manifest_sha256"] is None
+    assert (run_root / "responses" / entry["index_sha256"]).read_bytes() == index
+
+    def resumed_fetch(_session: requests.Session, url: str, _agent: str) -> bytes:
+        calls.append(url)
+        assert url == manifest_url
+        return manifest
+
+    monkeypatch.setattr(sync, "_fetch", resumed_fetch)
+    captured: list[tuple[str, datetime]] = []
+
+    def capture(
+        _body: bytes, url: str, _media_type: str, _observed_at: datetime, retrieved_at: datetime
+    ) -> str:
+        captured.append((url, retrieved_at))
+        return url
+
+    result = sync.collect_filing_packages(
+        session=requests.Session(),
+        user_agent="research@example.com",
+        cik="0000001001",
+        filings=(filing,),
+        checkpoint_root=tmp_path,
+        package_limit=1,
+        retrieval_config_sha256="a" * 64,
+        capture_response=capture,
+    )
+    assert len(result.packages) == 1
+    assert calls == [index_url, manifest_url, manifest_url]
+    assert captured[0] == (index_url, datetime.fromisoformat(entry["index_retrieved_at"]))
+    assert captured[1][0] == manifest_url
+
+
+def test_timed_checkpoint_rejects_changed_acquisition_contract_before_fetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    filing = _filing("0000001001-25-000001", "first.htm")
+    index_url, index, manifest_url, manifest = _bodies(filing)
+    responses = {index_url: index, manifest_url: manifest}
+
+    def first_fetch(_session: requests.Session, url: str, _agent: str) -> bytes:
+        return responses[url]
+
+    monkeypatch.setattr(sync, "_fetch", first_fetch)
+    sync.collect_filing_packages(
+        session=requests.Session(),
+        user_agent="research@example.com",
+        cik="0000001001",
+        filings=(filing,),
+        checkpoint_root=tmp_path,
+        package_limit=1,
+        retrieval_config_sha256="a" * 64,
+        capture_response=None,
+    )
+
+    def no_fetch(*_args: object) -> bytes:
+        raise AssertionError("incompatible checkpoint must fail before network")
+
+    monkeypatch.setattr(sync, "_fetch", no_fetch)
+    with pytest.raises(ValueError, match="acquisition contract changed"):
+        sync.collect_filing_packages(
+            session=requests.Session(),
+            user_agent="research@example.com",
+            cik="0000001001",
+            filings=(filing,),
+            checkpoint_root=tmp_path,
+            package_limit=1,
+            retrieval_config_sha256="b" * 64,
+            capture_response=None,
+        )
+    monkeypatch.setattr(sync, "_COLLECTOR", "sync-sec-filing-inventory@6")
+    with pytest.raises(ValueError, match="acquisition contract changed"):
+        sync.collect_filing_packages(
+            session=requests.Session(),
+            user_agent="research@example.com",
+            cik="0000001001",
+            filings=(filing,),
+            checkpoint_root=tmp_path,
+            package_limit=1,
+            retrieval_config_sha256="a" * 64,
+            capture_response=None,
+        )
 
 
 def test_transient_package_failure_is_explicit_and_retryable(
@@ -453,6 +727,7 @@ def test_transient_package_failure_is_explicit_and_retryable(
         filings=(filing,),
         checkpoint_root=tmp_path,
         package_limit=1,
+        retrieval_config_sha256="a" * 64,
         capture_response=None,
     )
 
@@ -461,6 +736,9 @@ def test_transient_package_failure_is_explicit_and_retryable(
         item.failure_reason for item in result.components if item.failure_reason is not None
     ] == ["transient_deferred"]
     assert not (tmp_path / "0000001001" / "state.json").exists()
+    checkpoint = json.loads((tmp_path / "0000001001" / "state.v2.json").read_text(encoding="utf-8"))
+    assert checkpoint["entries"][0]["index_sha256"] is None
+    assert checkpoint["entries"][0]["manifest_retrieved_at"]
 
 
 def test_package_failure_summary_identifies_accession_without_exposing_url() -> None:
@@ -507,6 +785,7 @@ def test_package_auth_failure_is_a_hard_stop(
             filings=(filing,),
             checkpoint_root=tmp_path,
             package_limit=1,
+            retrieval_config_sha256="a" * 64,
             capture_response=None,
         )
 
@@ -527,7 +806,9 @@ def test_manifest_only_primary_is_captured_with_explicit_presence(
     def fetch(_session: requests.Session, url: str, _user_agent: str) -> bytes:
         return responses[url]
 
-    def capture(_body: bytes, url: str, _media_type: str) -> str:
+    def capture(
+        _body: bytes, url: str, _media_type: str, _observed_at: datetime, _retrieved_at: datetime
+    ) -> str:
         captured.append(url)
         return f"observation:{len(captured)}"
 
@@ -539,6 +820,7 @@ def test_manifest_only_primary_is_captured_with_explicit_presence(
         filings=(filing,),
         checkpoint_root=tmp_path,
         package_limit=1,
+        retrieval_config_sha256="a" * 64,
         capture_response=capture,
     )
 
@@ -570,6 +852,7 @@ def test_expected_documents_keep_accession_parentage_for_every_package_child(
         filings=(filing,),
         checkpoint_root=tmp_path,
         package_limit=1,
+        retrieval_config_sha256="a" * 64,
         capture_response=None,
     ).packages
 

@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import NoReturn
+from typing import NoReturn, cast
 
 import pytest
 import requests
@@ -180,6 +181,59 @@ def test_other_inventory_errors_are_not_reported_as_sec_hard_stops(
     assert capsys.readouterr().out == ""
 
 
+def test_incompatible_timed_checkpoint_blocks_cli_before_source_network(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    db = migrated_db(tmp_path / "inventory.db")
+    monkeypatch.setattr(sync, "PROJECT_ROOT", tmp_path)
+    run_root = tmp_path / "checkpoint" / "0000000001"
+    run_root.mkdir(parents=True)
+    state_path = run_root / "state.v2.json"
+    state = json.dumps(
+        {
+            "cik": "0000000001",
+            "retrieval_config_sha256": "b" * 64,
+            "collector_code_version": "sync-sec-filing-inventory@5",
+            "entries": [],
+        }
+    )
+    state_path.write_text(state, encoding="utf-8")
+
+    def no_network(*_args: object, **_kwargs: object) -> NoReturn:
+        raise AssertionError("incompatible checkpoint must block before source network")
+
+    monkeypatch.setattr(requests.Session, "get", no_network)
+    assert (
+        sync.main(
+            [
+                "--db",
+                str(db),
+                "--ticker",
+                "ACME",
+                "--cik",
+                "1",
+                "--revision",
+                "1",
+                "--package-checkpoint-root",
+                str(tmp_path / "checkpoint"),
+                "--apply",
+            ]
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().out) == {
+        "outcome": "blocked",
+        "reason_code": "sec_inventory_checkpoint_invalid",
+        "retryable": False,
+    }
+    assert state_path.read_text(encoding="utf-8") == state
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone()[0] == 0
+
+
 def test_inventory_success_receipt_binds_real_reconciled_snapshot(
     tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -198,6 +252,10 @@ def test_inventory_success_receipt_binds_real_reconciled_snapshot(
 
     monkeypatch.setattr(sync, "resolve_sec_inventory_subject", approved_identity)
     monkeypatch.setattr(sync, "sec_user_agent", lambda: "synthetic test@example.test")
+    response_at = datetime.now(UTC) - timedelta(seconds=10)
+    recorded_at = response_at + timedelta(seconds=1)
+    clocks = iter((response_at, recorded_at))
+    monkeypatch.setattr(sync, "_utc_now", lambda: next(clocks))
     columns: dict[str, list[str]] = {
         key: []
         for key in (
@@ -265,4 +323,51 @@ def test_inventory_success_receipt_binds_real_reconciled_snapshot(
         ).fetchone()
         assert snapshot is not None
         assert receipt.result.snapshot_ids == (snapshot[0],)
-        assert conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone()[0] == 1
+        row = conn.execute(
+            "SELECT observed_at, retrieved_at FROM evidence_source_observations"
+        ).fetchone()
+        assert row is not None
+        assert datetime.fromisoformat(row[0]) == response_at
+        assert datetime.fromisoformat(row[1]) == response_at
+
+
+def test_retrieval_observation_identity_uses_response_clock_not_recording_clock(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db = migrated_db(tmp_path / "inventory.db")
+    observed = datetime(2026, 9, 30, 12, tzinfo=UTC)
+    retrieved = observed + timedelta(seconds=1)
+    recorded = retrieved + timedelta(seconds=5)
+    capture = cast(Callable[..., str], getattr(sync, "_capture_component"))
+    with sqlite3.connect(db) as conn:
+
+        def persist(at: datetime, got: datetime, stored: datetime) -> str:
+            return capture(
+                conn,
+                body=b"synthetic SEC response",
+                url="https://data.sec.gov/submissions/CIK0000000001.json",
+                blob_root=tmp_path / "blobs",
+                config_sha="a" * 64,
+                observed_at=at,
+                retrieved_at=got,
+                recorded_at=stored,
+            )
+
+        first = persist(observed, retrieved, recorded)
+        replay = persist(observed, retrieved, recorded + timedelta(seconds=1))
+        second = persist(
+            observed + timedelta(minutes=1),
+            retrieved + timedelta(minutes=1),
+            recorded + timedelta(minutes=1),
+        )
+        assert first == replay
+        assert first != second
+        rows = conn.execute(
+            "SELECT observation_id, observed_at, retrieved_at "
+            "FROM evidence_source_observations ORDER BY retrieved_at"
+        ).fetchall()
+        assert len(rows) == 2
+        assert rows[0][0] == first
+        assert datetime.fromisoformat(rows[0][1]) == observed
+        assert datetime.fromisoformat(rows[0][2]) == retrieved
+        assert rows[1][0] == second
