@@ -292,6 +292,24 @@ rejected before transport with `blocked`/`sec_contact_configuration_invalid`,
 emitted. This does not retry acquisition, assert source coverage, or add a
 scheduled action.
 
+The manual inventory collector timestamps each successful SEC response after its
+bytes arrive. A source observation records that response time separately from its
+later evidence-recording time. Package `state.v2.json` retains each successful
+response hash and original clock immediately, even when the next component fails.
+It also pins the acquisition config and collector version; an incompatible or
+malformed replay returns `blocked`/`sec_inventory_checkpoint_invalid`,
+`retryable: false` and exit 2 before source network or publication. Preflight
+verifies every referenced v2 component; missing or hash-conflicting bytes and
+future retrieval clocks are malformed replay. Resuming a compatible component
+does not claim a new HTTP retrieval. Older `state.json` checkpoints retain their
+bytes and identity, but have no retrieval clocks. Their entries are refetched
+within `--package-limit`
+before they can support new source observations; file modification times are never
+promoted to retrieval evidence. A failed component remains deferred while any
+successful sibling stays available for exact-byte resume. The operator still
+uses the same manual CLI and output fields; this changes no
+dashboard action, schedule, provider, database schema, or approval state.
+
 Settings distinguishes authorization from observed SEC coverage. Portfolio, evaluation,
 and watchlist retain automatic source authorization. A sealed SEC inventory defines the
 listed native-filing population; immutable document/source identities, exact-byte location

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal, Self
 
 import requests
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 try:
     from _lib import PROJECT_ROOT
@@ -67,7 +67,7 @@ from sec_identity import SecContactConfigurationError, sec_user_agent
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _TIMEOUT = (10, 60)
-_COLLECTOR = "sync-sec-filing-inventory@4"
+_COLLECTOR = "sync-sec-filing-inventory@5"
 _DEFAULT_PACKAGE_LIMIT = 250
 _SEC_REQUEST_DELAY_SECONDS = 0.25
 _PACKAGE_SCOPE_POLICY_VERSION = "governed-reporting-package-scope@4"
@@ -325,6 +325,10 @@ class _ClosedModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class SecCheckpointConfigurationError(ValueError):
+    """Retained SEC acquisition state cannot be replayed under this request."""
+
+
 class _CheckpointEntry(_ClosedModel):
     accession_number: str
     index_sha256: str = Field(min_length=64, max_length=64)
@@ -340,6 +344,65 @@ class _PackageCheckpoint(_ClosedModel):
         accessions = [item.accession_number for item in self.entries]
         if len(accessions) != len(set(accessions)):
             raise ValueError("package checkpoint accessions must be unique")
+        return self
+
+
+class _RetrievedBody(_ClosedModel):
+    body: bytes
+    observed_at: datetime
+    retrieved_at: datetime
+
+    @model_validator(mode="after")
+    def _validate_clocks(self) -> Self:
+        if (
+            self.observed_at.tzinfo is None
+            or self.retrieved_at.tzinfo is None
+            or self.retrieved_at < self.observed_at
+        ):
+            raise ValueError("SEC response clocks must be aware and ordered")
+        return self
+
+
+class _TimedCheckpointEntry(_ClosedModel):
+    accession_number: str
+    index_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    index_observed_at: datetime | None = None
+    index_retrieved_at: datetime | None = None
+    manifest_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    manifest_observed_at: datetime | None = None
+    manifest_retrieved_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def _validate_clocks(self) -> Self:
+        for digest, observed, retrieved in (
+            (self.index_sha256, self.index_observed_at, self.index_retrieved_at),
+            (self.manifest_sha256, self.manifest_observed_at, self.manifest_retrieved_at),
+        ):
+            if (digest is None, observed is None, retrieved is None) not in {
+                (True, True, True),
+                (False, False, False),
+            }:
+                raise ValueError(
+                    "SEC timed checkpoint component requires bytes and clocks together"
+                )
+            if observed is not None and retrieved is not None:
+                _RetrievedBody(body=b"", observed_at=observed, retrieved_at=retrieved)
+        if self.index_sha256 is None and self.manifest_sha256 is None:
+            raise ValueError("SEC timed checkpoint must retain a retrieved component")
+        return self
+
+
+class _TimedPackageCheckpoint(_ClosedModel):
+    cik: str
+    retrieval_config_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    collector_code_version: str
+    entries: tuple[_TimedCheckpointEntry, ...] = ()
+
+    @model_validator(mode="after")
+    def _validate_entries(self) -> Self:
+        accessions = [item.accession_number for item in self.entries]
+        if len(accessions) != len(set(accessions)):
+            raise ValueError("SEC timed checkpoint accessions must be unique")
         return self
 
 
@@ -466,6 +529,19 @@ def _fetch(session: requests.Session, url: str, user_agent: str) -> bytes:
     return response.content
 
 
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _fetch_observed(session: requests.Session, url: str, user_agent: str) -> _RetrievedBody:
+    body = _fetch(session, url, user_agent)
+    # The response is observed only once its bytes have arrived. A request-start
+    # timestamp would precede the collector's pacing delay and is not evidence of
+    # when the source response was available.
+    received_at = _utc_now()
+    return _RetrievedBody(body=body, observed_at=received_at, retrieved_at=received_at)
+
+
 def _capture_component(
     conn: sqlite3.Connection,
     *,
@@ -473,10 +549,15 @@ def _capture_component(
     url: str,
     blob_root: Path,
     config_sha: str,
+    observed_at: datetime,
+    retrieved_at: datetime,
     recorded_at: datetime,
     media_type: str = "application/json",
     source_kind: str = "sec_submissions",
 ) -> str:
+    _RetrievedBody(body=body, observed_at=observed_at, retrieved_at=retrieved_at)
+    if recorded_at.tzinfo is None or recorded_at < retrieved_at:
+        raise ValueError("SEC evidence recording must follow retrieval")
     digest = hashlib.sha256(body).hexdigest()
     path = blob_root / digest[:2] / digest
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -503,7 +584,9 @@ def _capture_component(
         )
     elif int(blob[1]) != len(body):
         raise ValueError("existing SEC evidence blob metadata conflicts")
-    observation_seed = hashlib.sha256(f"{url}\0{digest}\0{config_sha}".encode()).hexdigest()
+    observation_seed = hashlib.sha256(
+        f"{url}\0{digest}\0{config_sha}\0{observed_at.isoformat()}\0{retrieved_at.isoformat()}".encode()
+    ).hexdigest()
     observation_id = f"source-observation:{observation_seed}"
     observation = conn.execute(
         "SELECT observation_id FROM evidence_source_observations WHERE observation_id = ?",
@@ -520,8 +603,8 @@ def _capture_component(
                 source_published_at=None,
                 filing_at=None,
                 accepted_at=None,
-                observed_at=recorded_at,
-                retrieved_at=recorded_at,
+                observed_at=observed_at,
+                retrieved_at=retrieved_at,
                 retrieval_config_sha256=config_sha,
                 collector_code_version=_COLLECTOR,
             )
@@ -563,17 +646,20 @@ def collect_filing_packages(
     filings: tuple[SecFilingInventoryEntry, ...],
     checkpoint_root: Path,
     package_limit: int,
-    capture_response: Callable[[bytes, str, str], str] | None,
+    retrieval_config_sha256: str,
+    capture_response: Callable[[bytes, str, str, datetime, datetime], str] | None,
 ) -> _PackageCollection:
     """Fetch one bounded resumable package batch and parse every available response."""
 
     if package_limit <= 0:
         raise ValueError("package_limit must be positive")
     run_root = checkpoint_root / cik
-    state_path = run_root / "state.json"
-    checkpoint = _load_package_checkpoint(
-        state_path,
-        cik=cik,
+    # Legacy state has exact bytes but no retrieval clock. Preserve it, yet do not
+    # cite it as a new retrieval or mistake a file timestamp for source evidence.
+    _load_package_checkpoint(run_root / "state.json", cik=cik)
+    state_path = run_root / "state.v2.json"
+    checkpoint = _load_timed_package_checkpoint(
+        state_path, cik=cik, retrieval_config_sha256=retrieval_config_sha256
     )
     cached_by_accession = {entry.accession_number: entry for entry in checkpoint.entries}
     packages: list[ParsedSecFilingPackage] = []
@@ -588,7 +674,9 @@ def collect_filing_packages(
         index_url = filing_package_index_url(cik, accession)
         manifest_url = filing_package_manifest_url(cik, accession)
         cached = cached_by_accession.get(accession)
-        if cached is None and attempts >= package_limit:
+        index_response = _read_timed_component(run_root, cached, "index")
+        manifest_response = _read_timed_component(run_root, cached, "manifest")
+        if (index_response is None or manifest_response is None) and attempts >= package_limit:
             deferred += 1
             components.extend(
                 (
@@ -596,66 +684,123 @@ def collect_filing_packages(
                         accession_number=accession,
                         component_kind="package_index",
                         source_url=index_url,
-                        failure_reason="deferred_by_package_limit",
+                        body=index_response.body if index_response is not None else None,
+                        failure_reason=(
+                            "deferred_by_package_limit" if index_response is None else None
+                        ),
                     ),
                     PackageComponent(
                         accession_number=accession,
                         component_kind="filing_manifest",
                         source_url=manifest_url,
-                        failure_reason="deferred_by_package_limit",
+                        body=manifest_response.body if manifest_response is not None else None,
+                        failure_reason=(
+                            "deferred_by_package_limit" if manifest_response is None else None
+                        ),
                     ),
                 )
             )
+            if capture_response is not None:
+                if index_response is not None:
+                    capture_response(
+                        index_response.body,
+                        index_url,
+                        "application/json",
+                        index_response.observed_at,
+                        index_response.retrieved_at,
+                    )
+                if manifest_response is not None:
+                    capture_response(
+                        manifest_response.body,
+                        manifest_url,
+                        "text/html",
+                        manifest_response.observed_at,
+                        manifest_response.retrieved_at,
+                    )
             continue
-        if cached is None:
+        if index_response is None or manifest_response is None:
             attempts += 1
-            index_body, index_failure = _fetch_package_component(session, index_url, user_agent)
-            manifest_body, manifest_failure = _fetch_package_component(
+        index_failure: str | None = None
+        manifest_failure: str | None = None
+        if index_response is None:
+            index_response, index_failure = _fetch_package_component(session, index_url, user_agent)
+            if index_response is not None:
+                cached = _store_timed_package_checkpoint_component(
+                    run_root=run_root,
+                    state_path=state_path,
+                    checkpoint=checkpoint,
+                    accession_number=accession,
+                    component_kind="index",
+                    response=index_response,
+                )
+                cached_by_accession[accession] = cached
+                checkpoint = checkpoint.model_copy(
+                    update={
+                        "entries": tuple(
+                            cached_by_accession[key] for key in sorted(cached_by_accession)
+                        )
+                    }
+                )
+        if manifest_response is None:
+            manifest_response, manifest_failure = _fetch_package_component(
                 session, manifest_url, user_agent
             )
-            if index_body is None or manifest_body is None:
-                components.extend(
-                    (
-                        PackageComponent(
-                            accession_number=accession,
-                            component_kind="package_index",
-                            source_url=index_url,
-                            body=index_body,
-                            failure_reason=index_failure,
-                        ),
-                        PackageComponent(
-                            accession_number=accession,
-                            component_kind="filing_manifest",
-                            source_url=manifest_url,
-                            body=manifest_body,
-                            failure_reason=manifest_failure,
-                        ),
-                    )
+            if manifest_response is not None:
+                cached = _store_timed_package_checkpoint_component(
+                    run_root=run_root,
+                    state_path=state_path,
+                    checkpoint=checkpoint,
+                    accession_number=accession,
+                    component_kind="manifest",
+                    response=manifest_response,
                 )
-                if index_body is not None and capture_response is not None:
-                    capture_response(index_body, index_url, "application/json")
-                if manifest_body is not None and capture_response is not None:
-                    capture_response(manifest_body, manifest_url, "text/html")
-                continue
-            cached = _store_package_checkpoint_entry(
-                run_root=run_root,
-                state_path=state_path,
-                checkpoint=checkpoint,
-                accession_number=accession,
-                index_body=index_body,
-                manifest_body=manifest_body,
+                cached_by_accession[accession] = cached
+                checkpoint = checkpoint.model_copy(
+                    update={
+                        "entries": tuple(
+                            cached_by_accession[key] for key in sorted(cached_by_accession)
+                        )
+                    }
+                )
+        if index_response is None or manifest_response is None:
+            components.extend(
+                (
+                    PackageComponent(
+                        accession_number=accession,
+                        component_kind="package_index",
+                        source_url=index_url,
+                        body=index_response.body if index_response is not None else None,
+                        failure_reason=index_failure,
+                    ),
+                    PackageComponent(
+                        accession_number=accession,
+                        component_kind="filing_manifest",
+                        source_url=manifest_url,
+                        body=manifest_response.body if manifest_response is not None else None,
+                        failure_reason=manifest_failure,
+                    ),
+                )
             )
-            cached_by_accession[accession] = cached
-            checkpoint = checkpoint.model_copy(
-                update={
-                    "entries": tuple(
-                        cached_by_accession[key] for key in sorted(cached_by_accession)
-                    )
-                }
-            )
-        else:
-            index_body = _read_checkpoint_body(run_root, cached.index_sha256)
-            manifest_body = _read_checkpoint_body(run_root, cached.manifest_sha256)
+            if index_response is not None and capture_response is not None:
+                capture_response(
+                    index_response.body,
+                    index_url,
+                    "application/json",
+                    index_response.observed_at,
+                    index_response.retrieved_at,
+                )
+            if manifest_response is not None and capture_response is not None:
+                capture_response(
+                    manifest_response.body,
+                    manifest_url,
+                    "text/html",
+                    manifest_response.observed_at,
+                    manifest_response.retrieved_at,
+                )
+            continue
+
+        index_body = index_response.body
+        manifest_body = manifest_response.body
 
         components.extend(
             (
@@ -674,8 +819,20 @@ def collect_filing_packages(
             )
         )
         if capture_response is not None:
-            capture_response(index_body, index_url, "application/json")
-            capture_response(manifest_body, manifest_url, "text/html")
+            capture_response(
+                index_body,
+                index_url,
+                "application/json",
+                index_response.observed_at,
+                index_response.retrieved_at,
+            )
+            capture_response(
+                manifest_body,
+                manifest_url,
+                "text/html",
+                manifest_response.observed_at,
+                manifest_response.retrieved_at,
+            )
         try:
             packages.append(
                 parse_sec_filing_package_inventory(
@@ -705,9 +862,9 @@ def collect_filing_packages(
 
 def _fetch_package_component(
     session: requests.Session, url: str, user_agent: str
-) -> tuple[bytes | None, str | None]:
+) -> tuple[_RetrievedBody | None, str | None]:
     try:
-        return _fetch(session, url, user_agent), None
+        return _fetch_observed(session, url, user_agent), None
     except TransientError:
         return None, "transient_deferred"
     except SourceContractError:
@@ -721,32 +878,114 @@ def _load_package_checkpoint(
 ) -> _PackageCheckpoint:
     if not path.exists():
         return _PackageCheckpoint(cik=cik)
-    checkpoint = _PackageCheckpoint.model_validate_json(path.read_text(encoding="utf-8"))
+    try:
+        checkpoint = _PackageCheckpoint.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValidationError):
+        raise SecCheckpointConfigurationError("SEC legacy package checkpoint is invalid") from None
     if checkpoint.cik != cik:
-        raise ValueError("SEC package checkpoint identity conflicts with this run")
+        raise SecCheckpointConfigurationError("SEC legacy package checkpoint identity conflicts")
     return checkpoint
 
 
-def _store_package_checkpoint_entry(
+def _load_timed_package_checkpoint(
+    path: Path, *, cik: str, retrieval_config_sha256: str
+) -> _TimedPackageCheckpoint:
+    if not path.exists():
+        return _TimedPackageCheckpoint(
+            cik=cik,
+            retrieval_config_sha256=retrieval_config_sha256,
+            collector_code_version=_COLLECTOR,
+        )
+    try:
+        checkpoint = _TimedPackageCheckpoint.model_validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValidationError):
+        raise SecCheckpointConfigurationError("SEC timed package checkpoint is invalid") from None
+    if checkpoint.cik != cik:
+        raise SecCheckpointConfigurationError("SEC timed package checkpoint identity conflicts")
+    if (
+        checkpoint.retrieval_config_sha256 != retrieval_config_sha256
+        or checkpoint.collector_code_version != _COLLECTOR
+    ):
+        raise SecCheckpointConfigurationError(
+            "SEC timed package checkpoint acquisition contract changed"
+        )
+    return checkpoint
+
+
+def _read_timed_component(
+    run_root: Path,
+    entry: _TimedCheckpointEntry | None,
+    component_kind: Literal["index", "manifest"],
+) -> _RetrievedBody | None:
+    if entry is None:
+        return None
+    if component_kind == "index":
+        digest, observed, retrieved = (
+            entry.index_sha256,
+            entry.index_observed_at,
+            entry.index_retrieved_at,
+        )
+    else:
+        digest, observed, retrieved = (
+            entry.manifest_sha256,
+            entry.manifest_observed_at,
+            entry.manifest_retrieved_at,
+        )
+    if digest is None:
+        return None
+    if observed is None or retrieved is None:
+        raise ValueError("SEC timed checkpoint component clocks are missing")
+    return _RetrievedBody(
+        body=_read_checkpoint_body(run_root, digest),
+        observed_at=observed,
+        retrieved_at=retrieved,
+    )
+
+
+def _preflight_timed_checkpoint(
+    run_root: Path, checkpoint: _TimedPackageCheckpoint, *, preflight_at: datetime
+) -> None:
+    """Verify every retained v2 response before any new source acquisition."""
+
+    for entry in checkpoint.entries:
+        for component_kind in ("index", "manifest"):
+            try:
+                response = _read_timed_component(run_root, entry, component_kind)
+            except (OSError, RuntimeError, ValueError):
+                raise SecCheckpointConfigurationError(
+                    "SEC timed package response is unavailable or corrupt"
+                ) from None
+            if response is not None and response.retrieved_at > preflight_at:
+                raise SecCheckpointConfigurationError(
+                    "SEC timed package response clock is in the future"
+                )
+
+
+def _store_timed_package_checkpoint_component(
     *,
     run_root: Path,
     state_path: Path,
-    checkpoint: _PackageCheckpoint,
+    checkpoint: _TimedPackageCheckpoint,
     accession_number: str,
-    index_body: bytes,
-    manifest_body: bytes,
-) -> _CheckpointEntry:
-    index_sha = _store_checkpoint_body(run_root, index_body)
-    manifest_sha = _store_checkpoint_body(run_root, manifest_body)
-    entry = _CheckpointEntry(
-        accession_number=accession_number,
-        index_sha256=index_sha,
-        manifest_sha256=manifest_sha,
-    )
+    component_kind: Literal["index", "manifest"],
+    response: _RetrievedBody,
+) -> _TimedCheckpointEntry:
+    digest = _store_checkpoint_body(run_root, response.body)
     by_accession = {item.accession_number: item for item in checkpoint.entries}
     prior = by_accession.get(accession_number)
-    if prior is not None and prior != entry:
-        raise ValueError("SEC package checkpoint entry conflicts with prior bytes")
+    values: dict[str, object] = (
+        prior.model_dump() if prior is not None else {"accession_number": accession_number}
+    )
+    if values.get(f"{component_kind}_sha256") is not None:
+        raise ValueError("SEC timed package checkpoint component already exists")
+    values.update(
+        {
+            f"{component_kind}_sha256": digest,
+            f"{component_kind}_observed_at": response.observed_at,
+            f"{component_kind}_retrieved_at": response.retrieved_at,
+        }
+    )
+    entry = _TimedCheckpointEntry.model_validate(values)
     by_accession[accession_number] = entry
     next_checkpoint = checkpoint.model_copy(
         update={"entries": tuple(by_accession[key] for key in sorted(by_accession))}
@@ -1008,6 +1247,19 @@ def main(argv: list[str] | None = None) -> int:
             + "\n"
         )
         return 2
+    except SecCheckpointConfigurationError:
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "outcome": "blocked",
+                    "reason_code": "sec_inventory_checkpoint_invalid",
+                    "retryable": False,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        return 2
     except HardStopError:
         sys.stdout.write(
             json.dumps(
@@ -1113,7 +1365,15 @@ def _run_inventory(
             separators=(",", ":"),
         ).encode()
     ).hexdigest()
+    # Reject incompatible or malformed retained acquisition state before any
+    # source request or evidence write. Package collection validates again at use.
+    package_run_root = args.package_checkpoint_root / cik
+    _load_package_checkpoint(package_run_root / "state.json", cik=cik)
+    checkpoint = _load_timed_package_checkpoint(
+        package_run_root / "state.v2.json", cik=cik, retrieval_config_sha256=config_sha
+    )
     started = datetime.now(UTC)
+    _preflight_timed_checkpoint(package_run_root, checkpoint, preflight_at=started)
     canonical_issuer_id: str | None = None
     identity_conn = connect_sqlite(
         args.db,
@@ -1142,11 +1402,11 @@ def _run_inventory(
         identity_conn.close()
     session = requests.Session()
     user_agent = sec_user_agent()
-    root_body = _fetch(session, root_url, user_agent)
+    root_response = _fetch_observed(session, root_url, user_agent)
+    root_body = root_response.body
     conn: sqlite3.Connection | None = None
     root_observation: str | None = None
     observation_by_name: dict[str, str] = {}
-    captured_at = datetime.now(UTC)
     if args.apply:
         conn = connect_sqlite(args.db, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         conn.execute("BEGIN IMMEDIATE")
@@ -1156,14 +1416,16 @@ def _run_inventory(
             url=root_url,
             blob_root=args.blob_root,
             config_sha=config_sha,
-            recorded_at=captured_at,
+            observed_at=root_response.observed_at,
+            retrieved_at=root_response.retrieved_at,
+            recorded_at=_utc_now(),
         )
         conn.commit()
     historical: list[HistoricalComponent] = []
     for name, _count in advertised_historical_components(root_body):
         url = historical_component_url(name)
         try:
-            body = _fetch(session, url, user_agent)
+            response = _fetch_observed(session, url, user_agent)
         except TransientError as exc:
             historical.append(
                 HistoricalComponent(
@@ -1176,14 +1438,16 @@ def _run_inventory(
             conn.execute("BEGIN IMMEDIATE")
             observation_by_name[name] = _capture_component(
                 conn,
-                body=body,
+                body=response.body,
                 url=historical_component_url(name),
                 blob_root=args.blob_root,
                 config_sha=config_sha,
-                recorded_at=captured_at,
+                observed_at=response.observed_at,
+                retrieved_at=response.retrieved_at,
+                recorded_at=_utc_now(),
             )
             conn.commit()
-        historical.append(HistoricalComponent(name=name, body=body))
+        historical.append(HistoricalComponent(name=name, body=response.body))
     try:
         parsed = parse_sec_submissions_inventory(
             cik=cik,
@@ -1218,7 +1482,9 @@ def _run_inventory(
     )
     package_observation_by_url: dict[str, str] = {}
 
-    def capture_package_response(body: bytes, url: str, media_type: str) -> str:
+    def capture_package_response(
+        body: bytes, url: str, media_type: str, observed_at: datetime, retrieved_at: datetime
+    ) -> str:
         if conn is None:
             raise RuntimeError("package response capture requires an apply connection")
         try:
@@ -1229,7 +1495,9 @@ def _run_inventory(
                 url=url,
                 blob_root=args.blob_root,
                 config_sha=config_sha,
-                recorded_at=captured_at,
+                observed_at=observed_at,
+                retrieved_at=retrieved_at,
+                recorded_at=_utc_now(),
                 media_type=media_type,
                 source_kind="sec_filing_package",
             )
@@ -1247,6 +1515,7 @@ def _run_inventory(
         filings=package_filings,
         checkpoint_root=args.package_checkpoint_root,
         package_limit=int(args.package_limit),
+        retrieval_config_sha256=config_sha,
         capture_response=capture_package_response if conn is not None else None,
     )
     package_failures = tuple(
