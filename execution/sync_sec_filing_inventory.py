@@ -21,7 +21,7 @@ try:
 except ImportError:
     from execution._lib import PROJECT_ROOT
 
-from filings.edgar_fetch import (
+from filings.models import (
     HardStopError,
     SourceContractError,
     TransientError,
@@ -63,7 +63,7 @@ from provenance.source_coverage_reconcile import (
     reconcile_source_coverage,
 )
 from runtime.job_runtime import JobAlreadyRunningError, JobLock
-from sec_identity import sec_user_agent
+from sec_identity import SecContactConfigurationError, sec_user_agent
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _TIMEOUT = (10, 60)
@@ -974,26 +974,53 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
 
-    if args.apply:
-        try:
-            with JobLock(
-                PROJECT_ROOT,
-                "sync-sec-filing-inventory",
-                [
-                    f"sqlite:{args.db.resolve()}",
-                    f"evidence-blobs:{args.blob_root.resolve()}",
-                    (f"sec-package-checkpoint:{args.package_checkpoint_root.resolve()}"),
-                    f"source-inventory:sec-cik:{str(args.cik).strip().zfill(10)}",
-                ],
-            ):
-                return _run(args)
-        except JobAlreadyRunningError:
-            _event(
-                "sec_filing_inventory_locked",
-                ticker=str(args.ticker).strip().upper(),
+    try:
+        if args.apply:
+            try:
+                with JobLock(
+                    PROJECT_ROOT,
+                    "sync-sec-filing-inventory",
+                    [
+                        f"sqlite:{args.db.resolve()}",
+                        f"evidence-blobs:{args.blob_root.resolve()}",
+                        (f"sec-package-checkpoint:{args.package_checkpoint_root.resolve()}"),
+                        f"source-inventory:sec-cik:{str(args.cik).strip().zfill(10)}",
+                    ],
+                ):
+                    return _run(args)
+            except JobAlreadyRunningError:
+                _event(
+                    "sec_filing_inventory_locked",
+                    ticker=str(args.ticker).strip().upper(),
+                )
+                return 75
+        return _run(args)
+    except SecContactConfigurationError:
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "outcome": "blocked",
+                    "reason_code": "sec_contact_configuration_invalid",
+                    "retryable": False,
+                },
+                sort_keys=True,
             )
-            return 75
-    return _run(args)
+            + "\n"
+        )
+        return 2
+    except HardStopError:
+        sys.stdout.write(
+            json.dumps(
+                {
+                    "outcome": "blocked",
+                    "reason_code": "sec_inventory_hard_stop",
+                    "retryable": False,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        return 2
 
 
 def _run(args: argparse.Namespace) -> int:
