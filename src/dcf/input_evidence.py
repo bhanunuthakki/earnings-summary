@@ -14,11 +14,19 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
 
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import FactReadModel
-from provenance.metric_ontology import MetricOntology
+from provenance.metric_ontology import CanonicalDimension, MetricOntology, canonical_json
 from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
 
 
@@ -84,12 +92,71 @@ class InputRequirement(FrozenModel):
     unit_key: str
     currency: str | None
     period_kind: Literal["instant", "duration"]
+    consolidation_scope: Literal["consolidated"] = "consolidated"
     annual: bool = False
     accounting_basis: str | None = None
     period_start: date | None = None
     period_end: date | None = None
     scale: Decimal = Decimal(1)
     definition_constraints: dict[str, object] = Field(default_factory=dict)
+
+
+class ValuationRoleSelector(FrozenModel):
+    """Reviewed role selection against the complete canonical dimension set."""
+
+    canonical_dimensions: tuple[CanonicalDimension, ...]
+    semantic_constraints: dict[str, object]
+
+    @field_validator("canonical_dimensions")
+    @classmethod
+    def _unique_axes(
+        cls, dimensions: tuple[CanonicalDimension, ...]
+    ) -> tuple[CanonicalDimension, ...]:
+        if len({item.axis_id for item in dimensions}) != len(dimensions):
+            raise ValueError("valuation role selector has duplicate axes")
+        return dimensions
+
+
+_ROLE_SELECTORS = TypeAdapter(dict[str, ValuationRoleSelector])
+
+
+def _role_matches(
+    scope: dict[str, object],
+    requirement: InputRequirement,
+    dimensions: tuple[CanonicalDimension, ...],
+) -> bool:
+    if "valuation_role_selectors" in scope:
+        if "valuation_role" in scope:
+            return False
+        try:
+            selectors = _ROLE_SELECTORS.validate_python(scope["valuation_role_selectors"])
+        except ValidationError:
+            return False
+        dimension_sets = [
+            frozenset((item.axis_id, item.member_id) for item in selector.canonical_dimensions)
+            for selector in selectors.values()
+        ]
+        if not selectors or len(set(dimension_sets)) != len(dimension_sets):
+            return False
+        selected = selectors.get(requirement.role)
+        if selected is None or selected.semantic_constraints != requirement.definition_constraints:
+            return False
+        if any(
+            key in scope and scope[key] != value
+            for key, value in selected.semantic_constraints.items()
+        ):
+            return False
+        return {(item.axis_id, item.member_id) for item in selected.canonical_dimensions} == {
+            (item.axis_id, item.member_id) for item in dimensions
+        }
+    # The scalar legacy contract is safe only for a single undimensioned role.
+    return (
+        not dimensions
+        and scope.get("valuation_role") == requirement.role
+        and all(
+            scope.get(key) == value for key, value in requirement.definition_constraints.items()
+        )
+    )
 
 
 class VerifiedInput(FrozenModel):
@@ -252,9 +319,22 @@ def verify_model_inputs(
         bundle = reader.provenance_bundle(ref.observation_id, cutoff=cutoff)
         fact = bundle.observation
         identity = conn.execute(
-            "SELECT metric_id FROM canonical_metric_cells WHERE canonical_metric_cell_id=?",
+            "SELECT cell.metric_id,cell.dimension_count,seal.dimension_set_json,"
+            "seal.dimension_set_sha256,cell.consolidation_scope,cell.scope_security_id "
+            "FROM canonical_metric_cells cell "
+            "JOIN canonical_metric_cell_seals seal USING(canonical_metric_cell_id) "
+            "WHERE cell.canonical_metric_cell_id=?",
             (ref.canonical_metric_cell_id,),
         ).fetchone()
+        dimension_rows = conn.execute(
+            "SELECT axis_id,member_id FROM canonical_metric_cell_dimensions "
+            "WHERE canonical_metric_cell_id=? ORDER BY dimension_ordinal",
+            (ref.canonical_metric_cell_id,),
+        ).fetchall()
+        dimensions = tuple(
+            CanonicalDimension(axis_id=str(row[0]), member_id=str(row[1])) for row in dimension_rows
+        )
+        dimension_json = canonical_json([item.model_dump() for item in dimensions])
         member = conn.execute(
             "SELECT canonical_resolution_revision_id FROM canonical_fact_resolution_snapshot_members "
             "WHERE resolution_snapshot_id=? AND canonical_metric_cell_id=?",
@@ -263,6 +343,12 @@ def verify_model_inputs(
         if (
             identity is None
             or str(identity[0]) != ref.metric_id
+            or int(identity[1]) != len(dimensions)
+            or str(identity[2]) != dimension_json
+            or str(identity[3]) != hashlib.sha256(dimension_json.encode()).hexdigest()
+            or str(identity[4]) != requirement.consolidation_scope
+            or identity[5] is not None
+            or len({item.axis_id for item in dimensions}) != len(dimensions)
             or member is None
             or str(member[0]) != ref.canonical_resolution_revision_id
         ):
@@ -278,11 +364,7 @@ def verify_model_inputs(
             or definition is None
             or definition.lifecycle != "active"
             or definition.metric_definition_revision_id != ref.metric_definition_revision_id
-            or definition.scope_constraints.get("valuation_role") != requirement.role
-            or any(
-                definition.scope_constraints.get(key) != value
-                for key, value in requirement.definition_constraints.items()
-            )
+            or not _role_matches(definition.scope_constraints, requirement, dimensions)
             or (
                 requirement.accounting_basis is not None
                 and (
@@ -291,6 +373,8 @@ def verify_model_inputs(
                 )
             )
             or bundle.observation_payload_sha256 != ref.observation_payload_sha256
+            or bundle.cell.consolidation_scope != requirement.consolidation_scope
+            or bundle.cell.scope_security_id is not None
         ):
             raise InputEvidenceError(f"input_semantic_admission_failed:{requirement.key}")
         if (

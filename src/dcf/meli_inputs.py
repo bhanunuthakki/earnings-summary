@@ -24,7 +24,7 @@ from dcf.input_evidence import (
 )
 from dcf.meli_model import validate_credit_terminal
 
-RECIPE = "meli-platform-sotp-inputs/v3"
+RECIPE = "meli-platform-sotp-inputs/v4"
 MILLIONS = Decimal("0.000001")
 REPORTED_DRIVER_KEYS = frozenset({"comm_rev0", "fpay_rev0", "cb0", "shares", "net_cash"})
 ASSUMPTION_KEYS = frozenset(

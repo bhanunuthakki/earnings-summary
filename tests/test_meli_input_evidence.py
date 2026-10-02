@@ -16,6 +16,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal, cast
 
 import pytest
 
@@ -29,17 +30,32 @@ from provenance.canonical_fact_resolution import (
     ResolutionPolicy,
     ResolutionSnapshotScope,
 )
-from provenance.fact_plane_v2 import CanonicalJSONObject, ExtractionRunCompletenessSealV2
+from provenance.fact_plane_v2 import (
+    CanonicalJSONObject,
+    ExtractionRunCompletenessSealV2,
+    FactCellV2,
+    FactDimensionV2,
+)
 from provenance.fact_read_model import FactReadModel
+from provenance.issuer_registry import IssuerRegistry, Security
 from provenance.metric_ontology import (
     BindingRevision,
+    CanonicalAxis,
+    CanonicalDimension,
+    CanonicalMember,
     CanonicalMetric,
     CanonicalMetricCell,
     CanonicalMetricDefinitionRevision,
     MappingRevision,
     MetricOntology,
+    SourceDimensionMappingRevision,
     SourceObservationTaxonomyAssertion,
     SourceTaxonomyComponent,
+)
+from provenance.reporting_entity_registry import (
+    EvidenceSubjectBindingRevision,
+    ReportingEntityRegistry,
+    SecurityReportingEntityRevision,
 )
 from provenance.research_snapshot import ResearchSnapshotRequest
 from provenance.source_fact_repository import (
@@ -51,6 +67,20 @@ from tests.test_source_fact_repository import STAMP, make_cell, make_report, see
 
 NOW = datetime(2026, 10, 1, 20, microsecond=123456, tzinfo=UTC)
 END = date(2026, 6, 30)
+SHARED_REVENUE_ROLES = {
+    "meli.comm_rev0": "commerce",
+    "meli.revenue_total": None,
+    "meli.revenue_fintech": "fintech",
+    "meli.revenue_credit": "credit",
+}
+REVENUE_AXIS = "meli-revenue-segment"
+COUNTRY_AXIS = "meli-country"
+DISTRACTOR_KEY = "comm_rev0_ytd"
+
+
+def _revenue_dimensions(role: str) -> tuple[CanonicalDimension, ...]:
+    member = SHARED_REVENUE_ROLES[role]
+    return () if member is None else (CanonicalDimension(axis_id=REVENUE_AXIS, member_id=member),)
 
 
 def _snapshot() -> ResearchSnapshotRequest:
@@ -91,9 +121,62 @@ def _inputs() -> dict[str, float]:
     return meli_inputs.effective_numeric_inputs(dataclasses.asdict(assumptions))
 
 
-def _seed_real_inputs(conn: sqlite3.Connection) -> dict[str, evidence.FactBinding]:
+def _seed_real_inputs(
+    conn: sqlite3.Connection,
+    *,
+    shared_revenues: bool = False,
+    extra_country: bool = False,
+    security_scope: bool = False,
+) -> dict[str, evidence.FactBinding]:
     """No mocking source publication, ontology, binding, resolver or fact reader."""
     seed_foundation(conn)
+    if security_scope:
+        IssuerRegistry(conn).persist(
+            Security(
+                security_id="meli-fixture-security",
+                idempotency_key="meli-fixture-security",
+                issuer_id="issuer-1",
+                security_kind="common_stock",
+                created_at=STAMP,
+            )
+        )
+        ReportingEntityRegistry(conn).persist(
+            SecurityReportingEntityRevision(
+                relationship_revision_id="meli-fixture-security-reporting",
+                idempotency_key="meli-fixture-security-reporting",
+                relationship_key="meli-fixture-security:reporting-1",
+                revision=1,
+                security_id="meli-fixture-security",
+                reporting_entity_id="reporting-1",
+                relationship_kind="reports_through",
+                decision_kind="deterministic",
+                reason_code="synthetic_fixture",
+                reason_details=(("fixture", "security-scope-negative"),),
+                effective_at=STAMP,
+                knowledge_at=STAMP,
+                recorded_at=STAMP,
+            )
+        )
+        ReportingEntityRegistry(conn).persist(
+            EvidenceSubjectBindingRevision(
+                binding_revision_id="meli-fixture-security-binding",
+                idempotency_key="meli-fixture-security-binding",
+                recorded_issuer_id="issuer-1",
+                revision=2,
+                issuer_id="issuer-1",
+                reporting_entity_id="reporting-1",
+                security_id="meli-fixture-security",
+                outcome="selected",
+                decision_kind="deterministic",
+                reason_code="synthetic_fixture",
+                reason_details=(("fixture", "security-scope-negative"),),
+                material_dissent=False,
+                effective_at=STAMP,
+                knowledge_at=STAMP,
+                recorded_at=STAMP,
+                supersedes_binding_revision_id="binding-1",
+            )
+        )
     inputs = _inputs()
     amounts = {
         **inputs,
@@ -112,15 +195,24 @@ def _seed_real_inputs(conn: sqlite3.Connection) -> dict[str, evidence.FactBindin
         "reported_noncurrent_operating_lease_liabilities": 2037,
     }
     requirements = meli_inputs.requirements_for(END)
+    role_requirements = {req.role: req for req in requirements}
     facts: list[ReportedSourceFact] = []
     for index, req in enumerate(requirements):
-        concept = req.role.removeprefix("meli.")
+        concept = (
+            "Revenues"
+            if shared_revenues and req.role in SHARED_REVENUE_ROLES
+            else req.role.removeprefix("meli.")
+        )
         key = req.key
         amount = Decimal(
             str(
                 amounts[
-                    concept
-                    if concept != "diluted_shares" and concept != "nimal_after_funding_and_losses"
+                    req.role.removeprefix("meli.")
+                    if req.role
+                    not in {
+                        "meli.diluted_shares",
+                        "meli.nimal_after_funding_and_losses",
+                    }
                     else req.key
                 ]
             )
@@ -142,19 +234,59 @@ def _seed_real_inputs(conn: sqlite3.Connection) -> dict[str, evidence.FactBindin
             )
         )
         end = datetime.combine(req.period_end or END, datetime.min.time(), tzinfo=UTC)
-        cell = make_cell(key).model_copy(
-            update={
-                "semantic_key_sha256": None,
-                "concept_name": concept,
-                "dimensions": (),
-                "period_start": start,
-                "period_end": end,
-                "period_kind": req.period_kind,
-                "unit_key": req.unit_key,
-                "currency": req.currency,
-                "fiscal_period": None,
-                "accounting_basis": req.accounting_basis or "us_gaap",
-            }
+        member = SHARED_REVENUE_ROLES.get(req.role) if shared_revenues else None
+        source_dimensions = (
+            (
+                FactDimensionV2(
+                    dimension_id=f"meli-revenue-dimension-{index}",
+                    idempotency_key=f"meli-revenue-dimension-{index}",
+                    axis_namespace="urn:fixture:revenue-axis",
+                    axis_name="RevenueSegmentAxis",
+                    member_kind="explicit",
+                    explicit_member_namespace="urn:fixture:revenue-member",
+                    explicit_member_name=member.title() + "Member",
+                    recorded_at=STAMP,
+                ),
+            )
+            if member is not None
+            else ()
+        )
+        if extra_country and key == DISTRACTOR_KEY:
+            source_dimensions = (
+                *source_dimensions,
+                FactDimensionV2(
+                    dimension_id="meli-country-dimension",
+                    idempotency_key="meli-country-dimension",
+                    axis_namespace="urn:fixture:country-axis",
+                    axis_name="CountryAxis",
+                    member_kind="explicit",
+                    explicit_member_namespace="urn:fixture:country-member",
+                    explicit_member_name="BrazilMember",
+                    recorded_at=STAMP,
+                ),
+            )
+        cell = FactCellV2.model_validate(
+            make_cell(key)
+            .model_copy(
+                update={
+                    "semantic_key_sha256": None,
+                    "concept_name": concept,
+                    "dimensions": source_dimensions,
+                    "scope_security_id": (
+                        "meli-fixture-security"
+                        if security_scope and key == DISTRACTOR_KEY
+                        else None
+                    ),
+                    "period_start": start,
+                    "period_end": end,
+                    "period_kind": req.period_kind,
+                    "unit_key": req.unit_key,
+                    "currency": req.currency,
+                    "fiscal_period": None,
+                    "accounting_basis": req.accounting_basis or "us_gaap",
+                }
+            )
+            .model_dump(mode="json")
         )
         node = f"meli-node-{index}"
         source_locator: dict[str, object] = {"path": key}
@@ -202,6 +334,11 @@ def _seed_real_inputs(conn: sqlite3.Connection) -> dict[str, evidence.FactBindin
                 "evidence_node_id": node,
                 "source_locator": CanonicalJSONObject.model_validate(source_locator),
                 "source_locator_sha256": None,
+                "subject_binding_revision_id": (
+                    "meli-fixture-security-binding"
+                    if security_scope and key == DISTRACTOR_KEY
+                    else "binding-1"
+                ),
             }
         )
         facts.append(ReportedSourceFact(cell=cell, observation=report))
@@ -226,11 +363,146 @@ def _seed_real_inputs(conn: sqlite3.Connection) -> dict[str, evidence.FactBindin
         )
     )
     ontology, resolver = MetricOntology(conn), CanonicalFactResolutionEngine(conn)
+    if shared_revenues:
+        ontology.persist_axis(
+            CanonicalAxis(
+                axis_id=REVENUE_AXIS,
+                idempotency_key=REVENUE_AXIS,
+                canonical_name="Revenue segment",
+                effective_at=STAMP,
+                knowledge_at=STAMP,
+                recorded_at=STAMP,
+            )
+        )
+        for member in ("commerce", "fintech", "credit"):
+            ontology.persist_member(
+                CanonicalMember(
+                    member_id=member,
+                    idempotency_key=f"{REVENUE_AXIS}:{member}",
+                    axis_id=REVENUE_AXIS,
+                    canonical_name=member.title(),
+                    effective_at=STAMP,
+                    knowledge_at=STAMP,
+                    recorded_at=STAMP,
+                )
+            )
+        dimension_components: tuple[tuple[str, str, Literal["axis", "member"], str | None], ...] = (
+            ("RevenueSegmentAxis", "urn:fixture:revenue-axis", "axis", None),
+            ("CommerceMember", "urn:fixture:revenue-member", "member", "commerce"),
+            ("FintechMember", "urn:fixture:revenue-member", "member", "fintech"),
+            ("CreditMember", "urn:fixture:revenue-member", "member", "credit"),
+        )
+        for local_name, namespace, kind, member_id in dimension_components:
+            component_id = f"source-revenue-{local_name}"
+            ontology.persist_source_component(
+                SourceTaxonomyComponent(
+                    component_id=component_id,
+                    idempotency_key=component_id,
+                    component_kind=kind,
+                    taxonomy_namespace=namespace,
+                    local_name=local_name,
+                    taxonomy_name="US GAAP",
+                    taxonomy_version="2026",
+                    reporting_entity_id="reporting-1",
+                    is_extension=False,
+                    evidence_locator={"fixture": True},
+                    effective_at=STAMP,
+                    knowledge_at=STAMP,
+                    recorded_at=STAMP,
+                )
+            )
+            ontology.persist_dimension_mapping(
+                SourceDimensionMappingRevision(
+                    dimension_mapping_revision_id=f"dimension-mapping:{component_id}",
+                    idempotency_key=f"dimension-mapping:{component_id}",
+                    source_component_id=component_id,
+                    revision=1,
+                    disposition="exact",
+                    canonical_axis_id=REVENUE_AXIS,
+                    canonical_member_id=member_id,
+                    policy_name="synthetic-review",
+                    policy_version="1",
+                    policy_config_sha256="a" * 64,
+                    evidence={"fixture": True},
+                    reviewer_identity="fixture",
+                    effective_at=STAMP,
+                    knowledge_at=STAMP,
+                    recorded_at=STAMP,
+                )
+            )
+    if extra_country:
+        ontology.persist_axis(
+            CanonicalAxis(
+                axis_id=COUNTRY_AXIS,
+                idempotency_key=COUNTRY_AXIS,
+                canonical_name="Country",
+                effective_at=STAMP,
+                knowledge_at=STAMP,
+                recorded_at=STAMP,
+            )
+        )
+        ontology.persist_member(
+            CanonicalMember(
+                member_id="brazil",
+                idempotency_key=f"{COUNTRY_AXIS}:brazil",
+                axis_id=COUNTRY_AXIS,
+                canonical_name="Brazil",
+                effective_at=STAMP,
+                knowledge_at=STAMP,
+                recorded_at=STAMP,
+            )
+        )
+        country_components: tuple[tuple[str, str, Literal["axis", "member"], str | None], ...] = (
+            ("CountryAxis", "urn:fixture:country-axis", "axis", None),
+            ("BrazilMember", "urn:fixture:country-member", "member", "brazil"),
+        )
+        for local_name, namespace, kind, member_id in country_components:
+            component_id = f"source-country-{local_name}"
+            ontology.persist_source_component(
+                SourceTaxonomyComponent(
+                    component_id=component_id,
+                    idempotency_key=component_id,
+                    component_kind=kind,
+                    taxonomy_namespace=namespace,
+                    local_name=local_name,
+                    taxonomy_name="US GAAP",
+                    taxonomy_version="2026",
+                    reporting_entity_id="reporting-1",
+                    is_extension=False,
+                    evidence_locator={"fixture": True},
+                    effective_at=STAMP,
+                    knowledge_at=STAMP,
+                    recorded_at=STAMP,
+                )
+            )
+            ontology.persist_dimension_mapping(
+                SourceDimensionMappingRevision(
+                    dimension_mapping_revision_id=f"dimension-mapping:{component_id}",
+                    idempotency_key=f"dimension-mapping:{component_id}",
+                    source_component_id=component_id,
+                    revision=1,
+                    disposition="exact",
+                    canonical_axis_id=COUNTRY_AXIS,
+                    canonical_member_id=member_id,
+                    policy_name="synthetic-review",
+                    policy_version="1",
+                    policy_config_sha256="a" * 64,
+                    evidence={"fixture": True},
+                    reviewer_identity="fixture",
+                    effective_at=STAMP,
+                    knowledge_at=STAMP,
+                    recorded_at=STAMP,
+                )
+            )
     registered: set[str] = set()
     refs: dict[str, evidence.FactBinding] = {}
     for req, fact in zip(requirements, facts, strict=True):
         cell, observation = fact.cell, fact.observation
-        metric = req.role
+        metric = (
+            "meli.shared_revenues"
+            if shared_revenues and req.role in SHARED_REVENUE_ROLES
+            else req.role
+        )
         family = "currency" if req.currency else req.unit_key
         if metric not in registered:
             ontology.persist_metric(
@@ -255,7 +527,23 @@ def _seed_real_inputs(conn: sqlite3.Connection) -> dict[str, evidence.FactBindin
                     period_kind=req.period_kind,
                     unit_family=family,
                     accounting_basis=cell.accounting_basis,
-                    scope_constraints={"valuation_role": metric, **req.definition_constraints},
+                    scope_constraints=(
+                        {
+                            "valuation_role_selectors": {
+                                role: {
+                                    "canonical_dimensions": [
+                                        item.model_dump() for item in _revenue_dimensions(role)
+                                    ],
+                                    "semantic_constraints": role_requirements[
+                                        role
+                                    ].definition_constraints,
+                                }
+                                for role in SHARED_REVENUE_ROLES
+                            }
+                        }
+                        if metric == "meli.shared_revenues"
+                        else {"valuation_role": metric, **req.definition_constraints}
+                    ),
                     effective_at=STAMP,
                     knowledge_at=STAMP,
                     recorded_at=STAMP,
@@ -354,7 +642,19 @@ def _seed_real_inputs(conn: sqlite3.Connection) -> dict[str, evidence.FactBindin
                 period_kind=req.period_kind,
                 period_start=cell.period_start,
                 period_end=cell.period_end,
-                dimensions=(),
+                dimensions=(
+                    *(
+                        _revenue_dimensions(req.role)
+                        if shared_revenues and req.role in SHARED_REVENUE_ROLES
+                        else ()
+                    ),
+                    *(
+                        (CanonicalDimension(axis_id=COUNTRY_AXIS, member_id="brazil"),)
+                        if extra_country and req.key == DISTRACTOR_KEY
+                        else ()
+                    ),
+                ),
+                scope_security_id=cell.scope_security_id,
                 unit_family=family,
                 accounting_basis=cell.accounting_basis,
                 consolidation_scope="consolidated",
@@ -470,6 +770,304 @@ def real_inputs(
         yield conn, _request(conn, refs)
     finally:
         conn.close()
+
+
+@pytest.fixture
+def shared_revenue_inputs(
+    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> Generator[tuple[sqlite3.Connection, evidence.ModelInputRequest], None, None]:
+    conn = sqlite3.connect(migrated_db(tmp_path / "meli-shared-revenues.db"))
+    refs = _seed_real_inputs(conn, shared_revenues=True)
+
+    def coverage(
+        _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime
+    ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
+        return _snapshot(), "b" * 64, ("inventory",)
+
+    monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
+    try:
+        yield conn, _request(conn, refs)
+    finally:
+        conn.close()
+
+
+def test_shared_revenues_qname_routes_four_roles_by_sealed_dimensions(
+    shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+) -> None:
+    conn, request = shared_revenue_inputs
+    receipt = evidence.verify_model_inputs(
+        conn,
+        request,
+        recipe=meli_inputs.RECIPE,
+        requirements=meli_inputs.requirements_for(END),
+        effective_inputs={key: item.value for key, item in request.assumptions.items()},
+        assumption_keys=meli_inputs.ASSUMPTION_KEYS,
+        as_of=NOW,
+    )
+    selected = {
+        item.key: item
+        for item in receipt.inputs
+        if item.key.endswith("_ytd")
+        and item.key.rsplit("_", 1)[0]
+        in {"comm_rev0", "revenue_total", "revenue_fintech", "revenue_credit"}
+    }
+    assert len(selected) == 4
+    assert {item.reference.metric_id for item in selected.values()} == {"meli.shared_revenues"}
+    assert {
+        str(row[0])
+        for row in conn.execute(
+            "SELECT DISTINCT concept_name FROM fact_cells_v2 WHERE fact_cell_id IN "
+            "(SELECT fact_cell_id FROM fact_observations_v2 WHERE observation_id IN "
+            "(?,?,?,?))",
+            tuple(item.reference.observation_id for item in selected.values()),
+        )
+    } == {"Revenues"}
+    assert set(selected) == {
+        "comm_rev0_ytd",
+        "revenue_total_ytd",
+        "revenue_fintech_ytd",
+        "revenue_credit_ytd",
+    }
+
+
+@pytest.mark.parametrize("replacement", ["revenue_total_ytd", "revenue_fintech_ytd"])
+def test_shared_revenue_selector_rejects_missing_or_wrong_segment(
+    shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    replacement: str,
+) -> None:
+    conn, request = shared_revenue_inputs
+    altered = request.model_copy(
+        update={"facts": {**request.facts, "comm_rev0_ytd": request.facts[replacement]}}
+    )
+    with pytest.raises(evidence.InputEvidenceError, match="input_semantic_admission_failed"):
+        meli_inputs.prepare_meli_inputs(conn, altered, effective_inputs=_inputs(), as_of=NOW)
+
+
+@pytest.mark.parametrize(
+    "distraction,reason",
+    [
+        ("extra_country", "input_semantic_admission_failed:comm_rev0_ytd"),
+        ("security_scope", "input_outside_canonical_snapshot:comm_rev0_ytd"),
+    ],
+)
+def test_real_published_distractor_cell_cannot_feed_meli_role(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    distraction: str,
+    reason: str,
+) -> None:
+    conn = sqlite3.connect(migrated_db(tmp_path / f"meli-{distraction}.db"))
+    try:
+        refs = _seed_real_inputs(
+            conn,
+            shared_revenues=True,
+            extra_country=distraction == "extra_country",
+            security_scope=distraction == "security_scope",
+        )
+
+        def coverage(
+            _conn: sqlite3.Connection,
+            _request: evidence.ModelInputRequest,
+            _cutoff: datetime,
+        ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
+            return _snapshot(), "b" * 64, ("inventory",)
+
+        monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
+        ref = refs[DISTRACTOR_KEY]
+        resolution = CanonicalFactResolutionEngine(conn).as_known(ref.canonical_metric_cell_id, NOW)
+        assert resolution is not None and resolution.status == "resolved"
+        assert resolution.selected_observation_id == ref.observation_id
+        source = FactReadModel(conn).provenance_bundle(ref.observation_id, cutoff=NOW).cell
+        canonical_scope = conn.execute(
+            "SELECT scope_security_id FROM canonical_metric_cells WHERE canonical_metric_cell_id=?",
+            (ref.canonical_metric_cell_id,),
+        ).fetchone()
+        assert canonical_scope is not None
+        if distraction == "extra_country":
+            assert {item.axis_name for item in source.dimensions} == {
+                "RevenueSegmentAxis",
+                "CountryAxis",
+            }
+            canonical_dimensions = conn.execute(
+                "SELECT axis_id,member_id FROM canonical_metric_cell_dimensions "
+                "WHERE canonical_metric_cell_id=? ORDER BY dimension_ordinal",
+                (ref.canonical_metric_cell_id,),
+            ).fetchall()
+            assert (COUNTRY_AXIS, "brazil") in [tuple(row) for row in canonical_dimensions]
+            assert canonical_scope[0] is None
+        else:
+            assert source.scope_security_id == "meli-fixture-security"
+            assert canonical_scope[0] == "meli-fixture-security"
+        inputs = _inputs()
+        request = evidence.ModelInputRequest(
+            recipe=meli_inputs.RECIPE,
+            ticker="MELI",
+            research_snapshot_id="snapshot",
+            financial_period_end=END,
+            facts=refs,
+            assumptions={
+                key: evidence.AssumptionBasis(
+                    value=inputs[key],
+                    attribution="analyst",
+                    rationale="Explicit synthetic forecast choice",
+                )
+                for key in meli_inputs.ASSUMPTION_KEYS
+            },
+        )
+        with pytest.raises(evidence.InputEvidenceError, match=reason):
+            evidence.verify_model_inputs(
+                conn,
+                request,
+                recipe=meli_inputs.RECIPE,
+                requirements=meli_inputs.requirements_for(END),
+                effective_inputs={key: inputs[key] for key in meli_inputs.ASSUMPTION_KEYS},
+                assumption_keys=meli_inputs.ASSUMPTION_KEYS,
+                as_of=NOW,
+            )
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "mixed",
+        "missing_dimensions",
+        "wrong_semantics",
+        "extra_country_dimension",
+        "duplicate_axis",
+        "duplicate_selector",
+        "scalar_dimensioned",
+        "stale_head",
+    ],
+)
+def test_shared_revenue_revised_definition_fails_closed(
+    shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    change: str,
+) -> None:
+    conn, request = shared_revenue_inputs
+    ontology = MetricOntology(conn)
+    old = ontology.metric_definition_as_known("meli.shared_revenues", NOW)
+    assert old is not None
+    raw_selectors = old.scope_constraints.get("valuation_role_selectors")
+    assert isinstance(raw_selectors, dict)
+    selectors = cast("dict[str, object]", raw_selectors)
+    commerce = [item.model_dump() for item in _revenue_dimensions("meli.comm_rev0")]
+    comm_constraints = next(
+        item.definition_constraints
+        for item in meli_inputs.requirements_for(END)
+        if item.key == "comm_rev0_ytd"
+    )
+    scopes: dict[str, dict[str, object]] = {
+        "mixed": {**old.scope_constraints, "valuation_role": "meli.comm_rev0"},
+        "missing_dimensions": {
+            "valuation_role_selectors": {
+                "meli.comm_rev0": {
+                    "semantic_constraints": {
+                        "fiscal_year_end": "12-31",
+                        "reported_population": "actual",
+                    }
+                }
+            }
+        },
+        "wrong_semantics": {
+            "valuation_role_selectors": {
+                **selectors,
+                "meli.comm_rev0": {
+                    "canonical_dimensions": commerce,
+                    "semantic_constraints": {
+                        **comm_constraints,
+                        "revenue_scope": "country",
+                    },
+                },
+            }
+        },
+        "extra_country_dimension": {
+            "valuation_role_selectors": {
+                **selectors,
+                "meli.comm_rev0": {
+                    "canonical_dimensions": [
+                        *commerce,
+                        {"axis_id": "country", "member_id": "Brazil"},
+                    ],
+                    "semantic_constraints": comm_constraints,
+                },
+            }
+        },
+        "duplicate_axis": {
+            "valuation_role_selectors": {
+                **selectors,
+                "meli.comm_rev0": {
+                    "canonical_dimensions": [*commerce, *commerce],
+                    "semantic_constraints": comm_constraints,
+                },
+            }
+        },
+        "duplicate_selector": {
+            "valuation_role_selectors": {
+                **selectors,
+                "meli.revenue_fintech": {
+                    "canonical_dimensions": commerce,
+                    "semantic_constraints": next(
+                        item.definition_constraints
+                        for item in meli_inputs.requirements_for(END)
+                        if item.key == "revenue_fintech_ytd"
+                    ),
+                },
+            }
+        },
+        "scalar_dimensioned": {"valuation_role": "meli.comm_rev0", **comm_constraints},
+        "stale_head": old.scope_constraints,
+    }
+    revised = old.model_copy(
+        update={
+            "metric_definition_revision_id": old.metric_definition_revision_id + ":v2",
+            "idempotency_key": old.idempotency_key + ":v2",
+            "revision": 2,
+            "supersedes_metric_definition_revision_id": old.metric_definition_revision_id,
+            "scope_constraints": scopes[change],
+            "effective_at": NOW,
+            "knowledge_at": NOW,
+            "recorded_at": NOW,
+        }
+    )
+    ontology.persist_metric_definition(revised)
+    if change != "stale_head":
+        request = request.model_copy(
+            update={
+                "facts": {
+                    key: (
+                        ref.model_copy(
+                            update={
+                                "metric_definition_revision_id": revised.metric_definition_revision_id
+                            }
+                        )
+                        if ref.metric_id == "meli.shared_revenues"
+                        else ref
+                    )
+                    for key, ref in request.facts.items()
+                }
+            }
+        )
+    with pytest.raises(evidence.InputEvidenceError, match="input_semantic_admission_failed"):
+        meli_inputs.prepare_meli_inputs(conn, request, effective_inputs=_inputs(), as_of=NOW)
+
+
+def test_shared_revenue_append_only_dimension_and_recipe_cannot_be_bypassed(
+    shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+) -> None:
+    conn, request = shared_revenue_inputs
+    old_recipe = request.model_copy(update={"recipe": "meli-platform-sotp-inputs/v3"})
+    with pytest.raises(evidence.InputEvidenceError, match="input_recipe_mismatch"):
+        meli_inputs.prepare_meli_inputs(conn, old_recipe, effective_inputs=_inputs(), as_of=NOW)
+    cell_id = request.facts["comm_rev0_ytd"].canonical_metric_cell_id
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute(
+            "UPDATE canonical_metric_cell_dimensions SET member_id='credit' "
+            "WHERE canonical_metric_cell_id=?",
+            (cell_id,),
+        )
 
 
 def test_real_reported_bindings_compute_ttm_and_bridge(
