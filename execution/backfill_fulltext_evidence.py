@@ -11,14 +11,15 @@ import argparse
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from provenance.fulltext_backfill import (  # noqa: E402
+from provenance.fulltext_backfill import (
     FullTextBackfillRequest,
     backfill_fulltext_evidence,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -39,6 +40,10 @@ def main(argv: list[str] | None = None) -> int:
         "--document-id",
         type=int,
         help="Extract exactly one legacy document without reading or advancing a checkpoint",
+    )
+    parser.add_argument(
+        "--document-version-id",
+        help="Extract one evidence-native version without reading or advancing a checkpoint",
     )
     parser.add_argument(
         "--max-records",
@@ -74,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
         content_roots=tuple(args.content_roots or ()),
         apply=args.apply,
         document_id=args.document_id,
+        document_version_id=args.document_version_id,
         batch_size=args.batch_size,
         max_records_per_batch=args.max_records,
         max_nodes_per_batch=args.max_nodes,

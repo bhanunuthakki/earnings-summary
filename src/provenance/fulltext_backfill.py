@@ -35,6 +35,7 @@ from provenance.evidence_native_candidates import (
     has_evidence_native_after,
     resolve_local_storage_uri,
     select_evidence_native_candidates,
+    select_evidence_native_candidates_by_id,
 )
 from provenance.fulltext_extractor_identity import (
     BASE_FULLTEXT_EXTRACTOR,
@@ -118,6 +119,7 @@ class FullTextBackfillRequest(BaseModel):
     content_roots: tuple[Path, ...] = ()
     apply: bool = False
     document_id: int | None = Field(default=None, gt=0)
+    document_version_id: str | None = Field(default=None, min_length=1, max_length=128)
     batch_size: int = Field(default=100, ge=1, le=10_000)
     max_records_per_batch: int = Field(default=50_000, ge=1, le=1_000_000)
     max_nodes_per_batch: int = Field(default=50_000, ge=1, le=1_000_000)
@@ -284,18 +286,22 @@ def backfill_fulltext_evidence(
     _require_tables(conn, request.source_lane)
     if request.document_id is not None and request.source_lane != "legacy":
         raise ValueError("document_id is available only for the legacy source lane")
+    if request.document_version_id is not None and (
+        request.source_lane != "evidence_native" or request.document_id is not None
+    ):
+        raise ValueError("document_version_id requires only the evidence_native source lane")
     root = request.repo_root.resolve()
     allowed_roots = _allowed_content_roots(request, root)
     checkpoint_path = _checkpoint_path(root, request)
-    targeted = request.document_id is not None
+    targeted = request.document_id is not None or request.document_version_id is not None
     checkpoint = (
         FullTextBackfillCheckpoint(
-            source_lane="legacy",
+            source_lane=request.source_lane,
             format_scope=request.format_scope,
-            last_document_id=request.document_id - 1,
+            last_document_id=(0 if request.document_id is None else request.document_id - 1),
             updated_at=datetime.now(UTC),
         )
-        if request.document_id is not None
+        if targeted
         else _read_checkpoint(
             checkpoint_path,
             request.source_lane,
@@ -306,6 +312,13 @@ def backfill_fulltext_evidence(
         candidates = _candidates_for_document(conn, request.document_id)
         if not candidates:
             raise ValueError(f"legacy document {request.document_id} does not exist")
+    elif request.document_version_id is not None:
+        candidates = [
+            _candidate_from_evidence_native(candidate)
+            for candidate in select_evidence_native_candidates_by_id(
+                conn, document_version_ids=(request.document_version_id,)
+            )
+        ]
     elif request.source_lane == "evidence_native":
         candidates = _evidence_native_candidates_after(
             conn, checkpoint.last_evidence_rowid, request.batch_size
@@ -758,6 +771,32 @@ def _extract_nodes(
             )
         ]
     raise _ExtractionError("unsupported_format")
+
+
+def verify_native_html_replay(
+    raw_bytes: bytes,
+    source_ref: str,
+    nodes: tuple[tuple[str, str, EvidenceLocator], ...],
+) -> None:
+    """Verify stored native coordinates and text against the owning HTML parser.
+
+    The synthetic document root is excluded; every substantive node must have
+    exactly the same multiplicity, source span, DOM path and table coordinates.
+    This read-only replay does not create an extraction or admission receipt.
+    """
+    from collections import Counter
+
+    expected = Counter(
+        (node.node_kind, node.text, node.locator.canonical_json)
+        for node in _extract_html(raw_bytes, source_ref)
+    )
+    observed = Counter(
+        (kind, text, locator.canonical_json)
+        for kind, text, locator in nodes
+        if not (kind == "document" and locator.char_start is None)
+    )
+    if observed != expected:
+        raise ValueError("native HTML hierarchy does not replay from source bytes")
 
 
 def _extract_html(raw_bytes: bytes, source_ref: str) -> list[_NodeText]:
