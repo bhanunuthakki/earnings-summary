@@ -595,6 +595,14 @@ The existing explicit/configured database authority remains separate. The
 subprocess receives both authorities unchanged; it never infers an artifact root
 from the database parent or falls back to checkout `data/` or a runtime junction.
 The exact artifact path and content hash are retained in model provenance.
+For MELI, the explicit package selects the specialized recipe even in a clean
+checkout. Before dispatch, the parent validates its request shape, ticker and
+recipe and rejects conflicting or malformed local family hints. It passes the
+captured SHA-256 as `DCF_MELI_ASSUMPTIONS_SHA256`; the child validates that hash
+against the same bytes it parses, before opening the database. This routing
+check does not establish fact admission or scenario acceptance. A bulk refresh
+continues using each other ticker's existing routing independently of this MELI
+package.
 
 A verified artifact contains an `input_evidence` request with exact canonical
 reported-fact references, a sealed research snapshot and the complete effective

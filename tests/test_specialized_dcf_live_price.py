@@ -558,10 +558,11 @@ def test_meli_entrypoint_threads_one_observation_through_model_and_persistence(
     monkeypatch.setenv("DCF_MELI_ASSUMPTIONS_PATH", str(artifact_path))
 
     def load_assumptions(
-        _ticker: str, *, db_path: Path, assumptions_path: Path
+        _ticker: str, *, db_path: Path, assumptions_path: Path, expected_sha256: str | None = None
     ) -> tuple[meli.Assum, ModelInputReceipt]:
         assert db_path == db
         assert assumptions_path == artifact_path
+        assert expected_sha256 is None
         return assumptions, proof
 
     def resolve_price(

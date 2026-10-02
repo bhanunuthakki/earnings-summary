@@ -72,6 +72,7 @@ from dcf.input_evidence import (
 )
 from dcf.meli_inputs import (
     ASSUMPTION_KEYS,
+    RECIPE,
     effective_numeric_inputs,
     prepare_meli_inputs,
     verify_meli_inputs,
@@ -816,7 +817,7 @@ def persist_dcf_run(
 
 
 def load_verified_assumptions(
-    ticker: str, *, db_path: Path, assumptions_path: Path
+    ticker: str, *, db_path: Path, assumptions_path: Path, expected_sha256: str | None = None
 ) -> tuple[Assum, ModelInputReceipt]:
     """Read one explicit reviewed artifact; no repo/data or DB-directory fallback.
 
@@ -827,10 +828,17 @@ def load_verified_assumptions(
         raise InputEvidenceError("meli_input_recipe_ticker_mismatch")
     try:
         source_bytes = assumptions_path.read_bytes()
+    except OSError as exc:
+        raise InputEvidenceError("model_input_request_missing_or_invalid") from exc
+    if expected_sha256 is not None and hashlib.sha256(source_bytes).hexdigest() != expected_sha256:
+        raise InputEvidenceError("assumptions_authority_changed_after_dispatch")
+    try:
         request_payload = json.loads(source_bytes)
         request = ModelInputRequest.model_validate(request_payload.get("input_evidence"))
     except (OSError, ValueError, AttributeError) as exc:
         raise InputEvidenceError("model_input_request_missing_or_invalid") from exc
+    if request.recipe != RECIPE:
+        raise InputEvidenceError("model_input_recipe_mismatch")
     s = Assum()
     for key, assumption in request.assumptions.items():
         if key not in ASSUMPTION_KEYS:
@@ -894,7 +902,10 @@ def main() -> int:
             raise InputEvidenceError("explicit_assumptions_authority_required")
         assumptions_path = Path(raw_assumptions_path)
         s, input_receipt = load_verified_assumptions(
-            T, db_path=db_path, assumptions_path=assumptions_path
+            T,
+            db_path=db_path,
+            assumptions_path=assumptions_path,
+            expected_sha256=os.environ.get("DCF_MELI_ASSUMPTIONS_SHA256"),
         )
     price_observation = resolve_specialized_price(
         REPO,

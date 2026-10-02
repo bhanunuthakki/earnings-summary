@@ -133,7 +133,21 @@ def test_refresh_routes_meli_to_sotp_builder(
     db_path.touch()
     assumptions_path = tmp_path / "approved-state" / "MELI_sotp.json"
     assumptions_path.parent.mkdir()
-    assumptions_path.write_text("{}", encoding="utf-8")
+    assumptions_path.write_text(
+        json.dumps(
+            {
+                "input_evidence": {
+                    "recipe": meli.RECIPE,
+                    "ticker": "MELI",
+                    "research_snapshot_id": "synthetic",
+                    "financial_period_end": "2026-06-30",
+                    "facts": {},
+                    "assumptions": {},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
     calls: list[list[str]] = []
 
     def run_builder(
