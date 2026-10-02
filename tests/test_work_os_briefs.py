@@ -170,6 +170,74 @@ def test_brief_library_unifies_persisted_artifact_kinds_and_exact_facets(
     )
 
 
+def test_source_linked_working_draft_is_visible_but_degraded(
+    work_os_client: FlaskClient, work_os_app_repo: Path
+) -> None:
+    packet = work_os_app_repo / "output" / "research" / "earnings-briefs-2026-10-01"
+    packet.mkdir(parents=True)
+    (packet / "NU-Q2-2026-post-DRAFT.md").write_text(
+        "# NU Q2 working draft\n\n[Issuer release](https://example.com/release) "
+        "[unsafe](javascript:alert(1)) <script>alert(1)</script>",
+        encoding="utf-8",
+    )
+
+    payload = work_os_client.get("/api/work-os/briefs").get_json()
+    draft = next(item for item in payload["items"] if item["ticker"] == "NU")
+    assert draft["title"] == "NU Q2 2026 Post-Earnings · Working draft"
+    assert draft["artifact_kind"] == "post_earnings"
+    assert draft["status"] == "degraded"
+    assert draft["reader_mode"] == "peek"
+    assert draft["artifact_id"].startswith("draft-")
+
+    fragment = work_os_client.get(draft["open_url"])
+    assert fragment.status_code == 200
+    body = fragment.get_data(as_text=True)
+    assert "working draft" in body
+    assert (
+        '<a href="https://example.com/release" rel="noopener noreferrer">Issuer release</a>' in body
+    )
+    assert "<script>" not in body
+    assert "&lt;script&gt;" in body
+    assert 'href="javascript:' not in body
+    assert work_os_client.get("/api/peek/earnings-draft?artifact_id=draft-bad").status_code == 404
+    assert work_os_client.get("/api/peek/earnings-draft?artifact_id=../NU").status_code == 404
+
+
+def test_earnings_library_keeps_each_fiscal_period_when_newer_artifact_exists(
+    work_os_client: FlaskClient, work_os_app_repo: Path
+) -> None:
+    conn = sqlite3.connect(work_os_app_repo / "data" / "portfolio.db")
+    conn.executescript(
+        """
+        CREATE TABLE llm_artifacts (
+            id INTEGER PRIMARY KEY, ticker TEXT, scope TEXT, purpose TEXT,
+            fiscal_period TEXT, content_md TEXT, generated_at TEXT,
+            superseded_by_id INTEGER
+        );
+        CREATE TABLE expected_earnings (
+            id INTEGER PRIMARY KEY, ticker TEXT, expected_date TEXT,
+            fiscal_period_label TEXT
+        );
+        INSERT INTO llm_artifacts VALUES
+          (1, 'NU', 'ticker', 'post_earnings_readout', '2026-06-30',
+           'Q2 readout', '2026-09-15T00:00:00Z', NULL),
+          (2, 'NU', 'ticker', 'post_earnings_readout', '2026-03-31',
+           'Q1 readout', '2026-09-17T00:00:00Z', NULL);
+        """
+    )
+    conn.execute(
+        "INSERT INTO transcripts (ticker, fiscal_period_type, period_end) "
+        "VALUES ('NU', 'Q2', '2026-06-30'), ('NU', 'Q1', '2026-03-31')"
+    )
+    conn.commit()
+    conn.close()
+
+    payload = work_os_client.get(
+        "/api/work-os/briefs", query_string={"artifact_kind": "post_earnings"}
+    ).get_json()
+    assert [item["artifact_id"] for item in payload["items"]] == ["llm:2", "llm:1"]
+
+
 def test_brief_library_projects_only_latest_artifact_per_ticker_before_pagination(
     work_os_client: FlaskClient, work_os_app_repo: Path
 ) -> None:

@@ -44,6 +44,7 @@ __all__ = ["prose_card_text", "render_prose"]
 _BOLD_RX = re.compile(r"\*\*([^*]+)\*\*")
 _ITAL_RX = re.compile(r"(?<!\*)\*([^*]+)\*(?!\*)")
 _INLINE_CODE_RX = re.compile(r"`([^`]+)`")
+_HTTPS_LINK_RX = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s<>\)]+)\)")
 _HEADING_RX = re.compile(r"^(#{1,6})\s+(.*)$")
 _BULLET_RX = re.compile(r"^\s*[-*]\s+")
 
@@ -57,7 +58,11 @@ def _inline(text: str) -> str:
     text = _esc(text)
     text = _BOLD_RX.sub(r"<strong>\1</strong>", text)
     text = _ITAL_RX.sub(r"<em>\1</em>", text)
-    return _INLINE_CODE_RX.sub(r"<code>\1</code>", text)
+    text = _INLINE_CODE_RX.sub(r"<code>\1</code>", text)
+    return _HTTPS_LINK_RX.sub(
+        lambda match: f'<a href="{match.group(2)}" rel="noopener noreferrer">{match.group(1)}</a>',
+        text,
+    )
 
 
 def prose_card_text(text: str) -> str:

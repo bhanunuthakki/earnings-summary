@@ -29,6 +29,7 @@ from pipeline.work_os_briefs import (
     build_brief_library,
     load_report_reader_payload,
     resolve_report_artifact,
+    resolve_working_draft,
 )
 from pipeline.work_os_company import build_company_desk
 from pipeline.work_os_decisions import build_decision_projection
@@ -337,6 +338,21 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         if html is None:
             abort(404)
         return Response(html, mimetype="text/html")
+
+    @app.route("/api/peek/earnings-draft", methods=["GET"])
+    def peek_earnings_draft():
+        from ui.prose import render_prose
+
+        path = resolve_working_draft(repo_root, request.args.get("artifact_id") or "")
+        if path is None:
+            abort(404)
+        try:
+            body_md = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            abort(404)
+        response = Response(render_prose(body_md), mimetype="text/html")
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.route("/api/peek/investment-profile", methods=["GET"])
     def peek_investment_profile():
