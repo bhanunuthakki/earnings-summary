@@ -641,3 +641,25 @@ binding and resolution authorities; source-package completeness is an explicitly
 isolated boundary in those fixtures, with separate inventory checks. Routing,
 provenance, model-replay and readiness tests cover the changed contract. Passing
 those tests is not a claim that the production source population is complete.
+
+
+### MELI derived-scenario terminal gate
+
+The MELI builder rejects every derived scenario before workbook save or scenario
+snapshot emission unless terminal loan growth equals terminal earnings growth and
+the Gordon retention charge equals the equity required to fund that growth.
+The base-input recipe and scenario builder share the numerical owner's validator.
+Invalid/nonfinite terminal inputs fail; growth and ROE are not automatically
+clamped into apparently valid assumptions. Historical generic and thesis delta
+sets may therefore block a build even when the base input receipt verifies.
+No forecast, scenario probability, or owner thesis is changed by this gate.
+
+This is mathematical validation, not scenario approval. The existing
+`scenario_acceptance_unverified` allocation blocker remains. Explicit approved
+scenario/prior authority in the reviewed assumptions package is not yet supported;
+repository-relative scenario fallback is not promoted to an approved authority.
+Disposition: no new operator action, job, service, retry or UI surface. The existing
+MELI refresh action now fails closed for inconsistent derived scenarios, preserving
+an existing workbook. `tests/test_meli_scenario_consistency.py` verifies the failure
+cases and a mathematically coherent synthetic case; emission/parity tests retain
+coherent isolated fixtures.

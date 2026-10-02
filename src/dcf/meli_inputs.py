@@ -22,6 +22,7 @@ from dcf.input_evidence import (
     canonical_digest,
     verify_model_inputs,
 )
+from dcf.meli_model import validate_credit_terminal
 
 RECIPE = "meli-platform-sotp-inputs/v3"
 MILLIONS = Decimal("0.000001")
@@ -496,28 +497,9 @@ def _reconcile(actuals: Mapping[str, float], inputs: Mapping[str, float]) -> Non
         raise InputEvidenceError("positive_operating_baselines_required")
     if not 0 <= actuals["nimal_actual"] <= 1:
         raise InputEvidenceError("nimal_actual_invalid")
-    if (
-        inputs["years"] < 2
-        or inputs["years"] != int(inputs["years"])
-        or not 0 < inputs["cap_ratio"] <= 1
-        or not 0 <= inputs["tax"] < 1
-        or not 0 <= inputs["credit_g_term"] < inputs["credit_ke"]
-        or not inputs["credit_g_term"] < inputs["credit_terminal_roe"]
-        or inputs["wacc"] <= 0
-        or inputs["cbg_term"] <= -1
-    ):
+    if inputs["years"] < 2 or inputs["years"] != int(inputs["years"]) or inputs["wacc"] <= 0:
         raise InputEvidenceError("model_terminal_or_capital_inputs_invalid")
-    # Gordon payout must equal next-year NI less the equity needed for growth.
-    # ROE here is next-year NI / opening equity (not the dashboard's NI / closing
-    # equity). This preserves the engine formula and makes its retention charge
-    # equal cap_ratio * closing_book * terminal_growth.
-    implied = (
-        (1 + inputs["cbg_term"] / 2)
-        * (inputs["nimal_term"] - inputs["credit_opex_ratio"])
-        * (1 - inputs["tax"])
-        / inputs["cap_ratio"]
-    )
-    if not math.isclose(implied, inputs["credit_terminal_roe"], rel_tol=1e-6, abs_tol=1e-6):
-        raise InputEvidenceError("terminal_credit_roe_capital_inconsistent")
-    if not math.isclose(inputs["cbg_term"], inputs["credit_g_term"], abs_tol=1e-9):
-        raise InputEvidenceError("terminal_credit_growth_inconsistent")
+    try:
+        validate_credit_terminal(inputs)
+    except ValueError as exc:
+        raise InputEvidenceError(str(exc)) from exc

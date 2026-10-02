@@ -843,6 +843,19 @@ def test_real_builder_persistence_keeps_subsecond_calculation_clock(
         price=1700.0, observed_at=NOW, source_name="synthetic_quote"
     )
     model = meli.mirror(assumptions)
+    # This test owns timestamp/replay, not production scenario acceptance.
+    # Use coherent synthetic shifts; default terminal deltas now fail closed.
+    assert meli.redesign_mod is not None
+    monkeypatch.setattr(
+        meli.redesign_mod,
+        "BULL_SEED",
+        meli.redesign_mod.ScenarioDeltas(growth_near=0.03, exit_multiple=2),
+    )
+    monkeypatch.setattr(
+        meli.redesign_mod,
+        "BEAR_SEED",
+        meli.redesign_mod.ScenarioDeltas(growth_near=-0.03, exit_multiple=-2),
+    )
     meli.build(assumptions, model, destination, None)
     os.utime(destination, (NOW.timestamp(), NOW.timestamp()))
     assert meli.persist_dcf_run(

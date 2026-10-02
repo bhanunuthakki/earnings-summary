@@ -5,6 +5,8 @@ Defaults are historical draft seeds, never evidence of current financial facts.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from dcf.redesign import GROWTH_FADE_CURVATURE as _CURVATURE
@@ -76,6 +78,45 @@ class Assum:
     )
     price_seed_source: str = field(default="model_seed", repr=False)
     price_seed_path: str | None = field(default=None, repr=False)
+
+
+def validate_credit_terminal(inputs: Mapping[str, float]) -> None:
+    """Require one coherent steady state; never repair an economic assumption.
+
+    Gordon retention uses next-year NI / opening equity. The displayed mirror
+    ROE uses current-year NI / closing equity, which is a different denominator.
+    This gate applies equally to reviewed base inputs and derived scenarios.
+    """
+    keys = (
+        "cbg_term",
+        "nimal_term",
+        "credit_opex_ratio",
+        "tax",
+        "cap_ratio",
+        "credit_ke",
+        "credit_g_term",
+        "credit_terminal_roe",
+    )
+    if (
+        not all(math.isfinite(inputs[key]) for key in keys)
+        or not 0 < inputs["cap_ratio"] <= 1
+        or not 0 <= inputs["tax"] < 1
+        or not 0 <= inputs["credit_g_term"] < inputs["credit_ke"]
+        or not inputs["credit_g_term"] < inputs["credit_terminal_roe"]
+        or inputs["cbg_term"] <= -1
+    ):
+        raise ValueError("model_terminal_or_capital_inputs_invalid")
+    if not math.isclose(inputs["cbg_term"], inputs["credit_g_term"], rel_tol=0.0, abs_tol=1e-9):
+        raise ValueError("terminal_credit_growth_inconsistent")
+    # NI_(N+1)/E_N must make Gordon retention equal c * B_N * g.
+    implied = (
+        (1 + inputs["cbg_term"] / 2)
+        * (inputs["nimal_term"] - inputs["credit_opex_ratio"])
+        * (1 - inputs["tax"])
+        / inputs["cap_ratio"]
+    )
+    if not math.isclose(implied, inputs["credit_terminal_roe"], rel_tol=1e-6, abs_tol=1e-6):
+        raise ValueError("terminal_credit_roe_capital_inconsistent")
 
 
 def _interp(near: float, term: float, t: int, n: int) -> float:

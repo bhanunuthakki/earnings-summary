@@ -9,7 +9,7 @@ and NU (~25% of the book) invisible to tail stress / bear lint. These tests pin:
     ``parse_scenario_bear_provenance`` read it unchanged),
   * bear provenance is "thesis" iff the holdings JSON names ``bear_deltas``,
   * the delta->lever mappings actually push the bear leg below base,
-  * the Gordon-terminal guardrails hold under extreme deltas,
+  * NU retains its Gordon guardrails; MELI rejects inconsistent terminal deltas,
   * ``redesign.strip_unedited_seed_bear`` / ``redesign.resolve_mirrored_bear``
     treat an untouched BEAR_SEED as a fallback, never an owner edit,
   * the six red-team holdings JSONs carry valid, owner-pending bear_deltas,
@@ -32,18 +32,15 @@ from typing import cast
 import openpyxl
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import build_meli_platform_dcf as meli  # noqa: E402
-import build_nu_platform_dcf as nu  # noqa: E402
-
-from dcf import redesign  # noqa: E402
-from dcf.scenario_reward import (  # noqa: E402
+from dcf import redesign
+from dcf.scenario_reward import (
     parse_scenario_bear_provenance,
     parse_scenario_fair_values,
 )
+from execution import build_meli_platform_dcf as meli
+from execution import build_nu_platform_dcf as nu
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 THESIS_HOLDINGS: dict[str, object] = {
     "bear_deltas": {
@@ -152,10 +149,40 @@ def test_nu_reverse_valuation_reprices_with_archetype_specific_levers() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_meli_scenarios_block_parseable_and_ordered() -> None:
-    s = meli.Assum()
+@pytest.fixture
+def consistent_meli_case(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[meli.Assum, dict[str, object]]:
+    # Synthetic math-consistent states preserve the emission/parity oracle.
+    # They do not replace source/owner scenario authority in production.
+    monkeypatch.setattr(
+        redesign,
+        "BULL_SEED",
+        redesign.ScenarioDeltas(growth_near=0.03, margin_near=0.01, exit_multiple=2),
+    )
+    monkeypatch.setattr(
+        redesign,
+        "BEAR_SEED",
+        redesign.ScenarioDeltas(growth_near=-0.03, margin_near=-0.01, exit_multiple=-2),
+    )
+    holdings: dict[str, object] = {
+        "bear_deltas": {
+            "growth_delta_pp": 0.0,
+            "margin_delta_pp": 0.0,
+            "terminal_g_delta_pp": 0.0,
+            "exit_multiple_delta": -4.0,
+            "note": "Synthetic terminal-consistent emission fixture only",
+        }
+    }
+    return meli.Assum(derive_capm=0, credit_terminal_roe=0.4992), holdings
+
+
+def test_meli_scenarios_block_parseable_and_ordered(
+    consistent_meli_case: tuple[meli.Assum, dict[str, object]],
+) -> None:
+    s, holdings = consistent_meli_case
     m = meli.mirror(s)
-    block = meli.scenarios_block(s, m, THESIS_HOLDINGS)
+    block = meli.scenarios_block(s, m, holdings)
     snap = _snapshot_json(block)
     fvs = parse_scenario_fair_values(snap)
     assert set(fvs) == {"bull", "base", "bear"}
@@ -164,28 +191,36 @@ def test_meli_scenarios_block_parseable_and_ordered() -> None:
     assert parse_scenario_bear_provenance(snap) == "thesis"
 
 
-def test_meli_seed_provenance_without_holdings_override() -> None:
-    s = meli.Assum()
+def test_meli_seed_provenance_without_holdings_override(
+    consistent_meli_case: tuple[meli.Assum, dict[str, object]],
+) -> None:
+    s, _ = consistent_meli_case
     block = meli.scenarios_block(s, meli.mirror(s), {})
     assert parse_scenario_bear_provenance(_snapshot_json(block)) == "seed"
 
 
-def test_meli_lever_mapping_and_guardrails() -> None:
+def test_meli_extreme_credit_scenario_is_rejected() -> None:
     d = redesign.ScenarioDeltas(
         growth_near=-0.075,
         growth_term=-0.075,
         margin_near=-0.05,
         margin_term=-0.05,
-        exit_multiple=-40.0,  # extreme: must floor at 1x, not go negative
+        exit_multiple=-40.0,
         terminal_g=-0.10,
     )
-    base = meli.Assum()
+    with pytest.raises(ValueError, match="model_terminal_or_capital_inputs_invalid"):
+        meli.scenario_assumptions(meli.Assum(), d)
+
+
+def test_meli_consistent_levers_preserve_exit_multiple_floor() -> None:
+    base = meli.Assum(credit_terminal_roe=0.4992)
+    d = redesign.ScenarioDeltas(growth_near=-0.075, margin_near=-0.05, exit_multiple=-40)
     s2 = meli.scenario_assumptions(base, d)
     assert s2.op_exit_ebitda_mult == 1.0
-    assert s2.nimal_term == base.nimal_term - 0.05
-    assert s2.comm_g_near == base.comm_g_near - 0.075
-    assert s2.credit_g_term < s2.credit_ke
-    assert s2.credit_terminal_roe > s2.credit_g_term
+    assert s2.nimal_near == pytest.approx(base.nimal_near - 0.05)
+    assert s2.comm_g_near == pytest.approx(base.comm_g_near - 0.075)
+    assert s2.credit_g_term == base.credit_g_term
+    assert s2.credit_terminal_roe == base.credit_terminal_roe
 
 
 def test_meli_reverse_valuation_has_exit_multiple_and_credit_residual() -> None:
@@ -350,20 +385,26 @@ def test_nu_sheet_bear_seed_fallback_labeled(tmp_path: Path) -> None:
     assert "seed fallback" in provenance_note
 
 
-def test_meli_sheet_bear_matches_persisted_snapshot_thesis(tmp_path: Path) -> None:
-    s = meli.Assum(derive_capm=0)
+def test_meli_sheet_bear_matches_persisted_snapshot_thesis(
+    tmp_path: Path,
+    consistent_meli_case: tuple[meli.Assum, dict[str, object]],
+) -> None:
+    s, holdings = consistent_meli_case
     m = meli.mirror(s)
     dest = tmp_path / "MELI.xlsx"
-    meli.build(s, m, dest, THESIS_HOLDINGS)
+    meli.build(s, m, dest, holdings)
     sheet, provenance_note = _sheet_scenarios(dest)
-    persisted = _persisted_fvs(meli.scenarios_block(s, m, THESIS_HOLDINGS))
+    persisted = _persisted_fvs(meli.scenarios_block(s, m, holdings))
     for name in ("Bear", "Base", "Bull"):
         assert sheet[name] == pytest.approx(persisted[name.lower()], abs=0.005), name
     assert "thesis" in provenance_note
 
 
-def test_meli_sheet_bear_seed_fallback_labeled(tmp_path: Path) -> None:
-    s = meli.Assum(derive_capm=0)
+def test_meli_sheet_bear_seed_fallback_labeled(
+    tmp_path: Path,
+    consistent_meli_case: tuple[meli.Assum, dict[str, object]],
+) -> None:
+    s, _ = consistent_meli_case
     m = meli.mirror(s)
     dest = tmp_path / "MELI_seed.xlsx"
     meli.build(s, m, dest, {})

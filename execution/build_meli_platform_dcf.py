@@ -79,6 +79,7 @@ from dcf.meli_inputs import (
 from dcf.meli_model import Assum as Assum
 from dcf.meli_model import Mirror as Mirror
 from dcf.meli_model import mirror as mirror
+from dcf.meli_model import validate_credit_terminal
 from dcf.provenance import build_file_provenance, schema_supports_provenance
 from dcf.specialized_price import (
     SpecializedPriceObservation,
@@ -288,8 +289,8 @@ def _load_holdings(ticker: str) -> dict[str, object] | None:
 
 def scenario_assumptions(s: Assum, deltas: Any) -> Assum:
     """``s`` shifted by one scenario's ``dcf.redesign.ScenarioDeltas`` under the
-    documented lever mapping. Guardrails keep the credit Gordon terminal
-    well-posed (g < ke, ROE > g) and the exit multiple positive."""
+    documented lever mapping. Reject an inconsistent credit terminal rather
+    than changing growth or ROE to make a scenario appear well-posed."""
     import copy
 
     s2 = copy.copy(s)
@@ -304,8 +305,7 @@ def scenario_assumptions(s: Assum, deltas: Any) -> Assum:
     s2.op_exit_ebitda_mult = max(1.0, s2.op_exit_ebitda_mult + deltas.exit_multiple)
     s2.credit_g_term += deltas.terminal_g
     s2.g_term += deltas.terminal_g
-    s2.credit_g_term = min(s2.credit_g_term, s2.credit_ke - 0.01)
-    s2.credit_terminal_roe = max(s2.credit_terminal_roe, s2.credit_g_term + 0.01)
+    validate_credit_terminal(asdict(s2))
     return s2
 
 
