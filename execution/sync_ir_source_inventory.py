@@ -12,25 +12,29 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from ir_pipeline.authority import (  # noqa: E402
+from ir_pipeline.authority import (
     IRAuthorityEvidence,
     PublisherEndpointRule,
 )
-from ir_pipeline.discover.generic import discover_document_inventory  # noqa: E402
-from ir_pipeline.source_inventory import (  # noqa: E402
+from ir_pipeline.discover.generic import discover_document_inventory
+from ir_pipeline.meli_inventory import CapturedMeliQuarter, load_captured_meli_quarter
+from ir_pipeline.source_inventory import (
+    meli_quarter_discovery,
     source_inventory_request,
     sync_ir_source_inventory,
 )
-from provenance.inventory_identity import (  # noqa: E402
+from provenance.inventory_identity import (
     InventoryIdentityError,
     issuer_registry_available,
     resolve_ir_inventory_subject,
 )
-from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from runtime.job_runtime import JobAlreadyRunningError, JobLock
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _COLLECTOR = "sync-ir-source-inventory@2"
 
@@ -48,6 +52,7 @@ class SyncResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     mode: str
+    selected_quarter: CapturedMeliQuarter | None = None
     ticker: str
     issuer_id: str
     candidate_count: int = Field(ge=0)
@@ -71,10 +76,16 @@ def _config_sha(
     time_budget_s: float,
     publisher_file_rules: tuple[PublisherEndpointRule, ...],
     authority: IRAuthorityEvidence | None,
+    selected_quarter: CapturedMeliQuarter | None = None,
 ) -> str:
     return hashlib.sha256(
         json.dumps(
             {
+                **(
+                    {"selected_quarter": selected_quarter.model_dump(mode="json")}
+                    if selected_quarter is not None
+                    else {}
+                ),
                 "collector": _COLLECTOR,
                 "timeout_ms": timeout_ms,
                 "max_pages": max_pages,
@@ -126,8 +137,26 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=PROJECT_ROOT / "data" / "evidence" / "blobs",
     )
+    parser.add_argument(
+        "--meli-captured-observation",
+        help="Offline MELI quarter: existing original HTML SourceObservation; no crawl or capture",
+    )
+    parser.add_argument("--fiscal-year", type=int)
+    parser.add_argument("--fiscal-quarter", type=int, choices=range(1, 5))
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
+    if args.meli_captured_observation is not None:
+        if (
+            str(args.ticker).strip().upper() != "MELI"
+            or args.fiscal_year is None
+            or not 2000 <= args.fiscal_year <= 2100
+            or args.fiscal_quarter is None
+        ):
+            parser.error("captured MELI mode requires MELI, --fiscal-year and --fiscal-quarter")
+        if args.authority_evidence is not None:
+            parser.error("selected quarter cannot claim archive authority")
+    elif args.fiscal_year is not None or args.fiscal_quarter is not None:
+        parser.error("period selection requires --meli-captured-observation")
 
     if args.apply:
         try:
@@ -189,13 +218,35 @@ def _run(args: argparse.Namespace) -> int:
                 args.authority_evidence.read_text(encoding="utf-8")
             )
         )
-        inventory = discover_document_inventory(
-            ir_url=str(args.ir_url),
-            timeout_ms=int(args.timeout_ms),
-            time_budget_s=float(args.time_budget_s),
-            max_pages=int(args.max_pages),
-            publisher_file_rules=publisher_file_rules,
-        )
+        selected_quarter: CapturedMeliQuarter | None = None
+        if args.meli_captured_observation is not None:
+            captured_conn = connect_sqlite(
+                args.db, role=SQLiteConnectionRole.READ_ONLY, schema_preflight=False
+            )
+            try:
+                selected_quarter = load_captured_meli_quarter(
+                    captured_conn,
+                    issuer_id=str(args.issuer_id),
+                    ticker=ticker,
+                    ir_url=str(args.ir_url),
+                    source_observation_id=str(args.meli_captured_observation),
+                    fiscal_year=int(args.fiscal_year),
+                    fiscal_quarter=int(args.fiscal_quarter),
+                    publisher_file_rules=publisher_file_rules,
+                    blob_root=Path(args.blob_root),
+                    knowledge_at=started_at,
+                )
+            finally:
+                captured_conn.close()
+            inventory = meli_quarter_discovery(selected_quarter)
+        else:
+            inventory = discover_document_inventory(
+                ir_url=str(args.ir_url),
+                timeout_ms=int(args.timeout_ms),
+                time_budget_s=float(args.time_budget_s),
+                max_pages=int(args.max_pages),
+                publisher_file_rules=publisher_file_rules,
+            )
         completed_at = datetime.now(UTC)
         request = source_inventory_request(
             issuer_id=str(args.issuer_id),
@@ -204,12 +255,14 @@ def _run(args: argparse.Namespace) -> int:
             revision=int(args.revision),
             inventory=inventory,
             authority=authority,
+            selected_quarter=selected_quarter,
             retrieval_config_sha256=_config_sha(
                 timeout_ms=int(args.timeout_ms),
                 max_pages=int(args.max_pages),
                 time_budget_s=float(args.time_budget_s),
                 publisher_file_rules=publisher_file_rules,
                 authority=authority,
+                selected_quarter=selected_quarter,
             ),
             collector_code_version=_COLLECTOR,
             started_at=started_at,
@@ -242,6 +295,7 @@ def _run(args: argparse.Namespace) -> int:
 
     output = SyncResult(
         mode=result.mode,
+        selected_quarter=selected_quarter,
         ticker=ticker,
         issuer_id=str(args.issuer_id),
         candidate_count=result.candidate_count,
