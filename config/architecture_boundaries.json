@@ -319,7 +319,6 @@
     "execution/sync_issuer_registry.py",
     "execution/sync_position_lifecycle.py",
     "execution/track_comp_metrics.py",
-    "execution/track_evaluation_names.py",
     "execution/tracker_v1_parity.py",
     "execution/triage_second_pass.py",
     "execution/truncate_peer_fmp_cache.py",
