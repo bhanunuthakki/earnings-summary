@@ -53,6 +53,26 @@
     },
     {
       "disposition": "internal_python_target",
+      "evidence": "The paint-cycle runner starts only this checked-in harness in its fixed child-sample mode to isolate cold request sequences.",
+      "fingerprint": "b8a467d84824a5545f7a2b2da157cdc8351010bf34607dbe55283dbb6debe80a",
+      "line": 570,
+      "path": "execution/bench_flows.py",
+      "targets": [
+        "execution/bench_flows.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "The hermetic smoke test invokes only the fixed bench harness CLI using the test process's Python interpreter.",
+      "fingerprint": "92227ec2d74eaa1e08cd8df0bc94502a864214b3b14a0c39f9907d1f7adeb2e4",
+      "line": 38,
+      "path": "tests/test_bench_flows.py",
+      "targets": [
+        "execution/bench_flows.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
       "evidence": "_run invokes only the checked-in refresh_dcf_assumptions.py and build_redesigned_dcf.py names via managed_python_prefix; --opus remains a flag alias for the same refresh operation.",
       "fingerprint": "26eace15ab44707d05140cba68923176df379854169e2a2eb00096eca00e2935",
       "line": 64,
@@ -925,7 +945,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "1ebfe7419386eac38d3ae265796d737a648f338a5b99959602bdf27ec850b747",
+      "source_sha256": "cd861a0594a8e46297a44a14bba05c44e97e4e46194d1c40e12863d09a505c44",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
