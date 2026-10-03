@@ -1634,3 +1634,39 @@ def test_readout_request_unavailable_target_never_falls_back_to_latest(
     )
     assert response.status_code == 404
     assert "2099-06-30" in response.get_json()["error"]
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        {"retrieval_trace_id": "trace:one"},
+        {"knowledge_cutoff": "2026-08-01T00:00:00+00:00"},
+        {"retrieval_trace_id": "trace:one", "knowledge_cutoff": "bad"},
+        {"retrieval_trace_id": "trace:one", "knowledge_cutoff": "2026-08-01T00:00:00"},
+        {"retrieval_trace_id": [], "knowledge_cutoff": "2026-08-01T00:00:00+00:00"},
+    ],
+)
+def test_readout_request_rejects_invalid_retained_identity(
+    client: FlaskClient,
+    db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    evidence: dict[str, object],
+) -> None:
+    import earnings_readout
+
+    _seed_readout_ticker(db_path, list_type="evaluation")
+
+    def forbidden(*_args: object, **_kwargs: object) -> str:
+        pytest.fail("invalid evidence request must not invoke the model")
+
+    monkeypatch.setattr(earnings_readout, "call_llm", forbidden)
+    response = client.post(
+        "/api/earnings-readout/generate",
+        json={
+            "ticker": "NU",
+            "period_end": "2026-06-30",
+            "fiscal_period_type": "Q2",
+            **evidence,
+        },
+    )
+    assert response.status_code == 400

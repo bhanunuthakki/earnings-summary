@@ -4115,6 +4115,16 @@ def create_app(
             fiscal_period_type is not None and not isinstance(fiscal_period_type, str)
         ):
             return ({"error": "period_end and fiscal_period_type must be strings"}, 400)
+        trace_id = body.get("retrieval_trace_id")
+        cutoff_value = body.get("knowledge_cutoff")
+        if (trace_id is not None and not isinstance(trace_id, str)) or (
+            cutoff_value is not None and not isinstance(cutoff_value, str)
+        ):
+            return ({"error": "retrieval_trace_id and knowledge_cutoff must be strings"}, 400)
+        try:
+            cutoff = datetime.fromisoformat(cutoff_value) if cutoff_value is not None else None
+        except ValueError:
+            return ({"error": "knowledge_cutoff must be an aware ISO timestamp"}, 400)
         try:
             outcome = generate_for_ticker(
                 db_path,
@@ -4122,6 +4132,8 @@ def create_app(
                 ticker,
                 period_end=period_end,
                 fiscal_period_type=fiscal_period_type,
+                retrieval_trace_id=trace_id,
+                knowledge_cutoff=cutoff,
             )
         except ReadoutUnavailableError as exc:
             return ({"error": str(exc)}, 404)

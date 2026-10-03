@@ -10,6 +10,7 @@ reported quarter while retaining superseded history.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import time
@@ -17,6 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from ask.sealed_retrieval import load_verified_trace_evidence
 from db_paths import db_path_context
 from earnings_brief import (
     kpi_text,
@@ -40,7 +42,14 @@ from llm_artifact_store import (
 )
 from llm_budget import should_skip_for_budget
 from llm_client import call_llm, is_hard_stop
+from provenance.evidence_native_candidates import (
+    resolve_local_storage_uri,
+    select_evidence_native_candidates_by_id,
+)
+from provenance.immutable_artifact import read_stable_artifact, require_no_reparse_points
+from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
 from provenance.selection import selected_transcripts_relation
+from search.canonical_fact_projection import load_canonical_fact_entry
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -512,6 +521,181 @@ def build_prompt(quarter: ReportedQuarter, sections: list[str]) -> str:
     )
 
 
+def _retained_trace_context(
+    db_path: Path,
+    quarter: ReportedQuarter,
+    repo_root: Path,
+    trace_id: str,
+    cutoff: datetime,
+) -> tuple[list[ContextBlock], dict[str, object]]:
+    """Read one verified saved scope; never acquire, admit, or substitute evidence."""
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        conn.execute("BEGIN")
+        items = load_verified_trace_evidence(conn, trace_id)
+        row = conn.execute(
+            "SELECT snapshot.request_json, trace.research_snapshot_id, "
+            "trace.research_snapshot_sha256, trace.fact_generation_id, "
+            "trace.fact_projection_seal_sha256, seal.trace_sha256, snapshot.request_sha256 "
+            "FROM heterogeneous_retrieval_trace_headers trace "
+            "JOIN heterogeneous_retrieval_trace_seals seal USING (trace_id) "
+            "JOIN research_snapshot_headers snapshot USING (research_snapshot_id) "
+            "WHERE trace.trace_id=?",
+            (trace_id,),
+        ).fetchone()
+        if row is None or not items:
+            raise ReadoutUnavailableError("retained evidence has no verified results")
+        snapshot = ResearchSnapshotRequest.model_validate_json(str(row[0]))
+        verify_research_snapshot(conn, str(row[1]))
+        scope = snapshot.research_universe.analysis_scope
+        if scope is None:
+            raise ReadoutUnavailableError("retained evidence lacks a declared analysis scope")
+        if (
+            snapshot.cutoff_at.astimezone(UTC) != cutoff
+            or scope.request.cutoff_at.astimezone(UTC) != cutoff
+        ):
+            raise ReadoutUnavailableError("retained evidence cutoff differs from the request")
+        if date.fromisoformat(quarter.period_end) not in scope.request.required_period_ends:
+            raise ReadoutUnavailableError("retained evidence does not include the requested period")
+        documents = set(snapshot.research_universe.document_version_ids)
+        if any(
+            entry.expected_document.ticker != quarter.ticker
+            for entry in scope.entries
+            if entry.role == "research_document"
+        ) or any(
+            item.ticker != quarter.ticker or item.document_version_id not in documents
+            for item in items
+        ):
+            raise ReadoutUnavailableError("retained evidence issuer differs from the request")
+        periods = {period.isoformat() for period in scope.request.required_period_ends}
+        if any(item.kind == "fact" and item.period not in periods for item in items):
+            raise ReadoutUnavailableError("retained fact period is outside the declared analysis")
+        fact_context: list[dict[str, object]] = []
+        for item in items:
+            if item.kind != "fact":
+                continue
+            entry = load_canonical_fact_entry(
+                conn,
+                generation_id=str(row[3]),
+                canonical_metric_cell_id=item.candidate_id,
+                entry_sha256=item.source_commitment_sha256,
+            )
+            fact = conn.execute(
+                "SELECT cell.accounting_basis,cell.consolidation_scope,"
+                "cell.fiscal_year,cell.fiscal_period,definition.commitment_json "
+                "FROM fact_cells_v2 cell JOIN canonical_metric_definition_revisions definition "
+                "ON definition.metric_definition_revision_id=? AND definition.commitment_sha256=? "
+                "WHERE cell.fact_cell_id=?",
+                (
+                    str(entry["metric_definition_revision_id"]),
+                    str(entry["metric_definition_commitment_sha256"]),
+                    str(entry["source_fact_cell_id"]),
+                ),
+            ).fetchone()
+            if fact is None:
+                raise ReadoutUnavailableError("retained fact dimensions are unavailable")
+            fact_context.append(
+                {
+                    "citation_number": item.n,
+                    "projection_entry": json.loads(str(entry["entry_json"])),
+                    "source_generation_id": str(entry["generation_id"]),
+                    "accounting_basis": str(fact[0]),
+                    "consolidation_scope": str(fact[1]),
+                    "source_fiscal_year": fact[2],
+                    "source_fiscal_period": fact[3],
+                    "metric_definition": json.loads(str(fact[4])),
+                }
+            )
+        fact_context_text = json.dumps(fact_context, sort_keys=True, separators=(",", ":"))
+        require_no_reparse_points(repo_root)
+        blob_root = repo_root / "data" / "evidence" / "blobs"
+        candidates = select_evidence_native_candidates_by_id(
+            conn, document_version_ids=tuple(sorted({item.document_version_id for item in items}))
+        )
+        if sum(candidate.byte_size for candidate in candidates) > 100_000_000:
+            raise ReadoutUnavailableError("retained source bytes exceed the bounded read budget")
+        for candidate in candidates:
+            path = resolve_local_storage_uri(candidate.storage_uri, allowed_roots=(blob_root,))
+            if path is None or path.stat().st_size != candidate.byte_size:
+                raise ReadoutUnavailableError("retained source bytes are unavailable or changed")
+            artifact, raw = read_stable_artifact(path)
+            if artifact.file_sha256 != candidate.blob_sha256 or len(raw) != candidate.byte_size:
+                raise ReadoutUnavailableError(
+                    "retained source bytes differ from the saved commitment"
+                )
+        if len(fact_context_text) + sum(len(item.text) for item in items) > _MAX_TRANSCRIPT_CHARS:
+            raise ReadoutUnavailableError("retained evidence exceeds the bounded context budget")
+        retained: dict[str, object] = {
+            "schema_version": "post_earnings_retained_evidence@1",
+            "trace_id": trace_id,
+            "trace_sha256": str(row[5]),
+            "research_snapshot_id": str(row[1]),
+            "research_snapshot_sha256": str(row[2]),
+            "research_snapshot_request_sha256": str(row[6]),
+            "fact_generation_id": str(row[3]),
+            "fact_projection_seal_sha256": str(row[4]),
+            "analysis_scope": scope.model_dump(mode="json"),
+            "knowledge_cutoff": cutoff.isoformat(),
+            "items": [item.model_dump(mode="json") for item in items],
+            "fact_context": fact_context,
+            "comparison_coverage": "not_established_for_requested_fiscal_period",
+            "requested_fiscal_period_type": quarter.fiscal_period_type,
+            "requested_period_end": quarter.period_end,
+            "coverage": "bounded_retrieval_not_complete_financial_population",
+        }
+    except ReadoutUnavailableError:
+        raise
+    except (ValueError, RuntimeError, sqlite3.Error, OSError) as exc:
+        raise ReadoutUnavailableError(
+            "retained evidence is unavailable or failed verification"
+        ) from exc
+    finally:
+        conn.close()
+    blocks = [
+        ContextBlock(
+            "reported_quarter_identity",
+            "Requested reported quarter",
+            f"ticker={quarter.ticker}\nperiod_end={quarter.period_end}\n"
+            f"fiscal_period_type={quarter.fiscal_period_type}\nknowledge_cutoff={cutoff.isoformat()}",
+            ContextSource("declared_analysis_scope", "present"),
+        ),
+        ContextBlock(
+            "verified_retained_evidence",
+            "Verified saved evidence",
+            "\n\n".join(
+                f"[{item.n}] {item.label}\n{item.text}\nSource: {item.href}" for item in items
+            ),
+            ContextSource("verified_retrieval_trace", "present"),
+        ),
+        ContextBlock(
+            "retained_fact_dimensions",
+            "Actual source fact dimensions",
+            fact_context_text,
+            ContextSource("verified_projection_and_source_fact", "present"),
+        ),
+        ContextBlock(
+            "bounded_evidence_limits",
+            "Evidence limits",
+            "Use only the supplied saved evidence. Attribute management statements. "
+            "Retrieval is bounded, not a complete financial population. "
+            "The requested fiscal quarter identifies the readout, not every supplied fact. "
+            "Retain each fact's actual period start/end, fiscal label, unit, currency, basis, "
+            "scope, and definition. Annual facts remain annual context, never quarterly actuals "
+            "or completed quarterly comparisons. Do not infer fiscal labels from duration. "
+            "Consensus, cutoff-qualified owner thesis, and financial comparison coverage "
+            "are not established. Do not claim a beat, passed thesis threshold, comparable "
+            "growth calculation, current valuation, or complete thesis readout. "
+            "State these missing inputs in the corresponding report sections.",
+            ContextSource("analysis_limits", "present"),
+        ),
+    ]
+    for kind in ("actuals_vs_consensus", "thesis_break_rules_prior_context", "comparison_coverage"):
+        blocks.append(
+            ContextBlock(kind, kind.replace("_", " "), "", ContextSource(kind, "missing"))
+        )
+    return blocks, retained
+
+
 def _generate_quarter(
     db_path: Path,
     repo_root: Path,
@@ -519,16 +703,28 @@ def _generate_quarter(
     *,
     today: date,
     force: bool,
+    retrieval_trace_id: str | None = None,
+    knowledge_cutoff: datetime | None = None,
 ) -> GenerateOutcome:
     prompt_version = prompt_version_for(PURPOSE)
-    blocks = _context_blocks(db_path, repo_root, quarter, today=today)
+    retained: dict[str, object] | None = None
+    if retrieval_trace_id is not None and knowledge_cutoff is not None:
+        blocks, retained = _retained_trace_context(
+            db_path, quarter, repo_root, retrieval_trace_id, knowledge_cutoff
+        )
+    else:
+        blocks = _context_blocks(db_path, repo_root, quarter, today=today)
     sections = [block.render() for block in blocks if block.content.strip()]
     context_manifest, source_doc_ids = _context_manifest(blocks)
+    if retained is not None:
+        context_manifest["retained_evidence"] = retained
     cache_inputs: list[bytes | str] = [
         quarter.period_end,
         quarter.fiscal_period_type,
         *sections,
     ]
+    if retained is not None:
+        cache_inputs.append(json.dumps(retained, sort_keys=True, separators=(",", ":")))
     input_sha = compute_input_sha256(prompt_version=prompt_version, cache_inputs=cache_inputs)
     current = read_current(
         ticker=quarter.ticker,
@@ -596,9 +792,29 @@ def generate_for_ticker(
     force: bool = False,
     period_end: str | None = None,
     fiscal_period_type: str | None = None,
+    retrieval_trace_id: str | None = None,
+    knowledge_cutoff: datetime | None = None,
 ) -> GenerateOutcome:
     """Explicit generation path for one portfolio or evaluation name."""
     ref = today or datetime.now(UTC).date()
+    if retrieval_trace_id is not None or knowledge_cutoff is not None:
+        if (
+            not isinstance(retrieval_trace_id, str)
+            or not retrieval_trace_id.strip()
+            or len(retrieval_trace_id) > 128
+            or not isinstance(knowledge_cutoff, datetime)
+            or knowledge_cutoff.tzinfo is None
+            or knowledge_cutoff.utcoffset() is None
+            or period_end is None
+            or fiscal_period_type is None
+        ):
+            raise InvalidReadoutTargetError(
+                "retained evidence requires a trace, aware cutoff, and paired fiscal selectors"
+            )
+        knowledge_cutoff = knowledge_cutoff.astimezone(UTC)
+        if knowledge_cutoff.date() > ref:
+            raise InvalidReadoutTargetError("retained evidence cutoff cannot be in the future")
+        ref = knowledge_cutoff.date()
     quarter = latest_reported_quarter(
         db_path, ticker, today=ref, period_end=period_end, fiscal_period_type=fiscal_period_type
     )
@@ -609,7 +825,15 @@ def generate_for_ticker(
             + f" as of {ref.isoformat()}"
         )
     with db_path_context(db_path):
-        return _generate_quarter(db_path, repo_root, quarter, today=ref, force=force)
+        return _generate_quarter(
+            db_path,
+            repo_root,
+            quarter,
+            today=ref,
+            force=force,
+            retrieval_trace_id=retrieval_trace_id,
+            knowledge_cutoff=knowledge_cutoff,
+        )
 
 
 def generate_all(
