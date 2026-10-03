@@ -146,7 +146,7 @@ def test_legacy_processed_skip_requires_exact_canonical_ingest_evidence(
     processed_root.mkdir(parents=True)
     path = processed_root / "NU_Q1_2026.txt"
     payload = _body("LEGACY")
-    path.write_text(payload, encoding="utf-8")
+    path.write_bytes(payload.encode("utf-8"))
     digest = transcript_ingest.sha256_of(path)
     parsed = transcript_ingest.parse_transcript_filename(path)
     assert parsed is not None
