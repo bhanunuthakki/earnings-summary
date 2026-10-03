@@ -1,13 +1,13 @@
 """Retain exact deterministic thesis context on existing execution checks.
 
-Revision ID: 0049_thesis_check_context
-Revises: 0048_metric_computation_output_observation
+Revision ID: 0050_thesis_check_context
+Revises: 0049_resolution_selected_observation_index
 """
 
 from alembic import op
 
-revision = "0049_thesis_check_context"
-down_revision = "0048_metric_computation_output_observation"
+revision = "0050_thesis_check_context"
+down_revision = "0049_resolution_selected_observation_index"
 branch_labels = None
 depends_on = None
 

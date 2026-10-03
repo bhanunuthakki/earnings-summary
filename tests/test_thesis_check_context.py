@@ -676,7 +676,7 @@ def test_additive_migration_preserves_old_records_and_append_only_guards(
 
     migrated_db(
         database,
-        target="0049_thesis_check_context",
+        target="0050_thesis_check_context",
         upgrade_from="0048_metric_computation_output_observation",
         before_upgrade=seed,
     )
