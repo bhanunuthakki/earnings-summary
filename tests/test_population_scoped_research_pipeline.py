@@ -727,7 +727,7 @@ def test_current_schema_scoped_snapshot_yields_verified_trace(
     assert items[0].value == "120 USD"
 
 
-@pytest.mark.parametrize("mismatch", ("generation", "commitment"))
+@pytest.mark.parametrize("mismatch", ("generation", "commitment", "cell_sql", "generation_sql"))
 def test_current_schema_fact_reader_rejects_wrong_exact_binding(
     scoped_retrieval_trace: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt],
     mismatch: str,
@@ -740,13 +740,19 @@ def test_current_schema_fact_reader_rejects_wrong_exact_binding(
         (receipt.trace_id,),
     ).fetchone()
     assert candidate is not None
+    generation_id = "projection:checkpoint"
+    cell_id = str(candidate["candidate_id"])
+    if mismatch == "generation":
+        generation_id = "absent-generation"
+    elif mismatch == "generation_sql":
+        generation_id = "projection:checkpoint' OR 1=1 --"
+    elif mismatch == "cell_sql":
+        cell_id += "' OR 1=1 --"
     with pytest.raises(CanonicalFactProjectionError):
         load_canonical_fact_entry(
             conn,
-            generation_id="absent-generation"
-            if mismatch == "generation"
-            else "projection:checkpoint",
-            canonical_metric_cell_id=str(candidate["candidate_id"]),
+            generation_id=generation_id,
+            canonical_metric_cell_id=cell_id,
             entry_sha256="0" * 64
             if mismatch == "commitment"
             else str(candidate["source_commitment_sha256"]),

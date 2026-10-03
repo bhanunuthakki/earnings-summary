@@ -17,6 +17,7 @@ import sys
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -334,12 +335,27 @@ def test_sizing_intent_write_evicts_work_os_portfolio(client: Any) -> None:
     assert rebuilt.headers["X-Panel-Cache"] == "miss"
 
 
+@pytest.mark.parametrize("retained_context", (False, True))
 def test_earnings_readout_generation_evicts_work_os_portfolio(
-    client: Any, monkeypatch: Any
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch, retained_context: bool
 ) -> None:
     from earnings_readout import GENERATED, GenerateOutcome
 
-    def _generate_readout(_db_path: Path, _repo_root: Path, _ticker: str) -> GenerateOutcome:
+    forwarded: list[tuple[str, str | None, str | None, str | None, datetime | None]] = []
+
+    def _generate_readout(
+        _db_path: Path,
+        _repo_root: Path,
+        ticker: str,
+        *,
+        period_end: str | None = None,
+        fiscal_period_type: str | None = None,
+        retrieval_trace_id: str | None = None,
+        knowledge_cutoff: datetime | None = None,
+    ) -> GenerateOutcome:
+        forwarded.append(
+            (ticker, period_end, fiscal_period_type, retrieval_trace_id, knowledge_cutoff)
+        )
         return GenerateOutcome(GENERATED, "NU", "2026-06-30", None)
 
     monkeypatch.setattr(
@@ -348,11 +364,28 @@ def test_earnings_readout_generation_evicts_work_os_portfolio(
     )
     _warm_work_os(client, "/api/work-os/portfolio")
 
-    response: Any = client.post(
-        "/api/earnings-readout/generate",
-        json={"ticker": "NU"},
-    )
+    payload = {"ticker": "NU"}
+    if retained_context:
+        payload.update(
+            period_end="2026-06-30",
+            fiscal_period_type="Q2",
+            retrieval_trace_id="trace:synthetic-cache-invalidation",
+            knowledge_cutoff="2026-08-01T00:00:00+00:00",
+        )
+    response = client.post("/api/earnings-readout/generate", json=payload)
     assert response.status_code == 200
+    expected = (
+        (
+            "NU",
+            "2026-06-30",
+            "Q2",
+            "trace:synthetic-cache-invalidation",
+            datetime(2026, 8, 1, tzinfo=UTC),
+        )
+        if retained_context
+        else ("NU", None, None, None, None)
+    )
+    assert forwarded == [expected]
 
     rebuilt: Any = client.get("/api/work-os/portfolio")
     assert rebuilt.status_code == 200
