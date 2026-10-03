@@ -15,6 +15,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from datetime import time as datetime_time
 from pathlib import Path
 
 from db_paths import db_path_context
@@ -372,7 +373,8 @@ def _context_blocks(
         transcript = _transcript_text(conn, quarter) if conn is not None else ""
         surprise = _surprise_text(conn, quarter) if conn is not None else ""
         kpis = kpi_text(conn, quarter.ticker, today) if conn is not None else ""
-        valuation = valuation_text(conn, quarter.ticker) if conn is not None else ""
+        cutoff = min(datetime.now(UTC), datetime.combine(today, datetime_time.max, tzinfo=UTC))
+        valuation = valuation_text(conn, quarter.ticker, as_of=cutoff) if conn is not None else ""
     finally:
         if conn is not None:
             conn.close()

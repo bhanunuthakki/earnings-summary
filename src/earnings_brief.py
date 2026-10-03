@@ -35,15 +35,19 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from datetime import time as datetime_time
 from pathlib import Path
 from typing import cast
 
 from alerts import list_alerts
 from db_paths import db_path_context
+from dcf.latest import latest_dcf_row
+from dcf.readiness import load_valuation_readiness
 from expected_earnings import upcoming_by_ticker
 from llm.anchors import (
     compose_anchor_block,
@@ -218,29 +222,90 @@ def kpi_text(conn: sqlite3.Connection, t: str, today: date) -> str:
     return "\n".join(lines)
 
 
-def valuation_text(conn: sqlite3.Connection, t: str) -> str:
+def valuation_text(conn: sqlite3.Connection, t: str, *, as_of: datetime | None = None) -> str:
+    """Show the current stored run as context; only accepted inputs yield a gap.
+
+    This is not a historical run selector. If the current run was not known at
+    the cutoff, report the limitation rather than leaking it into a preview.
+    Selection and readiness share the caller's snapshot and preserve its state.
+    """
+    cutoff = as_of or datetime.now(UTC)
+    if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+        raise ValueError("as_of must have a timezone")
+    cutoff = cutoff.astimezone(UTC)
+    factory = conn.row_factory
+    owns_snapshot = not conn.in_transaction
     try:
-        row = conn.execute(
-            "SELECT live_price, npv_per_share, over_under_pct, COALESCE(sanity_flag, '') "
-            "FROM dcf_runs WHERE ticker = ? AND (segment_name IS NULL OR segment_name = '') "
-            "ORDER BY valuation_date DESC, rowid DESC LIMIT 1",
-            (t,),
-        ).fetchone()
+        if owns_snapshot:
+            conn.execute("BEGIN")
+        row = latest_dcf_row(conn, t)
+        if row is None:
+            missing = load_valuation_readiness(conn, t, as_of=cutoff)
+            return "Valuation unavailable: " + ", ".join(missing.reason_codes or (missing.status,))
+        calculated = datetime.fromisoformat((row.created_at or "").replace("Z", "+00:00"))
+        if calculated.tzinfo is None or calculated.utcoffset() is None:
+            return "Valuation unavailable at cutoff: model calculation time is unverified."
+        if calculated > cutoff or (
+            row.valuation_date and date.fromisoformat(row.valuation_date) > cutoff.date()
+        ):
+            return "Valuation unavailable at cutoff: historical run selection is not supported."
+        readiness = load_valuation_readiness(conn, t, as_of=cutoff)
+        reasons = list(readiness.reason_codes)
+        # Failed model evidence can return before readiness checks the quote.
+        # Its default market status cannot establish the quote's knowledge time.
+        quote_at: datetime | None = None
+        quote_reason: str | None = None
+        if row.live_price_at is None:
+            quote_reason = "market_price_or_timestamp_missing"
+        else:
+            try:
+                quote_at = datetime.fromisoformat(row.live_price_at.replace("Z", "+00:00"))
+            except ValueError:
+                quote_reason = "market_timestamp_invalid"
+            else:
+                if quote_at.tzinfo is None or quote_at.utcoffset() is None:
+                    quote_reason = "market_timestamp_invalid"
+                elif quote_at > cutoff:
+                    quote_reason = "market_timestamp_after_cutoff"
+        if quote_reason and quote_reason not in reasons:
+            reasons.append(quote_reason)
+        if readiness.run_id != row.id or readiness.ticker != t.upper():
+            reasons.append("valuation_readiness_run_mismatch")
+        accepted = readiness.ready and readiness.status == "ready" and not reasons
+        currency = row.currency or "currency unknown"
+        bits = [f"stored model #{row.id}; valued {row.valuation_date or 'date unknown'}"]
+        if (
+            row.live_price is not None
+            and math.isfinite(row.live_price)
+            and quote_at is not None
+            and quote_reason is None
+            and readiness.market_status != "invalid"
+        ):
+            bits.append(
+                f"stored quote {currency} {row.live_price:,.2f} "
+                f"(observed {row.live_price_at}; {readiness.market_status})"
+            )
+        if row.npv_per_share is not None and math.isfinite(row.npv_per_share):
+            bits.append(f"stored DCF estimate {currency} {row.npv_per_share:,.2f}")
+        bits.append(f"financial period {readiness.financial_period_end or 'unverified'}")
+        if accepted:
+            bits.append("accepted valuation")
+            if row.npv_per_share is not None and row.live_price is not None and row.live_price > 0:
+                bits.append(
+                    f"{(row.npv_per_share / row.live_price - 1) * 100:+.0f}% value/quote gap"
+                )
+        else:
+            bits.append("unaccepted valuation; no investment signal")
+            bits.append("missing evidence: " + ", ".join(reasons or [readiness.status]))
+        return " · ".join(bits)
     except sqlite3.Error:
-        return ""
-    if row is None:
-        return ""
-    live, fair, ou, sanity = row
-    bits: list[str] = []
-    if live is not None:
-        bits.append(f"live ${float(live):,.2f}")
-    if fair is not None:
-        bits.append(f"DCF fair ${float(fair):,.2f}")
-    if ou is not None:
-        bits.append(f"{float(ou) * 100.0:+.0f}% vs fair")
-    if sanity:
-        bits.append("(model flagged unreviewed — treat the gap as unverified)")
-    return " · ".join(bits)
+        return "Valuation unavailable: stored evidence query failed."
+    except (ValueError, TypeError, OverflowError):
+        return "Valuation unavailable: stored model evidence is invalid."
+    finally:
+        conn.row_factory = factory
+        if owns_snapshot and conn.in_transaction:
+            conn.rollback()
 
 
 def _evidence_text(db_path: Path, repo_root: Path, t: str) -> str:
@@ -271,7 +336,8 @@ def assemble_context(db_path: Path, repo_root: Path, t: str, *, today: date) -> 
         conn = None
     try:
         kpis = kpi_text(conn, t, today) if conn is not None else ""
-        valuation = valuation_text(conn, t) if conn is not None else ""
+        cutoff = min(datetime.now(UTC), datetime.combine(today, datetime_time.max, tzinfo=UTC))
+        valuation = valuation_text(conn, t, as_of=cutoff) if conn is not None else ""
     finally:
         if conn is not None:
             conn.close()

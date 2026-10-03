@@ -22,9 +22,33 @@ import numpy as np
 import pytest
 
 from allocation.model import BLEND_WEIGHTS, build_next_dollar_model
+from dcf.latest import latest_dcf_row
+from dcf.readiness import ValuationReadiness
 from owner_profile.store import affirm_fact, append_fact
 
 TICKERS = ["AAA", "BBB", "CCC"]
+
+
+@pytest.fixture()
+def qualified_synthetic_dcf(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate profile weights and cash arithmetic from financial admission.
+
+    These scalar rows are not decision-grade. Real readiness rejection is
+    checked without this seam in test_allocation_return_readiness.
+    """
+
+    def qualified(conn: sqlite3.Connection, ticker: str, *, as_of: datetime) -> ValuationReadiness:
+        row = latest_dcf_row(conn, ticker)
+        return ValuationReadiness(
+            ticker=ticker,
+            evaluated_at=as_of.isoformat(),
+            ready=row is not None,
+            status="ready" if row is not None else "missing",
+            run_id=row.id if row is not None else None,
+        )
+
+    monkeypatch.setattr("allocation.model.load_valuation_readiness", qualified)
+
 
 _OWNER_PROFILE_DDL = """
 CREATE TABLE owner_profile_facts (
@@ -203,6 +227,7 @@ def _affirm_blend_weights(repo_root: Path, ret: float, div: float, macro: float)
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.usefixtures("qualified_synthetic_dcf")
 def test_default_fallback_when_no_owner_profile_table(tmp_path: Path) -> None:
     """A DB predating migration 0159 (no owner_profile_facts table at all) —
     degrades to the hardcoded BLEND_WEIGHTS, never raises."""
@@ -226,6 +251,7 @@ def test_default_fallback_when_no_owner_profile_table(tmp_path: Path) -> None:
     ]
 
 
+@pytest.mark.usefixtures("qualified_synthetic_dcf")
 def test_default_fallback_when_fact_only_proposed(repo_root: Path) -> None:
     _seed_full_three_factor_book(repo_root)
     conn = sqlite3.connect(_db(repo_root))
@@ -248,6 +274,7 @@ def test_default_fallback_when_fact_only_proposed(repo_root: Path) -> None:
     assert dict(model.blend) == pytest.approx(BLEND_WEIGHTS)
 
 
+@pytest.mark.usefixtures("qualified_synthetic_dcf")
 def test_owner_affirmed_blend_weights_drive_the_model(repo_root: Path) -> None:
     _seed_full_three_factor_book(repo_root)
     _affirm_blend_weights(repo_root, ret=0.7, div=0.2, macro=0.1)
@@ -257,6 +284,7 @@ def test_owner_affirmed_blend_weights_drive_the_model(repo_root: Path) -> None:
     assert dict(model.blend) == pytest.approx({"ret": 0.7, "div": 0.2, "macro": 0.1})
 
 
+@pytest.mark.usefixtures("qualified_synthetic_dcf")
 def test_invalid_owner_weights_fall_back_to_default(repo_root: Path) -> None:
     """A hand-edited/corrupt fact that doesn't sum to ~1.0 fails
     NextDollarBlendWeights validation — degrades to the fallback rather than
@@ -287,6 +315,7 @@ def test_invalid_owner_weights_fall_back_to_default(repo_root: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.usefixtures("qualified_synthetic_dcf")
 def test_cash_to_deploy_usd_produces_per_holding_dollar_amounts(repo_root: Path) -> None:
     _seed_full_three_factor_book(repo_root)
     model = build_next_dollar_model(
@@ -302,6 +331,7 @@ def test_cash_to_deploy_usd_produces_per_holding_dollar_amounts(repo_root: Path)
     assert total_cash == pytest.approx(10_000.0)
 
 
+@pytest.mark.usefixtures("qualified_synthetic_dcf")
 def test_no_cash_to_deploy_usd_leaves_cash_allocation_none(repo_root: Path) -> None:
     """Default (no cash figure) mode is UNCHANGED from pre-Phase-2 behavior."""
     _seed_full_three_factor_book(repo_root)
