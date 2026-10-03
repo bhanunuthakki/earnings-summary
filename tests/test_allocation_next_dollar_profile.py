@@ -2,19 +2,19 @@
 (src/allocation/model.py): profile-driven blend weights (owner decision 5,
 §7 of docs/design/tenet2_advisory_program.md) and cash-aware mode.
 
-Duplicates the fixture setup from tests/test_allocation_model.py (three
-synthetic tickers with DCF + price history + macro betas, so all three
-factors are ACTIVE and the blend proportions are actually visible — with
-only one factor active, normalization would mask any difference between the
-owner's weights and the hardcoded fallback) per the repo's "duplicate simple
-shared logic, don't modularize" convention, plus an ``owner_profile_facts``
-table for the appetite-fact tests.
+The legacy synthetic schema supplies prices, macro betas and owner facts.
+Only the three blend-law tests inject a synthetic readiness receipt so all three
+factors are active and blend normalization cannot hide the owner's weights.
+This isolates profile arithmetic; it does not qualify a persisted model.
+The remaining tests use the real readiness owner. An explicit negative control
+keeps the valuation factor unavailable for these legacy facts.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -22,6 +22,8 @@ import numpy as np
 import pytest
 
 from allocation.model import BLEND_WEIGHTS, build_next_dollar_model
+from dcf.latest import latest_dcf_row
+from dcf.readiness import ValuationReadiness
 from owner_profile.store import affirm_fact, append_fact
 
 TICKERS = ["AAA", "BBB", "CCC"]
@@ -97,6 +99,31 @@ def repo_root(tmp_path: Path) -> Path:
     finally:
         conn.close()
     return tmp_path
+
+
+@pytest.fixture()
+def synthetic_blend_readiness(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Isolate three profile blend laws; this receipt is not model qualification."""
+    evaluated: list[tuple[str, int, datetime]] = []
+    expected_ids = {"AAA": 1, "BBB": 2, "CCC": 3}
+
+    def qualify(conn: sqlite3.Connection, ticker: str, *, as_of: datetime) -> ValuationReadiness:
+        assert isinstance(conn, sqlite3.Connection) and conn.in_transaction
+        assert as_of.tzinfo is UTC and as_of.utcoffset() == timedelta(0)
+        row = latest_dcf_row(conn, ticker)
+        assert row is not None and row.ticker == ticker
+        assert row.id == expected_ids[ticker]
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            conn.execute("UPDATE dcf_runs SET npv_per_share = 999.0")
+        evaluated.append((ticker, row.id, as_of))
+        return ValuationReadiness(
+            ticker=ticker, evaluated_at=as_of.isoformat(), ready=True, status="ready", run_id=row.id
+        )
+
+    monkeypatch.setattr("allocation.model.load_valuation_readiness", qualify)
+    yield
+    assert [(ticker, run_id) for ticker, run_id, _cutoff in evaluated] == list(expected_ids.items())
+    assert len({cutoff for _ticker, _run_id, cutoff in evaluated}) == 1
 
 
 def _db(repo_root: Path) -> Path:
@@ -203,7 +230,9 @@ def _affirm_blend_weights(repo_root: Path, ret: float, div: float, macro: float)
 # --------------------------------------------------------------------------- #
 
 
-def test_default_fallback_when_no_owner_profile_table(tmp_path: Path) -> None:
+def test_default_fallback_when_no_owner_profile_table(
+    tmp_path: Path, synthetic_blend_readiness: None
+) -> None:
     """A DB predating migration 0159 (no owner_profile_facts table at all) —
     degrades to the hardcoded BLEND_WEIGHTS, never raises."""
     db = tmp_path / "data" / "portfolio.db"
@@ -226,7 +255,9 @@ def test_default_fallback_when_no_owner_profile_table(tmp_path: Path) -> None:
     ]
 
 
-def test_default_fallback_when_fact_only_proposed(repo_root: Path) -> None:
+def test_default_fallback_when_fact_only_proposed(
+    repo_root: Path, synthetic_blend_readiness: None
+) -> None:
     _seed_full_three_factor_book(repo_root)
     conn = sqlite3.connect(_db(repo_root))
     try:
@@ -248,7 +279,9 @@ def test_default_fallback_when_fact_only_proposed(repo_root: Path) -> None:
     assert dict(model.blend) == pytest.approx(BLEND_WEIGHTS)
 
 
-def test_owner_affirmed_blend_weights_drive_the_model(repo_root: Path) -> None:
+def test_owner_affirmed_blend_weights_drive_the_model(
+    repo_root: Path, synthetic_blend_readiness: None
+) -> None:
     _seed_full_three_factor_book(repo_root)
     _affirm_blend_weights(repo_root, ret=0.7, div=0.2, macro=0.1)
     model = build_next_dollar_model(_db(repo_root), repo_root, TICKERS, None)
@@ -310,3 +343,18 @@ def test_no_cash_to_deploy_usd_leaves_cash_allocation_none(repo_root: Path) -> N
     assert model.cash_to_deploy_usd is None
     for row in model.rows:
         assert row.cash_allocation_usd is None
+
+
+def test_legacy_profile_facts_do_not_qualify_valuation_upside(repo_root: Path) -> None:
+    """The unmocked owner refuses the same legacy scalars used in blend fixtures."""
+    _seed_full_three_factor_book(repo_root)
+    _affirm_blend_weights(repo_root, ret=0.7, div=0.2, macro=0.1)
+    model = build_next_dollar_model(_db(repo_root), repo_root, TICKERS, None)
+    assert model is not None
+    assert model.blend_weights_source == "owner_profile"
+    assert dict(model.blend) == pytest.approx({"div": 2 / 3, "macro": 1 / 3})
+    assert all(row.ret is None for row in model.rows)
+    for ticker in TICKERS:
+        reason = "dcf_evidence_invalid, dcf_schema_unavailable"
+        assert f"{ticker}: {reason}" in model.hidden_factors["ret"]
+        assert f"Valuation upside unavailable for {ticker}: {reason}" in model.notes
