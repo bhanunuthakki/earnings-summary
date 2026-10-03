@@ -1,6 +1,6 @@
 # earnings-summary — Repo Agent Instructions
 
-Loads on top of the global `AGENTS.md`. This file adds only earnings-summary facts and constraints. Cross-project safety, authority, and routing stay in the root contract; detailed global workflows live in routed procedures and load only when their trigger applies.
+This file adds earnings-summary facts and constraints to the global contract.
 
 **What this repo is.** A solo-built, pull-only, localhost equity-research platform. Reusable business logic lives under `src/`; `execution/` contains operational entrypoints plus `execution/comments_server.py`, the Flask cockpit at http://127.0.0.1:7421. Production state belongs to the configured canonical Windows database authority; its path must be resolved from approved runtime configuration, never guessed from a checkout. Mac tests use explicit temporary or provenance-bearing restored-snapshot databases. Intermediate artifacts live in `.tmp/`.
 
@@ -54,10 +54,10 @@ Identification, acquisition, parsing, storage, resolution, and surfacing of comp
 
 UI work uses the shared `frontend-quality` procedure. Registered controls and family recipes are the default. An authorized redesign may evolve the design language through its master/registry extension path, with evidence for the changed user task; do not bypass that owner with local visual CSS, open-ended style APIs, or runtime style mutations. Golden regeneration (`GOLDEN_REGEN=1`) is an intentional expectation update, never the checking gate: review the changed expectations, then rerun comparison mode. Preserve the protected behavior when updating an obsolete expectation. `source_chip.py` and `workspace_styles.py` are existing surface-specific authorities whose shared semantics must remain aligned even where geometry differs. Material frontend work requires before/after browser evidence for the affected task and an explicit note for any unverified state.
 
-## Testing, CI & Merge Velocity Discipline
+## Tests and merge gates
 
-- **Merge Frequency & PR Sizing:** Never batch weeks of work into giant feature branches. Land small, intent-driven PRs frequently (e.g. migration/model → script CLI → UI cockpit). The long Alembic history and golden snapshot tests make small merges important for avoiding migration-head collisions and unreviewable diff cascades.
-- **Fast Local Feedback (`make check-fast`):** Use `make check-fast` (format + lint + typecheck + `pytest` on changed test files only) during active iteration. Use `make check` for complete pre-push verification, or `FAST_PUSH=1 git push` to delegate full matrix testing to CI.
+- Keep PRs small enough to review migrations and golden changes together; long Alembic history makes migration-head collisions costly.
+- Use `make check-fast` (format, lint, typecheck, and changed test files) during iteration. Use `make check` before pushing, or `FAST_PUSH=1 git push` to delegate the full matrix to CI.
 - **Bounded Test Execution:** Direct and targeted `pytest` runs are serial so they do not fan out across every local CPU. `make test` caps distribution at `PYTEST_WORKERS=2` with `--dist=loadfile` (override only after measuring the machine); CI also passes its worker count explicitly. Keep tests hermetic; use session-scoped `migrated_db` in `tests/conftest.py` rather than re-running Alembic migrations from scratch inside test functions.
 - **Ratchet Quality Gates:** Ruff linting and strict Pyright type-checking use diff-aware ratchets against `origin/main`. PRs must be clean on changed lines/files and must not increase overall Pyright error counts.
 
@@ -65,11 +65,9 @@ UI work uses the shared `frontend-quality` procedure. Registered controls and fa
 
 - Repo credential files: `.env`, `credentials.json`, `token.json` (global no-log/no-commit rules apply). Pass keys to scripts via environment variables, never CLI args; `src/log_redact.py` is the canonical redaction helper.
 
-## Agent delegation and review — repo scope note
+## Application LLM authority
 
-Use the global evidence and execution contract plus `procedures/agent-operations.md` for delegation and `procedures/judging.md` for J0-J3 review rigor. The repository does not redefine either policy.
-
-Repo-specific scope: that rule governs **coding/session** model choice. The application's **in-app per-purpose LLM routing** is a separate concern, governed by `LLM_MODELS` in `src/llm/cli.py`, the model-downgrade eval loop (`directives/model_eval_loop.md`), and the cheapest-at-parity routing design (`directives/cheapest_model_routing.md`).
+The global fleet policy and usage index own ordinary membership-provider order and its environment variables. `src/llm/fleet_policy.py` resolves that policy for the application; it does not set a competing provider order. `LLM_MODELS` in `src/llm/cli.py` owns per-purpose model pins, `directives/model_eval_loop.md` owns qualification and promotion, and `directives/cheapest_model_routing.md` owns economic ordering. These local owners do not override fleet provider priority. Explicit Judge selection and independence remain separate at the authorities registered in the fleet usage index. Session delegation and review follow the global contract.
 
 ## LLM scheduling and quota — repo scope note
 
@@ -77,7 +75,7 @@ The app's membership-backed pools share quota with interactive sessions. Before 
 
 ## Code-change specifics
 
-Use the global `code-change` procedure for typing, testing, architecture review, and validation. The one repo nuance: a single `cast(...)` at a validated JSON / external-data boundary (right after an `isinstance`/schema check) is accepted; never use `# type: ignore`. See `src/log_redact.py` for the canonical credential-redaction helper.
+A single `cast(...)` immediately after an `isinstance`/schema check at a JSON or external-data boundary is accepted; never use `# type: ignore`.
 
 ## Local implementation traps
 
