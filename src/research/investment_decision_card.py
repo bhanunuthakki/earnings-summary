@@ -97,7 +97,7 @@ PURPOSE = "investment_decision_card"
 # v3 makes the persisted markdown a lossless decision-useful projection of the
 # validated card schema. Keep this version in the artifact cache inputs so a
 # renderer change cannot silently reuse prose produced by an older projection.
-ENGINE_VERSION = "v3"
+ENGINE_VERSION = "v4"
 
 # A hypothetical add sized as 3% of book value â€” the Â§8.1 "expected
 # Concentration Zone if funded" preview. Not a recommendation of size; purely
@@ -223,9 +223,7 @@ class InvestmentDecisionCard(BaseModel):
             )
 
         for ref in self.source_refs:
-            if ref in allowed_refs:
-                continue
-            if any(ref in allowed for allowed in allowed_refs):
+            if ref.strip() and ref in allowed_refs:
                 continue
             reasons.append(f"source_refs cites {ref!r}, not present in the gathered inputs")
         return reasons

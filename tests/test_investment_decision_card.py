@@ -361,6 +361,52 @@ def test_source_refs_must_resolve(tmp_path: Path) -> None:
     assert not ok_reasons
 
 
+@pytest.mark.parametrize(
+    ("reference", "allowed"),
+    [
+        ("", ""),
+        (" ", " "),
+        ("pri", "price"),
+        ("ACME dominates", "ACME dominates checkout via network-effect attach."),
+        ("network-effect", "ACME dominates checkout via network-effect attach."),
+    ],
+)
+def test_source_refs_reject_blank_and_partial_references(reference: str, allowed: str) -> None:
+    card = ridc.InvestmentDecisionCard.model_validate(
+        {
+            **_llm_payload(source_refs=[reference]),
+            "ticker": TICKER,
+            "as_of": "2026-07-01T00:00:00",
+            "input_sha": "sha",
+            "hypothesis_origin": "user_authored",
+            "evidence_readiness": {"decision_ready": False},
+        }
+    )
+    assert card.validate_grounding(allowed_refs={allowed})
+
+
+def test_partial_reference_retries_then_persists_labelled_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = _make_db(tmp_path)
+    _patch_inputs(monkeypatch, spec=_spec())
+    prompts: list[str] = []
+
+    def fake_call(prompt: str, **kwargs: object) -> dict[str, object]:
+        prompts.append(prompt)
+        return _llm_payload(source_refs=["pri"])
+
+    monkeypatch.setattr(ridc, "call_llm_structured", fake_call)
+    result = ridc.generate_card(db_path, tmp_path, TICKER)
+    assert len(prompts) == 2
+    assert "source_refs cites 'pri'" in prompts[1]
+    assert result.selection_mode == "deterministic_fallback"
+    assert any("not present in the gathered inputs" in reason for reason in result.degraded_reasons)
+    assert result.artifact_id is not None
+    assert result.card is not None
+    assert result.card.source_refs == []
+
+
 # --------------------------------------------------------------------------- #
 # The hard gate: evidence_readiness is NEVER LLM-authored
 # --------------------------------------------------------------------------- #
