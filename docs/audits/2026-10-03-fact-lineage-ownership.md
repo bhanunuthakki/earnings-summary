@@ -16,7 +16,7 @@ The backend owns WACC derivation for both workbook reading and driver previews. 
 | Independent revised plan review | PASS after four acceptance repairs: table-wide admission, historical cutoffs, bounded transport and request/save generations. |
 | Independent first implementation review | BLOCK: collapse/reopen preview, stale preview WACC during save, and file-report source routing. All three repaired. |
 | Independent implementation re-review | PASS, conditional on final deterministic gates and commit binding. Ad hoc review, not a calibrated statistical receipt. |
-| `make check-fast` | 166 tests passed; architecture, format, lint, strict changed-file typing and suppression checks passed. |
+| `make check-fast` | 264 tests passed; architecture, format, lint, strict changed-file typing and suppression checks passed. |
 | UI controls, workspace goldens and overlay dismissal | 138 tests passed in comparison mode. |
 | Existing source viewers, provenance peeks, DCF workbook and confidence tests | Passed in the compatibility run; the initial run's only failures were the intended golden changes and an inline HTML emitter since moved back to its renderer owner. |
 | Full static quality gate | Exact ceilings passed across all retained Python files. No increase in existing Pyright diagnostics. Seven test suppressions removed and their ceiling reduced. |
@@ -26,6 +26,8 @@ The backend owns WACC derivation for both workbook reading and driver previews. 
 Golden regeneration was an intentional expectation update. The reviewed final golden diff is only the shared script bundle for DCF intent/lifecycle and configured file-report source routing. Comparison mode passed afterwards. Legacy Financials mockup values and source-popover expectations remain unchanged.
 
 The route tests also cover duplicate/unknown/oversized query fields, strict identity types, future and missing cutoffs, substituted identities, retained source-text escaping, corrupted commitments, table-wide rejection, old selections after restatement/definition changes, and a concurrent definition append during HTTP admission. Preview and save tests cover debounce races, stale errors, body-inclusive deadlines, driver injection, collapse/reopen, save/edit races and unconfirmed saves.
+
+The first full CI run also exposed the fixed route inventory and stale reachability receipts. The route inventory now requires the exact new GET-only endpoint. Independent review approved refresh of all three source-bound receipts: all 171 dispositions and their targets remain unchanged; only two moved-line fingerprints and the aggregate source hash changed. The new bounded Node test remains explicitly unknown in the test inventory. The scanner and pytest gate require zero unknown or unresolved production paths. The repaired checks passed within the 264-test run.
 
 Local screenshots and test logs are in `.tmp/ownership-review/`; they are reproducible through `OWNERSHIP_EVIDENCE_DIR=.tmp/ownership-review` and `tests/test_fact_ownership_browser.py`. The captured baseline proves the two original behavior failures. Its isolated DCF harness omitted a shell wrapper; shell layout is not claimed as a before/after change. Browser proof uses intercepted synthetic requests and disposable migrated fixtures. It does not establish production-host availability or live-data coverage.
 
