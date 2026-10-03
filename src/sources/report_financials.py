@@ -14,7 +14,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import FactReadModel, ProvenanceBundle
@@ -40,6 +40,53 @@ REPORT_CONCEPTS: tuple[FinancialReportConcept, ...] = (
     "free_cash_flow",
     "capital_expenditure",
 )
+
+
+class FinancialEvidenceReference(BaseModel):
+    """Read-only identity for one admitted report cell at its original cutoff.
+
+    This is a selection reference, not a signed report-authentication token.
+    Every identity must still match the complete admitted projection.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+    ticker: str = Field(min_length=1, max_length=32, pattern=r"^[A-Z][A-Z0-9.-]*$")
+    concept: FinancialReportConcept
+    canonical_metric_cell_id: str = Field(min_length=1, max_length=128)
+    observation_id: str = Field(min_length=1, max_length=128)
+    canonical_resolution_revision_id: str = Field(min_length=1, max_length=128)
+    metric_definition_revision_id: str = Field(min_length=1, max_length=128)
+    as_of: AwareDatetime
+
+    @field_validator(
+        "canonical_metric_cell_id",
+        "observation_id",
+        "canonical_resolution_revision_id",
+        "metric_definition_revision_id",
+    )
+    @classmethod
+    def _nonblank_identity(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("evidence identities must be nonblank")
+        return value
+
+    @field_validator("as_of", mode="before")
+    @classmethod
+    def _json_iso_cutoff(cls, value: object, info: ValidationInfo) -> object:
+        if info.mode == "json":
+            if not isinstance(value, str):
+                raise ValueError("financial evidence cutoff must be an ISO datetime string")
+            # Numeric timestamp strings must not acquire an inferred timezone.
+            return datetime.fromisoformat(value)
+        return value
+
+    @field_validator("as_of")
+    @classmethod
+    def _past_utc_cutoff(cls, value: datetime) -> datetime:
+        cutoff = value.astimezone(UTC)
+        if cutoff > datetime.now(UTC):
+            raise ValueError("financial evidence cutoff must not be in the future")
+        return cutoff
 
 
 class FinancialTableCell(BaseModel):
@@ -309,3 +356,26 @@ def read_financial_table(
         cells=tuple(cells),
         reason_codes=() if cells else ("no_canonical_financial_cells",),
     )
+
+
+def read_financial_evidence(
+    conn: sqlite3.Connection, reference: FinancialEvidenceReference
+) -> FinancialTableCell | None:
+    """Re-admit the exact report selection without a current or legacy fallback.
+
+    The complete projection preserves table-wide rejection rules and its
+    existing snapshot ownership. No further database read follows it.
+    """
+    projection = read_financial_table(conn, reference.ticker, as_of=reference.as_of)
+    for cell in projection.cells:
+        if (
+            cell.available
+            and cell.provenance is not None
+            and cell.concept == reference.concept
+            and cell.canonical_metric_cell_id == reference.canonical_metric_cell_id
+            and cell.provenance.observation.observation_id == reference.observation_id
+            and cell.canonical_resolution_revision_id == reference.canonical_resolution_revision_id
+            and cell.metric_definition_revision_id == reference.metric_definition_revision_id
+        ):
+            return cell
+    return None

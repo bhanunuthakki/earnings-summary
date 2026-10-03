@@ -59,6 +59,7 @@ from report.sections._common import (
     quarter_label,
 )
 from sources.report_financials import (
+    FinancialEvidenceReference,
     FinancialTableCell,
     annual_comparison_supported,
     read_financial_table,
@@ -171,7 +172,7 @@ def build_legacy_shadow(
             continue
         prov_by_period = cell_prov.get(_COL_TO_FACT_LINE_ITEM.get(col, col), {})
         sources_full = [
-            _to_cell_source(prov_by_period.get(_period_date_key(r.get("period_end"))))
+            to_cell_source(prov_by_period.get(_period_date_key(r.get("period_end"))))
             for r in deduped_quarterly
         ]
         if issue_signals:
@@ -260,7 +261,7 @@ def _period_date_key(raw: object) -> str:
     return s[:10]
 
 
-def _to_cell_source(prov: dict[str, object] | None) -> CellSource | None:
+def to_cell_source(prov: dict[str, object] | None) -> CellSource | None:
     """Map one load_financial_cell_provenance payload to the report model."""
     if prov is None:
         return None
@@ -292,6 +293,10 @@ def _to_cell_source(prov: dict[str, object] | None) -> CellSource | None:
         override=_opt("override"),
         issues=issues,
     )
+
+
+# Retain the private spelling used by older confidence-scoring consumers.
+_to_cell_source = to_cell_source
 
 
 def _read_chart_priorities_request(ticker: str, repo_root: Path) -> list[str]:
@@ -1078,12 +1083,18 @@ def build_per_metric_legacy_shadow(
     return out
 
 
-def _canonical_source(cell: FinancialTableCell | None) -> CellSource | None:
+def _canonical_source(
+    cell: FinancialTableCell | None, *, ticker: str, as_of: datetime
+) -> CellSource | None:
     if cell is None or not cell.available or cell.provenance is None:
         return None
     bundle = cell.provenance
     evidence = bundle.evidence
-    if evidence is None:
+    if (
+        evidence is None
+        or cell.canonical_resolution_revision_id is None
+        or cell.metric_definition_revision_id is None
+    ):
         return None
     return CellSource(
         source=cell.source_kind or "canonical_reported",
@@ -1092,6 +1103,15 @@ def _canonical_source(cell: FinancialTableCell | None) -> CellSource | None:
         doc_id=cell.legacy_document_id,
         locator=evidence.source_locator.model_dump_json(),
         extracted_by=bundle.observation.method_name,
+        canonical_reference=FinancialEvidenceReference(
+            ticker=ticker.upper(),
+            concept=cell.concept,
+            canonical_metric_cell_id=cell.canonical_metric_cell_id,
+            observation_id=bundle.observation.observation_id,
+            canonical_resolution_revision_id=cell.canonical_resolution_revision_id,
+            metric_definition_revision_id=cell.metric_definition_revision_id,
+            as_of=as_of,
+        ),
     )
 
 
@@ -1258,7 +1278,12 @@ def build(
                         quarters=quarters[-DISPLAY_QUARTERS:],
                         values=qvalues[-DISPLAY_QUARTERS:],
                         levels_full=qvalues,
-                        sources_full=[_canonical_source(cell) for cell in qcells],
+                        sources_full=[
+                            _canonical_source(
+                                cell, ticker=projection.ticker, as_of=projection.as_of
+                            )
+                            for cell in qcells
+                        ],
                         growth=_canonical_growth(qcells, qvalues),
                         comparison_period_ends=_source_period_ends(qcells),
                         comparison_eligible_edges=[
@@ -1278,7 +1303,12 @@ def build(
                         digits=digits,
                         years=years,
                         values=avalues,
-                        sources_full=[_canonical_source(cell) for cell in acells],
+                        sources_full=[
+                            _canonical_source(
+                                cell, ticker=projection.ticker, as_of=projection.as_of
+                            )
+                            for cell in acells
+                        ],
                     )
                 )
         requested = _read_chart_priorities_request(ticker, repo_root)
