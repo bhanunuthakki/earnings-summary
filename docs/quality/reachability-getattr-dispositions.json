@@ -484,8 +484,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "resolve_analysis_coverage iterates only the fixed literal source-identity field tuple and reads each field from the schema-validated frozen ExpectedDocument. The attribute name is not supplied by a request or source document; the value is compared with captured metadata and is not invoked.",
-      "fingerprint": "3a313085326009b5b80f88cf211415a649bb96ffb38aa97f4b7ec58b78b5982e",
-      "line": 443,
+      "fingerprint": "9f9e9e19676fb26ca0829cb61b7961b2d82330e2f17874670b867878825fc05d",
+      "line": 450,
       "path": "src/provenance/analysis_scope.py",
       "targets": [
         "issuer_id",
@@ -498,8 +498,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "resolve_analysis_coverage iterates only the fixed literal period_start/period_end tuple on the schema-validated frozen ExpectedDocument. These reads enforce exact source-period equality; they perform no dynamic dispatch or resource selection.",
-      "fingerprint": "8e2c5c7fcce98e054615e3435ec0bfb723323d8426e43622b85e0789b764ca7a",
-      "line": 446,
+      "fingerprint": "0a72df9f575cedbd860b3e28c22f863733d7edc593d202175b02ba65b8080186",
+      "line": 453,
       "path": "src/provenance/analysis_scope.py",
       "targets": [
         "period_start",
