@@ -474,8 +474,9 @@ def _require_unambiguous_terminal(
     conn: sqlite3.Connection, request: ResearchSnapshotRequest
 ) -> None:
     """One issuer/K/O cannot acquire a second terminal in another mode."""
-    conflict = conn.execute(
-        "SELECT 1 FROM research_snapshot_universe_commitments universe "
+    candidates = conn.execute(
+        "SELECT universe.cutoff_at,universe.recorded_at,header.recorded_at,seal.sealed_at "
+        "FROM research_snapshot_universe_commitments universe "
         "JOIN research_snapshot_headers header "
         "ON header.research_snapshot_id=universe.research_snapshot_id "
         "JOIN research_snapshot_seals seal "
@@ -485,8 +486,7 @@ def _require_unambiguous_terminal(
         "AND datetime(header.recorded_at)=datetime(?) "
         "AND datetime(seal.sealed_at)=datetime(?) "
         "AND header.research_snapshot_id<>? "
-        "AND json_extract(header.request_json,'$.research_universe.analysis_scope.scope_id') IS ? "
-        "LIMIT 1",
+        "AND json_extract(header.request_json,'$.research_universe.analysis_scope.scope_id') IS ? ",
         (
             request.research_universe.issuer_id,
             _db_time(request.cutoff_at),
@@ -498,9 +498,13 @@ def _require_unambiguous_terminal(
             if request.research_universe.analysis_scope is None
             else request.research_universe.analysis_scope.scope_id,
         ),
-    ).fetchone()
-    if conflict is not None:
-        raise ResearchSnapshotPlanError("research_snapshot_terminal_scope_conflict")
+    )
+    exact_clocks = (_utc(request.cutoff_at),) + (_utc(request.recorded_at),) * 3
+    # SQLite datetime() bounds the candidates but discards fractional seconds.
+    # Compare every candidate at full precision, including equivalent offsets.
+    for row in candidates:
+        if tuple(_utc(datetime.fromisoformat(str(value))) for value in row) == exact_clocks:
+            raise ResearchSnapshotPlanError("research_snapshot_terminal_scope_conflict")
 
 
 def _require_schema(conn: sqlite3.Connection) -> None:

@@ -49,6 +49,13 @@ class AnalysisScopeRequest(_Frozen):
     cutoff_at: datetime
     observed_through: datetime
 
+    @field_validator("cutoff_at", "observed_through")
+    @classmethod
+    def _aware_clock(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("analysis clocks require an explicit time zone")
+        return value
+
     @model_validator(mode="after")
     def _request(self) -> Self:
         if any(not value.strip() for value in (self.purpose, self.issuer_id, self.inventory_key)):

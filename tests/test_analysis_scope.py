@@ -863,3 +863,15 @@ def test_fractional_component_after_selection_cannot_satisfy_inventory_seal(
             scope_request(cutoff_at=frozen, observed_through=frozen),
             require_current_inventory=False,
         )
+
+
+@pytest.mark.parametrize("field", ["cutoff_at", "observed_through"])
+@pytest.mark.parametrize("as_json", [False, True])
+def test_analysis_clocks_require_explicit_time_zone(field: str, as_json: bool) -> None:
+    values = scope_request().model_dump(mode="json" if as_json else "python")
+    values[field] = "2026-07-28T00:00:00" if as_json else K.replace(tzinfo=None)
+    with pytest.raises(ValidationError, match="explicit time zone"):
+        if as_json:
+            AnalysisScopeRequest.model_validate_json(json.dumps(values))
+        else:
+            AnalysisScopeRequest.model_validate(values)

@@ -500,8 +500,12 @@ dependency, or outside the analysis with an explicit reason.
 Processing Scope, and Research Universe retain the full receipt. The corpus key
 and selection configuration digest bind it; the corpus manifest does not retain
 the full receipt or selection configuration.
-**Contract.** All selected package members must be captured before qualification.
-Only primary filings enter the research text collection. Required periodic filings
+**Contract.** Both request clocks require an explicit time zone. All selected
+package members must be captured before qualification. Only primary filings enter
+the research text collection. `require_latest_period` checks the latest known
+10-K/10-Q/20-F/40-F periodic base. It does not establish latest interim financial
+coverage for a 20-F/40-F issuer. Explicit 6-K/8-K selections retain their stated
+reasons; they do not replace a reviewed interim financial-package obligation. Required periodic filings
 include their known amendments. Related current reports require explicit accession
 selection; unavailable amendment linkage is not guessed. Outside archive gaps stay
 visible and do not block unrelated selected work. New operations require the current

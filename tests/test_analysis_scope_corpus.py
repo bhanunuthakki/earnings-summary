@@ -475,8 +475,11 @@ def test_unscoped_manifest_hash_and_request_serialization_remain_unchanged(
         )
         assert "analysis_scope" not in request.model_dump(mode="json")
         # Fixed from the pre-scope metadata builder for these exact inputs.
-        assert build_grounded_search_corpus(conn, request).manifest_config_sha256 == (
-            "e59da7cbda57fb72e24a3d53238f8eb0d40ddca2e12a227cac6dc0d9db16812a"
+        assert (
+            build_grounded_search_corpus(conn, request).manifest_config_sha256
+            == (
+                "e59da7cbda57fb72e24a3d53238f8eb0d40ddca2e12a227cac6dc0d9db16812a"  # pragma: allowlist secret -- fixed regression corpus digest
+            )
         )
     finally:
         conn.close()
