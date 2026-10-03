@@ -344,13 +344,11 @@ def test_gap_section_renders_with_control_kit() -> None:
         "of book risk vs" in html and "of modeled valuation upside" in html
     )  # the parity-gap chip
     assert "NU" in html
-    assert "OF REWARD UNMODELED" not in html  # 3/3 valued -> full coverage, no warning
+    assert "NAMES WITHOUT QUALIFIED VALUATION UPSIDE" not in html  # 3/3 qualified
 
 
 def test_gap_section_low_reward_coverage_leads_with_warning() -> None:
-    """Monthly Red Team Phase 1 guard 1: the reward leg is a book-level
-    scenario-reward rollup too — a majority-unscored reward share must lead
-    with the same UNMODELED warning tail stress does, not a quiet footnote."""
+    """Unqualified names lead with a count; missing upside mass is unknown."""
     from risk_reward import RiskRewardGap
 
     book = _book(
@@ -370,7 +368,8 @@ def test_gap_section_low_reward_coverage_leads_with_warning() -> None:
     )
 
     html = _risk_reward_gap_section(gap)
-    assert "OF REWARD UNMODELED" in html
+    assert "2/3 NAMES WITHOUT QUALIFIED VALUATION UPSIDE" in html
+    assert "OF MODELED UPSIDE UNMODELED" not in html
     assert "k-pill-bad" in html
 
 

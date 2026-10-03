@@ -143,7 +143,7 @@ def parse_scenario_prior_weights(snapshot_json: object) -> dict[str, float] | No
             return None
         out[key] = float(v)
     total = out["bull"] + out["base"] + out["bear"]
-    if total <= 0:
+    if not math.isfinite(total) or total <= 0:
         return None
     return {k: v / total for k, v in out.items()}
 
@@ -184,6 +184,12 @@ def scenario_reward(
     base_return = base_fv / price - 1.0
     bull_return = ret("bull")
     bear_return = ret("bear")
+    # Every consumer displays a percentage; reject overflow in that conversion too.
+    if any(
+        value is not None and (not math.isfinite(value) or not math.isfinite(value * 100.0))
+        for value in (base_return, bull_return, bear_return)
+    ):
+        return None
     has_scenarios = bull_return is not None or bear_return is not None
 
     # Per-name prior (LLM/owner) when the run carries one, else the global 25/50/25.
@@ -193,8 +199,12 @@ def scenario_reward(
     weights_source = "per_name" if prior is not None else "global"
     present = [s for s in weights if s in fair_values]
     mass = sum(weights[s] for s in present)
-    probabilities = {s: weights[s] / mass for s in present} if mass > 0 else {}
+    if not math.isfinite(mass) or mass <= 0:
+        return None
+    probabilities = {s: weights[s] / mass for s in present}
     expected_return = sum(probabilities[s] * (fair_values[s] / price - 1.0) for s in present)
+    if not math.isfinite(expected_return):
+        return None
 
     if has_scenarios:
         legs = " / ".join(

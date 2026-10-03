@@ -406,7 +406,7 @@ def test_company_profile_and_direct_portfolio_indicators_reuse_current_artifacts
     ]
     assert "Diversifier" in item.portfolio_role_labels
     assert "Balances factor tilt" in item.portfolio_role_labels
-    assert "Risk-adjusted accretive" in item.portfolio_role_labels
+    assert "Historical Sharpe improves" in item.portfolio_role_labels
 
     profile_html = render_investment_profile_peek(item)
     assert profile_html is not None
@@ -418,7 +418,7 @@ def test_company_profile_and_direct_portfolio_indicators_reuse_current_artifacts
     impact_html = render_portfolio_impact_peek(item)
     assert impact_html is not None
     assert "Candidate vs held book" in impact_html
-    assert "Marginal Sharpe" in impact_html
+    assert "Historical marginal Sharpe" in impact_html
     assert "not a composite fit score" in impact_html
 
 

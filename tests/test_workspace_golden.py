@@ -48,6 +48,7 @@ from unittest import mock
 
 import pytest
 
+from dcf.scenario_reward import SCENARIO_PROBABILITIES, scenario_reward
 from report.models import (
     AppendixSection,
     BearCaseSection,
@@ -762,6 +763,19 @@ def _valuation_basis() -> ValuationBasisSection:
 
 
 def _snapshot() -> SnapshotSection:
+    reward = scenario_reward(
+        price=72.4,
+        base_fv=86.0,
+        snapshot_json=json.dumps(
+            {
+                "scenarios": {
+                    "bull": {"fair_value_per_share_usd": 104.0},
+                    "bear": {"fair_value_per_share_usd": 58.0},
+                }
+            }
+        ),
+    )
+    assert reward is not None
     return SnapshotSection(
         status=SectionStatus.OK,
         ticker="TEST",
@@ -784,6 +798,10 @@ def _snapshot() -> SnapshotSection:
             bull_npv_per_share=104.0,
             bear_npv_per_share=58.0,
             valuation_model_label="FCFF DCF",
+            scenario_weights=dict(SCENARIO_PROBABILITIES),
+            scenario_set_by="global",
+            scenario_expected_return=reward.valuation_upside,
+            scenario_skew=reward.skew,
             assumptions_sync_status="synced",
             assumptions_synced_at=_TS,
         ),

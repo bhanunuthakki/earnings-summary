@@ -157,3 +157,25 @@ def test_partial_prior_and_per_name_prior_are_explicitly_unaccepted() -> None:
     assert reward.valuation_upside == pytest.approx((0.2 / 0.7) * 0.5)
     assert "per-name prior (unaccepted)" in reward.detail
     assert "partial scenarios; weights renormalized" in reward.detail
+
+
+def test_finite_operands_with_overflowing_value_gap_are_unavailable() -> None:
+    assert scenario_reward(price=1e-308, base_fv=1e308) is None
+    # The fractional ratio can be finite while its displayed percentage overflows.
+    assert scenario_reward(price=1, base_fv=1e308) is None
+    assert scenario_reward(price=1e-308, base_fv=1e-308, snapshot_json=_snap(1e308, 1, 1)) is None
+
+
+def test_overflowing_prior_total_uses_the_visible_default_prior() -> None:
+    snapshot = json.loads(_snap(150, 100, 50))
+    snapshot["scenario_prior"] = {"weights": {"bull": 1e308, "base": 1e308, "bear": 1e308}}
+    reward = scenario_reward(price=100, base_fv=100, snapshot_json=json.dumps(snapshot))
+    assert reward is not None
+    assert reward.probabilities == SCENARIO_PROBABILITIES
+    assert reward.valuation_upside == pytest.approx(0)
+    assert "default prior (unaccepted)" in reward.detail
+
+
+def test_zero_probability_mass_on_present_legs_is_unavailable() -> None:
+    snapshot = {"scenario_prior": {"weights": {"bull": 0.5, "base": 0, "bear": 0.5}}}
+    assert scenario_reward(price=100, base_fv=120, snapshot_json=json.dumps(snapshot)) is None

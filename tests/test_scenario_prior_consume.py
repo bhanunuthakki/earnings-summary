@@ -1,35 +1,65 @@
-"""PR E — scenario_reward consumes the per-name prior; the card surfaces E[V] + skew.
+"""PR E — scenario_reward consumes the per-name prior; the card surfaces present-value upside + skew.
 
 Covers:
   * scenario_reward.parse_scenario_prior_weights + the reward using per-name odds
     (the 3 allocation surfaces inherit it for free — they already pass snapshot_json);
-  * snapshot._scenario_prior_card / _scenario_ev_skew (card parse + E[V]/skew);
+  * snapshot._scenario_prior_card / _scenario_ev_skew (card parse + upside/skew);
   * ValuationSnapshot carries the fields off a fixture dcf_runs row;
-  * the markdown + workspace cards render weights + E[V] + skew + rationale.
+  * the markdown + workspace cards render weights + upside + skew + rationale.
 """
 
 from __future__ import annotations
 
 import json
 import sqlite3
-import sys
+from collections.abc import Callable
+from importlib import import_module
 from io import StringIO
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+from dcf.scenario_reward import parse_scenario_prior_weights, scenario_reward
+from report.models import SectionStatus, SnapshotSection, ValuationSnapshot
 
-from dcf.scenario_reward import parse_scenario_prior_weights, scenario_reward  # noqa: E402
-from report.models import SectionStatus, SnapshotSection, ValuationSnapshot  # noqa: E402
-from report.renderers.markdown import (  # noqa: E402
-    _valuation_card_md,  # pyright: ignore[reportPrivateUsage]  # internal seam
+
+class ValuationReader(Protocol):
+    def __call__(
+        self,
+        ticker: str,
+        repo_root: Path,
+        current_price: float | None,
+        model_link: str | None,
+        mos_bar: float | None,
+        sheet_url: str | None = None,
+        *,
+        held: bool = False,
+        conn: sqlite3.Connection | None = None,
+    ) -> ValuationSnapshot: ...
+
+
+_valuation_card_md = cast(
+    Callable[[StringIO, ValuationSnapshot], None],
+    getattr(import_module("report.renderers.markdown"), "_valuation_card_md"),
 )
-from report.renderers.workspace_html import (  # noqa: E402
-    _valuation_summary_panel,  # pyright: ignore[reportPrivateUsage]  # internal seam
+_valuation_summary_panel = cast(
+    Callable[[StringIO, SnapshotSection], None],
+    getattr(
+        import_module("report.renderers.workspace_sections.thesis_risk"), "_valuation_summary_panel"
+    ),
 )
-from report.sections import snapshot as snapshot_mod  # noqa: E402
+scenario_prior_card = cast(
+    Callable[[object], tuple[dict[str, float] | None, str | None, str | None]],
+    getattr(import_module("report.sections.snapshot"), "_scenario_prior_card"),
+)
+scenario_ev_skew = cast(
+    Callable[[float | None, float | None, object], tuple[float | None, float | None]],
+    getattr(import_module("report.sections.snapshot"), "_scenario_ev_skew"),
+)
+valuation_snapshot = cast(
+    ValuationReader, getattr(import_module("report.sections.snapshot"), "_valuation_snapshot")
+)
 
 
 def _approx(x: float) -> object:
@@ -138,29 +168,27 @@ def test_reward_renormalizes_over_present_legs() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 3. snapshot card parse + E[V]/skew
+# 3. snapshot card parse + upside/skew
 # --------------------------------------------------------------------------- #
 def test_scenario_prior_card_parse() -> None:
-    w, rationale, set_by = snapshot_mod._scenario_prior_card(  # pyright: ignore[reportPrivateUsage]
+    w, rationale, set_by = scenario_prior_card(
         _snap(weights={"bull": 0.15, "base": 0.50, "bear": 0.35})
     )
     assert w == {"bull": 0.15, "base": 0.50, "bear": 0.35}
     assert rationale == "fragile high-multiple thesis"
     assert set_by == "llm"
     # No block → all None.
-    assert snapshot_mod._scenario_prior_card(_snap()) == (None, None, None)  # pyright: ignore[reportPrivateUsage]
+    assert scenario_prior_card(_snap()) == (None, None, None)
 
 
 def test_scenario_ev_skew() -> None:
-    ev, skew = snapshot_mod._scenario_ev_skew(  # pyright: ignore[reportPrivateUsage]
+    ev, skew = scenario_ev_skew(
         100.0, 100.0, _snap(weights={"bull": 0.15, "base": 0.50, "bear": 0.35})
     )
     assert ev == _approx(-0.10)
     assert skew == _approx(-0.10)
     # No tails → None (a point estimate has no skew to show).
-    ev2, skew2 = snapshot_mod._scenario_ev_skew(  # pyright: ignore[reportPrivateUsage]
-        100.0, 100.0, json.dumps({"format": "redesign"})
-    )
+    ev2, skew2 = scenario_ev_skew(100.0, 100.0, json.dumps({"format": "redesign"}))
     assert ev2 is None and skew2 is None
 
 
@@ -198,9 +226,7 @@ def _seed_repo(tmp_path: Path, snapshot_json: str) -> Path:
 
 def test_valuation_snapshot_carries_scenario_prior(tmp_path: Path) -> None:
     repo = _seed_repo(tmp_path, _snap(weights={"bull": 0.15, "base": 0.50, "bear": 0.35}))
-    v = snapshot_mod._valuation_snapshot(  # pyright: ignore[reportPrivateUsage]
-        "TEST", repo, current_price=None, model_link=None, mos_bar=None
-    )
+    v = valuation_snapshot("TEST", repo, current_price=None, model_link=None, mos_bar=None)
     assert v.scenario_weights == {"bull": 0.15, "base": 0.50, "bear": 0.35}
     assert v.scenario_set_by == "llm"
     assert v.scenario_rationale == "fragile high-multiple thesis"
@@ -250,9 +276,7 @@ def test_valuation_snapshot_reads_newest_run_not_superseded_history(tmp_path: Pa
     conn.commit()
     conn.close()
 
-    v = snapshot_mod._valuation_snapshot(  # pyright: ignore[reportPrivateUsage]
-        "TEST", repo, current_price=None, model_link=None, mos_bar=None
-    )
+    v = valuation_snapshot("TEST", repo, current_price=None, model_link=None, mos_bar=None)
     # The NEWEST run's values + blocks, not the superseded 07-02 row.
     assert v.consolidated_npv_per_share == _approx(100.0)
     assert str(v.valuation_date) == "2026-07-03"
@@ -280,7 +304,7 @@ def test_markdown_card_renders_scenario_prior() -> None:
     _valuation_card_md(out, _card())
     text = out.getvalue()
     assert "Scenario prior" in text
-    assert "E[V] -10%" in text
+    assert "Scenario-weighted upside to present fair value -10%" in text
     assert "skew -10.0pts" in text
     assert "15/50/35" in text
     assert "LLM-set" in text
@@ -302,6 +326,25 @@ def test_workspace_card_renders_scenario_prior() -> None:
     html_out = body.getvalue()
     assert "Scenario prior" in html_out
     assert "15/50/35 bull/base/bear" in html_out
-    assert "Expected value E[V]" in html_out
+    assert "Scenario-weighted upside to present fair value" in html_out
     assert "-10%" in html_out
     assert "fragile high-multiple thesis" in html_out
+
+
+def test_projection_surfaces_default_prior_for_a_usable_range(tmp_path: Path) -> None:
+    repo = _seed_repo(tmp_path, _snap(bear=None))
+    valuation = valuation_snapshot("TEST", repo, current_price=None, model_link=None, mos_bar=None)
+    assert valuation.scenario_set_by == "global"
+    assert valuation.scenario_weights == {"bull": 0.25, "base": 0.5, "bear": 0.25}
+    assert valuation.scenario_valuation_upside == _approx(1 / 6)
+    assert (
+        valuation.scenario_prior_status
+        == "default prior (unaccepted); partial scenarios; weights renormalized"
+    )
+
+
+def test_projection_refuses_overflow_and_unsupported_probability_mass() -> None:
+    assert scenario_ev_skew(1e-308, 1e308, _snap()) == (None, None)
+    assert scenario_ev_skew(
+        100, 120, _snap(bull=None, bear=None, weights={"bull": 0.5, "base": 0, "bear": 0.5})
+    ) == (None, None)

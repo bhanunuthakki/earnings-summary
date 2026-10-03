@@ -582,6 +582,12 @@ def _valuation_summary_panel(body: StringIO, snap: SnapshotSection) -> None:
     if v.sum_of_segments_npv_per_share is not None:
         _val_row(body, "Sum-of-segments NPV", _fmt_price(v.sum_of_segments_npv_per_share))
     _val_row(body, "Current price", _fmt_price(v.current_price), emph=True)
+    _val_row(
+        body,
+        "Quote date",
+        v.live_price_at.date().isoformat() if v.live_price_at else "unavailable",
+        muted=True,
+    )
     if not has_range and v.current_price and v.consolidated_npv_per_share:
         # The range block already shows upside per scenario — this legacy row
         # would just duplicate its Base cell.
@@ -768,10 +774,7 @@ _SCEN_SRC_LABEL = {"llm": "LLM", "owner": "owner", "global": "default"}
 
 
 def _scenario_prior_block(body: StringIO, v: ValuationSnapshot) -> None:
-    """Scenario prior on the card: the per-name Bull/Base/Bear odds + the
-    probability-weighted expected value E[V], its skew, and the LLM/owner rationale
-    (until now only the allocation surfaces saw E[V]/skew). Silent when the run
-    carries no scenario_prior block."""
+    """Unaccepted prior and scenario-weighted upside to present fair value."""
     w = v.scenario_weights
     if w is None:
         return
@@ -783,9 +786,15 @@ def _scenario_prior_block(body: StringIO, v: ValuationSnapshot) -> None:
         f"{weights} bull/base/bear" + (f" ({src})" if src else ""),
         muted=True,
     )
-    if v.scenario_expected_return is not None:
-        skew_txt = f" · skew {v.scenario_skew * 100:+.1f}pts" if v.scenario_skew is not None else ""
-        _val_row(body, "Expected value E[V]", f"{v.scenario_expected_return * 100:+.0f}%{skew_txt}")
+    upside = v.scenario_valuation_upside
+    skew_txt = f" · skew {v.scenario_skew * 100:+.1f}pts" if v.scenario_skew is not None else ""
+    value = (
+        f"{upside * 100:+.0f}%{skew_txt}"
+        if upside is not None
+        else "unavailable: no usable scenario-weighted valuation gap"
+    )
+    _val_row(body, "Scenario-weighted upside to present fair value", value)
+    _val_row(body, "Scenario basis", v.scenario_prior_status, muted=True)
     if v.scenario_rationale:
         _val_row(body, "Why", v.scenario_rationale)
 

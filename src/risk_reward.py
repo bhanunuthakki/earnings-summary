@@ -312,7 +312,13 @@ def _dcf_reward_legs(
                 snapshot_json=row.assumption_snapshot_json,
             )
             if reward is None:
-                out[t] = Reward(None, False, True, "DCF has no usable price / fair value", None)
+                out[t] = Reward(
+                    None,
+                    False,
+                    True,
+                    "DCF valuation gap unavailable: price, fair value or probability mass unusable",
+                    None,
+                )
                 continue
             val_date = _parse_date(row.valuation_date)
             stale_bits: list[str] = []

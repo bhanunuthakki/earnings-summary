@@ -1033,7 +1033,11 @@ def _policy_line(policy: PolicyMix | None) -> str:
 
 def _risk_section(b: BetaStats) -> str:
     bench = b.benchmark or "SPY"
-    rf = f" · risk-free {_pct_frac(b.risk_free_annual)}" if b.risk_free_annual is not None else ""
+    rf = (
+        f" · risk-free {_pct_frac(b.risk_free_annual)}"
+        if b.risk_free_annual is not None
+        else " · risk-free treatment unavailable"
+    )
     samples = f" · {b.sample_size} daily samples" if b.sample_size is not None else ""
     intro = (
         '<section class="panel"><h2>Risk &amp; efficiency</h2>'
@@ -1058,7 +1062,7 @@ def _risk_section(b: BetaStats) -> str:
             _pct(b.alpha_annualized_pct, signed=True),
             tone=_tone(b.alpha_annualized_pct),
         ),
-        _kpi_card("Sharpe", _ratio(b.sharpe)),
+        _kpi_card("Historical Sharpe", _ratio(b.sharpe)),
         _kpi_card("Sortino", _ratio(b.sortino)),
         _kpi_card("Info ratio", _ratio(b.information_ratio)),
         _kpi_card("Tracking error", _pct_frac(b.tracking_error_annualized), sub="annualized"),
@@ -2318,7 +2322,7 @@ def _cached_risk_section(snap: RiskSnapshot) -> str:
     if snap.beta is not None:
         cards.append(_kpi_card(f"Beta vs {snap.benchmark or 'SPY'}", _ratio(snap.beta)))
     if snap.sharpe is not None:
-        cards.append(_kpi_card("Sharpe", _ratio(snap.sharpe)))
+        cards.append(_kpi_card("Historical Sharpe", _ratio(snap.sharpe)))
     if snap.portfolio_volatility_annualized is not None:
         cards.append(
             _kpi_card("Portfolio vol", _pct_frac(snap.portfolio_volatility_annualized), sub="ann.")
@@ -2339,11 +2343,16 @@ def _cached_risk_section(snap: RiskSnapshot) -> str:
     if snap.top5_weight_pct is not None:
         cards.append(_kpi_card("Top 5", _pct(snap.top5_weight_pct), sub="of book"))
     strip = f'<div class="kpi-strip">{"".join(cards)}</div>' if cards else ""
+    window = (
+        f"{escape(snap.window_start or 'unavailable')} → {escape(snap.window_end or 'unavailable')}"
+    )
     return (
         '<section class="panel"><h2>Risk &amp; drawdown</h2>'
         '<p class="sub">Live risk analytics are unavailable right now — showing the last-known '
         f"snapshot ({stamp}). These are cached values, not live; reconnect the tracker for live "
         "drawdown, factor, and benchmark-risk reads.</p>"
+        f'<p class="sub">Historical benchmark-risk window {window}; '
+        "return basis and risk-free treatment unavailable in this snapshot.</p>"
         f"{strip}</section>"
     )
 
@@ -3403,11 +3412,11 @@ def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
     head = (
         '<section class="panel"><h2>Risk vs reward vs conviction</h2>'
         '<p class="sub">Each position\'s share of total book risk (marginal contribution off the '
-        "Ledoit-Wolf covariance) set against its share of the book's expected reward "
-        "(probability-weighted bull/base/bear DCF on the live price) and your recorded "
-        "conviction. A positive gap means a name eats more of the book's risk than the "
-        "reward it supplies; where the DCF is stale or missing the reward leg is marked "
-        "low-confidence and shown but not scored.</p>"
+        "Ledoit-Wolf covariance) set against its share of positive modeled valuation upside "
+        "to present fair value and your recorded conviction. Upside shares cover only "
+        "readiness-qualified names. A positive gap means more modeled risk share than "
+        "modeled upside share. Missing, stale or unaccepted DCF evidence leaves the "
+        "valuation leg unavailable or unscored; conviction evidence remains usable.</p>"
     )
     if gap.hidden_reason is not None:
         return (
@@ -3428,21 +3437,28 @@ def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
         bits.append(f"LW shrink {gap.shrinkage:.2f}")
     if gap.prices_through is not None:
         bits.append(f"prices through {gap.prices_through.isoformat()}")
-    bits.append(f"{gap.valued_names}/{len(gap.rows)} priced by a current DCF")
+    bits.append(f"{gap.valued_names}/{len(gap.rows)} with readiness-qualified valuation upside")
     sub = f'<p class="sub">{escape(" · ".join(bits))}.</p>'
-    # Coverage gate (Monthly Red Team Phase 1 guard 1): the reward leg is a
-    # book-level scenario-reward rollup too — a majority-unscored reward share
-    # must not read as a quiet footnote fraction, same bar as tail stress.
+    # Preserve the coverage thresholds, but count names: missing upside mass is unknown.
     valued_pct = gap.valued_names / len(gap.rows) * 100.0
-    coverage_warn = _coverage_warning_html(valued_pct, noun="reward")
+    coverage_warn = ""
+    if valued_pct < COVERAGE_WARN_PCT:
+        coverage_tone = "k-pill-bad" if valued_pct < COVERAGE_BAD_PCT else "k-pill-warn"
+        missing_names = len(gap.rows) - gap.valued_names
+        coverage_warn = (
+            '<p class="pfr-coverage-warn">'
+            f'<span class="k-pill {coverage_tone}">{missing_names}/{len(gap.rows)} '
+            "NAMES WITHOUT QUALIFIED VALUATION UPSIDE</span> — "
+            "Modeled upside shares cover qualified names only.</p>"
+        )
     rows_html = "".join(_rrg_row(r) for r in gap.rows)
     notes = "".join(f'<p class="muted pfr-top">{escape(n)}</p>' for n in gap.notes)
     table = (
         '<table class="p-table rrg-table"><thead><tr>'
         "<th>Ticker</th>"
         '<th class="num">Weight</th><th class="num">Risk share</th>'
-        '<th class="num">Reward share</th><th class="num">Gap</th>'
-        '<th class="num">Exp. return</th><th class="num">Conviction</th>'
+        '<th class="num">Modeled upside share</th><th class="num">Gap</th>'
+        '<th class="num">Valuation upside</th><th class="num">Conviction</th>'
         "<th>Mismatch</th>"
         f"</tr></thead><tbody>{rows_html}</tbody></table>"
     )
@@ -3465,7 +3481,8 @@ def _rrg_row(r: RiskRewardGapRow) -> str:
         )
         exp_cell = f'<span class="{_NUM_CLS[e_tone]}">{r.expected_return_pct:+.0f}%</span>{warn}'
     else:
-        exp_cell = '<span class="muted">&mdash;</span>'
+        reason = f": {r.confidence_reason}" if r.confidence_reason else ""
+        exp_cell = f'<span class="muted" title="unavailable{escape(reason)}">unavailable</span>'
     reward_cell = (
         f"{r.reward_share_pct:.0f}%"
         if r.reward_share_pct is not None
@@ -3485,7 +3502,8 @@ def _rrg_row(r: RiskRewardGapRow) -> str:
     elif chips:
         mismatch = f'<span class="rrg-chips">{chips}</span>'
     elif r.low_confidence:
-        mismatch = '<span class="muted">low-confidence</span>'
+        reason = r.confidence_reason or "low-confidence"
+        mismatch = f'<span class="muted">valuation unavailable: {escape(reason)}</span>'
     else:
         mismatch = '<span class="muted">aligned</span>'
     return (

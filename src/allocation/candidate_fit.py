@@ -12,8 +12,8 @@ the held book, so the two surfaces are cohesive rather than disjoint.
 Four factors, each a transparent band multiplier centered at 1.0 (>1 accretive
 to the book, <1 dilutive), mirroring the score chip's reproducible-by-eye style:
 
-* **Marginal Sharpe** — the textbook marginal-Sharpe criterion: a name lifts the
-  book's Sharpe at the margin iff ``SR_candidate > SR_book · ρ(candidate, book)``.
+* **Historical marginal Sharpe** — a diagnostic comparison using recorded
+  price returns. The historical marginal-improvement criterion is ``SR_candidate > SR_book · ρ(candidate, book)``.
   ``SR_book`` is the tracker's reported book Sharpe (the same number the Risk tab
   shows); ``SR_candidate`` and ``ρ`` come from local daily price history.
 * **Diversification** — the candidate's correlation to the book (lower = better)
@@ -71,6 +71,9 @@ _SPY, _QQQ = "SPY", "QQQ"
 # --------------------------------------------------------------------------- #
 # Inputs / outputs
 # --------------------------------------------------------------------------- #
+
+
+HISTORICAL_SHARPE_LABEL = "Historical marginal Sharpe"
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,7 +134,7 @@ class FitFactor:
     """One fit factor's contribution to the composite."""
 
     key: str  # "sharpe" | "divers" | "factor" | "sector" — the why-string token
-    label: str  # human label for the breakdown peek ("Marginal Sharpe")
+    label: str  # human label for the breakdown peek (HISTORICAL_SHARPE_LABEL)
     multiplier: float  # band multiplier (1.0 when the inputs are missing)
     detail: str  # the reading, formatted; "n/a" when missing
     missing: bool
@@ -268,15 +271,19 @@ def _band_le(value: float, bands: tuple[tuple[float, float], ...], floor: float)
 
 def _sharpe_factor(risk: CandidateRisk, book: BookContext) -> FitFactor:
     if risk.sharpe is None or book.sharpe is None or risk.corr_to_book is None:
-        return FitFactor("sharpe", "Marginal Sharpe", 1.0, "n/a", True)
+        return FitFactor("sharpe", HISTORICAL_SHARPE_LABEL, 1.0, "n/a", True)
     hurdle = book.sharpe * risk.corr_to_book
     margin = risk.sharpe - hurdle
     detail = (
-        f"SR {risk.sharpe:+.2f} vs book {book.sharpe:+.2f} x corr "
+        f"Historical SR {risk.sharpe:+.2f} vs book {book.sharpe:+.2f} x corr "
         f"{risk.corr_to_book:+.2f} -> {margin:+.2f}"
     )
     return FitFactor(
-        "sharpe", "Marginal Sharpe", _band(margin, _SHARPE_BANDS, _SHARPE_FLOOR), detail, False
+        "sharpe",
+        HISTORICAL_SHARPE_LABEL,
+        _band(margin, _SHARPE_BANDS, _SHARPE_FLOOR),
+        detail,
+        False,
     )
 
 
