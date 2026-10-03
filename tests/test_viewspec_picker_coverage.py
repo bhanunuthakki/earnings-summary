@@ -16,10 +16,14 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from compute.kpi_resolver import kpi_group_key
 from provenance.overrides import record_override
+from sqlite_runtime import SQLiteConnectionRole
 from tests.kpi_semantic_support import admit_all_kpi_facts
 from timeseries.loaders import load_segment_junction_series_with_provenance
+from viewspec import engine
 from viewspec.engine import execute_view, metric_catalog
 from viewspec.spec import MetricRef, ViewSpec
 
@@ -460,6 +464,123 @@ def _seed_kpis(
     admit_all_kpi_facts(conn)
     conn.commit()
     conn.close()
+
+
+def test_catalog_anchor_work_is_bounded_to_relevant_definitions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "scoped-anchor.db"
+    _seed_kpis(
+        db,
+        [("TST", "Selected", 8)] + [(f"ALT{i}", f"Unrelated {i}", 8) for i in range(100)],
+    )
+    conn = _connect(db)
+    # Match production lookup indexes in this deliberately pre-cutover fixture.
+    conn.execute("CREATE INDEX context_fact ON kpi_fact_semantic_contexts(kpi_fact_id)")
+    conn.execute("CREATE INDEX context_head ON kpi_fact_semantic_contexts(supersedes_context_id)")
+    conn.execute("CREATE INDEX fact_ticker ON kpi_facts(ticker)")
+    conn.commit()
+
+    conn.close()
+    steps = 0
+    connect = engine.connect_sqlite
+
+    def counted_connect(path: Path, *, role: SQLiteConnectionRole) -> sqlite3.Connection:
+        connection = connect(path, role=role)
+
+        def progress() -> int:
+            nonlocal steps
+            steps += 1
+            return 0
+
+        connection.set_progress_handler(progress, 100)
+        return connection
+
+    monkeypatch.setattr(engine, "connect_sqlite", counted_connect)
+
+    def measure() -> tuple[list[dict[str, object]], int]:
+        nonlocal steps
+        steps = 0
+        rows = metric_catalog(db, ["TST"])["kpi"]
+        return rows, steps
+
+    scoped_rows, scoped_steps = measure()
+    anchor = engine.semantic_series_identity_anchor_sql
+
+    def unscoped_anchor(
+        connection: sqlite3.Connection, *, fact_relation: str | None = None
+    ) -> str | None:
+        # Reference the complete historical anchor, keeping the same bind
+        # parameter count. This deliberately includes unrelated issuers.
+        relation = (fact_relation or "kpi_facts").replace(
+            "kpi_definition_id IN (SELECT kpi_definition_id FROM kpi_facts WHERE ticker IN (?))",
+            "? IS NOT NULL",
+        )
+        return anchor(connection, fact_relation=relation)
+
+    monkeypatch.setattr(engine, "semantic_series_identity_anchor_sql", unscoped_anchor)
+    reference_rows, reference_steps = measure()
+    assert scoped_rows == reference_rows
+    assert [row["token"] for row in scoped_rows] == ["kpi:Selected"]
+    # Count SQLite instructions instead of relying on machine wall time.
+    assert scoped_steps < reference_steps / 2
+
+
+def test_catalog_definition_scope_uses_canonical_relation_at_cutover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "canonical-scope.db"
+    _seed_kpis(db, [("TST", "Selected", 8), ("ALT", "Unrelated", 8)])
+    conn = _connect(db)
+    conn.execute("CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts")
+    conn.commit()
+    conn.close()
+    connect = engine.connect_sqlite
+    denied: list[str] = []
+
+    def canonical_only_connect(path: Path, *, role: SQLiteConnectionRole) -> sqlite3.Connection:
+        connection = connect(path, role=role)
+
+        def authorize(
+            action: int,
+            table: str | None,
+            _column: str | None,
+            _database: str | None,
+            source: str | None,
+        ) -> int:
+            # Resolver-view reads remain allowed; direct consumer reads fail.
+            if action == sqlite3.SQLITE_READ and table == "kpi_facts" and source is None:
+                denied.append(table)
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+
+        connection.set_authorizer(authorize)
+        return connection
+
+    monkeypatch.setattr(engine, "connect_sqlite", canonical_only_connect)
+    rows = metric_catalog(db, ["TST"])["kpi"]
+    assert [row["token"] for row in rows] == ["kpi:Selected"]
+    assert denied == []
+
+
+def test_catalog_scope_retains_other_ticker_history_for_shared_definition(tmp_path: Path) -> None:
+    db = tmp_path / "shared-definition.db"
+    _seed_kpis(db, [("TST", "Shared", 1)])
+    conn = _connect(db)
+    conn.execute(
+        "INSERT INTO kpi_facts (ticker,period_end,fiscal_period_type,kpi_definition_id,"
+        "value,unit,source_doc_id) VALUES ('ALT','2026-03-31','Q1',1,'15','actual',1)"
+    )
+    admit_all_kpi_facts(conn)
+    conn.execute(
+        "UPDATE kpi_fact_semantic_contexts SET accounting_basis='GAAP' "
+        "WHERE kpi_fact_id=(SELECT MAX(id) FROM kpi_facts)"
+    )
+    conn.commit()
+    conn.close()
+    # The latest anchor changed basis. Scoping by ticker alone would wrongly
+    # retain TST's old management-basis series; scoping definitions does not.
+    assert metric_catalog(db, ["TST"])["kpi"] == []
 
 
 def test_kpi_group_key() -> None:
