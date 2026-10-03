@@ -479,3 +479,72 @@ def test_build_step_uses_workspace_renderer_with_enable_llm(tmp_path: Path) -> N
     assert "--renderer" in build_argv
     assert "workspace" in build_argv
     assert "--enable-llm" in build_argv
+
+
+@pytest.mark.parametrize(
+    "steps, skip",
+    [(["sec"], None), (["dcf", "typo"], None), ([""], None), (None, ["typo"]), (None, [""])],
+)
+def test_invalid_step_selection_is_rejected(
+    steps: list[str] | None, skip: list[str] | None
+) -> None:
+    with pytest.raises(ValueError, match="refresh step"):
+        rd.resolve_steps(steps, skip)
+
+
+def test_explicit_empty_step_selection_stays_empty() -> None:
+    assert rd.resolve_steps([]) == []
+
+
+def test_skip_every_step_never_restarts_default_chain(tmp_path: Path) -> None:
+    plan = build_plan(
+        ticker="NU", mode="full", db_path=tmp_path / "unused.db", skip_steps=list(STEP_NAMES)
+    )
+    calls: list[list[str]] = []
+
+    def refuse(argv: list[str], *, out: TextIO) -> _Result:
+        del out
+        calls.append(argv)
+        raise AssertionError("empty selection dispatched a child")
+
+    assert execute(plan, project_root=tmp_path, out=io.StringIO(), runner=refuse) == 0
+    assert calls == []
+
+
+@pytest.mark.parametrize("selection", ["", "typo", "dcf,typo"])
+def test_cli_invalid_steps_fail_before_database_access(
+    monkeypatch: pytest.MonkeyPatch, selection: str
+) -> None:
+    def refuse(override: Path | str | None = None) -> Path:
+        del override
+        raise AssertionError("invalid selection accessed database")
+
+    monkeypatch.setattr(rd, "require_db_path", refuse)
+    monkeypatch.setattr(
+        sys, "argv", ["refresh_dispatch.py", "--ticker", "NU", "--steps", selection]
+    )
+    with pytest.raises(SystemExit) as error:
+        rd.main()
+    assert error.value.code == 2
+
+
+def test_unselected_fmp_does_not_query_freshness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(**kwargs: object) -> tuple[datetime | None, str | None]:
+        del kwargs
+        raise AssertionError("unselected FMP accessed freshness receipts")
+
+    monkeypatch.setattr(rd, "_check_fmp_freshness", refuse)
+    plan = build_plan(ticker="NU", mode="stale", db_path=tmp_path / "unused.db", steps=["dcf"])
+    assert plan.steps == ("dcf",)
+    assert not plan.skip_fmp
+
+
+def test_direct_invalid_plan_refuses_before_dispatch(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="refresh step"):
+        execute(
+            Plan(ticker="NU", mode="full", skip_fmp=False, skip_fmp_reason=None, steps=("typo",)),
+            project_root=tmp_path,
+            out=io.StringIO(),
+        )
