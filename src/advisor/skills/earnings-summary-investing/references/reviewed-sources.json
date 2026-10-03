@@ -1,5 +1,5 @@
 {
-  "review_note": "Reviewed explicit valuation, thesis-revision and full-book-risk modes. Excluded legacy pressure-test execution and corrected evaluator audit writes. Verified governed Ask diff/decision limits including absent scored-miss enforcement, typed tracker account envelope, partial analytics, compatible risk snapshots, and read-only monthly evidence collection. Added source owners for those interfaces and existing evaluation/promotion contracts. Extended the existing monthly fifteen-minute window with bounded synthetic probes, without new production jobs. Reviewed #1616 Operations note: identity-preserving Company Desk loading/retry and lookup index add no writer, operator action or source authority. Reviewed main #1623: cached host-runtime GET adds no live probe or financial write; typed option metadata and signed covered-call projection require preserving gross stock capital, option liability, net NAV, account coverage and incomplete reasons, without assuming sensitivity or contract multipliers.",
+  "review_note": "Reviewed explicit valuation, thesis-revision and full-book-risk modes. Excluded legacy pressure-test execution and corrected evaluator audit writes. Verified governed Ask diff/decision limits including absent scored-miss enforcement, typed tracker account envelope, partial analytics, compatible risk snapshots, and read-only monthly evidence collection. Added source owners for those interfaces and existing evaluation/promotion contracts. Extended the existing monthly fifteen-minute window with bounded synthetic probes, without new production jobs. Reviewed #1616 Operations note: identity-preserving Company Desk loading/retry and lookup index add no writer, operator action or source authority. Reviewed main #1623: cached host-runtime GET adds no live probe or financial write; typed option metadata and signed covered-call projection require preserving gross stock capital, option liability, net NAV, account coverage and incomplete reasons, without assuming sensitivity or contract multipliers. Reviewed release contracts and six explicit source interfaces against actual APIs through separate GPT-6.1 Sol advisory semantic review on 2026-10-03. Exact scope, capture/replay, selected SEC text-only limits, MELI role and scenario acceptance, and current valuation-upside limits remain mandatory. Source review does not qualify installation, native execution, financial readiness or visual performance.",
   "schema_version": 1,
   "sources": [
     {
@@ -8,7 +8,7 @@
     },
     {
       "path": "DEFINITIONS.md",
-      "sha256": "0f464ce207a0892122f588b1466c10cd40b093adab4f5a8553eadf8f1ce433df"
+      "sha256": "0ccad9e61635cdeac4c398adcd1e8c40c3f0e7493a73d564cef93e2c56583ca3"
     },
     {
       "path": "directives/agent_host_operations.md",
@@ -20,11 +20,11 @@
     },
     {
       "path": "directives/data_pipeline_dag.md",
-      "sha256": "4b6e75808bd3ae6b891489558aa570488f2ad3f4657e039f5f7442c509f19b42"
+      "sha256": "28576a04379c9c6ecb42d1a8ddd8f16e7e471996b033ffbff765f90c63f79a53"
     },
     {
       "path": "directives/data_provenance.md",
-      "sha256": "c95c24b2ad5f0601a7d7f50dbb912e6a2554ac0089b1a6c73073d3064fe85241"
+      "sha256": "1db2e36d1fe450bb9759862e3809d0c02fee93d9a264478ed134d8b58d8fa4ab"
     },
     {
       "path": "directives/dcf_gsheets_setup.md",
@@ -80,11 +80,11 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "ffcd771b28fdf1b6f9c7d2f65e832113e4cab2b45107227856ac50f0e3af746e"
+      "sha256": "1ce86946cee393b55ed9198c0a451ad9de865f1522f2d630bbfaa5169f96e2c4"
     },
     {
       "path": "directives/post_earnings_readout.md",
-      "sha256": "60a42693ffd4f5c1b94efd3da21c29a621ace9a4bfbdd4badb498283846c7ef7"
+      "sha256": "e462436b0326395839b10b8be7a657e476369577956d86d6c780e237c608fa9e"
     },
     {
       "path": "directives/quarterly_refresh.md",
@@ -119,6 +119,10 @@
       "sha256": "0651d288e1193c3a1cfe7c40d6d120397677f0901204c1ec4418c8629c5ae755"
     },
     {
+      "path": "execution/build_meli_platform_dcf.py",
+      "sha256": "2a06a7a1e550d7e05517fbbdfc9d24fb770e4b90145b9924257b8cebc87ca60d"
+    },
+    {
       "path": "execution/capture_expected_sec_documents.py",
       "sha256": "6d3399cf5924b706aec54b42b1aad6e3eea54169b0dc0c775b0409c9c34c6cd8"
     },
@@ -128,7 +132,7 @@
     },
     {
       "path": "execution/comments_server.py",
-      "sha256": "fb9a210257d65697c57960cece6f4045a821e9abfa994e55a9ecb27c9d8af471"
+      "sha256": "b085bb4f24fdebef7b9d8e84f7a97ac1ba365c629862bda1ea2c571104ef3858"
     },
     {
       "path": "execution/comments_server_research_routes.py",
@@ -187,8 +191,12 @@
       "sha256": "bd75394b2faef6b115ddd008c5e4489e94b6dc377b8d8e8f5a77627e397ca3cd"
     },
     {
+      "path": "execution/plan_analysis_evidence_scope.py",
+      "sha256": "6716fa0ed4eeb48e53eb65e3ad56251da71525e14c3029de729be8241466223e"
+    },
+    {
       "path": "execution/populate_research_snapshots.py",
-      "sha256": "6414cdbe20454a672fbf3cff614e7dfc3af9c5d9063a7ed003f1661280975e5d"
+      "sha256": "3361b0b4e4aab69e6f71085f5cf4304c90316e9abe4e606dd9ba5ee7b38f4040"
     },
     {
       "path": "execution/populate_source_fact_plane.py",
@@ -209,6 +217,10 @@
     {
       "path": "execution/refresh_portfolio_risk_snapshot.py",
       "sha256": "2b5535e14f5abd616a6a384753d5f2d5ad915c640fbb999747b1ab66304181d5"
+    },
+    {
+      "path": "execution/refresh_sec_accession.py",
+      "sha256": "f4b9b6fa6a8c67cea9aaf16bc56a50e47bb8caabcbd1b9cdb29b7adbc7a2b76b"
     },
     {
       "path": "execution/run_calibration_scorecard.py",
@@ -244,7 +256,7 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "0de8ae0057efb79ae645975c047c971343f9f873280173d4b1378263929b2f99"
+      "sha256": "8f18d15d4f6b84a9f9ca56423a114d4522cb9cebef52af9f34c6e8422dcad525"
     },
     {
       "path": "scripts/check_investing_skill.py",
@@ -280,11 +292,19 @@
     },
     {
       "path": "src/compute/thesis_evaluator.py",
-      "sha256": "362209870e5e444899dc5524d1e33ac91c429119a81fac5d4fb991adbe605db0"
+      "sha256": "0a4f2602f5bc3a9a6ad322eb1ed05713600010e16b0ab305a5945d9a3bc6745d"
     },
     {
       "path": "src/dcf/grade_evidence.py",
       "sha256": "f212cc8ca1a98586ba9cd46028087419877eb606b26f20aa1f333eb3e527ee88"
+    },
+    {
+      "path": "src/dcf/input_evidence.py",
+      "sha256": "f8e079fb9228d422be7c30927b2bc6ba660361d26eba124364e00a3d4d5cafe0"
+    },
+    {
+      "path": "src/dcf/meli_inputs.py",
+      "sha256": "d74030112933f4dc86a4890bb8a251df28322b99511ab62ad828ed1c64bab77f"
     },
     {
       "path": "src/dcf/readiness.py",
@@ -296,7 +316,7 @@
     },
     {
       "path": "src/earnings_readout.py",
-      "sha256": "50d9d6884e72a1a76fd6a543e83a0a1274e7ee45649adf2aef10f361c0712402"
+      "sha256": "85fed9fcdbb09e243f23fda31916f96250e5ed02f6331c5f5060d4aa5e0839c0"
     },
     {
       "path": "src/evals/coverage.py",
@@ -324,11 +344,15 @@
     },
     {
       "path": "src/pipeline/work_os_evaluation.py",
-      "sha256": "47bc26f1cd7c0e1e0848ebade3583b04b5ee09a9db2bddae0ae37422ca5b7b70"
+      "sha256": "1086d2503cb85348418ab99e44ea306a21b245e0105ec5e757544769761ec036"
     },
     {
       "path": "src/portfolio_risk_snapshot_store.py",
       "sha256": "24162dd772425bd2719a6f307da3f4d025716d28d379f181b7789cb5e6680bd7"
+    },
+    {
+      "path": "src/provenance/analysis_scope.py",
+      "sha256": "ee16d76313cdaf608ed1cbf67afb77e1863d537613cc8c2aa1f590e593dbd175"
     },
     {
       "path": "src/provenance/fact_read_model.py",
@@ -336,11 +360,11 @@
     },
     {
       "path": "src/provenance/population_research_snapshots.py",
-      "sha256": "55a1aea8c240d46215114ecb867043dbfa4325fd7af425962e7ee17a98420a20"
+      "sha256": "4b881ba6b944b51857952a07736f76d6859cc3bbff2a2d53a398b46cee116ada"
     },
     {
       "path": "src/provenance/research_snapshot.py",
-      "sha256": "e645061b4c810d9221fab58911e20d52c7ffd6584cc6f25bd140324a9f73a3af"
+      "sha256": "7ab75eeaf59954880a115d28da2c692fde835e9386db2447c935693801d57a6c"
     },
     {
       "path": "src/report/builder.py",
@@ -352,11 +376,11 @@
     },
     {
       "path": "src/report/sections/thesis.py",
-      "sha256": "af03a01a29463485b166611cfd4e510fb319659f0767d0962d8477c596f055fc"
+      "sha256": "45e6028ca435285bebe58631f79d1a36deec5ef80c7edb061255606d59a47356"
     },
     {
       "path": "src/research/investment_decision_card.py",
-      "sha256": "d565b0e100e91571a1bc24908d7ce1c6a2e072175fb402f2776c23725f85f1e9"
+      "sha256": "35a44a5fb8c24bab5bfd7df2a0bf21fb341ba7e810423cde0523d65316ff6dc4"
     },
     {
       "path": "src/research/proposal_approval.py",

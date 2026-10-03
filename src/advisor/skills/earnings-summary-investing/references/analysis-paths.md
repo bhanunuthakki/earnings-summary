@@ -20,6 +20,25 @@ requests. The evidence can change the conclusion. Keep brief requests brief.
    strongest counter-case and what would change the view. A sizing, funding or
    increase/reduce request also uses the allocation skill's full-book context.
 
+For an updated valuation, retain the selected model run, financial period,
+reported input bindings, source documents/locators and semantic definitions,
+research snapshot, model and market clocks, dated assumptions and scenario
+acceptance. Use the preflight reasons to identify the missing owning stage.
+Inspect its retained plan, attempt, checkpoint and provider disposition before
+starting an authorized repair. A missing input is not an invitation to fetch
+through a different provider or use unreviewed figures. Routine saved-data reads
+perform no acquisition. An explicit source request declares its scope and bounds.
+Source capture, text extraction, financial admission and model acceptance have
+separate outcomes; show the last verified result while its successor is blocked.
+
+MELI keeps commerce and non-credit payments FCFF separate from credit FCFE.
+Retain issuer liquidity/debt basis and analyst allocations so credit funding,
+leases and credit losses are not counted twice. The ten main assumptions are
+a reading aid; review every material driver. Keep ordinary downside separate
+from stress, with explicit probability status. Present fair-value upside is
+not a future holding-period return or a Sharpe numerator. Compare forward
+returns only when horizon, exit value, payouts and probabilities are accepted.
+
 ## Thesis revision from notes or an article
 
 1. Recover the current approved thesis and its version. Read the supplied notes
