@@ -13,6 +13,16 @@ and better UI families within authorized work while distinguishing reported fact
 analyst inference. Production authority, financial lineage and publication permissions remain fixed
 unless the owner explicitly changes them.
 
+## Investing task routing
+
+Use [earnings-summary-investing](src/advisor/skills/earnings-summary-investing/SKILL.md)
+as the primary workflow for this project's company research, earnings briefs,
+thesis checks, valuation, evaluation-list review, and portfolio research. It routes
+to the repository's research paths and existing specialist skills. Do not load the
+generic Public Equity Investing plugin for these tasks unless the user explicitly
+requests it. The project workflow does not change source, production, or publication
+authority.
+
 ## Production and test boundary
 
 The production database authority is configured outside this repository; the canonical Windows host

@@ -264,9 +264,7 @@ def _section(label: str, text: str) -> str:
 
 
 def assemble_context(db_path: Path, repo_root: Path, t: str, *, today: date) -> list[str]:
-    """The ordered deterministic context sections. This list IS the cache-input
-    list (er_date is prepended by the caller): any change to what the platform
-    knows produces a new input hash."""
+    """Ordered rendered context retained verbatim in the manifest and input hash."""
     try:
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
@@ -327,6 +325,59 @@ def build_prompt(t: str, er_date: date, days_until: int, sections: list[str]) ->
     return head + "\n\n" + "\n\n".join(sections)
 
 
+def _context_manifest(
+    candidate: BriefCandidate, sections: list[str], *, today: date, prompt_version: str
+) -> dict[str, object]:
+    """Retain exact prompt inputs without inferring identities from rendered text."""
+    blocks: list[dict[str, object]] = [
+        {
+            "kind": f"context_section_{index}",
+            "content": section,
+            "content_status": "present" if section.strip() else "missing",
+            "source": {
+                "source_kind": "assembled_context",
+                "identity_status": "missing",
+                "source_doc_id": None,
+            },
+        }
+        for index, section in enumerate(sections, start=1)
+    ]
+    return {
+        "schema_version": "pre_earnings_brief_context@1",
+        "prompt_version": prompt_version,
+        "ticker": candidate.ticker,
+        "as_of": today.isoformat(),
+        "expected_earnings_date": candidate.er_date.isoformat(),
+        "days_until": candidate.days_until,
+        "expected_earnings_source": {
+            "source_kind": "expected_earnings",
+            "identity_status": "missing",
+            "source_doc_id": None,
+        },
+        "artifact_key_semantics": "expected_earnings_event_date",
+        "fiscal_target": {
+            "identity_status": "unresolved",
+            "fiscal_year": None,
+            "fiscal_period_type": None,
+            "period_end": None,
+            "reason": "An expected earnings event date does not identify an issuer fiscal period.",
+        },
+        "grounding_status": "partial",
+        "missing_source_identities": [
+            "expected_earnings_event",
+            "fiscal_target",
+            *[block["kind"] for block in blocks],
+            *([] if blocks else ["context_sections"]),
+        ],
+        "prompt_header": _PROMPT_HEADER.format(
+            ticker=candidate.ticker,
+            er_date=candidate.er_date.isoformat(),
+            days_until=candidate.days_until,
+        ),
+        "blocks": blocks,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Generation — idempotent per (ticker, er_date), ≤2 calls per cycle
 # ---------------------------------------------------------------------------
@@ -353,7 +404,14 @@ def generate_brief(
     er_iso = candidate.er_date.isoformat()
     prompt_version = prompt_version_for(PURPOSE)
     sections = assemble_context(db_path, repo_root, t, today=today)
-    cache_inputs: list[bytes | str] = [er_iso, *sections]
+    context_manifest = _context_manifest(
+        candidate, sections, today=today, prompt_version=prompt_version
+    )
+    cache_inputs: list[bytes | str] = [
+        er_iso,
+        *sections,
+        json.dumps(context_manifest, sort_keys=True, separators=(",", ":")),
+    ]
     input_sha = compute_input_sha256(prompt_version=prompt_version, cache_inputs=cache_inputs)
 
     current = read_current(ticker=t, purpose=PURPOSE, fiscal_period=er_iso, db_path=db_path)
@@ -380,6 +438,7 @@ def generate_brief(
         model=LLM_MODELS.get(PURPOSE),
         prompt_version=prompt_version,
         cache_inputs=cache_inputs,
+        content_json=context_manifest,
     )
     artifact_id: int | None = None
     was_cache_hit = False
