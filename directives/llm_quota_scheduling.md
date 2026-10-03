@@ -35,7 +35,7 @@ This runbook is the single current repository authority for collision avoidance 
 | `run_decision_nudge` | daily 17:00 | no LLM work |
 | myclaw `weekly_review` | Sunday 14:00 | cross-repository scorer and domain reviews |
 | myclaw `monthly_curate` | first Saturday 14:00 | cross-repository curation and fitting |
-| Monthly prompt architecture refresh (Mac app automation) | first Monday 10:00 | existing instruction-maintenance job also reviews `earnings-summary-investing`; deterministic source check first, project subtask bounded to 15 minutes; no application LLM call, scheduler writer, or production-data mutation |
+| Monthly prompt architecture refresh (Mac app automation) | first Monday 10:00 | existing instruction-maintenance job also reviews `earnings-summary-investing`; deterministic source check plus skill-selection/analysis assessment using existing weekly evaluation and monthly memo/calibration receipts; up to three bounded synthetic-probe workers, project subtask remains 15 minutes; defer on contention; no application LLM call, scheduler writer, or production-data mutation |
 
 ## Registration evidence
 
