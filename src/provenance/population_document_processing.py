@@ -18,6 +18,11 @@ from pydantic import (
     model_validator,
 )
 
+from provenance.analysis_scope import (
+    AnalysisEvidenceScope,
+    require_analysis_documents,
+    resolve_analysis_coverage,
+)
 from provenance.document_processing_evidence import (
     publish_document_processing_evidence,
     verify_document_processing_evidence,
@@ -46,6 +51,7 @@ from provenance.research_snapshot import (
     seal_disposition,
     seal_processing_snapshot,
 )
+from provenance.source_coverage import expected_document_obligation_binding_id
 
 _POLICY = DocumentProcessingPolicy(
     policy_name="complete_reporting_document_processing",
@@ -79,6 +85,9 @@ class DocumentProcessingPopulationRequest(_FrozenModel):
     max_obligations: int | None = Field(default=None, ge=1)
     input_commitment_sha256: str | None = None
     plan_commitment_sha256: str | None = None
+    analysis_scope: AnalysisEvidenceScope | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator("input_commitment_sha256", "plan_commitment_sha256")
     @classmethod
@@ -579,6 +588,7 @@ def _validate_document_processing_receipt_successor(
     if (
         successor.request.cutoff_at != parent.request.cutoff_at
         or successor.request.operation_recorded_at != parent.request.operation_recorded_at
+        or successor.request.analysis_scope != parent.request.analysis_scope
     ):
         raise ValueError("document-processing checkpoint successor scope changed")
     successor_bounded = (
@@ -695,6 +705,7 @@ def verify_document_processing(
         "WHERE datetime(header.cutoff_at)=datetime(?) "
         "AND datetime(header.recorded_at)<=datetime(?) "
         "AND datetime(seal.sealed_at)<=datetime(?) "
+        "AND json_extract(header.scope_json,'$.analysis_scope') IS NULL "
         "ORDER BY header.processing_snapshot_id"
     )
     scope_set = stream_population_artifact_set(
@@ -738,6 +749,7 @@ def verify_document_processing(
         "WHERE datetime(header.cutoff_at)=datetime(?) "
         "AND datetime(header.recorded_at)<=datetime(?) "
         "AND datetime(seal.sealed_at)<=datetime(?) "
+        "AND json_extract(header.scope_json,'$.analysis_scope') IS NULL "
         "GROUP BY document.issuer_id,header.processing_snapshot_id"
         ") GROUP BY issuer_id HAVING COUNT(*)<>1 LIMIT 1",
         (_db_time(knowledge), _db_time(observed), _db_time(observed)),
@@ -778,10 +790,13 @@ def populate_document_processing(
             conn,
             cutoff,
             recorded,
+            analysis_scope=request.analysis_scope,
         )
         if not documents_by_issuer:
             raise ValueError("document processing requires a nonempty covered universe")
-        input_sha = _input_commitment(conn, cutoff, recorded, decisions)
+        input_sha = _input_commitment(
+            conn, cutoff, recorded, decisions, analysis_scope=request.analysis_scope
+        )
         selection_sha = _selection_commitment(decisions)
         plan_sha = document_processing_plan_commitment(request, input_sha, selection_sha)
         _verify_commitments(request, input_sha=input_sha, plan_sha=plan_sha)
@@ -809,7 +824,9 @@ def populate_document_processing(
             for document_ids in documents_by_issuer.values():
                 derive_obligations(
                     conn,
-                    DocumentProcessingScope(document_version_ids=document_ids),
+                    DocumentProcessingScope(
+                        document_version_ids=document_ids, analysis_scope=request.analysis_scope
+                    ),
                     cutoff,
                     _POLICY,
                     observed_through=recorded,
@@ -867,7 +884,9 @@ def populate_document_processing(
                     "cannot seal document-processing snapshots while source "
                     "inventory, classification, coverage, or binding blockers remain"
                 )
-            _seal_complete_snapshots(conn, documents_by_issuer, cutoff, recorded)
+            _seal_complete_snapshots(
+                conn, documents_by_issuer, cutoff, recorded, analysis_scope=request.analysis_scope
+            )
         scoped_document_ids = tuple(
             sorted(
                 document_id
@@ -917,7 +936,11 @@ def populate_document_processing(
             ),
         )
         post_state_sha = (
-            _input_commitment(conn, cutoff, recorded, decisions) if request.apply else input_sha
+            _input_commitment(
+                conn, cutoff, recorded, decisions, analysis_scope=request.analysis_scope
+            )
+            if request.apply
+            else input_sha
         )
         return DocumentProcessingPopulationResult(
             mode="apply" if request.apply else "dry_run",
@@ -947,7 +970,9 @@ def populate_document_processing(
             processed_obligation_count=processed,
             last_processing_obligation_revision_id=last_id,
             expected_issuer_count=len(documents_by_issuer),
-            processing_snapshot_count=_processing_snapshot_count(conn, cutoff, recorded),
+            processing_snapshot_count=_processing_snapshot_count(
+                conn, cutoff, recorded, analysis_scope=request.analysis_scope
+            ),
             selection_commitment_sha256=selection_sha,
             input_commitment_sha256=input_sha,
             post_state_commitment_sha256=post_state_sha,
@@ -957,6 +982,7 @@ def populate_document_processing(
                 cutoff,
                 decisions,
                 recorded,
+                analysis_scope=request.analysis_scope,
             ),
             checkpoint=checkpoint,
         )
@@ -968,11 +994,21 @@ def _document_scope(
     conn: sqlite3.Connection,
     cutoff: datetime,
     observed_through: datetime,
+    *,
+    analysis_scope: AnalysisEvidenceScope | None = None,
 ) -> tuple[
     tuple[ReportingDocumentDecision, ...],
     dict[str, tuple[str, ...]],
     int,
 ]:
+    selected_ids: set[str] | None = None
+    if analysis_scope is not None:
+        require_analysis_documents(conn, analysis_scope, cutoff, observed_through)
+        selected_ids = {
+            entry.expected_document_id
+            for entry in resolve_analysis_coverage(conn, analysis_scope, cutoff, observed_through)
+            if entry.role == "research_document"
+        }
     rows = conn.execute(
         "SELECT expected.expected_document_id,expected.issuer_id,"
         "expected.source_kind,expected.document_type,expected.form_type,"
@@ -1022,6 +1058,8 @@ def _document_scope(
     grouped: dict[str, list[str]] = {}
     decisions: list[ReportingDocumentDecision] = []
     for row in rows:
+        if selected_ids is not None and str(row[0]) not in selected_ids:
+            continue
         lifecycle_status = None if row[8] is None else str(row[8])
         lifecycle_expected_id = None if row[9] is None else str(row[9])
         if lifecycle_status is None:
@@ -1082,7 +1120,7 @@ def _document_scope(
             issuer_id: tuple(sorted(set(document_ids)))
             for issuer_id, document_ids in sorted(grouped.items())
         },
-        incomplete_inventory_count,
+        incomplete_inventory_count if analysis_scope is None else 0,
     )
 
 
@@ -1341,7 +1379,7 @@ def _ensure_expected_document_binding(
         separators=(",", ":"),
         ensure_ascii=False,
     )
-    binding_id = "expected-obligation-binding:" + _digest(
+    binding_id = expected_document_obligation_binding_id(
         decision.expected_document_id,
         obligation_revision_id,
     )
@@ -1368,8 +1406,11 @@ def _ensure_expected_document_binding(
         (decision.expected_document_id,),
     ).fetchone()
     if existing is not None:
-        if tuple(existing) != values:
+        if tuple(existing[:9]) != values[:9]:
             raise ValueError("expected document binding replay changed immutable values")
+        effective, knowledge, recorded = (_parse_time(value) for value in existing[9:])
+        if effective > cutoff or knowledge > cutoff or recorded > recorded_at:
+            raise ValueError("expected document binding is not visible at requested cutoff")
         return False
     conn.execute(
         "INSERT INTO expected_document_obligation_bindings "
@@ -1512,6 +1553,8 @@ def _seal_complete_snapshots(
     documents_by_issuer: dict[str, tuple[str, ...]],
     cutoff: datetime,
     recorded_at: datetime,
+    *,
+    analysis_scope: AnalysisEvidenceScope | None = None,
 ) -> None:
     planned: list[tuple[str, tuple[str, ...], str]] = []
     for issuer_id, document_ids in documents_by_issuer.items():
@@ -1521,6 +1564,10 @@ def _seal_complete_snapshots(
                 f"cannot seal processing snapshot for {issuer_id} with unclosed obligations"
             )
         snapshot_id = "processing-snapshot:" + _digest(issuer_id, _db_time(cutoff))
+        if analysis_scope is not None:
+            snapshot_id = "analysis-processing:" + _digest(
+                analysis_scope.scope_id, _db_time(cutoff), _db_time(recorded_at)
+            )
         planned.append((issuer_id, document_ids, snapshot_id))
     conn.execute("SAVEPOINT population_document_snapshot_batch")
     try:
@@ -1529,7 +1576,9 @@ def _seal_complete_snapshots(
                 conn,
                 processing_snapshot_id=snapshot_id,
                 idempotency_key=snapshot_id,
-                scope=DocumentProcessingScope(document_version_ids=document_ids),
+                scope=DocumentProcessingScope(
+                    document_version_ids=document_ids, analysis_scope=analysis_scope
+                ),
                 cutoff_at=cutoff,
                 policy=_POLICY,
                 recorded_at=recorded_at,
@@ -1679,6 +1728,8 @@ def _processing_snapshot_count(
     conn: sqlite3.Connection,
     cutoff: datetime,
     observed_through: datetime,
+    *,
+    analysis_scope: AnalysisEvidenceScope | None = None,
 ) -> int:
     return int(
         conn.execute(
@@ -1687,11 +1738,13 @@ def _processing_snapshot_count(
             "ON seal.processing_snapshot_id=header.processing_snapshot_id "
             "WHERE datetime(header.cutoff_at)=datetime(?) "
             "AND datetime(header.recorded_at)<=datetime(?) "
-            "AND datetime(seal.sealed_at)<=datetime(?)",
+            "AND datetime(seal.sealed_at)<=datetime(?) "
+            "AND json_extract(header.scope_json,'$.analysis_scope.scope_id') IS ?",
             (
                 _db_time(cutoff),
                 _db_time(observed_through),
                 _db_time(observed_through),
+                None if analysis_scope is None else analysis_scope.scope_id,
             ),
         ).fetchone()[0]
     )
@@ -1702,6 +1755,8 @@ def _input_commitment(
     cutoff: datetime,
     observed_through: datetime,
     decisions: tuple[ReportingDocumentDecision, ...],
+    *,
+    analysis_scope: AnalysisEvidenceScope | None = None,
 ) -> str:
     scope_rows = conn.execute(
         "SELECT expected.expected_document_id,coverage.coverage_status,"
@@ -1732,6 +1787,23 @@ def _input_commitment(
         )
     )
     expected_ids = tuple(sorted(item.expected_document_id for item in decisions))
+    if analysis_scope is not None:
+        coverage = tuple(
+            item
+            for item in resolve_analysis_coverage(conn, analysis_scope, cutoff, observed_through)
+            if item.role != "outside_scope"
+        )
+        expected_ids = tuple(sorted(item.expected_document_id for item in coverage))
+        document_ids = tuple(
+            sorted(
+                {
+                    item.document_version_id
+                    for item in coverage
+                    if item.document_version_id is not None
+                }
+            )
+        )
+        scope_rows = [row for row in scope_rows if str(row[0]) in set(expected_ids)]
     material: dict[str, list[list[object]]] = {
         "scope": _json_rows(scope_rows),
         "source_inventory": _json_rows(
@@ -1847,6 +1919,42 @@ def _input_commitment(
             order_by="document_version_id,artifact_id",
         ),
     }
+    if analysis_scope is not None:
+        snapshot_ids = (analysis_scope.inventory.snapshot_id,)
+        for label, table, column, values, order in (
+            (
+                "source_inventory",
+                "source_inventory_snapshots",
+                "snapshot_id",
+                snapshot_ids,
+                "snapshot_id",
+            ),
+            (
+                "source_inventory_components",
+                "source_inventory_components",
+                "snapshot_id",
+                snapshot_ids,
+                "ordinal",
+            ),
+            (
+                "lifecycle",
+                "expected_document_lifecycle_revisions",
+                "source_inventory_snapshot_id",
+                snapshot_ids,
+                "expected_document_key,revision",
+            ),
+            (
+                "source_obligations",
+                "source_obligation_revisions",
+                "issuer_id",
+                (analysis_scope.request.issuer_id,),
+                "obligation_key,revision",
+            ),
+        ):
+            material[label] = _rows_for_values(
+                conn, table=table, column=column, values=values, order_by=order
+            )
+        material["analysis_scope"] = [[analysis_scope.scope_sha256]]
     run_ids = (
         tuple(
             str(row[0])
@@ -1902,6 +2010,16 @@ def _input_commitment(
         )
         if document_ids
         else ()
+    )
+    snapshot_ids = tuple(
+        snapshot_id
+        for snapshot_id in snapshot_ids
+        if conn.execute(
+            "SELECT 1 FROM document_processing_snapshot_headers WHERE processing_snapshot_id=? "
+            "AND json_extract(scope_json,'$.analysis_scope.scope_id') IS ?",
+            (snapshot_id, None if analysis_scope is None else analysis_scope.scope_id),
+        ).fetchone()
+        is not None
     )
     assessment_ids = _selected_ids(
         conn,
@@ -2186,7 +2304,17 @@ def _output_commitment(
     cutoff: datetime,
     decisions: tuple[ReportingDocumentDecision, ...],
     observed_through: datetime,
+    *,
+    analysis_scope: AnalysisEvidenceScope | None = None,
 ) -> str:
+    if analysis_scope is not None:
+        return _digest(
+            analysis_scope.scope_sha256,
+            _selection_commitment(decisions),
+            _input_commitment(
+                conn, cutoff, observed_through, decisions, analysis_scope=analysis_scope
+            ),
+        )
     rows = conn.execute(
         "SELECT 'evidence',header.evidence_seal_id,seal.member_set_sha256 "
         "FROM document_processing_evidence_headers header "
@@ -2211,6 +2339,7 @@ def _output_commitment(
         "WHERE datetime(header.cutoff_at)=datetime(?) "
         "AND datetime(header.recorded_at)<=datetime(?) "
         "AND datetime(seal.sealed_at)<=datetime(?) "
+        "AND json_extract(header.scope_json,'$.analysis_scope') IS NULL "
         "ORDER BY 1,2",
         (
             _db_time(cutoff),

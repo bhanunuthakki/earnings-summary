@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import json
@@ -164,8 +163,8 @@ def test_document_receipt_rejects_self_rehashed_plan_tamper() -> None:
         update={
             "request": forged_request,
             "result": forged_result,
-            "request_sha256": population._model_sha(forged_request),
-            "result_sha256": population._model_sha(forged_result),
+            "request_sha256": getattr(population, "_model_sha")(forged_request),
+            "result_sha256": getattr(population, "_model_sha")(forged_result),
             "operation_id": population.document_processing_operation_id(
                 database_instance_id=valid.database_instance_id,
                 request=forged_request,
@@ -174,7 +173,9 @@ def test_document_receipt_rejects_self_rehashed_plan_tamper() -> None:
             ),
         }
     )
-    forged = forged.model_copy(update={"receipt_sha256": population._document_receipt_sha(forged)})
+    forged = forged.model_copy(
+        update={"receipt_sha256": getattr(population, "_document_receipt_sha")(forged)}
+    )
 
     with pytest.raises(ValidationError, match="result plan commitment"):
         DocumentProcessingOperationReceipt.model_validate(forged.model_dump(mode="json"))
@@ -234,7 +235,7 @@ def test_bounded_apply_requires_dry_run_commitments() -> None:
 
 
 def test_bounded_checkpoint_never_claims_safe_to_seal() -> None:
-    checkpoint = population._document_checkpoint(
+    checkpoint = getattr(population, "_document_checkpoint")(
         bounded=True,
         prior_cursor="obligation-1",
         processed=2,
@@ -249,7 +250,7 @@ def test_bounded_checkpoint_never_claims_safe_to_seal() -> None:
 
 
 def test_first_item_failure_does_not_claim_resumable_checkpoint() -> None:
-    checkpoint = population._document_checkpoint(
+    checkpoint = getattr(population, "_document_checkpoint")(
         bounded=True,
         prior_cursor=None,
         processed=0,
@@ -336,7 +337,7 @@ def test_snapshot_batch_preflights_every_issuer_before_first_write(
     monkeypatch.setattr(population, "seal_processing_snapshot", seal_stub)
 
     with pytest.raises(ValueError, match="issuer-b"):
-        population._seal_complete_snapshots(
+        getattr(population, "_seal_complete_snapshots")(
             conn,
             documents,
             datetime(2026, 7, 29, tzinfo=UTC),
@@ -389,7 +390,7 @@ def test_snapshot_batch_rolls_back_every_issuer_when_later_seal_fails(
     monkeypatch.setattr(population, "seal_processing_snapshot", seal_stub)
 
     with pytest.raises(ValueError, match="second issuer"):
-        population._seal_complete_snapshots(
+        getattr(population, "_seal_complete_snapshots")(
             conn,
             documents,
             datetime(2026, 7, 29, tzinfo=UTC),
@@ -417,9 +418,9 @@ def test_read_set_binds_all_reporting_entity_fallback_candidates() -> None:
         reporting_entity_id=None,
     )
 
-    before = population._reporting_entity_scope_rows(conn, (decision,))
+    before = getattr(population, "_reporting_entity_scope_rows")(conn, (decision,))
     conn.execute("INSERT INTO reporting_entities VALUES ('entity-2','issuer','second')")
-    after = population._reporting_entity_scope_rows(conn, (decision,))
+    after = getattr(population, "_reporting_entity_scope_rows")(conn, (decision,))
 
     assert before != after
     assert len(before) == 1
@@ -447,13 +448,13 @@ def test_read_set_binds_selected_blob_metadata_but_excludes_unrelated_blobs() ->
         """
     )
 
-    original = population._document_blob_scope_rows(conn, ("document",))
+    original = getattr(population, "_document_blob_scope_rows")(conn, ("document",))
     conn.execute(
         "UPDATE evidence_content_blobs SET media_type='text/plain' WHERE sha256='aaaaaaaa'"
     )
-    selected_change = population._document_blob_scope_rows(conn, ("document",))
+    selected_change = getattr(population, "_document_blob_scope_rows")(conn, ("document",))
     conn.execute("UPDATE evidence_content_blobs SET media_type='image/png' WHERE sha256='bbbbbbbb'")
-    unrelated_change = population._document_blob_scope_rows(conn, ("document",))
+    unrelated_change = getattr(population, "_document_blob_scope_rows")(conn, ("document",))
 
     assert selected_change != original
     assert unrelated_change == selected_change
@@ -487,7 +488,7 @@ def test_bounded_all_returns_checkpoint_without_sealing(
     ]:
         return (decision,), {"issuer": ("document",)}, 0
 
-    def input_stub(*_args: object) -> str:
+    def input_stub(*_args: object, **_kwargs: object) -> str:
         return "a" * 64
 
     def created_stub(*_args: object, **_kwargs: object) -> int:
@@ -511,13 +512,13 @@ def test_bounded_all_returns_checkpoint_without_sealing(
     def totals_stub(*_args: object, **_kwargs: object) -> dict[str, int]:
         return {"total": 1, "applicable": 1, "not_applicable": 0}
 
-    def zero_stub(*_args: object) -> int:
+    def zero_stub(*_args: object, **_kwargs: object) -> int:
         return 0
 
     def one_stub(*_args: object) -> int:
         return 1
 
-    def output_stub(*_args: object) -> str:
+    def output_stub(*_args: object, **_kwargs: object) -> str:
         return "b" * 64
 
     def must_not_seal(*_args: object) -> None:
@@ -606,7 +607,7 @@ def test_document_verifier_ignores_snapshot_recorded_after_observation() -> None
         );
         CREATE TABLE document_processing_snapshot_headers (
             processing_snapshot_id TEXT,scope_sha256 TEXT,policy_sha256 TEXT,
-            cutoff_at TEXT,recorded_at TEXT
+            cutoff_at TEXT,recorded_at TEXT,scope_json TEXT DEFAULT '{}'
         );
         CREATE TABLE document_processing_snapshot_seals (
             processing_snapshot_id TEXT,member_set_sha256 TEXT,sealed_at TEXT
@@ -638,7 +639,8 @@ def test_document_verifier_ignores_snapshot_recorded_after_observation() -> None
         ),
     )
     conn.execute(
-        "INSERT INTO document_processing_snapshot_headers VALUES (?,?,?,?,?)",
+        "INSERT INTO document_processing_snapshot_headers "
+        "(processing_snapshot_id,scope_sha256,policy_sha256,cutoff_at,recorded_at) VALUES (?,?,?,?,?)",
         ("snapshot", sha, sha, cutoff.isoformat(), recorded.isoformat()),
     )
     conn.execute(
@@ -672,7 +674,7 @@ def test_document_verifier_ignores_snapshot_recorded_after_observation() -> None
 
 def test_failed_disposition_keeps_cursor_at_last_success() -> None:
     assert (
-        population._retry_cursor_after_attempt(
+        getattr(population, "_retry_cursor_after_attempt")(
             prior_cursor="obligation-1",
             attempted_id="obligation-2",
             succeeded=False,
@@ -801,7 +803,8 @@ def test_all_apply_preflights_snapshot_blockers_before_any_write(
     assert writes == []
 
 
-def test_existing_binding_requires_exact_immutable_replay() -> None:
+@pytest.mark.parametrize("mismatch", ("payload", "effective_at", "knowledge_at", "recorded_at"))
+def test_existing_binding_requires_exact_immutable_replay(mismatch: str) -> None:
     cutoff = datetime(2026, 7, 29, tzinfo=UTC)
     conn = sqlite3.connect(":memory:")
     conn.executescript(
@@ -851,32 +854,40 @@ def test_existing_binding_requires_exact_immutable_replay() -> None:
             cutoff.isoformat(),
         ),
     )
-    stale_payload = json.dumps(
+    obligation_id = "obligation-stale" if mismatch == "payload" else "obligation-current"
+    family = "continuous_disclosure" if mismatch == "payload" else "operating_company_periodic"
+    payload = json.dumps(
         {
-            "document_family": "continuous_disclosure",
+            "document_family": family,
             "expected_document_id": "expected",
             "issuer_id": "issuer",
             "reporting_entity_id": "reporting",
-            "source_obligation_revision_id": "obligation-stale",
+            "source_obligation_revision_id": obligation_id,
         },
         sort_keys=True,
         separators=(",", ":"),
     )
+    binding_id = (
+        "expected-obligation-binding:"
+        + population.hashlib.sha256(f"expected\0{obligation_id}".encode()).hexdigest()
+    )
+    clocks = tuple(
+        (cutoff + timedelta(seconds=1) if mismatch == name else cutoff).isoformat()
+        for name in ("effective_at", "knowledge_at", "recorded_at")
+    )
     conn.execute(
         "INSERT INTO expected_document_obligation_bindings VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            "binding-stale",
-            "binding-stale",
+            binding_id,
+            binding_id,
             "expected",
-            "obligation-stale",
+            obligation_id,
             "issuer",
             "reporting",
-            "continuous_disclosure",
-            stale_payload,
-            population.hashlib.sha256(stale_payload.encode()).hexdigest(),
-            cutoff.isoformat(),
-            cutoff.isoformat(),
-            cutoff.isoformat(),
+            family,
+            payload,
+            population.hashlib.sha256(payload.encode()).hexdigest(),
+            *clocks,
         ),
     )
     decision = ReportingDocumentDecision(
@@ -890,8 +901,13 @@ def test_existing_binding_requires_exact_immutable_replay() -> None:
         reporting_entity_id="reporting",
     )
     try:
-        with pytest.raises(ValueError, match="binding replay changed immutable values"):
-            population._ensure_expected_document_binding(
+        reason = (
+            "binding replay changed immutable values"
+            if mismatch == "payload"
+            else "binding is not visible at requested cutoff"
+        )
+        with pytest.raises(ValueError, match=reason):
+            getattr(population, "_ensure_expected_document_binding")(
                 conn,
                 decision,
                 cutoff,

@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from io import StringIO
 from pathlib import Path
-from typing import Literal, Self, cast
+from typing import Final, Literal, LiteralString, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -672,6 +672,31 @@ def search_canonical_facts(
 class CanonicalFactQueryPlan(_Frozen):
     metric_terms: tuple[str, ...]
     years: tuple[int, ...]
+
+
+def load_canonical_fact_entry(
+    conn: sqlite3.Connection,
+    *,
+    generation_id: str,
+    canonical_metric_cell_id: str,
+    entry_sha256: str,
+) -> dict[str, object]:
+    """Resolve one exact effective entry through the bounded sealed generation chain."""
+    admit_canonical_projection_for_read(conn, generation_id)
+    entry = _row(
+        conn,
+        _CURRENT_STATE_ENTRY_SQL,
+        (generation_id, canonical_metric_cell_id),
+    )
+    if entry is None or str(entry["entry_sha256"]) != entry_sha256:
+        raise CanonicalFactProjectionError(
+            "projection_read_entry_missing_or_changed", generation_id=generation_id
+        )
+    source_generation_id = str(entry["generation_id"])
+    if source_generation_id != generation_id:
+        admit_canonical_projection_for_read(conn, source_generation_id)
+    _verify_projected_hit_for_read(conn, generation_id, entry, verified_buckets=set())
+    return entry
 
 
 def plan_canonical_fact_query(query_text: str) -> CanonicalFactQueryPlan:
@@ -2105,7 +2130,7 @@ _SELECTED_FACT_SQL = (
     "ORDER BY member.canonical_metric_cell_id LIMIT ?"
 )
 
-_CURRENT_STATE_CTE = """
+_CURRENT_STATE_CTE: Final[LiteralString] = """
 WITH RECURSIVE lineage(generation_id,parent_generation_id,depth) AS (
  SELECT generation_id,parent_generation_id,0
  FROM canonical_fact_projection_generations WHERE generation_id=?
@@ -2129,3 +2154,9 @@ current_state AS (
  SELECT * FROM ranked WHERE state_rank=1
 )
 """
+
+# Fixed SQL structure is owned here; generation and cell identities remain bound values.
+_CURRENT_STATE_ENTRY_SELECT: Final[LiteralString] = (
+    " SELECT * FROM current_state WHERE canonical_metric_cell_id=? AND change_kind='upsert'"
+)
+_CURRENT_STATE_ENTRY_SQL: Final[LiteralString] = _CURRENT_STATE_CTE + _CURRENT_STATE_ENTRY_SELECT

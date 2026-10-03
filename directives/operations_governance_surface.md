@@ -734,14 +734,65 @@ Preview with the approved explicit `--db`, `--cutoff-at`, `--recorded-at` and op
 the existing managed SQLite bootstrap. Both commitments bind the selected mode;
 a mode switch refuses the old pins before writes. Lexical-only requests omit vector
 and promotion coordinates and have distinct identities; retained semantic identities
-are unchanged. There is still exactly one terminal per issuer and K/O scope:
+are unchanged. There is exactly one terminal per issuer, K/O, and Analysis Evidence
+Scope identity when present. An unscoped request retains its existing coordinate:
 `research_snapshot_terminal_scope_conflict` blocks a second terminal, including a
 mode switch. This operation does not supersede an existing terminal or alter that
-universe policy. Replay verifies the existing seal through the public source verifier;
+scope. Replay verifies the existing seal through the public source verifier;
 terminal verification infers the persisted mode, reassembles that exact request, and
 performs the same lineage checks. No schema, store, service, schedule, provider, or
 new dashboard action is introduced. A preview is an assembly plan, not a successful
 sealed-source verification receipt.
+
+### Analysis Evidence Scope planning and use
+
+`execution/plan_analysis_evidence_scope.py --db <approved-database> --request <request.json>
+--scope-receipt <receipt.json>` is a manual, read-only selection operation. Run it
+through the managed SQLite bootstrap. The request is an `AnalysisScopeRequest` with
+issuer, purpose, inventory key, sorted required period ends, knowledge cutoff,
+observation cutoff, and optional extra accession/reason pairs. Latest-period
+inclusion is the default. The command requires a current, complete authoritative
+SEC inventory. It writes one immutable output receipt with no replacement of its
+request, database, or an existing conflicting artifact. It does not fetch reports
+or write database rows. Its result reports `selection_only_not_model_ready` and
+research-document, package-dependency, and outside-scope counts.
+
+The receipt retains every expected document in the selected inventory. Primary
+filings are research documents. All other selected package members are required
+capture dependencies. Outside documents retain explicit reasons and visible
+coverage gaps. Selected periodic packages include known amendments. Missing or
+ambiguous required periods and unavailable current-report amendment linkage fail;
+selection never invents reporting dates or relationships.
+
+Use the receipt through the existing manual interfaces:
+
+- `execution/populate_document_processing.py --analysis-scope <receipt.json>` accepts
+  it for a dry-run. Apply uses the scope embedded in the admitted request through
+  `--admission-receipt`; passing a separate `--analysis-scope` to apply is rejected.
+- `execution/build_grounded_search_corpus.py --analysis-scope <receipt.json>` uses
+  it instead of `--inventory` or `--coverage-inventory-key`. All selected package
+  members must be captured. Only primary research documents enter the corpus.
+  The scoped corpus key must equal the receipt's `scope_id`
+  (`analysis-scope:<sha256>`).
+- `execution/populate_research_snapshots.py --analysis-scope <receipt.json>` uses
+  it for planning and committed apply through the existing input/plan commitment
+  checks. Processing, corpus, and research primary document sets must match exactly.
+
+These operations retain their explicit database, clock, locking, immutable receipt,
+and apply requirements. New operations require the current inventory. Internal
+verification of a stored artifact can reconstruct the inventory visible at its
+original scope observation cutoff. No CLI permits historical verification to
+authorize a stale write. Research terminal identity includes the scope identity;
+distinct purposes do not replace each other's artifacts. Scoped artifacts do not
+count as full-population readiness.
+
+This is an internal manual CLI capability. The existing `OperationsRegistry`,
+`OperationsSnapshot`, and Operations workspace controls remain unchanged. There is
+no new dashboard button, background job, provider activation, schema, financial
+admission, valuation update, or production-state change. Selection and successful
+capture alone do not establish model readiness. The focused analysis-scope tests
+own selection, retained reconstruction, missing dependency, processing-lane, and
+corpus consistency checks.
 
 ### Bounded accession capture
 
