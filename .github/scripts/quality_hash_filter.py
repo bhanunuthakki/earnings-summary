@@ -89,6 +89,12 @@ _MELI_SOURCE_FIXTURE = "tests/fixtures/meli_reported_tables/provenance.json"
 _MELI_SOURCE_DIGEST_MEMBER = re.compile(
     r'[ \t]*"(?:source_sha256|snippet_sha256|sha256)"[ \t]*(?::|=)[ \t]*"[0-9a-f]{64}"[ \t]*,?[ \t]*(?:\r?\n)?\Z'
 )
+_INVESTING_REVIEW_BASELINE = (
+    "src/advisor/skills/earnings-summary-investing/references/reviewed-sources.json"
+)
+_INVESTING_REVIEW_DIGEST_MEMBER = re.compile(
+    r'[ \t]*"sha256"[ \t]*(?::|=)[ \t]*"[0-9a-f]{64}"[ \t]*,?[ \t]*(?:\r?\n)?\Z'
+)
 
 
 def is_quality_evidence_hash(filename: str, line: str) -> bool:
@@ -97,6 +103,8 @@ def is_quality_evidence_hash(filename: str, line: str) -> bool:
     canonical_path = filename.replace(os.sep, "/")
     if canonical_path == _MELI_SOURCE_FIXTURE:
         return _MELI_SOURCE_DIGEST_MEMBER.fullmatch(line) is not None
+    if canonical_path == _INVESTING_REVIEW_BASELINE:
+        return _INVESTING_REVIEW_DIGEST_MEMBER.fullmatch(line) is not None
     if canonical_path not in _CANONICAL_PATHS:
         return False
     if _HASH40_MEMBER.fullmatch(line) is not None or _HASH64_MEMBER.fullmatch(line) is not None:

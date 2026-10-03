@@ -189,7 +189,57 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    assert len(graph.unknown_edges) == 112
+    assert len(graph.unknown_edges) == 123
+    # Exact-period CLI and skill-maintenance checks add two test-owned calls.
+    # Keep their computed entrypoints explicit without admitting production gaps.
+    assert (
+        GraphEdge(
+            source="tests/test_earnings_readout.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=608,
+            unknown=True,
+        )
+        in graph.unknown_edges
+    )
+    assert (
+        GraphEdge(
+            source="instruction_tests/test_investing_skill_maintenance.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=160,
+            unknown=True,
+        )
+        in graph.unknown_edges
+    )
+    # Nine bounded Node children exercise synthetic browser request lifecycles.
+    # Keep their exact test-only inventory visible without admitting production edges.
+    lifecycle_children = {
+        ("tests/test_copilot_restore_read_lifecycle.py", 62),
+        ("tests/test_copilot_restore_read_lifecycle.py", 112),
+        ("tests/test_panel_read_lifecycle.py", 95),
+        ("tests/test_panel_read_lifecycle.py", 152),
+        ("tests/test_policy_refresh_lifecycle.py", 74),
+        ("tests/test_ui_requests.py", 69),
+        ("tests/test_work_os_read_lifecycle.py", 63),
+        ("tests/test_work_os_read_lifecycle.py", 98),
+        ("tests/test_workspace_dcf_read_lifecycle.py", 63),
+    }
+    assert {
+        (edge.source, edge.line)
+        for edge in graph.unknown_edges
+        if edge.source in {source for source, _line in lifecycle_children}
+    } == lifecycle_children
+    assert all(
+        edge.kind == "unknown" and edge.target == "<dynamic process entrypoint>"
+        for edge in graph.unknown_edges
+        if (edge.source, edge.line) in lifecycle_children
+    )
+
     assert (
         sum(
             edge.source == "tests/test_dcf_assumption_cli.py"

@@ -89,6 +89,7 @@ def render_console(
     heading_exclude: tuple[str, ...] = (),
     grid: bool = False,
     wide: tuple[str, ...] = (),
+    deferred: dict[str, str] | None = None,
 ) -> str:
     """Assemble a composite console: an anchor-nav band (jump chips) over the
     composed builder sections.
@@ -128,7 +129,14 @@ def render_console(
     toolbar = panel_toolbar(title, filters=nav, suppress_title=True, sticky=True)
     rendered_sections: list[str] = []
     for anchor, label, fn in sections:
-        fragment = _hide_duplicate_heading(label, _safe(label, fn))
+        endpoint = (deferred or {}).get(anchor)
+        fragment = (
+            f'<div data-console-endpoint="{escape(endpoint, quote=True)}" '
+            f'data-console-label="{escape(label, quote=True)}" aria-busy="true">'
+            f'<p class="muted" role="status">Loading {escape(label)}…</p></div>'
+            if endpoint
+            else _hide_duplicate_heading(label, _safe(label, fn))
+        )
         heading = (
             ""
             if anchor in heading_exclude
@@ -147,7 +155,8 @@ def render_console(
     if grid:
         body = f'<div class="console-grid">{body}</div>'
     return (
-        f'<div class="{escape(wrap_class)}">{toolbar}{body}</div><script>{_CONSOLE_NAV_JS}</script>'
+        f'<div class="{escape(wrap_class)}">{toolbar}{body}</div>'
+        f"<script>{_CONSOLE_NAV_JS}\n{_CONSOLE_LOAD_JS if deferred else ''}</script>"
     )
 
 
@@ -166,5 +175,103 @@ _CONSOLE_NAV_JS = """
     var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (el) el.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
   });
+})();
+""".strip()
+
+# Only visible sections consume work. Leaving the console cancels its reads;
+# provider calculations can finish on the server without later replacing UI.
+_CONSOLE_LOAD_JS = """
+(function () {
+  var script = document.currentScript;
+  var root = script && script.previousElementSibling;
+  if (!root) return;
+  var sections = Array.from(root.querySelectorAll('[data-console-endpoint]'));
+  var active = new Map();
+  var ready = new Set();
+  var disposed = false;
+  function visible() {
+    return !document.hidden && root.isConnected && !root.closest('[hidden], [aria-hidden="true"]');
+  }
+  function eligible(section) {
+    return visible() && !section.closest('[hidden], [aria-hidden="true"]');
+  }
+  function error(section) {
+    section.removeAttribute('aria-busy');
+    section.innerHTML = '<p class="muted" role="alert">This section is temporarily unavailable. '
+      + '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-console-retry>Retry</button></p>';
+  }
+  function pump() {
+    if (disposed || !visible()) return;
+    for (var section of ready) {
+      if (active.size >= 2) break;
+      if (!eligible(section) || active.has(section) || section.dataset.consoleLoaded === '1') continue;
+      ready.delete(section);
+      load(section);
+    }
+  }
+  async function load(section) {
+    var controller = new AbortController();
+    var state = {controller: controller, timer: 0};
+    active.set(section, state);
+    section.setAttribute('aria-busy', 'true');
+    state.timer = window.setTimeout(function () { controller.abort(); }, 45000);
+    try {
+      var endpoint = section.dataset.consoleEndpoint;
+      var url = new URL(endpoint, window.location.href);
+      if (url.origin !== window.location.origin || !url.pathname.startsWith('/api/panel/')) throw new Error('Invalid section endpoint');
+      var response = await (window.uiFetch || fetch)(endpoint, {signal: controller.signal, timeoutMs: 45000, headers: {Accept: 'text/html'}});
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      var html = await response.text();
+      if (disposed || active.get(section) !== state || !eligible(section)) return;
+      if (window.workOsMountHtml) window.workOsMountHtml(section, html, endpoint);
+      else {
+        section.innerHTML = html;
+        section.querySelectorAll('script').forEach(function (old) {
+          var replacement = document.createElement('script');
+          if (old.src) replacement.src = old.src; else replacement.textContent = old.textContent;
+          old.replaceWith(replacement);
+        });
+      }
+      section.dataset.consoleLoaded = '1';
+    } catch (_) {
+      if (!disposed && active.get(section) === state && eligible(section)) error(section);
+    } finally {
+      window.clearTimeout(state.timer);
+      if (active.get(section) === state) {
+        active.delete(section);
+        section.removeAttribute('aria-busy');
+      }
+      pump();
+    }
+  }
+  var observer = typeof IntersectionObserver === 'function' ? new IntersectionObserver(function (entries) {
+    entries.forEach(function (entry) { if (entry.isIntersecting) ready.add(entry.target); else ready.delete(entry.target); });
+    pump();
+  }, {rootMargin: '100px'}) : null;
+  sections.forEach(function (section) { if (observer) observer.observe(section); else ready.add(section); });
+  root.addEventListener('click', function (event) {
+    var button = event.target.closest('[data-console-retry]');
+    if (!button) return;
+    var section = button.closest('[data-console-endpoint]');
+    if (section) { ready.add(section); pump(); }
+  });
+  function check() {
+    if (!root.isConnected) {
+      disposed = true;
+      if (observer) observer.disconnect();
+      lifecycle.disconnect();
+      document.removeEventListener('visibilitychange', check);
+    }
+    if (!visible()) {
+      active.forEach(function (state, section) {
+        active.delete(section); window.clearTimeout(state.timer); state.controller.abort();
+        section.removeAttribute('aria-busy'); ready.add(section);
+      });
+    } else pump();
+  }
+  var lifecycle = new MutationObserver(check);
+  lifecycle.observe(document.body, {childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-hidden']});
+  document.addEventListener('visibilitychange', check);
+  pump();
 })();
 """.strip()

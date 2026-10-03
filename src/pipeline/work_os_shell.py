@@ -657,14 +657,15 @@ def _add_production_contract(
         + "\n"
         + full_page_detail
         + "\n"
+        + select_runtime
+        + "\n"
         + CITE_MARKS_SNIPPET
         + f'\n<script id="work-os-explore-runtime">{EXPLORE_PANEL_JS}</script>\n'
         + runtime
         + "\n"
         + copilot
         + "\n"
-        + select_runtime
-        + "\n</body>",
+        + "</body>",
         1,
     )
 
