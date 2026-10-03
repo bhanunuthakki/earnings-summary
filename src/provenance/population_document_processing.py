@@ -51,6 +51,7 @@ from provenance.research_snapshot import (
     seal_disposition,
     seal_processing_snapshot,
 )
+from provenance.source_coverage import expected_document_obligation_binding_id
 
 _POLICY = DocumentProcessingPolicy(
     policy_name="complete_reporting_document_processing",
@@ -1378,7 +1379,7 @@ def _ensure_expected_document_binding(
         separators=(",", ":"),
         ensure_ascii=False,
     )
-    binding_id = "expected-obligation-binding:" + _digest(
+    binding_id = expected_document_obligation_binding_id(
         decision.expected_document_id,
         obligation_revision_id,
     )
@@ -1405,8 +1406,11 @@ def _ensure_expected_document_binding(
         (decision.expected_document_id,),
     ).fetchone()
     if existing is not None:
-        if tuple(existing) != values:
+        if tuple(existing[:9]) != values[:9]:
             raise ValueError("expected document binding replay changed immutable values")
+        effective, knowledge, recorded = (_parse_time(value) for value in existing[9:])
+        if effective > cutoff or knowledge > cutoff or recorded > recorded_at:
+            raise ValueError("expected document binding is not visible at requested cutoff")
         return False
     conn.execute(
         "INSERT INTO expected_document_obligation_bindings "
