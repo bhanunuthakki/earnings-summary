@@ -1596,9 +1596,11 @@ def test_company_switch_keeps_url_and_rendered_identity_in_sync() -> None:
     assert "if (!committed) return false;" in html
     assert "window.navigateTo('screen-workspace'" in switch_runtime
     assert "workOsWriteCompanyContext(requested, 'company-desk', options);" in switch_runtime
-    assert switch_runtime.index(
-        "workOsWriteCompanyContext(requested, 'company-desk', options);"
-    ) < switch_runtime.index("window.navigateTo('screen-workspace'")
+    assert (
+        switch_runtime.index("window.navigateTo('screen-workspace'")
+        < switch_runtime.index("await workOsRenderCompanyDesk(requested)")
+        < switch_runtime.index("workOsWriteCompanyContext(requested, 'company-desk', options);")
+    )
 
 
 def test_company_identity_is_only_committed_by_the_atomic_desk_transition() -> None:
