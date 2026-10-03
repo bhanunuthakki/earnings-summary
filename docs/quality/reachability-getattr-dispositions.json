@@ -224,6 +224,20 @@
     },
     {
       "disposition": "closed_literal_set",
+      "evidence": "_verified_metric_expression iterates only the literal numerator, denominator, input, left, right field tuple on the frozen, extra-forbid MetricExpression schema. Each child is recursively rebound through its source-file-bound KPI reference. No source data controls the attribute name.",
+      "fingerprint": "ab69bc326b05608896ef6fa8b0bb577810ac3c89746d3f6306e47bc9a686e627",
+      "line": 1002,
+      "path": "src/compute/thesis_evaluator.py",
+      "targets": [
+        "numerator",
+        "denominator",
+        "input",
+        "left",
+        "right"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
       "evidence": "getattr reads only _BASELINE_SCALAR_FIELDS attributes.",
       "fingerprint": "8094493b39f51023e7ef74f9a416db008bb10ce9d06424ff1c08b17d10a3f771",
       "line": 259,
