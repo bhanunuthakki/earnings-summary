@@ -6,10 +6,155 @@ branches, draft research models, quality receipts and `.tmp/` artifacts do not
 supersede it. Production database and background services belong to the configured
 Windows authority, never a development checkout.
 
-## October 2, 2026 current checkpoint
+## October 2, 2026 independent review and delivery plan
 
-This checkpoint supersedes the release and branch states in the historical
-checkpoints below. It does not certify current production health.
+The source baseline now includes PR1591 and Antigravity PR1604. The owner
+approved publishing the prepared source candidates. Three draft PRs isolate the
+remaining feature and runtime changes:
+
+| Draft | Purpose | Dependency |
+| --- | --- | --- |
+| [PR1605](https://github.com/bhanunuthakki/earnings-summary/pull/1605) | Select and retain the same issuer filings through processing, search and research. | Merged `main`. |
+| [PR1606](https://github.com/bhanunuthakki/earnings-summary/pull/1606) | Check Windows process termination and creation identity before changing job ownership. | PR1605 in the reviewed source stack. Runtime behavior is separate; source-review evidence binds the whole tree. |
+| [PR1607](https://github.com/bhanunuthakki/earnings-summary/pull/1607) | Report failed Job handle closure and still attempt owned-root cleanup. | PR1606's typed native API loader. |
+
+A separately briefed GPT-6.1 Sol reviewed the original exact heads. It supports
+this three-PR split. Its judgment is independent advisory evidence. It does not
+waive failed checks or establish installed behavior. The review independently
+ran 292 passing tests; four Windows-only cases were skipped. Five further
+diagnostic cases reproduced gaps in the current application. Those diagnostic
+passes establish the observed gaps, not correct product behavior.
+
+The first CI runs failed because a fixed corpus regression fingerprint triggered
+the secret scanner. The repaired candidate classifies only that public fixture,
+using the existing inline convention. The expected fingerprint and security gate
+remain intact. Scope request clocks now require explicit time zones. The research
+terminal check compares full-precision instants after bounded candidate selection.
+Regression tests cover distinct fractions, equivalent offsets, and a real
+collision after an earlier nonmatching candidate. The analysis-scope definition
+also states that its latest-period check does not prove FPI interim coverage.
+Updated heads require their own CI and source-review evidence. The terminal-guard
+regressions do not establish complete subsecond processing/research verification;
+adjacent second-resolution selectors still need their own boundary tests.
+
+These are source improvements. They are not a completed valuation refresh,
+Windows installation, qualified native reader, or proof that the previous native
+timeout cause is fixed. Existing parked branches and private diagnostic evidence
+remain separate from the merge candidates. No private portfolio data or host
+configuration is part of these PRs.
+
+### Product behavior required for repeatable analysis
+
+Routine analysis reads saved application evidence first. It must not silently
+fetch data because a report, model or comparison lacks an input. It reports the
+missing source, financial period, processing stage and readiness reason. An
+explicit Library or Analytics request may start bounded acquisition through the
+existing pipeline owners. Analysis reads retained evidence without changing it
+and may persist new outputs and manifests. Historical replay must not fetch new
+evidence or change prior inputs and outputs.
+
+The current acquisition policy permits automatic full source collection for
+portfolio, evaluation and watchlist roles, subject to source authorization,
+instrument identity, provider limits, period bounds and audio exclusion. This
+is recorded in `directives/data_pipeline_dag.md` and implemented by
+`src/pipeline/source_policy.py`. The narrower Data Collection Policy text in
+`DEFINITIONS.md` is an unresolved documentation mismatch. Reconcile that text
+against the recorded approval. A change to request-only collection needs a
+separate explicit policy and schedule decision. Do not infer it from a missing
+input or fabricate an owner request from a scheduler run ID. FMP stays inactive;
+the initial issuer refresh uses SEC and issuer sources.
+
+Each retained result needs the actual input content and references. A hash alone
+cannot restore lost inputs. Retain the request/purpose, issuer and instrument,
+required periods, knowledge/observation cutoffs, immutable source and observation
+versions, definition revisions, unit/currency/scope/accounting basis, comparability
+and admission dispositions, model/formula or prompt version, assumptions and
+output identity. Source capture, financial period, price time and calculation time
+remain separate. A reported fact, management claim, estimate, calculation and
+analyst inference must remain distinguishable.
+
+Do not add another fact store or a generic orchestration framework. Reuse Pipeline
+Execution, Observation Version, Processing Snapshot and Research Snapshot. Give
+one process ownership of each write set and checkpoint. A later failure resumes
+that exact stage; it does not repeat completed acquisition. Preserve prior outputs
+and source versions when corrections arrive.
+
+### Required depth by analysis track
+
+| Track | Required retained inputs beyond the common manifest | Completion evidence |
+| --- | --- | --- |
+| Earnings preparation/readout | Exact earnings package, transcript locators and speakers, comparable prior period, admitted KPIs, novel observations, owner-note/thesis revisions and dated estimate context. | Original context reconstructs after a changed note or restatement. Source links open saved wording. Historical calculations use their declared cutoff. |
+| Thesis evaluation | Rule/threshold revision, exact Observation Version and definition, basis/period, source locator and comparability disposition. | A prior verdict remains intact. A new verdict names the superseding observation. Unknown or noncomparable evidence cannot become a pass/fail result. |
+| Valuation | Accepted model-family recipe, complete input roles, annual/current/prior-YTD closure, reviewed drivers, scenario vectors/probabilities, formula version and acceptance receipt. | Saved inputs replay the deterministic result. Invalid dimensions, future/stale evidence, rejected drivers and invalid probabilities block eligibility. |
+| Portfolio risk/allocation | Holdings/account/lot snapshot, prices and corporate-action treatment, aligned history window, covariance settings, weights, exclusions, goals and accepted expected-return assumptions. | The saved modeled book reproduces risk calculations. Missing instruments remain named. Unready valuations cannot supply accepted return factors. |
+| Evaluation-list/peer research | Selected company universe, thesis and note revisions, peer-set version, eligible valuation if used, and exact claim references. | Invalid issuer/period/definition comparisons fail. Substring, nonexistent and retired references cannot pass grounding. |
+| Search/reports/Analytics | Saved scope/context manifest, exact native or fact references, resolver policy and claim type. | The same source bundle resolves through every consumer. Search text retains its disposition; a search hit does not become an admitted fact. |
+
+Narrative reconstruction means retaining the supplied context, prompt/configuration,
+raw response and claim references. A new LLM generation gets a new output identity;
+it is not promised to reproduce identical prose. Deterministic model and risk
+calculations must replay from their saved inputs without provider calls.
+
+### Ordered implementation and acceptance plan
+
+1. **Finish the current source candidates.** Run corrected exact-head CI, retain
+   the three-PR stack and review each delta. Keep classifications, ratchet ceilings
+   and compatibility tests intact. Merge readiness requires successful applicable
+   gates; source merge does not authorize installation or financial admission.
+2. **Qualify native operation.** Test actual Windows process/handle ownership,
+   denied queries, identity mismatch, close failure, repeated cleanup failure and
+   timeout recovery. Qualify the reader for the required formats. Retain source
+   identities, failure receipts and independent process/listener census. An
+   installed release needs its own approved rollout, rollback and recurrence proof.
+3. **Complete a bounded source package.** Use the existing inventory, capture,
+   processing, scope, corpus and research entrypoints for the required annual and
+   interim periods. Separately implement a filing-regime-aware FPI financial 6-K
+   package obligation. An unrelated 6-K cannot prove financial interim coverage.
+   Prove amendments, corrupt/missing bytes, extraction population, interrupted-stage
+   resumption and offline reconstruction without treating scoped coverage as an
+   entire issuer archive. Audit adjacent second-resolution selectors; a later
+   observation within the same second must not enter an earlier retained snapshot.
+4. **Close semantic and consumer gaps.** Publish the needed facts through the
+   existing definition, binding and resolution owners. Preserve restatements,
+   conflicts, dimensions and novel observations. Fix earnings' superseded valuation
+   selection and misleading price label. Retain full pre-earnings input context;
+   extend thesis verdict provenance and exact company-card citations. Tests must
+   reconstruct prior evidence after notes, prices and filings change.
+5. **Make one MELI model eligible.** Complete all 28 recipe input roles and period
+   closure. Reconcile commerce/non-credit and credit separately without double
+   counting. Persist reviewed assumption vectors and accepted scenario probabilities;
+   implement scenario acceptance through the existing readiness owner. Separate
+   ordinary downside from labelled stress outcomes and retain their probabilities
+   and expected-return arithmetic. The current
+   unconditional `scenario_acceptance_unverified` reason must gain evidence, not
+   simply be removed. A three-row publisher does not satisfy the full recipe.
+6. **Extend only the next needed model families and portfolio consumers.** Ordinary
+   operating cash flow, bank equity cash flow and holding-company sum-of-parts need
+   distinct input roles. Propagate shared readiness into the alternate return-factor
+   path. Retain the modeled-book/price-history manifest and comparable peer inputs.
+   Then produce refreshed valuations and the requested independent allocation
+   assessments. A fresh quote alone cannot refresh financial evidence.
+7. **Connect bounded Library/Analytics requests.** The current default refresh
+   dispatcher does not supply the complete SEC-to-model chain. Add a small request
+   adapter to existing job and pipeline owners. Show reusable evidence, missing prerequisites,
+   request scope and separate acquisition/extraction/admission/model states before
+   work. Retain request identity, checkpoints, cancellation and recovery outcomes.
+   Test repeated read-only analysis with external calls disabled; explicit requests
+   must resume without duplicate capture or inactive-provider fallback. Implement
+   any owner-approved schedule change separately.
+
+Native qualification and saved-consumer repairs can progress independently. Their
+acceptance gates remain separate. Keep each next change small enough to review
+and merge by one intent; do not combine the seven steps into another long-lived
+branch. Each delivery record must state implemented, validated, committed, merged,
+installed and live-verified separately. Current valuation and allocation eligibility
+remain blocked until the corresponding source, semantic, model and scenario
+requirements have passed.
+
+## Historical October 2, 2026 candidate checkpoint
+
+This historical checkpoint records the original candidates before publication
+and independent review. The delivery plan above owns the current work sequence.
 
 The working branch is `codex/reconciled-pipeline-updates`. Its executable
 baseline is `origin/main` at `8149b5ab30650e122367941cd04da7d99e911c04`,
