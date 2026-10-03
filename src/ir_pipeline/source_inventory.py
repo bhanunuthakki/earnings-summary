@@ -14,7 +14,7 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from pathlib import Path
 from typing import Literal, Self, cast
 
@@ -25,7 +25,9 @@ from ir_pipeline.authority import (
     PublisherSurfaceEvidence,
     authority_is_complete,
 )
-from ir_pipeline.discover.generic import DocumentDiscoveryInventory
+from ir_pipeline.discover._docmeta import CandidateDoc
+from ir_pipeline.discover.generic import CrawlPageOutcome, DocumentDiscoveryInventory
+from ir_pipeline.meli_inventory import CapturedMeliQuarter, load_captured_meli_quarter
 from provenance.evidence_ledger import (
     ContentBlob,
     EvidenceLedger,
@@ -126,6 +128,7 @@ class IRSourceInventoryRequest(_ClosedModel):
     revision: int = Field(gt=0)
     discovery: IRDiscoverySnapshot
     authority: IRAuthorityEvidence | None = None
+    selected_quarter: CapturedMeliQuarter | None = None
     retrieval_config_sha256: str
     collector_code_version: str = Field(min_length=1, max_length=255)
     started_at: datetime
@@ -138,6 +141,8 @@ class IRSourceInventoryRequest(_ClosedModel):
 
     @model_validator(mode="after")
     def _validate_clocks(self) -> Self:
+        if self.selected_quarter is not None and self.authority is not None:
+            raise ValueError("selected quarter cannot claim publisher archive authority")
         if _timeline(self.completed_at) < _timeline(self.started_at):
             raise ValueError("completed_at must not precede started_at")
         if _timeline(self.recorded_at) < _timeline(self.completed_at):
@@ -165,12 +170,15 @@ class _PageArtifact(_ClosedModel):
 
 
 class _CandidateInventoryArtifact(_ClosedModel):
-    schema_version: Literal["ir-candidate-inventory@2"] = "ir-candidate-inventory@2"
+    schema_version: Literal["ir-candidate-inventory@2", "ir-candidate-inventory@3"] = (
+        "ir-candidate-inventory@2"
+    )
     page_artifact_sha256: tuple[str, ...]
     candidates: tuple[IRDocumentCandidate, ...]
     crawl_complete: bool
     crawl_stop_reason: str
     authority: IRAuthorityEvidence | None = None
+    selected_quarter: CapturedMeliQuarter | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,6 +199,7 @@ def source_inventory_request(
     revision: int,
     inventory: DocumentDiscoveryInventory,
     authority: IRAuthorityEvidence | None = None,
+    selected_quarter: CapturedMeliQuarter | None = None,
     retrieval_config_sha256: str,
     collector_code_version: str,
     started_at: datetime,
@@ -234,6 +243,7 @@ def source_inventory_request(
             crawl_stop_reason=inventory.crawl_stop_reason,
         ),
         authority=authority,
+        selected_quarter=selected_quarter,
         retrieval_config_sha256=retrieval_config_sha256,
         collector_code_version=collector_code_version,
         started_at=started_at,
@@ -242,6 +252,81 @@ def source_inventory_request(
         reconciled_at=reconciled_at,
         apply=apply,
     )
+
+
+def meli_quarter_discovery(scope: CapturedMeliQuarter) -> DocumentDiscoveryInventory:
+    """Project only the selected package; the wider crawl remains unproved."""
+
+    inventory = scope.inventory
+    # Publisher labels remain in the scoped manifest. These are candidate duty
+    # families, not SEC form verification or financial semantic admission.
+    types = {
+        "ir_investor_update": "earnings_material",
+        "ir_presentation": "investor_presentation",
+        "ir_transcript": "earnings_transcript",
+        "sec_10q": "financial_statement",
+    }
+    return DocumentDiscoveryInventory(
+        candidates=tuple(
+            CandidateDoc(
+                url=doc.source_url,
+                link_text=doc.label,
+                filename_hint=doc.source_url.rsplit("/", 1)[-1],
+                doc_type_guess=types[doc.document_type],
+                year_guess=inventory.fiscal_year,
+                quarter_guess=inventory.fiscal_quarter,
+                source_page=inventory.source_page,
+            )
+            for doc in inventory.documents
+        ),
+        pages=(
+            CrawlPageOutcome(
+                page_url=inventory.source_page,
+                outcome="succeeded",
+                anchor_count=4,
+                anchors=tuple((doc.source_url, doc.label) for doc in inventory.documents),
+            ),
+        ),
+        crawl_complete=False,
+        crawl_stop_reason="selected_quarter_only",
+    )
+
+
+def _verify_selected_quarter(
+    conn: sqlite3.Connection, request: IRSourceInventoryRequest, blob_root: Path
+) -> None:
+    scope = request.selected_quarter
+    if scope is None:
+        return
+    replay = load_captured_meli_quarter(
+        conn,
+        issuer_id=request.issuer_id,
+        ticker=request.ticker,
+        ir_url=request.ir_url,
+        source_observation_id=scope.source_observation_id,
+        fiscal_year=scope.inventory.fiscal_year,
+        fiscal_quarter=scope.inventory.fiscal_quarter,
+        publisher_file_rules=scope.publisher_file_rules,
+        blob_root=blob_root,
+        knowledge_at=request.started_at,
+    )
+    projected = source_inventory_request(
+        issuer_id=request.issuer_id,
+        ticker=request.ticker,
+        ir_url=request.ir_url,
+        revision=request.revision,
+        inventory=meli_quarter_discovery(replay),
+        selected_quarter=replay,
+        retrieval_config_sha256=request.retrieval_config_sha256,
+        collector_code_version=request.collector_code_version,
+        started_at=request.started_at,
+        completed_at=request.completed_at,
+        recorded_at=request.recorded_at,
+        reconciled_at=request.reconciled_at,
+        apply=request.apply,
+    )
+    if replay != scope or projected.discovery != request.discovery:
+        raise ValueError("selected quarter does not replay from captured publisher bytes")
 
 
 def _page_outcome(value: str) -> _PageOutcome:
@@ -259,6 +344,7 @@ def sync_ir_source_inventory(
     """Persist discovery evidence first, then append its sealed coverage view."""
 
     request = IRSourceInventoryRequest.model_validate(request.model_dump())
+    _verify_selected_quarter(conn, request, blob_root)
     artifacts = _artifacts(request, blob_root)
     authority_complete = _authority_complete(request)
     if request.authority is not None:
@@ -291,7 +377,12 @@ def sync_ir_source_inventory(
 
 def _canonical_bytes(model: BaseModel) -> bytes:
     return json.dumps(
-        model.model_dump(mode="json"),
+        model.model_dump(
+            mode="json",
+            exclude={"selected_quarter"}
+            if isinstance(model, _CandidateInventoryArtifact) and model.selected_quarter is None
+            else None,
+        ),
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -313,11 +404,15 @@ def _artifacts(request: IRSourceInventoryRequest, blob_root: Path) -> tuple[_Art
         page_digests.append(artifact.sha256)
     inventory_body = _canonical_bytes(
         _CandidateInventoryArtifact(
+            schema_version="ir-candidate-inventory@3"
+            if request.selected_quarter is not None
+            else "ir-candidate-inventory@2",
             page_artifact_sha256=tuple(page_digests),
             candidates=tuple(sorted(request.discovery.candidates, key=lambda item: item.url)),
             crawl_complete=request.discovery.crawl_complete,
             crawl_stop_reason=request.discovery.crawl_stop_reason,
             authority=request.authority,
+            selected_quarter=request.selected_quarter,
         )
     )
     artifacts.append(
@@ -478,6 +573,19 @@ def _coverage_request(
         )
     ]
     ordinal = 1
+    if request.selected_quarter is not None:
+        components.append(
+            InventoryComponentImport(
+                component_key="original-publisher-html",
+                component_kind="other",
+                source_url=request.ir_url,
+                source_observation_id=request.selected_quarter.source_observation_id,
+                outcome="succeeded",
+                required=True,
+                ordinal=ordinal,
+            )
+        )
+        ordinal += 1
     for page, artifact in zip(request.discovery.pages, page_artifacts, strict=True):
         if page.outcome == "succeeded":
             components.append(
@@ -546,7 +654,7 @@ def _coverage_request(
         for candidate in sorted(request.discovery.candidates, key=lambda item: item.url)
     )
     return SourceCoverageImport(
-        inventory_key=f"{request.issuer_id}:ir-crawl",
+        inventory_key=_inventory_key(request),
         revision=request.revision,
         issuer_id=request.issuer_id,
         ticker=request.ticker,
@@ -567,6 +675,13 @@ def _coverage_request(
     )
 
 
+def _inventory_key(request: IRSourceInventoryRequest) -> str:
+    scope = request.selected_quarter
+    if scope is None:
+        return f"{request.issuer_id}:ir-crawl"
+    return f"{request.issuer_id}:ir-quarter:{scope.inventory.fiscal_year}:Q{scope.inventory.fiscal_quarter}"
+
+
 def _expected_candidate(
     request: IRSourceInventoryRequest,
     candidate: IRDocumentCandidate,
@@ -574,8 +689,16 @@ def _expected_candidate(
     authoritative: bool,
 ) -> ExpectedDocumentImport:
     url_sha = _sha_text(candidate.url)
+    scope = request.selected_quarter
     return ExpectedDocumentImport(
-        expected_document_key=f"{request.issuer_id}:ir:{url_sha}",
+        expected_document_key=(
+            f"{_inventory_key(request)}:ir:{url_sha}"
+            if scope is not None
+            else f"{request.issuer_id}:ir:{url_sha}"
+        ),
+        period_end=(
+            None if scope is None else datetime.combine(scope.inventory.period_end, time(), UTC)
+        ),
         source_kind="ir_document",
         document_type=candidate.document_type_guess or _DEFAULT_DOCUMENT_TYPE,
         source_url=candidate.url,
