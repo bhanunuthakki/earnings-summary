@@ -27,7 +27,7 @@ INDEX = "ix_observation_resolution_selected_observation"
 STAMP = datetime(2026, 10, 3)
 
 
-def _seed(conn: sqlite3.Connection) -> None:
+def seed_resolution_ledger(conn: sqlite3.Connection) -> None:
     evidence = EvidenceLedger(conn)
     evidence.persist(
         ContentBlob(
@@ -156,7 +156,7 @@ def _seed(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _indexes(conn: sqlite3.Connection) -> set[str]:
+def resolution_indexes(conn: sqlite3.Connection) -> set[str]:
     return {
         str(row[1]) for row in conn.execute("PRAGMA index_list(observation_resolution_revisions)")
     }
@@ -167,7 +167,7 @@ def test_current_schema_indexes_selected_observations(
 ) -> None:
     path = migrated_db(tmp_path / "current.db")
     with sqlite3.connect(path) as conn:
-        assert INDEX in _indexes(conn)
+        assert INDEX in resolution_indexes(conn)
         assert [str(row[2]) for row in conn.execute(f"PRAGMA index_info({INDEX})")] == [
             "selected_observation_id"
         ]
@@ -181,7 +181,7 @@ def test_selected_lookup_instruction_work_is_bounded_by_matches(
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys=ON")
     try:
-        _seed(conn)
+        seed_resolution_ledger(conn)
         # Distinct logical keys model unrelated issuer/metric families. The
         # exact selected membership and append-only constraints remain active.
         conn.executemany(

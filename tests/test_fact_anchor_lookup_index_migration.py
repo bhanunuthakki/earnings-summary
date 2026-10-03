@@ -98,7 +98,7 @@ def test_index_upgrade_and_downgrade_preserve_ledger_and_current_selection(
     conn = sqlite3.connect(path)
     conn.execute("PRAGMA foreign_keys=ON")
     try:
-        selected_index._seed(conn)
+        selected_index.seed_resolution_ledger(conn)
         ledger = conn.execute(
             "SELECT * FROM observation_resolution_revisions ORDER BY revision"
         ).fetchall()
@@ -109,13 +109,13 @@ def test_index_upgrade_and_downgrade_preserve_ledger_and_current_selection(
         assert len(ledger) == 2
         assert len(selected) == 1
         assert selected[0][0] == "resolution-2"
-        assert selected_index.INDEX not in selected_index._indexes(conn)
+        assert selected_index.INDEX not in selected_index.resolution_indexes(conn)
         for target in (selected_index.REVISION, selected_index.PARENT):
             if target == selected_index.REVISION:
                 command.upgrade(_config(path), target)
             else:
                 command.downgrade(_config(path), target)
-            assert (selected_index.INDEX in selected_index._indexes(conn)) == (
+            assert (selected_index.INDEX in selected_index.resolution_indexes(conn)) == (
                 target == selected_index.REVISION
             )
             assert (
