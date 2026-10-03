@@ -1,19 +1,30 @@
 """One selected accession uses native evidence owners without unrelated work."""
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Callable, Iterator
+from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from execution import refresh_sec_accession as cli
 from pipeline import sec_accession_refresh as owner
 from pipeline.sec_accession_refresh import (
+    AccessionRefreshPlan,
     AccessionRefreshRequest,
     apply_accession_refresh,
     plan_accession_refresh,
 )
+from pipeline.sec_accession_request import (
+    BoundAccessionRequest,
+    HttpAnalysisRequest,
+    SecAccessionPlanInput,
+    prepare_bound_request,
+)
+from provenance.analysis_scope import AnalysisEvidenceScope
 from provenance.sec_native_capture import SecNativeCaptureRequest, capture_expected_sec_documents
 from provenance.source_coverage import ExpectedDocument, SourceCoverageLedger
 from tests.test_sec_native_capture import (
@@ -421,3 +432,97 @@ def test_changed_policy_role_refuses_exact_resume(
     changed = plan.model_copy(update={"coverage_role": "different"})
     with pytest.raises(owner.RefreshBoundaryError, match="no_longer_current"):
         owner.inspect_accession_refresh(database, changed)
+
+
+def scoped_plan(
+    database: sqlite3.Connection, root: Path
+) -> tuple[BoundAccessionRequest, AccessionRefreshPlan]:
+    body = SecAccessionPlanInput(
+        request_id="scoped-acme",
+        ticker="ACME",
+        cik="0000000001",
+        accession_number="0000000001-26-000001",
+        analysis=HttpAnalysisRequest(
+            purpose="Read the annual reported period",
+            issuer_id="issuer-acme",
+            inventory_key=INVENTORY_KEY,
+            required_period_ends=(date(2025, 12, 31),),
+            cutoff_at=datetime(2026, 7, 28, tzinfo=UTC),
+            observed_through=datetime(2026, 7, 28, tzinfo=UTC),
+        ),
+    )
+    return prepare_bound_request(database, root, body)
+
+
+@pytest.mark.parametrize("commitment", [None, "0" * 64])
+def test_cli_bound_request_requires_exact_scope_before_transport(
+    database: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    commitment: str | None,
+) -> None:
+    _bound, plan = scoped_plan(database, tmp_path)
+
+    def forbidden() -> None:
+        raise AssertionError("invalid scope reached transport")
+
+    monkeypatch.setattr(cli.requests, "Session", forbidden)
+    args = [
+        "--db",
+        plan.database_path,
+        "--repo-root",
+        str(tmp_path),
+        "--request-id",
+        "scoped-acme",
+        "--apply",
+        "--plan-sha256",
+        plan.commitment,
+    ]
+    if commitment is not None:
+        args.extend(["--request-sha256", commitment])
+    assert cli.main(args) == 2
+    assert not (plan.request.operation_root / "attempts").exists()
+
+
+def test_cli_self_rehashed_wrong_period_scope_is_not_cosmetic(
+    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bound, plan = scoped_plan(database, tmp_path)
+    material = bound.scope.model_dump(mode="json", exclude={"scope_sha256", "scope_id"})
+    declared = material["request"]
+    assert isinstance(declared, dict)
+    cast("dict[str, object]", declared)["required_period_ends"] = ["2024-12-31"]
+    digest = hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    fake_scope = AnalysisEvidenceScope.model_validate(
+        material | {"scope_sha256": digest, "scope_id": "analysis-scope:" + digest}
+    )
+    fake = BoundAccessionRequest(
+        request_id=bound.request_id, plan_sha256=plan.commitment, scope=fake_scope
+    )
+    (plan.request.operation_root / "request.json").write_text(fake.model_dump_json() + "\n")
+
+    def forbidden() -> None:
+        raise AssertionError("fabricated analysis selection reached transport")
+
+    monkeypatch.setattr(cli.requests, "Session", forbidden)
+    assert (
+        cli.main(
+            [
+                "--db",
+                plan.database_path,
+                "--repo-root",
+                str(tmp_path),
+                "--request-id",
+                "scoped-acme",
+                "--apply",
+                "--plan-sha256",
+                plan.commitment,
+                "--request-sha256",
+                fake.commitment,
+            ]
+        )
+        == 2
+    )
+    assert not (plan.request.operation_root / "attempts").exists()
