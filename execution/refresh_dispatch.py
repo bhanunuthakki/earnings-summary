@@ -89,20 +89,17 @@ DEFAULT_STEPS: tuple[str, ...] = (
 
 
 def resolve_steps(steps: list[str] | None = None, skip: list[str] | None = None) -> list[str]:
-    """Resolve which steps to run, in canonical order.
+    """Validate the requested selection and retain canonical execution order.
 
-    `steps` selects an explicit subset (unknown names are dropped); when falsy,
-    the default chain runs. `skip` removes names from whatever was selected.
+    Only omitted steps select the default chain. An explicit empty selection
+    remains empty, including when every selected step is skipped.
     """
-    if steps:
-        wanted = {s.strip() for s in steps if s.strip()}
-        selected = [s for s in STEP_NAMES if s in wanted]
-    else:
-        selected = list(DEFAULT_STEPS)
-    if skip:
-        skipset = {s.strip() for s in skip if s.strip()}
-        selected = [s for s in selected if s not in skipset]
-    return selected
+    selected_names = list(DEFAULT_STEPS) if steps is None else [name.strip() for name in steps]
+    skipped_names = [] if skip is None else [name.strip() for name in skip]
+    if any(name not in STEP_NAMES for name in (*selected_names, *skipped_names)):
+        raise ValueError("Invalid refresh step; available: " + ",".join(STEP_NAMES))
+    wanted = set(selected_names) - set(skipped_names)
+    return [name for name in STEP_NAMES if name in wanted]
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +114,7 @@ class Plan:
     skip_fmp: bool
     skip_fmp_reason: str | None  # e.g. "fresh last_pulled=2026-05-11T01:02:14"
     force_budget_bypass: bool = False  # pass --force-budget-bypass to build_artifacts
-    steps: tuple[str, ...] = ()  # resolved steps to run, in canonical order
+    steps: tuple[str, ...] = DEFAULT_STEPS  # omitted selection keeps the established default
     force: bool = False  # run FMP even if fresh (override the stale-skip)
 
 
@@ -140,7 +137,7 @@ def build_plan(
     `skip_steps` narrow the chain (see `resolve_steps`).
     """
     resolved = tuple(resolve_steps(steps, skip_steps))
-    if mode == "full" or force:
+    if mode == "full" or force or "fmp" not in resolved:
         return Plan(
             ticker=ticker,
             mode=mode,
@@ -243,8 +240,12 @@ def execute(
     """
     runner = runner or _default_runner
     resolved_state_root = state_root or project_root
-    steps = plan.steps or DEFAULT_STEPS
+    steps = resolve_steps(list(plan.steps))
     _emit(out, f"[dispatch] ticker={plan.ticker} mode={plan.mode} steps={','.join(steps)}")
+
+    if not steps:
+        _emit(out, "[dispatch] all_done rc=0")
+        return 0
 
     # argv per step name — built once; only the selected ones run.
     builders = {
@@ -471,7 +472,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    steps = [s for s in args.steps.split(",")] if args.steps else None
+    steps = args.steps.split(",") if args.steps is not None else None
+    try:
+        resolve_steps(steps, args.skip_step)
+    except ValueError as exc:
+        parser.error(str(exc))
     db_path = require_db_path(args.db)
     plan = build_plan(
         ticker=args.ticker.upper(),

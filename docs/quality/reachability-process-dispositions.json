@@ -384,8 +384,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Dispatcher builds only the nine fixed STEP_NAMES scripts via managed_python_argv.",
-      "fingerprint": "97882541cff72b4e3e2269b9984514a0db0d66320f400c7b3daa417d0dedf651",
-      "line": 285,
+      "fingerprint": "fe2096e81fe69e89a207b82472bb339f60500223dc7060e516c713b98b1d2b1d",
+      "line": 286,
       "path": "execution/refresh_dispatch.py",
       "targets": [
         "execution/fetch_fmp_historical_data.py",
