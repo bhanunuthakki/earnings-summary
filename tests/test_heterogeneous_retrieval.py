@@ -1345,7 +1345,7 @@ def _restore_binding_trigger(conn: sqlite3.Connection, trigger_sql: str) -> None
     conn.execute(trigger_sql)
 
 
-def two_annual_period_output() -> FilingXbrlNormalizedOutput:
+def _two_period_output() -> FilingXbrlNormalizedOutput:
     period_2023 = datetime(2023, 12, 31, tzinfo=UTC)
     period_2024 = datetime(2024, 12, 31, tzinfo=UTC)
     first = _entry(0, numeric_value=Decimal("100")).model_copy(
@@ -1367,7 +1367,7 @@ def two_annual_period_output() -> FilingXbrlNormalizedOutput:
     return _output((first, second))
 
 
-def seed_resolved_annual_periods(
+def _seed_resolved_periods(
     conn: sqlite3.Connection,
 ) -> tuple[dict[int, BindingRevision], tuple[str, ...]]:
     ontology = MetricOntology(conn)
@@ -1980,7 +1980,7 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
         )
 
     monkeypatch.setattr(command, "upgrade", _bounded_fixture_upgrade)
-    output = two_annual_period_output()
+    output = _two_period_output()
     conn = _resolution_database(
         tmp_path,
         output,
@@ -1994,7 +1994,7 @@ def test_nonempty_checkpoint_delta_and_mixed_trace_are_exact(
         conn.execute("PRAGMA foreign_keys=ON")
         historical_binding_trigger = _use_taxonomy_qualified_binding_trigger(conn)
         FilingXbrlExtractionLedger(conn).publish(output)
-        bindings, canonical_cells = seed_resolved_annual_periods(conn)
+        bindings, canonical_cells = _seed_resolved_periods(conn)
         conn.close()
         _upgrade(path, "0252_research_universe_closure")
         conn = sqlite3.connect(path)

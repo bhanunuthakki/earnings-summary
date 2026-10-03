@@ -7,6 +7,7 @@ import json
 import sqlite3
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta, tzinfo
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -17,7 +18,18 @@ from provenance.analysis_scope import AnalysisScopeRequest, build_analysis_scope
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine, ResolutionPolicy
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 from provenance.filing_xbrl_extraction_ledger import FilingXbrlExtractionLedger
-from provenance.metric_ontology import MetricOntology, OntologySnapshot
+from provenance.filing_xbrl_fact_adapter import FilingXbrlNormalizedOutput, NormalizedFilingXbrlFact
+from provenance.metric_ontology import (
+    BindingRevision,
+    CanonicalMetric,
+    CanonicalMetricCell,
+    CanonicalMetricDefinitionRevision,
+    MappingRevision,
+    MetricOntology,
+    OntologySnapshot,
+    SourceObservationTaxonomyAssertion,
+    SourceTaxonomyComponent,
+)
 from provenance.population_document_processing import (
     DocumentProcessingPopulationRequest,
     populate_document_processing,
@@ -50,6 +62,7 @@ from search.canonical_fact_projection import (
     CanonicalFactProjectionError,
     ProjectionGenerationRequest,
     build_canonical_projection_generation,
+    canonical_json,
     load_canonical_fact_entry,
 )
 from search.corpus_builder import (
@@ -65,15 +78,253 @@ from search.heterogeneous_retrieval import (
     retrieve_heterogeneous,
     verify_heterogeneous_retrieval_trace,
 )
-from tests.test_filing_xbrl_extraction_ledger import filing_xbrl_ledger_database
-from tests.test_heterogeneous_retrieval import (
-    NOW,
-    SCOPE,
-    seed_resolved_annual_periods,
-    two_annual_period_output,
+from tests.test_canonical_fact_resolution import NOW, SCOPE
+from tests.test_filing_xbrl_extraction_ledger import (
+    filing_xbrl_entry,
+    filing_xbrl_ledger_database,
+    filing_xbrl_output,
 )
 
 PERIOD = datetime(2024, 12, 31, tzinfo=UTC)
+
+
+def two_annual_period_output() -> FilingXbrlNormalizedOutput:
+    """Two explicit annual facts; these are never quarterly comparison data."""
+    entries = tuple(
+        NormalizedFilingXbrlFact.model_validate(
+            {
+                **filing_xbrl_entry(ordinal, numeric_value=value).model_dump(),
+                "period_start": datetime(year, 1, 1, tzinfo=UTC),
+                "period_end": datetime(year, 12, 31, tzinfo=UTC),
+                "fiscal_year": year,
+                "fiscal_period": "FY",
+                "effective_at": datetime(year, 12, 31, tzinfo=UTC),
+            }
+        )
+        for ordinal, year, value in ((0, 2023, Decimal("100")), (1, 2024, Decimal("120")))
+    )
+    return filing_xbrl_output(entries)
+
+
+def _annual_component() -> SourceTaxonomyComponent:
+    name = "Revenue"
+    qualifier = {
+        "accounting_basis": "us_gaap",
+        "concept_name": name,
+        "concept_namespace": "https://fasb.org/us-gaap/2026",
+        "consolidation_scope": "consolidated",
+        "period_kind": "duration",
+        "reporting_entity_id": "reporting-1",
+        "unit_family": "currency",
+        "value_kind": "numeric",
+        "schema_version": "source-definition-identity/v1",
+        "taxonomy_name": "US GAAP",
+        "taxonomy_version": "2026",
+    }
+    definition_qualifier_sha256 = hashlib.sha256(canonical_json(qualifier).encode()).hexdigest()
+    return SourceTaxonomyComponent(
+        component_id=f"component:{name}",
+        idempotency_key=f"component:{name}",
+        component_kind="concept",
+        taxonomy_namespace="https://fasb.org/us-gaap/2026",
+        local_name=name,
+        taxonomy_name="US GAAP",
+        taxonomy_version="2026",
+        is_extension=False,
+        data_type="monetaryItemType",
+        period_type="duration",
+        balance="credit",
+        is_abstract=False,
+        standard_label=name,
+        definition_text=name,
+        references=(),
+        definition_qualifier_sha256=definition_qualifier_sha256,
+        reporting_entity_id="reporting-1",
+        evidence_locator={"source": "test"},
+        effective_at=NOW,
+        knowledge_at=NOW,
+        recorded_at=NOW,
+    )
+
+
+def _annual_mapping(component: SourceTaxonomyComponent) -> MappingRevision:
+    return MappingRevision(
+        mapping_revision_id=f"mapping:{component.local_name}",
+        idempotency_key=f"mapping:{component.local_name}",
+        source_component_id=component.component_id,
+        metric_id="revenue",
+        revision=1,
+        disposition="equivalent",
+        policy_name="test",
+        policy_version="v1",
+        policy_config_sha256="a" * 64,
+        method_name="review",
+        method_version="v1",
+        constraints={},
+        evidence={"test": True},
+        reviewer_identity="reviewer@example.test",
+        effective_at=NOW,
+        knowledge_at=NOW,
+        recorded_at=NOW,
+    )
+
+
+def _persist_annual_taxonomy_assertion(
+    conn: sqlite3.Connection,
+    observation_id: str,
+    fact_cell_id: str,
+    *,
+    idempotency_key: str,
+) -> None:
+    proof = conn.execute(
+        "SELECT anchor.extraction_run_id,cell.taxonomy_name,"
+        "anchor.source_taxonomy_version,cell_seal.semantic_key_sha256,"
+        "anchor.anchor_payload_sha256,payload.observation_payload_sha256,"
+        "run.output_sha256,anchor.raw_entry_sha256,"
+        "completeness.observation_set_sha256 "
+        "FROM fact_reported_observation_anchors_v2 anchor "
+        "JOIN fact_cells_v2 cell ON cell.fact_cell_id=? "
+        "JOIN fact_cell_identity_seals_v2 cell_seal "
+        "ON cell_seal.fact_cell_id=cell.fact_cell_id "
+        "JOIN fact_observation_payload_commitments_v2 payload "
+        "ON payload.observation_id=anchor.observation_id "
+        "JOIN evidence_extraction_runs run "
+        "ON run.extraction_run_id=anchor.extraction_run_id "
+        "JOIN fact_extraction_run_completeness_seals_v2 completeness "
+        "ON completeness.extraction_run_id=anchor.extraction_run_id "
+        "WHERE anchor.observation_id=?",
+        (fact_cell_id, observation_id),
+    ).fetchone()
+    assert proof is not None
+    MetricOntology(conn).persist_observation_taxonomy_assertion(
+        SourceObservationTaxonomyAssertion(
+            observation_id=observation_id,
+            idempotency_key=idempotency_key,
+            extraction_run_id=str(proof[0]),
+            taxonomy_name=str(proof[1]),
+            taxonomy_version=str(proof[2]),
+            fact_cell_semantic_key_sha256=str(proof[3]),
+            anchor_payload_sha256=str(proof[4]),
+            observation_payload_sha256=str(proof[5]),
+            extraction_output_sha256=str(proof[6]),
+            raw_entry_sha256=str(proof[7]),
+            observation_set_sha256=str(proof[8]),
+            knowledge_at=NOW,
+            recorded_at=NOW,
+        )
+    )
+
+
+def seed_resolved_annual_periods(
+    conn: sqlite3.Connection,
+) -> tuple[dict[int, BindingRevision], tuple[str, ...]]:
+    ontology = MetricOntology(conn)
+    ontology.persist_metric(
+        CanonicalMetric(
+            metric_id="revenue",
+            idempotency_key="metric:revenue",
+            canonical_name="Revenue",
+            effective_at=NOW,
+            knowledge_at=NOW,
+            recorded_at=NOW,
+        )
+    )
+    ontology.persist_metric_definition(
+        CanonicalMetricDefinitionRevision(
+            metric_definition_revision_id="metric:revenue:v1",
+            idempotency_key="metric:revenue:v1",
+            metric_id="revenue",
+            revision=1,
+            lifecycle="active",
+            definition_text="Revenue recognized from customer contracts.",
+            aliases=("sales", "top line"),
+            value_kind="numeric",
+            period_kind="duration",
+            unit_family="currency",
+            accounting_basis="us_gaap",
+            scope_constraints={},
+            effective_at=NOW,
+            knowledge_at=NOW,
+            recorded_at=NOW,
+        )
+    )
+    rows = conn.execute(
+        "SELECT cell.fact_cell_id,cell.concept_name,cell.period_start,"
+        "cell.period_end,observation.observation_id "
+        "FROM fact_cells_v2 cell JOIN fact_observations_v2 observation "
+        "ON observation.fact_cell_id=cell.fact_cell_id "
+        "JOIN filing_xbrl_extraction_dispositions disposition "
+        "ON disposition.observation_id=observation.observation_id "
+        "WHERE disposition.disposition='published' ORDER BY cell.period_end"
+    ).fetchall()
+    assert len(rows) == 2
+    component = _annual_component()
+    mapping = _annual_mapping(component)
+    ontology.persist_source_component(component)
+    ontology.persist_mapping(mapping)
+    bindings: dict[int, BindingRevision] = {}
+    canonical_cells: list[str] = []
+    for row in rows:
+        year = datetime.fromisoformat(str(row[3])).year
+        canonical_cell_id = f"canonical:revenue:{year}"
+        _persist_annual_taxonomy_assertion(
+            conn,
+            str(row[4]),
+            str(row[0]),
+            idempotency_key=f"taxonomy:{year}",
+        )
+        ontology.persist_canonical_metric_cell(
+            CanonicalMetricCell(
+                canonical_metric_cell_id=canonical_cell_id,
+                idempotency_key=canonical_cell_id,
+                metric_id="revenue",
+                reporting_entity_id="reporting-1",
+                period_kind="duration",
+                period_start=datetime.fromisoformat(str(row[2])),
+                period_end=datetime.fromisoformat(str(row[3])),
+                unit_family="currency",
+                accounting_basis="us_gaap",
+                consolidation_scope="consolidated",
+                effective_at=NOW,
+                knowledge_at=NOW,
+                recorded_at=NOW,
+            )
+        )
+        binding = BindingRevision(
+            binding_revision_id=f"binding:revenue:{year}:v1",
+            idempotency_key=f"binding:revenue:{year}:v1",
+            fact_cell_id=str(row[0]),
+            source_observation_id=str(row[4]),
+            revision=1,
+            canonical_metric_cell_id=canonical_cell_id,
+            mapping_revision_id=mapping.mapping_revision_id,
+            source_component_id=component.component_id,
+            effective_at=NOW,
+            knowledge_at=NOW,
+            recorded_at=NOW,
+        )
+        ontology.persist_binding(binding)
+        bindings[year] = binding
+        canonical_cells.append(canonical_cell_id)
+    resolver = CanonicalFactResolutionEngine(conn)
+    for canonical_cell_id in canonical_cells:
+        result = resolver.resolve(
+            canonical_cell_id,
+            NOW,
+            ResolutionPolicy(name="deterministic", version="v1", config={}),
+            recorded_at=NOW,
+        )
+        assert result.status == "resolved"
+    ontology.seal_snapshot(
+        OntologySnapshot(
+            ontology_snapshot_id="ontology:checkpoint",
+            idempotency_key="ontology:checkpoint",
+            cutoff_at=NOW,
+            recorded_at=NOW,
+        )
+    )
+    resolver.seal_snapshot("resolution:checkpoint", NOW, NOW, SCOPE)
+    return bindings, tuple(canonical_cells)
 
 
 @pytest.fixture
