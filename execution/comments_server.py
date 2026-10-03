@@ -4182,6 +4182,11 @@ def create_app(
         if steps_raw is not None:
             if not isinstance(steps_raw, list):
                 return ({"error": "steps must be a list of step names"}, 400)
+            if not steps_raw:
+                return (
+                    {"error": "select at least one step, or omit steps for the default chain"},
+                    400,
+                )
             steps = [str(s) for s in cast("list[object]", steps_raw)]
             bad = [s for s in steps if s not in STEP_NAMES]
             if bad:

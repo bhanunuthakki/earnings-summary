@@ -13,6 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TextIO
 
+import pytest
+
 from execution import refresh_dispatch as rd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -65,8 +67,9 @@ def test_resolve_steps_subset_reordered_to_canonical() -> None:
     assert rd.resolve_steps(["dcf", "fmp"]) == ["fmp", "dcf"]
 
 
-def test_resolve_steps_drops_unknown() -> None:
-    assert rd.resolve_steps(["dcf", "bogus"]) == ["dcf"]
+def test_resolve_steps_rejects_unknown_instead_of_running_partial_selection() -> None:
+    with pytest.raises(ValueError, match="Invalid refresh step"):
+        rd.resolve_steps(["dcf", "bogus"])
 
 
 def test_resolve_steps_skip_removes() -> None:
