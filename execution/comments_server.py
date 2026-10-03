@@ -641,6 +641,16 @@ def create_app(
     # rather than paying the full build merely to discover the ETag is unchanged.
     panel_cache = PanelResponseCache(ttl_seconds=30.0, max_entries=256)
     declared_operations = operations_registry or build_operations_registry(resolved_code_root)
+    # run_python.bat writes scheduler receipts under the deployed checkout.
+    # The semantic-review wrapper alone selects the declared DB's state root.
+    operations_job_receipt_roots: dict[str, Path] = {
+        step.job: (
+            resolved_db_path.parent.parent
+            if step.job == "prepare-kpi-semantic-review"
+            else resolved_code_root
+        )
+        for step in declared_operations.job_steps
+    }
     operations_review_code_identity = review_code_identity(resolved_code_root)
     app.config["CODE_ROOT"] = resolved_code_root
     app.config["OPERATIONS_REGISTRY"] = declared_operations
@@ -1918,6 +1928,7 @@ def create_app(
             observed_at=datetime.now(UTC),
             scheduler_receipt_path=scheduler_receipt_path(repo_root),
             service_receipt_path=service_receipt_path(repo_root),
+            job_receipt_roots=operations_job_receipt_roots,
         )
         semantic_rows = scoped_kpi_definitions(
             operations_conn,
@@ -2024,6 +2035,7 @@ def create_app(
                 observed_at=datetime.now(UTC),
                 scheduler_receipt_path=scheduler_receipt_path(repo_root),
                 service_receipt_path=service_receipt_path(repo_root),
+                job_receipt_roots=operations_job_receipt_roots,
             )
             return Response(
                 render_operations_panel(
