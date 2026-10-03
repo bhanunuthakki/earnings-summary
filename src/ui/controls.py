@@ -1177,6 +1177,85 @@ _CONTROLS_JS = r"""
 """
 
 
+_READ_REQUEST_JS = r"""
+/* Bounded UI reads */
+(function () {
+  'use strict';
+  if (window.uiFetch) return;
+  window.uiFetch = async function (input, options) {
+    const settings = Object.assign({}, options || {});
+    const timeoutMs = settings.timeoutMs == null ? 15000 : settings.timeoutMs;
+    const allowStatuses = settings.allowStatuses || [];
+    delete settings.timeoutMs;
+    delete settings.allowStatuses;
+    const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, window.location.href);
+    const method = String(settings.method || (input && input.method) || 'GET').toUpperCase();
+    const accepts = new Headers(settings.headers || (input && input.headers) || {}).get('Accept') || '';
+    // Writes and event streams keep their existing idempotency and lifecycle owners.
+    if (method !== 'GET' || url.origin !== window.location.origin || accepts.includes('text/event-stream')) {
+      return fetch(input, settings);
+    }
+    const controller = new AbortController();
+    const parent = settings.signal || (input && input.signal);
+    const cancel = function () { controller.abort(parent.reason); };
+    if (parent && parent.aborted) throw parent.reason || new DOMException('Read cancelled', 'AbortError');
+    if (parent) parent.addEventListener('abort', cancel, { once: true });
+    const started = performance.now();
+    let outcome = 'failed';
+    let status = 0;
+    const timer = window.setTimeout(function () {
+      controller.abort(new DOMException('Read timed out', 'TimeoutError'));
+    }, timeoutMs);
+    try {
+      const response = await fetch(input, Object.assign(settings, { signal: controller.signal }));
+      status = response.status;
+      if (!response.ok && status !== 304 && !allowStatuses.includes(status)) {
+        const error = new Error('View unavailable (HTTP ' + status + ')');
+        error.status = status;
+        error.retryAfter = response.headers.get('Retry-After');
+        throw error;
+      }
+      if ((response.headers.get('Content-Type') || '').includes('text/event-stream')) {
+        if (response.body) await response.body.cancel();
+        throw new Error('Streaming reads require Accept: text/event-stream');
+      }
+      // Keep the deadline until the body completes, including stalled streaming bodies.
+      const body = await response.arrayBuffer();
+      const headers = new Headers(response.headers);
+      headers.delete('Content-Encoding');
+      headers.delete('Content-Length');
+      outcome = 'complete';
+      const buffered = new Response([204, 205, 304].includes(status) ? null : body, {
+        status: status, statusText: response.statusText, headers: headers
+      });
+      Object.defineProperties(buffered, {
+        url: { value: response.url }, redirected: { value: response.redirected }, type: { value: response.type }
+      });
+      return buffered;
+    } catch (error) {
+      if (controller.signal.aborted) {
+        outcome = controller.signal.reason && controller.signal.reason.name === 'TimeoutError' ? 'timeout' : 'cancelled';
+        throw controller.signal.reason;
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timer);
+      if (parent) parent.removeEventListener('abort', cancel);
+      // Local diagnostics contain neither URLs nor source/financial payloads.
+      document.dispatchEvent(new CustomEvent('ui-read-measure', { detail: {
+        duration_ms: Math.round(performance.now() - started), status: status, outcome: outcome
+      } }));
+    }
+  };
+}());
+"""
+
+
+def read_request_js() -> str:
+    """Return the guarded bounded-read runtime for standalone fragments."""
+    return _READ_REQUEST_JS
+
+
 def controls_js() -> str:
     """Return the one Searchable Single-Select runtime for a page document.
 
@@ -1186,7 +1265,7 @@ def controls_js() -> str:
     keep their exact behavior.
     """
 
-    return _CONTROLS_JS
+    return _CONTROLS_JS + _READ_REQUEST_JS
 
 
 def ticker_label(

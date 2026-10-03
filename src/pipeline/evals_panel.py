@@ -498,7 +498,7 @@ _RUN_JS = r"""
   }
   function refetch() {
     var target = bar.closest('.cc-panel-body') || bar.parentElement || document.body;
-    fetch('/api/panel/evals')
+    (window.uiFetch || fetch)('/api/panel/evals')
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
       .then(function (html) {
         target.innerHTML = html;

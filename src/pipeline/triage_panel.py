@@ -36,7 +36,7 @@ from typing import cast
 from identity import DEFAULT_USER_ID
 from pipeline.operations_styles import TRIAGE_STYLE as _PANEL_STYLE
 from ui import living_grid as lg
-from ui.controls import panel_toolbar, ticker_label
+from ui.controls import panel_toolbar, read_request_js, ticker_label
 from user_state.notes import ROUTABLE_INTENTS, AnalystNoteRow, list_triage_notes
 
 # Routable-intent → human label for the route picker (keys are the
@@ -206,6 +206,7 @@ Route each to the real intent it meant, resolve it once handled, or dismiss it.<
     </div>
   </div>
 </div>
+<script>{read_request_js()}</script>
 <script>
 (function () {{
   var root = document.getElementById('triage-root');
@@ -217,15 +218,43 @@ Route each to the real intent it meant, resolve it once handled, or dismiss it.<
     priority: window.CCOverlay.PRIORITY.PEEK, motion: 'slide-right',
     closeId: 'triage-drawer-close', label: 'Triage detail'
   }}) : null;
+  var refreshController = null;
+  var refreshVersion = 0;
   function refresh() {{
-    fetch('/api/panel/triage?fragment=list').then(function (r) {{ return r.text(); }})
-      .then(function (html) {{
-        document.getElementById('triage-list').innerHTML = html;
-        var n = document.querySelectorAll('#triage-list tr[data-note-id]').length;
+    if (!root.isConnected || root.closest('[hidden], [aria-hidden="true"]')) return;
+    var version = ++refreshVersion;
+    if (refreshController) refreshController.abort();
+    refreshController = new AbortController();
+    var list = root.querySelector('#triage-list');
+    list.setAttribute('aria-busy', 'true');
+    window.uiFetch('/api/panel/triage?fragment=list', {{signal: refreshController.signal, timeoutMs: 45000}})
+      .then(function (r) {{ return r.text(); }}).then(function (html) {{
+        if (!root.isConnected || version !== refreshVersion) return;
+        list.innerHTML = html;
+        var n = root.querySelectorAll('#triage-list tr[data-note-id]').length;
         var c = document.getElementById('tri-count');
         if (c) c.textContent = n + ' open';
+      }}).catch(function () {{
+        if (!root.isConnected || version !== refreshVersion) return;
+        var notice = list.querySelector('[data-triage-refresh-error]');
+        if (!notice) {{
+          notice = document.createElement('p');
+          notice.className = 'muted'; notice.setAttribute('role', 'alert');
+          notice.setAttribute('data-triage-refresh-error', '');
+          list.prepend(notice);
+        }}
+        notice.innerHTML = 'Could not refresh. Previous list retained. <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-triage-refresh-retry>Retry refresh</button>';
+      }}).finally(function () {{
+        if (root.isConnected && version === refreshVersion) list.removeAttribute('aria-busy');
       }});
   }}
+  var lifetime = new MutationObserver(function () {{
+    if (root.isConnected && !root.closest('[hidden], [aria-hidden="true"]')) return;
+    refreshVersion += 1;
+    if (refreshController) refreshController.abort();
+    if (!root.isConnected) lifetime.disconnect();
+  }});
+  lifetime.observe(document.body, {{childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-hidden']}});
   function post(url, payload, btn) {{
     CCAction.busy(btn);
     fetch(url, {{
@@ -288,6 +317,7 @@ Route each to the real intent it meant, resolve it once handled, or dismiss it.<
     if (ov) ov.open();
   }}
   root.addEventListener('click', function (ev) {{
+    if (ev.target.closest('[data-triage-refresh-retry]')) {{ refresh(); return; }}
     var btn = ev.target.closest('[data-act]');
     if (!btn) return;
     var holder = btn.closest('[data-note-id]');

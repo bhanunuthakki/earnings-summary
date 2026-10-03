@@ -4,30 +4,74 @@ from __future__ import annotations
 
 import importlib
 import threading
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from io import StringIO
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 import pytest
 
 import execution.verify_design_conformance as design_conformance
 from execution.design_route_canaries import ROUTE_SCREEN_IDS, write_route_canary_fixtures
-from execution.verify_design_conformance import (  # pyright: ignore[reportPrivateUsage]
-    CanaryResult,
-    RouteCanaryResult,
-    _build_receipt,  # pyright: ignore[reportPrivateUsage]
-    _route_canary_source,  # pyright: ignore[reportPrivateUsage]
-    _route_population_failures,  # pyright: ignore[reportPrivateUsage]
-    _scan_canary,  # pyright: ignore[reportPrivateUsage]
-    _scan_route_canaries,  # pyright: ignore[reportPrivateUsage]
-)
+from execution.verify_design_conformance import CanaryResult, ConformanceReceipt, RouteCanaryResult
 from pipeline.work_os_shell import SCREEN_SPECS
 from report.models import SectionStatus, SignalRow, SignalsSection
 from report.renderers import workspace_html
 from report.renderers.workspace_styles import CSS as WORKSPACE_CSS
 from ui.conformance_scan import scan_surface_evidence
+
+
+def _private_call(name: str, *args: object, **kwargs: object) -> object:
+    """Exercise the owned white-box seam without exporting test-only public APIs."""
+    target: Callable[..., object] = design_conformance.__dict__[name]
+    assert callable(target), name
+    return target(*args, **kwargs)
+
+
+def _route_results(value: object) -> tuple[RouteCanaryResult, ...]:
+    assert isinstance(value, tuple)
+    items = cast(tuple[object, ...], value)
+    assert all(isinstance(item, RouteCanaryResult) for item in items)
+    return tuple(item for item in items if isinstance(item, RouteCanaryResult))
+
+
+def _scan_canary(url: str | None, *, browser_canary: bool = False) -> CanaryResult:
+    result = _private_call("_scan_canary", url, browser_canary=browser_canary)
+    assert isinstance(result, CanaryResult)
+    return result
+
+
+def _scan_route_canaries(*, fixture_root: Path | None = None) -> tuple[RouteCanaryResult, ...]:
+    return _route_results(_private_call("_scan_route_canaries", fixture_root=fixture_root))
+
+
+def _route_population_failures(
+    results: tuple[RouteCanaryResult, ...],
+) -> tuple[RouteCanaryResult, ...]:
+    return _route_results(_private_call("_route_population_failures", results))
+
+
+def _route_canary_source(route: str, viewport: str, fixture_root: Path | None) -> str:
+    result = _private_call("_route_canary_source", route, viewport, fixture_root)
+    assert isinstance(result, str)
+    return result
+
+
+def _build_receipt(
+    source_root: Path, url: str | None, *, route_canaries: bool = False
+) -> ConformanceReceipt:
+    result = _private_call("_build_receipt", source_root, url, route_canaries=route_canaries)
+    assert isinstance(result, ConformanceReceipt)
+    return result
+
+
+def _private_mapping(name: str) -> dict[str, object]:
+    result: dict[str, object] = design_conformance.__dict__[name]
+    assert isinstance(result, dict)
+    assert all(isinstance(key, str) for key in result)
+    return result
+
 
 ROOT_TOKENS = """
 :root {
@@ -124,6 +168,28 @@ def test_workspace_signal_disclosure_is_keyboard_reachable_at_both_widths() -> N
 class _FulfillableRoute(Protocol):
     def fulfill(self, *, body: str, content_type: str) -> object: ...
 
+    def abort(self) -> object: ...
+
+
+class _CanaryPage(Protocol):
+    def route(self, url: str, handler: Callable[[_FulfillableRoute], None]) -> object: ...
+
+    def goto(self, url: str, *, wait_until: str) -> object: ...
+
+
+def _load_route_canary(page: _CanaryPage, html: str) -> None:
+    """Use a real origin for production same-origin reads; block all network."""
+
+    def block_request(route: _FulfillableRoute) -> None:
+        route.abort()
+
+    def serve_document(route: _FulfillableRoute) -> None:
+        route.fulfill(body=html, content_type="text/html")
+
+    page.route("**/*", block_request)
+    page.route("http://design-canary.invalid/", serve_document)
+    page.goto("http://design-canary.invalid/", wait_until="load")
+
 
 def _specimen(
     *,
@@ -172,7 +238,7 @@ def specimen_server() -> Generator[tuple[ThreadingHTTPServer, str, list[str]], N
             self.end_headers()
             self.wfile.write(payload[0].encode("utf-8"))
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        def log_message(self, *args: object, **kwargs: object) -> None:
             return
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -261,13 +327,11 @@ def test_guarded_persistent_routes_exactly_match_the_production_screen_registry(
 
 
 def test_every_route_canary_has_a_role_contract() -> None:
-    assert set(design_conformance._ROUTE_CANARY_ROLE_CONTRACTS) == set(  # pyright: ignore[reportPrivateUsage]
-        ROUTE_SCREEN_IDS
-    )
+    assert set(_private_mapping("_ROUTE_CANARY_ROLE_CONTRACTS")) == set(ROUTE_SCREEN_IDS)
 
 
 def test_every_persistent_route_canary_has_a_production_settle_selector() -> None:
-    settled = design_conformance._ROUTE_CANARY_SETTLED_SELECTORS  # pyright: ignore[reportPrivateUsage]
+    settled = _private_mapping("_ROUTE_CANARY_SETTLED_SELECTORS")
     assert set(settled) == set(ROUTE_SCREEN_IDS) - {"full-brief"}
     assert settled["evaluation"] == "#workOsEvaluationRows [data-work-os-evaluation-row]"
 
@@ -384,7 +448,7 @@ def test_evaluation_dialogue_labels_share_columns_and_center_without_own_subtext
         )
         try:
             page = context.new_page()
-            page.set_content(html, wait_until="load")
+            _load_route_canary(page, html)
             rows = page.locator("[data-work-os-evaluation-ticker]")
             page.wait_for_function(
                 "() => document.querySelectorAll('[data-work-os-evaluation-ticker]').length === 3"
@@ -444,7 +508,7 @@ def test_full_brief_canary_uses_production_loader_and_controls_shadow_content(
                 reduced_motion="reduce",
             )
             page = context.new_page()
-            page.set_content(html, wait_until="load")
+            _load_route_canary(page, html)
             page.wait_for_selector("#workOsBriefReader .work-os-report-host", state="visible")
             buttons = page.locator("#workOsBriefReaderSections .work-os-reader-group-button")
             assert buttons.count() == 6
@@ -633,7 +697,7 @@ def test_fact_playground_canary_renders_production_panel_without_stylesheet_leak
         browser = playwright.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport={"width": 1440, "height": 900})
-            page.set_content(html, wait_until="load")
+            _load_route_canary(page, html)
             page.locator("#screen-cockpit").evaluate(
                 """
                 node => {

@@ -380,6 +380,19 @@ def test_explore_panel_carries_question_suggestion_chips(db_path: Path) -> None:
     assert "What changed?" in html_out
 
 
+def test_explore_shell_does_not_wait_for_metric_catalog(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unavailable_catalog(*args: object, **kwargs: object) -> None:
+        raise AssertionError("optional analytics must not block the Explore shell")
+
+    monkeypatch.setattr("pipeline.explore_panel.metric_catalog", unavailable_catalog)
+    html_out = render_explore_panel(db_path, initial_tickers=["TST"], include_runtime=False)
+    assert 'id="ask-q"' in html_out
+    assert 'id="vx-workbench"' in html_out
+    assert "What changed most recently for TST?" in html_out
+
+
 def test_keymetrics_fragment_route(client: FlaskClient) -> None:
     """``?fragment=keymetrics`` is a 200 HTML fragment. TST has no tier-graded
     KPIs or LLM cache, so the row is empty (the container collapses) — the merge

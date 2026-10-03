@@ -4,17 +4,11 @@ from __future__ import annotations
 
 import concurrent.futures
 import sqlite3
-import sys
 from pathlib import Path
 
+import comments_server
 import pytest
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-from comments_server_panel_cache import (  # noqa: E402
+from comments_server_panel_cache import (
     PanelCacheEntry,
     PanelCacheHit,
     PanelCacheReservation,
@@ -81,6 +75,33 @@ def test_panel_cache_single_flights_same_key_without_serializing_other_keys() ->
     assert isinstance(result, PanelCacheHit)
     assert result.entry.body == b"overview"
     cache.abandon(other)
+
+
+def test_panel_cache_bounds_waits_without_starting_duplicate_builds() -> None:
+    cache = PanelResponseCache(ttl_seconds=30, max_entries=2, wait_seconds=0.02)
+    owner = cache.get_or_reserve("slow")
+    assert isinstance(owner, PanelCacheReservation)
+    blocked = cache.get_or_reserve("slow")
+    assert type(blocked).__name__ == "PanelCacheBusy"
+    assert isinstance(cache.get_or_reserve("other"), PanelCacheReservation)
+    assert type(cache.get_or_reserve("overflow")).__name__ == "PanelCacheBusy"
+    cache.store(owner, PanelCacheEntry(body=b"complete", content_type="text/html", etag="ok"))
+    assert isinstance(cache.get_or_reserve("slow"), PanelCacheHit)
+
+
+def test_clear_releases_waiters_and_rejects_obsolete_builds() -> None:
+    cache = PanelResponseCache(ttl_seconds=30, max_entries=2)
+    owner = cache.get_or_reserve("slow")
+    assert isinstance(owner, PanelCacheReservation)
+    cache.clear()
+    assert owner.ready.is_set()
+    replacement = cache.get_or_reserve("slow")
+    assert isinstance(replacement, PanelCacheReservation)
+    cache.store(owner, PanelCacheEntry(body=b"obsolete", content_type="text/html", etag="old"))
+    cache.store(replacement, PanelCacheEntry(body=b"new", content_type="text/html", etag="new"))
+    hit = cache.get_or_reserve("slow")
+    assert isinstance(hit, PanelCacheHit)
+    assert hit.entry.body == b"new"
 
 
 def test_explore_to_dcf_injection_is_not_registered(tmp_path: Path) -> None:

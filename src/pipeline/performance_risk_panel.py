@@ -11,6 +11,7 @@ from collections.abc import Callable
 from decimal import Decimal
 from html import escape
 from pathlib import Path
+from urllib.parse import urlencode
 
 from integrations.portfolio_allocation import (
     PortfolioAllocationBucket,
@@ -19,6 +20,7 @@ from integrations.portfolio_allocation import (
     fetch_portfolio_allocation,
 )
 from integrations.portfolio_tracker_client import PolicyMix, PortfolioAnalytics
+from pipeline.console_scaffold import render_console
 from pipeline.portfolio_decision_support import render_portfolio_posture_section
 from pipeline.portfolio_panel import render_portfolio_panel
 from pipeline.portfolio_styles import portfolio_css
@@ -35,13 +37,19 @@ _TABS: tuple[tuple[str, str, str], ...] = (
 _TABS_JS = """
 <script>
 (function () {
+  var reads = new WeakMap();
   function load(panel) {
     if (!panel || panel.dataset.loaded === '1') return;
     panel.dataset.loaded = '1';
-    fetch(panel.dataset.src).then(function (response) {
+    var controller = new AbortController();
+    reads.set(panel, controller);
+    var timer = window.setTimeout(function () { controller.abort(); }, 45000);
+    panel.setAttribute('aria-busy', 'true');
+    (window.uiFetch || fetch)(panel.dataset.src, {signal: controller.signal, timeoutMs: 45000}).then(function (response) {
       if (!response.ok) throw new Error('HTTP ' + response.status);
       return response.text();
     }).then(function (html) {
+      if (!panel.isConnected || reads.get(panel) !== controller || panel.hidden) return;
       panel.innerHTML = html;
       var scripts = panel.querySelectorAll('script');
       for (var i = 0; i < scripts.length; i++) {
@@ -50,8 +58,15 @@ _TABS_JS = """
         old.parentNode.replaceChild(script, old);
       }
     }).catch(function () {
+      if (reads.get(panel) !== controller || !panel.isConnected) return;
       panel.dataset.loaded = '';
       panel.innerHTML = '<p class="muted" role="status">Risk view unavailable — select the tab to retry.</p>';
+    }).finally(function () {
+      window.clearTimeout(timer);
+      if (reads.get(panel) === controller) {
+        reads.delete(panel);
+        panel.removeAttribute('aria-busy');
+      }
     });
   }
   function activate(root, key, focus) {
@@ -66,6 +81,10 @@ _TABS_JS = """
     for (var j = 0; j < panels.length; j++) {
       var shown = panels[j].dataset.prPanel === key;
       panels[j].hidden = !shown;
+      if (!shown && reads.has(panels[j])) {
+        reads.get(panels[j]).abort(); reads.delete(panels[j]);
+        panels[j].dataset.loaded = ''; panels[j].removeAttribute('aria-busy');
+      }
       if (shown) load(panels[j]);
     }
   }
@@ -107,13 +126,48 @@ _POLICY_EDITOR_JS = """
       status.textContent = message;
       status.dataset.tone = tone || 'neutral';
     }
+    var refreshController = null;
+    var refreshVersion = 0;
+    var receiptTimer = null;
+    function visible() {
+      return root.isConnected && !document.hidden && !root.closest('[hidden], [aria-hidden="true"]');
+    }
+    var wasHidden = !visible();
+    function stopHiddenRead() {
+      var hidden = !visible();
+      var resumed = wasHidden && !hidden;
+      wasHidden = hidden;
+      if (hidden && receiptTimer) {
+        window.clearTimeout(receiptTimer); receiptTimer = null;
+      }
+      if (hidden && refreshController) {
+        refreshVersion += 1;
+        refreshController.abort(); refreshController = null;
+      }
+      if (!root.isConnected) {
+        if (receiptTimer) window.clearTimeout(receiptTimer);
+        lifecycle.disconnect(); document.removeEventListener('visibilitychange', stopHiddenRead);
+      }
+      if (resumed) checkReceipt();
+    }
+    var lifecycle = new MutationObserver(stopHiddenRead);
+    lifecycle.observe(document.body, {childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-hidden']});
+    document.addEventListener('visibilitychange', stopHiddenRead);
     function refreshPanel() {
-      var target = root.closest('#workOsPerformanceMount') || root.parentElement;
+      if (!visible()) return;
+      var section = root.closest('[data-console-endpoint]');
+      var target = section || root.closest('#workOsPerformanceMount') || root.parentElement;
       if (!target) { say('Fresh policy read is ready; refresh this panel to display it.', 'error'); return; }
-      fetch('/api/panel/performance_risk').then(function (response) {
+      var endpoint = section ? section.dataset.consoleEndpoint : '/api/panel/performance_risk';
+      var version = ++refreshVersion;
+      if (refreshController) refreshController.abort();
+      var controller = new AbortController(); refreshController = controller;
+      var timer = window.setTimeout(function () { controller.abort(); }, 45000);
+      (window.uiFetch || fetch)(endpoint, {signal: controller.signal, timeoutMs: 45000}).then(function (response) {
         if (!response.ok) throw new Error('HTTP ' + response.status);
         return response.text();
       }).then(function (html) {
+        if (version !== refreshVersion || !visible()) return;
         target.innerHTML = html;
       var scripts = target.querySelectorAll('script');
       for (var i = 0; i < scripts.length; i++) {
@@ -122,7 +176,11 @@ _POLICY_EDITOR_JS = """
         old.parentNode.replaceChild(script, old);
       }
       }).catch(function () {
+        if (version !== refreshVersion || !visible()) return;
         say('Could not complete the fresh policy read. The confirmed chart and mix are unchanged.', 'error');
+      }).finally(function () {
+        window.clearTimeout(timer);
+        if (refreshController === controller) refreshController = null;
       });
     }
     function checkReceipt() {
@@ -143,7 +201,7 @@ _POLICY_EDITOR_JS = """
       receipt.attempts += 1;
       window.sessionStorage.setItem('bha79-policy-receipt', JSON.stringify(receipt));
       say('Receipt accepted; benchmark recomputation pending. Checking the fresh panel…', 'pending');
-      window.setTimeout(refreshPanel, 1250);
+      receiptTimer = window.setTimeout(function () { receiptTimer = null; refreshPanel(); }, 1250);
     }
     checkReceipt();
     if (form.dataset.writeReady !== '1') return;
@@ -327,8 +385,37 @@ def render_performance_risk_panel(
     allocation: PortfolioAllocationProjection | None = None,
     performance_renderer: Callable[[], str] | None = None,
     policy: PolicyMix | None = None,
+    lazy: bool = False,
 ) -> str:
     """Compose Performance & Risk with one shared tracker policy read."""
+    if lazy:
+        window = {
+            key: value
+            for key, value in {
+                "start_date": start_date,
+                "end_date": end_date,
+                "include_backfill": "1" if include_backfill else None,
+            }.items()
+            if value is not None
+        }
+        anchors = (
+            ("performance", "Index Benchmarking"),
+            ("posture", "Portfolio Posture"),
+            ("allocation", "Portfolio Allocation"),
+        )
+        return (
+            portfolio_css()
+            + render_console(
+                "Performance & Risk",
+                [(key, label, lambda: "") for key, label in anchors],
+                wrap_class="performance-risk-panel",
+                deferred={
+                    key: "/api/panel/performance_risk?" + urlencode({"fragment": key, **window})
+                    for key, _label in anchors
+                },
+            )
+            + _risk_explorer()
+        )
     captured: dict[str, PolicyMix | None] = {"policy": None}
     if performance_renderer is not None:
         performance = performance_renderer()
@@ -351,6 +438,7 @@ def render_performance_risk_panel(
     allocation_card = render_allocation_card(
         allocation if allocation is not None else fetch_portfolio_allocation()
     )
+
     posture = render_portfolio_posture_section(db_path, repo_root, include_actions=False)
     policy_editor = _policy_editor(policy if policy is not None else captured["policy"])
     return (
@@ -365,6 +453,43 @@ def render_performance_risk_panel(
         + _risk_explorer()
         + "</div>"
     )
+
+
+def render_performance_risk_fragment(
+    db_path: Path,
+    repo_root: Path,
+    fragment: str,
+    *,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    include_backfill: bool = False,
+) -> str:
+    """Render independent performance sections through their existing owners."""
+    if fragment == "allocation":
+        return portfolio_css() + render_allocation_card(fetch_portfolio_allocation())
+    if fragment == "posture":
+        return portfolio_css() + render_portfolio_posture_section(
+            db_path, repo_root, include_actions=False
+        )
+    if fragment != "performance":
+        raise ValueError("Unknown performance fragment")
+    captured: dict[str, PolicyMix | None] = {"policy": None}
+
+    def capture(analytics: PortfolioAnalytics) -> None:
+        captured["policy"] = analytics.policy
+
+    performance = render_portfolio_panel(
+        start_date=start_date,
+        end_date=end_date,
+        include_backfill=include_backfill,
+        db_path=db_path,
+        performance_title="Index Benchmarking",
+        include_position_drivers=False,
+        refresh_endpoint="/api/panel/performance_risk?fragment=performance",
+        refresh_target_selector='[data-console-endpoint*="fragment=performance"]',
+        analytics_observer=capture,
+    )
+    return portfolio_css() + performance + _policy_editor(captured["policy"])
 
 
 __all__ = ["render_allocation_card", "render_performance_risk_panel"]

@@ -361,7 +361,7 @@ _RUN_JS = r"""
   }
   function refetch() {
     var target = bar.closest('.cc-panel-body') || bar.parentElement || document.body;
-    fetch('/api/panel/advisor_memos')
+    (window.uiFetch || fetch)('/api/panel/advisor_memos')
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
       .then(function (html) {
         target.innerHTML = html;
@@ -512,7 +512,7 @@ _SOCRATIC_JS = r"""
           es.close();
           if (m.exit_code === 0) {
             append('# exit code 0 — loading questions…');
-            fetch('/api/socratic/questions/' + encodeURIComponent(ticker))
+            (window.uiFetch || fetch)('/api/socratic/questions/' + encodeURIComponent(ticker))
               .then(function (r) {
                 return r.json().then(function (j) {
                   if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));

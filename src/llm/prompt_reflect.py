@@ -33,14 +33,24 @@ Safety contracts kept from §4:
   site passes a fixed set of variables, so a body that invents or drops a slot
   cannot render and would fail at spend time. Validated before any spend.
 * Proposing is steering, never load-bearing: every failure path returns None.
+
+Held-out discipline (the overfitting guard). Every replayable case belongs to a
+fixed TRAIN or TEST split (``case_split``). The rewriter sees TRAIN failures
+only; the backtest grades on TEST. A rewrite that wins train but not test was
+fitted to the evidence, not to the task. Splits group by ticker, so a rewrite
+cannot learn company facts from a train case and reuse them on a test case of
+the same company. A rewrite that copies a ticker, figure, or verbatim passage
+from its evidence into the template is rejected before spend.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import cast
+from typing import Literal, cast
 
 from llm.prompt_registry import PromptTemplate, body_slots
 
@@ -53,6 +63,46 @@ REFLECT_PURPOSE = "prompt_reflect_rewrite"
 # both are rejected pre-spend rather than measured expensively.
 MIN_BODY_RATIO = 0.5
 MAX_BODY_RATIO = 2.0
+
+Split = Literal["train", "test"]
+
+# Share of case groups held out from the rewriter. Half keeps both sides large
+# enough to judge at the small n a backtest can afford.
+HOLDOUT_FRACTION = 0.5
+
+# Verbatim-copy window: a run of this many words shared by the evidence and the
+# rewrite (and absent from the parent) is case content, not an instruction.
+_COPY_SHINGLE_WORDS = 8
+_NUMBER_RX = re.compile(r"\d[\d,.]*\d")
+_WORD_RX = re.compile(r"[a-z0-9']+")
+
+
+def case_group_key(ticker: str | None, prompt_sha: str) -> str:
+    """The unit a split assigns: the ticker when known, else the prompt sha."""
+    return ticker.strip().upper() if ticker and ticker.strip() else prompt_sha
+
+
+def case_split(purpose: str, group_key: str) -> Split:
+    """Deterministic split membership. Stable across runs, machines, and
+    rounds, so no stored assignment can drift or leak."""
+    digest = hashlib.sha256(f"{purpose}\x00{group_key}".encode()).digest()
+    fraction = int.from_bytes(digest[:8], "big") / 2**64
+    return "test" if fraction < HOLDOUT_FRACTION else "train"
+
+
+@dataclass(frozen=True, slots=True)
+class FailureEvidence:
+    """One judged loss handed to the rewriter. ``prompt_sha`` and ``ticker``
+    identify the case so its split can be checked."""
+
+    prompt_sha: str
+    ticker: str | None
+    text: str
+
+    @property
+    def group_key(self) -> str:
+        return case_group_key(self.ticker, self.prompt_sha)
+
 
 REFLECT_PROMPT = """\
 You are improving one production LLM prompt by REWRITING it, based on evidence
@@ -78,6 +128,8 @@ HARD RULES — a violation makes your rewrite unusable:
 - Preserve WHAT is asked: same task, same output contract, same consumer. You
   are changing HOW the instruction gets there, not what it produces.
 - Keep the revision within roughly half to twice the current length.
+- Fix the general cause. Do not copy tickers, figures, or passages from the
+  evidence into the template; the rewrite is graded on cases you never see.
 
 Respond with ONLY a JSON object:
 {{"diagnosis": "<2-3 sentences: the specific mechanism by which the current
@@ -129,17 +181,61 @@ def _validate_body(base: PromptTemplate, body: str) -> tuple[bool, str]:
     return True, ""
 
 
+def _shingles(text: str) -> set[tuple[str, ...]]:
+    words = _WORD_RX.findall(text.lower())
+    n = _COPY_SHINGLE_WORDS
+    return {tuple(words[i : i + n]) for i in range(len(words) - n + 1)}
+
+
+def _copied_case_content(
+    base_body: str, revised: str, evidence: Sequence[FailureEvidence]
+) -> str | None:
+    """Name the case content the rewrite introduced, or None. Only content
+    absent from the parent counts — the parent's own text is not a leak."""
+    for item in evidence:
+        ticker = (item.ticker or "").strip().upper()
+        if len(ticker) >= 2:
+            rx = re.compile(rf"\b{re.escape(ticker)}\b")
+            if rx.search(revised) and not rx.search(base_body):
+                return f"ticker {ticker!r} from the evidence"
+    evidence_text = "\n".join(item.text for item in evidence)
+    base_numbers = set(_NUMBER_RX.findall(base_body))
+    for number in sorted(set(_NUMBER_RX.findall(evidence_text)) - base_numbers):
+        if re.search(rf"(?<![\d.]){re.escape(number)}(?![\d])", revised):
+            return f"figure {number!r} from the evidence"
+    copied = (_shingles(evidence_text) & _shingles(revised)) - _shingles(base_body)
+    if copied:
+        return f"verbatim evidence passage {' '.join(sorted(copied)[0])!r}"
+    return None
+
+
 def reflect_and_rewrite(
     base: PromptTemplate,
     *,
     purpose: str,
-    evidence: str,
+    evidence: Sequence[FailureEvidence],
     direction: str = "No fixed direction — attack the strongest failure in the evidence.",
     struct: StructCall | None = None,
 ) -> Rewrite | None:
     """One reflective mutation. Returns None on ANY failure — a mutation that
     cannot be validated is not worth spending judged cases on, and proposing is
-    steering, never load-bearing."""
+    steering, never load-bearing.
+
+    ``evidence`` must be TRAIN-split only. A held-out case in the evidence
+    voids the test set for this purpose, so the call is refused, not trimmed:
+    the caller's evidence assembly is wrong and must be fixed."""
+    held_out = [e for e in evidence if case_split(purpose, e.group_key) == "test"]
+    if held_out or not evidence:
+        log.warning(
+            {
+                "event": "reflective_rewrite_refused",
+                "purpose": purpose,
+                "reason": "held-out case in evidence" if held_out else "no evidence",
+                "n_held_out": len(held_out),
+            }
+        )
+        return None
+    evidence_text = "\n\n".join(f"- {e.text.strip()}" for e in evidence)
     struct_fn: StructCall
     if struct is None:
         from llm.structured import call_llm_structured
@@ -153,7 +249,7 @@ def reflect_and_rewrite(
                 purpose=purpose,
                 slot_list=", ".join(sorted(base.variables)) or "(none)",
                 body=base.body[:14000],
-                evidence=evidence[:8000],
+                evidence=evidence_text[:8000],
                 direction=direction[:1200],
             ),
             purpose=REFLECT_PURPOSE,
@@ -176,6 +272,9 @@ def reflect_and_rewrite(
         return None
 
     ok, why = _validate_body(base, revised)
+    if ok:
+        leak = _copied_case_content(base.body, revised, evidence)
+        ok, why = (False, f"copies {leak}") if leak else (True, "")
     if not ok:
         log.warning(
             {

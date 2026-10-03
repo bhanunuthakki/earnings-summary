@@ -1837,3 +1837,19 @@ def test_cli_reports_structurally_unverifiable_markup_instead_of_passing(
             "values": ["dynamic-container-class:h3", "dynamic-heading-class:h3"],
         }
     ]
+
+
+def test_console_loading_recipe_is_registered_and_rejects_visual_drift() -> None:
+    surface = "pipeline/console_scaffold.py"
+    source = (SRC / surface).read_text(encoding="utf-8")
+    emitter = next(item for item in registry.VISUAL_EMITTER_MANIFEST if item.path == surface)
+    assert registry.EvidenceAdapter.RUNTIME_JS in emitter.adapter_kinds
+    contracts = [item for item in registry.DYNAMIC_VISUAL_CONTRACTS if item.surface == surface]
+    assert len(contracts) == 1
+    assert dynamic_visual_digest(source) == contracts[0].digest
+    evidence = scan_surface_evidence(surface, source)
+    assert "dynamic-visual-value" not in evidence.unverifiable_markup
+    assert "dynamic-html-markup" not in evidence.unverifiable_markup
+    # An unowned dynamic visual/style payload must invalidate the closed recipe.
+    mutated = source + '\nDRIFT = f"<div style=\\"width:{value}px\\"></div>"\n'
+    assert scan_surface(surface, mutated)["dynamic-visual-contract"]

@@ -34,6 +34,7 @@ from identity import DEFAULT_USER_ID
 from pipeline.console_scaffold import ConsoleSection, render_console
 from pipeline.portfolio_styles import console_css
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from ui.controls import read_request_js
 
 # The D1 tile grid + Band-1 brief. Tokens only (design_language §2): auto-fit
 # tiles ≥460px so a wide desktop viewport gets 2-3 columns and a narrow one
@@ -57,10 +58,22 @@ _HEALTH_CSS = console_css()
 # again retries.
 _HEALTH_TABS_JS = """
 (function () {
+  var reads = window.__ccHealthReads || (window.__ccHealthReads = new WeakMap());
+  function cancel(pane) {
+    var controller = reads.get(pane);
+    if (controller) { reads.delete(pane); controller.abort(); pane.removeAttribute('aria-busy'); }
+  }
   function loadPane(pane) {
-    if (!pane || !pane.dataset.src || pane.dataset.loaded === '1') return;
-    pane.dataset.loaded = '1';
-    fetch(pane.dataset.src).then(function (r) { return r.text(); }).then(function (html) {
+    if (!pane || !pane.dataset.src || pane.dataset.loaded === '1' || reads.has(pane)) return;
+    var controller = new AbortController();
+    reads.set(pane, controller);
+    pane.setAttribute('aria-busy', 'true');
+    (window.uiFetch || fetch)(pane.dataset.src, {signal: controller.signal, timeoutMs: 45000}).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.text();
+    }).then(function (html) {
+      if (reads.get(pane) !== controller || !pane.isConnected || pane.closest('[hidden], [aria-hidden="true"]')) return;
+      pane.dataset.loaded = '1';
       pane.innerHTML = html;
       var scripts = pane.querySelectorAll('script');
       for (var i = 0; i < scripts.length; i++) {
@@ -70,8 +83,11 @@ _HEALTH_TABS_JS = """
         old.parentNode.replaceChild(s, old);
       }
     }).catch(function () {
+      if (reads.get(pane) !== controller || controller.signal.aborted) return;
       pane.dataset.loaded = '';
-      pane.innerHTML = '<p class="muted">Failed to load — press the chip again to retry.</p>';
+      pane.innerHTML = '<p class="muted" role="alert">Failed to load — select the tab again to retry.</p>';
+    }).finally(function () {
+      if (reads.get(pane) === controller) { reads.delete(pane); pane.removeAttribute('aria-busy'); }
     });
   }
   if (!window.__ccHealthTabs) {
@@ -87,7 +103,7 @@ _HEALTH_TABS_JS = """
       var panes = card.querySelectorAll('.hc-pane');
       for (var j = 0; j < panes.length; j++) {
         if (panes[j] === pane) panes[j].removeAttribute('hidden');
-        else panes[j].setAttribute('hidden', '');
+        else { panes[j].setAttribute('hidden', ''); cancel(panes[j]); }
       }
       loadPane(pane);
     });
@@ -168,7 +184,7 @@ def render_portfolio_health_panel(db_path: Path, *, user_id: str = DEFAULT_USER_
         + "</section>"
         + f'<div class="console-grid">{cards}</div>'
         + "</div>"
-        + f"<script>{_HEALTH_TABS_JS}</script>"
+        + f"<script>{read_request_js()}\n{_HEALTH_TABS_JS}</script>"
     )
 
 
@@ -427,7 +443,7 @@ def render_portfolio_allocation_panel(
     )
 
 
-def render_portfolio_record_panel(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
+def _record_sections(db_path: Path, user_id: str) -> list[ConsoleSection]:
     """Portfolio → Record: the audit trail, on the D1 page model — the Band-1
     read leads, Decisions spans wide (it is the record), Memos and the
     Triggers ladder sit as side-by-side tiles."""
@@ -435,7 +451,7 @@ def render_portfolio_record_panel(db_path: Path, *, user_id: str = DEFAULT_USER_
     from pipeline.allocation_decisions_panel import render_allocation_decisions_panel
     from pipeline.journal_panel import render_journal_panel
 
-    sections: list[ConsoleSection] = [
+    return [
         ("brief", "Read", lambda: _record_brief(db_path)),
         (
             "decisions",
@@ -455,6 +471,23 @@ def render_portfolio_record_panel(db_path: Path, *, user_id: str = DEFAULT_USER_
         ("memos", "Memos", lambda: render_advisor_memos_panel(db_path, user_id=user_id)),
         ("triggers", "Triggers", lambda: _render_triggers(db_path)),
     ]
+
+
+def render_portfolio_record_fragment(
+    db_path: Path, fragment: str, *, user_id: str = DEFAULT_USER_ID
+) -> str:
+    """Build one audit section without waiting for unrelated dependencies."""
+    for anchor, _label, builder in _record_sections(db_path, user_id):
+        if anchor == fragment:
+            return builder()
+    raise ValueError("Unknown record fragment")
+
+
+def render_portfolio_record_panel(
+    db_path: Path, *, user_id: str = DEFAULT_USER_ID, lazy: bool = False
+) -> str:
+    """Render the audit console, deferring independent sections on live routes."""
+    sections = _record_sections(db_path, user_id)
     return _CONSOLE_CSS + render_console(
         "Record",
         sections,
@@ -462,6 +495,12 @@ def render_portfolio_record_panel(db_path: Path, *, user_id: str = DEFAULT_USER_
         nav_exclude=("brief",),
         grid=True,
         wide=("brief", "decisions"),
+        deferred={
+            anchor: f"/api/panel/portfolio_record?fragment={anchor}"
+            for anchor, _label, _builder in sections
+        }
+        if lazy
+        else None,
     )
 
 

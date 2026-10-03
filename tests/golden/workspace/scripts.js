@@ -1780,6 +1780,10 @@ ${r?'Expression: "'+r+`"
   var elHeatmap = document.getElementById('dcf-edit-heatmap');
   var elReset = document.getElementById('dcf-edit-reset');
   var elSave = document.getElementById('dcf-edit-save');
+  var elRetry = document.getElementById('dcf-edit-retry');
+  var loadController = null;
+  var loadGeneration = 0;
+  var INPUT_READ_TIMEOUT_MS = 15000;
 
   var loaded = null;   // canonical inputs as last fetched / saved
   var model = null;    // working copy with live edits
@@ -2061,18 +2065,34 @@ ${r?'Expression: "'+r+`"
     debounceTimer = setTimeout(recompute, 280);
   }
 
+  function cancelLoad() {
+    loadGeneration++;
+    if (loadController) loadController.abort();
+    loadController = null;
+  }
   function load() {
+    cancelLoad();
+    var request = loadGeneration;
+    var controller = new AbortController();
+    loadController = controller;
+    // This report may run from a file against its configured server origin.
+    // Keep the deadline active through JSON body consumption, not only headers.
+    var timer = setTimeout(function () { controller.abort(); }, INPUT_READ_TIMEOUT_MS);
+    elRetry.hidden = true;
     setStatus('Loading model…');
-    fetch(SERVER_URL + '/api/dcf/inputs/' + encodeURIComponent(TICKER), {
-      headers: window.__workspaceMutationHeaders ? window.__workspaceMutationHeaders() : {}
+    return fetch(SERVER_URL + '/api/dcf/inputs/' + encodeURIComponent(TICKER), {
+      headers: window.__workspaceMutationHeaders ? window.__workspaceMutationHeaders() : {},
+      signal: controller.signal
     })
       .then(function (r) {
+        if (request !== loadGeneration || controller.signal.aborted) return null;
         if (r.status === 404) { setStatus('No editable DCF model for this ticker.', ''); return null; }
         return r.json().then(function (j) { return {ok: r.ok, body: j}; });
       }).then(function (res) {
-        if (!res) return;
+        if (request !== loadGeneration || controller.signal.aborted || !root.isConnected || !res) return;
         if (!res.ok || !res.body || !res.body.inputs) {
           setStatus((res.body && res.body.error) || 'Could not load the model.', 'bad');
+          elRetry.hidden = false;
           return;
         }
         loaded = res.body.inputs;
@@ -2085,9 +2105,18 @@ ${r?'Expression: "'+r+`"
           applyInject(pi.key, pi.value, pi.label);
         }
       }).catch(function () {
-        setStatus('Research server offline — start comments_server to edit.', 'bad');
+        if (request !== loadGeneration || !root.isConnected) return;
+        setStatus(controller.signal.aborted
+          ? 'Model loading timed out. Retry loading the model.'
+          : 'Model could not load from the research server. Retry loading the model.', 'bad');
+        elRetry.hidden = false;
+      }).finally(function () {
+        clearTimeout(timer);
+        if (loadController === controller) loadController = null;
       });
   }
+  elRetry.addEventListener('click', load);
+  window.addEventListener('pagehide', cancelLoad);
 
   // --- Wave 5: KPI -> DCF driver injection ---------------------------------
   // A captured report value carries a "-> DCF" affordance
@@ -2140,6 +2169,7 @@ ${r?'Expression: "'+r+`"
     elBody.hidden = !open;
     elToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open && !ready && loaded === null) load();
+    if (!open) cancelLoad();
   });
 
   elReset.addEventListener('click', function () {
@@ -2543,4 +2573,75 @@ ${r?'Expression: "'+r+`"
   window.KSelect = { version: '1', enhanceAll: enhanceAll, sync: sync };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
   else start();
+}());
+
+/* Bounded UI reads */
+(function () {
+  'use strict';
+  if (window.uiFetch) return;
+  window.uiFetch = async function (input, options) {
+    const settings = Object.assign({}, options || {});
+    const timeoutMs = settings.timeoutMs == null ? 15000 : settings.timeoutMs;
+    const allowStatuses = settings.allowStatuses || [];
+    delete settings.timeoutMs;
+    delete settings.allowStatuses;
+    const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url, window.location.href);
+    const method = String(settings.method || (input && input.method) || 'GET').toUpperCase();
+    const accepts = new Headers(settings.headers || (input && input.headers) || {}).get('Accept') || '';
+    // Writes and event streams keep their existing idempotency and lifecycle owners.
+    if (method !== 'GET' || url.origin !== window.location.origin || accepts.includes('text/event-stream')) {
+      return fetch(input, settings);
+    }
+    const controller = new AbortController();
+    const parent = settings.signal || (input && input.signal);
+    const cancel = function () { controller.abort(parent.reason); };
+    if (parent && parent.aborted) throw parent.reason || new DOMException('Read cancelled', 'AbortError');
+    if (parent) parent.addEventListener('abort', cancel, { once: true });
+    const started = performance.now();
+    let outcome = 'failed';
+    let status = 0;
+    const timer = window.setTimeout(function () {
+      controller.abort(new DOMException('Read timed out', 'TimeoutError'));
+    }, timeoutMs);
+    try {
+      const response = await fetch(input, Object.assign(settings, { signal: controller.signal }));
+      status = response.status;
+      if (!response.ok && status !== 304 && !allowStatuses.includes(status)) {
+        const error = new Error('View unavailable (HTTP ' + status + ')');
+        error.status = status;
+        error.retryAfter = response.headers.get('Retry-After');
+        throw error;
+      }
+      if ((response.headers.get('Content-Type') || '').includes('text/event-stream')) {
+        if (response.body) await response.body.cancel();
+        throw new Error('Streaming reads require Accept: text/event-stream');
+      }
+      // Keep the deadline until the body completes, including stalled streaming bodies.
+      const body = await response.arrayBuffer();
+      const headers = new Headers(response.headers);
+      headers.delete('Content-Encoding');
+      headers.delete('Content-Length');
+      outcome = 'complete';
+      const buffered = new Response([204, 205, 304].includes(status) ? null : body, {
+        status: status, statusText: response.statusText, headers: headers
+      });
+      Object.defineProperties(buffered, {
+        url: { value: response.url }, redirected: { value: response.redirected }, type: { value: response.type }
+      });
+      return buffered;
+    } catch (error) {
+      if (controller.signal.aborted) {
+        outcome = controller.signal.reason && controller.signal.reason.name === 'TimeoutError' ? 'timeout' : 'cancelled';
+        throw controller.signal.reason;
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timer);
+      if (parent) parent.removeEventListener('abort', cancel);
+      // Local diagnostics contain neither URLs nor source/financial payloads.
+      document.dispatchEvent(new CustomEvent('ui-read-measure', { detail: {
+        duration_ms: Math.round(performance.now() - started), status: status, outcome: outcome
+      } }));
+    }
+  };
 }());

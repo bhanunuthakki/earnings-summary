@@ -2054,7 +2054,7 @@ _EDITOR_JS = r"""
     return el.closest('.cc-panel-body') || el.closest('.cc-drawer-sec-body') || document.body;
   }
   function refetch(target) {
-    fetch('/api/panel/decisions_record')
+    (window.uiFetch || fetch)('/api/panel/decisions_record')
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
       .then(function (html) {
         target.innerHTML = html;
@@ -2067,7 +2067,15 @@ _EDITOR_JS = r"""
         }
       })
       .catch(function (e) {
-        target.innerHTML = '<div class="cc-empty">Failed to reload (' + e.message + ').</div>';
+        var prior = target.querySelector('[data-decisions-refresh-error]');
+        if (prior) prior.remove();
+        var recovery = document.createElement('div'); recovery.className = 'k-well';
+        recovery.setAttribute('data-decisions-refresh-error', ''); recovery.setAttribute('role', 'status');
+        recovery.textContent = 'Saved, but decisions could not refresh. Previous entries remain visible. ';
+        var retry = document.createElement('button'); retry.type = 'button';
+        retry.className = 'k-btn k-btn-quiet k-btn-sm'; retry.textContent = 'Retry refresh';
+        retry.addEventListener('click', function () { refetch(target); });
+        recovery.appendChild(retry); target.prepend(recovery);
       });
   }
   document.querySelectorAll('.ad-edit-btn').forEach(function (btn) {

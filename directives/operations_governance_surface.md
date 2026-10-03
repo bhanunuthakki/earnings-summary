@@ -14,6 +14,19 @@
 
 ## Outcome
 
+### Cached host-owner monitoring endpoint
+
+Disposition: **linked governed view**. `GET /api/operations/host-runtime`
+restores the existing private fleet monitor's read-only transport for the
+`HostRuntimeBundle` owned by `src/operations/host_runtime.py`. It reads only
+the bounded cached host receipt from the configured product-state root.
+Missing, stale, invalid and current evidence remain explicit. The response
+uses the same configured private HTTPS origin and code identity as the
+operations review bundle; request headers cannot supply either identity.
+It returns a content digest, `ETag` and `Cache-Control: no-store`. It adds no
+host probe, database read, recovery action, financial payload or scheduler owner.
+`tests/test_comments_server_host_runtime.py` verifies those boundaries.
+
 The Operations & Governance workspace remains a truthful operator-facing map as functionality is added, removed, renamed, or changes ownership. It is not an inventory of every module or CLI. It shows supported operations, their declared ownership, current evidence, freshness, failure state, and guarded actions at the level needed to understand or operate the product safely.
 
 ## Trigger matrix
@@ -70,6 +83,14 @@ At minimum, record one Pull Request disposition and run the relevant set. The Pu
 A tested `no surface change` disposition must state which canonical owner and visible contract remain unchanged. Static configuration, a green subprocess, or a successful historical row is not current-health evidence.
 
 ### Current no-surface-change dispositions
+
+Application read-performance changes preserve the existing Operations registry,
+Jobs, Sources, Data, Actions, and README approval boundaries. Independent panel
+loading, bounded reads, cache-busy responses, and retry controls change delivery
+and recovery of read-only observations. They do not add an operator action,
+scheduler, writer, or service-health claim. A failed README status read disables
+Apply until the current status is verified. Route and read-lifecycle tests cover
+these preserved boundaries.
 
 `execution/sync_list_type_from_holdings.py --apply --onboard-untracked` is the
 primary operator surface for approving reviewed tracker holdings into the

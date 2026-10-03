@@ -125,7 +125,8 @@ def render_dcf_editor(body: StringIO, ticker: str) -> None:
         'id="dcf-edit-toggle" aria-expanded="false">Edit assumptions &amp; re-run ↻'
         "</button>"
         '<div class="dcf-edit-body" id="dcf-edit-body" hidden>'
-        '<div class="dcf-edit-status" id="dcf-edit-status" role="status"></div>'
+        '<div class="dcf-edit-status" id="dcf-edit-status" role="status" aria-live="polite"></div>'
+        '<button type="button" class="k-btn k-btn-quiet k-btn-sm" id="dcf-edit-retry" hidden>Retry loading model</button>'
         '<div class="dcf-edit-cols">'
         '<div class="dcf-edit-controls" id="dcf-edit-controls"></div>'
         '<div class="dcf-edit-out">'
@@ -173,6 +174,10 @@ JS = r"""
   var elHeatmap = document.getElementById('dcf-edit-heatmap');
   var elReset = document.getElementById('dcf-edit-reset');
   var elSave = document.getElementById('dcf-edit-save');
+  var elRetry = document.getElementById('dcf-edit-retry');
+  var loadController = null;
+  var loadGeneration = 0;
+  var INPUT_READ_TIMEOUT_MS = 15000;
 
   var loaded = null;   // canonical inputs as last fetched / saved
   var model = null;    // working copy with live edits
@@ -454,18 +459,34 @@ JS = r"""
     debounceTimer = setTimeout(recompute, 280);
   }
 
+  function cancelLoad() {
+    loadGeneration++;
+    if (loadController) loadController.abort();
+    loadController = null;
+  }
   function load() {
+    cancelLoad();
+    var request = loadGeneration;
+    var controller = new AbortController();
+    loadController = controller;
+    // This report may run from a file against its configured server origin.
+    // Keep the deadline active through JSON body consumption, not only headers.
+    var timer = setTimeout(function () { controller.abort(); }, INPUT_READ_TIMEOUT_MS);
+    elRetry.hidden = true;
     setStatus('Loading model…');
-    fetch(SERVER_URL + '/api/dcf/inputs/' + encodeURIComponent(TICKER), {
-      headers: window.__workspaceMutationHeaders ? window.__workspaceMutationHeaders() : {}
+    return fetch(SERVER_URL + '/api/dcf/inputs/' + encodeURIComponent(TICKER), {
+      headers: window.__workspaceMutationHeaders ? window.__workspaceMutationHeaders() : {},
+      signal: controller.signal
     })
       .then(function (r) {
+        if (request !== loadGeneration || controller.signal.aborted) return null;
         if (r.status === 404) { setStatus('No editable DCF model for this ticker.', ''); return null; }
         return r.json().then(function (j) { return {ok: r.ok, body: j}; });
       }).then(function (res) {
-        if (!res) return;
+        if (request !== loadGeneration || controller.signal.aborted || !root.isConnected || !res) return;
         if (!res.ok || !res.body || !res.body.inputs) {
           setStatus((res.body && res.body.error) || 'Could not load the model.', 'bad');
+          elRetry.hidden = false;
           return;
         }
         loaded = res.body.inputs;
@@ -478,9 +499,18 @@ JS = r"""
           applyInject(pi.key, pi.value, pi.label);
         }
       }).catch(function () {
-        setStatus('Research server offline — start comments_server to edit.', 'bad');
+        if (request !== loadGeneration || !root.isConnected) return;
+        setStatus(controller.signal.aborted
+          ? 'Model loading timed out. Retry loading the model.'
+          : 'Model could not load from the research server. Retry loading the model.', 'bad');
+        elRetry.hidden = false;
+      }).finally(function () {
+        clearTimeout(timer);
+        if (loadController === controller) loadController = null;
       });
   }
+  elRetry.addEventListener('click', load);
+  window.addEventListener('pagehide', cancelLoad);
 
   // --- Wave 5: KPI -> DCF driver injection ---------------------------------
   // A captured report value carries a "-> DCF" affordance
@@ -533,6 +563,7 @@ JS = r"""
     elBody.hidden = !open;
     elToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
     if (open && !ready && loaded === null) load();
+    if (!open) cancelLoad();
   });
 
   elReset.addEventListener('click', function () {

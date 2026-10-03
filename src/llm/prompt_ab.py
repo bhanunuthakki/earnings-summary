@@ -44,6 +44,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from calibration_guard import wilson_interval
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -74,6 +75,12 @@ PROMOTION_MAX_BASELINE_WINS = 0.20  # zero-regression guard
 PROMOTION_MIN_AGREEMENT = 0.6
 PROMOTION_MIN_RUNS = 2
 PROMOTION_MIN_CASES = 10
+# Noise gate: across EVERY measured run (not only the promoting ones — dropping
+# HOLD runs would cherry-pick), the 95% Wilson lower bound of the variant's
+# strict-win rate must clear a coin flip. Otherwise the gain is inside the
+# noise and is not promoted. n is the case count, not judgments, because two
+# judges grading one case are not two independent observations.
+PROMOTION_MIN_WIN_LOWER_BOUND = 0.5
 VARIANT_ERROR_RATE_THRESHOLD = 0.5  # mirrors CANDIDATE_ERROR_RATE_THRESHOLD
 # Baseline error rate above which a variant's failures are attributed to the
 # transport rather than to the edit. The baseline is UNEDITED, so anything it
@@ -645,6 +652,26 @@ def decide_ab(
     return AB_HOLD, "mixed: below the promotion bar for some judge"
 
 
+_UNMEASURED_RECOMMENDATIONS = frozenset({TRANSPORT_DEGRADED, VARIANT_ERRORED})
+
+
+def _pooled_case_wins(rows: list[sqlite3.Row]) -> tuple[int, int]:
+    """(variant case wins, measured cases) over every run that measured the
+    prompt. Judgment tallies are rescaled to the run's case count."""
+    wins = 0.0
+    measured = 0
+    for r in rows:
+        if str(r["recommendation"]) in _UNMEASURED_RECOMMENDATIONS:
+            continue
+        n_cases = int(r["n_cases"] or 0)
+        judged = int(r["variant_wins"] or 0) + int(r["baseline_wins"] or 0) + int(r["ties"] or 0)
+        if n_cases <= 0 or judged <= 0:
+            continue
+        wins += n_cases * int(r["variant_wins"] or 0) / judged
+        measured += n_cases
+    return round(wins), measured
+
+
 def promotion_ready(
     db_path: Path, experiment_id: str, *, arm_label: str | None = None
 ) -> tuple[bool, str]:
@@ -670,13 +697,15 @@ def promotion_ready(
             )
             if arm_label is not None and has_arm_col:
                 rows = conn.execute(
-                    "SELECT recommendation, n_cases FROM prompt_ab_verdicts "
+                    "SELECT recommendation, n_cases, variant_wins, baseline_wins, ties "
+                    "FROM prompt_ab_verdicts "
                     "WHERE experiment_id = ? AND arm_label = ? ORDER BY recorded_at",
                     (experiment_id, arm_label),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    "SELECT recommendation, n_cases FROM prompt_ab_verdicts "
+                    "SELECT recommendation, n_cases, variant_wins, baseline_wins, ties "
+                    "FROM prompt_ab_verdicts "
                     "WHERE experiment_id = ? ORDER BY recorded_at",
                     (experiment_id,),
                 ).fetchall()
@@ -692,7 +721,19 @@ def promotion_ready(
     promotes = [r for r in rows if str(r["recommendation"]) == PROMOTE_VARIANT]
     total_cases = sum(int(r["n_cases"] or 0) for r in promotes)
     if len(promotes) >= PROMOTION_MIN_RUNS and total_cases >= PROMOTION_MIN_CASES:
-        return True, f"{len(promotes)} promoting run(s), {total_cases} pooled cases"
+        wins, measured = _pooled_case_wins(rows)
+        interval = wilson_interval(wins, measured)
+        low = interval[0] if interval else 0.0
+        if low <= PROMOTION_MIN_WIN_LOWER_BOUND:
+            return False, (
+                f"within noise: pooled variant wins {wins}/{measured} case(s) across all "
+                f"measured runs, 95% lower bound {low:.2f} <= "
+                f"{PROMOTION_MIN_WIN_LOWER_BOUND:.2f}"
+            )
+        return True, (
+            f"{len(promotes)} promoting run(s), {total_cases} pooled cases; "
+            f"pooled win lower bound {low:.2f}"
+        )
     n_transport = sum(1 for r in recs if r == TRANSPORT_DEGRADED)
     suffix = f" ({n_transport} run(s) neutral: transport degraded)" if n_transport else ""
     return (

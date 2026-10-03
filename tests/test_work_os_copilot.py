@@ -58,7 +58,7 @@ def test_copilot_history_and_context_controls_are_dense_real_filters() -> None:
 def test_copilot_reuses_ask_session_crud_and_stream_contract() -> None:
     html = render_work_os_copilot()
 
-    assert "fetch('/api/ask/sessions?limit=200'" in html
+    assert "(window.uiFetch || fetch)('/api/ask/sessions?limit=200'" in html
     assert "fetch('/api/ask/sessions/' + encodeURIComponent" in html
     assert "method: 'PATCH'" in html
     assert "method: 'DELETE'" in html
@@ -288,7 +288,7 @@ def test_proposal_contract_uses_only_backend_owned_links() -> None:
     assert "var proposalId = Number(rawId)" in html
     assert "proposal_id: proposalId" in html
     assert "function sameOriginActionUrl(value)" in html
-    assert "fetch(ref.detail_url" in html
+    assert "(window.uiFetch || fetch)(ref.detail_url" in html
     assert "fetch(ref.decision_url" in html
     assert "schema_version: 'ask_proposal_decision.v1'" in html
     assert "proposal_id: ref.proposal_id" in html

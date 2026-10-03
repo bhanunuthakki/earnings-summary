@@ -61,7 +61,7 @@ _PANEL_SCRIPT = """<script>
       body: JSON.stringify(payload)
     }).then(function (r) {
       if (!r.ok) throw new Error('save failed (' + r.status + ')');
-      return fetch('/api/position-lifecycle/' + root.getAttribute('data-plc-ticker'));
+      return (window.uiFetch || fetch)('/api/position-lifecycle/' + root.getAttribute('data-plc-ticker'));
     }).then(function (r) { return r.text(); }).then(function (html) {
       var holder = root.parentElement;
       root.outerHTML = html;

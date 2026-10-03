@@ -64,6 +64,27 @@ requires it.
 Prompt changes follow the versioned regression workflow in `llm_calls.md`. Model
 promotion follows `model_eval_loop.md`; judges never switch production routing directly.
 
+## Noise and headroom
+
+A single eval score is not evidence of a change until its noise is known. Every run
+reports a 95% interval on its pass rate and mean score. `run_llm_evals.py --repeats N`
+measures how far the score moves by chance (per-repeat scores, spread, flipped cases);
+for rubric audits the outputs are fixed, so repeats measure judge stability. Do not act on
+a difference smaller than that noise. A run with a pass rate of 95% or more is
+`saturated`: it cannot show a quality gain, so use it for cost or latency work or harden
+the set. Prompt promotion (`llm.prompt_ab.promotion_ready`) also requires the pooled
+variant win rate over every measured run to have a 95% lower bound above 0.5.
+
+## Automated prompt optimization
+
+`src/llm/prompt_reflect.py` owns the held-out split (`case_split`, grouped by ticker).
+A rewriter receives judged failures from the train split only; a held-out case in its
+evidence refuses the rewrite. A rewrite that copies a ticker, figure, or verbatim
+passage from its evidence is rejected before spend. `execution/backtest_prompt_candidate.py`
+grades the held-out test split: a candidate that wins train but not test is
+`OVERFIT_SUSPECTED` and must not be promoted. An unsplit backtest (`--split all`) is not
+promotion evidence.
+
 ## Identity and evidence failure
 
 - **Logical Idempotency Key:** `(purpose, eval-suite version, candidate configuration)`.

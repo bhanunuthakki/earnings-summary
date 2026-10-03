@@ -12,7 +12,10 @@ import pytest
 
 from llm.prompt_reflect import (
     Candidate,
+    FailureEvidence,
     ParetoFrontier,
+    case_group_key,
+    case_split,
     reflect_and_rewrite,
 )
 from llm.prompt_registry import PromptTemplate
@@ -36,6 +39,19 @@ def _caller(payload: object):
     return fake
 
 
+def _ticker_in(purpose: str, split: str) -> str:
+    """A ticker whose group lands in ``split`` for ``purpose``."""
+    for i in range(500):
+        ticker = f"T{i}"
+        if case_split(purpose, ticker) == split:
+            return ticker
+    raise AssertionError("no ticker found")
+
+
+def _train(text: str = "e", purpose: str = "p") -> list[FailureEvidence]:
+    return [FailureEvidence(prompt_sha="0" * 64, ticker=_ticker_in(purpose, "train"), text=text)]
+
+
 def _good_body(extra: str = "Name the mechanism explicitly.\n") -> str:
     return (
         "You are analyzing {ticker}.\n"
@@ -55,7 +71,9 @@ def test_rewrite_produces_a_new_registry_version() -> None:
     out = reflect_and_rewrite(
         _BASE,
         purpose="bear_case",
-        evidence="Judge: output stated 'revenue fell' with no period or figure.",
+        evidence=_train(
+            "Judge: output stated 'revenue fell' with no period or figure.", "bear_case"
+        ),
         struct=_caller(
             {
                 "diagnosis": "The instruction says 'cite numbers' but never demands a period.",
@@ -102,7 +120,7 @@ def test_invalid_rewrites_are_rejected_before_spend(body: str, why: str) -> None
     out = reflect_and_rewrite(
         _BASE,
         purpose="bear_case",
-        evidence="e",
+        evidence=_train(purpose="bear_case"),
         struct=_caller({"diagnosis": "d", "revised_template": body}),
     )
     assert out is None, f"should have rejected: {why}"
@@ -114,7 +132,7 @@ def test_noop_rewrite_is_rejected() -> None:
     out = reflect_and_rewrite(
         _BASE,
         purpose="p",
-        evidence="e",
+        evidence=_train(),
         struct=_caller({"diagnosis": "d", "revised_template": _BASE.body}),
     )
     assert out is None
@@ -131,14 +149,16 @@ def test_noop_rewrite_is_rejected() -> None:
     ],
 )
 def test_malformed_payloads_return_none(payload: object) -> None:
-    assert reflect_and_rewrite(_BASE, purpose="p", evidence="e", struct=_caller(payload)) is None
+    assert (
+        reflect_and_rewrite(_BASE, purpose="p", evidence=_train(), struct=_caller(payload)) is None
+    )
 
 
 def test_caller_exception_is_not_load_bearing() -> None:
     def boom(prompt: str, **_kw: object) -> object:
         raise RuntimeError("judge transport down")
 
-    assert reflect_and_rewrite(_BASE, purpose="p", evidence="e", struct=boom) is None
+    assert reflect_and_rewrite(_BASE, purpose="p", evidence=_train(), struct=boom) is None
 
 
 def test_prompt_names_the_required_slots() -> None:
@@ -150,10 +170,84 @@ def test_prompt_names_the_required_slots() -> None:
         seen["prompt"] = prompt
         return {"diagnosis": "d", "revised_template": _good_body()}
 
-    reflect_and_rewrite(_BASE, purpose="p", evidence="ev", struct=capture)
+    reflect_and_rewrite(_BASE, purpose="p", evidence=_train("judge said ev"), struct=capture)
     assert "data, ticker" in seen["prompt"]  # sorted, so the contract is stable
     assert "str.format" in seen["prompt"]  # the brace-doubling rule
-    assert "ev" in seen["prompt"]
+    assert "judge said ev" in seen["prompt"]
+    assert "Do not copy tickers, figures, or passages" in seen["prompt"]
+
+
+# ---------------------------------------------------------------------------
+# Held-out discipline — the overfitting guard
+# ---------------------------------------------------------------------------
+
+
+def test_split_is_deterministic_and_roughly_balanced() -> None:
+    keys = [f"K{i}" for i in range(2000)]
+    first = [case_split("bear_case", k) for k in keys]
+    assert first == [case_split("bear_case", k) for k in keys]
+    share = first.count("test") / len(first)
+    assert 0.45 < share < 0.55
+
+
+def test_split_groups_by_ticker_case_insensitively() -> None:
+    """Two quarters of one company must land together, or the rewriter could
+    learn the company from train and be graded on it in test."""
+    a = case_group_key("nvda", "a" * 64)
+    b = case_group_key(" NVDA ", "b" * 64)
+    assert a == b == "NVDA"
+    assert case_group_key(None, "c" * 64) == "c" * 64
+
+
+def test_held_out_evidence_refuses_the_rewrite_before_any_call() -> None:
+    called: list[str] = []
+
+    def spy(prompt: str, **_kw: object) -> object:
+        called.append(prompt)
+        return {"diagnosis": "d", "revised_template": _good_body()}
+
+    leaked = [
+        *_train(),
+        FailureEvidence(prompt_sha="1" * 64, ticker=_ticker_in("p", "test"), text="t"),
+    ]
+    assert reflect_and_rewrite(_BASE, purpose="p", evidence=leaked, struct=spy) is None
+    assert reflect_and_rewrite(_BASE, purpose="p", evidence=[], struct=spy) is None
+    assert called == []
+
+
+def _rewrite_with(extra: str, evidence: list[FailureEvidence]):
+    return reflect_and_rewrite(
+        _BASE,
+        purpose="p",
+        evidence=evidence,
+        struct=_caller({"diagnosis": "d", "revised_template": _good_body(extra)}),
+    )
+
+
+def test_rewrite_copying_the_evidence_ticker_is_rejected() -> None:
+    ev = _train()
+    ticker = ev[0].ticker
+    assert ticker is not None
+    assert _rewrite_with(f"For {ticker}, stress the deposit base.\n", ev) is None
+
+
+def test_rewrite_copying_an_evidence_figure_is_rejected() -> None:
+    ev = _train("Missed that FCF fell to $24.6B in Q2.")
+    assert _rewrite_with("Flag any FCF drop like 24.6 billion.\n", ev) is None
+
+
+def test_rewrite_copying_an_evidence_passage_is_rejected() -> None:
+    passage = "the answer never named which segment drove the margin decline this quarter"
+    ev = _train(f"Judge: {passage}.")
+    assert _rewrite_with(f"Remember: {passage}.\n", ev) is None
+
+
+def test_general_fix_with_parent_content_is_accepted() -> None:
+    """Fixing the cause in general terms is the point; words and figures the
+    parent already had are not leaks."""
+    ev = _train("Judge: cited numbers with no period; FCF fell to $24.6B.")
+    out = _rewrite_with("Every figure must name its fiscal period.\n", ev)
+    assert out is not None
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +278,8 @@ def test_better_and_pricier_coexists_with_cheaper_and_worse() -> None:
         ]
     )
     assert {c.version for c in f.candidates} == {"cheap", "rich"}  # neither dominates
-    assert f.best() is not None and f.best().version == "rich"  # promotion picks quality
+    best = f.best()
+    assert best is not None and best.version == "rich"  # promotion picks quality
 
 
 def test_ties_keep_the_incumbent() -> None:
@@ -197,10 +292,15 @@ def test_parent_draw_is_deterministic_and_quality_weighted() -> None:
     f = ParetoFrontier(
         [Candidate("hi", quality=0.9, cost=200), Candidate("lo", quality=0.1, cost=10)]
     )
-    assert f.draw_parent(0.0) is not None
+
+    def version_at(rand: float) -> str:
+        parent = f.draw_parent(rand)
+        assert parent is not None
+        return parent.version
+
     # Same rand -> same parent (the seeded-replay contract).
-    assert f.draw_parent(0.42).version == f.draw_parent(0.42).version
-    picks = [f.draw_parent(i / 100).version for i in range(100)]
+    assert version_at(0.42) == version_at(0.42)
+    picks = [version_at(i / 100) for i in range(100)]
     assert picks.count("hi") > picks.count("lo")
     assert picks.count("lo") > 0  # never starves the frontier
 

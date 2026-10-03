@@ -24,6 +24,13 @@ class PanelCacheHit:
 
 
 @dataclass(frozen=True, slots=True)
+class PanelCacheBusy:
+    """A bounded wait expired or the render capacity is occupied."""
+
+    retry_after_seconds: int = 1
+
+
+@dataclass(frozen=True, slots=True)
 class PanelCacheReservation:
     """Exclusive permission to build one cache key."""
 
@@ -46,20 +53,24 @@ class PanelResponseCache:
     sharing a build lock.
     """
 
-    def __init__(self, *, ttl_seconds: float, max_entries: int) -> None:
+    def __init__(self, *, ttl_seconds: float, max_entries: int, wait_seconds: float = 1.0) -> None:
         if ttl_seconds <= 0:
             raise ValueError("ttl_seconds must be positive")
         if max_entries <= 0:
             raise ValueError("max_entries must be positive")
+        if wait_seconds <= 0:
+            raise ValueError("wait_seconds must be positive")
         self._ttl_seconds = ttl_seconds
         self._max_entries = max_entries
+        self._wait_seconds = wait_seconds
         self._lock = threading.Lock()
         self._entries: dict[str, tuple[float, PanelCacheEntry]] = {}
         self._in_flight: dict[str, _InFlight] = {}
         self._generation = 0
 
-    def get_or_reserve(self, key: str) -> PanelCacheHit | PanelCacheReservation:
+    def get_or_reserve(self, key: str) -> PanelCacheHit | PanelCacheReservation | PanelCacheBusy:
         """Return a fresh hit or reserve ``key``, waiting only on that key."""
+        deadline = time.monotonic() + self._wait_seconds
         while True:
             now = time.monotonic()
             with self._lock:
@@ -72,12 +83,16 @@ class PanelResponseCache:
 
                 in_flight = self._in_flight.get(key)
                 if in_flight is None:
+                    if len(self._in_flight) >= self._max_entries:
+                        return PanelCacheBusy()
                     ready = threading.Event()
                     generation = self._generation
                     self._in_flight[key] = _InFlight(generation, ready)
                     return PanelCacheReservation(key, generation, ready)
                 ready = in_flight.ready
-            ready.wait()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not ready.wait(timeout=remaining):
+                return PanelCacheBusy()
 
     def store(self, reservation: PanelCacheReservation, entry: PanelCacheEntry) -> None:
         """Publish a reserved build and release same-key waiters."""
@@ -111,6 +126,10 @@ class PanelResponseCache:
         with self._lock:
             self._generation += 1
             self._entries.clear()
+            ready_events = [entry.ready for entry in self._in_flight.values()]
+            self._in_flight.clear()
+        for ready in ready_events:
+            ready.set()
 
     def invalidate_prefix(self, prefix: str) -> None:
         """Invalidate one bounded panel family without evicting unrelated panels."""

@@ -1,4 +1,3 @@
-# pyright: reportUnknownArgumentType=false, reportUnknownLambdaType=false
 """Red-team wave B (B4/B5): composite-console latency + memo duplication.
 
 B4a — Health's Risk + Red Team panes defer until first activation. Allocation
@@ -17,6 +16,7 @@ instead of duplicating the full cross-portfolio memo.
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from pathlib import Path
@@ -27,6 +27,7 @@ import pipeline.analytical_dashboard as ad
 import pipeline.portfolio_panel as pp
 from integrations.portfolio_tracker_client import LivePortfolio, PortfolioAnalytics
 from pipeline.analytical_dashboard import AnalyticalDashboard
+from pipeline.console_scaffold import ConsoleSection
 from pipeline.portfolio_console_panel import (
     render_portfolio_allocation_panel,
     render_portfolio_health_panel,
@@ -37,7 +38,10 @@ _DOWN = (False, "http://127.0.0.1:8000")
 
 @pytest.fixture
 def probe_down(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pp, "probe_tracker", lambda api_url=None: _DOWN)
+    def probe(api_url: str | None = None) -> tuple[bool, str]:
+        return _DOWN
+
+    monkeypatch.setattr(pp, "probe_tracker", probe)
 
 
 # --------------------------------------------------------------------------- #
@@ -152,7 +156,10 @@ def test_probe_down_risk_panel_degrades_without_calling_analytics(
 
 
 def test_probe_up_still_uses_the_fetchers(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(pp, "probe_tracker", lambda api_url=None: (True, "http://x"))
+    def probe(api_url: str | None = None) -> tuple[bool, str]:
+        return True, "http://x"
+
+    monkeypatch.setattr(pp, "probe_tracker", probe)
     calls: list[str] = []
     active = 0
     max_active = 0
@@ -200,10 +207,13 @@ _MEMO_MD = (
 def test_health_synthesis_shows_headline_and_doorway_not_full_memo(
     monkeypatch: pytest.MonkeyPatch, probe_down: None, tmp_path: Path
 ) -> None:
+    def dashboard(db_path: Path, sections: object = None, **kwargs: object) -> AnalyticalDashboard:
+        return AnalyticalDashboard(portfolio_synthesis_md=_MEMO_MD)
+
     monkeypatch.setattr(
         ad,
         "build_analytical_dashboard",
-        lambda db_path, sections=None, **kw: AnalyticalDashboard(portfolio_synthesis_md=_MEMO_MD),
+        dashboard,
     )
     html = pp.render_portfolio_synthesis_panel(tmp_path / "missing.db")
     # Headline (first substantive prose line) + the doorway to Record → Memos.
@@ -217,10 +227,13 @@ def test_health_synthesis_shows_headline_and_doorway_not_full_memo(
 def test_health_synthesis_without_cached_memo_keeps_the_run_hint(
     monkeypatch: pytest.MonkeyPatch, probe_down: None, tmp_path: Path
 ) -> None:
+    def dashboard(db_path: Path, sections: object = None, **kwargs: object) -> AnalyticalDashboard:
+        return AnalyticalDashboard()
+
     monkeypatch.setattr(
         ad,
         "build_analytical_dashboard",
-        lambda db_path, sections=None, **kw: AnalyticalDashboard(),
+        dashboard,
     )
     html = pp.render_portfolio_synthesis_panel(tmp_path / "missing.db")
     assert "No cross-portfolio synthesis cached" in html
@@ -332,16 +345,17 @@ def test_health_fragment_crowding_and_tail_empty_states(tmp_path: Path, probe_do
     assert "Whole-book macro stress" not in tail
 
 
-def test_health_cards_cover_exactly_the_fragment_keys() -> None:
+def test_health_cards_cover_exactly_the_fragment_keys(tmp_path: Path, probe_down: None) -> None:
     """The owner's caps are structural: exactly 2 cards, ≤4 chips each, and
     every chip key is a served fragment (and vice versa)."""
-    from pipeline.portfolio_console_panel import (
-        _HEALTH_CARDS,  # pyright: ignore[reportPrivateUsage]
+    html = render_portfolio_health_panel(tmp_path / "missing.db")
+    cards = re.findall(
+        r'<article class="[^"]*\bhc-card\b[^"]*"[^>]*>(.*?)</article>', html, re.DOTALL
     )
-
-    assert len(_HEALTH_CARDS) == 2
-    assert all(len(tabs) <= 4 for _a, _q, tabs in _HEALTH_CARDS)
-    keys = [k for _a, _q, tabs in _HEALTH_CARDS for k, _l in tabs]
+    tabs = [re.findall(r'data-hc-pane="hcp-([^"]+)"', card) for card in cards]
+    assert len(cards) == 2
+    assert all(len(card_tabs) <= 4 for card_tabs in tabs)
+    keys = [key for card_tabs in tabs for key in card_tabs]
     assert keys == list(pp.HEALTH_FRAGMENTS)
 
 
@@ -381,3 +395,25 @@ def test_health_brief_counts_real_theses_only(tmp_path: Path, probe_down: None) 
     assert "Thesis health needs eyes:" in html
     assert "1 breach" in html  # MELI only — STB (stub) and WCH (watchlist) excluded
     assert "1 ok" in html
+
+
+def test_lazy_record_shell_defers_every_builder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import pipeline.portfolio_console_panel as console
+
+    def blocked() -> str:
+        raise AssertionError("The audit shell must not execute builders")
+
+    def sections(_db: Path, _user: str) -> list[ConsoleSection]:
+        return [("decisions", "Decisions", blocked), ("brief", "Read", blocked)]
+
+    monkeypatch.setattr(
+        console,
+        "_record_sections",
+        sections,
+    )
+    html = console.render_portfolio_record_panel(tmp_path / "unused.db", lazy=True)
+    assert "fragment=decisions" in html
+    assert "fragment=brief" in html
+    assert "Loading Decisions" in html

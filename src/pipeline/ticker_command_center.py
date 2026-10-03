@@ -632,10 +632,10 @@ var _t = document.querySelector('.tcc-bypass-toggle');
 if (_t) {
   var _tk = _t.getAttribute('data-ticker');
   var _tm = document.querySelector('.tcc-bypass-msg');
-  fetch('/api/ticker-settings/' + encodeURIComponent(_tk))
+  (window.uiFetch || fetch)('/api/ticker-settings/' + encodeURIComponent(_tk))
     .then(function (r) { return r.json(); })
     .then(function (s) { _t.checked = !!s.bypass_budget; })
-    .catch(function () {});
+    .catch(function () { _tm.textContent = 'Settings could not load. Reopen this panel to retry.'; });
   _t.addEventListener('change', function () {
     _tm.textContent = 'saving\\u2026';
     fetch('/api/ticker-settings/' + encodeURIComponent(_tk), {
@@ -678,12 +678,12 @@ _DCF_SHEETS_SCRIPT = """<script>
   var msg = root.querySelector('.tcc-dcfsheets-msg');
   var openLink = root.querySelector('.tcc-dcfsheets-open');
   function refreshLink() {
-    fetch('/api/dcf-sheet/' + encodeURIComponent(tk))
+    (window.uiFetch || fetch)('/api/dcf-sheet/' + encodeURIComponent(tk))
       .then(function (r) { return r.json(); })
       .then(function (s) {
         if (s && s.url) { openLink.href = s.url; openLink.hidden = false; }
         else { openLink.hidden = true; }
-      }).catch(function () {});
+      }).catch(function () { msg.textContent = 'DCF link could not refresh. Existing link may be stale.'; });
   }
   function post(url, label, btn) {
     msg.textContent = label + '\\u2026';
@@ -1152,7 +1152,7 @@ _COMBO_SCRIPT = """<script>
   function fetchT() {
     if (all) return Promise.resolve(all);
     if (loading) return loading;
-    loading = fetch('/api/tickers').then(function (r) { return r.json(); })
+    loading = (window.uiFetch || fetch)('/api/tickers').then(function (r) { return r.json(); })
       .then(function (j) { all = (j && j.tickers) || []; return all; })
       .catch(function () { all = []; return all; });
     return loading;

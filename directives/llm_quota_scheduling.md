@@ -31,6 +31,7 @@ This runbook is the single current repository authority for collision avoidance 
 | `fetch_news` quality scoring | with news fetch | bounded batches riding the morning-pipeline window when scheduled |
 | `session_distill` | manual only | one session-distill purpose; postmortem backfill is a separate explicit action |
 | MBGL recording follow-up (Mac app heartbeat) | hourly at :42, excluding 03:00–05:00; temporary until read-back confirms completion | `record-mobility-global-evaluation`; thread-context scheduling only, no application LLM pipeline or subagents; unchanged check target <2 minutes; defer on resource ownership or shared-quota contention; no claim that adjacent long-running jobs cannot overlap |
+| Retail research roadmap continuation (thread heartbeat) | one-time October 3, 2026, 05:05 PDT | `continue-research-roadmap`; same-chat continuation after the protected window; first wake observed at 2026-10-03T12:05:28.725Z; heartbeat paused through the app after resuming; bounded existing source work and independently briefed GPT-6.1 Sol reviews only; no application ingestion/provider/production job is scheduled; recheck shared capacity before dispatch |
 | `coach_pings` | daily 07:15 | no LLM work |
 | `run_decision_nudge` | daily 17:00 | no LLM work |
 | myclaw `weekly_review` | Sunday 14:00 | cross-repository scorer and domain reviews |

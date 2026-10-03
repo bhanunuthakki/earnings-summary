@@ -202,7 +202,15 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # +2 fixed, read-only tracker bridge endpoints retained from the live runtime.
     # -2 retired score/fit presentation peeks.
     # +1 read-only degraded earnings draft peek.
-    assert len(rules) == 175
+    # +1 read-only cached host-runtime evidence projection.
+    assert len(rules) == 176
+    assert rules["operations_host_runtime_api"] == "/api/operations/host-runtime"
+    host_rule = next(
+        rule
+        for rule in client.application.url_map.iter_rules()
+        if rule.endpoint == "operations_host_runtime_api"
+    )
+    assert host_rule.methods == {"GET", "HEAD", "OPTIONS"}
     assert rules["tracker_read_health"] == "/portfolio-tracker/api/v1/health"
     assert rules["tracker_read_snapshot"] == "/portfolio-tracker/api/v1/portfolio-snapshot"
     for rule in client.application.url_map.iter_rules():
