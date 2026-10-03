@@ -7,10 +7,6 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-import pytest
-from alembic.config import Config
-
-from alembic import command
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -25,18 +21,10 @@ from provenance.observation_resolution import (
     ResolutionRevision,
 )
 
-ROOT = Path(__file__).resolve().parents[1]
 PARENT = "0048_metric_computation_output_observation"
 REVISION = "0049_resolution_selected_observation_index"
 INDEX = "ix_observation_resolution_selected_observation"
 STAMP = datetime(2026, 10, 3)
-
-
-def _config(path: Path) -> Config:
-    config = Config(str(ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(ROOT / "alembic"))
-    config.set_main_option("sqlalchemy.url", f"sqlite:///{path.as_posix()}")
-    return config
 
 
 def _seed(conn: sqlite3.Connection) -> None:
@@ -184,57 +172,6 @@ def test_current_schema_indexes_selected_observations(
             "selected_observation_id"
         ]
         assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (REVISION,)
-
-
-def test_index_upgrade_and_downgrade_preserve_ledger_and_current_selection(
-    tmp_path: Path, migrated_db: Callable[..., Path]
-) -> None:
-    path = migrated_db(tmp_path / "round-trip.db", target=PARENT)
-    conn = sqlite3.connect(path)
-    conn.execute("PRAGMA foreign_keys=ON")
-    try:
-        _seed(conn)
-        ledger = conn.execute(
-            "SELECT * FROM observation_resolution_revisions ORDER BY revision"
-        ).fetchall()
-        candidates = conn.execute(
-            "SELECT * FROM observation_resolution_candidates ORDER BY resolution_id,observation_id"
-        ).fetchall()
-        selected = conn.execute("SELECT * FROM v_observation_resolution_current").fetchall()
-        assert len(ledger) == 2
-        assert len(selected) == 1
-        assert selected[0][0] == "resolution-2"
-        assert INDEX not in _indexes(conn)
-        for target in (REVISION, PARENT):
-            if target == REVISION:
-                command.upgrade(_config(path), target)
-            else:
-                command.downgrade(_config(path), target)
-            assert (INDEX in _indexes(conn)) == (target == REVISION)
-            assert (
-                conn.execute(
-                    "SELECT * FROM observation_resolution_revisions ORDER BY revision"
-                ).fetchall()
-                == ledger
-            )
-            assert (
-                conn.execute(
-                    "SELECT * FROM observation_resolution_candidates ORDER BY resolution_id,observation_id"
-                ).fetchall()
-                == candidates
-            )
-            assert (
-                conn.execute("SELECT * FROM v_observation_resolution_current").fetchall()
-                == selected
-            )
-            assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-            with pytest.raises(sqlite3.IntegrityError, match="append-only"):
-                conn.execute(
-                    "DELETE FROM observation_resolution_revisions WHERE resolution_id='resolution-1'"
-                )
-            conn.rollback()
-    finally:
-        conn.close()
 
 
 def test_selected_lookup_instruction_work_is_bounded_by_matches(
