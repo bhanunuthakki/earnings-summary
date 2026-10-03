@@ -383,6 +383,11 @@ def build_decision_projection(
             values, origin="owner", ticker=ticker, conn=conn, as_of=reference
         )
 
+    # Only the selected condition set reaches the reader. Do not resolve
+    # model fact histories when populated owner conditions already govern it.
+    if owner_conditions:
+        return projection, owner_conditions, []
+
     model_conditions: list[DecisionCondition] = []
     if model_row is not None:
         values = dict(model_row)
@@ -390,9 +395,7 @@ def build_decision_projection(
             values, origin="model", ticker=ticker, conn=conn, as_of=reference
         )
 
-    # Use owner conditions when explicitly populated; otherwise fall back to model conditions
-    conditions = owner_conditions if owner_conditions else model_conditions
-    return projection, conditions, []
+    return projection, model_conditions, []
 
 
 __all__ = [
