@@ -14,6 +14,19 @@
 
 ## Outcome
 
+### Cached host-owner monitoring endpoint
+
+Disposition: **linked governed view**. `GET /api/operations/host-runtime`
+restores the existing private fleet monitor's read-only transport for the
+`HostRuntimeBundle` owned by `src/operations/host_runtime.py`. It reads only
+the bounded cached host receipt from the configured product-state root.
+Missing, stale, invalid and current evidence remain explicit. The response
+uses the same configured private HTTPS origin and code identity as the
+operations review bundle; request headers cannot supply either identity.
+It returns a content digest, `ETag` and `Cache-Control: no-store`. It adds no
+host probe, database read, recovery action, financial payload or scheduler owner.
+`tests/test_comments_server_host_runtime.py` verifies those boundaries.
+
 The Operations & Governance workspace remains a truthful operator-facing map as functionality is added, removed, renamed, or changes ownership. It is not an inventory of every module or CLI. It shows supported operations, their declared ownership, current evidence, freshness, failure state, and guarded actions at the level needed to understand or operate the product safely.
 
 ## Trigger matrix

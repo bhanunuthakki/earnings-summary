@@ -261,6 +261,10 @@ def _percent(bucket: PortfolioAllocationBucket) -> str:
     return f"{bucket.weight_pct:.1f}%"
 
 
+def _units(value: Decimal) -> str:
+    return format(value.normalize(), "f")
+
+
 def _row(label: str, bucket: PortfolioAllocationBucket) -> str:
     width = max(Decimal(0), min(Decimal(100), bucket.weight_pct or Decimal(0)))
     return (
@@ -294,13 +298,69 @@ def render_allocation_card(allocation: PortfolioAllocationProjection) -> str:
             _row("Unclassified", unclassified),
         )
     )
-    status = "Incomplete classification" if allocation.state == "incomplete" else "Current"
+    status = "Incomplete evidence" if allocation.state == "incomplete" else "Current"
     as_of = allocation.as_of.isoformat() if allocation.as_of else "observation date unavailable"
     reconciliation = "reconciled" if allocation.reconciliation.is_reconciled else "not reconciled"
+    option_details = ""
+    if allocation.covered_calls:
+        groups: list[str] = []
+        for exposure in allocation.covered_calls:
+            leg_rows: list[str] = []
+            for leg in exposure.legs:
+                source = {
+                    "plaid.option_contract": "Plaid",
+                    "snaptrade.option_symbol": "SnapTrade",
+                    "occ_symbol": "Option symbol",
+                }.get(leg.metadata_source, "Provider metadata")
+                contracts = (
+                    f"{_units(leg.contracts)} calls"
+                    if leg.contracts is not None
+                    else "Contract count unavailable"
+                )
+                leg_rows.append(
+                    f"<li>{escape(leg.account_name)} · {contracts} · "
+                    f"strike {leg.strike_price:,.2f} · expiry {leg.expiration_date.isoformat()} · "
+                    f"{_units(leg.covered_shares)}/{_units(leg.represented_shares)} shares covered in this account"
+                    f" · {_units(leg.uncovered_shares)} uncovered · {source}</li>"
+                )
+            legs = "".join(leg_rows)
+            groups.append(
+                f"<p><strong>{escape(exposure.underlying_ticker)}</strong> · "
+                f"Unified position weight {exposure.net_weight_pct:.2f}% · "
+                f"Net market value {exposure.net_market_value:,.2f}</p>"
+                f"<ul><li>Long stock · {exposure.stock_weight_pct:.2f}% · "
+                f"Gross stock capital {exposure.gross_stock_capital:,.2f} {escape(allocation.currency or '')}</li>"
+                f"<li>Written calls · {exposure.option_weight_pct:.2f}% · "
+                f"Signed option value {exposure.option_market_value:,.2f}<ul>{legs}</ul></li></ul>"
+            )
+        option_details = (
+            '<details class="pf-alpha-details"><summary>Covered calls and stock capital</summary>'
+            '<p class="sub">Allocation uses net market value. Gross stock capital remains invested in the shares. '
+            "A written call limits gains above its strike before expiry. It does not remove stock downside.</p>"
+            + "".join(groups)
+            + '<p class="sub">Delta sensitivity unavailable: no sourced option delta.</p></details>'
+        )
+    explanations = {
+        "option_metadata_incomplete": "Option contract metadata is missing or disagrees between sources.",
+        "option_quantity_or_metadata_unproven": "Option quantity units are unknown. Share coverage cannot be verified.",
+        "option_underlying_unmapped": "An option cannot be matched to one held underlying security.",
+        "option_strategy_unsupported": "This option strategy is not supported in covered-call reporting.",
+        "option_call_not_fully_covered": "Some written-call shares are not covered in the same account.",
+        "option_value_sign_incoherent": "A written-call value does not have the required liability sign.",
+        "option_contract_quantity_incoherent": "The supplied contract count does not match its sourced quantity units.",
+        "portfolio_allocation_incomplete": "Some holdings cannot be classified.",
+    }
+    reasons = (
+        '<p class="muted" role="status">'
+        + escape(" ".join(explanations.get(code, code) for code in allocation.reason_codes))
+        + "</p>"
+        if allocation.state == "incomplete"
+        else ""
+    )
     return (
         f'{head}<p class="sub">{escape(status)} · {escape(allocation.source_identity)} · '
         f"{escape(as_of)} · {escape(reconciliation)}.</p>"
-        f'<div class="pr-allocation-rows">{rows}</div></section>'
+        f'<div class="pr-allocation-rows">{rows}</div>{reasons}{option_details}</section>'
     )
 
 
