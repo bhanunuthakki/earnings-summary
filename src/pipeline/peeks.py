@@ -68,6 +68,7 @@ from pipeline.source_viewers import (
 from pipeline.source_viewers import SourceDocRow as _SourceDocRow
 from pipeline.you_said import render_you_said_strip
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_reltime
+from sources.report_financials import FinancialEvidenceReference, FinancialTableCell
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import pill_tone_class, thesis_status_tone, ticker_label
 from ui.prose import render_prose
@@ -76,6 +77,7 @@ from ui.time import stamp_html
 __all__ = [
     "render_alert_peek",
     "render_alerts_list_peek",
+    "render_canonical_financial_peek",
     "render_derived_peek",
     "render_discovery_compare_peek",
     "render_earnings_readout_peek",
@@ -1541,6 +1543,56 @@ def _load_fact_row(
         extracted_by=str(row[5]) if row[5] is not None else None,
         computed_from_json=str(row[6]) if len(row) > 6 and row[6] is not None else None,
         formula_id=int(row[7]) if len(row) > 7 and row[7] is not None else None,
+    )
+
+
+def render_canonical_financial_peek(
+    cell: FinancialTableCell, reference: FinancialEvidenceReference
+) -> str:
+    """Render the admitted selection without re-reading mutable legacy facts."""
+    bundle = cell.provenance
+    if not cell.available or bundle is None or bundle.evidence is None:
+        raise ValueError("canonical evidence must be admitted before rendering")
+    observation, evidence = bundle.observation, bundle.evidence
+    rows: list[tuple[str, object]] = [
+        ("Value", observation.decimal_value),
+        ("Unit", observation.unit_key),
+        ("Currency", observation.currency),
+        ("Fiscal period", bundle.cell.fiscal_period),
+        ("Period start", observation.period_start),
+        ("Period end", observation.period_end),
+        ("Original value", observation.raw_lexical_value),
+        ("Source locator", evidence.source_locator.model_dump_json()),
+    ]
+    records: list[tuple[str, object]] = [
+        ("Document version", evidence.document_version_id),
+        ("Evidence node", evidence.evidence_node_id),
+        ("Observation", observation.observation_id),
+        ("Resolution", reference.canonical_resolution_revision_id),
+        ("Metric definition", reference.metric_definition_revision_id),
+        ("Extraction", evidence.extraction_run_id),
+        ("Extractor", evidence.extractor_name),
+        ("Extractor version", evidence.extractor_code_version),
+    ]
+    content = "".join(
+        f'<div class="sv-sec-row"><span class="sv-sec-key">{escape(label)}</span> '
+        f'<span class="sv-sec-val">{escape(str(value))}</span></div>'
+        for label, value in rows
+        if value is not None
+    )
+    record_content = "".join(
+        f'<div class="sv-sec-row"><span class="sv-sec-key">{escape(label)}</span> '
+        f'<span class="sv-sec-val">{escape(str(value))}</span></div>'
+        for label, value in records
+        if value is not None
+    )
+    return (
+        f"<p>{escape(reference.ticker)} · {escape(reference.concept)}</p>"
+        f"<p>As known at {escape(reference.as_of.isoformat())}</p>"
+        + content
+        + "<details><summary>Record details</summary>"
+        + record_content
+        + "</details><p>Retained evidence record. Raw document viewing is unavailable here.</p>"
     )
 
 

@@ -450,6 +450,53 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             abort(404)
         return Response(html, mimetype="text/html")
 
+    @app.route("/api/peek/canonical-financial", methods=["GET"])
+    def peek_canonical_financial():
+        from pipeline.peeks import render_canonical_financial_peek
+        from pipeline.source_viewers import render_record_view
+        from sources.report_financials import FinancialEvidenceReference, read_financial_evidence
+
+        values = request.args.getlist("reference")
+        if (
+            not set(request.args) <= {"reference", "fragment"}
+            or len(values) != 1
+            or len(values[0]) > 4096
+            or ("fragment" in request.args and request.args.getlist("fragment") != ["1"])
+        ):
+            return Response("Invalid evidence reference.", status=400, mimetype="text/html")
+        try:
+            reference = FinancialEvidenceReference.model_validate_json(values[0])
+            if context.safe_ticker(reference.ticker) != reference.ticker:
+                raise ValueError("invalid ticker")
+        except ValueError:
+            return Response("Invalid evidence reference.", status=400, mimetype="text/html")
+        # The shared reader owns admission and the complete table's rejection
+        # rules. It preserves the request's read snapshot and performs no writes.
+        try:
+            cell = read_financial_evidence(context.get_read_db(), reference)
+        except (OSError, RuntimeError, sqlite3.Error):
+            cell = None
+        if cell is None:
+            return Response(
+                render_record_view(
+                    "Evidence unavailable",
+                    "Evidence unavailable for this selection.",
+                    fragment=request.args.get("fragment") == "1",
+                ),
+                status=404,
+                mimetype="text/html",
+            )
+        response = Response(
+            render_record_view(
+                "Evidence for the selected value",
+                render_canonical_financial_peek(cell, reference),
+                fragment=request.args.get("fragment") == "1",
+            ),
+            mimetype="text/html",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.route("/api/ticker/<ticker>", methods=["GET"])
     def ticker_api(ticker: str):
         command_center = context.build_ticker_command_center(repo_root, ticker)

@@ -582,6 +582,27 @@ class RedesignInputs:
         )
 
 
+def derive_wacc(
+    *,
+    risk_free_rate: float,
+    beta: float,
+    equity_risk_premium: float,
+    country_risk_premium: float,
+    cost_of_debt: float,
+    tax_rate: float,
+    current_price: float,
+    diluted_shares_m: float,
+    total_debt_m: float,
+) -> float:
+    """Derive the workbook discount rate from CAPM and market-value weights."""
+    cost_of_equity = risk_free_rate + beta * equity_risk_premium + country_risk_premium
+    after_tax_debt = cost_of_debt * (1.0 - tax_rate)
+    market_cap = current_price * diluted_shares_m
+    capital = market_cap + total_debt_m
+    equity_weight = market_cap / capital if capital > 0 else 1.0
+    return equity_weight * cost_of_equity + (1.0 - equity_weight) * after_tax_debt
+
+
 def normalize_scenario_weights(bull: float, base: float, bear: float) -> tuple[float, float, float]:
     """Normalize three raw scenario weights to a sum-1 simplex, or fall back to the
     symmetric default when they are non-positive/negative (a degenerate cell edit).
@@ -938,11 +959,17 @@ def read_inputs(workbook_path: Path) -> RedesignInputs | None:
         and tax is not None
         and price is not None
     )
-    ke = rf + beta * erp + crp
-    after_tax_kd = kd * (1.0 - tax)
-    market_cap = price * shares
-    equity_weight = market_cap / (market_cap + debt) if (market_cap + debt) > 0 else 1.0
-    wacc = equity_weight * ke + (1.0 - equity_weight) * after_tax_kd
+    wacc = derive_wacc(
+        risk_free_rate=rf,
+        beta=beta,
+        equity_risk_premium=erp,
+        country_risk_premium=crp,
+        cost_of_debt=kd,
+        tax_rate=tax,
+        current_price=price,
+        diluted_shares_m=shares,
+        total_debt_m=debt,
+    )
 
     assert (
         near_margin is not None

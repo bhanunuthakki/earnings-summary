@@ -753,6 +753,36 @@ ${r?'Expression: "'+r+`"
 
 
 (function () {
+  // File reports use only their explicitly configured evidence server.
+  // No checkout or localhost authority is inferred from a file location.
+  function resolveCanonicalLinks() {
+    if (window.location.protocol !== 'file:') return;
+    var origin = null;
+    try {
+      var el = document.getElementById('workspace-boot');
+      var boot = el ? JSON.parse(el.textContent) : {};
+      if (typeof boot.server_url === 'string') {
+        var server = new URL(boot.server_url);
+        if (/^https?:$/.test(server.protocol) && !server.username && !server.password)
+          origin = server.origin;
+      }
+    } catch (e) {}
+    document.querySelectorAll('a[href^="/api/peek/canonical-financial?"], '
+      + '[data-peek-url^="/api/peek/canonical-financial?"]').forEach(function (el) {
+      ['href', 'data-peek-url'].forEach(function (attr) {
+        var path = el.getAttribute(attr);
+        if (!path || path.indexOf('/api/peek/canonical-financial?') !== 0) return;
+        if (origin) el.setAttribute(attr, origin + path);
+        else {
+          el.removeAttribute(attr);
+          el.setAttribute('title', 'Evidence server is not configured.');
+        }
+      });
+    });
+  }
+  if (document.readyState === 'loading')
+    document.addEventListener('DOMContentLoaded', resolveCanonicalLinks, {once: true});
+  else resolveCanonicalLinks();
   if (window.__ccSrcChipEsc || !window.CCOverlay) return;
   window.__ccSrcChipEsc = true;
   window.CCOverlay.addPopoverDismisser(function () {
@@ -1770,6 +1800,9 @@ ${r?'Expression: "'+r+`"
     ? window.location.origin
     : (boot.server_url || 'http://localhost:7421');
   var MUTATION_HEADERS = window.__workspaceMutationHeaders || {'Content-Type': 'application/json'};
+  function requestHeaders() {
+    return typeof MUTATION_HEADERS === 'function' ? MUTATION_HEADERS() : MUTATION_HEADERS;
+  }
   var TICKER = root.getAttribute('data-dcf-ticker') || boot.ticker;
 
   var elToggle = document.getElementById('dcf-edit-toggle');
@@ -1789,10 +1822,19 @@ ${r?'Expression: "'+r+`"
   var model = null;    // working copy with live edits
   var ready = false;
   var debounceTimer = null;
+  var editGeneration = 0;
+  var inputGeneration = 0;
+  var modelGeneration = 0;
+  var previewController = null;
+  var PREVIEW_TIMEOUT_MS = 15000;
+  var waccMode = 'override'; // Loading honors the workbook's current rate.
+  var waccOverride = false;
+  var dirty = false;
+  var saving = false;
 
   // Rate-like fields edit as percent (x100); the rest are raw numbers.
   var SCALARS = [
-    {key: 'wacc', label: 'WACC', pct: true, step: 0.1},
+    {key: 'wacc', label: 'WACC (preview only)', pct: true, step: 0.1},
     {key: 'near_op_margin', label: 'Near op margin', pct: true, step: 0.5},
     {key: 'terminal_op_margin', label: 'Term op margin', pct: true, step: 0.5},
     {key: 'exit_multiple', label: 'Exit multiple', pct: false, step: 0.5},
@@ -1821,16 +1863,21 @@ ${r?'Expression: "'+r+`"
   function fmtPct(x) { return (Number(x) * 100).toFixed(1) + '%'; }
   function fmtMult(x) { return Number(x).toFixed(1) + 'x'; }
 
-  // The CAPM derivation, identical to redesign.read_inputs: editing a driver
-  // re-derives WACC so the preview stays consistent (a direct WACC edit is a
-  // preview-only override that the durable save expresses via the drivers).
-  function deriveWacc(m) {
-    var ke = m.risk_free_rate + m.beta * m.equity_risk_premium;
-    var akd = m.cost_of_debt * (1 - m.tax_rate);
-    var mcap = m.current_price * m.diluted_shares_m;
-    var denom = mcap + m.total_debt_m;
-    var ew = denom > 0 ? mcap / denom : 1.0;
-    return ew * ke + (1 - ew) * akd;
+  function selectWaccMode(key) {
+    if (key === 'wacc') { waccMode = 'override'; waccOverride = true; }
+    else if (key === 'tax_rate' || DRIVERS.some(function (d) { return d.key === key; })) {
+      waccMode = 'drivers'; waccOverride = false;
+    }
+  }
+  function previewNote() {
+    return waccOverride ? ' · WACC override is preview-only; save uses drivers.' : '';
+  }
+  function invalidatePreview() {
+    editGeneration++;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = null;
+    if (previewController) previewController.abort();
+    previewController = null;
   }
 
   function numField(spec, value, onChange) {
@@ -1892,6 +1939,7 @@ ${r?'Expression: "'+r+`"
     SCALARS.forEach(function (spec) {
       var f = numField(spec, model[spec.key], function (v) {
         model[spec.key] = v;
+        selectWaccMode(spec.key);
         scheduleRecompute();
       });
       if (spec.key === 'wacc') waccInput = f.input;
@@ -1908,8 +1956,7 @@ ${r?'Expression: "'+r+`"
     DRIVERS.forEach(function (spec) {
       var f = numField(spec, model[spec.key], function (v) {
         model[spec.key] = v;
-        model.wacc = deriveWacc(model);
-        if (waccInput) waccInput.value = (model.wacc * 100).toFixed(2);
+        selectWaccMode(spec.key);
         scheduleRecompute();
       });
       inputsByKey[spec.key] = f.input;
@@ -2031,47 +2078,72 @@ ${r?'Expression: "'+r+`"
 
   function recompute() {
     if (!ready) return;
-    setStatus('Recomputing…');
-    fetch(SERVER_URL + '/api/dcf/recompute', {
+    var generation = editGeneration;
+    var controller = new AbortController();
+    previewController = controller;
+    var timedOut = false;
+    var timer = setTimeout(function () { timedOut = true; controller.abort(); }, PREVIEW_TIMEOUT_MS);
+    function current() { return generation === editGeneration && root.isConnected; }
+    setStatus((dirty ? 'Unsaved edits · ' : '') + 'Recomputing…' + previewNote());
+    return fetch(SERVER_URL + '/api/dcf/recompute', {
       method: 'POST',
-      headers: MUTATION_HEADERS,
-      body: JSON.stringify({inputs: model})
+      headers: requestHeaders(),
+      signal: controller.signal,
+      body: JSON.stringify({inputs: model, wacc_mode: waccMode})
     }).then(function (r) {
+      if (!current() || controller.signal.aborted) return null;
       return r.json().then(function (j) { return {ok: r.ok, status: r.status, body: j}; });
     }).then(function (res) {
+      if (!current() || controller.signal.aborted || !res) return;
       if (!res.ok) {
-        setStatus((res.body && res.body.error) || ('recompute failed (' + res.status + ')'), 'bad');
+        setStatus((dirty ? 'Unsaved edits · ' : '')
+          + ((res.body && res.body.error) || ('recompute failed (' + res.status + ')')), 'bad');
         return;
       }
+      model.wacc = res.body.wacc;
+      if (waccInput) waccInput.value = (model.wacc * 100).toFixed(2);
       renderScenarios(res.body);
       renderHeatmap(res.body.sensitivity);
       var ou = res.body.over_under_pct;
       if (ou !== null && ou !== undefined) {
         var pct = (ou * 100);
-        setStatus('Base ' + fmtMoney(res.body.fair_value_per_share_usd) + ' · '
+        setStatus((dirty ? 'Unsaved edits · ' : '') + 'Base ' + fmtMoney(res.body.fair_value_per_share_usd) + ' · '
           + (pct >= 0 ? 'over' : 'under') + ' by ' + Math.abs(pct).toFixed(0)
-          + '% vs price · WACC ' + fmtPct(res.body.wacc), '');
+          + '% vs price · WACC ' + fmtPct(res.body.wacc) + previewNote(), '');
       } else {
-        setStatus('Base ' + fmtMoney(res.body.fair_value_per_share_usd)
-          + ' · WACC ' + fmtPct(res.body.wacc), '');
+        setStatus((dirty ? 'Unsaved edits · ' : '') + 'Base ' + fmtMoney(res.body.fair_value_per_share_usd)
+          + ' · WACC ' + fmtPct(res.body.wacc) + previewNote(), '');
       }
     }).catch(function () {
-      setStatus('Research server offline — start comments_server to recompute.', 'bad');
+      if (!current() || (controller.signal.aborted && !timedOut)) return;
+      setStatus((dirty ? 'Unsaved edits · ' : '') + (timedOut
+        ? 'Preview timed out. Edit an assumption to try again.'
+        : 'Research server unavailable. Edit an assumption to try again.'), 'bad');
+    }).finally(function () {
+      clearTimeout(timer);
+      if (previewController === controller) previewController = null;
     });
   }
 
   function scheduleRecompute() {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(recompute, 280);
+    invalidatePreview(); // Invalidate before the debounce gap, not at dispatch.
+    inputGeneration++;
+    dirty = true;
+    setStatus('Unsaved edits · Recomputing…' + previewNote());
+    debounceTimer = setTimeout(function () { debounceTimer = null; recompute(); }, 280);
   }
 
   function cancelLoad() {
+    invalidatePreview();
     loadGeneration++;
     if (loadController) loadController.abort();
     loadController = null;
   }
   function load() {
     cancelLoad();
+    modelGeneration++;
+    inputGeneration++;
+    ready = false;
     var request = loadGeneration;
     var controller = new AbortController();
     loadController = controller;
@@ -2081,7 +2153,7 @@ ${r?'Expression: "'+r+`"
     elRetry.hidden = true;
     setStatus('Loading model…');
     return fetch(SERVER_URL + '/api/dcf/inputs/' + encodeURIComponent(TICKER), {
-      headers: window.__workspaceMutationHeaders ? window.__workspaceMutationHeaders() : {},
+      headers: requestHeaders(),
       signal: controller.signal
     })
       .then(function (r) {
@@ -2097,6 +2169,7 @@ ${r?'Expression: "'+r+`"
         }
         loaded = res.body.inputs;
         model = JSON.parse(JSON.stringify(loaded));
+        waccMode = 'override'; waccOverride = false; dirty = false;
         ready = true;
         buildControls();
         recompute();
@@ -2128,10 +2201,7 @@ ${r?'Expression: "'+r+`"
   function applyInject(key, value, label) {
     if (!model || !(key in model)) { setStatus('No DCF input "' + key + '".', 'bad'); return; }
     model[key] = value;
-    if (DRIVERS.some(function (d) { return d.key === key; })) {
-      model.wacc = deriveWacc(model);
-      if (inputsByKey.wacc) inputsByKey.wacc.value = (model.wacc * 100).toFixed(2);
-    }
+    selectWaccMode(key);
     var inp = inputsByKey[key], spec = SPEC_BY_KEY[key];
     if (inp && spec) {
       inp.value = spec.pct ? (value * 100).toFixed(2) : String(value);
@@ -2168,49 +2238,73 @@ ${r?'Expression: "'+r+`"
     var open = elBody.hidden;
     elBody.hidden = !open;
     elToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-    if (open && !ready && loaded === null) load();
-    if (!open) cancelLoad();
+    if (open) {
+      if (!ready && loaded === null) load();
+      else if (ready) recompute(); // Resume previews cancelled while the editor was closed.
+    } else cancelLoad();
   });
 
   elReset.addEventListener('click', function () {
     if (!loaded) return;
+    invalidatePreview();
+    inputGeneration++;
     model = JSON.parse(JSON.stringify(loaded));
+    waccMode = 'override'; waccOverride = false; dirty = false;
     buildControls();
     recompute();
   });
 
   elSave.addEventListener('click', function () {
-    if (!ready) return;
+    if (!ready || saving) return;
+    invalidatePreview();
+    var savedInputGeneration = inputGeneration;
+    var loadedGeneration = modelGeneration;
+    saving = true;
     CCAction.busy(elSave, 'Saving…');
     setStatus('Saving…');
     fetch(SERVER_URL + '/api/dcf/save', {
       method: 'POST',
-      headers: MUTATION_HEADERS,
+      headers: requestHeaders(),
       body: JSON.stringify({ticker: TICKER, inputs: model})
     }).then(function (r) {
       return r.json().then(function (j) { return {ok: r.ok, status: r.status, body: j}; });
     }).then(function (res) {
       if (!res.ok) {
+        saving = false;
         CCAction.release(elSave);
-        setStatus((res.body && res.body.error) || ('save failed (' + res.status + ')'), 'bad');
+        if (loadedGeneration === modelGeneration && root.isConnected) {
+          setStatus('Unsaved edits · ' + ((res.body && res.body.error)
+            || ('save failed (' + res.status + ')')), 'bad');
+        }
         return;
       }
-      // Adopt the canonical saved inputs (WACC re-derived from saved drivers) as
-      // the new reset baseline, then re-render from the persisted state.
-      if (res.body.inputs) {
-        loaded = res.body.inputs;
-        model = JSON.parse(JSON.stringify(loaded));
-        buildControls();
+      // An older save is a durable receipt for its captured inputs only.
+      if (loadedGeneration === modelGeneration && root.isConnected) {
+        if (res.body.inputs) loaded = res.body.inputs;
+        if (savedInputGeneration === inputGeneration) {
+          invalidatePreview(); // A reopened preview cannot replace the persisted receipt.
+          if (res.body.inputs) {
+            model = JSON.parse(JSON.stringify(loaded));
+            waccMode = 'override'; waccOverride = false; dirty = false;
+            buildControls();
+          }
+          if (res.body.sensitivity) { renderScenarios(res.body); renderHeatmap(res.body.sensitivity); }
+          setStatus('Saved to model.', 'ok');
+        } else {
+          dirty = true;
+          setStatus('Earlier inputs saved. Current edits are unsaved.' + previewNote(), 'warn');
+        }
       }
-      if (res.body.sensitivity) { renderScenarios(res.body); renderHeatmap(res.body.sensitivity); }
       CCAction.receipt(elSave, '✓ Saved');
-      setStatus('Saved to model ✓ · override ledger updated (Opus baseline untouched).', 'ok');
       // Saving again after further slider adjustments is the normal flow —
       // unlock once the receipt has registered rather than staying terminal.
-      setTimeout(function () { CCAction.release(elSave); }, 1500);
+      setTimeout(function () { saving = false; CCAction.release(elSave); }, 1500);
     }).catch(function () {
+      saving = false;
       CCAction.release(elSave);
-      setStatus('Research server offline — could not save.', 'bad');
+      if (loadedGeneration === modelGeneration && root.isConnected) {
+        setStatus('Save not confirmed. Current edits remain unsaved. Reload the model to check.', 'bad');
+      }
     });
   });
 })();
