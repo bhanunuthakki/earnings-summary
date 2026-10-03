@@ -31,6 +31,7 @@ class RuntimeTestAPI(Protocol):
     process_start_identity: Callable[[int], str | None]
     windows_job: type[WindowsJobForTest]
     create_suspended: int
+    resume_process_threads: Callable[[int], None]
 
 
 _RUNTIME_MEMBERS = {
@@ -39,6 +40,7 @@ _RUNTIME_MEMBERS = {
     "pid_is_alive": "_pid_is_alive",
     "process_start_identity": "_process_start_identity",
     "windows_job": "_WindowsKillOnCloseJob",
+    "resume_process_threads": "_resume_process_threads",
 }
 _runtime_members = {
     public: vars(job_runtime)[private] for public, private in _RUNTIME_MEMBERS.items()
@@ -139,7 +141,11 @@ def test_windows_kill_on_close_job_terminates_process_and_descendant(tmp_path: P
         "\nchild=subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
         "out.write_text(str(child.pid), encoding='ascii'); time.sleep(60)"
     )
-    parent = subprocess.Popen([sys.executable, "-c", code, str(gate), str(child_pid_file)])
+    # The venv launcher must not create its interpreter before job assignment.
+    parent = subprocess.Popen(
+        [sys.executable, "-c", code, str(gate), str(child_pid_file)],
+        creationflags=runtime_test_api.create_suspended,
+    )
     job: WindowsJobForTest | None = None
     try:
         inherited_parent_job = _process_is_in_job(parent.pid)
@@ -149,6 +155,7 @@ def test_windows_kill_on_close_job_terminates_process_and_descendant(tmp_path: P
             if inherited_parent_job and getattr(exc, "winerror", None) == 5:
                 pytest.skip("host parent job does not permit nested child jobs")
             raise
+        runtime_test_api.resume_process_threads(parent.pid)
         gate.touch()
         deadline = time.monotonic() + 5
         while not child_pid_file.exists() and time.monotonic() < deadline:
