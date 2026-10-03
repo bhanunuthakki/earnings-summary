@@ -926,3 +926,30 @@ Its bounded review does not run the application, acquire financial data, change
 owner policy, or mutate canonical Windows state. The deterministic checker has
 no network or database access. Readout, brief and maintenance regression tests
 establish local behavior; they do not establish deployment or a future job run.
+
+
+### Selected SEC accession reading request
+
+`execution/refresh_sec_accession.py` plans one explicit stored SEC accession without
+network or database writes. It requires an active authorized corporate issuer and a
+current complete SEC inventory, with the exact issuer/CIK, accession and expected
+population. The immutable plan is stored under the configured product-state
+Operations runtime directory and binds the database lineage/path, source policy,
+extractor implementation and bounded capture/extraction controls.
+
+Explicit apply requires that plan's SHA-256 commitment. Each invocation records a
+separate started/result receipt and resumes the existing SEC capture checkpoint and
+exact native document/extractor evidence. Completed items do not consume the next
+extraction budget. Per-item missing authority, deferred fetch, quarantine and budget
+stops remain partial; exit 0 means only the selected readable-text request succeeded.
+No acquisition/extraction completeness seal, financial admission or model readiness
+is inferred. Source coverage promotion is not part of this command.
+
+The command reserves the exact database writer, evidence blob, SEC network and request
+artifact lanes. It never dispatches IR, FMP, LLM, native XBRL or model work. FMP remains
+excluded; no provider probe or policy change is implied. There is no cancellation
+control: interruption without a terminal result means completion unconfirmed, and
+resumption rechecks current authority and retained bytes. Active plan, checkpoint and
+attempt artifacts retain the existing active-checkpoint lifecycle. No scheduler,
+service or dashboard action is added; the CLI JSON and private attempt receipts are
+the supported operation surface.

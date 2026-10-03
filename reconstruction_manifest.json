@@ -60,7 +60,8 @@
         "execution/refresh_expected_earnings.py",
         "execution/refresh_cache.py",
         "execution/plan_analysis_evidence_scope.py",
-        "src/provenance/analysis_scope.py"
+        "src/provenance/analysis_scope.py",
+        "execution/refresh_sec_accession.py"
       ],
       "dependencies": [
         "core_data_layer"
