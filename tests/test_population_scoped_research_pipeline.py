@@ -15,8 +15,10 @@ import provenance.fulltext_backfill as fulltext
 from ask.sealed_retrieval import PromotionVerificationError, load_verified_trace_evidence
 from ask.sealed_retrieval import _fact_item as fact_item_for_test
 from provenance.analysis_scope import AnalysisScopeRequest, build_analysis_scope
+from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine, ResolutionPolicy
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 from provenance.filing_xbrl_extraction_ledger import FilingXbrlExtractionLedger
+from provenance.metric_ontology import MetricOntology, OntologySnapshot
 from provenance.population_document_processing import (
     DocumentProcessingPopulationRequest,
     populate_document_processing,
@@ -46,8 +48,10 @@ from provenance.source_inventory_seal import (
     component_digest,
 )
 from search.canonical_fact_projection import (
+    CanonicalFactProjectionError,
     ProjectionGenerationRequest,
     build_canonical_projection_generation,
+    load_canonical_fact_entry,
 )
 from search.corpus_builder import (
     CorpusBuildRequest,
@@ -63,7 +67,12 @@ from search.heterogeneous_retrieval import (
     verify_heterogeneous_retrieval_trace,
 )
 from tests.test_filing_xbrl_extraction_ledger import filing_xbrl_ledger_database
-from tests.test_heterogeneous_retrieval import NOW, _seed_resolved_periods, _two_period_output
+from tests.test_heterogeneous_retrieval import (
+    NOW,
+    SCOPE,
+    _seed_resolved_periods,
+    _two_period_output,
+)
 
 PERIOD = datetime(2024, 12, 31, tzinfo=UTC)
 
@@ -497,4 +506,173 @@ def test_current_schema_fact_reader_rejects_wrong_exact_binding(
             fact_generation_id=(
                 "absent-generation" if mismatch == "generation" else "projection:checkpoint"
             ),
+        )
+
+
+@pytest.fixture
+def inherited_delta(
+    scoped_research_pipeline: tuple[sqlite3.Connection, ResearchSnapshotRequest],
+) -> tuple[sqlite3.Connection, ResearchSnapshotRequest]:
+    conn, request = scoped_research_pipeline
+    delta = build_canonical_projection_generation(
+        conn,
+        ProjectionGenerationRequest(
+            generation_id="projection:unchanged-delta",
+            idempotency_key="projection:unchanged-delta",
+            generation_kind="delta",
+            parent_generation_id=request.canonical_fact_projection_run_id,
+            resolution_snapshot_id=request.canonical_fact_resolution_snapshot_id,
+            ontology_snapshot_id=request.ontology_snapshot_id,
+            cutoff_at=NOW,
+            recorded_at=NOW,
+        ),
+    )
+    assert delta.change_count == 0
+    assert delta.effective_entry_count == 2
+    delta_request = request.model_copy(
+        update={
+            "research_snapshot_id": "snapshot:unchanged-delta",
+            "idempotency_key": "snapshot:unchanged-delta",
+            "canonical_fact_projection_run_id": delta.generation_id,
+        }
+    )
+    assert build_research_snapshot(conn, delta_request).admitted
+    return conn, delta_request
+
+
+def test_current_schema_delta_trace_reads_inherited_fact(
+    inherited_delta: tuple[sqlite3.Connection, ResearchSnapshotRequest],
+) -> None:
+    conn, request = inherited_delta
+    audit_research_snapshot_for_retrieval(conn, request.research_snapshot_id, audited_at=NOW)
+    bundle = request.corpus_bundles[0]
+    assert bundle.lexical_index_run_id is not None
+    receipt = retrieve_heterogeneous(
+        conn,
+        HeterogeneousRetrievalRequest(
+            trace_id="trace:delta",
+            idempotency_key="trace:delta",
+            research_snapshot_id=request.research_snapshot_id,
+            fact_generation_id=request.canonical_fact_projection_run_id,
+            narrative_bundles=(
+                NarrativeBundle(
+                    corpus_manifest_id=bundle.corpus_manifest_id,
+                    lexical_index_run_id=bundle.lexical_index_run_id,
+                ),
+            ),
+            query_text="Revenue 2024",
+            cutoff_at=NOW,
+            recorded_at=NOW,
+        ),
+    )
+    (item,) = load_verified_trace_evidence(conn, receipt.trace_id)
+    entry = load_canonical_fact_entry(
+        conn,
+        generation_id=request.canonical_fact_projection_run_id,
+        canonical_metric_cell_id=item.candidate_id,
+        entry_sha256=item.source_commitment_sha256,
+    )
+    assert entry["generation_id"] == "projection:checkpoint"
+    assert item.value == "120 USD"
+    with pytest.raises(CanonicalFactProjectionError, match="projection_parent_scope_mismatch"):
+        build_canonical_projection_generation(
+            conn,
+            ProjectionGenerationRequest(
+                generation_id="projection:missing-parent",
+                idempotency_key="projection:missing-parent",
+                generation_kind="delta",
+                parent_generation_id="projection:absent",
+                resolution_snapshot_id=request.canonical_fact_resolution_snapshot_id,
+                ontology_snapshot_id=request.ontology_snapshot_id,
+                cutoff_at=NOW,
+                recorded_at=NOW,
+            ),
+        )
+    with pytest.raises(CanonicalFactProjectionError, match="missing_or_changed"):
+        load_canonical_fact_entry(
+            conn,
+            generation_id=request.canonical_fact_projection_run_id,
+            canonical_metric_cell_id=item.candidate_id,
+            entry_sha256="0" * 64,
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute(
+            "DELETE FROM canonical_fact_projection_entries WHERE generation_id='projection:checkpoint'"
+        )
+    with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+        conn.execute(
+            "UPDATE canonical_fact_projection_entries SET entry_sha256=? WHERE generation_id='projection:checkpoint'",
+            ("0" * 64,),
+        )
+    assert load_verified_trace_evidence(conn, receipt.trace_id) == (item,)
+
+
+def test_current_schema_delta_tombstone_does_not_recover_ancestor_fact(
+    inherited_delta: tuple[sqlite3.Connection, ResearchSnapshotRequest],
+) -> None:
+    conn, request = inherited_delta
+    source = conn.execute(
+        "SELECT selected_observation_id,entry_sha256 FROM canonical_fact_projection_entries "
+        "WHERE generation_id='projection:checkpoint' AND canonical_metric_cell_id='canonical:revenue:2023'"
+    ).fetchone()
+    ontology = MetricOntology(conn)
+    old = ontology.binding_as_known(str(source[0]), NOW)
+    assert old is not None
+    later = NOW + timedelta(days=2)
+    ontology.persist_binding(
+        old.model_copy(
+            update={
+                "binding_revision_id": "binding:revenue:2023:retired",
+                "idempotency_key": "binding:revenue:2023:retired",
+                "revision": 2,
+                "supersedes_binding_revision_id": old.binding_revision_id,
+                "binding_status": "retired",
+                "reason_code": "synthetic_retirement",
+                "reason_details": {"test": True},
+                "effective_at": later,
+                "knowledge_at": later,
+                "recorded_at": later,
+            }
+        )
+    )
+    resolver = CanonicalFactResolutionEngine(conn)
+    for year in (2023, 2024):
+        resolver.resolve(
+            f"canonical:revenue:{year}",
+            later,
+            ResolutionPolicy(name="deterministic", version="v1", config={}),
+            recorded_at=later,
+        )
+    ontology.seal_snapshot(
+        OntologySnapshot(
+            ontology_snapshot_id="ontology:retired",
+            idempotency_key="ontology:retired",
+            cutoff_at=later,
+            recorded_at=later,
+        )
+    )
+    resolver.seal_snapshot("resolution:retired", later, later, SCOPE)
+    bind_resolution_snapshot_watermark(
+        conn, resolution_snapshot_id="resolution:retired", cutoff_at=later, recorded_at=later
+    )
+    generation = build_canonical_projection_generation(
+        conn,
+        ProjectionGenerationRequest(
+            generation_id="projection:retired",
+            idempotency_key="projection:retired",
+            generation_kind="delta",
+            parent_generation_id=request.canonical_fact_projection_run_id,
+            resolution_snapshot_id="resolution:retired",
+            ontology_snapshot_id="ontology:retired",
+            cutoff_at=later,
+            recorded_at=later,
+        ),
+    )
+    assert generation.tombstone_count == 1
+    with pytest.raises(CanonicalFactProjectionError, match="missing_or_changed"):
+        load_canonical_fact_entry(
+            conn,
+            generation_id=generation.generation_id,
+            canonical_metric_cell_id="canonical:revenue:2023",
+            entry_sha256=str(source[1]),
         )

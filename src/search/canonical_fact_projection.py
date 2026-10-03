@@ -674,6 +674,32 @@ class CanonicalFactQueryPlan(_Frozen):
     years: tuple[int, ...]
 
 
+def load_canonical_fact_entry(
+    conn: sqlite3.Connection,
+    *,
+    generation_id: str,
+    canonical_metric_cell_id: str,
+    entry_sha256: str,
+) -> dict[str, object]:
+    """Resolve one exact effective entry through the bounded sealed generation chain."""
+    admit_canonical_projection_for_read(conn, generation_id)
+    entry = _row(
+        conn,
+        _CURRENT_STATE_CTE + " SELECT * FROM current_state "
+        "WHERE canonical_metric_cell_id=? AND change_kind='upsert'",
+        (generation_id, canonical_metric_cell_id),
+    )
+    if entry is None or str(entry["entry_sha256"]) != entry_sha256:
+        raise CanonicalFactProjectionError(
+            "projection_read_entry_missing_or_changed", generation_id=generation_id
+        )
+    source_generation_id = str(entry["generation_id"])
+    if source_generation_id != generation_id:
+        admit_canonical_projection_for_read(conn, source_generation_id)
+    _verify_projected_hit_for_read(conn, generation_id, entry, verified_buckets=set())
+    return entry
+
+
 def plan_canonical_fact_query(query_text: str) -> CanonicalFactQueryPlan:
     """Deterministically separate metric terms from periods and narrative intent."""
 
