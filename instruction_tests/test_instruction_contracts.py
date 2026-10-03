@@ -244,9 +244,12 @@ def test_project_rulebook_uses_manifest_classes_as_the_directive_authority() -> 
     assert "Each directive must specify" not in agents
     assert "[[root:Delegation & Subagent Calibration]]" not in agents
     assert "[[root:Evidence governance]]" not in agents
-    assert "global evidence and execution contract" in agents
-    assert "`procedures/agent-operations.md` for delegation" in agents
-    assert "`procedures/judging.md` for J0-J3 review rigor" in agents
+    assert "This file adds earnings-summary facts and constraints to the global contract." in agents
+    assert "Session delegation and review follow the global contract." in agents
+    assert (
+        "The global fleet policy and usage index own ordinary membership-provider order" in agents
+    )
+    assert "Explicit Judge selection and independence remain separate" in agents
     assert "[[root:Evidence and delegation]]" not in agents
 
 

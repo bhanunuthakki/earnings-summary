@@ -819,3 +819,20 @@ failure; no successful snapshot or revision is inferred from those raw captures.
 No source duty taxonomy, schema, provider, schedule or financial readiness rule
 changes. Mixed-inventory tests use the actual migrated ledger and duty bindings;
 network responses alone are synthetic fixtures.
+
+### Investing workflow maintenance and brief inputs
+
+Disposition: **no Operations surface change**. The internal post-earnings CLI
+adds an optional paired fiscal-period selector with complete-scope validation.
+Its scheduled default remains latest reported active portfolio quarters. The
+pre-earnings writer retains its rendered prompt inputs and explicit source and
+fiscal-identity gaps in the existing artifact JSON. Grounding remains partial.
+Neither change adds an operator control, job identity, writer, schema, provider
+purpose, or production schedule.
+
+The existing Mac Monthly prompt architecture refresh automation also checks the
+project-owned investing skill for changed source hashes and broken references.
+Its bounded review does not run the application, acquire financial data, change
+owner policy, or mutate canonical Windows state. The deterministic checker has
+no network or database access. Readout, brief and maintenance regression tests
+establish local behavior; they do not establish deployment or a future job run.

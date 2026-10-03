@@ -10,6 +10,14 @@ inference, and next-quarter verification conditions.
 
 - Canonical quarter identity: the active selected transcript's `period_end` and
   `fiscal_period_type`.
+- Default selection: latest reported selected quarter as of the run date.
+  An explicit request can supply the paired `period_end` and
+  `fiscal_period_type` arguments. The CLI exposes these as `--period-end` and
+  `--fiscal-period-type`. Future period ends and future call dates are ineligible.
+  An exact portfolio batch validates all requested active names and selected
+  quarters before any generation. Missing scope fails closed. An explicit
+  evaluation request uses the single-ticker implementation; the cockpit API
+  retains its latest-quarter selection.
 - Primary evidence: speaker-attributed, time-coded `transcript_segments` for
   that selected transcript.
 - Supporting evidence: the quarter's `earnings_surprises`, tracked KPI deltas,
