@@ -24,7 +24,7 @@ import hashlib
 import json
 import logging
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -40,19 +40,26 @@ from compute.kpi_resolver import (
     semantic_series_identity_sql,
 )
 from compute.soft_rule_evaluator import (
+    SoftEvaluationCapture,
     SoftRule,
     SoftRuleResult,
     SoftRuleStatus,
     evaluate_soft_rules,
     load_soft_rules,
+    replay_soft_capture,
+    soft_result_economic_payload,
 )
 from compute.thesis_episode_attention import deliver_episode_alert, supersede_prior
 from compute.thesis_evaluation_episodes import (
     AcceptedObservationInput,
+    CapturedKpiObservation,
     EpisodeCheckInput,
     EpisodeSeverity,
+    EpisodeStoreError,
     ForwardSemanticInput,
+    HardRuleCapture,
     ProvenanceCompleteness,
+    RetainedThesisContext,
     SemanticRuleInput,
     forward_episode_id,
     record_forward_episode,
@@ -160,6 +167,9 @@ class KpiObservation:
     period_end: datetime
     value: Decimal
     unit: Unit
+    provenance: dict[str, JsonValue] = field(
+        default_factory=lambda: dict[str, JsonValue](), compare=False
+    )
 
 
 @dataclass(frozen=True)
@@ -188,9 +198,10 @@ class ThesisVerdict:
     evaluated_at: datetime
     soft_rule_results: tuple[SoftRuleResult, ...] = ()
     semantic_input: ForwardSemanticInput | None = None
+    retained_context: RetainedThesisContext | None = None
 
 
-_THESIS_EVALUATOR_SEMANTIC_VERSION = "thesis-evaluator/v1"
+_THESIS_EVALUATOR_SEMANTIC_VERSION = "thesis-evaluator/v2"
 _RULESET_VERSION = "holdings-break-rules/v1"
 _HOLDINGS_PAYLOAD_ADAPTER = TypeAdapter(dict[str, JsonValue])
 _RULE_PROJECTION_ADAPTER = TypeAdapter(list[dict[str, JsonValue]])
@@ -269,12 +280,62 @@ def _semantic_rule(rule: BreakRule) -> SemanticRuleInput:
     )
 
 
+def _hard_economic_payload(capture: HardRuleCapture) -> dict[str, JsonValue]:
+    rows: list[JsonValue] | None = None
+    if capture.observations is not None:
+        rows = []
+        for observation in capture.observations:
+            provenance = observation.provenance
+            raw_semantics = provenance.get("retained_semantic_context_json")
+            semantics = (
+                _HOLDINGS_PAYLOAD_ADAPTER.validate_json(raw_semantics)
+                if isinstance(raw_semantics, str)
+                else {}
+            )
+            rows.append(
+                {
+                    "period_end": observation.period_end.isoformat(),
+                    "value": observation.value,
+                    "unit": observation.unit,
+                    "fiscal_period_type": provenance.get("fiscal_period_type"),
+                    "currency": provenance.get("currency"),
+                    "semantic_context": {
+                        key: semantics.get(key)
+                        for key in (
+                            "metric_name_as_reported",
+                            "accounting_basis",
+                            "consolidation_scope",
+                            "dimensions_json",
+                            "unit_scale",
+                            "publication_lane",
+                            "status",
+                        )
+                    },
+                }
+            )
+    return {
+        "rule": capture.rule,
+        "selected_definition": capture.selected_definition,
+        "disposition": capture.disposition,
+        "definition_semantics": None
+        if capture.selected_definition_content is None
+        else {
+            key: capture.selected_definition_content.get(key)
+            for key in ("name", "unit", "reporting_cadence", "definition_text", "definition_origin")
+        },
+        "observations": rows,
+    }
+
+
 def _build_semantic_input(
     *,
     payload: dict[str, JsonValue],
     spec: HoldingsSpec,
     evaluations: list[RuleEvaluation],
     soft_results: list[SoftRuleResult],
+    hard_inputs: tuple[HardRuleCapture, ...] = (),
+    soft_inputs: tuple[SoftEvaluationCapture, ...] = (),
+    effective_soft_rules: list[SoftRule] | None = None,
 ) -> ForwardSemanticInput:
     observations: list[AcceptedObservationInput] = []
     for evaluation in evaluations:
@@ -291,22 +352,46 @@ def _build_semantic_input(
                     restatement_semantics="source-provenance-not-retained",
                 )
             )
-    for result in soft_results:
-        details_json = _canonical_json(cast("dict[str, JsonValue]", result.details))
-        details_sha = hashlib.sha256(details_json.encode("utf-8")).hexdigest()
-        last_period = result.details.get("last_period")
+    for index, capture in enumerate(hard_inputs):
         observations.append(
             AcceptedObservationInput(
-                metric_identity=f"soft:{result.rule_name}",
-                period_end=str(last_period) if last_period else "unresolved-period",
-                observed_value=details_sha,
-                accepted_value=details_sha,
-                unit="soft-evidence-sha256",
-                currency=None,
-                material_source_semantics=("soft-evaluator-projection",),
-                restatement_semantics="source-provenance-not-retained",
+                metric_identity=f"hard-input:{index}",
+                period_end="captured-input",
+                observed_value=_sha256_json(_hard_economic_payload(capture)),
+                accepted_value=_sha256_json(_hard_economic_payload(capture)),
+                unit="input-sha256",
+                material_source_semantics=("partial-captured-selection",),
+                restatement_semantics="unknown",
             )
         )
+    for index, capture in enumerate(soft_inputs):
+        observations.append(
+            AcceptedObservationInput(
+                metric_identity=f"soft-input:{index}",
+                period_end="captured-input",
+                observed_value=_sha256_json(capture.economic_payload()),
+                accepted_value=_sha256_json(capture.economic_payload()),
+                unit="input-sha256",
+                material_source_semantics=("captured-effective-series",),
+                restatement_semantics="partial",
+            )
+        )
+    # Result clocks and exact citation identities do not describe investment events.
+    # Blocked rules have no series reads, so retain their disposition in identity.
+    for result in soft_results:
+        if "reason" in result.details:
+            stable = soft_result_economic_payload(result)
+            observations.append(
+                AcceptedObservationInput(
+                    metric_identity=f"soft-blocked:{result.rule_name}",
+                    period_end="unresolved-period",
+                    observed_value=_sha256_json(stable),
+                    accepted_value=_sha256_json(stable),
+                    unit="soft-disposition-sha256",
+                    material_source_semantics=("blocked",),
+                    restatement_semantics="partial",
+                )
+            )
     return ForwardSemanticInput(
         ticker=spec.ticker,
         thesis_content_sha256=_sha256_json(_thesis_content_payload(payload)),
@@ -320,7 +405,7 @@ def _build_semantic_input(
                 rule_id=rule.name,
                 definition=cast("dict[str, JsonValue]", rule.model_dump(mode="json")),
             )
-            for rule in spec.soft_rules
+            for rule in (spec.soft_rules if effective_soft_rules is None else effective_soft_rules)
         ),
         accepted_observations=tuple(observations),
     )
@@ -409,6 +494,8 @@ def _fetch_kpi_history(
     ticker: str,
     kpi_name: str,
     n_periods: int,
+    *,
+    trace: dict[str, JsonValue] | None = None,
 ) -> list[KpiObservation] | None:
     """Return up to `n_periods` most-recent kpi_facts observations for the rule's KPI.
 
@@ -434,6 +521,9 @@ def _fetch_kpi_history(
     read path rather than maintaining another source-ranking rule.
     """
     resolved_name = resolve_kpi_definition_name(conn, ticker, kpi_name)
+    if trace is not None:
+        trace["selected_definition"] = resolved_name
+        trace["disposition"] = "definition_unresolved" if resolved_name is None else "selected"
     if resolved_name is None:
         # Unresolvable: no kpi_facts definition matches this rule's KPI name
         # (e.g. a derived "... YoY change (bps)" series the pipeline hasn't
@@ -445,6 +535,7 @@ def _fetch_kpi_history(
         ticker,
         resolved_name,
         n_periods,
+        trace=trace,
     )
 
 
@@ -453,6 +544,8 @@ def _fetch_kpi_history_for_resolved_definition(
     ticker: str,
     resolved_name: str,
     n_periods: int,
+    *,
+    trace: dict[str, JsonValue] | None = None,
 ) -> list[KpiObservation] | None:
     """Read one definition name returned by the governed report-reference resolver."""
 
@@ -471,24 +564,33 @@ def _fetch_kpi_history_for_resolved_definition(
     # silently entering a break-rule series.
     semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
     semantic_where += " AND " + semantic_series_identity_sql(conn)
+    context_columns = [
+        str(row[1]) for row in conn.execute("PRAGMA table_info(kpi_fact_semantic_contexts)")
+    ]
+    context_pairs = ",".join(f"'{column}',ksc.{column}" for column in context_columns)
+    context_projection = (
+        f", json_object({context_pairs}) AS retained_semantic_context_json" if semantic_join else ""
+    )
+    if trace is not None:
+        trace["selection_mode"] = fact_relation.selection_mode
     if fact_relation.selection_mode == "legacy_pre_cutover":
         # Pre-cutover fixtures have no canonical resolver relation. Preserve
         # their historic one-row-per-period shape by stable fact-row identity;
         # this is deliberately not a source-document ranking policy.
         query = (
             "WITH eligible AS ("
-            "SELECT kf.period_end, kf.fiscal_period_type, kf.value, kf.unit, "
+            f"SELECT kf.*{context_projection}, "
             "ROW_NUMBER() OVER (PARTITION BY kf.kpi_definition_id, kf.period_end, "
             "kf.fiscal_period_type ORDER BY kf.id DESC) AS rn "
             f"FROM {fact_relation.sql} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "  # nosec B608 -- canonical relation is a closed internal identifier
             f"{semantic_join} "
             "WHERE kf.ticker = ? AND kd.name = ? AND " + semantic_where + period_filter + ") "
-            "SELECT period_end, fiscal_period_type, value, unit FROM eligible "
+            "SELECT * FROM eligible "
             "WHERE rn = 1 ORDER BY period_end DESC LIMIT ?"
         )
     else:
         query = (
-            "SELECT kf.period_end, kf.fiscal_period_type, kf.value, kf.unit "
+            f"SELECT kf.*{context_projection} "
             f"FROM {fact_relation.sql} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "  # nosec B608 -- canonical relation is a closed internal identifier
             f"{semantic_join} "
             "WHERE kf.ticker = ? AND kd.name = ? AND " + semantic_where + period_filter + " "
@@ -502,11 +604,23 @@ def _fetch_kpi_history_for_resolved_definition(
         conn, ticker=ticker, fact_kind=OVERRIDE_KPI, fact_key=resolved_name
     )
     out: list[KpiObservation] = []
-    for row in cur.fetchall():
+    selected_rows = cur.fetchall()
+    if trace is not None:
+        trace["selected_rows"] = [
+            _HOLDINGS_PAYLOAD_ADAPTER.validate_python(dict(row)) for row in selected_rows
+        ]
+        trace["active_overrides"] = [
+            _HOLDINGS_PAYLOAD_ADAPTER.validate_python(asdict(override))
+            for override in ov_map.values()
+        ]
+    for row in selected_rows:
         period_key = str(row["period_end"])[:10]
         period_type = str(row["fiscal_period_type"])
         ov = ov_map.get((period_key, period_type))
         if ov is not None:
+            if trace is not None:
+                trace["disposition"] = "active_scalar_override"
+                trace["override_id"] = ov.id
             log.warning(
                 "thesis_kpi_history_unreviewed_override",
                 extra={
@@ -524,10 +638,19 @@ def _fetch_kpi_history_for_resolved_definition(
             period = datetime.fromisoformat(period)
         value = Decimal(str(row["value"]))
         unit = Unit(row["unit"])
-        out.append(KpiObservation(period_end=period, value=value, unit=unit))
+        out.append(
+            KpiObservation(
+                period_end=period,
+                value=value,
+                unit=unit,
+                provenance=_HOLDINGS_PAYLOAD_ADAPTER.validate_python(dict(row)),
+            )
+        )
     # The definition resolver can find fact-carrying definitions whose rows are
     # all semantically missing, quarantined, or non-current.  That is an
     # unevaluable decision input, not a passing empty series.
+    if not out and trace is not None:
+        trace["disposition"] = "no_admitted_rows"
     return out or None
 
 
@@ -706,6 +829,7 @@ def _verified_report_rule_name(
     repo_root: Path,
     ticker: str,
     json_pointer: str,
+    selections: list[dict[str, JsonValue]] | None = None,
 ) -> str | None:
     reference = report_kpi_reference_at(
         repo_root,
@@ -713,6 +837,8 @@ def _verified_report_rule_name(
         json_pointer=json_pointer,
     )
     if reference is None:
+        if selections is not None:
+            selections.append({"json_pointer": json_pointer, "disposition": "reference_missing"})
         return None
     verified = verified_report_kpi_reference_definition(
         conn,
@@ -720,6 +846,14 @@ def _verified_report_rule_name(
         user_id=DEFAULT_USER_ID,
         reference=reference,
     )
+    if selections is not None:
+        selections.append(
+            {
+                "reference": reference.model_dump(mode="json"),
+                "verified": None if verified is None else verified.model_dump(mode="json"),
+                "disposition": "blocked" if verified is None else "verified",
+            }
+        )
     return None if verified is None else verified.definition_name
 
 
@@ -776,10 +910,13 @@ def _verified_soft_rules(
     repo_root: Path,
     ticker: str,
     payload: dict[str, JsonValue],
+    selections: list[dict[str, JsonValue]] | None = None,
 ) -> tuple[list[tuple[int, SoftRule]], frozenset[int]]:
     """Bind every supported KPI soft-rule leaf to its reviewed definition."""
     inventory = load_report_kpi_reference_inventory(repo_root, (ticker.upper(),))
     source = inventory.source_states[0]
+    if selections is not None:
+        selections.append({"soft_inventory_source": source.model_dump(mode="json")})
     if source.status is not ReportKpiReferenceSourceStatus.VALID:
         original_rules = _soft_rules_with_raw_indexes(payload)
         return original_rules, frozenset(raw_index for raw_index, _ in original_rules)
@@ -797,6 +934,7 @@ def _verified_soft_rules(
             repo_root=repo_root,
             ticker=ticker,
             json_pointer=reference.json_pointer,
+            selections=selections,
         )
         if verified_name is None or not _replace_json_pointer_value(
             rebound,
@@ -813,11 +951,12 @@ def _evaluate_verified_soft_rules(
     ticker: str,
     rules: list[tuple[int, SoftRule]],
     blocked_indexes: frozenset[int],
+    captures: list[SoftEvaluationCapture] | None = None,
 ) -> list[SoftRuleResult]:
     out: list[SoftRuleResult] = []
     for raw_index, rule in rules:
         if raw_index not in blocked_indexes:
-            out.extend(evaluate_soft_rules(ticker, [rule], conn))
+            out.extend(evaluate_soft_rules(ticker, [rule], conn, captures=captures))
             continue
         out.append(
             SoftRuleResult(
@@ -847,92 +986,231 @@ def evaluate_ticker_thesis(
     payload = _read_holdings_payload(holdings_path)
     spec = _holdings_spec_from_payload(payload, path=holdings_path)
     evaluations: list[RuleEvaluation] = []
+    hard_inputs: list[HardRuleCapture] = []
+    soft_inputs: list[SoftEvaluationCapture] = []
+    references: list[dict[str, JsonValue]] = []
     repo_root = (
         holdings_dir.parent.parent
         if holdings_dir.name == "holdings" and holdings_dir.parent.name == "micro_thesis"
         else None
     )
-    for index, rule in enumerate(spec.break_rules):
-        verified_name = (
-            None
-            if repo_root is None
-            else _verified_report_rule_name(
-                conn,
-                repo_root=repo_root,
-                ticker=ticker,
-                json_pointer=f"/break_rules/{index}/kpi_name",
+    for array_name, rules in (
+        ("break_rules", spec.break_rules),
+        ("business_model_rules", spec.business_model_rules),
+    ):
+        for index, rule in enumerate(rules):
+            pointer = f"/{array_name}/{index}/kpi_name"
+            trace: dict[str, JsonValue] = {
+                "selected_definition": None,
+                "disposition": "unverified_report_reference",
+            }
+            verified_name = (
+                None
+                if repo_root is None
+                else _verified_report_rule_name(
+                    conn,
+                    repo_root=repo_root,
+                    ticker=ticker,
+                    json_pointer=pointer,
+                    selections=references,
+                )
             )
-        )
-        if repo_root is not None and verified_name is None:
-            history = None
-        elif verified_name is not None:
-            history = _fetch_kpi_history_for_resolved_definition(
-                conn,
-                ticker,
-                verified_name,
-                rule.consecutive_periods,
+            if repo_root is not None and verified_name is None:
+                history = None
+            elif verified_name is not None:
+                trace["selected_definition"] = verified_name
+                trace["disposition"] = "selected"
+                history = _fetch_kpi_history_for_resolved_definition(
+                    conn, ticker, verified_name, rule.consecutive_periods, trace=trace
+                )
+            else:
+                history = _fetch_kpi_history(
+                    conn, ticker, rule.kpi_name, rule.consecutive_periods, trace=trace
+                )
+            selected_name = trace.get("selected_definition")
+            definition_row = (
+                None
+                if not isinstance(selected_name, str)
+                else conn.execute(
+                    "SELECT * FROM kpi_definitions WHERE UPPER(ticker)=? AND name=?",
+                    (ticker.upper(), selected_name),
+                ).fetchone()
             )
-        else:
-            history = _fetch_kpi_history(
-                conn,
-                ticker,
-                rule.kpi_name,
-                rule.consecutive_periods,
+            hard_inputs.append(
+                HardRuleCapture.model_validate(
+                    dict(
+                        rule=rule.model_dump(mode="json"),
+                        json_pointer=pointer,
+                        selected_definition=selected_name
+                        if isinstance(selected_name, str)
+                        else None,
+                        selected_definition_content=None
+                        if definition_row is None
+                        else _HOLDINGS_PAYLOAD_ADAPTER.validate_python(dict(definition_row)),
+                        disposition=trace["disposition"],
+                        selection_details=trace,
+                        observations=None
+                        if history is None
+                        else tuple(
+                            CapturedKpiObservation(
+                                period_end=obs.period_end,
+                                value=str(obs.value),
+                                unit=obs.unit.value,
+                                provenance=obs.provenance,
+                            )
+                            for obs in history
+                        ),
+                    )
+                )
             )
-        evaluations.append(evaluate_rule(rule, history))
-    for index, rule in enumerate(spec.business_model_rules):
-        verified_name = (
-            None
-            if repo_root is None
-            else _verified_report_rule_name(
-                conn,
-                repo_root=repo_root,
-                ticker=ticker,
-                json_pointer=f"/business_model_rules/{index}/kpi_name",
-            )
-        )
-        if repo_root is not None and verified_name is None:
-            history = None
-        elif verified_name is not None:
-            history = _fetch_kpi_history_for_resolved_definition(
-                conn,
-                ticker,
-                verified_name,
-                rule.consecutive_periods,
-            )
-        else:
-            history = _fetch_kpi_history(conn, ticker, rule.kpi_name, rule.consecutive_periods)
-        evaluations.append(evaluate_rule(rule, history))
+            references.append({"json_pointer": pointer, "selection": trace})
+            evaluations.append(evaluate_rule(rule, history))
     if repo_root is None:
-        soft_results = evaluate_soft_rules(spec.ticker.upper(), spec.soft_rules, conn)
+        effective_soft_rules = spec.soft_rules
+        soft_results = evaluate_soft_rules(
+            spec.ticker.upper(), spec.soft_rules, conn, captures=soft_inputs
+        )
     else:
         verified_soft_rules, blocked_soft_indexes = _verified_soft_rules(
-            conn,
-            repo_root=repo_root,
-            ticker=ticker,
-            payload=payload,
+            conn, repo_root=repo_root, ticker=ticker, payload=payload, selections=references
         )
+        effective_soft_rules = [rule for _, rule in verified_soft_rules]
         soft_results = _evaluate_verified_soft_rules(
             conn,
             ticker=spec.ticker.upper(),
             rules=verified_soft_rules,
             blocked_indexes=blocked_soft_indexes,
+            captures=soft_inputs,
         )
-    overall = _rollup_with_soft(evaluations, soft_results)
-    return ThesisVerdict(
+    semantic = _build_semantic_input(
+        payload=payload,
+        spec=spec,
+        evaluations=evaluations,
+        soft_results=soft_results,
+        hard_inputs=tuple(hard_inputs),
+        soft_inputs=tuple(soft_inputs),
+        effective_soft_rules=effective_soft_rules,
+    )
+    verdict = ThesisVerdict(
         ticker=spec.ticker.upper(),
         thesis=spec.thesis,
-        overall_status=overall,
+        overall_status=_rollup_with_soft(evaluations, soft_results),
         rule_evaluations=tuple(evaluations),
         evaluated_at=datetime.now(UTC),
         soft_rule_results=tuple(soft_results),
-        semantic_input=_build_semantic_input(
-            payload=payload,
-            spec=spec,
-            evaluations=evaluations,
-            soft_results=soft_results,
-        ),
+        semantic_input=semantic,
     )
+    blocked_results: list[SoftRuleResult] = []
+    result_order: list[int] = []
+    executed_index = 0
+    for result in soft_results:
+        if result.details.get("reason") == "unverified_report_kpi_reference":
+            blocked_results.append(result)
+            result_order.append(-len(blocked_results))
+        else:
+            result_order.append(executed_index)
+            executed_index += 1
+    context = RetainedThesisContext(
+        ticker=verdict.ticker,
+        holdings_payload=payload,
+        belief_payload=_thesis_content_payload(payload),
+        original_spec=spec.model_dump(mode="json"),
+        hard_inputs=tuple(hard_inputs),
+        soft_inputs=tuple(soft_inputs),
+        effective_soft_rules=tuple(effective_soft_rules),
+        soft_result_order=tuple(result_order),
+        blocked_soft_results=tuple(blocked_results),
+        reference_selections=tuple(references),
+        evaluated_at=verdict.evaluated_at,
+        semantic=semantic,
+        severity=EpisodeSeverity(verdict.overall_status.value),
+        evidence_as_of=_episode_evidence_as_of(verdict),
+        rule_outputs=_episode_rule_projection(verdict),
+        soft_outputs=_episode_soft_projection(verdict),
+        stable_soft_outputs=tuple(soft_result_economic_payload(result) for result in soft_results),
+    )
+    return replace(verdict, retained_context=context)
+
+
+def replay_check_context(context: RetainedThesisContext) -> ThesisVerdict:
+    """Execute supported saved rules without opening current files or databases."""
+    if context.semantic.evaluator_semantic_version != _THESIS_EVALUATOR_SEMANTIC_VERSION:
+        raise EpisodeStoreError("saved evaluator version cannot be replayed")
+    spec = _holdings_spec_from_payload(
+        context.holdings_payload, path=Path("retained-holdings.json")
+    )
+    if (
+        spec.model_dump(mode="json") != context.original_spec
+        or _thesis_content_payload(context.holdings_payload) != context.belief_payload
+    ):
+        raise EpisodeStoreError("saved original thesis/rules differ")
+    original_hard = [
+        rule.model_dump(mode="json") for rule in (*spec.break_rules, *spec.business_model_rules)
+    ]
+    if original_hard != [capture.rule for capture in context.hard_inputs]:
+        raise EpisodeStoreError("saved hard rules differ from original rules")
+    evaluations = [
+        evaluate_rule(
+            BreakRule.model_validate(capture.rule),
+            None
+            if capture.observations is None
+            else [
+                KpiObservation(
+                    period_end=obs.period_end,
+                    value=Decimal(obs.value),
+                    unit=Unit(obs.unit),
+                    provenance=obs.provenance,
+                )
+                for obs in capture.observations
+            ],
+        )
+        for capture in context.hard_inputs
+    ]
+    executed = [
+        result for capture in context.soft_inputs for result in replay_soft_capture(capture)
+    ]
+    try:
+        soft_results = [
+            executed[index] if index >= 0 else context.blocked_soft_results[-index - 1]
+            for index in context.soft_result_order
+        ]
+    except IndexError as exc:
+        raise EpisodeStoreError("saved soft execution order is invalid") from exc
+    if sorted(index for index in context.soft_result_order if index >= 0) != list(
+        range(len(executed))
+    ) or sorted(-index - 1 for index in context.soft_result_order if index < 0) != list(
+        range(len(context.blocked_soft_results))
+    ):
+        raise EpisodeStoreError("saved soft execution population differs")
+    effective_soft_rules = list(context.effective_soft_rules)
+    semantic = _build_semantic_input(
+        payload=context.holdings_payload,
+        spec=spec,
+        evaluations=evaluations,
+        soft_results=soft_results,
+        hard_inputs=context.hard_inputs,
+        soft_inputs=context.soft_inputs,
+        effective_soft_rules=effective_soft_rules,
+    )
+    verdict = ThesisVerdict(
+        ticker=context.ticker,
+        thesis=spec.thesis,
+        overall_status=_rollup_with_soft(evaluations, soft_results),
+        rule_evaluations=tuple(evaluations),
+        evaluated_at=context.evaluated_at,
+        soft_rule_results=tuple(soft_results),
+        semantic_input=semantic,
+        retained_context=context,
+    )
+    if (
+        semantic != context.semantic
+        or EpisodeSeverity(verdict.overall_status.value) != context.severity
+        or _episode_rule_projection(verdict) != context.rule_outputs
+        or _episode_soft_projection(verdict) != context.soft_outputs
+        or _episode_evidence_as_of(verdict) != context.evidence_as_of
+    ):
+        raise EpisodeStoreError("saved thesis output differs from deterministic replay")
+    return verdict
 
 
 def _serialize_soft_rule_results(verdict: ThesisVerdict) -> str | None:
@@ -1311,6 +1589,17 @@ def persist_verdict(
     if verdict.semantic_input is None:
         raise ValueError("semantic_input is required when semantic thesis episodes are active")
 
+    if verdict.semantic_input.evaluator_semantic_version == _THESIS_EVALUATOR_SEMANTIC_VERSION:
+        if verdict.retained_context is None:
+            raise EpisodeStoreError("new thesis check requires retained context")
+        replayed = replay_check_context(verdict.retained_context)
+        if (
+            replayed.semantic_input != verdict.semantic_input
+            or _episode_rule_projection(replayed) != _episode_rule_projection(verdict)
+            or _episode_soft_projection(replayed) != _episode_soft_projection(verdict)
+            or replayed.overall_status != verdict.overall_status
+        ):
+            raise EpisodeStoreError("verdict differs from retained deterministic context")
     prior = conn.execute(
         "SELECT thesis, breach_status, raw_json FROM thesis_state WHERE ticker = ?",
         (verdict.ticker,),
@@ -1371,6 +1660,7 @@ def persist_verdict(
                 rule_evaluations=_episode_rule_projection(verdict),
                 soft_rule_results=_episode_soft_projection(verdict),
                 raw_evaluation_id=raw_id,
+                retained_context=verdict.retained_context,
             ),
         )
         if episode_write.created:

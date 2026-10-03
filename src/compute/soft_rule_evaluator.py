@@ -52,12 +52,12 @@ import itertools
 import logging
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal, NamedTuple, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 from compute.kpi_resolver import resolve_kpi_definition_name, semantic_series_identity_sql
 from pipeline.kpi_semantics import semantic_admission_sql
@@ -153,18 +153,166 @@ class SoftRuleResult:
     evaluated_at: datetime
 
 
-@dataclass(frozen=True)
-class _EvaluationContext:
-    conn: sqlite3.Connection
+class CapturedReplayError(ValueError):
+    """Saved input cannot satisfy a deterministic replay read."""
+
+
+class SoftSeriesCapture(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    metric: str
+    source: FactSource
+    series: tuple[tuple[datetime, float], ...]
+    financial: CanonicalFinancialSeries | None = None
+    selected_definition: str | None = None
+    disposition: Literal[
+        "selected",
+        "definition_unresolved",
+        "active_scalar_override",
+        "no_admitted_rows",
+        "sql_read_failed",
+        "read_failed",
+    ] = "selected"
+    rows: tuple[dict[str, JsonValue], ...] = ()
+    overrides: tuple[dict[str, JsonValue], ...] = ()
+    error_type: str | None = None
+    error_message: str | None = None
+    definition_rows: tuple[dict[str, JsonValue], ...] = ()
+
+    def economic_payload(self) -> dict[str, JsonValue]:
+        financial: list[JsonValue] = []
+        if self.financial is not None:
+            for item in self.financial.observations:
+                financial.append(
+                    {
+                        "metric": item.metric,
+                        "cadence": item.cadence.value,
+                        "reporting_entity": item.reporting_entity_id,
+                        "scope_security": item.scope_security_id,
+                        "period_start": item.period_start.isoformat(),
+                        "period_end": item.period_end.isoformat(),
+                        "fiscal_year": item.fiscal_year,
+                        "fiscal_period": item.fiscal_period,
+                        "currency": item.currency,
+                        "unit": item.unit,
+                        "accounting_basis": item.accounting_basis,
+                        "consolidation_scope": item.consolidation_scope,
+                        "dimensions": [dimension.canonical_member for dimension in item.dimensions],
+                        "value": str(item.value),
+                    }
+                )
+        # These are economic fields, not a recursive provenance-key filter.
+        row_semantics: list[JsonValue] = []
+        for row in self.rows:
+            raw_context = row.get("retained_semantic_context_json")
+            semantic = (
+                TypeAdapter(dict[str, JsonValue]).validate_json(raw_context)
+                if isinstance(raw_context, str)
+                else {}
+            )
+            row_semantics.append(
+                {
+                    "fiscal_period_type": row.get("fiscal_period_type"),
+                    "unit": row.get("unit"),
+                    "currency": row.get("currency"),
+                    "semantic_context": {
+                        key: semantic.get(key)
+                        for key in (
+                            "metric_name_as_reported",
+                            "accounting_basis",
+                            "consolidation_scope",
+                            "dimensions_json",
+                            "unit_scale",
+                            "publication_lane",
+                            "status",
+                        )
+                    },
+                }
+            )
+        return {
+            "metric": self.metric,
+            "source": self.source.value,
+            "selected_definition": self.selected_definition,
+            "disposition": self.disposition,
+            "series": [[period.isoformat(), value] for period, value in self.series],
+            "financial_status": None if self.financial is None else self.financial.status,
+            "financial_reason": None if self.financial is None else self.financial.reason_code,
+            "financial_observations": financial,
+            "kpi_semantics": row_semantics,
+            "definition_semantics": [
+                {
+                    key: row.get(key)
+                    for key in (
+                        "name",
+                        "unit",
+                        "reporting_cadence",
+                        "definition_text",
+                        "aliases_json",
+                        "value_kind",
+                        "period_kind",
+                        "unit_family",
+                        "accounting_basis",
+                        "scope_constraints_json",
+                        "lifecycle",
+                    )
+                }
+                for row in self.definition_rows
+            ],
+        }
+
+
+class SoftEvaluationCapture(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
     ticker: str
-    financials: CanonicalFinancialSeriesReader
+    cutoff: datetime
+    rules: tuple[SoftRule, ...]
+    reads: tuple[SoftSeriesCapture, ...]
+    results: tuple[SoftRuleResult, ...]
+    unit_jump_ratio: float
+
+    def economic_payload(self) -> dict[str, JsonValue]:
+        return {
+            "rules": [rule.model_dump(mode="json") for rule in self.rules],
+            "reads": [read.economic_payload() for read in self.reads],
+            "unit_jump_ratio": self.unit_jump_ratio,
+        }
+
+
+@dataclass
+class _EvaluationContext:
+    conn: sqlite3.Connection | None
+    ticker: str
+    financials: CanonicalFinancialSeriesReader | None
+    retain_reads: bool = False
+    reads: list[SoftSeriesCapture] = field(default_factory=lambda: list[SoftSeriesCapture]())
+    saved_reads: tuple[SoftSeriesCapture, ...] | None = None
+    read_index: int = 0
+    selected_definition: str | None = None
+    disposition: Literal[
+        "selected",
+        "definition_unresolved",
+        "active_scalar_override",
+        "no_admitted_rows",
+        "sql_read_failed",
+        "read_failed",
+    ] = "selected"
+    rows: tuple[dict[str, JsonValue], ...] = ()
+    overrides: tuple[dict[str, JsonValue], ...] = ()
 
 
 def _read_financial(context: _EvaluationContext, metric: str) -> CanonicalFinancialSeries:
+    if context.saved_reads is not None:
+        for read in context.saved_reads:
+            if (
+                read.metric == metric
+                and read.source is FactSource.FINANCIAL
+                and read.financial is not None
+            ):
+                return read.financial
+        raise CapturedReplayError("financial manifest was not captured")
+    if context.financials is None:
+        raise CapturedReplayError("financial reader is unavailable")
     return context.financials.read(
-        metric,
-        cadence=FinancialCadence.QUARTERLY,
-        continuity=SeriesContinuity.STRICT_CONTIGUOUS,
+        metric, cadence=FinancialCadence.QUARTERLY, continuity=SeriesContinuity.STRICT_CONTIGUOUS
     )
 
 
@@ -204,7 +352,7 @@ def load_soft_rules(raw: list[Any] | None) -> list[SoftRule]:
 # ---------------------------------------------------------------------------
 
 
-def _fetch_series(
+def _fetch_series_live(
     context: _EvaluationContext,
     metric: str,
     source: FactSource,
@@ -226,13 +374,24 @@ def _fetch_series(
             else []
         )
     conn = context.conn
+    if conn is None:
+        raise CapturedReplayError("live KPI connection is unavailable")
     ticker = context.ticker
     resolved_name = resolve_kpi_definition_name(conn, ticker, metric)
+    context.selected_definition = resolved_name
     if resolved_name is None:
+        context.disposition = "definition_unresolved"
         return []
-    if active_scalar_override_map(
+    overrides = active_scalar_override_map(
         conn, ticker=ticker, fact_kind=OVERRIDE_KPI, fact_key=resolved_name
-    ):
+    )
+    if context.retain_reads:
+        context.overrides = tuple(
+            TypeAdapter(dict[str, JsonValue]).validate_python(asdict(override))
+            for override in overrides.values()
+        )
+    if overrides:
+        context.disposition = "active_scalar_override"
         log.warning(
             "soft_rule_kpi_unreviewed_override",
             extra={"ticker": ticker.upper(), "kpi_name": resolved_name},
@@ -241,25 +400,31 @@ def _fetch_series(
     fact_relation = canonical_fact_relation(conn, "kpi_facts")
     semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
     semantic_where += " AND " + semantic_series_identity_sql(conn, fact_relation=fact_relation.sql)
+    context_columns = [
+        str(row[1]) for row in conn.execute("PRAGMA table_info(kpi_fact_semantic_contexts)")
+    ]
+    pairs = ",".join(f"'{column}',ksc.{column}" for column in context_columns)
+    context_projection = (
+        f", json_object({pairs}) AS retained_semantic_context_json" if semantic_join else ""
+    )
     if fact_relation.selection_mode == "legacy_pre_cutover":
         sql = (
             "WITH ranked AS ("  # nosec B608
-            "SELECT kf.id, kf.period_end, kf.fiscal_period_type, kf.value, "
-            "kf.kpi_definition_id, "
+            "SELECT kf.*, "
             "ROW_NUMBER() OVER (PARTITION BY kf.kpi_definition_id, kf.period_end, "
             "kf.fiscal_period_type ORDER BY kf.id DESC) AS rn "
             f"FROM {fact_relation.sql} kf "
             "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
             "WHERE kf.ticker = ? AND kd.name = ? "
             "AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4')) "
-            "SELECT kf.period_end, kf.value "  # nosec B608
+            f"SELECT kf.period_end, kf.value, kf.*{context_projection} "  # nosec B608
             "FROM ranked kf "
             f"{semantic_join} "
             "WHERE kf.rn = 1 AND " + semantic_where + " ORDER BY kf.period_end ASC"
         )
     else:
         sql = (
-            "SELECT kf.period_end, kf.value "  # nosec B608
+            f"SELECT kf.period_end, kf.value, kf.*{context_projection} "  # nosec B608
             f"FROM {fact_relation.sql} kf "
             "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
             f"{semantic_join} "
@@ -269,10 +434,25 @@ def _fetch_series(
             "ORDER BY kf.period_end ASC"
         )
     try:
-        rows = conn.execute(sql, (ticker.upper(), resolved_name)).fetchall()
+        cursor = conn.execute(sql, (ticker.upper(), resolved_name))
+        rows = cursor.fetchall()
     except sqlite3.Error as exc:
+        context.disposition = "sql_read_failed"
         log.warning({"event": "soft_rule_fetch_failed", "metric": metric, "error": str(exc)})
         return []
+    if context.retain_reads:
+        context.rows = tuple(
+            TypeAdapter(dict[str, JsonValue]).validate_python(
+                dict(row)
+                if isinstance(row, sqlite3.Row)
+                else dict(
+                    zip((str(column[0]) for column in cursor.description or ()), row, strict=True)
+                )
+            )
+            for row in rows
+        )
+    if not rows:
+        context.disposition = "no_admitted_rows"
     out: list[tuple[datetime, float]] = []
     for row in rows:
         period_raw = row[0]
@@ -294,6 +474,94 @@ def _fetch_series(
             continue
         out.append((period, value))
     return out
+
+
+def _definition_rows(
+    context: _EvaluationContext, source: FactSource, financial: CanonicalFinancialSeries | None
+) -> tuple[dict[str, JsonValue], ...]:
+    if context.conn is None:
+        return ()
+    queries: list[tuple[str, tuple[object, ...]]] = []
+    if source is FactSource.FINANCIAL and financial is not None:
+        queries = [
+            (
+                "SELECT * FROM canonical_metric_definition_revisions WHERE metric_definition_revision_id=?",
+                (revision,),
+            )
+            for revision in sorted(
+                {item.metric_definition_revision_id for item in financial.observations}
+            )
+        ]
+    elif source is FactSource.KPI and context.selected_definition is not None:
+        queries = [
+            (
+                "SELECT * FROM kpi_definitions WHERE UPPER(ticker)=? AND name=?",
+                (context.ticker.upper(), context.selected_definition),
+            )
+        ]
+    rows: list[dict[str, JsonValue]] = []
+    for query, params in queries:
+        cursor = context.conn.execute(query, params)
+        for row in cursor.fetchall():
+            values = (
+                dict(row)
+                if isinstance(row, sqlite3.Row)
+                else dict(
+                    zip((str(column[0]) for column in cursor.description or ()), row, strict=True)
+                )
+            )
+            rows.append(TypeAdapter(dict[str, JsonValue]).validate_python(values))
+    return tuple(rows)
+
+
+def _fetch_series(
+    context: _EvaluationContext, metric: str, source: FactSource
+) -> list[tuple[datetime, float]]:
+    if context.saved_reads is not None:
+        if context.read_index >= len(context.saved_reads):
+            raise CapturedReplayError("series read was not captured")
+        read = context.saved_reads[context.read_index]
+        context.read_index += 1
+        if read.metric != metric or read.source != source:
+            raise CapturedReplayError("captured series read identity differs")
+        if read.error_message is not None:
+            raise ValueError(read.error_message)
+        return list(read.series)
+    if not context.retain_reads:
+        return _fetch_series_live(context, metric, source)
+    context.selected_definition = None
+    context.disposition = "selected"
+    context.rows = ()
+    context.overrides = ()
+    try:
+        series = _fetch_series_live(context, metric, source)
+    except Exception as exc:
+        context.reads.append(
+            SoftSeriesCapture(
+                metric=metric,
+                source=source,
+                series=(),
+                disposition="read_failed",
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+        )
+        raise
+    financial = _read_financial(context, metric) if source is FactSource.FINANCIAL else None
+    context.reads.append(
+        SoftSeriesCapture(
+            metric=metric,
+            source=source,
+            series=tuple(series),
+            financial=financial,
+            selected_definition=context.selected_definition,
+            disposition=context.disposition,
+            rows=context.rows,
+            overrides=context.overrides,
+            definition_rows=_definition_rows(context, source, financial),
+        )
+    )
+    return series
 
 
 # ---------------------------------------------------------------------------
@@ -1125,6 +1393,8 @@ def _evaluate_soft_rules_in_snapshot(
         try:
             outcome = _evaluate_predicate(context, rule.predicate)
         except Exception as exc:
+            if isinstance(exc, CapturedReplayError):
+                raise
             log.warning(
                 {
                     "event": "soft_rule_eval_failed",
@@ -1169,6 +1439,8 @@ def evaluate_soft_rules(
     ticker: str,
     rules: list[SoftRule],
     conn: sqlite3.Connection,
+    *,
+    captures: list[SoftEvaluationCapture] | None = None,
 ) -> list[SoftRuleResult]:
     """Evaluate every soft rule at one aware cutoff and SQLite read snapshot.
 
@@ -1185,8 +1457,143 @@ def evaluate_soft_rules(
             conn=conn,
             ticker=ticker,
             financials=CanonicalFinancialSeriesReader(conn, ticker, cutoff=cutoff),
+            retain_reads=captures is not None,
         )
-        return _evaluate_soft_rules_in_snapshot(context, rules, cutoff)
+        results = _evaluate_soft_rules_in_snapshot(context, rules, cutoff)
+        if captures is not None:
+            captures.append(
+                SoftEvaluationCapture(
+                    ticker=ticker,
+                    cutoff=cutoff,
+                    rules=tuple(rules),
+                    reads=tuple(context.reads),
+                    results=tuple(results),
+                    unit_jump_ratio=_UNIT_JUMP_RATIO,
+                )
+            )
+        return results
     finally:
         if owns_snapshot and conn.in_transaction:
             conn.rollback()
+
+
+def replay_soft_capture(capture: SoftEvaluationCapture) -> list[SoftRuleResult]:
+    """Execute the original predicates using only captured ordered reads."""
+    if capture.unit_jump_ratio != _UNIT_JUMP_RATIO or capture.cutoff.tzinfo is None:
+        raise CapturedReplayError("unsupported saved soft evaluator configuration")
+    context = _EvaluationContext(
+        conn=None, ticker=capture.ticker, financials=None, saved_reads=capture.reads
+    )
+    results = _evaluate_soft_rules_in_snapshot(context, list(capture.rules), capture.cutoff)
+    if context.read_index != len(capture.reads):
+        raise CapturedReplayError("captured soft reads were not consumed")
+    if results != list(capture.results):
+        raise CapturedReplayError("saved soft output differs from replay")
+    return results
+
+
+def soft_result_economic_payload(result: SoftRuleResult) -> dict[str, JsonValue]:
+    """Closed economic output projection; full citations stay in the check."""
+    keys = {
+        PredicateType.SERIES_DECEL: (
+            "metric",
+            "derived",
+            "have",
+            "need",
+            "source_reason",
+            "zero_base_at",
+            "periods",
+            "threshold_bps",
+            "first_bps",
+            "second_bps",
+            "last_yoy_pct",
+            "prior_yoy_pct",
+            "decel_series_bps",
+            "last_period",
+        ),
+        PredicateType.SERIES_BELOW: (
+            "metric",
+            "derived",
+            "have",
+            "need",
+            "source_reason",
+            "threshold",
+            "periods",
+            "direction",
+            "last_value",
+            "values",
+            "last_period",
+        ),
+        PredicateType.SERIES_ABOVE: (
+            "metric",
+            "derived",
+            "have",
+            "need",
+            "source_reason",
+            "threshold",
+            "periods",
+            "direction",
+            "last_value",
+            "values",
+            "last_period",
+        ),
+        PredicateType.RATIO_BREACH: (
+            "numerator",
+            "denominator",
+            "source_reason",
+            "have",
+            "need",
+            "threshold",
+            "threshold_pct",
+            "direction",
+            "periods",
+            "last_ratio",
+            "last_ratio_pct",
+            "ratios_pct",
+            "last_period",
+        ),
+        PredicateType.TRAJECTORY: (
+            "kpi_name",
+            "derived",
+            "have",
+            "need",
+            "source_reason",
+            "threshold",
+            "comparator",
+            "lookback_prints",
+            "horizon_prints",
+            "slope_per_period",
+            "last_value",
+            "last_period",
+            "trip_period",
+            "trip_h",
+            "trip_value",
+            "already_violating",
+        ),
+        PredicateType.COMPOUND: ("op",),
+    }
+    raw_type = result.details.get("predicate_type")
+    if raw_type is None:
+        details = {
+            "disposition": "evaluation_failed"
+            if "error" in result.details
+            else result.details.get("reason")
+        }
+    else:
+        predicate_type = PredicateType(raw_type)
+        details = {
+            key: result.details[key] for key in keys[predicate_type] if key in result.details
+        }
+        if predicate_type is PredicateType.COMPOUND:
+            details["children"] = [
+                {"type": child["type"], "fired": child["fired"]}
+                for child in result.details.get("children", [])
+            ]
+    return TypeAdapter(dict[str, JsonValue]).validate_python(
+        {
+            "rule_name": result.rule_name,
+            "status": result.status.value,
+            "predicate_type": raw_type,
+            "details": details,
+        }
+    )
