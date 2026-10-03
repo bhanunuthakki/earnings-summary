@@ -12,8 +12,7 @@ from pathlib import Path
 import pytest
 
 import provenance.fulltext_backfill as fulltext
-from ask.sealed_retrieval import PromotionVerificationError, load_verified_trace_evidence
-from ask.sealed_retrieval import _fact_item as fact_item_for_test
+from ask.sealed_retrieval import load_verified_trace_evidence
 from provenance.analysis_scope import AnalysisScopeRequest, build_analysis_scope
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine, ResolutionPolicy
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
@@ -70,8 +69,8 @@ from tests.test_filing_xbrl_extraction_ledger import filing_xbrl_ledger_database
 from tests.test_heterogeneous_retrieval import (
     NOW,
     SCOPE,
-    _seed_resolved_periods,
-    _two_period_output,
+    seed_resolved_annual_periods,
+    two_annual_period_output,
 )
 
 PERIOD = datetime(2024, 12, 31, tzinfo=UTC)
@@ -84,7 +83,7 @@ def scoped_research_pipeline(
     blob = tmp_path / "data/evidence/blobs/filing.xhtml"
     blob.parent.mkdir(parents=True)
     blob.write_bytes(b"filing-bytes")
-    output = _two_period_output()
+    output = two_annual_period_output()
     conn = filing_xbrl_ledger_database(
         tmp_path,
         output,
@@ -96,7 +95,7 @@ def scoped_research_pipeline(
     )
     try:
         FilingXbrlExtractionLedger(conn).publish(output)
-        _seed_resolved_periods(conn)
+        seed_resolved_annual_periods(conn)
         bind_resolution_snapshot_watermark(
             conn, resolution_snapshot_id="resolution:checkpoint", cutoff_at=NOW, recorded_at=NOW
         )
@@ -490,23 +489,18 @@ def test_current_schema_fact_reader_rejects_wrong_exact_binding(
         (receipt.trace_id,),
     ).fetchone()
     assert candidate is not None
-    if mismatch == "commitment":
-        candidate = conn.execute(
-            "SELECT ? AS candidate_id,? AS source_commitment_sha256",
-            (candidate["candidate_id"], "0" * 64),
-        ).fetchone()
-    with pytest.raises(PromotionVerificationError, match="fact source commitment is missing"):
-        fact_item_for_test(
+    with pytest.raises(CanonicalFactProjectionError):
+        load_canonical_fact_entry(
             conn,
-            receipt,
-            candidate,
-            receipt.ordered_results[0],
-            n=1,
-            cutoff=NOW,
-            fact_generation_id=(
-                "absent-generation" if mismatch == "generation" else "projection:checkpoint"
-            ),
+            generation_id="absent-generation"
+            if mismatch == "generation"
+            else "projection:checkpoint",
+            canonical_metric_cell_id=str(candidate["candidate_id"]),
+            entry_sha256="0" * 64
+            if mismatch == "commitment"
+            else str(candidate["source_commitment_sha256"]),
         )
+    assert load_verified_trace_evidence(conn, receipt.trace_id)[0].value == "120 USD"
 
 
 @pytest.fixture
