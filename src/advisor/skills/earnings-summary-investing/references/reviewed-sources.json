@@ -1,5 +1,5 @@
 {
-  "review_note": "Reviewed released-main integration: preserve condensed global authority and full-population snapshot routes; exclude the unreleased exact-date analysis-scope planner. Reviewed main performance changes: cache-busy retries and lazy portfolio fragments preserve existing investing routes, writer boundaries and Operations approvals. Retain the investing maintenance no-surface-change disposition.",
+  "review_note": "Independent GPT-6.1 Sol thesis main-030 follow-up source review: all eight frozen source files PASS; four semantic source dispositions. Main0050 retained; thesis0051 SQL unchanged. Copy checks occur after generation before judged/backtest spend and are bounded. Tests, native, installation and model acceptance remain separate.",
   "schema_version": 1,
   "sources": [
     {
@@ -55,8 +55,12 @@
       "sha256": "4f47ea54f4f82b1f5a4610b655e419a592571bd5b90969ea174c5e82c038f12f"
     },
     {
+      "path": "directives/llm_evals.md",
+      "sha256": "4c712bcce01356017e99f4687ce99ff21af25a73727b82e428fa35bcdebb3f99"
+    },
+    {
       "path": "directives/llm_quota_scheduling.md",
-      "sha256": "f8ca004150920266e946e38e0e082efaec0d9cc196efd71e861b69aea302e4d1"
+      "sha256": "68be74e0220e8b4b093bd2433f7b1c90b88bb36f1e839fe75afec9f52b978cfe"
     },
     {
       "path": "directives/micro_thesis_runbook.md",
@@ -67,12 +71,16 @@
       "sha256": "8ce943f6cb59a2d0feaa4b1ba6428ed4dc8416112f688c5e3b9c83e557bec3e4"
     },
     {
+      "path": "directives/model_eval_loop.md",
+      "sha256": "2644d9e89caede490d44f050935a11e755160363fac41fa5f33b27898205efb9"
+    },
+    {
       "path": "directives/next_dollar_model.md",
       "sha256": "ee91917bde8a179a35417a25b6285b0af2888fd2e0f716db337f0440f3118788"
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "11d481fe3e61bd03c1f42c6ea4c36d7de4167ad3e20e7d15d5b7814387d6c6c8"
+      "sha256": "6fc2e52cca316acd79b131d61640059e8dac1bb154dc3abc95eaecba6196dbce"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -81,6 +89,10 @@
     {
       "path": "directives/quarterly_refresh.md",
       "sha256": "380e7b287e41802a7cbba091280ea33d8847b0fa2ce953e3853c2870e68c9581"
+    },
+    {
+      "path": "directives/report_comments_and_chat.md",
+      "sha256": "055fe782588e23c9455dfaa4eaadd74a12de6bd44b90f5247becd3d2138c95d1"
     },
     {
       "path": "execution/apply_issuer_fact_manifest.py",
@@ -116,7 +128,7 @@
     },
     {
       "path": "execution/comments_server.py",
-      "sha256": "c8a78b4a566f4b34d9ae8e16b1c2bcc37929ef557ebf0789ae70f6bd3607cfab"
+      "sha256": "fb9a210257d65697c57960cece6f4045a821e9abfa994e55a9ecb27c9d8af471"
     },
     {
       "path": "execution/comments_server_research_routes.py",
@@ -199,8 +211,16 @@
       "sha256": "2b5535e14f5abd616a6a384753d5f2d5ad915c640fbb999747b1ab66304181d5"
     },
     {
+      "path": "execution/run_calibration_scorecard.py",
+      "sha256": "fa60248615d2c6946bc07d78f6ea46ccbd0bcea14fbcaf9cf1387790f17112bb"
+    },
+    {
       "path": "execution/run_thesis_evaluator.py",
       "sha256": "e147c93448504c97fb843adce34dc73e283af18aa7cd16ab5aeb77c04cce0557"
+    },
+    {
+      "path": "execution/run_weekly_model_eval.py",
+      "sha256": "f7eab292699fae268a2126c5f71de20943a7c8e4eed7be7ca30760ae2a1784ed"
     },
     {
       "path": "execution/scan_ir_transcripts.py",
@@ -224,7 +244,7 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "0de8ae0057efb79ae645975c047c971343f9f873280173d4b1378263929b2f99"
+      "sha256": "4117e94086d586ae036f2697939a390b5312139c7075eddac6f2b0642ba05087"
     },
     {
       "path": "scripts/check_investing_skill.py",
@@ -236,7 +256,11 @@
     },
     {
       "path": "src/advisor/skills/next-dollar-allocation/references/interfaces.md",
-      "sha256": "4044ed779dd16a7eef273a914d1cfa87f3dd5031c99a7d1886df8b44520b9bd5"
+      "sha256": "857d059b3961104c6252fed5abc86f750fc94bf7def573f3014ba1396f5215d4"
+    },
+    {
+      "path": "src/advisor/store.py",
+      "sha256": "1ca851ef6b9b12918669e59d159632b23ec6f30af48497c78e1f38df19bc7bd6"
     },
     {
       "path": "src/allocation/book_risk.py",
@@ -247,12 +271,20 @@
       "sha256": "a5752220df9bb7c7b0d455a49c070bae35660782071c893d35deb81e4c149f83"
     },
     {
+      "path": "src/calibration_coach.py",
+      "sha256": "9c2e2f226c092856c8eb8e4378dc3d137a1dc865f449df12f452ca78fca4194d"
+    },
+    {
       "path": "src/compute/kpi_resolver.py",
       "sha256": "68110a2766ac9a7f8da1d4270f3dad338ba5f1e33f4ebea0b602e3c4e75f915e"
     },
     {
       "path": "src/compute/thesis_evaluator.py",
-      "sha256": "362209870e5e444899dc5524d1e33ac91c429119a81fac5d4fb991adbe605db0"
+      "sha256": "0a4f2602f5bc3a9a6ad322eb1ed05713600010e16b0ab305a5945d9a3bc6745d"
+    },
+    {
+      "path": "src/dcf/grade_evidence.py",
+      "sha256": "f212cc8ca1a98586ba9cd46028087419877eb606b26f20aa1f333eb3e527ee88"
     },
     {
       "path": "src/dcf/readiness.py",
@@ -267,12 +299,36 @@
       "sha256": "50d9d6884e72a1a76fd6a543e83a0a1274e7ee45649adf2aef10f361c0712402"
     },
     {
+      "path": "src/evals/coverage.py",
+      "sha256": "970d3b1369d7a5dc6eec3e748ffa52f2cd5379c4bb42fb952d4ef7689690b467"
+    },
+    {
+      "path": "src/integrations/portfolio_allocation.py",
+      "sha256": "34587f1f0439be5688de41320e1e4b5667b543d6c48605742264d471af91ca83"
+    },
+    {
+      "path": "src/integrations/portfolio_tracker_client.py",
+      "sha256": "5ea9c0fdc38c9634c334eb6fd8b06aaf8f7aa0d219d5654c13bffbafa1fc1a62"
+    },
+    {
+      "path": "src/integrations/portfolio_tracker_v1.py",
+      "sha256": "87716d99214585550b73653a6ef4359a20423a63b8f7a3c5a67d5c72bbe43635"
+    },
+    {
+      "path": "src/llm/calibration.py",
+      "sha256": "68c4bf0ed73282d77d247f166a4a335adab0b26a0863bc87232228e0867828ef"
+    },
+    {
       "path": "src/pipeline/kpi_report_reference_resolver.py",
       "sha256": "b55ce31efe9863201ea456e3f4e5b00014075901a5ca54a42b5b884e11816727"
     },
     {
       "path": "src/pipeline/work_os_evaluation.py",
       "sha256": "47bc26f1cd7c0e1e0848ebade3583b04b5ee09a9db2bddae0ae37422ca5b7b70"
+    },
+    {
+      "path": "src/portfolio_risk_snapshot_store.py",
+      "sha256": "24162dd772425bd2719a6f307da3f4d025716d28d379f181b7789cb5e6680bd7"
     },
     {
       "path": "src/provenance/fact_read_model.py",
@@ -301,6 +357,18 @@
     {
       "path": "src/research/investment_decision_card.py",
       "sha256": "d565b0e100e91571a1bc24908d7ce1c6a2e072175fb402f2776c23725f85f1e9"
+    },
+    {
+      "path": "src/research/proposal_approval.py",
+      "sha256": "5a5fb8de7826c485df63ecb419c581953ebad2acf687a05f3e77faca3b01c766"
+    },
+    {
+      "path": "src/research/thesis_artifact.py",
+      "sha256": "b827ed1fd24569fbde97dc464796c0c7859469843d460935c4b0efe24a567093"
+    },
+    {
+      "path": "src/sqlite_runtime.py",
+      "sha256": "98c31ae91fcbccdb698f4d8eab213c305a1b8b372b9aa7d24e8b598a83677687"
     }
   ]
 }

@@ -2,7 +2,16 @@
 (LLM Quality Program P2 — directives/llm_quality_program_2026_07.md).
 
 The question this answers: *before* spending on a live A/B, would this
-candidate template have beaten the incumbent on cases we have already seen?
+candidate template have beaten the incumbent on HELD-OUT cases it was not
+written from?
+
+Held-out discipline: every case falls in a fixed train or test split
+(``llm.prompt_reflect.case_split``, grouped by ticker). The rewriter only sees
+train failures; the verdict comes from the test split. ``--split both`` (the
+default) grades both sides and reports ``OVERFIT_SUSPECTED`` when the candidate
+wins train but not test. The JSON output carries the candidate's TRAIN losses
+as ``FailureEvidence`` rows for the next rewrite round; test losses are never
+emitted.
 
 How it differs from ``run_prompt_ab.py`` (which stays the live experiment
 driver): the backtest replays a FIXED historical case set — real captured
@@ -40,17 +49,23 @@ import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from evals.sampler import load_frame
+from llm.backend_judge import CLAUDE, GEMINI, judge_pair
+from llm.cli import DEFAULT_MODEL, LLM_MODELS
+from llm.model_eval import run_model
+from llm.model_ladder import JUDGE_POOL
+from llm.prompt_reflect import (
+    Candidate,
+    FailureEvidence,
+    Split,
+    case_group_key,
+    case_split,
+)
+from llm.prompt_registry import REGISTRY, PromptTemplate
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from evals.sampler import load_frame  # noqa: E402
-from llm.backend_judge import CLAUDE, GEMINI, judge_pair  # noqa: E402
-from llm.cli import DEFAULT_MODEL, LLM_MODELS  # noqa: E402
-from llm.model_eval import run_model  # noqa: E402
-from llm.model_ladder import JUDGE_POOL  # noqa: E402
-from llm.prompt_reflect import Candidate  # noqa: E402
-from llm.prompt_registry import REGISTRY, PromptTemplate  # noqa: E402
-
 log = logging.getLogger("backtest_prompt_candidate")
 
 # Rough per-case cost guard so --dry-run can state a real number. Measured
@@ -84,6 +99,10 @@ class BacktestResult:
     baseline_mean_output_chars: float
     verdict: str
     reason: str
+    split: Split | None = None  # None = unsplit (every replayable case)
+    # The candidate's judged losses on TRAIN cases — evidence for the next
+    # rewrite. Always empty for test or unsplit runs.
+    train_losses: tuple[FailureEvidence, ...] = ()
 
     @property
     def win_rate(self) -> float:
@@ -137,27 +156,44 @@ def _extract_variables(rendered: str, template: PromptTemplate) -> dict[str, str
     return {k: (v or "") for k, v in m.groupdict().items()}
 
 
+@dataclass(frozen=True, slots=True)
+class HistoricalCase:
+    label: str
+    prompt_sha: str
+    ticker: str | None
+    variables: dict[str, str]
+    incumbent_response: str
+
+
 def load_historical_cases(
-    capture_dir: Path, purpose: str, template: PromptTemplate, *, limit: int
-) -> tuple[list[tuple[str, dict[str, str], str]], int]:
-    """[(label, variables, incumbent_response)], plus the count SKIPPED.
+    capture_dir: Path,
+    purpose: str,
+    template: PromptTemplate,
+    *,
+    limit: int,
+    split: Split | None = None,
+) -> tuple[list[HistoricalCase], int]:
+    """Replayable cases in ``split`` (None = all), plus the count SKIPPED.
 
     Skips are reported, never hidden: a low match rate means the template
     drifted from what production actually sent, which is a finding in itself.
+    Cases outside the requested split are not skips.
     """
     files = sorted(capture_dir.glob("capture_*.jsonl"))
     frame = load_frame(files, purpose)
-    cases: list[tuple[str, dict[str, str], str]] = []
+    cases: list[HistoricalCase] = []
     skipped = 0
     for sha, rec in frame.items():
         if len(cases) >= limit:
             break
+        if split is not None and case_split(purpose, case_group_key(rec.ticker, sha)) != split:
+            continue
         variables = _extract_variables(rec.prompt, template)
         if variables is None:
             skipped += 1
             continue
         label = f"{purpose}:{rec.ticker or '-'}:{sha[:8]}"
-        cases.append((label, variables, rec.response))
+        cases.append(HistoricalCase(label, sha, rec.ticker, variables, rec.response))
     return cases, skipped
 
 
@@ -172,6 +208,7 @@ def run_backtest(
     judges: list[str],
     timeout_seconds: int | None,
     dry_run: bool,
+    split: Split | None = None,
 ) -> BacktestResult | None:
     from llm.model_eval import CANDIDATE_ERROR_RATE_THRESHOLD, JUDGE_ERROR_RATE_THRESHOLD
 
@@ -193,13 +230,14 @@ def run_backtest(
         return None
 
     frozen_model = LLM_MODELS.get(purpose, DEFAULT_MODEL)
-    cases, skipped = load_historical_cases(capture_dir, purpose, baseline, limit=limit)
+    cases, skipped = load_historical_cases(capture_dir, purpose, baseline, limit=limit, split=split)
     if not cases:
         log.error(
-            "[%s] no replayable historical cases (%d captured renders did not match "
-            "the registered template) — harvest more, or the template has drifted "
-            "from what production sends",
+            "[%s] no replayable historical cases in split %s (%d captured renders "
+            "did not match the registered template) — harvest more, or the template "
+            "has drifted from what production sends",
             purpose,
+            split or "all",
             skipped,
         )
         return None
@@ -222,11 +260,12 @@ def run_backtest(
                     "template_id": baseline.template_id,
                     "baseline_version": baseline.version,
                     "candidate_version": candidate.version,
+                    "split": split,
                     "n_cases": len(cases),
                     "n_skipped": skipped,
                     "frozen_model": frozen_model,
                     "estimated_usd": round(est, 2),
-                    "sample_labels": [c[0] for c in cases[:5]],
+                    "sample_labels": [c.label for c in cases[:5]],
                 },
                 indent=2,
             )
@@ -239,14 +278,16 @@ def run_backtest(
     cand_chars: list[int] = []
     base_chars: list[int] = []
     agreements: list[bool] = []
+    train_losses: list[FailureEvidence] = []
 
-    for label, variables, incumbent_response in cases:
-        base_prompt = baseline.render(**variables)
-        cand_prompt = candidate.render(**variables)
+    for case in cases:
+        label = case.label
+        base_prompt = baseline.render(**case.variables)
+        cand_prompt = candidate.render(**case.variables)
 
         # Baseline: reuse the captured response when the incumbent model made
         # it (zero spend); else re-run under the frozen model.
-        baseline_out = incumbent_response
+        baseline_out = case.incumbent_response
         if not baseline_out:
             base = run_model(
                 base_prompt,
@@ -276,6 +317,7 @@ def run_backtest(
         base_chars.append(len(baseline_out))
 
         winners: list[str] = []
+        loss_rationales: list[str] = []
         for jb in judges:
             jp = judge_pair(
                 purpose=purpose,
@@ -297,10 +339,19 @@ def run_backtest(
                 tally[jb][0] += 1
             elif jp.winner == CLAUDE:
                 tally[jb][1] += 1
+                loss_rationales.extend(r for r in jp.rationales if r.strip())
             else:
                 tally[jb][2] += 1
         if len(winners) >= 2:
             agreements.append(len(set(winners)) == 1)
+        if split == "train" and loss_rationales:
+            train_losses.append(
+                FailureEvidence(
+                    prompt_sha=case.prompt_sha,
+                    ticker=case.ticker,
+                    text=" / ".join(loss_rationales),
+                )
+            )
 
     n_attempted = len(cases)
     agreement = (sum(agreements) / len(agreements)) if agreements else 0.0
@@ -355,7 +406,28 @@ def run_backtest(
         baseline_mean_output_chars=(sum(base_chars) / len(base_chars)) if base_chars else 0.0,
         verdict=verdict,
         reason=reason,
+        split=split,
+        train_losses=tuple(train_losses),
     )
+
+
+OVERFIT_SUSPECTED = "OVERFIT_SUSPECTED"
+
+
+def holdout_verdict(train: BacktestResult, test: BacktestResult) -> tuple[str, str]:
+    """The test split decides. A train win that does not carry to test is the
+    overfitting signature: the rewrite fitted the evidence, not the task."""
+    if test.verdict == "CANDIDATE_BETTER":
+        return test.verdict, f"held-out: {test.reason}"
+    if train.verdict == "CANDIDATE_BETTER" and test.verdict in {
+        "INCONCLUSIVE",
+        "BASELINE_BETTER",
+    }:
+        return OVERFIT_SUSPECTED, (
+            f"wins train ({train.win_rate:.0%}) but not held-out test "
+            f"({test.win_rate:.0%}) — revert this rewrite"
+        )
+    return test.verdict, f"held-out: {test.reason}"
 
 
 def main() -> int:
@@ -367,7 +439,14 @@ def main() -> int:
     parser.add_argument(
         "--candidate-file", type=Path, help="file holding the candidate template body"
     )
-    parser.add_argument("--limit", type=int, default=8)
+    parser.add_argument("--limit", type=int, default=8, help="cases per split")
+    parser.add_argument(
+        "--split",
+        choices=("both", "test", "train", "all"),
+        default="both",
+        help="both = grade train and held-out test and check for overfitting "
+        "(default); all = ignore the split (not valid evidence for a rewrite)",
+    )
     parser.add_argument("--judges", default=f"{CLAUDE},{GEMINI}")
     parser.add_argument("--timeout", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
@@ -385,8 +464,10 @@ def main() -> int:
 
     # Importing the modules that REGISTER templates.
     # Import for SIDE EFFECT: these modules register their templates.
-    import llm_client  # noqa: F401  # pyright: ignore[reportUnusedImport]
-    from dcf import scenario_prior  # noqa: F401  # pyright: ignore[reportUnusedImport]
+    import llm_client
+    from dcf import scenario_prior
+
+    log.debug("template modules loaded: %s", [m.__name__ for m in (llm_client, scenario_prior)])
 
     baseline = REGISTRY.get(args.template_id)
     if baseline is None:
@@ -407,21 +488,47 @@ def main() -> int:
         log.error("candidate is not a valid template for this call site: %s", exc)
         return 1
 
-    result = run_backtest(
-        db_path=db_path,
-        capture_dir=capture_dir,
-        purpose=args.purpose,
-        baseline=baseline,
-        candidate=candidate,
-        limit=args.limit,
-        judges=[j.strip() for j in str(args.judges).split(",") if j.strip()],
-        timeout_seconds=args.timeout,
-        dry_run=args.dry_run,
+    def run(split: Split | None) -> BacktestResult | None:
+        return run_backtest(
+            db_path=db_path,
+            capture_dir=capture_dir,
+            purpose=args.purpose,
+            baseline=baseline,
+            candidate=candidate,
+            limit=args.limit,
+            judges=[j.strip() for j in str(args.judges).split(",") if j.strip()],
+            timeout_seconds=args.timeout,
+            dry_run=args.dry_run,
+            split=split,
+        )
+
+    def payload(result: BacktestResult) -> dict[str, object]:
+        out: dict[str, object] = asdict(result)
+        out["win_rate"] = round(result.win_rate, 4)
+        return out
+
+    if args.split != "both":
+        result = run(None if args.split == "all" else args.split)
+        if result is None:
+            return 0 if args.dry_run else 1
+        print(json.dumps(payload(result), indent=2))
+        log.info("[%s] %s — %s", args.purpose, result.verdict, result.reason)
+        return 0
+
+    train = run("train")
+    test = run("test")
+    if args.dry_run:
+        return 0
+    if train is None or test is None:
+        return 1
+    verdict, reason = holdout_verdict(train, test)
+    print(
+        json.dumps(
+            {"verdict": verdict, "reason": reason, "train": payload(train), "test": payload(test)},
+            indent=2,
+        )
     )
-    if result is None:
-        return 0 if args.dry_run else 1
-    print(json.dumps(asdict(result) | {"win_rate": round(result.win_rate, 4)}, indent=2))
-    log.info("[%s] %s — %s", args.purpose, result.verdict, result.reason)
+    log.info("[%s] %s — %s", args.purpose, verdict, reason)
     return 0
 
 
