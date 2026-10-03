@@ -537,6 +537,8 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
     "/chat/<ticker>/apply": NO_CACHE_FAMILY,
     # ---- Broad pipeline / ops actions (fail-safe clear-all) ----
     "/actions/refresh": CLEAR_ALL,
+    "/actions/sec-accession/plan": CLEAR_ALL,
+    "/actions/sec-accession/<request_id>/apply": CLEAR_ALL,
     "/actions/maintenance": CLEAR_ALL,
     "/actions/rebuild-dcfs": CLEAR_ALL,
     "/actions/refresh-ir": (
