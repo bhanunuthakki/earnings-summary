@@ -202,6 +202,7 @@ from logging_config import (
     set_correlation_id,
 )
 from operations.attention_projection import build_attention_panel_view
+from operations.host_runtime import build_host_bundle
 from operations.kpi_semantic_review_export import (
     KPI_SEMANTIC_EXPORT_RELATIVE_ROOT,
     KpiSemanticReviewExportError,
@@ -1869,6 +1870,31 @@ def create_app(
             download_name="cio_export.xlsx",
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
+
+    @app.route("/api/operations/host-runtime", methods=["GET"])
+    def operations_host_runtime_api():
+        """Serve bounded cached host evidence without probing or recovery."""
+        configured_private_origin = private_mobile_origin(
+            config_path=secret_read_path("private_mobile_base_url", repo_root=repo_root)
+        )
+        if (
+            configured_private_origin is None
+            or urllib.parse.urlparse(configured_private_origin).scheme != "https"
+        ):
+            return _client_error(
+                "private review origin is not configured as HTTPS; refusing to emit an identity",
+                503,
+            )
+        bundle = build_host_bundle(
+            repo_root,
+            datetime.now(UTC),
+            configured_private_origin,
+            operations_review_code_identity,
+        )
+        response = app.json.response(bundle.model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["ETag"] = f'"{bundle.content_sha256}"'
+        return response
 
     @app.route("/api/operations/review-bundle", methods=["GET"])
     def operations_review_bundle_api():
