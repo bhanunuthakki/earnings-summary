@@ -17,6 +17,7 @@ from provenance.population_document_processing import (
     DocumentProcessingPopulationRequest,
     populate_document_processing,
 )
+from provenance.population_research_snapshots import assemble_research_snapshot_request
 from provenance.reporting_entity_registry import ReportingEntityRegistry, SourceObligationRevision
 from provenance.source_coverage import (
     CoverageAssessment,
@@ -39,13 +40,18 @@ from search.canonical_fact_projection import (
     ProjectionGenerationRequest,
     build_canonical_projection_generation,
 )
+from search.corpus_builder import (
+    CorpusBuildRequest,
+    build_grounded_search_corpus,
+    load_analysis_expected_document_inventory,
+)
 from tests.test_filing_xbrl_extraction_ledger import filing_xbrl_ledger_database
 from tests.test_heterogeneous_retrieval import NOW, _seed_resolved_periods, _two_period_output
 
 PERIOD = datetime(2024, 12, 31, tzinfo=UTC)
 
 
-def test_current_schema_scoped_processing_is_idempotent(
+def test_current_schema_scoped_processing_and_autoassembly(
     tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     blob = tmp_path / "data/evidence/blobs/filing.xhtml"
@@ -289,6 +295,28 @@ def test_current_schema_scoped_processing_is_idempotent(
             binding_id
             == "expected-obligation-binding:" + hashlib.sha256(b"expected\0periodic:v1").hexdigest()
         )
+        inventory, snapshots = load_analysis_expected_document_inventory(
+            conn, scope, cutoff_at=NOW, observed_through=NOW
+        )
+        build_grounded_search_corpus(
+            conn,
+            CorpusBuildRequest(
+                corpus_key=scope.scope_id,
+                revision=1,
+                selector_code_version="synthetic@1",
+                recorded_at=NOW,
+                knowledge_cutoff=NOW,
+                expected_documents=inventory.expected_documents,
+                source_inventory_snapshot_ids=snapshots,
+                analysis_scope=scope,
+                apply=True,
+            ),
+        )
+        request = assemble_research_snapshot_request(
+            conn, "issuer-1", NOW, analysis_scope=scope, projection_mode="lexical_only"
+        )
+        assert request.research_universe.analysis_scope == scope
+        assert request.canonical_fact_resolution_snapshot_id == "resolution:checkpoint"
         replay = populate_document_processing(
             conn,
             DocumentProcessingPopulationRequest(
