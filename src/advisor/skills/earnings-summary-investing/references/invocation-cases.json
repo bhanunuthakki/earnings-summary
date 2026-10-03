@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "method": "Synthetic selection and analysis-plan probes; not host invocation measurements. Hide expected fields until selection is recorded.",
+  "cases": [
+    {
+      "id": "P1",
+      "prompt": "Does the current valuation still justify holding this position? Use the project's saved research.",
+      "expected_investing_skills": [
+        "earnings-summary-investing"
+      ],
+      "mode": "valuation"
+    },
+    {
+      "id": "P2",
+      "prompt": "Should I increase this position, reduce it, or leave it alone? Consider the rest of my book.",
+      "expected_investing_skills": [
+        "next-dollar-allocation",
+        "earnings-summary-investing"
+      ],
+      "mode": "position sizing"
+    },
+    {
+      "id": "P3",
+      "prompt": "What should I do with the next dollar, including taxes and available cash?",
+      "expected_investing_skills": [
+        "next-dollar-allocation"
+      ],
+      "mode": "allocation"
+    },
+    {
+      "id": "P4",
+      "prompt": "Explain what a price-to-earnings ratio means in one sentence; no company analysis.",
+      "expected_investing_skills": [],
+      "mode": "negative"
+    },
+    {
+      "id": "T1",
+      "prompt": "Here are my rough notes: customer growth is slowing, but pricing might offset it. I am unsure whether the moat holds. Revise the thesis using saved evidence.",
+      "expected_investing_skills": [
+        "earnings-summary-investing"
+      ],
+      "mode": "thesis revision"
+    },
+    {
+      "id": "T2",
+      "prompt": "Assess this opinion article against our thesis: competitors may be gaining share. The article provides no sources.",
+      "expected_investing_skills": [
+        "earnings-summary-investing"
+      ],
+      "mode": "article assessment"
+    },
+    {
+      "id": "T3",
+      "prompt": "Pressure-test the thesis. What evidence would prove it wrong?",
+      "expected_investing_skills": [
+        "earnings-summary-investing"
+      ],
+      "mode": "counter-case"
+    },
+    {
+      "id": "T4",
+      "prompt": "Fix the grammar in my diary entry. Do not evaluate the argument.",
+      "expected_investing_skills": [],
+      "mode": "negative"
+    },
+    {
+      "id": "R1",
+      "prompt": "Assess portfolio risk across all my accounts, including concentration and fund overlap.",
+      "expected_investing_skills": [
+        "earnings-summary-investing"
+      ],
+      "mode": "portfolio risk"
+    },
+    {
+      "id": "R2",
+      "prompt": "Evaluate a new company using this project's standards.",
+      "expected_investing_skills": [
+        "earnings-summary-investing"
+      ],
+      "mode": "company evaluation"
+    },
+    {
+      "id": "R3",
+      "prompt": "Prepare the latest fiscal readout and the next-quarter earnings preview.",
+      "expected_investing_skills": [
+        "earnings-summary-investing"
+      ],
+      "mode": "earnings"
+    },
+    {
+      "id": "R4",
+      "prompt": "Fix a Python CSV parser. There is no financial analysis in this request.",
+      "expected_investing_skills": [],
+      "mode": "negative"
+    },
+    {
+      "id": "R5",
+      "prompt": "Assess the risk of my stocks with covered calls across accounts. Does the smaller net position value mean the stock risk is reduced?",
+      "expected_investing_skills": [
+        "earnings-summary-investing"
+      ],
+      "mode": "portfolio risk with signed option positions"
+    }
+  ]
+}
