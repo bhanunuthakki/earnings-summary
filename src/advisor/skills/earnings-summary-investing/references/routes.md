@@ -49,7 +49,8 @@ route is not authority to run it on production.
 | Acquisition gaps / issuer releases, slides, filings | `execution/capture_issuer_document_inventory.py`; current source receipts | `execution/manage_issuer_document_sources.py` prepare → validate → publish; `execution/fetch_ir_documents.py`; `execution/intake_documents.py` |
 | SEC expected coverage and financial facts | Existing issuer/filing identity and coverage receipts | `execution/sync_sec_filing_inventory.py`; `execution/capture_expected_sec_documents.py`; `execution/ingest_sec_filing_xbrl.py`; `execution/fetch_sec_xbrl.py` |
 | Transcript gaps / provenance | `transcripts/`; `execution/audit_transcript_evidence.py` | `execution/backfill_transcripts.py`; `execution/scan_ir_transcripts.py`; `execution/ingest_transcripts.py`; do not collect audio/webcasts |
-| Reviewed financial fact population | `src/provenance/fact_read_model.py`; `src/compute/kpi_resolver.py`; `src/pipeline/kpi_report_reference_resolver.py` | `execution/produce_issuer_fact_manifest.py` creates inert reviewed input; `execution/apply_issuer_fact_manifest.py` applies through the typed pipeline |
+| Reviewed KPI and segment population | `src/compute/kpi_resolver.py`; `src/pipeline/kpi_report_reference_resolver.py` | `execution/produce_issuer_fact_manifest.py` creates inert reviewed input; `execution/apply_issuer_fact_manifest.py` admits KPI and segment facts only |
+| Sealed financial-statement facts | `src/provenance/fact_read_model.py`; exact analysis-scope and extraction receipts | `execution/populate_source_fact_plane.py` plans publication from governed extraction runs; inspect its scope and commitments before authorized `--apply` |
 | Research snapshot / completeness | `src/provenance/research_snapshot.py`; `src/provenance/population_research_snapshots.py` | `execution/populate_research_snapshots.py --db <explicit>`; inspect receipt before authorized `--apply` |
 
 ## Route limits and traps
