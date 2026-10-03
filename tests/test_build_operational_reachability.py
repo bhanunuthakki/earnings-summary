@@ -190,6 +190,20 @@ def test_actual_head_is_supported() -> None:
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
     assert len(graph.unknown_edges) == 124
+    # The held-handle regression adds one bounded test-owned Python child. Its
+    # computed interpreter/exit-code argv remains an explicit test-only unknown.
+    assert (
+        GraphEdge(
+            source="tests/test_job_runtime_process_tree.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=191,
+            unknown=True,
+        )
+        in graph.unknown_edges
+    )
     # Exact-period CLI and skill-maintenance checks add two test-owned calls.
     # Keep their computed entrypoints explicit without admitting production gaps.
     assert (

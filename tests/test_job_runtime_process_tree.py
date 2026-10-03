@@ -1,24 +1,32 @@
-# pyright: reportPrivateUsage=false
 """Windows process-tree ownership regressions for the shared job runtime."""
 
 from __future__ import annotations
 
+import ctypes
+import json
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import cast
+from types import SimpleNamespace
+from typing import Protocol, cast
 
 import pytest
 
 import runtime.job_runtime as job_runtime
 from runtime.job_runtime import (
-    _process_is_in_job,
-    _run_managed_child,
-    _WindowsKillOnCloseJob,
+    JobLock,
     main,
 )
+
+_process_is_in_job = getattr(job_runtime, "_process_is_in_job")
+_run_managed_child = getattr(job_runtime, "_run_managed_child")
+_WindowsKillOnCloseJob = getattr(job_runtime, "_WindowsKillOnCloseJob")
+
+
+class ProcessTreeJob(Protocol):
+    def close(self) -> None: ...
 
 
 class _SuspendedProcess:
@@ -44,6 +52,185 @@ class _RecordingJob:
 
     def close(self) -> None:
         self.events.append("close")
+
+
+@pytest.mark.parametrize("error_code", [0, 5, 6])
+def test_windows_job_close_failure_retains_handle_and_native_error(
+    monkeypatch: pytest.MonkeyPatch, error_code: int
+) -> None:
+    handle = 0x123456789ABC
+    events: list[tuple[str, int]] = []
+
+    def close_handle(value: int) -> int:
+        events.append(("close", value))
+        return 0
+
+    def last_error() -> int:
+        events.append(("error", error_code))
+        return error_code
+
+    def win_error(code: int, _description: str) -> OSError:
+        error = OSError(code, "controlled native close failure")
+        setattr(error, "winerror", code)
+        return error
+
+    monkeypatch.setattr(job_runtime.sys, "platform", "win32")
+    monkeypatch.setattr(
+        job_runtime,
+        "_load_process_query_kernel32",
+        lambda: SimpleNamespace(CloseHandle=close_handle),
+    )
+    monkeypatch.setattr(ctypes, "get_last_error", last_error, raising=False)
+    monkeypatch.setattr(ctypes, "WinError", win_error, raising=False)
+    job = _WindowsKillOnCloseJob(handle)
+
+    with pytest.raises(OSError) as raised:
+        job.close()
+
+    assert getattr(job, "_handle") == handle
+    assert getattr(raised.value, "winerror") == error_code
+    assert events == [("close", handle), ("error", error_code)]
+
+
+def test_windows_job_close_success_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[int] = []
+    monkeypatch.setattr(job_runtime.sys, "platform", "win32")
+
+    def close_handle(handle: int) -> int:
+        closed.append(handle)
+        return 1
+
+    monkeypatch.setattr(
+        job_runtime,
+        "_load_process_query_kernel32",
+        lambda: SimpleNamespace(CloseHandle=close_handle),
+    )
+    job = _WindowsKillOnCloseJob(12345)
+    job.close()
+    job.close()
+
+    assert closed == [12345]
+    assert getattr(job, "_handle") == 0
+
+
+def test_windows_job_close_loader_failure_retains_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(job_runtime.sys, "platform", "win32")
+
+    def unavailable() -> None:
+        raise OSError("controlled loader failure")
+
+    monkeypatch.setattr(job_runtime, "_load_process_query_kernel32", unavailable)
+    job = _WindowsKillOnCloseJob(12345)
+    with pytest.raises(OSError, match="controlled loader failure"):
+        job.close()
+    assert getattr(job, "_handle") == 12345
+
+
+@pytest.mark.parametrize("startup_failure", [True, False])
+def test_owned_root_cleanup_runs_when_job_close_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, startup_failure: bool
+) -> None:
+    events: list[str] = []
+
+    class Process(_SuspendedProcess):
+        def kill(self) -> None:
+            events.append("kill")
+            super().kill()
+
+        def wait(self, timeout: float | None = None) -> int:
+            events.append("wait")
+            return super().wait(timeout)
+
+    class Job:
+        def close(self) -> None:
+            events.append("close")
+            raise OSError("controlled job close failure")
+
+    process = Process()
+
+    def resume(_pid: int) -> None:
+        if startup_failure:
+            raise ValueError("controlled resume failure")
+
+    def popen(*_args: object, **_kwargs: object) -> Process:
+        return process
+
+    def create_job(_process: object) -> Job:
+        return Job()
+
+    def owner_alive(_owner: object) -> bool:
+        return False
+
+    monkeypatch.setattr(job_runtime, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
+    monkeypatch.setattr(job_runtime.subprocess, "Popen", popen)
+    monkeypatch.setattr(job_runtime, "_create_process_tree_job", create_job)
+    monkeypatch.setattr(job_runtime, "_resume_process_threads", resume)
+    monkeypatch.setattr(job_runtime, "_process_identity_is_alive", owner_alive)
+
+    with pytest.raises(OSError, match="controlled job close failure") as raised:
+        _run_managed_child(
+            ["python", "worker.py"], cwd=tmp_path, env={}, scheduler_owner=(1234, "win:start")
+        )
+
+    assert events[:3] == ["close", "kill", "wait"]
+    if startup_failure:
+        assert isinstance(raised.value.__context__, ValueError)
+    else:
+        assert events == ["close", "kill", "wait", "close"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows held process handle integration")
+@pytest.mark.parametrize("exit_code", [0, 259])
+def test_windows_exited_process_with_held_handle_is_dead_and_lock_is_recoverable(
+    tmp_path: Path, exit_code: int
+) -> None:
+    """Keep both Popen and a probe handle open after exit, including STILL_ACTIVE."""
+    kernel32 = getattr(job_runtime, "_load_process_query_kernel32")()
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-I",
+            "-B",
+            "-c",
+            "import sys; sys.stdin.buffer.read(1); sys.exit(int(sys.argv[1]))",
+            str(exit_code),
+        ],
+        stdin=subprocess.PIPE,
+    )
+    handle: int | None = None
+    try:
+        handle = kernel32.OpenProcess(0x100000, False, process.pid)
+        assert handle
+        identity = getattr(job_runtime, "_process_start_identity")(process.pid)
+        assert identity is not None
+        assert getattr(job_runtime, "_pid_is_alive")(process.pid) is True
+        assert process.stdin is not None
+        process.stdin.write(b"x")
+        process.stdin.close()
+        assert process.wait(timeout=5) == exit_code
+        assert kernel32.WaitForSingleObject(handle, 0) == 0
+        assert getattr(job_runtime, "_pid_is_alive")(process.pid) is False
+        assert getattr(job_runtime, "_process_identity_is_alive")((process.pid, identity)) is False
+
+        lock_path = getattr(job_runtime, "_write_set_lock_path")(tmp_path, "unit-held-handle")
+        lock_path.parent.mkdir(parents=True)
+        lock_path.write_text(
+            json.dumps({"pid": process.pid, "token": "exited-owner", "process_start": identity}),
+            encoding="utf-8",
+        )
+        with JobLock(tmp_path, "successor", ["unit-held-handle"], wait_s=0):
+            assert json.loads(lock_path.read_text(encoding="utf-8"))["token"] != "exited-owner"
+        assert not lock_path.exists()
+    finally:
+        if process.stdin is not None:
+            process.stdin.close()
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        if handle:
+            kernel32.CloseHandle(handle)
 
 
 def test_windows_child_is_assigned_while_suspended_before_resume(
@@ -79,7 +266,7 @@ def test_windows_child_is_assigned_while_suspended_before_resume(
         )
         == 0
     )
-    assert observed_flags == [job_runtime._CREATE_SUSPENDED]
+    assert observed_flags == [getattr(job_runtime, "_CREATE_SUSPENDED")]
     assert events == ["assign", "resume", "close"]
 
 
@@ -96,11 +283,11 @@ def test_windows_kill_on_close_job_terminates_process_and_descendant(tmp_path: P
         "out.write_text(str(child.pid), encoding='ascii'); time.sleep(60)"
     )
     parent = subprocess.Popen([sys.executable, "-c", code, str(gate), str(child_pid_file)])
-    job: _WindowsKillOnCloseJob | None = None
+    job: ProcessTreeJob | None = None
     try:
         inherited_parent_job = _process_is_in_job(parent.pid)
         try:
-            job = _WindowsKillOnCloseJob.create_for_process(parent.pid)
+            job = cast("ProcessTreeJob", _WindowsKillOnCloseJob.create_for_process(parent.pid))
         except OSError as exc:
             if inherited_parent_job and getattr(exc, "winerror", None) == 5:
                 pytest.skip("host parent job does not permit nested child jobs")
@@ -116,9 +303,9 @@ def test_windows_kill_on_close_job_terminates_process_and_descendant(tmp_path: P
         job = None
         parent.wait(timeout=5)
         deadline = time.monotonic() + 5
-        while job_runtime._pid_is_alive(child_pid) and time.monotonic() < deadline:
+        while getattr(job_runtime, "_pid_is_alive")(child_pid) and time.monotonic() < deadline:
             time.sleep(0.01)
-        assert job_runtime._pid_is_alive(child_pid) is False
+        assert getattr(job_runtime, "_pid_is_alive")(child_pid) is False
     finally:
         if job is not None:
             job.close()
@@ -136,7 +323,7 @@ def test_scheduler_wrapper_tracks_its_direct_cmd_parent(
         return f"start:{pid}"
 
     def fake_run_job(**_kwargs: object) -> int:
-        observed.append(job_runtime._SCHEDULER_OWNER)
+        observed.append(getattr(job_runtime, "_SCHEDULER_OWNER"))
         return 0
 
     monkeypatch.setattr(job_runtime, "_process_start_identity", start_identity)
@@ -175,7 +362,7 @@ def test_managed_child_is_suspended_assigned_resumed_and_kills_descendant(
     )
     owner = (
         os.getpid(),
-        job_runtime._process_start_identity(os.getpid()),
+        getattr(job_runtime, "_process_start_identity")(os.getpid()),
     )
     try:
         result = _run_managed_child(
@@ -192,6 +379,6 @@ def test_managed_child_is_suspended_assigned_resumed_and_kills_descendant(
     assert child_pid_file.exists()
     child_pid = int(child_pid_file.read_text(encoding="ascii"))
     deadline = time.monotonic() + 5
-    while job_runtime._pid_is_alive(child_pid) and time.monotonic() < deadline:
+    while getattr(job_runtime, "_pid_is_alive")(child_pid) and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert job_runtime._pid_is_alive(child_pid) is False
+    assert getattr(job_runtime, "_pid_is_alive")(child_pid) is False
