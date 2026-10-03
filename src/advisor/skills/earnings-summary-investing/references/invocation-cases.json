@@ -89,7 +89,7 @@
     },
     {
       "id": "R4",
-      "prompt": "Fix a Python CSV parser. There is no financial analysis in this request.",
+      "prompt": "Fix CSV parsing code written in Python. There is no financial analysis in this request.",
       "expected_investing_skills": [],
       "mode": "negative"
     },
