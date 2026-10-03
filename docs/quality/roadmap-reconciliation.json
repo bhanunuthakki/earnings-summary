@@ -5,12 +5,12 @@
     {
       "name": "production module count",
       "provisional_expected": 1291,
-      "observed": 1342,
+      "observed": 1396,
       "verdict": "corrected",
       "scored_eligible": true,
       "evidence": {
         "path": "architecture.raw",
-        "sha256": "735ec55a3f334a2c800d0286738e42c571f5c67d550dcddf8d5619262cabc8d4",
+        "sha256": "cb061dcd7610d703a215574acc3f7b77a667d823292dfb546ab5561b54071b4c",
         "locator": "$.metrics"
       },
       "provisional_evidence": {
@@ -23,12 +23,12 @@
     {
       "name": "production noncomment LOC",
       "provisional_expected": 554615,
-      "observed": 500200,
+      "observed": 520394,
       "verdict": "corrected",
       "scored_eligible": true,
       "evidence": {
         "path": "architecture.raw",
-        "sha256": "735ec55a3f334a2c800d0286738e42c571f5c67d550dcddf8d5619262cabc8d4",
+        "sha256": "cb061dcd7610d703a215574acc3f7b77a667d823292dfb546ab5561b54071b4c",
         "locator": "$.metrics"
       },
       "provisional_evidence": {
@@ -41,12 +41,12 @@
     {
       "name": "scc count",
       "provisional_expected": 16,
-      "observed": 17,
+      "observed": 19,
       "verdict": "corrected",
       "scored_eligible": true,
       "evidence": {
         "path": "architecture.raw",
-        "sha256": "735ec55a3f334a2c800d0286738e42c571f5c67d550dcddf8d5619262cabc8d4",
+        "sha256": "cb061dcd7610d703a215574acc3f7b77a667d823292dfb546ab5561b54071b4c",
         "locator": "$.metrics"
       },
       "provisional_evidence": {
@@ -64,7 +64,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "architecture.raw",
-        "sha256": "735ec55a3f334a2c800d0286738e42c571f5c67d550dcddf8d5619262cabc8d4",
+        "sha256": "cb061dcd7610d703a215574acc3f7b77a667d823292dfb546ab5561b54071b4c",
         "locator": "$.metrics"
       },
       "provisional_evidence": {
@@ -77,12 +77,12 @@
     {
       "name": "exact duplicate groups",
       "provisional_expected": 140,
-      "observed": 8,
+      "observed": 6,
       "verdict": "corrected",
       "scored_eligible": true,
       "evidence": {
         "path": "duplicates.raw",
-        "sha256": "5b0d7fed8b36cc5fa78be2512d24dde94563f4b6e6514ddc31774f22b18533f8",
+        "sha256": "30fb3470445d104ec0ca16df6ac64ab205ede124b3e0d6c8aad64e4de7466d44",
         "locator": "$.exact_totals"
       },
       "provisional_evidence": {
@@ -95,12 +95,12 @@
     {
       "name": "exact duplicate functions",
       "provisional_expected": 397,
-      "observed": 19,
+      "observed": 13,
       "verdict": "corrected",
       "scored_eligible": true,
       "evidence": {
         "path": "duplicates.raw",
-        "sha256": "5b0d7fed8b36cc5fa78be2512d24dde94563f4b6e6514ddc31774f22b18533f8",
+        "sha256": "30fb3470445d104ec0ca16df6ac64ab205ede124b3e0d6c8aad64e4de7466d44",
         "locator": "$.exact_totals"
       },
       "provisional_evidence": {
@@ -202,7 +202,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "reachability.raw",
-        "sha256": "be6f5e01a3e47efd6bc5bbff1c5f44e66d79e4da43bd42c8ce12b7b61919810c",
+        "sha256": "876a3b331acfe00a319dc14cc5a493aab32ede46d254f56aeb51c65f9b707869",
         "locator": "$.edges"
       },
       "provisional_evidence": {
@@ -220,7 +220,7 @@
       "scored_eligible": true,
       "evidence": {
         "path": "architecture.raw",
-        "sha256": "735ec55a3f334a2c800d0286738e42c571f5c67d550dcddf8d5619262cabc8d4",
+        "sha256": "cb061dcd7610d703a215574acc3f7b77a667d823292dfb546ab5561b54071b4c",
         "locator": "$.metrics"
       },
       "provisional_evidence": {
@@ -261,9 +261,9 @@
   ],
   "scored_claims": 8,
   "rejected_claims": 8,
-  "subject_commit": "beb90404738e4abd1014f93ad2d87aed1d06160b",
+  "subject_commit": "8bca0208fa3bd69cf1844aa06ba3be0fdae4ca83",
   "worktree_dirty": false,
-  "source_hash": "a78981cbfb7a38729ae502af2e0d41bb1ba634915d8716cd6227f5346b7d7aa8",
+  "source_hash": "9c2138e4889715d0418fcadb0b16d01706e6a399309ade6948c7d6471d43cfae",
   "roadmap_source": {
     "path": "roadmap.context.md",
     "sha256": "b889434fcfb5e6c2a7faee8accd79da782a3379c7bebe07d89934c7bbcbbf5fd",

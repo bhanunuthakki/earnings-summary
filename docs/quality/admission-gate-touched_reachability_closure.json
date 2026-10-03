@@ -3,13 +3,13 @@
   "kind": "hard_gate",
   "key": "touched_reachability_closure",
   "state": "fail",
-  "subject_commit": "beb90404738e4abd1014f93ad2d87aed1d06160b",
+  "subject_commit": "8bca0208fa3bd69cf1844aa06ba3be0fdae4ca83",
   "generator_path": "src/quality/admission_policy.py",
-  "generator_sha256": "4451bc83023c7aa6c56f0f136b8bbdd8c2ac6cf47e44587c156a899334a7bcae",
+  "generator_sha256": "b2c98b954b710f06f3d3bbc9d278c450c7aa2734032c834ea128fb9e13d03cc9",
   "sources": [
     {
       "path": "docs/quality/reachability-check.json",
-      "sha256": "be6f5e01a3e47efd6bc5bbff1c5f44e66d79e4da43bd42c8ce12b7b61919810c",
+      "sha256": "876a3b331acfe00a319dc14cc5a493aab32ede46d254f56aeb51c65f9b707869",
       "schema_version": "operational-reachability-raw/v1"
     }
   ]
