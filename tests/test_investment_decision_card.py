@@ -6,26 +6,41 @@ values (the deterministic-input layers they front are covered by their own
 test modules — tests/test_allocation_eligibility.py etc.) so these tests
 exercise only the card-generation seam: the LLM call, schema + grounding
 validation, the corrective retry, the deterministic post-pass overwrite, the
-deterministic fallback, and persistence. ``call_llm_structured`` is
+deterministic fallback, and persistence. ``call_llm_structured_with_raw`` is
 monkeypatched at the module seam per the repo's never-spend convention — no
 real LLM call anywhere in this file.
 """
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+import llm.structured as structured
 import llm_artifact_store
 import research.investment_decision_card as ridc
 from allocation.eligibility import DecisionReadyAssessment
 from compute.thesis_evaluator import HoldingsSpec
 from identity import DEFAULT_USER_ID
+from llm.cli import LLMBudgetExceeded
+from llm.structured import StructuredCallResult
 
 TICKER = "ACME"
+
+
+@pytest.fixture(autouse=True)
+def _block_unstubbed_card_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    def blocked(*args: object, **kwargs: object) -> str:
+        raise AssertionError("card tests must stub the governed provider seam")
+
+    monkeypatch.setattr(structured, "call_llm", blocked)
+
 
 _DDL = """
 CREATE TABLE tracked_companies (
@@ -208,7 +223,11 @@ def _patch_inputs(
 
 def _fake_call_factory(payload: dict[str, object]):
     def fake_call(prompt: str, **kw: object) -> object:
-        return dict(payload)
+        return StructuredCallResult(
+            value=dict(payload),
+            raw_response=json.dumps(payload),
+            prompt=prompt,
+        )
 
     return fake_call
 
@@ -221,7 +240,7 @@ def _fake_call_factory(payload: dict[str, object]):
 def test_required_sections_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = _make_db(tmp_path)
     _patch_inputs(monkeypatch, spec=_spec())
-    monkeypatch.setattr(ridc, "call_llm_structured", _fake_call_factory(_llm_payload()))
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", _fake_call_factory(_llm_payload()))
 
     result = ridc.generate_card(db_path, tmp_path, TICKER)
 
@@ -249,7 +268,7 @@ def test_persisted_markdown_keeps_actionable_decision_card_evidence(
 ) -> None:
     db_path = _make_db(tmp_path)
     _patch_inputs(monkeypatch, spec=_spec())
-    monkeypatch.setattr(ridc, "call_llm_structured", _fake_call_factory(_llm_payload()))
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", _fake_call_factory(_llm_payload()))
 
     result = ridc.generate_card(db_path, tmp_path, TICKER)
 
@@ -280,9 +299,9 @@ def test_prompt_assigns_qualitative_profile_but_reserves_valuation_labels_for_co
 
     def fake_call(prompt: str, **kw: object) -> object:
         captured.append(prompt)
-        return _llm_payload()
+        return _fake_call_factory(_llm_payload())(prompt)
 
-    monkeypatch.setattr(ridc, "call_llm_structured", fake_call)
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", fake_call)
     result = ridc.generate_card(db_path, tmp_path, TICKER)
 
     assert result.selection_mode == "llm"
@@ -327,7 +346,7 @@ def test_company_security_portfolio_are_distinct(
             "correlated_exposure": "n/a",
         },
     )
-    monkeypatch.setattr(ridc, "call_llm_structured", _fake_call_factory(bad_payload))
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", _fake_call_factory(bad_payload))
 
     result = ridc.generate_card(db_path, tmp_path, TICKER)
 
@@ -361,6 +380,62 @@ def test_source_refs_must_resolve(tmp_path: Path) -> None:
     assert not ok_reasons
 
 
+@pytest.mark.parametrize(
+    ("reference", "allowed"),
+    [
+        ("", ""),
+        (" ", " "),
+        ("pri", "price"),
+        ("ACME dominates", "ACME dominates checkout via network-effect attach."),
+        ("network-effect", "ACME dominates checkout via network-effect attach."),
+    ],
+)
+def test_source_refs_reject_blank_and_partial_references(reference: str, allowed: str) -> None:
+    card = ridc.InvestmentDecisionCard.model_validate(
+        {
+            **_llm_payload(source_refs=[reference]),
+            "ticker": TICKER,
+            "as_of": "2026-07-01T00:00:00",
+            "input_sha": "sha",
+            "hypothesis_origin": "user_authored",
+            "evidence_readiness": {"decision_ready": False},
+        }
+    )
+    assert card.validate_grounding(allowed_refs={allowed})
+
+
+def test_partial_reference_retries_then_persists_labelled_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = _make_db(tmp_path)
+    _patch_inputs(monkeypatch, spec=_spec())
+    prompts: list[str] = []
+
+    def fake_call(prompt: str, **kwargs: object) -> object:
+        prompts.append(prompt)
+        return _fake_call_factory(_llm_payload(source_refs=["pri"]))(prompt)
+
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", fake_call)
+    result = ridc.generate_card(db_path, tmp_path, TICKER)
+    assert len(prompts) == 2
+    assert "source_refs cites 'pri'" in prompts[1]
+    assert result.selection_mode == "deterministic_fallback"
+    assert any("not present in the gathered inputs" in reason for reason in result.degraded_reasons)
+    assert result.card is not None and result.card.research_context is not None
+    context = result.card.research_context
+    assert len(context.exchanges) == 2
+    assert context.exchanges[0].prompt == prompts[0]
+    assert context.exchanges[1].prompt == prompts[1]
+    assert context.exchanges[0].validation_reasons
+    assert context.exchanges[1].validation_reasons
+    assert context.exchanges[0].raw_response == json.dumps(_llm_payload(source_refs=["pri"]))
+    assert context.selection_mode == "deterministic_fallback"
+    assert result.artifact_id is not None
+    assert result.card is not None
+    assert result.card.source_refs == []
+    assert ridc.read_card_record(result.artifact_id, db_path=db_path) == result.card
+
+
 # --------------------------------------------------------------------------- #
 # The hard gate: evidence_readiness is NEVER LLM-authored
 # --------------------------------------------------------------------------- #
@@ -371,7 +446,7 @@ def test_dcf_outlier_forces_not_decision_ready(
 ) -> None:
     db_path = _make_db(tmp_path, dcf_sanity_flag="unit_mismatch")
     _patch_inputs(monkeypatch, assessment=_assessment(eligible=True), spec=_spec())
-    monkeypatch.setattr(ridc, "call_llm_structured", _fake_call_factory(_llm_payload()))
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", _fake_call_factory(_llm_payload()))
 
     result = ridc.generate_card(db_path, tmp_path, TICKER)
 
@@ -399,7 +474,7 @@ def test_llm_claiming_decision_ready_is_overwritten_false(
             "stale_or_missing": [],
         }
     )
-    monkeypatch.setattr(ridc, "call_llm_structured", _fake_call_factory(malicious))
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", _fake_call_factory(malicious))
 
     result = ridc.generate_card(db_path, tmp_path, TICKER)
 
@@ -421,7 +496,7 @@ def test_blocked_evaluation_persists_explicit_blocker_without_llm_or_thesis(
     def _must_not_call(*args: object, **kwargs: object) -> object:
         raise AssertionError("blocked evaluations must not spend an LLM call")
 
-    monkeypatch.setattr(ridc, "call_llm_structured", _must_not_call)
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", _must_not_call)
     result = ridc.generate_card(db_path, tmp_path, TICKER)
 
     assert result.selection_mode == "deterministic_fallback"
@@ -431,6 +506,11 @@ def test_blocked_evaluation_persists_explicit_blocker_without_llm_or_thesis(
         "No directional hypothesis is on file"
     )
     assert "no thesis on file" in result.card.evidence_readiness.blockers
+    assert result.card.research_context is not None
+    assert result.card.research_context.exchanges == ()
+    assert result.card.research_context.selection_mode == "deterministic_fallback"
+    assert result.artifact_id is not None
+    assert ridc.read_card_record(result.artifact_id, db_path=db_path) == result.card
 
 
 # --------------------------------------------------------------------------- #
@@ -443,7 +523,7 @@ def test_generation_never_mutates_disposition_state(
 ) -> None:
     db_path = _make_db(tmp_path)
     _patch_inputs(monkeypatch, spec=_spec())
-    monkeypatch.setattr(ridc, "call_llm_structured", _fake_call_factory(_llm_payload()))
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", _fake_call_factory(_llm_payload()))
 
     ridc.generate_card(db_path, tmp_path, TICKER)
 
@@ -469,7 +549,7 @@ def test_unchanged_inputs_reuse_the_artifact(
 ) -> None:
     db_path = _make_db(tmp_path)
     _patch_inputs(monkeypatch, spec=_spec())
-    monkeypatch.setattr(ridc, "call_llm_structured", _fake_call_factory(_llm_payload()))
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", _fake_call_factory(_llm_payload()))
 
     first = ridc.generate_card(db_path, tmp_path, TICKER)
     second = ridc.generate_card(db_path, tmp_path, TICKER)
@@ -490,7 +570,7 @@ def test_renderer_engine_version_invalidates_the_artifact_cache(
 ) -> None:
     db_path = _make_db(tmp_path)
     _patch_inputs(monkeypatch, spec=_spec())
-    monkeypatch.setattr(ridc, "call_llm_structured", _fake_call_factory(_llm_payload()))
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", _fake_call_factory(_llm_payload()))
 
     first = ridc.generate_card(db_path, tmp_path, TICKER)
     monkeypatch.setattr(ridc, "ENGINE_VERSION", "v4-test")
@@ -509,7 +589,7 @@ def test_input_change_creates_a_new_artifact(
 ) -> None:
     db_path = _make_db(tmp_path)
     _patch_inputs(monkeypatch, assessment=_assessment(), spec=_spec())
-    monkeypatch.setattr(ridc, "call_llm_structured", _fake_call_factory(_llm_payload()))
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", _fake_call_factory(_llm_payload()))
     first = ridc.generate_card(db_path, tmp_path, TICKER)
 
     changed = _assessment(blocking=("a new blocker appeared",), input_sha="assessment-sha-2")
@@ -526,6 +606,336 @@ def test_input_change_creates_a_new_artifact(
     )
     assert current is not None
     assert current.id == second.artifact_id
+
+
+def _retention_db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    database = migrated_db(tmp_path / "card-context.db")
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "INSERT INTO tracked_companies (user_id,ticker,name,list_type) "
+            "VALUES (?,?,'Synthetic card issuer','evaluation')",
+            (DEFAULT_USER_ID, TICKER),
+        )
+        connection.execute(
+            "INSERT INTO dcf_runs (ticker,valuation_date,horizon_years,revenue_growths_json,"
+            "fcf_margin,wacc,terminal_growth,npv,npv_per_share,live_price,live_price_at) "
+            "VALUES (?,'2026-07-01',5,'[]',0.1,0.1,0.02,500,50,40,'2026-07-01')",
+            (TICKER,),
+        )
+    return database
+
+
+def test_card_original_context_reopens_offline_after_inputs_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
+) -> None:
+    database = _retention_db(tmp_path, migrated_db)
+    _patch_inputs(monkeypatch, spec=_spec())
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", _fake_call_factory(_llm_payload()))
+    bear_id, _ = llm_artifact_store.upsert(
+        llm_artifact_store.UpsertRequest(
+            ticker=TICKER,
+            purpose="bear_case",
+            content_md="Original bear evidence.",
+            cache_inputs=["original bear"],
+        ),
+        db_path=database,
+    )
+    first = ridc.generate_card(database, tmp_path, TICKER)
+    assert first.artifact_id is not None
+    first_artifact = llm_artifact_store.read_artifact(first.artifact_id, db_path=database)
+    assert first_artifact is not None
+    assert first_artifact.parent_artifact_ids == [bear_id]
+    assert first_artifact.llm_call_id is None
+    assert first_artifact.model is None
+    original = ridc.read_card_record(first.artifact_id, db_path=database)
+    assert original is not None
+    assert original.research_context is not None
+    context = original.research_context
+    assert context.inputs.holdings_spec is not None
+    assert context.inputs.holdings_spec.thesis == _spec().thesis
+    assert context.inputs.bear_case is not None
+    assert context.inputs.bear_case.artifact_id == bear_id
+    assert context.inputs.bear_case.content_md == "Original bear evidence."
+    assert context.exchanges[0].prompt == context.base_prompt
+    assert json.loads(context.exchanges[0].raw_response or "null") == _llm_payload()
+    assert context.configuration.call_attribution == "unavailable_from_structured_api"
+    assert context.used_refs == tuple(original.source_refs)
+
+    _patch_inputs(monkeypatch, spec=_spec().model_copy(update={"thesis": "Changed owner thesis."}))
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE dcf_runs SET live_price=45,live_price_at='2026-07-02'")
+    second = ridc.generate_card(database, tmp_path, TICKER)
+    assert second.artifact_id is not None and second.artifact_id != first.artifact_id
+
+    def offline(*args: object, **kwargs: object) -> object:
+        raise AssertionError("saved records must not read current inputs or call a provider")
+
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", offline)
+    monkeypatch.setattr(ridc, "_gather_inputs", offline)
+    reopened = ridc.read_card_record(first.artifact_id, db_path=database)
+    assert reopened == original
+    changed = ridc.read_card_record(second.artifact_id, db_path=database)
+    assert changed is not None and changed.research_context is not None
+    assert changed.research_context.inputs.holdings_spec is not None
+    assert changed.research_context.inputs.holdings_spec.thesis == "Changed owner thesis."
+    assert original.security_setup.current_price == 40
+    assert changed.security_setup.current_price == 45
+
+
+@pytest.mark.parametrize("change", ["assessment", "price", "rule", "bear", "fit", "comp", "zone"])
+def test_actual_card_input_changes_invalidate_opaque_cache_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path], change: str
+) -> None:
+    database = _retention_db(tmp_path, migrated_db)
+    _patch_inputs(monkeypatch, spec=_spec())
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", _fake_call_factory(_llm_payload()))
+    first = ridc.generate_card(database, tmp_path, TICKER)
+    if change == "assessment":
+        changed_assessment = replace(_assessment(), warning_reasons=("New evidence warning",))
+        _patch_inputs(monkeypatch, spec=_spec(), assessment=changed_assessment)
+    elif change == "price":
+        with sqlite3.connect(database) as connection:
+            connection.execute("UPDATE dcf_runs SET live_price=41")
+    elif change == "rule":
+        from compute.thesis_evaluator import BreakRule
+
+        rule = BreakRule.model_validate(
+            {
+                "rule_id": "new-rule",
+                "kpi_name": "Revenue",
+                "comparator": "lt",
+                "threshold": 1,
+                "unit": "actual",
+                "consecutive_periods": 1,
+                "tier": "business_model",
+                "narrative": "New threshold",
+            }
+        )
+        _patch_inputs(monkeypatch, spec=_spec().model_copy(update={"break_rules": [rule]}))
+    elif change == "bear":
+        llm_artifact_store.upsert(
+            llm_artifact_store.UpsertRequest(
+                ticker=TICKER,
+                purpose="bear_case",
+                content_md="New bear context.",
+                cache_inputs=["new bear"],
+            ),
+            db_path=database,
+        )
+    elif change == "fit":
+        from allocation.candidate_fit import CandidateFit
+
+        fit = CandidateFit(ticker=TICKER, factors=[], fit=1, why="Changed fit text", partial=False)
+
+        def changed_fit(repo_root: Path) -> dict[str, CandidateFit]:
+            return {TICKER: fit}
+
+        monkeypatch.setattr(ridc, "read_materialized_candidate_fit", changed_fit)
+    elif change == "comp":
+        import report.sections.comp_set_context as comp_module
+
+        comp = comp_module.CompSetContextSection(
+            ticker=TICKER,
+            comparable_set_id="synthetic",
+            method_version=1,
+            metric_class="operating",
+            as_of_date=None,
+            stale=False,
+            n_members=3,
+            primary_metrics=(),
+            secondary_metrics=(),
+            industry="Changed industry",
+            sector=None,
+            industry_scope=None,
+            sector_scope=None,
+            benchmark_etf="SYNTH",
+            benchmark_sector_etf=None,
+            benchmark_note="",
+            members=(),
+        )
+
+        def changed_comp(*args: object, **kwargs: object) -> comp_module.CompSetContextSection:
+            return comp
+
+        monkeypatch.setattr(comp_module, "load_comp_set_context", changed_comp)
+    else:
+
+        def changed_zone(repo_root: Path, ticker: str) -> str:
+            return "Changed zone"
+
+        monkeypatch.setattr(ridc, "_expected_zone_if_funded", changed_zone)
+    second = ridc.generate_card(database, tmp_path, TICKER)
+    assert first.artifact_id is not None and second.artifact_id is not None
+    assert first.artifact_id != second.artifact_id
+    assert second.cache_hit is False
+
+
+def test_rejected_exchange_and_corrective_exchange_are_retained(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
+) -> None:
+    database = _retention_db(tmp_path, migrated_db)
+    _patch_inputs(monkeypatch, spec=_spec())
+    prompts: list[str] = []
+    raw_responses = [
+        "\n" + json.dumps(_llm_payload(source_refs=["invented"])) + "\n",
+        "```json\n" + json.dumps(_llm_payload()) + "\n```",
+    ]
+
+    def fake_call(prompt: str, **kwargs: object) -> structured.StructuredCallResult[object]:
+        prompts.append(prompt)
+        raw = raw_responses[len(prompts) - 1]
+        return StructuredCallResult(
+            value=structured.parse_json_payload(raw), raw_response=raw, prompt=prompt
+        )
+
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", fake_call)
+    result = ridc.generate_card(database, tmp_path, TICKER)
+    assert result.selection_mode == "llm" and result.artifact_id is not None
+    saved = ridc.read_card_record(result.artifact_id, db_path=database)
+    assert saved is not None and saved.research_context is not None
+    exchanges = saved.research_context.exchanges
+    assert len(exchanges) == 2
+    assert exchanges[0].raw_response == raw_responses[0]
+    assert exchanges[0].validation_reasons
+    assert exchanges[1].raw_response == raw_responses[1]
+    assert exchanges[1].requested_prompt == prompts[1]
+    assert "YOUR PRIOR ATTEMPT FAILED" in prompts[1]
+    assert exchanges[1].validation_reasons == ()
+
+
+def test_final_schema_repair_exchange_retains_exact_available_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
+) -> None:
+    database = _retention_db(tmp_path, migrated_db)
+    _patch_inputs(monkeypatch, spec=_spec())
+    prompts: list[str] = []
+    raw = "  ```json\n" + json.dumps(_llm_payload(), indent=2) + "\n```  "
+
+    def fake_provider(prompt: str, **kwargs: object) -> str:
+        prompts.append(prompt)
+        return "not JSON" if len(prompts) == 1 else raw
+
+    monkeypatch.setattr(structured, "call_llm", fake_provider)
+    result = ridc.generate_card(database, tmp_path, TICKER)
+    assert result.artifact_id is not None
+    saved = ridc.read_card_record(result.artifact_id, db_path=database)
+    assert saved is not None and saved.research_context is not None
+    context = saved.research_context
+    assert len(context.exchanges) == 1
+    assert context.exchanges[0].requested_prompt == prompts[0] == context.base_prompt
+    assert context.exchanges[0].prompt == prompts[1]
+    assert context.exchanges[0].raw_response == raw
+    assert context.exchanges[0].schema_repair_reason
+    assert context.configuration.exchange_coverage == "final_schema_valid_exchange_per_call"
+
+
+@pytest.mark.parametrize("failure_type", [RuntimeError, LLMBudgetExceeded])
+def test_failed_call_fallback_does_not_hide_later_success_with_same_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
+    failure_type: type[RuntimeError],
+) -> None:
+    database = _retention_db(tmp_path, migrated_db)
+    _patch_inputs(monkeypatch, spec=_spec())
+
+    def failed_call(*args: object, **kwargs: object) -> object:
+        raise failure_type("synthetic call failure")
+
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", failed_call)
+    fallback = ridc.generate_card(database, tmp_path, TICKER)
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", _fake_call_factory(_llm_payload()))
+    success = ridc.generate_card(database, tmp_path, TICKER)
+    assert fallback.artifact_id is not None and success.artifact_id is not None
+    assert fallback.artifact_id != success.artifact_id
+    assert success.selection_mode == "llm" and not success.cache_hit
+    assert fallback.card is not None and fallback.card.research_context is not None
+    exchange = fallback.card.research_context.exchanges[0]
+    assert exchange.failure_class == failure_type.__name__
+    assert exchange.prompt is None and exchange.raw_response is None
+    assert ridc.read_card_record(fallback.artifact_id, db_path=database) == fallback.card
+
+
+@pytest.mark.parametrize(
+    "damage", ["missing", "corrupt", "missing_marker", "output", "artifact_refs"]
+)
+def test_new_card_context_fails_explicitly_when_missing_or_corrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path], damage: str
+) -> None:
+    database = _retention_db(tmp_path, migrated_db)
+    _patch_inputs(monkeypatch, spec=_spec())
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", _fake_call_factory(_llm_payload()))
+    result = ridc.generate_card(database, tmp_path, TICKER)
+    assert result.artifact_id is not None
+    with sqlite3.connect(database) as connection:
+        raw = connection.execute(
+            "SELECT content_json FROM llm_artifacts WHERE id=?", (result.artifact_id,)
+        ).fetchone()[0]
+        payload = json.loads(raw)
+        if damage == "missing":
+            payload.pop("research_context", None)
+        elif damage == "corrupt":
+            payload["research_context_sha256"] = "0" * 64
+        elif damage == "missing_marker":
+            payload.pop("record_format", None)
+            payload.pop("research_context", None)
+            payload.pop("research_context_sha256", None)
+        elif damage == "output":
+            payload["company_hypothesis"]["directional_thesis"] = "Altered output"
+        else:
+            connection.execute(
+                "UPDATE llm_artifacts SET parent_artifact_ids='[999]' WHERE id=?",
+                (result.artifact_id,),
+            )
+        connection.execute(
+            "UPDATE llm_artifacts SET content_json=? WHERE id=?",
+            (json.dumps(payload), result.artifact_id),
+        )
+    with pytest.raises(ValueError, match="context"):
+        ridc.read_card_record(result.artifact_id, db_path=database)
+
+
+def test_legacy_card_context_is_explicitly_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
+) -> None:
+    database = _retention_db(tmp_path, migrated_db)
+    _patch_inputs(monkeypatch, spec=_spec())
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", _fake_call_factory(_llm_payload()))
+    result = ridc.generate_card(database, tmp_path, TICKER)
+    assert result.card is not None
+    legacy = result.card.model_dump(mode="json")
+    legacy["engine_version"] = "v4"
+    for name in ("record_format", "research_context", "research_context_sha256"):
+        legacy.pop(name, None)
+    artifact_id, _ = llm_artifact_store.upsert(
+        llm_artifact_store.UpsertRequest(
+            ticker=TICKER, purpose=ridc.PURPOSE, content_json=legacy, cache_inputs=["legacy"]
+        ),
+        db_path=database,
+    )
+    assert artifact_id is not None
+    reopened = ridc.read_card_record(artifact_id, db_path=database)
+    assert reopened is not None
+    assert reopened.record_format == "legacy_unavailable"
+    assert reopened.research_context is None
+    from io import StringIO
+
+    from report.renderers.workspace_sections.chrome import _decision_card_strip
+    from report.sections.investment_decision_card import build
+
+    with sqlite3.connect(database) as connection:
+        section = build(TICKER, tmp_path, conn=connection)
+    assert section is not None
+    assert section.company_hypothesis is not None
+    assert (
+        section.company_hypothesis.directional_thesis
+        == reopened.company_hypothesis.directional_thesis
+    )
+    assert section.source_refs == reopened.source_refs
+    body = StringIO()
+    _decision_card_strip(body, section, ticker=TICKER)
+    assert reopened.company_hypothesis.directional_thesis in body.getvalue()
+    assert f'data-artifact-id="{artifact_id}"' in body.getvalue()
 
 
 # --------------------------------------------------------------------------- #
@@ -545,7 +955,7 @@ def test_no_thesis_on_file_is_an_explicit_failure_not_a_fabrication(
     def raise_transient(prompt: str, **kw: object) -> object:
         raise RuntimeError("simulated transient failure")
 
-    monkeypatch.setattr(ridc, "call_llm_structured", raise_transient)
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", raise_transient)
 
     result = ridc.generate_card(db_path, tmp_path, TICKER)
 
@@ -572,13 +982,16 @@ def test_budget_forgone_degrades_to_labeled_fallback(
     def fail_if_called(prompt: str, **kw: object) -> object:
         raise AssertionError("the LLM must not be called when budget-skipped")
 
-    monkeypatch.setattr(ridc, "call_llm_structured", fail_if_called)
+    monkeypatch.setattr(ridc, "call_llm_structured_with_raw", fail_if_called)
 
     result = ridc.generate_card(db_path, tmp_path, TICKER)
 
     assert result.selection_mode == "deterministic_fallback"
     assert result.card is not None
     assert any("budget" in r for r in result.degraded_reasons)
+    assert result.artifact_id is not None and result.card.research_context is not None
+    assert result.card.research_context.exchanges == ()
+    assert ridc.read_card_record(result.artifact_id, db_path=db_path) == result.card
 
 
 # --------------------------------------------------------------------------- #
