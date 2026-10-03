@@ -22,7 +22,7 @@ from html import escape
 from pipeline.analysis_styles import ANALYSIS_STYLE
 from redteam.gate import MonthStatus
 from redteam.models import RedTeamItemRow
-from ui.controls import panel_toolbar, ticker_label
+from ui.controls import panel_toolbar, read_request_js, ticker_label
 from ui.prose import render_prose
 
 # ---------------------------------------------------------------------------
@@ -161,7 +161,7 @@ def render_red_team_brief(
         parts.append('<h3 class="rt-group-title">Cross-book</h3>')
         parts.extend(_render_item(i) for i in cross)
     parts.append("</div>")
-    parts.append(_ACTIONS_SCRIPT)
+    parts.append(f"<script>{read_request_js()}</script>" + _ACTIONS_SCRIPT)
     return "".join(parts)
 
 
@@ -186,9 +186,17 @@ _ACTIONS_SCRIPT = """<script>
   var container = document.querySelector('[data-panel="red_team"]');
   if (!container || container.dataset.rtWired) return;
   container.dataset.rtWired = '1';
+  var refreshController = null;
+  var refreshVersion = 0;
   function refresh() {
-    fetch('/api/panel/red_team').then(function (r) { return r.text(); })
-      .then(function (html) {
+    if (!container.isConnected || container.closest('[hidden], [aria-hidden="true"]')) return;
+    var version = ++refreshVersion;
+    if (refreshController) refreshController.abort();
+    refreshController = new AbortController();
+    container.setAttribute('aria-busy', 'true');
+    window.uiFetch('/api/panel/red_team', {signal: refreshController.signal, timeoutMs: 45000})
+      .then(function (r) { return r.text(); }).then(function (html) {
+        if (!container.isConnected || version !== refreshVersion) return;
         container.innerHTML = html;
         var scripts = container.querySelectorAll('script');
         for (var i = 0; i < scripts.length; i++) {
@@ -197,8 +205,28 @@ _ACTIONS_SCRIPT = """<script>
           if (old.src) { s.src = old.src; } else { s.textContent = old.textContent; }
           old.parentNode.replaceChild(s, old);
         }
+      }).catch(function () {
+        if (!container.isConnected || version !== refreshVersion) return;
+        var notice = container.querySelector('[data-rt-refresh-error]');
+        if (!notice) {
+          notice = document.createElement('p');
+          notice.className = 'muted'; notice.setAttribute('role', 'alert');
+          notice.setAttribute('data-rt-refresh-error', '');
+          container.prepend(notice);
+        }
+        notice.innerHTML = 'Could not refresh. Previous view retained. <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-rt-refresh-retry>Retry refresh</button>';
+      }).finally(function () {
+        if (container.isConnected && version === refreshVersion) container.removeAttribute('aria-busy');
       });
   }
+  var lifetime = new MutationObserver(function () {
+    if (container.isConnected && !container.closest('[hidden], [aria-hidden="true"]')) return;
+    refreshVersion += 1;
+    if (refreshController) refreshController.abort();
+    container.removeAttribute('aria-busy');
+    if (!container.isConnected) lifetime.disconnect();
+  });
+  lifetime.observe(document.body, {childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-hidden']});
   function post(id, payload, btn) {
     if (btn) CCAction.busy(btn, '…');
     fetch('/api/red_team/' + id + '/respond', {
@@ -260,6 +288,7 @@ _ACTIONS_SCRIPT = """<script>
     });
   }
   container.addEventListener('click', function (ev) {
+    if (ev.target.closest('[data-rt-refresh-retry]')) { refresh(); return; }
     var btn = ev.target.closest('[data-rt-act]');
     if (!btn) return;
     var holder = btn.closest('[data-item-id]');

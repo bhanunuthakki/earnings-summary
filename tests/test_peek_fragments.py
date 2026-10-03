@@ -1374,9 +1374,18 @@ def test_earnings_readout_peek_route_serves_and_404s(client: FlaskClient, db_pat
     assert client.get("/api/peek/earnings-readout").status_code == 404
 
 
+@pytest.mark.parametrize("as_of", [date(2026, 10, 3), date(2026, 10, 21)])
 def test_earnings_readout_peek_can_resolve_one_exact_persisted_artifact(
-    client: FlaskClient, db_path: Path
+    client: FlaskClient, db_path: Path, monkeypatch: pytest.MonkeyPatch, as_of: date
 ) -> None:
+    import pipeline.peeks as peeks
+
+    class FrozenDateTime(datetime):
+        @classmethod
+        def now(cls, tz: object = None) -> datetime:
+            return datetime(as_of.year, as_of.month, as_of.day, tzinfo=UTC)
+
+    monkeypatch.setattr(peeks, "datetime", FrozenDateTime)
     _seed_readout_ticker(db_path)
     conn = sqlite3.connect(db_path)
     try:
@@ -1407,8 +1416,16 @@ def test_earnings_readout_peek_can_resolve_one_exact_persisted_artifact(
     assert "data-generate-readout" not in body
 
     latest = client.get("/api/peek/earnings-readout?ticker=NU").get_data(as_text=True)
-    assert "Exact Q2 readout" not in latest
-    assert 'data-generate-readout="NU"' in latest
+    if as_of < date(2026, 10, 20):
+        assert "Exact Q2 readout" in latest
+        assert 'href="/source/9000"' in latest
+        assert 'href="/source/9001"' not in latest
+        assert "data-generate-readout" not in latest
+    else:
+        assert "Exact Q2 readout" not in latest
+        assert 'href="/source/9001"' in latest
+        assert 'href="/source/9000"' not in latest
+        assert 'data-generate-readout="NU"' in latest
     assert client.get("/api/peek/earnings-readout?ticker=NU&artifact_id=701").status_code == 404
     assert client.get("/api/peek/earnings-readout?ticker=NU&artifact_id=nope").status_code == 400
 

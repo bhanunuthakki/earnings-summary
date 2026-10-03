@@ -12,18 +12,12 @@ import json
 import shutil
 import sqlite3
 import subprocess
-import sys
 from pathlib import Path
 
+import comments_server
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-from pipeline.provenance_panel import render_provenance_panel  # noqa: E402
+from pipeline.provenance_panel import render_provenance_panel
 
 _SECTIONS = (
     "coverage",
@@ -90,7 +84,7 @@ def test_assembler_initializes_every_diagnostic_with_native_loading_states(
     assert 'data-prov-state="loading"' in html
     assert "data-prov-retry" in html
     assert "window.htmx" not in html
-    assert "fetch(endpoint" in html
+    assert "(window.uiFetch || fetch)(endpoint" in html
     assert "MAX_CONCURRENT = 3" in html
     assert "visibilityObserver.observe" in html
     assert "unmountObserver.observe" in html

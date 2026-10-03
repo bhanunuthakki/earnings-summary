@@ -71,6 +71,14 @@ A tested `no surface change` disposition must state which canonical owner and vi
 
 ### Current no-surface-change dispositions
 
+Application read-performance changes preserve the existing Operations registry,
+Jobs, Sources, Data, Actions, and README approval boundaries. Independent panel
+loading, bounded reads, cache-busy responses, and retry controls change delivery
+and recovery of read-only observations. They do not add an operator action,
+scheduler, writer, or service-health claim. A failed README status read disables
+Apply until the current status is verified. Route and read-lifecycle tests cover
+these preserved boundaries.
+
 `execution/sync_list_type_from_holdings.py --apply --onboard-untracked` is the
 primary operator surface for approving reviewed tracker holdings into the
 research roster. It reuses `db.track_company` for SEC validation, issuer
@@ -874,3 +882,19 @@ operator control. `tests/test_job_runtime.py` covers signaled, running, unknown
 and identity-mismatch decisions. `tests/test_job_runtime_process_tree.py` retains
 the Windows held-handle and process-tree checks. Local tests do not establish
 deployment or a successful future scheduled run.
+### Investing workflow maintenance and brief inputs
+
+Disposition: **no Operations surface change**. The internal post-earnings CLI
+adds an optional paired fiscal-period selector with complete-scope validation.
+Its scheduled default remains latest reported active portfolio quarters. The
+pre-earnings writer retains its rendered prompt inputs and explicit source and
+fiscal-identity gaps in the existing artifact JSON. Grounding remains partial.
+Neither change adds an operator control, job identity, writer, schema, provider
+purpose, or production schedule.
+
+The existing Mac Monthly prompt architecture refresh automation also checks the
+project-owned investing skill for changed source hashes and broken references.
+Its bounded review does not run the application, acquire financial data, change
+owner policy, or mutate canonical Windows state. The deterministic checker has
+no network or database access. Readout, brief and maintenance regression tests
+establish local behavior; they do not establish deployment or a future job run.

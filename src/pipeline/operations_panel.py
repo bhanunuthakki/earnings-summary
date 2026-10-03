@@ -1231,6 +1231,7 @@ def _governance(view: OperationsPanelView) -> str:
         '<button type="button" class="k-btn k-btn-primary" data-readme-action="preview">Preview &amp; judge</button>'
         f'<button type="button" class="k-btn k-btn-quiet" data-readme-action="apply" data-run-id="{_html(run_id)}"{apply_disabled}>Apply approved candidate</button>'
         '<span class="k-card-meta" role="status" aria-live="polite" data-readme-action-status></span>'
+        '<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-readme-status-retry hidden>Retry status</button>'
         "</div></article>"
     )
 
@@ -1297,6 +1298,8 @@ def render_operations_panel(view: OperationsPanelView) -> str:
     <button type="button" class="k-chip k-chip-btn k-chip-tab operations-tab" id="operations-tab-runtime" role="tab" aria-selected="false" aria-controls="operations-pane-runtime" tabindex="-1">Runtime &amp; Recovery</button>
     <button type="button" class="k-chip k-chip-btn k-chip-tab operations-tab" id="operations-tab-governance" role="tab" aria-selected="false" aria-controls="operations-pane-governance" tabindex="-1">Governance</button>
   </div>
+  <div class="k-well" role="status" aria-live="polite" data-operations-refresh-status hidden></div>
+  <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-operations-refresh-retry hidden>Retry refresh</button>
   <div id="operations-pane-overview" role="tabpanel" aria-labelledby="operations-tab-overview">{_overview(view)}</div>
   <div id="operations-pane-attention" role="tabpanel" aria-labelledby="operations-tab-attention" hidden>{_attention(view)}</div>
   <div id="operations-pane-jobs" role="tabpanel" aria-labelledby="operations-tab-jobs" hidden>{_jobs(view)}</div>
@@ -1400,16 +1403,32 @@ def render_operations_panel(view: OperationsPanelView) -> str:
     }}
     return payload;
   }};
-  const refreshOperations = () => fetch('/api/panel/operations', {{headers: {{Accept: 'text/html'}}}})
+  const operationsStatus = root.querySelector('[data-operations-refresh-status]');
+  const operationsRetry = root.querySelector('[data-operations-refresh-retry]');
+  let operationsGeneration = 0;
+  let operationsController = null;
+  const refreshOperations = () => {{
+    const request = ++operationsGeneration;
+    if (operationsController) operationsController.abort();
+    operationsController = new AbortController();
+    return window.uiFetch('/api/panel/operations', {{headers: {{Accept: 'text/html'}}, signal: operationsController.signal}})
     .then((response) => {{
       if (!response.ok) throw new Error('Operations refresh failed');
       return response.text();
     }})
     .then((markup) => {{
+      if (request !== operationsGeneration || !root.isConnected) return;
       const mount = root.parentElement;
       if (!mount || typeof window.workOsMountHtml !== 'function') throw new Error('Operations refresh is unavailable');
       window.workOsMountHtml(mount, markup, '/api/panel/operations');
+    }}).catch((error) => {{
+      if (request !== operationsGeneration || !root.isConnected) return;
+      operationsStatus.textContent = 'Operations could not refresh. Previous observations remain visible.';
+      operationsStatus.hidden = false; operationsRetry.hidden = false;
+      throw error;
     }});
+  }};
+  operationsRetry.addEventListener('click', () => refreshOperations().catch(() => {{}}));
   attentionCards.forEach((card) => {{
     const buttons = Array.from(card.querySelectorAll('[data-attention-action]'));
     const status = card.querySelector('[data-attention-status]');
@@ -1464,9 +1483,17 @@ def render_operations_panel(view: OperationsPanelView) -> str:
   const setReadmeButtons = (busy) => readmeButtons.forEach((candidate) => {{
     candidate.disabled = busy || (candidate.dataset.readmeAction === 'apply' && !readmeCanApply);
   }});
-  const refreshReadmeStatus = () => fetch('/api/readme-governance/status')
+  const readmeRetry = root.querySelector('[data-readme-status-retry]');
+  let readmeGeneration = 0;
+  let readmeController = null;
+  const refreshReadmeStatus = () => {{
+    const request = ++readmeGeneration;
+    if (readmeController) readmeController.abort();
+    readmeController = new AbortController();
+    return window.uiFetch('/api/readme-governance/status', {{signal: readmeController.signal}})
     .then((response) => response.json().then((body) => ({{ok: response.ok, body}})))
     .then((result) => {{
+      if (request !== readmeGeneration || !root.isConnected) return;
       if (!result.ok) throw new Error(result.body.error || 'Status refresh failed');
       const body = result.body;
       const labels = {{
@@ -1490,7 +1517,16 @@ def render_operations_panel(view: OperationsPanelView) -> str:
         readmeCanApply = Boolean(body.can_apply);
       }}
       setReadmeButtons(false);
+      readmeRetry.hidden = true;
+    }}).catch((error) => {{
+      if (request !== readmeGeneration || !root.isConnected) return;
+      readmeCanApply = false; setReadmeButtons(false);
+      readmeRetry.hidden = false;
+      if (readmeStatus) readmeStatus.textContent = 'README status could not refresh. Apply is unavailable until status is verified.';
+      throw error;
     }});
+  }};
+  readmeRetry.addEventListener('click', () => refreshReadmeStatus().catch(() => {{}}));
   const runReadmeAction = (button) => {{
     const action = button.dataset.readmeAction || '';
     if (action === 'apply' && !window.confirm('Apply this exact judged README candidate?')) return;

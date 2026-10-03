@@ -332,18 +332,34 @@ def test_unknown_additive_field_tolerated() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_check_major_version_rejects_incompatible() -> None:
-    # White-box unit test of the internal gate function itself (the
-    # end-to-end tests below exercise it through the public client API).
-    err = tv1._check_major_version("2.0.0")  # pyright: ignore[reportPrivateUsage]
+def test_check_major_version_rejects_incompatible(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_get(
+        self: requests.Session, url: str, params: object = None, timeout: object = None
+    ) -> _FakeResponse:
+        return _FakeResponse(_accounts_payload("2.0.0"))
+
+    monkeypatch.setattr(requests.Session, "get", fake_get)
+    fetch = tv1.TrackerV1Client().get_accounts()
+    assert fetch.available is False
+    err = fetch.error
     assert err is not None
     assert "2.0.0" in err
     assert "1" in err
 
 
 @pytest.mark.parametrize("version", ["1.0.0", "1.7.3", "1.99.99"])
-def test_check_major_version_accepts_minor_patch_drift(version: str) -> None:
-    assert tv1._check_major_version(version) is None  # pyright: ignore[reportPrivateUsage]
+def test_check_major_version_accepts_minor_patch_drift(
+    version: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_get(
+        self: requests.Session, url: str, params: object = None, timeout: object = None
+    ) -> _FakeResponse:
+        return _FakeResponse(_accounts_payload(version))
+
+    monkeypatch.setattr(requests.Session, "get", fake_get)
+    fetch = tv1.TrackerV1Client().get_accounts()
+    assert fetch.available is True
+    assert fetch.error is None
 
 
 def test_major_version_rejected_end_to_end(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -722,3 +738,67 @@ def test_probe_v1_hits_health_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     assert fetch.data is not None
     assert fetch.data.status == "ok"
     assert seen_urls == ["http://127.0.0.1:8000/api/v1/health"]
+
+
+def test_total_deadline_skips_expired_requests(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*args: object, **kwargs: object) -> _FakeResponse:
+        raise AssertionError("An expired client must not access the network")
+
+    monkeypatch.setattr(requests.Session, "get", forbidden)
+    client = tv1.TrackerV1Client(total_timeout_seconds=0)
+    result = client.get_health()
+    assert result.available is False
+    assert result.error == "total_deadline_exceeded"
+
+
+def test_total_deadline_reduces_later_request_allowance(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = [100.0]
+    budgets: list[tuple[float, float]] = []
+    monkeypatch.setattr(tv1.time, "monotonic", lambda: now[0])
+
+    def fake_get(
+        self: requests.Session,
+        url: str,
+        params: object = None,
+        timeout: tuple[float, float] = (1, 1),
+    ) -> _FakeResponse:
+        budgets.append(timeout)
+        now[0] += 2
+        return _FakeResponse(_accounts_payload())
+
+    monkeypatch.setattr(requests.Session, "get", fake_get)
+    client = tv1.TrackerV1Client(total_timeout_seconds=5)
+    assert client.get_accounts().available
+    assert client.get_accounts().available
+    result = client.get_accounts()
+    assert result.available is False
+    assert result.error == "total_deadline_exceeded"
+    assert sum(budgets[0]) <= 5
+    assert sum(budgets[1]) <= 3
+    assert sum(budgets[2]) <= 1
+    # A late result never becomes usable, and the next request is skipped.
+    assert client.get_accounts().error == "total_deadline_exceeded"
+    assert len(budgets) == 3
+
+
+def test_total_deadline_pagination_discards_partial_population(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+    calls: list[str] = []
+    monkeypatch.setattr(tv1.time, "monotonic", lambda: now[0])
+
+    def fake_get(
+        self: requests.Session, url: str, params: object = None, timeout: object = None
+    ) -> _FakeResponse:
+        calls.append(url)
+        now[0] += 2
+        return _FakeResponse(_txn_page("next-page", ["t1"]))
+
+    monkeypatch.setattr(requests.Session, "get", fake_get)
+    client = tv1.TrackerV1Client(total_timeout_seconds=3)
+    result = client.get_all_transactions()
+    assert result.available is False
+    assert result.data is None
+    assert result.error == "total_deadline_exceeded"
+    assert len(calls) == 2
