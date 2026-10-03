@@ -366,10 +366,14 @@ class _WindowsKillOnCloseJob:
     def close(self) -> None:
         if self._handle == 0:
             return
+        if sys.platform != "win32":
+            raise OSError("Windows job close requires Windows")
 
-        handle, self._handle = self._handle, 0
         kernel32 = _load_process_query_kernel32()
-        kernel32.CloseHandle(handle)
+        if not kernel32.CloseHandle(self._handle):
+            error = ctypes.get_last_error()
+            raise ctypes.WinError(error, "CloseHandle failed for an owned process-tree job")
+        self._handle = 0
 
 
 def _resume_process_threads(pid: int) -> None:
@@ -484,11 +488,13 @@ def _run_managed_child(
         if process_tree_job is not None and creationflags:
             _resume_process_threads(process.pid)
     except Exception:
-        if process_tree_job is not None:
-            process_tree_job.close()
-        if process.poll() is None:
-            process.kill()
-            process.wait(timeout=5)
+        try:
+            if process_tree_job is not None:
+                process_tree_job.close()
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
         raise
     try:
         while True:
@@ -497,7 +503,13 @@ def _run_managed_child(
                 return returncode
             if not _process_identity_is_alive(scheduler_owner):
                 if process_tree_job is not None:
-                    process_tree_job.close()
+                    try:
+                        process_tree_job.close()
+                    except Exception:
+                        if process.poll() is None:
+                            process.kill()
+                            process.wait(timeout=5)
+                        raise
                     process_tree_job = None
                 else:
                     _terminate_process_tree(process)

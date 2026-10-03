@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Protocol, cast
 
 import pytest
@@ -50,6 +52,133 @@ class _RecordingJob:
 
     def close(self) -> None:
         self.events.append("close")
+
+
+@pytest.mark.parametrize("error_code", [0, 5, 6])
+def test_windows_job_close_failure_retains_handle_and_native_error(
+    monkeypatch: pytest.MonkeyPatch, error_code: int
+) -> None:
+    handle = 0x123456789ABC
+    events: list[tuple[str, int]] = []
+
+    def close_handle(value: int) -> int:
+        events.append(("close", value))
+        return 0
+
+    def last_error() -> int:
+        events.append(("error", error_code))
+        return error_code
+
+    def win_error(code: int, _description: str) -> OSError:
+        error = OSError(code, "controlled native close failure")
+        setattr(error, "winerror", code)
+        return error
+
+    monkeypatch.setattr(job_runtime.sys, "platform", "win32")
+    monkeypatch.setattr(
+        job_runtime,
+        "_load_process_query_kernel32",
+        lambda: SimpleNamespace(CloseHandle=close_handle),
+    )
+    monkeypatch.setattr(ctypes, "get_last_error", last_error, raising=False)
+    monkeypatch.setattr(ctypes, "WinError", win_error, raising=False)
+    job = _WindowsKillOnCloseJob(handle)
+
+    with pytest.raises(OSError) as raised:
+        job.close()
+
+    assert getattr(job, "_handle") == handle
+    assert getattr(raised.value, "winerror") == error_code
+    assert events == [("close", handle), ("error", error_code)]
+
+
+def test_windows_job_close_success_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[int] = []
+    monkeypatch.setattr(job_runtime.sys, "platform", "win32")
+
+    def close_handle(handle: int) -> int:
+        closed.append(handle)
+        return 1
+
+    monkeypatch.setattr(
+        job_runtime,
+        "_load_process_query_kernel32",
+        lambda: SimpleNamespace(CloseHandle=close_handle),
+    )
+    job = _WindowsKillOnCloseJob(12345)
+    job.close()
+    job.close()
+
+    assert closed == [12345]
+    assert getattr(job, "_handle") == 0
+
+
+def test_windows_job_close_loader_failure_retains_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(job_runtime.sys, "platform", "win32")
+
+    def unavailable() -> None:
+        raise OSError("controlled loader failure")
+
+    monkeypatch.setattr(job_runtime, "_load_process_query_kernel32", unavailable)
+    job = _WindowsKillOnCloseJob(12345)
+    with pytest.raises(OSError, match="controlled loader failure"):
+        job.close()
+    assert getattr(job, "_handle") == 12345
+
+
+@pytest.mark.parametrize("startup_failure", [True, False])
+def test_owned_root_cleanup_runs_when_job_close_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, startup_failure: bool
+) -> None:
+    events: list[str] = []
+
+    class Process(_SuspendedProcess):
+        def kill(self) -> None:
+            events.append("kill")
+            super().kill()
+
+        def wait(self, timeout: float | None = None) -> int:
+            events.append("wait")
+            return super().wait(timeout)
+
+    class Job:
+        def close(self) -> None:
+            events.append("close")
+            raise OSError("controlled job close failure")
+
+    process = Process()
+
+    def resume(_pid: int) -> None:
+        if startup_failure:
+            raise ValueError("controlled resume failure")
+
+    def popen(*_args: object, **_kwargs: object) -> Process:
+        return process
+
+    def create_job(_process: object) -> Job:
+        return Job()
+
+    def owner_alive(_owner: object) -> bool:
+        return False
+
+    monkeypatch.setattr(job_runtime, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
+    monkeypatch.setattr(job_runtime.subprocess, "Popen", popen)
+    monkeypatch.setattr(job_runtime, "_create_process_tree_job", create_job)
+    monkeypatch.setattr(job_runtime, "_resume_process_threads", resume)
+    monkeypatch.setattr(job_runtime, "_process_identity_is_alive", owner_alive)
+
+    with pytest.raises(OSError, match="controlled job close failure") as raised:
+        _run_managed_child(
+            ["python", "worker.py"], cwd=tmp_path, env={}, scheduler_owner=(1234, "win:start")
+        )
+
+    assert events[:3] == ["close", "kill", "wait"]
+    if startup_failure:
+        assert isinstance(raised.value.__context__, ValueError)
+    else:
+        assert events == ["close", "kill", "wait", "close"]
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows held process handle integration")
