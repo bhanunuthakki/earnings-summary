@@ -189,7 +189,7 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    assert len(graph.unknown_edges) == 124
+    assert len(graph.unknown_edges) == 125
     # The held-handle regression adds one bounded test-owned Python child. Its
     # computed interpreter/exit-code argv remains an explicit test-only unknown.
     assert (
