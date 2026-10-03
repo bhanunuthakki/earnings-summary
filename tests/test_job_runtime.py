@@ -291,6 +291,7 @@ def test_spoofed_inheritance_name_does_not_bypass_lock(
 
 
 def test_stale_lock_is_reclaimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "isolated" / "portfolio.db"))
     lock_path = _write_set_lock_path(tmp_path, "portfolio-db")
     lock_path.parent.mkdir(parents=True)
     lock_path.write_text(
@@ -311,6 +312,7 @@ def test_stale_lock_is_reclaimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_reused_pid_with_different_process_start_is_reclaimed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "isolated" / "portfolio.db"))
     lock_path = _write_set_lock_path(tmp_path, "portfolio-db")
     lock_path.parent.mkdir(parents=True)
     lock_path.write_text(
@@ -355,6 +357,7 @@ def test_release_does_not_delete_successor_lock(tmp_path: Path) -> None:
 def test_concurrent_stale_lock_contenders_leave_one_owner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "isolated" / "portfolio.db"))
     lock_path = _write_set_lock_path(tmp_path, "portfolio-db")
     lock_path.parent.mkdir(parents=True)
     lock_path.write_text(
