@@ -143,20 +143,52 @@ def _active_list_type(conn: sqlite3.Connection, ticker: str) -> str | None:
     return str(row[0]) if row is not None and row[0] else None
 
 
-def _latest_quarter(conn: sqlite3.Connection, ticker: str) -> ReportedQuarter | None:
+def _validated_target(
+    period_end: str | None, fiscal_period_type: str | None
+) -> tuple[str | None, str | None]:
+    if period_end is None and fiscal_period_type is None:
+        return None, None
+    if period_end is None or fiscal_period_type is None:
+        raise ValueError("period_end and fiscal_period_type must be supplied together")
+    try:
+        parsed = date.fromisoformat(period_end)
+    except ValueError as exc:
+        raise ValueError("period_end must be a valid YYYY-MM-DD date") from exc
+    if parsed.isoformat() != period_end:
+        raise ValueError("period_end must be a valid YYYY-MM-DD date")
+    fpt = fiscal_period_type.upper()
+    if fpt not in {"Q1", "Q2", "Q3", "Q4"}:
+        raise ValueError("fiscal_period_type must be Q1, Q2, Q3 or Q4")
+    return period_end, fpt
+
+
+def _latest_quarter(
+    conn: sqlite3.Connection,
+    ticker: str,
+    *,
+    today: date,
+    period_end: str | None = None,
+    fiscal_period_type: str | None = None,
+) -> ReportedQuarter | None:
     list_type = _active_list_type(conn, ticker)
     if list_type not in {"portfolio", "evaluation"}:
         return None
     try:
         relation = selected_transcripts_relation(conn)
+        target_sql = ""
+        params: list[str] = [ticker, today.isoformat(), today.isoformat()]
+        if period_end is not None and fiscal_period_type is not None:
+            target_sql = "AND period_end = ? AND UPPER(fiscal_period_type) = ? "
+            params.extend((period_end, fiscal_period_type))
         row = conn.execute(
             f"SELECT id, document_id, fiscal_period_type, period_end, call_date "  # nosec B608 -- trusted selected-relation shape; ticker remains bound
             f"FROM {relation.sql} WHERE UPPER(ticker) = ? "
-            "AND period_end IS NOT NULL "
+            "AND date(period_end) <= date(?) "
+            "AND (call_date IS NULL OR date(call_date) <= date(?)) "
             "AND (UPPER(COALESCE(fiscal_period_type, '')) GLOB 'Q[1-4]*' "
             "     OR UPPER(COALESCE(fiscal_period_type, '')) = 'QUARTER') "
-            "ORDER BY period_end DESC, id DESC LIMIT 1",
-            (ticker,),
+            f"{target_sql}ORDER BY period_end DESC, id DESC LIMIT 1",
+            params,
         ).fetchone()
     except sqlite3.Error:
         return None
@@ -178,26 +210,54 @@ def _latest_quarter(conn: sqlite3.Connection, ticker: str) -> ReportedQuarter | 
     )
 
 
-def latest_reported_quarter(db_path: Path | str, ticker: str) -> ReportedQuarter | None:
-    """Return the canonical latest quarter for a portfolio/evaluation name."""
+def latest_reported_quarter(
+    db_path: Path | str,
+    ticker: str,
+    *,
+    today: date | None = None,
+    period_end: str | None = None,
+    fiscal_period_type: str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> ReportedQuarter | None:
+    """Return the latest or exact selected reported quarter for an active name."""
+    period_end, fiscal_period_type = _validated_target(period_end, fiscal_period_type)
+    ref = today or datetime.now(UTC).date()
     t = (ticker or "").strip().upper()
     if not t:
         return None
+    own = conn is None
+    if own:
+        try:
+            conn = connect_sqlite(Path(db_path), role=SQLiteConnectionRole.READ_ONLY)
+        except sqlite3.Error:
+            return None
+    assert conn is not None
     try:
-        conn = connect_sqlite(Path(db_path), role=SQLiteConnectionRole.READ_ONLY)
-    except sqlite3.Error:
-        return None
-    try:
-        return _latest_quarter(conn, t)
+        return _latest_quarter(
+            conn, t, today=ref, period_end=period_end, fiscal_period_type=fiscal_period_type
+        )
     finally:
-        conn.close()
+        if own:
+            conn.close()
 
 
-def eligible_portfolio_quarters(db_path: Path | str) -> list[ReportedQuarter]:
-    """Latest reported quarter for every active portfolio name, ticker-sorted."""
+def eligible_portfolio_quarters(
+    db_path: Path | str,
+    *,
+    today: date | None = None,
+    period_end: str | None = None,
+    fiscal_period_type: str | None = None,
+    only_tickers: set[str] | None = None,
+) -> list[ReportedQuarter]:
+    """Portfolio-only selection; exact scopes must be complete before generation."""
+    period_end, fiscal_period_type = _validated_target(period_end, fiscal_period_type)
+    ref = today or datetime.now(UTC).date()
+    wanted = {ticker.strip().upper() for ticker in only_tickers} if only_tickers else None
     try:
         conn = connect_sqlite(Path(db_path), role=SQLiteConnectionRole.READ_ONLY)
     except sqlite3.Error:
+        if period_end is not None:
+            raise ReadoutUnavailableError("exact portfolio scope database is unavailable") from None
         return []
     try:
         try:
@@ -206,13 +266,37 @@ def eligible_portfolio_quarters(db_path: Path | str) -> list[ReportedQuarter]:
                 "WHERE archived_at IS NULL AND list_type = 'portfolio' ORDER BY ticker"
             ).fetchall()
         except sqlite3.Error:
+            if period_end is not None:
+                raise ReadoutUnavailableError("exact portfolio roster is unavailable") from None
             return []
+        tickers = {str(row[0]).upper() for row in rows if row and row[0]}
+        if period_end is not None and wanted and (missing := wanted - tickers):
+            raise ReadoutUnavailableError(
+                f"exact scope requires active portfolio names: {', '.join(sorted(missing))}"
+            )
+        if wanted:
+            tickers &= wanted
         quarters = [
             quarter
-            for row in rows
-            if row and row[0]
-            if (quarter := _latest_quarter(conn, str(row[0]).upper())) is not None
+            for ticker in sorted(tickers)
+            if (
+                quarter := _latest_quarter(
+                    conn,
+                    ticker,
+                    today=ref,
+                    period_end=period_end,
+                    fiscal_period_type=fiscal_period_type,
+                )
+            )
+            is not None
         ]
+        if period_end is not None and (
+            missing := tickers - {quarter.ticker for quarter in quarters}
+        ):
+            raise ReadoutUnavailableError(
+                f"no selected reported {fiscal_period_type} ending {period_end} "
+                f"as of {ref.isoformat()} for: {', '.join(sorted(missing))}"
+            )
     finally:
         conn.close()
     return quarters
@@ -504,14 +588,20 @@ def generate_for_ticker(
     *,
     today: date | None = None,
     force: bool = False,
+    period_end: str | None = None,
+    fiscal_period_type: str | None = None,
 ) -> GenerateOutcome:
     """Explicit generation path for one portfolio or evaluation name."""
-    quarter = latest_reported_quarter(db_path, ticker)
+    ref = today or datetime.now(UTC).date()
+    quarter = latest_reported_quarter(
+        db_path, ticker, today=ref, period_end=period_end, fiscal_period_type=fiscal_period_type
+    )
     if quarter is None:
         raise ReadoutUnavailableError(
             f"{(ticker or '').strip().upper() or 'ticker'} has no selected reported quarter"
+            + (f" {fiscal_period_type} ending {period_end}" if period_end is not None else "")
+            + f" as of {ref.isoformat()}"
         )
-    ref = today or datetime.now(UTC).date()
     with db_path_context(db_path):
         return _generate_quarter(db_path, repo_root, quarter, today=ref, force=force)
 
@@ -523,14 +613,19 @@ def generate_all(
     today: date | None = None,
     force: bool = False,
     only_tickers: set[str] | None = None,
+    period_end: str | None = None,
+    fiscal_period_type: str | None = None,
 ) -> dict[str, int]:
     """Scheduled portfolio-only lane with per-item transient degradation."""
     ref = today or datetime.now(UTC).date()
     tally = {GENERATED: 0, CACHE_HIT: 0, BUDGET_SKIPPED: 0, DEFERRED_TRANSIENT: 0}
-    quarters = eligible_portfolio_quarters(db_path)
-    if only_tickers:
-        wanted = {ticker.upper() for ticker in only_tickers}
-        quarters = [quarter for quarter in quarters if quarter.ticker in wanted]
+    quarters = eligible_portfolio_quarters(
+        db_path,
+        today=ref,
+        period_end=period_end,
+        fiscal_period_type=fiscal_period_type,
+        only_tickers=only_tickers,
+    )
     with db_path_context(db_path):
         for quarter in quarters:
             try:

@@ -43,7 +43,10 @@ from datetime import UTC, date, datetime, timedelta
 from html import escape
 from io import StringIO
 from pathlib import Path
-from typing import NamedTuple, cast
+from typing import TYPE_CHECKING, NamedTuple, cast
+
+if TYPE_CHECKING:
+    from earnings_readout import ReportedQuarter
 
 from alerts import AlertRow, get_alert, list_alerts, list_queued_actions_for_alert
 from compute.metrics_engine.io import latest_ttm_value
@@ -2460,10 +2463,14 @@ def render_earnings_readout_peek(
                 f"{escape(t)} · quarter-stable artifact</span></div>{persisted}</div>{foot}"
                 f"<style>{_PREP_CSS}</style>"
             )
+        from earnings_readout import latest_reported_quarter
+
+        ref = datetime.now(UTC).date()
+        quarter = latest_reported_quarter(db_path, t, today=ref, conn=conn)
         header = _readout_header(conn, t)
         surprise = _readout_surprise(conn, t)
         kpis = _readout_kpi_moves(conn, t)
-        transcript = _readout_transcript_link(conn, t)
+        transcript = _readout_transcript_link(quarter)
         valuation = _prep_valuation(conn, t)
     finally:
         if own:
@@ -2473,13 +2480,10 @@ def render_earnings_readout_peek(
     watch = _prep_watch_items(db_path, t, heading="What you said to watch — did they answer it?")
 
     persisted = ""
-    quarter = None
     try:
         from earnings_readout import PURPOSE as _READOUT_PURPOSE
-        from earnings_readout import latest_reported_quarter
         from llm_artifact_store import read_current
 
-        quarter = latest_reported_quarter(db_path, t)
         art = (
             read_current(
                 ticker=t,
@@ -2699,26 +2703,12 @@ def _readout_tone(db_path: Path, t: str) -> str:
     )
 
 
-def _readout_transcript_link(conn: sqlite3.Connection, t: str) -> str:
-    """The latest selected transcript as a ``/source/<doc_id>`` doorway with
-    its period label — the primary source every readout claim traces to."""
-    try:
-        from provenance.selection import selected_transcripts_relation
-
-        rel = selected_transcripts_relation(conn)
-        row = conn.execute(
-            f"SELECT document_id, fiscal_period_type, period_end FROM {rel.sql} "  # nosec B608 -- trusted internal SQL shape; values remain bound
-            + "WHERE UPPER(ticker) = ? AND period_end IS NOT NULL "
-            + "ORDER BY period_end DESC LIMIT 1",
-            (t,),
-        ).fetchone()
-    except Exception:
+def _readout_transcript_link(quarter: ReportedQuarter | None) -> str:
+    """Link the same selected reported transcript used for the readout body."""
+    if quarter is None:
         return ""
-    if row is None or row[0] is None:
-        return ""
-    doc_id, fpt, period_end = int(row[0]), str(row[1] or "").strip(), str(row[2] or "")
-    label = f"{fpt} {period_end[:4]}".strip() or "latest call"
+    label = f"{quarter.fiscal_period_type} {quarter.period_end[:4]}".strip()
     return (
         '<div class="prep-sec"><h4>Primary source</h4>'
-        f'<p><a href="/source/{doc_id}">{escape(label)} earnings-call transcript →</a></p></div>'
+        f'<p><a href="/source/{quarter.document_id}">{escape(label)} earnings-call transcript →</a></p></div>'
     )
