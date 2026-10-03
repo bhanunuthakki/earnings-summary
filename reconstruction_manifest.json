@@ -58,7 +58,8 @@
       "entrypoints": [
         "execution/run_morning_pipeline.py",
         "execution/refresh_expected_earnings.py",
-        "execution/refresh_cache.py"
+        "execution/refresh_cache.py",
+        "execution/refresh_sec_accession.py"
       ],
       "dependencies": [
         "core_data_layer"

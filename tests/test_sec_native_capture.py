@@ -1225,3 +1225,8 @@ def test_zero_work_still_pins_selector_and_receipt_identity(
         assert first_receipt.request_id != second_receipt.request_id
     finally:
         conn.close()
+
+
+# Shared migrated synthetic inventory for selected-accession orchestration tests.
+seed_sec_capture_inventory = _conn
+seed_second_sec_accession = _second
