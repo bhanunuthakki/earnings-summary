@@ -10,9 +10,10 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Protocol, TypedDict
+from typing import Protocol, TypedDict, cast
 
 import pytest
 
@@ -29,24 +30,48 @@ from runtime.job_runtime import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-_run_managed_child = getattr(job_runtime, "_run_managed_child")
-_scheduler_write_sets = getattr(job_runtime, "_scheduler_write_sets")
-_windows_mutex_name = getattr(job_runtime, "_windows_mutex_name")
-_write_set_lock_path = getattr(job_runtime, "_write_set_lock_path")
+
+class JournalHandleForTest(Protocol):
+    operation_id: str
+    trace_id: str
+    accepted: bool
+    started: bool
 
 
-class JournalHandleShape(Protocol):
-    @property
-    def operation_id(self) -> str: ...
+class RuntimeTestAPI(Protocol):
+    run_managed_child: Callable[..., int]
+    scheduler_write_sets: Callable[[str, list[str]], list[str]]
+    windows_mutex_name: Callable[[Path], str]
+    write_set_lock_path: Callable[[Path, str], Path]
+    schema_preflight: Callable[..., str | None]
+    pid_is_alive: Callable[[int], bool]
+    write_health: Callable[[Path, job_runtime.HealthRecord], Path]
+    scheduled_deadline_seconds: Callable[[Path, str], float | None]
+    journal_handle: Callable[..., JournalHandleForTest]
 
-    @property
-    def trace_id(self) -> str: ...
 
-    @property
-    def accepted(self) -> bool: ...
-
-    @property
-    def started(self) -> bool: ...
+# This test boundary retains the actual private implementations. Validate the
+# callable shape once, then give each projection its test-facing static type.
+_RUNTIME_MEMBERS = {
+    "run_managed_child": "_run_managed_child",
+    "scheduler_write_sets": "_scheduler_write_sets",
+    "windows_mutex_name": "_windows_mutex_name",
+    "write_set_lock_path": "_write_set_lock_path",
+    "schema_preflight": "_schema_preflight",
+    "pid_is_alive": "_pid_is_alive",
+    "write_health": "_write_health",
+    "scheduled_deadline_seconds": "_scheduled_deadline_seconds",
+    "journal_handle": "_JournalHandle",
+}
+_runtime_members = {
+    public: vars(job_runtime)[private] for public, private in _RUNTIME_MEMBERS.items()
+}
+assert all(callable(member) for member in _runtime_members.values())
+runtime_test_api = cast(RuntimeTestAPI, SimpleNamespace(**_runtime_members))
+_run_managed_child = runtime_test_api.run_managed_child
+_scheduler_write_sets = runtime_test_api.scheduler_write_sets
+_windows_mutex_name = runtime_test_api.windows_mutex_name
+_write_set_lock_path = runtime_test_api.write_set_lock_path
 
 
 class _RequestFields(TypedDict):
@@ -95,8 +120,7 @@ def test_schema_preflight_uses_state_database_and_code_migrations(
     monkeypatch.setattr(schema_compat, "describe_drift", describe_drift)
 
     assert (
-        getattr(job_runtime, "_schema_preflight")(state_root, "unit-job", code_root=code_root)
-        == "blocked"
+        runtime_test_api.schema_preflight(state_root, "unit-job", code_root=code_root) == "blocked"
     )
     assert captured == {"db_path": expected_db, "project_root": code_root}
 
@@ -504,6 +528,7 @@ def test_spoofed_inheritance_name_does_not_bypass_lock(
 
 
 def test_stale_lock_is_reclaimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "isolated" / "portfolio.db"))
     lock_path = _write_set_lock_path(tmp_path, "portfolio-db")
     lock_path.parent.mkdir(parents=True)
     lock_path.write_text(
@@ -524,6 +549,7 @@ def test_stale_lock_is_reclaimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_reused_pid_with_different_process_start_is_reclaimed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "isolated" / "portfolio.db"))
     lock_path = _write_set_lock_path(tmp_path, "portfolio-db")
     lock_path.parent.mkdir(parents=True)
     lock_path.write_text(
@@ -568,13 +594,14 @@ def test_release_does_not_delete_successor_lock(tmp_path: Path) -> None:
 def test_concurrent_stale_lock_contenders_leave_one_owner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "isolated" / "portfolio.db"))
     lock_path = _write_set_lock_path(tmp_path, "portfolio-db")
     lock_path.parent.mkdir(parents=True)
     lock_path.write_text(
         json.dumps({"job": "dead", "pid": 12345, "token": "stale-owner"}),
         encoding="utf-8",
     )
-    real_pid_is_alive = getattr(job_runtime, "_pid_is_alive")
+    real_pid_is_alive = runtime_test_api.pid_is_alive
 
     def pid_is_alive(pid: int) -> bool:
         return False if pid == 12345 else real_pid_is_alive(pid)
@@ -1059,8 +1086,8 @@ def test_run_job_propagates_complete_journal_context_and_service_origin(
     terminal: dict[str, object] = {}
     monkeypatch.setattr(job_runtime, "_schema_preflight", _no_schema_drift)
 
-    def accept(**_kwargs: object) -> JournalHandleShape:
-        return getattr(job_runtime, "_JournalHandle")(operation_id, trace_id, True)
+    def accept(**_kwargs: object) -> JournalHandleForTest:
+        return runtime_test_api.journal_handle(operation_id, trace_id, True)
 
     def mark_started(**_kwargs: object) -> None:
         return None
@@ -1120,8 +1147,8 @@ def test_lock_skipped_request_has_terminal_but_no_started_event(
     monkeypatch.setenv("ES_JOB_LOCK_WAIT_S", "0")
     monkeypatch.setattr(job_runtime, "_schema_preflight", _no_schema_drift)
 
-    def accept(**_kwargs: object) -> JournalHandleShape:
-        return getattr(job_runtime, "_JournalHandle")(operation_id, trace_id, True)
+    def accept(**_kwargs: object) -> JournalHandleForTest:
+        return runtime_test_api.journal_handle(operation_id, trace_id, True)
 
     def started(**kwargs: object) -> None:
         events.append(("started", kwargs))
@@ -1169,7 +1196,7 @@ def test_journal_failure_never_changes_child_outcome(
 ) -> None:
     monkeypatch.setattr(job_runtime, "_schema_preflight", _no_schema_drift)
 
-    def fail_journal(**_kwargs: object) -> JournalHandleShape:
+    def fail_journal(**_kwargs: object) -> JournalHandleForTest:
         raise RuntimeError("journal unavailable")
 
     monkeypatch.setattr(job_runtime, "_accept_operation_journal", fail_journal)
@@ -1231,7 +1258,7 @@ def test_health_receipt_serialization_redacts_and_bounds_detail(tmp_path: Path) 
         journal_reason=f"x-api-key: {journal_sentinel} " + "y" * 500,
     )
 
-    getattr(job_runtime, "_write_health")(tmp_path, record)
+    runtime_test_api.write_health(tmp_path, record)
 
     receipt = json.loads(
         (tmp_path / ".tmp" / "job_health" / "unit-job" / "latest.json").read_text(encoding="utf-8")
@@ -1265,7 +1292,7 @@ def test_health_receipt_masks_complete_header_and_assignment_values(tmp_path: Pa
         journal_reason=f"x-api-key: prefix {sentinel} suffix; retry=closed",
     )
 
-    getattr(job_runtime, "_write_health")(tmp_path, record)
+    runtime_test_api.write_health(tmp_path, record)
 
     receipt = json.loads(
         (tmp_path / ".tmp" / "job_health" / "unit-job" / "latest.json").read_text(encoding="utf-8")
@@ -1289,7 +1316,7 @@ def test_health_receipt_masks_bearer_b64token_and_preserves_safe_suffix(tmp_path
         journal_reason="request failed Bearer " + credential + "; retry=closed",
     )
 
-    getattr(job_runtime, "_write_health")(tmp_path, record)
+    runtime_test_api.write_health(tmp_path, record)
 
     receipt = json.loads(
         (tmp_path / ".tmp" / "job_health" / "unit-job" / "latest.json").read_text(encoding="utf-8")
@@ -1318,7 +1345,7 @@ def test_health_receipt_preserves_non_b64token_bearer_delimiter(
         detail="request failed Bearer " + credential + delimiter + " suffix=safe",
     )
 
-    getattr(job_runtime, "_write_health")(tmp_path, record)
+    runtime_test_api.write_health(tmp_path, record)
 
     receipt = json.loads(
         (tmp_path / ".tmp" / "job_health" / "unit-job" / "latest.json").read_text(encoding="utf-8")
@@ -1435,3 +1462,296 @@ def test_inherited_lock_rejected_when_token_does_not_match_on_disk_owner(
         )
         monkeypatch.setattr(job_runtime.os, "getppid", lambda: owner["pid"])
         assert inherited_lock_is_valid(tmp_path, "portfolio-db") is False
+
+
+def test_sec_scheduled_deadline_uses_code_root_task_policy(tmp_path: Path) -> None:
+    code_root = tmp_path / "code"
+    task = code_root / "cron/fetch_sec_xbrl.task.xml"
+    task.parent.mkdir(parents=True)
+    task.write_text(
+        '<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">'
+        "<Settings><ExecutionTimeLimit>PT1H2M3S</ExecutionTimeLimit></Settings></Task>",
+        encoding="utf-8",
+    )
+    assert runtime_test_api.scheduled_deadline_seconds(code_root, "fetch-sec-xbrl") == 3723
+    assert runtime_test_api.scheduled_deadline_seconds(tmp_path, "unrelated-job") is None
+    assert runtime_test_api.scheduled_deadline_seconds(PROJECT_ROOT, "fetch-sec-xbrl") == 7200
+
+
+@pytest.mark.parametrize("duration", ["PT0S", "P0D", "invalid", "PT", ""])
+def test_sec_scheduled_deadline_rejects_unbounded_policy(tmp_path: Path, duration: str) -> None:
+    task = tmp_path / "cron/fetch_sec_xbrl.task.xml"
+    task.parent.mkdir()
+    task.write_text(
+        '<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">'
+        f"<Settings><ExecutionTimeLimit>{duration}</ExecutionTimeLimit></Settings></Task>",
+        encoding="utf-8",
+    )
+    with pytest.raises(OSError, match="ExecutionTimeLimit"):
+        runtime_test_api.scheduled_deadline_seconds(tmp_path, "fetch-sec-xbrl")
+
+
+def test_managed_child_deadline_kills_tree_with_live_owner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    process = _PollingProcess()
+    elapsed = iter([0.0, 0.0, 7200.0])
+    terminated: list[int] = []
+
+    def popen(*_args: object, **_kwargs: object) -> _PollingProcess:
+        return process
+
+    def owner_alive(_owner: tuple[int, str | None]) -> bool:
+        return True
+
+    def monotonic() -> float:
+        return next(elapsed)
+
+    def sleep(_seconds: float) -> None:
+        pass
+
+    monkeypatch.setattr(job_runtime.subprocess, "Popen", popen)
+    monkeypatch.setattr(job_runtime, "_process_identity_is_alive", owner_alive)
+    monkeypatch.setattr(job_runtime.time, "monotonic", monotonic)
+    monkeypatch.setattr(job_runtime.time, "sleep", sleep)
+
+    def terminate_tree(target: _PollingProcess) -> None:
+        terminated.append(target.pid)
+        target.terminated = True
+
+    monkeypatch.setattr(job_runtime, "_terminate_process_tree", terminate_tree)
+    with pytest.raises(job_runtime.JobDeadlineExceededError, match="7200"):
+        _run_managed_child(
+            ["python", "worker.py"],
+            cwd=tmp_path,
+            env={},
+            scheduler_owner=(1234, "win:start"),
+            timeout_seconds=7200,
+        )
+    assert terminated == [process.pid]
+    assert process.poll() == -15
+
+
+def test_sec_deadline_persists_failed_health_and_journal_then_releases_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    terminal: dict[str, object] = {}
+    monkeypatch.setattr(job_runtime, "_schema_preflight", _no_schema_drift)
+
+    def accept(**_kwargs: object) -> JournalHandleForTest:
+        return runtime_test_api.journal_handle("operation:" + "a" * 64, "b" * 32, True)
+
+    def started(**_kwargs: object) -> None:
+        pass
+
+    def finish(**kwargs: object) -> None:
+        terminal.update(kwargs)
+
+    monkeypatch.setattr(job_runtime, "_accept_operation_journal", accept)
+    monkeypatch.setattr(job_runtime, "_mark_operation_journal_started", started)
+    monkeypatch.setattr(job_runtime, "_finish_operation_journal", finish)
+
+    def timeout(*_args: object, **kwargs: object) -> int:
+        assert kwargs["timeout_seconds"] == 7200
+        raise job_runtime.JobDeadlineExceededError(7200)
+
+    monkeypatch.setattr(job_runtime, "_run_managed_child", timeout)
+    code = run_job(
+        repo_root=tmp_path,
+        code_root=PROJECT_ROOT,
+        job_name="fetch-sec-xbrl",
+        write_sets=["sec-companyfacts"],
+        command=[sys.executable, "-c", "pass"],
+        trigger_kind="scheduled",
+        **_request_fields("fetch-sec-xbrl"),
+    )
+    assert code == 124
+    health = json.loads(
+        (tmp_path / ".tmp/job_health/fetch-sec-xbrl/latest.json").read_text(encoding="utf-8")
+    )
+    assert health["status"] == terminal["status"] == "failed"
+    assert health["exit_code"] == terminal["exit_code"] == 124
+    assert health["journal_state"] == "complete"
+    assert "deadline" in health["detail"]
+    assert terminal["detail_reason"] == health["detail"]
+    with JobLock(tmp_path, "next-run", ["sec-companyfacts"], wait_s=0):
+        pass
+
+
+def test_manual_sec_run_keeps_interactive_contract_without_scheduler_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(job_runtime, "_schema_preflight", _no_schema_drift)
+    assert (
+        run_job(
+            repo_root=tmp_path,
+            job_name="fetch-sec-xbrl",
+            write_sets=["sec-companyfacts"],
+            command=[sys.executable, "-c", "pass"],
+            **_request_fields("fetch-sec-xbrl"),
+        )
+        == 0
+    )
+
+
+def test_missing_sec_deadline_policy_fails_without_child_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(job_runtime, "_schema_preflight", _no_schema_drift)
+
+    def child_must_not_run(*_args: object, **_kwargs: object) -> int:
+        pytest.fail("invalid deadline policy launched child")
+
+    monkeypatch.setattr(job_runtime, "_run_managed_child", child_must_not_run)
+    assert (
+        run_job(
+            repo_root=tmp_path,
+            job_name="fetch-sec-xbrl",
+            write_sets=["sec-companyfacts"],
+            command=[sys.executable, "-c", "pass"],
+            trigger_kind="scheduled",
+            **_request_fields("fetch-sec-xbrl"),
+        )
+        == 1
+    )
+    receipt = json.loads(
+        (tmp_path / ".tmp/job_health/fetch-sec-xbrl/latest.json").read_text(encoding="utf-8")
+    )
+    assert receipt["status"] == "failed"
+    assert "ExecutionTimeLimit" in receipt["detail"]
+
+
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_deadline_finishes_only_child_sec_attempt_and_allows_next_run(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
+    ambiguous: bool,
+) -> None:
+    from models.runs import StageStatus
+    from operations.context import activate
+    from pipeline.run_accounting import end_run, start_run
+
+    db_path = migrated_db(tmp_path / "deadline-ledger.db")
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
+    runs: dict[str, str] = {}
+    with sqlite3.connect(db_path) as conn:
+        runs["foreign"] = start_run(conn, "fetch_sec_xbrl", ["FOREIGN"])
+
+    def child(
+        _command: list[str],
+        *,
+        cwd: Path,
+        env: dict[str, str],
+        scheduler_owner: tuple[int, str | None] | None,
+        timeout_seconds: float,
+    ) -> int:
+        del cwd, scheduler_owner
+        with (
+            activate(
+                operation_id=env["ES_OPERATION_ID"],
+                trace_id=env["ES_TRACE_ID"],
+                stage="fetch-sec-xbrl",
+            ),
+            sqlite3.connect(db_path) as conn,
+        ):
+            runs["own"] = start_run(conn, "fetch_sec_xbrl", ["NU"])
+            if ambiguous:
+                runs["own_second"] = start_run(conn, "fetch_sec_xbrl", ["AMBIGUOUS"])
+            runs["other_directive"] = start_run(conn, "different_directive", ["NU"])
+            runs["complete"] = start_run(conn, "fetch_sec_xbrl", ["COMPLETE"])
+            end_run(conn, runs["complete"], StageStatus.OK)
+        raise job_runtime.JobDeadlineExceededError(timeout_seconds)
+
+    monkeypatch.setattr(job_runtime, "_run_managed_child", child)
+    assert (
+        run_job(
+            repo_root=tmp_path,
+            code_root=PROJECT_ROOT,
+            job_name="fetch-sec-xbrl",
+            write_sets=["sec-companyfacts"],
+            command=[sys.executable, "-c", "pass"],
+            trigger_kind="scheduled",
+            **_request_fields("fetch-sec-xbrl"),
+        )
+        == 124
+    )
+    with sqlite3.connect(db_path) as conn:
+        for key, run_id in runs.items():
+            expected = (
+                StageStatus.FAILED
+                if key == "own" and not ambiguous
+                else (StageStatus.OK if key == "complete" else StageStatus.IN_PROGRESS)
+            )
+            for table, identity in (
+                ("ingestion_runs", "run_id"),
+                ("pipeline_attempts", "attempt_id"),
+            ):
+                row = conn.execute(
+                    f"SELECT status,error_summary FROM {table} WHERE {identity}=?", (run_id,)
+                ).fetchone()
+                assert row is not None and row[0] == expected.value
+                if key == "own" and not ambiguous:
+                    assert "deadline exceeded" in row[1]
+            if key == "own" and not ambiguous:
+                assert start_run(conn, "fetch_sec_xbrl", ["NU"]) != run_id
+    receipt = json.loads(
+        (tmp_path / ".tmp/job_health/fetch-sec-xbrl/latest.json").read_text(encoding="utf-8")
+    )
+    assert receipt["journal_state"] == "complete"
+    if ambiguous:
+        assert "attempt reconciliation unavailable" in receipt["detail"]
+        assert "multiple SEC attempts" in receipt["detail"]
+    else:
+        assert "child SEC attempt marked failed" in receipt["detail"]
+
+
+def test_sec_deadline_without_journal_keeps_failed_receipt_and_does_not_sweep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(job_runtime, "_schema_preflight", _no_schema_drift)
+
+    def unavailable(**_kwargs: object) -> JournalHandleForTest:
+        raise OSError("operation journal unavailable")
+
+    def child(*_args: object, **kwargs: object) -> int:
+        assert kwargs["timeout_seconds"] == 7200
+        raise job_runtime.JobDeadlineExceededError(7200)
+
+    def must_not_reconcile(*_args: object, **_kwargs: object) -> str:
+        pytest.fail("unattributed timeout must not change any ingestion attempt")
+
+    monkeypatch.setattr(job_runtime, "_accept_operation_journal", unavailable)
+    monkeypatch.setattr(job_runtime, "_run_managed_child", child)
+    monkeypatch.setattr(job_runtime, "_finish_timed_out_sec_attempt", must_not_reconcile)
+    assert (
+        run_job(
+            repo_root=tmp_path,
+            code_root=PROJECT_ROOT,
+            job_name="fetch-sec-xbrl",
+            write_sets=["sec-companyfacts"],
+            command=[sys.executable, "-c", "pass"],
+            trigger_kind="scheduled",
+            **_request_fields("fetch-sec-xbrl"),
+        )
+        == 124
+    )
+    receipt = json.loads(
+        (tmp_path / ".tmp/job_health/fetch-sec-xbrl/latest.json").read_text(encoding="utf-8")
+    )
+    assert receipt["status"] == "failed"
+    assert receipt["journal_state"] == "unavailable"
+    assert "attempt reconciliation unavailable: operation journal not accepted" in receipt["detail"]
+
+
+def test_sec_deadline_policy_rejects_xml_entities(tmp_path: Path) -> None:
+    task = tmp_path / "cron" / "fetch_sec_xbrl.task.xml"
+    task.parent.mkdir()
+    task.write_text(
+        '<!DOCTYPE Task [<!ENTITY duration "PT2H">]>'
+        '<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">'
+        "<Settings><ExecutionTimeLimit>&duration;</ExecutionTimeLimit></Settings></Task>",
+        encoding="utf-8",
+    )
+    with pytest.raises(OSError, match="policy unavailable"):
+        runtime_test_api.scheduled_deadline_seconds(tmp_path, "fetch-sec-xbrl")

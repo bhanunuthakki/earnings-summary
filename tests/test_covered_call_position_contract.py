@@ -95,6 +95,7 @@ def test_typed_call_does_not_hide_held_stock_or_reject_stock_percent_above_100(
             source_identity="synthetic",
             health=health,
             portfolio_snapshot=snapshot,
-        ).model_dump_json()
+        ).model_dump_json(),
+        encoding="utf-8",
     )
     assert read_configured_offline_portfolio_snapshot(path) is not None

@@ -24,6 +24,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
+from xml.etree.ElementTree import ParseError
+
+from defusedxml import ElementTree
+from defusedxml.common import DefusedXmlException
 
 from log_redact import sanitize_operational_text
 from runtime.python_process import ensure_managed_python_argv
@@ -463,12 +467,57 @@ def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
     process.terminate()
 
 
+class JobDeadlineExceededError(RuntimeError):
+    """The managed child exceeded its approved elapsed-time limit."""
+
+    def __init__(self, timeout_seconds: float) -> None:
+        super().__init__(
+            f"application deadline exceeded after {timeout_seconds:g} seconds; "
+            "child tree terminated; ingestion incomplete; no automatic replay"
+        )
+
+
+def _scheduled_deadline_seconds(code_root: Path, job_name: str) -> float | None:
+    """Use the SEC scheduler's checked policy as its application backstop."""
+    if job_name != "fetch-sec-xbrl":
+        return None
+    policy = code_root / "cron/fetch_sec_xbrl.task.xml"
+    try:
+        root = ElementTree.parse(policy).getroot()
+        if root is None:
+            raise OSError("SEC ExecutionTimeLimit policy has no root")
+        duration = (
+            root.findtext(
+                "task:Settings/task:ExecutionTimeLimit",
+                namespaces={"task": "http://schemas.microsoft.com/windows/2004/02/mit/task"},
+            )
+            or ""
+        )
+    except (OSError, ParseError, DefusedXmlException) as exc:
+        raise OSError("SEC ExecutionTimeLimit policy unavailable") from exc
+    match = re.fullmatch(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?", duration)
+    seconds = (
+        sum(
+            int(value or 0) * factor
+            for value, factor in zip(match.groups(), (86400, 3600, 60, 1), strict=True)
+        )
+        if match is not None
+        else 0
+    )
+    if seconds <= 0:
+        raise OSError(
+            "SEC ExecutionTimeLimit must be a finite positive day/hour/minute/second duration"
+        )
+    return float(seconds)
+
+
 def _run_managed_child(
     command: list[str],
     *,
     cwd: Path,
     env: dict[str, str],
     scheduler_owner: tuple[int, str | None] | None,
+    timeout_seconds: float | None = None,
 ) -> int:
     """Run a job and tear down its tree if Task Scheduler kills the wrapper.
 
@@ -477,9 +526,10 @@ def _run_managed_child(
     exists, but no user code can run or spawn an escaping descendant. Any
     assignment or resume failure terminates that root before returning.
     """
-    if scheduler_owner is None:
+    if scheduler_owner is None and timeout_seconds is None:
         return subprocess.run(command, cwd=cwd, check=False, env=env).returncode
 
+    deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
     creationflags = _CREATE_SUSPENDED if os.name == "nt" else 0
     process = subprocess.Popen(command, cwd=cwd, env=env, creationflags=creationflags)
     process_tree_job: _WindowsKillOnCloseJob | None = None
@@ -501,7 +551,11 @@ def _run_managed_child(
             returncode = process.poll()
             if returncode is not None:
                 return returncode
-            if not _process_identity_is_alive(scheduler_owner):
+            timed_out = deadline is not None and time.monotonic() >= deadline
+            owner_exited = scheduler_owner is not None and not _process_identity_is_alive(
+                scheduler_owner
+            )
+            if timed_out or owner_exited:
                 if process_tree_job is not None:
                     try:
                         process_tree_job.close()
@@ -514,10 +568,13 @@ def _run_managed_child(
                 else:
                     _terminate_process_tree(process)
                 try:
-                    return process.wait(timeout=15)
+                    exit_code = process.wait(timeout=15)
                 except subprocess.TimeoutExpired:
                     process.kill()
-                    return process.wait(timeout=5)
+                    exit_code = process.wait(timeout=5)
+                if timed_out and timeout_seconds is not None:
+                    raise JobDeadlineExceededError(timeout_seconds)
+                return exit_code
             time.sleep(0.5)
     finally:
         if process_tree_job is not None:
@@ -1111,6 +1168,39 @@ def _finish_operation_journal(
         conn.close()
 
 
+def _finish_timed_out_sec_attempt(repo_root: Path, *, operation_id: str, detail: str) -> str:
+    """Finish only the terminated SEC child's attributable live attempt."""
+    from models.runs import StageStatus
+    from pipeline.run_accounting import end_run
+    from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+    with (
+        allow_nested_job_locks(),
+        JobLock(repo_root, "fetch-sec-xbrl-deadline-recovery", ["portfolio-db"]),
+    ):
+        conn = connect_sqlite(
+            portfolio_db_path(repo_root), role=SQLiteConnectionRole.WRITER, schema_preflight=True
+        )
+        try:
+            rows = conn.execute(
+                "SELECT a.attempt_id,r.status FROM pipeline_attempts a "
+                "JOIN ingestion_runs r ON r.run_id=a.attempt_id "
+                "WHERE a.operation_id=? AND r.directive='fetch_sec_xbrl' AND a.status=? "
+                "LIMIT 2",
+                (operation_id, StageStatus.IN_PROGRESS.value),
+            ).fetchall()
+            if len(rows) > 1:
+                raise RuntimeError("multiple SEC attempts attributed to timed-out operation")
+            if not rows:
+                return "no active SEC attempt attributed to child"
+            if str(rows[0][1]) != StageStatus.IN_PROGRESS.value:
+                raise RuntimeError("SEC attempt ledgers disagree before deadline recovery")
+            end_run(conn, str(rows[0][0]), StageStatus.FAILED, error_summary=detail)
+            return "child SEC attempt marked failed"
+        finally:
+            conn.close()
+
+
 def run_job(
     *,
     repo_root: Path,
@@ -1236,13 +1326,51 @@ def run_job(
                 child_env["ES_TRACE_ID"] = journal.trace_id
                 child_env["ES_STAGE"] = job_name
             managed_command = ensure_managed_python_argv(effective_code_root, command)
-            exit_code = _run_managed_child(
-                managed_command,
-                cwd=repo_root,
-                env=child_env,
-                scheduler_owner=_SCHEDULER_OWNER,
+            timeout_seconds = (
+                _scheduled_deadline_seconds(effective_code_root, job_name)
+                if trigger.value == "scheduled"
+                else None
             )
+            if timeout_seconds is None:
+                exit_code = _run_managed_child(
+                    managed_command,
+                    cwd=repo_root,
+                    env=child_env,
+                    scheduler_owner=_SCHEDULER_OWNER,
+                )
+            else:
+                try:
+                    exit_code = _run_managed_child(
+                        managed_command,
+                        cwd=repo_root,
+                        env=child_env,
+                        scheduler_owner=_SCHEDULER_OWNER,
+                        timeout_seconds=timeout_seconds,
+                    )
+                except JobDeadlineExceededError as exc:
+                    if journal.accepted:
+                        try:
+                            recovery = _finish_timed_out_sec_attempt(
+                                repo_root, operation_id=journal.operation_id, detail=str(exc)
+                            )
+                        except Exception as recovery_exc:
+                            recovery = (
+                                "attempt reconciliation unavailable: "
+                                + _safe_journal_reason(recovery_exc)
+                            )
+                    else:
+                        recovery = (
+                            "attempt reconciliation unavailable: operation journal not accepted"
+                        )
+                    exc.add_note(recovery)
+                    raise
         status, severity, detail = _child_health_semantics(job_name, exit_code)
+    except JobDeadlineExceededError as exc:
+        exit_code = 124
+        status = "failed"
+        severity = "error"
+        detail = "; ".join((str(exc), *getattr(exc, "__notes__", ())))
+        print(f"JOB DEADLINE - {job_name}: {detail}", file=sys.stderr, flush=True)
     except JobAlreadyRunningError as exc:
         exit_code = 75  # EX_TEMPFAIL: safe, retryable scheduler contention.
         status = "skipped_locked"

@@ -676,11 +676,17 @@ def test_additive_migration_preserves_old_records_and_append_only_guards(
 
     migrated_db(
         database,
-        target="0050_thesis_check_context",
+        target="0051_thesis_check_context",
         upgrade_from="0048_metric_computation_output_observation",
         before_upgrade=seed,
     )
     connection = sqlite3.connect(database)
+    assert connection.execute("SELECT version_num FROM alembic_version").fetchone() == (
+        "0051_thesis_check_context",
+    )
+    assert "ix_kpi_facts_supersedes_id" in {
+        row[1] for row in connection.execute("PRAGMA index_list(kpi_facts)")
+    }
     for table in tables:
         rows = [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]  # nosec B608 -- closed test table list
         expected = prior_rows[table]

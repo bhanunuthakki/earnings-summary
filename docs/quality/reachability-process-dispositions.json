@@ -853,8 +853,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "_run_managed_child runs the operator-supplied managed command.",
-      "fingerprint": "09343543cf88033bc8eb6cb8f2669015201a36cce99062204327112f15365a6f",
-      "line": 481,
+      "fingerprint": "53830ba109edf6e86673de72c7716143eb6c0fbe87cdabca2bc6b855cbb443d4",
+      "line": 530,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -863,8 +863,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Popen runs the operator-supplied managed command.",
-      "fingerprint": "6e71cbee3bad7735aa489b1d89d7dc9f4842c5bfac9571b0503e2f3741041e1e",
-      "line": 484,
+      "fingerprint": "a60a698213cc933a266bc42aee8128e6e4ff4062cd89541f853d827cebe1cce7",
+      "line": 534,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -925,7 +925,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "be13260fab2b82c74fc5081e6384c86f08b0d1912e19abb35a25c2911488061d",
+      "source_sha256": "67b54002569bbc08aac8f4a9d73be544d942838ce6849576e095f3ac46ceae2e",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

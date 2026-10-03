@@ -7,15 +7,20 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
+from unittest.mock import patch
 
 import pytest
 
 import provenance.sec_companyfacts_capture as companyfacts_capture
+import provenance.sec_companyfacts_fact_matcher as companyfacts_matcher
 from execution.match_legacy_companyfacts_evidence import main as cli_main
 from provenance.sec_companyfacts_capture import CompanyFactsPayload
 from provenance.sec_companyfacts_fact_matcher import (
+    CompanyFactsFactMatcherError,
     CompanyFactsFactMatcherRequest,
+    CompanyFactsMatchContext,
+    match_companyfacts_fact_row,
     match_legacy_companyfacts_evidence,
 )
 
@@ -784,3 +789,285 @@ def test_cli_rejects_live_database() -> None:
         )
         == 2
     )
+
+
+def _duplicate_live_facts(conn: sqlite3.Connection, count: int) -> None:
+    for _ in range(count - 1):
+        conn.execute(
+            "INSERT INTO financial_facts (ticker,period_end,fiscal_period_type,line_item,"
+            "value,currency,unit,source_doc_id,confidence,extracted_by,locator) "
+            "SELECT ticker,period_end,fiscal_period_type,line_item,value,currency,unit,"
+            "source_doc_id,confidence,extracted_by,locator FROM financial_facts WHERE id=1"
+        )
+    conn.commit()
+
+
+def test_live_context_reuses_whole_payload_work_with_exact_match_parity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    facts: dict[str, dict[str, dict[str, object]]] = {
+        "us-gaap": {
+            "Revenues": {
+                "label": "Revenue",
+                "description": "Revenue",
+                "units": {"USD": [_entry()]},
+            },
+            **{
+                f"Unrelated{i}": {
+                    "label": "Unrelated",
+                    "description": "Unrelated",
+                    "units": {"USD": [_entry(accession=OTHER_ACCESSION) for _ in range(20)]},
+                }
+                for i in range(40)
+            },
+        }
+    }
+    raw = _payload(facts=facts)
+    counts = {"dump": 0, "parse": 0}
+    dump = CompanyFactsPayload.model_dump
+    parse = companyfacts_matcher.parse_companyfacts_body
+
+    def counted_dump(
+        self: CompanyFactsPayload,
+        *,
+        mode: Literal["json", "python"] = "python",
+        by_alias: bool | None = None,
+    ) -> dict[str, object]:
+        counts["dump"] += 1
+        return dump(self, mode=mode, by_alias=by_alias)
+
+    def counted_parse(body: bytes, *, expected_cik: str) -> CompanyFactsPayload:
+        counts["parse"] += 1
+        return parse(body, expected_cik=expected_cik)
+
+    monkeypatch.setattr(CompanyFactsPayload, "model_dump", counted_dump)
+    monkeypatch.setattr(companyfacts_matcher, "parse_companyfacts_body", counted_parse)
+    results: list[list[tuple[object, ...]]] = []
+    work: list[dict[str, int]] = []
+    for shared in (False, True):
+        root = tmp_path / ("shared" if shared else "unshared")
+        root.mkdir()
+        conn, blob_root = _seed(
+            root, raw, aggregate_identity=True, locator=json.dumps({"accession_number": ACCESSION})
+        )
+        try:
+            _duplicate_live_facts(conn, 12)
+            context = CompanyFactsMatchContext(blob_root) if shared else None
+            counts["dump"] = counts["parse"] = 0
+            with (
+                patch.object(
+                    companyfacts_matcher,
+                    "_claimed_rungs",
+                    wraps=vars(companyfacts_matcher)["_claimed_rungs"],
+                ) as claim_work,
+                patch.object(
+                    companyfacts_matcher,
+                    "_raw_candidates",
+                    wraps=vars(companyfacts_matcher)["_raw_candidates"],
+                ) as candidate_work,
+            ):
+                for fact_id in range(1, 13):
+                    item = match_companyfacts_fact_row(
+                        conn, fact_row_id=fact_id, blob_root=blob_root, context=context
+                    )
+                    assert item.outcome == "accepted"
+                counts["claim"] = claim_work.call_count
+                counts["candidate"] = candidate_work.call_count
+            results.append(
+                [
+                    tuple(row)
+                    for row in conn.execute(
+                        "SELECT * FROM legacy_fact_evidence_match_revisions ORDER BY fact_row_id"
+                    )
+                ]
+            )
+            work.append(dict(counts))
+        finally:
+            conn.close()
+    assert results[0] == results[1]
+    assert work[0] == {"dump": 12, "parse": 12, "claim": 12, "candidate": 12}
+    assert work[1] == {"dump": 1, "parse": 1, "claim": 1, "candidate": 1}
+
+
+def test_live_context_rechecks_corruption_issuer_scope_and_root(
+    tmp_path: Path,
+) -> None:
+    raw = _payload()
+    conn, blob_root = _seed(
+        tmp_path, raw, aggregate_identity=True, locator=json.dumps({"accession_number": ACCESSION})
+    )
+    try:
+        _duplicate_live_facts(conn, 2)
+        context = CompanyFactsMatchContext(blob_root)
+        match_companyfacts_fact_row(conn, fact_row_id=1, blob_root=blob_root, context=context)
+        path = next(blob_root.rglob("*.json"))
+        path.write_bytes(b"corrupted after cache fill")
+        with pytest.raises(
+            CompanyFactsFactMatcherError, match="companyfacts_blob_or_scope_unavailable"
+        ):
+            match_companyfacts_fact_row(conn, fact_row_id=2, blob_root=blob_root, context=context)
+        path.write_bytes(raw)
+        conn.execute("UPDATE issuer_identifier_assertions SET normalized_value='0000000002'")
+        with pytest.raises(
+            CompanyFactsFactMatcherError, match="companyfacts_blob_or_scope_unavailable"
+        ):
+            match_companyfacts_fact_row(conn, fact_row_id=2, blob_root=blob_root, context=context)
+        conn.execute("UPDATE issuer_identifier_assertions SET normalized_value='0000000001'")
+        conn.execute(
+            "UPDATE legacy_document_evidence_binding_revisions SET scope_content_sha256=?",
+            ("0" * 64,),
+        )
+        with pytest.raises(
+            CompanyFactsFactMatcherError, match="companyfacts_blob_or_scope_unavailable"
+        ):
+            match_companyfacts_fact_row(conn, fact_row_id=2, blob_root=blob_root, context=context)
+        conn.execute(
+            "UPDATE legacy_document_evidence_binding_revisions SET scope_content_sha256=?",
+            (hashlib.sha256(raw).hexdigest(),),
+        )
+        with pytest.raises(
+            CompanyFactsFactMatcherError, match="companyfacts_blob_or_scope_unavailable"
+        ):
+            match_companyfacts_fact_row(
+                conn,
+                fact_row_id=2,
+                blob_root=blob_root,
+                context=CompanyFactsMatchContext(tmp_path / "wrong-root"),
+            )
+        assert (
+            conn.execute("SELECT COUNT(*) FROM legacy_fact_evidence_match_revisions").fetchone()[0]
+            == 1
+        )
+    finally:
+        conn.close()
+
+
+def test_live_context_bounds_candidate_reuse_without_dropping_candidates(tmp_path: Path) -> None:
+    accessions = [ACCESSION, *(f"0000000001-26-{i:06d}" for i in range(2, 19))]
+    raw = _payload(
+        facts={
+            "us-gaap": {
+                "Revenues": {
+                    "label": "Revenue",
+                    "description": "Revenue",
+                    "units": {"USD": [_entry(accession=value) for value in accessions]},
+                }
+            }
+        }
+    )
+    conn, blob_root = _seed(tmp_path, raw, aggregate_identity=True)
+    try:
+        _duplicate_live_facts(conn, 21)
+        context = CompanyFactsMatchContext(blob_root)
+        with patch.object(
+            companyfacts_matcher,
+            "_raw_candidates",
+            wraps=vars(companyfacts_matcher)["_raw_candidates"],
+        ) as candidate_work:
+            # Eighteen distinct pairs exceed the sixteen-pair bound. The last
+            # pair reuses work, while the evicted first pair must recompute.
+            visits = [*accessions, accessions[-1], accessions[0], accessions[-1]]
+            for fact_id, accession in enumerate(visits, start=1):
+                conn.execute(
+                    "UPDATE financial_facts SET locator=? WHERE id=?",
+                    (json.dumps({"accession_number": accession}), fact_id),
+                )
+                item = match_companyfacts_fact_row(
+                    conn, fact_row_id=fact_id, blob_root=blob_root, context=context
+                )
+                assert item.outcome == "accepted"
+                assert item.candidate_count == 1
+            assert candidate_work.call_count == 19
+    finally:
+        conn.close()
+
+
+def test_live_context_retains_only_one_source_identity(tmp_path: Path) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_root.mkdir()
+    second_root.mkdir()
+    locator = json.dumps({"accession_number": ACCESSION})
+    first, blob_root = _seed(first_root, _payload(), aggregate_identity=True, locator=locator)
+    different_raw = _payload(
+        facts={
+            "us-gaap": {
+                "Revenues": {
+                    "label": "Revenue",
+                    "description": "Different immutable source",
+                    "units": {"USD": [_entry()]},
+                }
+            }
+        }
+    )
+    second, second_blob_root = _seed(
+        second_root, different_raw, aggregate_identity=True, locator=locator
+    )
+    try:
+        source = next(second_blob_root.rglob("*.json"))
+        destination = blob_root / source.relative_to(second_blob_root)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(different_raw)
+        for table in ("evidence_content_blobs", "evidence_blob_location_observations"):
+            second.execute(f"UPDATE {table} SET storage_uri=?", (destination.as_uri(),))
+        context = CompanyFactsMatchContext(blob_root)
+        with patch.object(
+            companyfacts_matcher,
+            "parse_companyfacts_body",
+            wraps=companyfacts_matcher.parse_companyfacts_body,
+        ) as parse_work:
+            for conn in (first, first, second, second, first):
+                item = match_companyfacts_fact_row(
+                    conn, fact_row_id=1, blob_root=blob_root, context=context
+                )
+                assert item.outcome == "accepted"
+            assert parse_work.call_count == 3
+    finally:
+        first.close()
+        second.close()
+
+
+def test_live_context_does_not_retain_oversized_candidate_sets(tmp_path: Path) -> None:
+    # Large sets remain fully evaluated. They do not enter the retained cache.
+    large_root = tmp_path / "large"
+    large_root.mkdir()
+    large_raw = _payload(
+        facts={
+            "us-gaap": {
+                "Revenues": {
+                    "label": "Revenue",
+                    "description": "Revenue",
+                    "units": {"USD": [_entry() for _ in range(513)]},
+                }
+            }
+        }
+    )
+    conn, blob_root = _seed(
+        large_root,
+        large_raw,
+        aggregate_identity=True,
+        locator=json.dumps({"accession_number": ACCESSION}),
+    )
+    try:
+        context = CompanyFactsMatchContext(blob_root)
+        with patch.object(
+            companyfacts_matcher,
+            "_raw_candidates",
+            wraps=vars(companyfacts_matcher)["_raw_candidates"],
+        ) as candidate_work:
+            for _ in range(2):
+                with pytest.raises(
+                    CompanyFactsFactMatcherError, match="ambiguous_companyfacts_candidates"
+                ):
+                    match_companyfacts_fact_row(
+                        conn, fact_row_id=1, blob_root=blob_root, context=context
+                    )
+            assert candidate_work.call_count == 2
+            assert (
+                conn.execute(
+                    "SELECT COUNT(*) FROM legacy_fact_evidence_match_revisions"
+                ).fetchone()[0]
+                == 0
+            )
+    finally:
+        conn.close()

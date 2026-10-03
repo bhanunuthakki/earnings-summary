@@ -1280,14 +1280,18 @@ def insert_facts_from_companyfacts(
         # Deferred import breaks the intentional matcher -> ladder dependency
         # while keeping live admission at this boundary.
         from provenance.sec_companyfacts_fact_matcher import (
+            CompanyFactsMatchContext,
             match_companyfacts_fact_row,
         )
+
+        match_context = CompanyFactsMatchContext(snapshot_root)
 
         def _capture_companyfacts_provenance(fact_row_id: int) -> None:
             match_companyfacts_fact_row(
                 conn,
                 fact_row_id=fact_row_id,
                 blob_root=snapshot_root,
+                context=match_context,
             )
             capture_fact_row_observation(
                 conn,

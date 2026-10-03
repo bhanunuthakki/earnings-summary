@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 
 from dcf.scenario_reward import parse_scenario_fair_value
 from sources.discovery_market import DiscoveryMarketContext
-from sources.report_financials import FinancialTableProjection
+from sources.report_financials import FinancialEvidenceReference, FinancialTableProjection
 
 
 class SectionStatus(StrEnum):
@@ -558,6 +558,9 @@ class CellSource(BaseModel):
     # (the original P4.3 chip source); KPI-sourced chips set "kpi_facts"
     # (provenance Phase B, where IR-deck pdf_slide locators live).
     fact_table: str = "financial_facts"
+    # Exact admitted report selection. The shared chip prefers this over
+    # mutable legacy fact/document references when it is present.
+    canonical_reference: FinancialEvidenceReference | None = None
 
 
 class QuarterlyLineItem(BaseModel):
