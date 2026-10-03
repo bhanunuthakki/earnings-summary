@@ -73,7 +73,7 @@ class RiskRewardGapRow:
     risk_share_pct: float  # share of total book risk (sums to ~100%)
     marginal_vol_ann_pct: float  # annualized marginal vol (waterfall substrate)
     expected_return_pct: float | None  # compatibility field: present-value upside percentage
-    reward_share_pct: float | None  # share of measured positive modeled upside
+    reward_share_pct: float | None  # signed contribution / positive gross modeled upside
     gap_pct: float | None  # risk_share - reward_share (+ = over-risked for the reward)
     conviction: float | None  # latest recorded conviction (1-5)
     has_scenarios: bool  # the reward used a bull/base/bear range (not just the base point)
@@ -178,10 +178,10 @@ def build_gap_rows(
 ) -> tuple[list[RiskRewardGapRow], int]:
     """Join risk shares × reward legs × conviction into the ranked rows.
 
-    Returns ``(rows, valued_names)``. Reward shares distribute the book's
-    *measured* valuation upside — the sum of positive weight×valuation-upside
-    contributions over the names that carry a DCF reward — so a name without a
-    DCF reads as low-confidence with no reward share, not a fabricated zero."""
+    Returns ``(rows, valued_names)``. Each reward share is a signed
+    weight×valuation-upside contribution (gap clamped to ±REWARD_CLAMP), divided
+    by the sum of positive contributions over names with a DCF reward. Negative gaps have negative
+    shares; rows need not sum to 100%. A name without a DCF has no reward share."""
     contrib: dict[str, float] = {
         t: book.weights.get(t, 0.0) * max(-REWARD_CLAMP, min(REWARD_CLAMP, r.expected_return))
         for t, r in rewards.items()

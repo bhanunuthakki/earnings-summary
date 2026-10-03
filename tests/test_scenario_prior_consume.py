@@ -348,3 +348,31 @@ def test_projection_refuses_overflow_and_unsupported_probability_mass() -> None:
     assert scenario_ev_skew(
         100, 120, _snap(bull=None, bear=None, weights={"bull": 0.5, "base": 0, "bear": 0.5})
     ) == (None, None)
+
+
+@pytest.mark.parametrize("bear", [None, 0.0, -50.0, float("nan"), float("inf"), float("-inf")])
+def test_card_coverage_uses_calculation_admitted_tails(tmp_path: Path, bear: float | None) -> None:
+    repo = _seed_repo(tmp_path, _snap(bull=150, base=100, bear=bear))
+    valuation = valuation_snapshot("TEST", repo, current_price=None, model_link=None, mos_bar=None)
+    assert valuation.scenario_valuation_upside == pytest.approx(1 / 6)
+    for renderer in ("workspace", "markdown"):
+        body = StringIO()
+        if renderer == "workspace":
+            _valuation_summary_panel(
+                body, SnapshotSection(status=SectionStatus.OK, ticker="TEST", valuation=valuation)
+            )
+        else:
+            _valuation_card_md(body, valuation)
+        assert "partial scenarios; weights renormalized" in body.getvalue()
+    assert valuation.bear_npv_per_share is None
+
+
+@pytest.mark.parametrize("bear", [0.0, -50.0, float("nan"), float("inf")])
+def test_prior_status_excludes_unusable_tail_in_legacy_payload(bear: float) -> None:
+    valuation = ValuationSnapshot(
+        bull_npv_per_share=150,
+        bear_npv_per_share=bear,
+        scenario_expected_return=1 / 6,
+        scenario_set_by="global",
+    )
+    assert "partial scenarios; weights renormalized" in valuation.scenario_prior_status

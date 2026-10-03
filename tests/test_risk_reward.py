@@ -516,3 +516,32 @@ def test_entry_conviction_fallback_fills_names_without_intents(tmp_path: Path) -
     assert by_ticker["BBB"].conviction == 3.0  # medium → 3, from the entry record
     assert by_ticker["CCC"].conviction is None  # closed entry ignored
     assert any("conviction from entry record" in n and "BBB" in n for n in gap.notes)
+
+
+@pytest.mark.parametrize("valuation_gap", [0.1, 2.0])
+def test_rendered_upside_share_explains_signed_contributions(valuation_gap: float) -> None:
+    book = _book(risk_share={"GAIN": 0.5, "LOSS": 0.5}, weights={"GAIN": 0.5, "LOSS": 0.5})
+    rows, valued = build_gap_rows(
+        book,
+        rewards={"GAIN": _reward(valuation_gap), "LOSS": _reward(-valuation_gap)},
+        convictions={},
+    )
+    by = {row.ticker: row for row in rows}
+    assert by["GAIN"].reward_share_pct == pytest.approx(100)
+    assert by["LOSS"].reward_share_pct == pytest.approx(-100)
+    assert sum(row.reward_share_pct or 0 for row in rows) == pytest.approx(0)
+    gap = RiskRewardGap(
+        rows=rows,
+        portfolio_vol_ann=0.2,
+        weights_source="tracker",
+        prices_through=date(2026, 6, 1),
+        cov_obs=252,
+        shrinkage=0.1,
+        valued_names=valued,
+    )
+    text = _risk_reward_gap_section(gap)
+    assert "signed contribution (weight times valuation upside)" in text
+    assert "sum of positive contributions" in text
+    assert "valuation gaps clamped to ±100%" in text
+    assert "rows need not sum to 100%" in text
+    assert "share of positive modeled valuation upside" not in text

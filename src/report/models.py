@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from dcf.scenario_reward import parse_scenario_fair_value
 from sources.discovery_market import DiscoveryMarketContext
 from sources.report_financials import FinancialTableProjection
 
@@ -196,9 +197,11 @@ class ValuationSnapshot(BaseModel):
         """Prior origin and coverage; neither is accepted scenario authority."""
         origin = "default prior" if self.scenario_set_by == "global" else "per-name prior"
         status = f"{origin} (unaccepted)"
-        if (self.bull_npv_per_share is None) != (self.bear_npv_per_share is None):
+        bull_present = parse_scenario_fair_value(self.bull_npv_per_share) is not None
+        bear_present = parse_scenario_fair_value(self.bear_npv_per_share) is not None
+        if bull_present != bear_present:
             status += "; partial scenarios; weights renormalized"
-        elif self.bull_npv_per_share is None and self.scenario_valuation_upside is not None:
+        elif not bull_present and self.scenario_valuation_upside is not None:
             status += "; scenario coverage unavailable"
         return status
 

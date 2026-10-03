@@ -127,7 +127,7 @@ from position_guard_cache import (
     read_position_guard_cache,
 )
 from risk_factors import BookFactorVector, book_factor_vector
-from risk_reward import RiskRewardGap, RiskRewardGapRow, build_risk_reward_gap
+from risk_reward import REWARD_CLAMP, RiskRewardGap, RiskRewardGapRow, build_risk_reward_gap
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from thesis_collision import CachedReport, read_cached_report
 from ui import living_grid as lg
@@ -3412,8 +3412,11 @@ def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
     head = (
         '<section class="panel"><h2>Risk vs reward vs conviction</h2>'
         '<p class="sub">Each position\'s share of total book risk (marginal contribution off the '
-        "Ledoit-Wolf covariance) set against its share of positive modeled valuation upside "
-        "to present fair value and your recorded conviction. Upside shares cover only "
+        "Ledoit-Wolf covariance) set against its modeled valuation upside share and "
+        "your recorded conviction. Each upside share is the signed contribution (weight times valuation upside) "
+        "to present fair value, divided by the sum of positive contributions, with "
+        f"valuation gaps clamped to ±{REWARD_CLAMP * 100:.0f}%. Negative "
+        "valuation gaps have negative shares; rows need not sum to 100%. Upside shares cover only "
         "readiness-qualified names. A positive gap means more modeled risk share than "
         "modeled upside share. Missing, stale or unaccepted DCF evidence leaves the "
         "valuation leg unavailable or unscored; conviction evidence remains usable.</p>"

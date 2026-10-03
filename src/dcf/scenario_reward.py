@@ -56,10 +56,22 @@ class ScenarioReward:
         return self.expected_return - self.base_return
 
 
+def parse_scenario_fair_value(value: object) -> float | None:
+    """Admit one positive, finite scenario value; shared by calculation and cards."""
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    ):
+        return float(value)
+    return None
+
+
 def parse_scenario_fair_values(snapshot_json: object) -> dict[str, float]:
     """Bull / base / bear per-share fair values from a ``dcf_runs`` assumption
-    snapshot. Mirrors ``snapshot._scenario_range`` parsing but returns all three
-    legs that are present + positive. Tolerates absent / malformed / null /
+    snapshot. This owner admits the legs used by the calculation and report
+    range. Tolerates absent / malformed / null /
     non-redesign snapshots (returns an empty dict)."""
     if not isinstance(snapshot_json, str) or not snapshot_json:
         return {}
@@ -78,9 +90,9 @@ def parse_scenario_fair_values(snapshot_json: object) -> dict[str, float]:
         if not isinstance(block, dict):
             continue
         v = cast("dict[str, object]", block).get("fair_value_per_share_usd")
-        # bool is an int subclass — exclude it (matches snapshot._scenario_range).
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0:
-            out[key] = float(v)
+        admitted = parse_scenario_fair_value(v)
+        if admitted is not None:
+            out[key] = admitted
     return out
 
 

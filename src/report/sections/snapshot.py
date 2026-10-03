@@ -14,7 +14,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, SupportsFloat, SupportsIndex, cast
 
-from dcf.scenario_reward import SCENARIO_PROBABILITIES, scenario_reward
+from dcf.scenario_reward import (
+    SCENARIO_PROBABILITIES,
+    parse_scenario_fair_values,
+    scenario_reward,
+)
 from report.models import (
     DecisionBadge,
     KpiSnapshotRow,
@@ -303,28 +307,11 @@ def _scenario_range(snapshot_json: object) -> tuple[float | None, float | None]:
     The "scenarios" block is written by execution/refresh_dcf.py for the
     redesigned FCFF archetype; rows that predate it (or other archetypes) have
     none — both values None and the card keeps its single-point readout. An
-    un-valuable scenario is persisted as null and stays None here.
+    unusable scenario stays None here. The calculation owner supplies the same
+    admitted positive, finite tail set to the range and the prior status.
     """
-    if not isinstance(snapshot_json, str) or not snapshot_json:
-        return None, None
-    try:
-        data: object = json.loads(snapshot_json)
-    except ValueError:
-        return None, None
-    if not isinstance(data, dict):
-        return None, None
-    scenarios = cast("dict[str, object]", data).get("scenarios")
-    if not isinstance(scenarios, dict):
-        return None, None
-
-    def fair_value(key: str) -> float | None:
-        block = cast("dict[str, object]", scenarios).get(key)
-        if not isinstance(block, dict):
-            return None
-        v = cast("dict[str, object]", block).get("fair_value_per_share_usd")
-        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
-
-    return fair_value("bull"), fair_value("bear")
+    admitted = parse_scenario_fair_values(snapshot_json)
+    return admitted.get("bull"), admitted.get("bear")
 
 
 def _priced_in(snapshot_json: object) -> PricedInCard | None:
