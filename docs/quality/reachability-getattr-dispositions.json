@@ -454,7 +454,7 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr reads only _COMPARE_METRIC_ROWS TickerMetrics fields.",
-      "fingerprint": "1498cc273afcbb5370d22a2a10b09d19ba4bd6baf37bb098a91cf4487ba85b1f",
+      "fingerprint": "ad17ded49bfcbbaad350724093e4382cf8da727ea88b80e4bed504960b615caa",
       "line": 1960,
       "path": "src/pipeline/peeks.py",
       "targets": [
