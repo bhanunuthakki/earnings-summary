@@ -131,6 +131,7 @@ WORK_OS_COPILOT_JS = r"""
   var pendingContext = {};
   var busy = false;
   var sessionLoadToken = 0;
+  var savedViewRestores = new Set();
   var copilotOverlay = window.CCOverlay.register(root, {
     modal: true, priority: window.CCOverlay.PRIORITY.DOCK, scrim: false,
     trapFocus: true, restoreFocus: true, motion: 'rise',
@@ -143,6 +144,7 @@ WORK_OS_COPILOT_JS = r"""
       window.setTimeout(function () { input.focus(); }, 0);
     },
     onClose: function () {
+      cancelSavedViewRestores();
       root.setAttribute('aria-hidden', 'true');
       launcher.setAttribute('aria-expanded', 'false');
     }
@@ -316,20 +318,47 @@ WORK_OS_COPILOT_JS = r"""
     visible.forEach(function (session) { historyNode.appendChild(sessionRow(session)); });
   }
 
+  var historyLoadToken = 0;
+  var historyController = null;
+  var historyLoaded = false;
+  var historyFeedback = null;
   function loadCopilotSessions() {
-    historyNode.innerHTML = '<div class="k-well" role="status">Loading conversations&hellip;</div>';
-    fetch('/api/ask/sessions?limit=200', {headers: {Accept: 'application/json'}})
+    var loadToken = ++historyLoadToken;
+    if (historyController) historyController.abort();
+    historyController = new AbortController();
+    if (!historyFeedback) {
+      historyFeedback = document.createElement('div');
+      historyFeedback.className = 'k-well';
+      historyFeedback.setAttribute('aria-live', 'polite');
+      historyNode.before(historyFeedback);
+    }
+    historyFeedback.setAttribute('role', 'status');
+    historyFeedback.textContent = historyLoaded ? 'Refreshing conversation history. Previous results remain visible.' : 'Loading conversations...';
+    historyFeedback.hidden = false;
+    (window.uiFetch || fetch)('/api/ask/sessions?limit=200', {headers: {Accept: 'application/json'}, signal: historyController.signal})
       .then(function (response) {
         if (!response.ok) throw new Error('HTTP ' + response.status);
         return response.json();
       })
       .then(function (payload) {
+        if (loadToken !== historyLoadToken) return;
         sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+        historyLoaded = true; historyFeedback.hidden = true;
         populateCopilotCompanies();
         filterCopilotSessions();
       })
       .catch(function () {
-        historyNode.innerHTML = '<div class="k-well" role="alert">Copilot is temporarily unavailable. Conversation history could not be loaded.</div>';
+        if (loadToken !== historyLoadToken) return;
+        if (!historyLoaded) historyNode.innerHTML = '';
+        historyFeedback.setAttribute('role', 'alert');
+        historyFeedback.textContent = historyLoaded
+          ? 'Conversation history could not refresh. Previous results remain visible and may be stale. '
+          : 'Conversation history could not be loaded. ';
+        var retry = document.createElement('button');
+        retry.type = 'button'; retry.className = 'k-btn k-btn-quiet k-btn-sm';
+        retry.textContent = 'Retry loading history';
+        retry.addEventListener('click', loadCopilotSessions);
+        historyFeedback.appendChild(retry);
       });
   }
 
@@ -412,6 +441,51 @@ WORK_OS_COPILOT_JS = r"""
     return node;
   }
 
+  function cancelSavedViewRestores() {
+    savedViewRestores.forEach(function (controller) { controller.abort(); });
+    savedViewRestores.clear();
+  }
+  function restoreSavedView(fragment, viewSpec, loadToken) {
+    if (loadToken !== sessionLoadToken || !fragment.isConnected) return Promise.resolve();
+    if (fragment.__restoreController) fragment.__restoreController.abort();
+    var controller = new AbortController();
+    fragment.__restoreController = controller;
+    savedViewRestores.add(controller);
+    var timedOut = false;
+    var timer = window.setTimeout(function () { timedOut = true; controller.abort(); }, 30000);
+    fragment.setAttribute('role', 'status');
+    fragment.textContent = 'Restoring saved view...';
+    // This POST evaluates a persisted read-only view. It does not save or approve a mutation.
+    return fetch('/api/viewspec/run', {
+      method: 'POST', headers: {'Content-Type': 'application/json', Accept: 'text/html'},
+      body: JSON.stringify({spec: viewSpec}), signal: controller.signal
+    }).then(function (response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.text();
+    }).then(function (html) {
+      if (loadToken !== sessionLoadToken || !fragment.isConnected ||
+          fragment.__restoreController !== controller || controller.signal.aborted) return;
+      fragment.removeAttribute('role');
+      fragment.innerHTML = html;
+    }).catch(function () {
+      if (loadToken !== sessionLoadToken || !fragment.isConnected ||
+          fragment.__restoreController !== controller) return;
+      fragment.setAttribute('role', 'alert');
+      fragment.textContent = timedOut ? 'Saved view restoration timed out. '
+        : 'The saved view could not be restored. ';
+      var retry = document.createElement('button');
+      retry.type = 'button'; retry.className = 'k-btn k-btn-quiet k-btn-sm';
+      retry.textContent = 'Retry restoring view';
+      retry.addEventListener('click', function () { restoreSavedView(fragment, viewSpec, loadToken); });
+      fragment.appendChild(retry);
+    }).finally(function () {
+      window.clearTimeout(timer);
+      savedViewRestores.delete(controller);
+      if (fragment.__restoreController === controller) fragment.__restoreController = null;
+    });
+  }
+  window.addEventListener('pagehide', cancelSavedViewRestores);
+
   function hydrateStoredExchangeArtifact(exchangeArtifact, loadToken) {
     if (!exchangeArtifact || exchangeArtifact.schema_version !== 'session_exchange_artifact.v1' ||
         typeof exchangeArtifact.exchange_id !== 'string' ||
@@ -435,21 +509,7 @@ WORK_OS_COPILOT_JS = r"""
       fragment.setAttribute('role', 'status');
       fragment.textContent = 'Restoring saved view...';
       host.appendChild(fragment);
-      fetch('/api/viewspec/run', {
-        method: 'POST', headers: {'Content-Type': 'application/json', Accept: 'text/html'},
-        body: JSON.stringify({spec: artifact.view_spec})
-      }).then(function (response) {
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        return response.text();
-      }).then(function (html) {
-        if (loadToken !== sessionLoadToken || !fragment.isConnected) return;
-        fragment.removeAttribute('role');
-        fragment.innerHTML = html;
-      }).catch(function () {
-        if (loadToken !== sessionLoadToken || !fragment.isConnected) return;
-        fragment.setAttribute('role', 'alert');
-        fragment.textContent = 'The saved view could not be restored.';
-      });
+      restoreSavedView(fragment, artifact.view_spec, loadToken);
     }
     if (Array.isArray(artifact.citations) && artifact.citations.length &&
         !host.querySelector('.work-os-copilot-citations')) {
@@ -465,6 +525,7 @@ WORK_OS_COPILOT_JS = r"""
   }
 
   function loadCopilotSession(sessionId) {
+    cancelSavedViewRestores();
     sessionLoadToken += 1;
     var loadToken = sessionLoadToken;
     lastSpec = null;
@@ -477,7 +538,7 @@ WORK_OS_COPILOT_JS = r"""
     renderCopilotContext();
     thread.innerHTML = '<div class="k-well" role="status">Loading conversation...</div>';
     status.textContent = 'Loading conversation...';
-    fetch('/api/ask/sessions/' + encodeURIComponent(sessionId), {headers: {Accept: 'application/json'}})
+    (window.uiFetch || fetch)('/api/ask/sessions/' + encodeURIComponent(sessionId), {headers: {Accept: 'application/json'}})
       .then(function (response) {
         if (!response.ok) throw new Error('HTTP ' + response.status);
         return response.json();
@@ -534,6 +595,7 @@ WORK_OS_COPILOT_JS = r"""
   }
 
   function startNewCopilotSession() {
+    cancelSavedViewRestores();
     sessionLoadToken += 1;
     currentSessionId = null;
     currentSessionContext = null;
@@ -554,6 +616,7 @@ WORK_OS_COPILOT_JS = r"""
       (currentSessionContext && currentSessionContext.company_ticker) || ''
     ).trim().toUpperCase();
     if (!normalizedNext || !currentCompany || currentCompany === normalizedNext) return false;
+    cancelSavedViewRestores();
     sessionLoadToken += 1;
     currentSessionId = null;
     currentSessionContext = null;
@@ -856,7 +919,7 @@ WORK_OS_COPILOT_JS = r"""
     if (moveFocus) focusProposalTarget(card, proposalStatus);
     clearProposalRecoveryActions(card);
     try {
-      var response = await fetch(ref.detail_url, {headers: {'Accept': 'application/json'}});
+      var response = await (window.uiFetch || fetch)(ref.detail_url, {headers: {'Accept': 'application/json'}});
       var detail = await response.json();
       var authoritativeRef = normalizeProposalRef(detail);
       if (!response.ok || !authoritativeRef || authoritativeRef.proposal_id !== ref.proposal_id) {

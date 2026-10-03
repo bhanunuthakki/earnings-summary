@@ -81,7 +81,7 @@ def test_portfolio_copilot_home_composes_live_sortable_holdings_and_bounded_dial
         "const url = '/api/work-os/evaluation-dialogues?limit=' + encodeURIComponent(workOsEvalLimit)"
         in html
     )
-    assert "await fetch(url" in html
+    assert "await workOsFetch(url" in html
     assert "workOsBindEvaluationControls" in html
     assert "workOsRenderEvaluationDialogues" in html
     assert "workOsOpenEvaluationDialogue" in html
@@ -159,7 +159,7 @@ def test_evaluation_is_a_complete_live_research_destination() -> None:
     assert "workOsRenderEvaluationSurface" in html
     assert "function workOsFiniteNumber(value)" in html
     assert "if (value == null || String(value).trim() === '') return null;" in html
-    assert "fetch('/api/work-os/evaluation'" in html
+    assert "workOsFetch('/api/work-os/evaluation'" in html
     assert "Company Desk" in html
     assert "ETF workup" in html
     assert "if (!opened) window.location.assign(target.getAttribute('href'));" in html
@@ -1181,7 +1181,7 @@ def test_full_brief_reader_has_a_resolved_modal_stacking_token() -> None:
 
 def test_cockpit_hydration_does_not_construct_company_desk() -> None:
     html = render_work_os_shell()
-    assert "fetch('/api/work-os/portfolio'" in html
+    assert "workOsFetch('/api/work-os/portfolio'" in html
     assert 'id="workOsPortfolioNav"' in html
     assert 'id="workOsActionQueue"' in html
     assert 'id="workOsPortfolioRows"' in html
@@ -1335,7 +1335,7 @@ def test_earnings_doorway_route_uses_the_document_level_peek_delegate() -> None:
     assert "event.target.closest('[data-peek-url]')" in html
     assert "route.startsWith('/api/peek/')" in html
     assert "workOsOpenPeekRoute(route" in html
-    assert "const response = await fetch(parsedRoute.pathname + parsedRoute.search" in html
+    assert "const response = await workOsFetch(parsedRoute.pathname + parsedRoute.search" in html
     assert "headers: { Accept: 'text/html' }" in html
     assert "signal: controller.signal" in html
     assert "const html = await response.text()" in html
@@ -1381,7 +1381,9 @@ def test_nvo_action_queue_open_company_uses_the_canonical_desk_handoff() -> None
     assert (
         "const requested = workOsNormalizeTicker(ticker) || workOsCurrentCompanyTicker();" in html
     )
-    assert "fetch('/api/work-os/companies/' + encodeURIComponent(normalized) + '/desk'" in html
+    assert (
+        "workOsFetch('/api/work-os/companies/' + encodeURIComponent(normalized) + '/desk'" in html
+    )
 
 
 def test_action_queue_renders_only_exact_alert_evidence_doorways() -> None:
@@ -1594,9 +1596,11 @@ def test_company_switch_keeps_url_and_rendered_identity_in_sync() -> None:
     assert "if (!committed) return false;" in html
     assert "window.navigateTo('screen-workspace'" in switch_runtime
     assert "workOsWriteCompanyContext(requested, 'company-desk', options);" in switch_runtime
-    assert switch_runtime.index(
-        "workOsWriteCompanyContext(requested, 'company-desk', options);"
-    ) < switch_runtime.index("window.navigateTo('screen-workspace'")
+    assert (
+        switch_runtime.index("window.navigateTo('screen-workspace'")
+        < switch_runtime.index("await workOsRenderCompanyDesk(requested)")
+        < switch_runtime.index("workOsWriteCompanyContext(requested, 'company-desk', options);")
+    )
 
 
 def test_company_identity_is_only_committed_by_the_atomic_desk_transition() -> None:

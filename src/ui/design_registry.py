@@ -753,6 +753,7 @@ _PYTHON_CSS_SURFACES = frozenset(
         "pipeline/peeks.py",
         "pipeline/performance_risk_panel.py",
         "pipeline/portfolio_panel.py",
+        "pipeline/portfolio_console_panel.py",  # Reuses canonical portfolio console CSS.
         "pipeline/portfolio_styles.py",
         "pipeline/position_lifecycle_panel.py",
         "pipeline/positioning_panel.py",
@@ -817,6 +818,7 @@ _RUNTIME_JS_SURFACES = frozenset(
         "pipeline/allocation_decisions_panel.py",
         "pipeline/cc_action.py",
         "pipeline/cc_overlay.py",
+        "pipeline/console_scaffold.py",
         "pipeline/cron_health_panel.py",
         "pipeline/decision_journal_panel.py",
         "pipeline/dashboard_html.py",
@@ -1079,6 +1081,9 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/allocation_decisions_panel.py": "d6d9f74f8d6282f475b9250a1949ead4bb7a5a9966ad1fd3bf3772f1f562fc4b",  # pragma: allowlist secret
         "pipeline/analytical_dashboard_html.py": "9777e9c61dad855011479eecf7760f7bfd7d2269155f9d5fb708cf616bade37b",  # pragma: allowlist secret
         "pipeline/calibration_scorecard_panel.py": "1edfbfb1291c38be645133eaab45f78343920da72bf42b3e96c1a36e60a91eac",  # pragma: allowlist secret
+        # Composite section loading reads governed panel HTML. Its fallback
+        # mount preserves server-owned markup; status and Retry use kit classes.
+        "pipeline/console_scaffold.py": "d0949ff412286e9ecccdc606ab4709f3f10fc222183c3a6a599d16cbefd8518d",  # pragma: allowlist secret
         "pipeline/cron_health_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
         "pipeline/explore_panel.py": "fc1dd2e109d4f31a63e523c6f6ba3bc016b10b1faa443d32240e35fabed2fa8c",  # pragma: allowlist secret
         "pipeline/model_eval_panel.py": "f4af1f25d2641ba46a64a043073730df7b11ef1e96f3b3ad4d71801e17c3e983",  # pragma: allowlist secret

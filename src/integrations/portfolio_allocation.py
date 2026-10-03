@@ -108,6 +108,9 @@ class CoveredCallExposure(BaseModel):
     gross_stock_capital: Decimal
     option_market_value: Decimal
     net_market_value: Decimal
+    net_weight_pct: Decimal
+    stock_weight_pct: Decimal
+    option_weight_pct: Decimal
     legs: tuple[CoveredCallLeg, ...]
 
 
@@ -444,6 +447,9 @@ def project_portfolio_allocation(
                 gross_stock_capital=stock_value,
                 option_market_value=value,
                 net_market_value=stock_value + value,
+                net_weight_pct=(stock_value + value) / total * Decimal(100),
+                stock_weight_pct=stock_value / total * Decimal(100),
+                option_weight_pct=value / total * Decimal(100),
                 legs=tuple(call_legs[security_id]),
             )
         )

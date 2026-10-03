@@ -101,6 +101,7 @@ from comments_server_journal_routes import (
     register_journal_routes,
 )
 from comments_server_panel_cache import (
+    PanelCacheBusy,
     PanelCacheEntry,
     PanelCacheHit,
     PanelCacheReservation,
@@ -1012,6 +1013,17 @@ def create_app(
             return None
         cache_key = request.full_path.removesuffix("?")
         lookup = panel_cache.get_or_reserve(cache_key)
+        if isinstance(lookup, PanelCacheBusy):
+            g.panel_cache_bypass = True
+            g.panel_cache_busy = True
+            response = Response(
+                json.dumps({"error": "This view is still loading. Retry shortly."}),
+                status=503,
+                mimetype="application/json",
+            )
+            response.headers["Retry-After"] = str(lookup.retry_after_seconds)
+            response.headers["X-Panel-Cache"] = "busy"
+            return response
         if isinstance(lookup, PanelCacheReservation):
             g.panel_cache_reservation = lookup
             return None
@@ -1154,7 +1166,11 @@ def create_app(
                             "status": response.status_code,
                             "duration_ms": round(duration_ms, 1),
                             "panel_cache": (
-                                "hit" if getattr(g, "panel_cache_hit", False) else "miss"
+                                "busy"
+                                if getattr(g, "panel_cache_busy", False)
+                                else "hit"
+                                if getattr(g, "panel_cache_hit", False)
+                                else "miss"
                             ),
                             "correlation_id": get_correlation_id(),
                         },
@@ -2049,10 +2065,26 @@ def create_app(
             # established performance, posture, typed allocation, and lazy
             # risk fragments.  It intentionally does not call the legacy Risk
             # page renderer, whose successful reads refresh a snapshot.
-            from pipeline.performance_risk_panel import render_performance_risk_panel
+            from pipeline.performance_risk_panel import (
+                render_performance_risk_fragment,
+                render_performance_risk_panel,
+            )
             from pipeline.portfolio_panel import render_health_fragment
 
             fragment = request.args.get("fragment")
+            if fragment in ("performance", "allocation", "posture"):
+                return Response(
+                    render_performance_risk_fragment(
+                        db_path,
+                        repo_root,
+                        fragment,
+                        start_date=request.args.get("start_date"),
+                        end_date=request.args.get("end_date"),
+                        include_backfill=request.args.get("include_backfill")
+                        in ("1", "true", "True"),
+                    ),
+                    mimetype="text/html",
+                )
             if fragment:
                 return Response(
                     render_health_fragment(db_path, fragment, conn=get_read_db()),
@@ -2065,6 +2097,7 @@ def create_app(
                     start_date=request.args.get("start_date"),
                     end_date=request.args.get("end_date"),
                     include_backfill=request.args.get("include_backfill") in ("1", "true", "True"),
+                    lazy=True,
                 ),
                 mimetype="text/html",
             )
@@ -2150,11 +2183,23 @@ def create_app(
         if name == "portfolio_record":
             # Portfolio -> Record (Phase-5 IA): composes the allocation-decisions
             # record + advisor Memos + the Triggers ladder (old `holdings`).
-            from pipeline.portfolio_console_panel import render_portfolio_record_panel
+            from pipeline.portfolio_console_panel import (
+                render_portfolio_record_fragment,
+                render_portfolio_record_panel,
+            )
 
             user_id = DEFAULT_USER_ID
+            fragment = request.args.get("fragment")
+            if fragment:
+                if fragment not in ("brief", "decisions", "research-items", "memos", "triggers"):
+                    abort(404)
+                return Response(
+                    render_portfolio_record_fragment(db_path, fragment, user_id=user_id),
+                    mimetype="text/html",
+                )
             return Response(
-                render_portfolio_record_panel(db_path, user_id=user_id), mimetype="text/html"
+                render_portfolio_record_panel(db_path, user_id=user_id, lazy=True),
+                mimetype="text/html",
             )
 
         if name == "ir_coverage":

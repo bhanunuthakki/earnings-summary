@@ -454,7 +454,7 @@ _CRON_REFRESH_JS = """
     live.setAttribute('aria-busy', 'true');
     status.textContent = 'Refreshing cron health';
     try {
-      var response = await fetch(live.dataset.cronFragmentUrl, {
+      var response = await (window.uiFetch || fetch)(live.dataset.cronFragmentUrl, {
         signal: requestController.signal,
         headers: { Accept: 'text/html' },
         cache: 'no-store'

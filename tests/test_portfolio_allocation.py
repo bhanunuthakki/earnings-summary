@@ -218,6 +218,9 @@ def test_signed_covered_call_preserves_net_allocation_and_stock_capital() -> Non
     assert exposure.gross_stock_capital == Decimal(13200)
     assert exposure.option_market_value == Decimal(-200)
     assert exposure.net_market_value == Decimal(13000)
+    assert exposure.net_weight_pct == Decimal(13000) / Decimal(19800) * 100
+    assert exposure.stock_weight_pct == Decimal(13200) / Decimal(19800) * 100
+    assert exposure.option_weight_pct == Decimal(-200) / Decimal(19800) * 100
     assert exposure.legs[0].covered_shares == Decimal(100)
     assert exposure.legs[0].uncovered_shares == 0
     assert exposure.legs[0].contracts == 1

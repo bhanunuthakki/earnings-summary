@@ -38,12 +38,15 @@ def _create_decisions_db() -> sqlite3.Connection:
     return conn
 
 
-def test_build_decision_projection_owner_overrides_when_populated() -> None:
+def test_build_decision_projection_owner_overrides_when_populated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     conn = _create_decisions_db()
     owner_conds = json.dumps(
         [
             {
                 "metric": "Services Gross Margin",
+                "metric_source": "kpi",
                 "op": "ge",
                 "threshold": 75.0,
                 "unit": "percent",
@@ -56,6 +59,7 @@ def test_build_decision_projection_owner_overrides_when_populated() -> None:
         [
             {
                 "metric": "iPhone Revenue",
+                "metric_source": "kpi",
                 "op": "ge",
                 "threshold": 40.0,
                 "unit": "billions",
@@ -76,9 +80,24 @@ def test_build_decision_projection_owner_overrides_when_populated() -> None:
         (model_conds,),
     )
 
+    reads: list[str] = []
+
+    def fetch_observations(
+        _conn: sqlite3.Connection, _ticker: str, metric: str, _periods: int
+    ) -> list[KpiObservation]:
+        reads.append(metric)
+        if metric != "Services Gross Margin":
+            raise AssertionError("Unused model conditions must not read financial history")
+        return [_observation("80", "2026-06-30", Unit.PERCENT)]
+
+    monkeypatch.setattr(decisions_projection, "fetch_kpi_observations", fetch_observations)
     _projection, conditions, _issues = build_decision_projection(
         conn, "AAPL", as_of=datetime(2026, 8, 15, tzinfo=UTC)
     )
+    assert reads == ["Services Gross Margin"]
+    assert conditions[0].latest_value == 80
+    assert _projection.owner is not None and _projection.model is not None
+    assert _projection.relationship == "agree"
 
     assert len(conditions) == 1
     assert conditions[0].metric == "Services Gross Margin"

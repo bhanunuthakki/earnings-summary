@@ -27,6 +27,7 @@
   let workOsPortfolioLoading = null;
   let workOsEvaluationSurfaceLoading = null;
   let workOsResearchCompanies = null;
+  let workOsResearchCompaniesLoading = null;
   let workOsCompanyRequestSequence = 0;
   let workOsCompanyRequestController = null;
   let workOsPeekRequestSequence = 0;
@@ -39,6 +40,8 @@
   let workOsFactPlaygroundLoading = null;
   let workOsFactPlaygroundRequestSequence = 0;
   let workOsFactPlaygroundRequestController = null;
+  let workOsBriefLookupSequence = 0;
+  let workOsBriefLookupController = null;
   let companyPickerMatches = [];
   let companyPickerActiveIndex = -1;
   const workOsLaunchParams = new URLSearchParams(window.location.search);
@@ -256,6 +259,13 @@
     trapFocus: true, restoreFocus: true, motion: 'fade',
     group: 'work-os-reader', closeId: 'workOsBriefReaderClose', wireClose: true,
     onOpen: function () { briefReader.hidden = false; briefReader.setAttribute('aria-hidden', 'false'); },
+    onBeforeClose: function () {
+      workOsBriefLookupSequence += 1;
+      if (workOsBriefLookupController) workOsBriefLookupController.abort();
+      workOsBriefLookupController = null;
+      workOsAbortTarget(document.getElementById('workOsBriefReaderBody'), 'hidden');
+      workOsAbortTarget(document.getElementById('workOsBriefResearchItemsMount'), 'hidden');
+    },
     onClose: function () {
       briefReader.hidden = true;
       briefReader.setAttribute('aria-hidden', 'true');
@@ -360,13 +370,19 @@
   async function workOsLoadBriefResearchItems(ticker) {
     const mount = document.getElementById('workOsBriefResearchItemsMount');
     if (!mount || !ticker) return;
+    const state = workOsBeginRead(mount);
     mount.innerHTML = '<div class="k-well" role="status">Loading live research items…</div>';
     try {
-      const response = await fetch('/api/panel/journal?items=1&band=brief&ticker=' + encodeURIComponent(ticker), { headers: { Accept: 'text/html' } });
+      const response = await workOsFetch('/api/panel/journal?items=1&band=brief&ticker=' + encodeURIComponent(ticker), { signal: state.controller.signal, headers: { Accept: 'text/html' } });
       if (!response.ok) throw new Error('HTTP ' + response.status);
-      window.workOsMountHtml(mount, await response.text(), '/api/panel/journal');
+      const markup = await response.text();
+      if (workOsRequests.get(mount) !== state) return;
+      window.workOsMountHtml(mount, markup, '/api/panel/journal');
     } catch (error) {
-      mount.innerHTML = '<div class="k-well" role="alert">Research Items are unavailable; the persisted brief remains readable.</div>';
+      if (workOsRequests.get(mount) !== state) return;
+      mount.innerHTML = '<div class="k-well" role="alert">Research Items are unavailable; the persisted brief remains readable.' + workOsRetryControl('research-items') + '</div>';
+    } finally {
+      workOsFinishRead(mount, state);
     }
   }
 
@@ -390,10 +406,11 @@
       return;
     }
     if (!body) return;
+    const state = workOsBeginRead(body);
     body.innerHTML = '<div class="k-well" role="status">Loading complete persisted brief…</div>';
     try {
       const bodyUrl = artifact.body_url || ('/api/work-os/briefs/' + encodeURIComponent(artifact.artifact_id) + '/body');
-      const response = await fetch(bodyUrl, { headers: { Accept: 'application/json' } });
+      const response = await workOsFetch(bodyUrl, { signal: state.controller.signal, allowStatuses: [409], headers: { Accept: 'application/json' } });
       if (!response.ok) {
         const unavailable = response.status === 409 ? await response.json() : null;
         const error = new Error('HTTP ' + response.status);
@@ -401,6 +418,7 @@
         throw error;
       }
       const payload = await response.json();
+      if (workOsRequests.get(body) !== state) return;
       if (!payload || payload.schema_version !== 'report_reader_payload.v1' || !payload.body_html || !payload.style_url || !payload.decision) throw new Error('invalid reader payload');
       workOsRenderReaderDecision(payload.decision);
       const host = document.createElement('div');
@@ -561,11 +579,17 @@
         window.workOsOpenPeekRoute(sourceUrl.pathname + sourceUrl.search + sourceUrl.hash, sourceLink.textContent.trim() || 'Source detail');
       });
     } catch (error) {
+      if (workOsRequests.get(body) !== state) return;
       workOsReaderUnavailable(body, artifact, error && error.readerStatus);
+    } finally {
+      workOsFinishRead(body, state);
     }
   }
 
   window.openWorkOsBriefReader = async function (tickerOrArtifact, options) {
+    const lookupSequence = ++workOsBriefLookupSequence;
+    if (workOsBriefLookupController) workOsBriefLookupController.abort();
+    workOsBriefLookupController = null;
     if (tickerOrArtifact && typeof tickerOrArtifact === 'object' && tickerOrArtifact.artifact_id) {
       if (!(options && options.fromHistory)) {
         const origin = workOsHistoryOrigin();
@@ -582,17 +606,41 @@
       const focusId = workOsHistoryFocusId();
       workOsPushHistoryState(Object.assign({}, window.history.state || {}, { workOsBriefReader: { ticker: requestedTicker, origin: workOsEncodeDetailOrigin(origin), focusId: focusId } }), workOsBriefUrl(requestedTicker, origin, focusId));
     }
-    const response = await fetch('/api/work-os/briefs?ticker=' + encodeURIComponent(requestedTicker) + '&artifact_kind=full_brief&limit=1', { headers: { Accept: 'application/json' } });
-    const payload = response.ok ? await response.json() : null;
-    if (!payload || !payload.items || !payload.items.length) {
-      const title = document.getElementById('workOsBriefReaderTitle');
-      const body = document.getElementById('workOsBriefReaderBody');
-      if (title) title.textContent = requestedTicker + ' Brief';
-      if (body) body.innerHTML = '<div class="k-well" role="alert">No persisted research brief is indexed for this company.</div>';
-      if (briefReaderOverlay) briefReaderOverlay.open();
-      return;
+    const title = document.getElementById('workOsBriefReaderTitle');
+    const body = document.getElementById('workOsBriefReaderBody');
+    if (!body) return;
+    const controller = new AbortController();
+    workOsBriefLookupController = controller;
+    const state = workOsBeginRead(body);
+    const cancelLookup = function () { controller.abort(state.controller.signal.reason); };
+    state.controller.signal.addEventListener('abort', cancelLookup, { once: true });
+    if (title) title.textContent = requestedTicker + ' Brief';
+    body.innerHTML = '<div class="k-well" role="status">Finding persisted research brief…</div>';
+    body.setAttribute('aria-busy', 'true');
+    if (briefReaderOverlay) briefReaderOverlay.open();
+    try {
+      const response = await workOsFetch('/api/work-os/briefs?ticker=' + encodeURIComponent(requestedTicker) + '&artifact_kind=full_brief&limit=1', { signal: controller.signal, headers: { Accept: 'application/json' } });
+      const payload = response.ok ? await response.json() : null;
+      if (lookupSequence !== workOsBriefLookupSequence || workOsRequests.get(body) !== state) return;
+      if (!payload || !Array.isArray(payload.items)) throw new Error('Invalid brief inventory');
+      if (!payload.items.length) {
+        if (title) title.textContent = requestedTicker + ' Brief';
+        body.innerHTML = '<div class="k-well" role="alert">No persisted research brief is indexed for this company.</div>';
+        return;
+      }
+      // The body read takes ownership after lookup admission, not before.
+      workOsFinishRead(body, state);
+      await workOsLoadBriefArtifact(payload.items[0], options);
+    } catch (error) {
+      if (lookupSequence !== workOsBriefLookupSequence || controller.signal.aborted) return;
+      body.innerHTML = '<div class="k-well" role="alert">Brief inventory is temporarily unavailable. <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-work-os-brief-lookup-retry>Retry</button></div>';
+      const retry = body.querySelector('[data-work-os-brief-lookup-retry]');
+      if (retry) retry.addEventListener('click', function () { window.openWorkOsBriefReader(requestedTicker, { fromHistory: true }); });
+    } finally {
+      state.controller.signal.removeEventListener('abort', cancelLookup);
+      workOsFinishRead(body, state);
+      if (workOsBriefLookupController === controller) workOsBriefLookupController = null;
     }
-    await workOsLoadBriefArtifact(payload.items[0], options);
   };
   window.openFullBriefCanvas = window.openWorkOsBriefReader;
 
@@ -765,7 +813,7 @@
     fullPageDetailOverlay.open();
     try {
       const parsedRoute = new URL(canonicalRoute, window.location.origin);
-      const response = await fetch(parsedRoute.pathname + parsedRoute.search, { signal: controller.signal, headers: { Accept: 'text/html' } });
+      const response = await workOsFetch(parsedRoute.pathname + parsedRoute.search, { signal: controller.signal, headers: { Accept: 'text/html' } });
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const markup = await response.text();
       if (requestSequence !== workOsFullPageDetailRequestSequence) return false;
@@ -837,7 +885,7 @@
     body.innerHTML = '<div class="k-well" role="status">Loading persisted research artifact…</div>';
     peekOverlay.open();
     try {
-      const response = await fetch(parsedRoute.pathname + parsedRoute.search, {
+      const response = await workOsFetch(parsedRoute.pathname + parsedRoute.search, {
         signal: controller.signal,
         headers: { Accept: 'text/html' }
       });
@@ -904,7 +952,7 @@
     trigger.disabled = true;
     trigger.textContent = 'Generating persisted readout…';
     try {
-      const response = await fetch('/api/earnings-readout/generate', {
+      const response = await workOsFetch('/api/earnings-readout/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ ticker: ticker })
@@ -977,9 +1025,12 @@
     companyPickerActiveIndex = -1;
     if (companyPickerStatus) companyPickerStatus.textContent = 'Loading company list';
     companyPickerOverlay.open();
-    try { await workOsEnsureResearchCompanies(); } catch (error) { workOsResearchCompanies = []; }
+    let rosterUnavailable = false;
+    try { await workOsEnsureResearchCompanies(); } catch (error) { rosterUnavailable = true; }
     workOsRenderCompanyPickerOptions('', true);
-    if (companyPickerStatus) companyPickerStatus.textContent = companyPickerMatches.length + ' companies available';
+    if (companyPickerStatus) companyPickerStatus.textContent = rosterUnavailable
+      ? (companyPickerMatches.length ? 'Partial company list. ' : '') + 'Company list unavailable. Close and reopen the picker to retry.'
+      : companyPickerMatches.length + ' companies available';
   }
 
   function workOsChooseCompany(ticker) {
@@ -1057,15 +1108,20 @@
 
   async function workOsEnsureResearchCompanies() {
     if (Array.isArray(workOsResearchCompanies)) return workOsResearchCompanies;
-    const response = await fetch('/api/tickers', { headers: { Accept: 'application/json' } });
-    if (!response.ok) throw new Error('HTTP ' + response.status);
-    const payload = await response.json();
-    workOsResearchCompanies = Array.isArray(payload.tickers) ? payload.tickers.filter(function (item) {
-      return item.list_type === 'portfolio' || item.list_type === 'evaluation';
-    }).map(function (item) {
-      return { ticker: String(item.ticker || '').toUpperCase(), name: item.name || item.ticker, coverage_role: item.list_type || 'unknown' };
-    }) : [];
-    return workOsResearchCompanies;
+    if (!workOsResearchCompaniesLoading) {
+      workOsResearchCompaniesLoading = (async function () {
+        const response = await workOsFetch('/api/tickers', { headers: { Accept: 'application/json' } });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const payload = await response.json();
+        workOsResearchCompanies = Array.isArray(payload.tickers) ? payload.tickers.filter(function (item) {
+          return item.list_type === 'portfolio' || item.list_type === 'evaluation';
+        }).map(function (item) {
+          return { ticker: String(item.ticker || '').toUpperCase(), name: item.name || item.ticker, coverage_role: item.list_type || 'unknown' };
+        }) : [];
+        return workOsResearchCompanies;
+      })().finally(function () { workOsResearchCompaniesLoading = null; });
+    }
+    return workOsResearchCompaniesLoading;
   }
 
   async function workOsRenderCompanyDesk(ticker) {
@@ -1078,18 +1134,25 @@
     workOsCompanyRequestController = controller;
     if (companyPickerStatus) companyPickerStatus.textContent = 'Loading ' + normalized + ' company desk';
     screen.setAttribute('aria-busy', 'true');
+    const warningBox = document.getElementById('deskWarnings');
+    if (warningBox) {
+      screen.prepend(warningBox);
+      warningBox.hidden = false;
+      warningBox.setAttribute('role', 'status');
+      warningBox.textContent = 'Loading ' + normalized + ' company desk. Previous company details remain visible until this request succeeds.';
+    }
     try {
-      try { await workOsEnsureResearchCompanies(); } catch (error) { workOsResearchCompanies = []; }
+      try { await workOsEnsureResearchCompanies(); } catch (error) { if (companyPickerStatus) companyPickerStatus.textContent = 'Company list unavailable. Open the picker to retry.'; }
       if (requestSequence !== workOsCompanyRequestSequence) return false;
       const company = workOsCompanyByTicker(normalized);
       if (!company) throw new Error('Unknown company ' + normalized);
-      const response = await fetch('/api/work-os/companies/' + encodeURIComponent(normalized) + '/desk', { signal: controller.signal, headers: { Accept: 'application/json' } });
+      const response = await workOsFetch('/api/work-os/companies/' + encodeURIComponent(normalized) + '/desk', { signal: controller.signal, headers: { Accept: 'application/json' } });
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const desk = await response.json();
       const sayDo = desk.say_do || { status: 'unavailable', commitments: [], quarters: [] };
       if (requestSequence !== workOsCompanyRequestSequence) return false;
       const identity = desk.company || {};
-      const identityTicker = String(identity.ticker || normalized).toUpperCase();
+      const identityTicker = String(identity.ticker || '').toUpperCase();
       if (identityTicker !== normalized) throw new Error('Company response mismatch');
       document.getElementById('deskTicker').textContent = identity.ticker || normalized;
       document.getElementById('deskCompanyName').textContent = identity.name || company.name;
@@ -1357,7 +1420,14 @@
     } catch (error) {
       if ((error && error.name === 'AbortError') || requestSequence !== workOsCompanyRequestSequence) return false;
       const warningBox = document.getElementById('deskWarnings');
-      if (warningBox) { warningBox.hidden = false; warningBox.textContent = 'Unable to switch company desks. The prior company remains open.'; }
+      if (warningBox) {
+        warningBox.hidden = false;
+        warningBox.setAttribute('role', 'alert');
+        warningBox.innerHTML = 'Unable to load ' + escapeWorkOsHtml(normalized) + '. Previous company details remain visible. <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-company-retry>Retry ' + escapeWorkOsHtml(normalized) + '</button>';
+        warningBox.querySelector('[data-work-os-company-retry]').addEventListener('click', function () {
+          return window.switchCompanyWorkspace(normalized);
+        });
+      }
       if (companyPickerStatus) companyPickerStatus.textContent = normalized + ' could not be loaded; ' + workOsCurrentCompanyTicker() + ' remains open';
       return false;
     } finally {
@@ -1445,12 +1515,14 @@
     if (tickerFilter && tickerFilter.value) params.set('ticker', tickerFilter.value);
     if (roleFilter && roleFilter.value) params.set('coverage_role', roleFilter.value);
     if (kindFilter && kindFilter.value) params.set('artifact_kind', kindFilter.value);
+    const state = workOsBeginRead(target);
     target.setAttribute('aria-busy', 'true');
     target.innerHTML = '<div class="k-well" role="status">Loading persisted research artifacts…</div>';
     try {
-      const response = await fetch('/api/work-os/briefs?' + params.toString(), { headers: { Accept: 'application/json' } });
+      const response = await workOsFetch('/api/work-os/briefs?' + params.toString(), { signal: state.controller.signal, headers: { Accept: 'application/json' } });
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const payload = await response.json();
+      if (workOsRequests.get(target) !== state) return;
       const items = Array.isArray(payload.items) ? payload.items : [];
       const kindCleared = workOsUpdateBriefFacet(kindFilter, workOsBriefFacetCounts(payload, 'artifact_kind'), 'All artifacts');
       const tickerCleared = workOsUpdateBriefFacet(tickerFilter, workOsBriefFacetCounts(payload, 'ticker'), 'All companies');
@@ -1481,14 +1553,16 @@
         button.addEventListener('click', workOsClearBriefFilters);
       });
     } catch (error) {
-      target.innerHTML = '<div class="k-well" role="alert">Brief Library inventory is temporarily unavailable.</div>';
+      if (workOsRequests.get(target) !== state) return;
+      target.innerHTML = '<div class="k-well" role="alert">Brief Library inventory is temporarily unavailable.' + workOsRetryControl('briefs') + '</div>';
     } finally {
-      target.removeAttribute('aria-busy');
+      workOsFinishRead(target, state);
     }
   }
 
   window.switchCompanyWorkspace = async function (ticker, options) {
     const requested = workOsNormalizeTicker(ticker) || workOsCurrentCompanyTicker();
+    window.navigateTo('screen-workspace', { fromHistory: true, companyReady: true });
     const committed = await workOsRenderCompanyDesk(requested);
     if (!committed) return false;
     workOsWriteCompanyContext(requested, 'company-desk', options);
@@ -1605,7 +1679,7 @@
       occurred_at: new Date().toISOString()
     }, fields);
     try {
-      const response = await fetch('/api/governed-alerts/' + alertId + '/actions', {
+      const response = await workOsFetch('/api/governed-alerts/' + alertId + '/actions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body)
       });
       const payload = await response.json().catch(function () { return null; });
@@ -1810,7 +1884,7 @@
       const url = '/api/work-os/evaluation-dialogues?limit=' + encodeURIComponent(workOsEvalLimit) +
         '&sort=' + encodeURIComponent(workOsEvalSort) +
         '&filter=' + encodeURIComponent(workOsEvalFilter);
-      const response = await fetch(url, {
+      const response = await workOsFetch(url, {
         signal: signal,
         headers: { Accept: 'application/json' }
       });
@@ -2070,14 +2144,14 @@
     target.setAttribute('aria-busy', 'true');
     workOsEvaluationSurfaceLoading = (async function () {
       try {
-        const response = await fetch('/api/work-os/evaluation', { headers: { Accept: 'application/json' } });
+        const response = await workOsFetch('/api/work-os/evaluation', { headers: { Accept: 'application/json' } });
         const payload = response.ok ? await response.json() : null;
         if (!payload || payload.schema_version !== 'evaluation_surface.v2' || !Array.isArray(payload.items)) throw new Error('Invalid evaluation response');
         workOsRenderEvaluationRows(payload);
         return true;
       } catch (_error) {
         if (count) count.textContent = 'Unavailable';
-        target.innerHTML = '<tr><td colspan="6"><div class="k-well" role="alert">Evaluation coverage is temporarily unavailable. No prototype rows are being shown.</div></td></tr>';
+        target.innerHTML = '<tr><td colspan="6"><div class="k-well" role="alert">Evaluation coverage is temporarily unavailable. No prototype rows are being shown.' + workOsRetryControl('evaluation') + '</div></td></tr>';
         return false;
       } finally {
         target.removeAttribute('aria-busy');
@@ -2159,7 +2233,7 @@
       target.disabled = true;
       target.textContent = 'Recording…';
       try {
-        const response = await fetch('/api/research/investment-profile/' + encodeURIComponent(ticker) + '/labels/' + encodeURIComponent(label) + '/' + encodeURIComponent(action), {
+        const response = await workOsFetch('/api/research/investment-profile/' + encodeURIComponent(ticker) + '/labels/' + encodeURIComponent(label) + '/' + encodeURIComponent(action), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
           body: JSON.stringify({ suggestion_fingerprint: fingerprint })
@@ -2206,7 +2280,7 @@
       workOsPortfolioLoading = (async function () {
         const status = document.getElementById('workOsLiveStatus');
         try {
-          const response = await fetch('/api/work-os/portfolio', { headers: { Accept: 'application/json' } });
+          const response = await workOsFetch('/api/work-os/portfolio', { headers: { Accept: 'application/json' } });
           if (!response.ok) throw new Error('HTTP ' + response.status);
           const payload = await response.json();
           if (!payload || !Array.isArray(payload.companies)) throw new Error('Invalid portfolio response');
@@ -2220,7 +2294,7 @@
           const queue = document.getElementById('workOsActionQueue');
           if (queue) queue.innerHTML = '<div class="k-well" role="alert">Portfolio companies are temporarily unavailable. No prototype values are being shown.</div>';
           const rows = document.getElementById('workOsPortfolioRows');
-          if (rows) rows.innerHTML = '<tr><td colspan="5"><div class="k-well" role="alert">Portfolio company data is temporarily unavailable.</div></td></tr>';
+          if (rows) rows.innerHTML = '<tr><td colspan="5"><div class="k-well" role="alert">Portfolio company data is temporarily unavailable.' + workOsRetryControl('portfolio') + '</div></td></tr>';
           if (status) status.textContent = 'Tracker unavailable · research data only';
         }
       })().finally(function () { workOsPortfolioLoading = null; });
@@ -2265,7 +2339,7 @@
     if (!body) return;
     if (status) status.textContent = 'Saving owner question…';
     try {
-      const response = await fetch('/api/notes', {
+      const response = await workOsFetch('/api/notes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ ticker: workOsCurrentCompanyTicker(), kind: 'question', body: body })
@@ -2355,7 +2429,7 @@
               escapeWorkOsHtml(company.ticker + ' · ' + company.name) + '</option>';
           }).join('');
         }
-        const response = await fetch(endpoint + '?fragment=work-os&tickers=' + encodeURIComponent(ticker), {
+        const response = await workOsFetch(endpoint + '?fragment=work-os&tickers=' + encodeURIComponent(ticker), {
           signal: controller.signal, headers: { Accept: 'text/html' }
         });
         if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -2369,7 +2443,7 @@
         return true;
       } catch (error) {
         if ((error && error.name === 'AbortError') || requestSequence !== workOsFactPlaygroundRequestSequence) return false;
-        mount.innerHTML = '<div class="k-well" role="alert">Explore is temporarily unavailable. No prototype values are being shown.</div>';
+        mount.innerHTML = '<div class="k-well" role="alert">Explore is temporarily unavailable. No prototype values are being shown.' + workOsRetryControl('explore') + '</div>';
         return false;
       } finally {
         if (requestSequence === workOsFactPlaygroundRequestSequence) {
@@ -2409,6 +2483,28 @@
     }
     if (target === 'screen-analytics-playground') workOsRenderFactPlayground();
     originalNavigateTo(target);
+    document.querySelectorAll('.screen-view').forEach(function (screen) {
+      screen.setAttribute('aria-hidden', screen.id === target ? 'false' : 'true');
+    });
+    Object.keys(workOsPersistentMountIds).forEach(function (screenId) {
+      if (screenId !== target) workOsAbortTarget(document.getElementById(workOsPersistentMountIds[screenId]), 'hidden');
+    });
+    if (target !== 'screen-brief-library') workOsAbortTarget(document.getElementById('workOsBriefLibrary'), 'hidden');
+    if (target !== 'screen-analytics-playground' && workOsFactPlaygroundRequestController) {
+      ++workOsFactPlaygroundRequestSequence;
+      workOsFactPlaygroundRequestController.abort();
+      workOsFactPlaygroundRequestController = null;
+      workOsFactPlaygroundLoading = null;
+      const mount = document.getElementById('workOsFactPlayground');
+      if (mount) mount.removeAttribute('aria-busy');
+    }
+    if (target !== 'screen-workspace' && workOsCompanyRequestController) {
+      ++workOsCompanyRequestSequence;
+      workOsCompanyRequestController.abort();
+      workOsCompanyRequestController = null;
+      const screen = document.getElementById('screen-workspace');
+      if (screen) screen.removeAttribute('aria-busy');
+    }
     workOsRenderCompanyBreadcrumb();
     const persistentMountId = workOsPersistentMountIds[target];
     const persistentMount = persistentMountId ? document.getElementById(persistentMountId) : null;
@@ -2607,6 +2703,28 @@
     }
   }
 
+  function workOsFetch(input, options) {
+    return window.uiFetch ? window.uiFetch(input, options) : fetch(input, options);
+  }
+
+  function workOsBeginRead(target) {
+    workOsAbortTarget(target, 'superseded');
+    const state = { controller: new AbortController(), timeoutId: 0, abortReason: '' };
+    workOsRequests.set(target, state);
+    return state;
+  }
+
+  function workOsFinishRead(target, state) {
+    if (workOsRequests.get(target) === state) {
+      target.removeAttribute('aria-busy');
+      workOsRequests.delete(target);
+    }
+  }
+
+  function workOsRetryControl(action) {
+    return ' <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-work-os-retry-action="' + action + '">Retry</button>';
+  }
+
   function workOsMountHtml(target, markup, endpoint) {
     if (!workOsTrustedFragmentEndpoint(endpoint)) {
       throw new Error('Untrusted fragment endpoint');
@@ -2683,7 +2801,7 @@
     const status = document.getElementById('workOsLiveStatus');
     if (status) status.textContent = 'Loading live ' + screenId.replace('screen-', '') + ' data';
     try {
-      const response = await fetch(endpoint, { signal: controller.signal, headers: { Accept: 'text/html' } });
+      const response = await workOsFetch(endpoint, { signal: controller.signal, headers: { Accept: 'text/html' } });
       if (workOsRequests.get(target) !== requestState || !workOsTargetVisible(target)) return;
       if (!response.ok) throw new Error('HTTP ' + response.status);
       const markup = await response.text();
@@ -2694,7 +2812,7 @@
     } catch (error) {
       if (workOsRequests.get(target) !== requestState ||
           requestState.abortReason === 'superseded' || requestState.abortReason === 'hidden') return;
-      const timedOut = requestState.abortReason === 'timeout';
+      const timedOut = requestState.abortReason === 'timeout' || (error && error.name === 'TimeoutError');
       workOsLoadError(
         target,
         screenId,
@@ -2714,6 +2832,16 @@
   window.workOsLoadScreen = workOsLoadScreen;
 
   document.addEventListener('click', function (event) {
+    const actionRetry = event.target && event.target.closest ? event.target.closest('[data-work-os-retry-action]') : null;
+    if (actionRetry) {
+      const action = actionRetry.dataset.workOsRetryAction;
+      if (action === 'briefs') workOsRenderBriefLibrary();
+      if (action === 'evaluation') workOsRenderEvaluationSurface();
+      if (action === 'portfolio') { workOsPortfolioHydration = null; workOsEnsurePortfolioHydration(); }
+      if (action === 'explore') workOsRenderFactPlayground();
+      if (action === 'research-items' && workOsReaderContext) workOsLoadBriefResearchItems(workOsReaderContext.ticker);
+      return;
+    }
     const refresh = event.target && event.target.closest
       ? event.target.closest('[data-work-os-refresh-screen]')
       : null;

@@ -186,7 +186,7 @@ _PROV_NAV_JS = """
     section.innerHTML = '<div class="k-well" role="status">Loading ' + label + '...</div>';
     announce('Loading ' + label);
     try {
-      var response = await fetch(endpoint, {
+      var response = await (window.uiFetch || fetch)(endpoint, {
         signal: controller.signal,
         headers: { Accept: 'text/html' },
         cache: 'no-store'
