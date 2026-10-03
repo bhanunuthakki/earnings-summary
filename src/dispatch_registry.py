@@ -26,6 +26,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from runtime.python_process import managed_python_argv
 
@@ -55,55 +56,95 @@ class Job:
     _done: threading.Event = field(default_factory=threading.Event, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _reader: threading.Thread | None = field(default=None, repr=False)
+    _startup_state: Literal["not_started", "started", "launch_failed", "completion_unconfirmed"] = (
+        field(default="not_started", repr=False)
+    )
+    _startup_reason_code: str | None = field(default=None, repr=False)
 
     def start_subprocess(self) -> None:
         """Spawn the process and a background reader. Idempotent — second call is a no-op."""
-        if self._process is not None:
+        if self._process is not None or self._startup_state == "launch_failed":
             return
-        argv = self.argv
-        child_env: dict[str, str] | None = None
-        if self.lock_repo_root is not None and self.write_sets:
-            state_root = Path(self.lock_repo_root).resolve()
-            code_root = Path(self.code_repo_root or self.lock_repo_root).resolve()
-            runtime = code_root / "src" / "runtime" / "job_runtime.py"
-            argv = [
-                *managed_python_argv(code_root, runtime),
-                "--job",
-                f"interactive-{self.kind}",
-            ]
-            for write_set in self.write_sets:
-                argv.extend(["--write-set", write_set])
-            argv.extend(
-                [
-                    "--repo-root",
-                    str(state_root),
-                    "--code-root",
-                    str(code_root),
-                    "--",
-                    *self.argv,
+        try:
+            argv = self.argv
+            child_env: dict[str, str] | None = None
+            if self.lock_repo_root is not None and self.write_sets:
+                state_root = Path(self.lock_repo_root).resolve()
+                code_root = Path(self.code_repo_root or self.lock_repo_root).resolve()
+                runtime = code_root / "src" / "runtime" / "job_runtime.py"
+                argv = [
+                    *managed_python_argv(code_root, runtime),
+                    "--job",
+                    f"interactive-{self.kind}",
                 ]
+                for write_set in self.write_sets:
+                    argv.extend(["--write-set", write_set])
+                argv.extend(
+                    [
+                        "--repo-root",
+                        str(state_root),
+                        "--code-root",
+                        str(code_root),
+                        "--",
+                        *self.argv,
+                    ]
+                )
+                python_path = [str(code_root), str(code_root / "src")]
+                inherited_python_path = os.environ.get("PYTHONPATH")
+                if inherited_python_path:
+                    python_path.append(inherited_python_path)
+                child_env = {
+                    **os.environ,
+                    "PYTHONPATH": os.pathsep.join(python_path),
+                }
+            self._process = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                bufsize=1,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                cwd=self.cwd,
+                env=child_env,
             )
-            python_path = [str(code_root), str(code_root / "src")]
-            inherited_python_path = os.environ.get("PYTHONPATH")
-            if inherited_python_path:
-                python_path.append(inherited_python_path)
-            child_env = {
-                **os.environ,
-                "PYTHONPATH": os.pathsep.join(python_path),
-            }
-        self._process = subprocess.Popen(
-            argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            bufsize=1,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=self.cwd,
-            env=child_env,
+            self._reader = threading.Thread(target=self._consume_output, daemon=True)
+            self._reader.start()
+            self._startup_state = "started"
+        except BaseException as exc:
+            self.record_startup_failure(exc)
+            raise
+
+    def record_startup_failure(self, error: BaseException) -> None:
+        """Reject unstarted work, or retain an uncertain already-created child."""
+        name = type(error).__name__
+        self._startup_reason_code = (
+            name
+            if len(name) <= 64
+            and name.isascii()
+            and name[0].isalpha()
+            and name.replace("_", "").isalnum()
+            else "StartupError"
         )
-        self._reader = threading.Thread(target=self._consume_output, daemon=True)
-        self._reader.start()
+        if self._process is None:
+            self._startup_state = "launch_failed"
+            # No process exit was observed. Free the normal slot/cap only.
+            self._done.set()
+        else:
+            # Keep this exact process object. Reader failure is not closure.
+            self._startup_state = "completion_unconfirmed"
+
+    @property
+    def startup_disposition(self) -> dict[str, object]:
+        process = self._process
+        pid = process.pid if process is not None else None
+        return {
+            "state": self._startup_state,
+            "reason_code": self._startup_reason_code,
+            "process_retained": process is not None,
+            "pid_observation": pid if isinstance(pid, int) else None,
+            "identity_authority": "retained_popen_object",
+        }
 
     def _consume_output(self) -> None:
         assert self._process is not None
@@ -131,6 +172,7 @@ class Job:
                 "is_running": self.is_running,
                 "exit_code": self.exit_code,
                 "line_count": len(self.lines),
+                "startup": self.startup_disposition,
             }
 
     def stream_events(self) -> Iterator[str]:
@@ -156,7 +198,17 @@ class Job:
                     sent = len(self.lines)
                 for line in new_lines:
                     yield _sse({"event": "log", "line": line})
-                yield _sse({"event": "done", "exit_code": self.exit_code})
+                yield _sse(
+                    {
+                        "event": "done",
+                        "exit_code": self.exit_code,
+                        **(
+                            {"startup": self.startup_disposition}
+                            if self._startup_state == "launch_failed"
+                            else {}
+                        ),
+                    }
+                )
                 return
             time.sleep(POLL_INTERVAL_SEC)
 
@@ -165,8 +217,11 @@ def _sse(payload: dict[str, object]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
-class RegistryConflict(Exception):  # noqa: N818 - public compatibility name
+class RegistryConflictError(Exception):
     """Raised when start() can't accept the request — caller maps to HTTP 409."""
+
+
+RegistryConflict = RegistryConflictError
 
 
 class Registry:

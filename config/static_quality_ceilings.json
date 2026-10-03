@@ -64,7 +64,7 @@
     "execution": 1073,
     "instruction_tests": 0,
     "scripts": 4,
-    "src": 15,
+    "src": 14,
     "src/advisor": 0,
     "src/alerts": 0,
     "src/allocation": 0,

@@ -953,3 +953,48 @@ resumption rechecks current authority and retained bytes. Active plan, checkpoin
 attempt artifacts retain the existing active-checkpoint lifecycle. No scheduler,
 service or dashboard action is added; the CLI JSON and private attempt receipts are
 the supported operation surface.
+
+### Scoped selected-accession HTTP request
+
+Disposition: **primary explicit request API**, with a **deliberate exclusion** of
+Library, Analytics and Operations controls in this slice. The new plan, apply/resume
+and status routes under `/actions/sec-accession` use the server's trusted product-state
+root, code root and explicit database. The client supplies no paths. Existing private
+origin and CSRF guards remain active. No scheduled job, service, provider policy,
+permission or financial writer is added.
+
+The request retains one `AnalysisEvidenceScope` beside the existing immutable
+`plan.json`. It binds issuer, purpose, reporting periods, aware cutoffs, complete
+inventory, selected accession and budgets to that plan. Apply requires the exact
+request, scope and plan commitments. The managed CLI verifies the retained scope
+against stored authority before creating transport. Resume names the last attempt;
+it never selects a new package or widens a historical cutoff. Actual acquisition
+clocks remain current. New observations need an explicit valid successor scope
+before research use. Readable-text success still reports missing financial admission
+and research/report readiness. Cancellation remains unavailable.
+
+The existing Registry owns live job progress and the existing operation directory
+owns durable request/attempt identity. A confirmed startup failure with no retained
+process reports `launch_failed`, a sanitized exception class and no process exit
+code. It frees the normal Registry slot. Failure after process creation retains the
+same process object and reports completion unconfirmed. It does not dispose, kill or
+retry that child. Its actual process owner must establish closure. A server restart
+does not turn absent terminal evidence into success or a new GET-triggered run.
+Explicit resume also refuses completion-unconfirmed attempts.
+
+Status uses one request-scoped read-only connection and bounded immutable metadata:
+at most 250 selected documents, 1000 scope documents, 250 inventory components,
+32 attempts, 160 attempt files, 2 MB per artifact and 8 MB per status read. HTTP capture
+planning also caps batch-size times per-document bytes at 1 GB. Status does not open
+document blobs, create transport, invoke an extractor or restart work. Its ledger
+view explicitly leaves blob verification unperformed. A malformed, changed,
+nonregular, reparse or oversized artifact fails closed. Prior partial and
+unconfirmed receipts remain retained.
+
+`tests/test_sec_accession_request_routes.py`, scoped CLI tests in
+`tests/test_sec_accession_refresh.py` and startup tests in
+`tests/test_dispatch_registry.py` cover synthetic current-schema scope bindings,
+pre-spawn refusal, read-only control, exact resume, restart, startup failure and
+truthful partial/readiness states. These tests do not establish deployment, native
+cleanup qualification, admitted research or milestone 1 completion. UI and
+cancellation acceptance remain separate work.

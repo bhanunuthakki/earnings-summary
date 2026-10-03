@@ -203,7 +203,25 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # -2 retired score/fit presentation peeks.
     # +1 read-only degraded earnings draft peek.
     # +1 bounded cached host-runtime evidence endpoint.
-    assert len(rules) == 176
+    # +3 bounded SEC accession plan, status and apply routes.
+    assert len(rules) == 179
+    expected_sec_routes = {
+        "sec_accession_plan": ("/actions/sec-accession/plan", {"POST", "OPTIONS"}),
+        "sec_accession_status": (
+            "/actions/sec-accession/<request_id>",
+            {"GET", "HEAD", "OPTIONS"},
+        ),
+        "sec_accession_apply": (
+            "/actions/sec-accession/<request_id>/apply",
+            {"POST", "OPTIONS"},
+        ),
+    }
+    for route in client.application.url_map.iter_rules():
+        if route.endpoint in expected_sec_routes:
+            expected_path, expected_methods = expected_sec_routes[route.endpoint]
+            assert rules[route.endpoint] == expected_path
+            assert route.methods == expected_methods
+    assert expected_sec_routes.keys() <= rules.keys()
     assert rules["operations_host_runtime_api"] == "/api/operations/host-runtime"
     assert rules["tracker_read_health"] == "/portfolio-tracker/api/v1/health"
     assert rules["tracker_read_snapshot"] == "/portfolio-tracker/api/v1/portfolio-snapshot"

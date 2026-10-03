@@ -29,6 +29,13 @@ from pipeline.sec_accession_refresh import (
     plan_accession_refresh,
     verify_plan,
 )
+from pipeline.sec_accession_request import (
+    MAX_ATTEMPTS,
+    BoundAccessionRequest,
+    load_bound_request,
+    read_request_status,
+    verify_bound_request,
+)
 from provenance.immutable_artifact import (
     assert_artifact_unchanged,
     publish_text_no_clobber,
@@ -63,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-document-bytes", type=int)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--plan-sha256", help="Exact plan commitment printed by offline planning")
+    parser.add_argument("--request-sha256", help="Exact retained analysis/request commitment")
+    parser.add_argument("--attempt-id", help="Server-bound attempt identity, not request identity")
     args = parser.parse_args(argv)
     try:
         database = require_db_path(args.db)
@@ -119,7 +128,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             try:
                 if not args.apply:
-                    if args.plan_sha256:
+                    if args.plan_sha256 or args.request_sha256 or args.attempt_id:
                         raise RefreshBoundaryError("plan_commitment_is_apply_only")
                     request = AccessionRefreshRequest(
                         request_id=args.request_id,
@@ -163,9 +172,18 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 ):
                     raise RefreshBoundaryError("apply_uses_only_frozen_budgets")
-                snapshot, raw = read_stable_artifact(plan_path)
-                plan = AccessionRefreshPlan.model_validate_json(raw)
-                require_canonical_text_artifact(snapshot, plan.model_dump_json())
+                scope_snapshots = ()
+                bound: BoundAccessionRequest | None = None
+                bound_path = operation_root / "request.json"
+                require_no_reparse_points(bound_path)
+                scoped = bound_path.exists() or bool(args.request_sha256)
+                if scoped:
+                    bound, plan, scope_snapshots = load_bound_request(root, args.request_id)
+                    snapshot = scope_snapshots[0]
+                else:
+                    snapshot, raw = read_stable_artifact(plan_path)
+                    plan = AccessionRefreshPlan.model_validate_json(raw)
+                    require_canonical_text_artifact(snapshot, plan.model_dump_json())
                 if (
                     plan.request.repo_root != root
                     or plan.request.request_id != args.request_id
@@ -173,14 +191,33 @@ def main(argv: list[str] | None = None) -> int:
                     or plan.commitment != args.plan_sha256
                 ):
                     raise RefreshBoundaryError("plan_commitment_or_target_mismatch")
-                verify_plan(conn, plan)
+                if bound is not None:
+                    if bound.commitment != args.request_sha256:
+                        raise RefreshBoundaryError("request_scope_commitment_mismatch")
+                    verify_bound_request(conn, bound, plan)
+                    status = read_request_status(conn, root, args.request_id)
+                    if (
+                        status["attempt_count"] == MAX_ATTEMPTS
+                        and args.attempt_id != status["attempt_id"]
+                    ):
+                        raise RefreshBoundaryError("attempt_population_over_budget")
+                else:
+                    if args.attempt_id:
+                        raise RefreshBoundaryError("attempt_requires_scoped_request")
+                    verify_plan(conn, plan)
+                if args.attempt_id and (
+                    len(args.attempt_id) != 32
+                    or any(character not in "0123456789abcdef" for character in args.attempt_id)
+                ):
+                    raise RefreshBoundaryError("invalid_attempt_id")
                 contact = sec_user_agent()
-                attempt_id = uuid4().hex
+                attempt_id = args.attempt_id or uuid4().hex
                 attempt = operation_root / "attempts" / attempt_id
                 common = {
                     "attempt_id": attempt_id,
                     "request_id": args.request_id,
                     "plan_sha256": plan.commitment,
+                    **({"request_sha256": args.request_sha256} if args.request_sha256 else {}),
                 }
                 publish_text_no_clobber(
                     attempt.with_suffix(".started.json"),
@@ -199,6 +236,8 @@ def main(argv: list[str] | None = None) -> int:
                             conn, plan, session=cast(SessionLike, session), user_agent=contact
                         )
                     assert_artifact_unchanged(snapshot)
+                    for scope_snapshot in scope_snapshots:
+                        assert_artifact_unchanged(scope_snapshot)
                     publish_text_no_clobber(
                         attempt.with_suffix(".result.json"),
                         json.dumps(

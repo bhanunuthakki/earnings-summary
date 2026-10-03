@@ -255,3 +255,59 @@ def test_unlocked_job_inherits_parent_environment(tmp_path: Path):
         assert not job.is_running
 
     assert popen.call_args.kwargs["env"] is None
+
+
+def test_launch_failure_before_process_birth_releases_slot_without_exit_code():
+    registry = Registry(max_concurrent=1)
+    first = _quick_job(registry)
+    with patch(
+        "dispatch_registry.subprocess.Popen", side_effect=FileNotFoundError("private path")
+    ) as popen:
+        with pytest.raises(FileNotFoundError):
+            first.start_subprocess()
+        assert first.startup_disposition["state"] == "launch_failed"
+        assert first.startup_disposition["reason_code"] == "FileNotFoundError"
+        assert first.startup_disposition["process_retained"] is False
+        assert not first.is_running
+        assert first.exit_code is None
+        assert "private path" not in str(first.snapshot())
+        first.start_subprocess()
+        assert popen.call_count == 1
+    second = _quick_job(registry)
+    assert second.job_id != first.job_id
+    assert first.snapshot()["startup"] == first.startup_disposition
+    frames = list(first.stream_events())
+    assert '"exit_code": null' in frames[-1]
+    assert '"launch_failed"' in frames[-1]
+
+
+def test_reader_start_failure_retains_process_and_refuses_retry():
+    registry = Registry(max_concurrent=1)
+    job = _quick_job(registry)
+    with patch("dispatch_registry.subprocess.Popen") as popen:
+        process = popen.return_value
+        process.pid = 1234
+        with (
+            patch(
+                "dispatch_registry.threading.Thread.start",
+                side_effect=RuntimeError("private detail"),
+            ),
+            pytest.raises(RuntimeError),
+        ):
+            job.start_subprocess()
+        assert job.startup_disposition == {
+            "state": "completion_unconfirmed",
+            "reason_code": "RuntimeError",
+            "process_retained": True,
+            "pid_observation": 1234,
+            "identity_authority": "retained_popen_object",
+        }
+        assert job.is_running and job.exit_code is None
+        with pytest.raises(RegistryConflict):
+            _quick_job(registry)
+        job.start_subprocess()
+        assert popen.call_count == 1
+        process.wait.assert_not_called()
+        process.kill.assert_not_called()
+        process.terminate.assert_not_called()
+        assert "private detail" not in str(job.snapshot())

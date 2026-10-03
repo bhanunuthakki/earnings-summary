@@ -1,5 +1,5 @@
 {
-  "review_note": "Reviewed explicit valuation, thesis-revision and full-book-risk modes. Excluded legacy pressure-test execution and corrected evaluator audit writes. Verified governed Ask diff/decision limits including absent scored-miss enforcement, typed tracker account envelope, partial analytics, compatible risk snapshots, and read-only monthly evidence collection. Added source owners for those interfaces and existing evaluation/promotion contracts. Extended the existing monthly fifteen-minute window with bounded synthetic probes, without new production jobs. Reviewed #1616 Operations note: identity-preserving Company Desk loading/retry and lookup index add no writer, operator action or source authority. Reviewed main #1623: cached host-runtime GET adds no live probe or financial write; typed option metadata and signed covered-call projection require preserving gross stock capital, option liability, net NAV, account coverage and incomplete reasons, without assuming sensitivity or contract multipliers. Reviewed release contracts and six explicit source interfaces against actual APIs through separate GPT-6.1 Sol advisory semantic review on 2026-10-03. Exact scope, capture/replay, selected SEC text-only limits, MELI role and scenario acceptance, and current valuation-upside limits remain mandatory. Source review does not qualify installation, native execution, financial readiness or visual performance.",
+  "review_note": "SEC request adapter: exact merged source matches the nine-file semantic review (findings SHA70619a37530549a2648810cd7cd18723c6c2fb7f8e735c3c174d4f5ead84c903) plus independently reviewed POSIX metadata-open repair (metadata-open-review/findings.json SHA09faf648e1724d6d094d9e07e78c6f0235a7aaa62163b23b3d389c0d8c43d927; A1 closed). Operations surface adds bounded plan/dispatch/status and explicit readiness limits; comments_server registers the typed route adapter; refresh_sec_accession reports launch evidence. No financial admission, provider authorization, or complete research claim changes.",
   "schema_version": 1,
   "sources": [
     {
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "1ce86946cee393b55ed9198c0a451ad9de865f1522f2d630bbfaa5169f96e2c4"
+      "sha256": "f194859bd2013c048804225752c93ffdc0d77700d88e5a7a2e6de544025c2bad"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -132,7 +132,7 @@
     },
     {
       "path": "execution/comments_server.py",
-      "sha256": "b085bb4f24fdebef7b9d8e84f7a97ac1ba365c629862bda1ea2c571104ef3858"
+      "sha256": "dbd019699951072ab6d867b364b1025c11d34e4396ad3856bf838792439a1113"
     },
     {
       "path": "execution/comments_server_research_routes.py",
@@ -220,7 +220,7 @@
     },
     {
       "path": "execution/refresh_sec_accession.py",
-      "sha256": "f4b9b6fa6a8c67cea9aaf16bc56a50e47bb8caabcbd1b9cdb29b7adbc7a2b76b"
+      "sha256": "d1f5cacb570ed7a259dba8bbef13c6b70ef4b35fcd77f8924dee9065a98c0263"
     },
     {
       "path": "execution/run_calibration_scorecard.py",

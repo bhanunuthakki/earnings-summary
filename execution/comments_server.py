@@ -120,6 +120,10 @@ from comments_server_research_routes import (
     ResearchTaskRouteContext,
     register_research_task_routes,
 )
+from comments_server_sec_accession_routes import (
+    SecAccessionRouteContext,
+    register_sec_accession_routes,
+)
 from comments_server_settings_routes import (
     SettingsRouteContext,
     register_settings_routes,
@@ -628,6 +632,7 @@ def create_app(
     app = _RedactingFlask(__name__)
     register_tracker_read_routes(app)
     app.config["MAX_CONTENT_LENGTH"] = _MAX_REQUEST_BYTES
+    explicit_sec_database = db_path is not None
     resolved_db_path = (db_path or repo_root / "data" / "portfolio.db").resolve()
     db_path = resolved_db_path
     resolved_code_root = (code_root or PROJECT_ROOT).resolve()
@@ -2862,6 +2867,16 @@ def create_app(
         IrApprovalRouteContext(
             db_path=db_path,
             owner_actor=DEFAULT_USER_ID,
+            get_read_db=get_read_db,
+        ),
+    )
+    register_sec_accession_routes(
+        app,
+        SecAccessionRouteContext(
+            state_root=repo_root,
+            code_root=resolved_code_root,
+            db_path=db_path if explicit_sec_database else None,
+            registry=job_registry,
             get_read_db=get_read_db,
         ),
     )
