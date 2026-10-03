@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
 
@@ -21,7 +21,11 @@ from provenance.population_document_processing import (
 )
 from provenance.population_research_snapshots import assemble_research_snapshot_request
 from provenance.reporting_entity_registry import ReportingEntityRegistry, SourceObligationRevision
-from provenance.research_snapshot import build_research_snapshot, verify_research_snapshot
+from provenance.research_snapshot import (
+    ResearchSnapshotRequest,
+    build_research_snapshot,
+    verify_research_snapshot,
+)
 from provenance.source_coverage import (
     CoverageAssessment,
     ExpectedDocument,
@@ -48,15 +52,24 @@ from search.corpus_builder import (
     build_grounded_search_corpus,
     load_analysis_expected_document_inventory,
 )
+from search.heterogeneous_retrieval import (
+    HeterogeneousRetrievalReceipt,
+    HeterogeneousRetrievalRequest,
+    NarrativeBundle,
+    audit_research_snapshot_for_retrieval,
+    retrieve_heterogeneous,
+    verify_heterogeneous_retrieval_trace,
+)
 from tests.test_filing_xbrl_extraction_ledger import filing_xbrl_ledger_database
 from tests.test_heterogeneous_retrieval import NOW, _seed_resolved_periods, _two_period_output
 
 PERIOD = datetime(2024, 12, 31, tzinfo=UTC)
 
 
-def test_current_schema_scoped_processing_and_autoassembly(
+@pytest.fixture
+def scoped_research_pipeline(
     tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
-) -> None:
+) -> Iterator[tuple[sqlite3.Connection, ResearchSnapshotRequest]]:
     blob = tmp_path / "data/evidence/blobs/filing.xhtml"
     blob.parent.mkdir(parents=True)
     blob.write_bytes(b"filing-bytes")
@@ -397,5 +410,52 @@ def test_current_schema_scoped_processing_and_autoassembly(
         with pytest.raises(ValueError, match="immutable expected_documents"):
             coverage.persist(expected_document.model_copy(update={"form_type": "10-Q"}))
 
+        conn.commit()
+        yield conn, request
     finally:
         conn.close()
+
+
+def test_current_schema_scoped_processing_and_autoassembly(
+    scoped_research_pipeline: tuple[sqlite3.Connection, ResearchSnapshotRequest],
+) -> None:
+    conn, request = scoped_research_pipeline
+    assert verify_research_snapshot(conn, request.research_snapshot_id).admitted
+
+
+@pytest.fixture
+def scoped_retrieval_trace(
+    scoped_research_pipeline: tuple[sqlite3.Connection, ResearchSnapshotRequest],
+) -> tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt]:
+    conn, request = scoped_research_pipeline
+    audit_research_snapshot_for_retrieval(conn, request.research_snapshot_id, audited_at=NOW)
+    bundle = request.corpus_bundles[0]
+    assert bundle.lexical_index_run_id is not None
+    receipt = retrieve_heterogeneous(
+        conn,
+        HeterogeneousRetrievalRequest(
+            trace_id="trace:current",
+            idempotency_key="trace:current",
+            research_snapshot_id=request.research_snapshot_id,
+            fact_generation_id=request.canonical_fact_projection_run_id,
+            narrative_bundles=(
+                NarrativeBundle(
+                    corpus_manifest_id=bundle.corpus_manifest_id,
+                    lexical_index_run_id=bundle.lexical_index_run_id,
+                ),
+            ),
+            query_text="Revenue 2024",
+            cutoff_at=NOW,
+            recorded_at=NOW,
+        ),
+    )
+    assert receipt.result_count > 0
+    conn.commit()
+    return conn, receipt
+
+
+def test_current_schema_scoped_snapshot_yields_verified_trace(
+    scoped_retrieval_trace: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt],
+) -> None:
+    conn, receipt = scoped_retrieval_trace
+    assert verify_heterogeneous_retrieval_trace(conn, receipt.trace_id) == receipt

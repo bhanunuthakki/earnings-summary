@@ -1545,7 +1545,9 @@ class _DefaultResearchReferenceVerifier:
         request: ResearchSnapshotRequest,
     ) -> VerifiedResearchReference:
         if requested_lane == "research_universe":
-            canonical = canonical_json(_universe_payload(request.research_universe))
+            canonical = canonical_json(
+                research_universe_commitment_payload(request.research_universe)
+            )
             return VerifiedResearchReference(
                 requested_lane=requested_lane,
                 reference_table="research_snapshot_universe_commitments",
@@ -2149,7 +2151,7 @@ def _verify_research_universe(
         raise ValueError("canonical fact reporting-entity set must equal the research universe")
 
 
-def _universe_payload(universe: ResearchUniverse) -> dict[str, object]:
+def research_universe_commitment_payload(universe: ResearchUniverse) -> dict[str, object]:
     # This table commits the four-field universe. AnalysisScope is committed by
     # the immutable request header and checked against processing references.
     payload: dict[str, object] = {
@@ -2165,7 +2167,7 @@ def _persist_research_universe(
     conn: sqlite3.Connection,
     request: ResearchSnapshotRequest,
 ) -> None:
-    payload = _universe_payload(request.research_universe)
+    payload = research_universe_commitment_payload(request.research_universe)
     canonical = canonical_json(payload)
     row = (
         request.research_snapshot_id,
@@ -2207,7 +2209,7 @@ def _verify_stored_research_universe(
         "WHERE research_snapshot_id=?",
         (request.research_snapshot_id,),
     ).fetchone()
-    payload = _universe_payload(request.research_universe)
+    payload = research_universe_commitment_payload(request.research_universe)
     canonical = canonical_json(payload)
     expected = (
         request.research_universe.issuer_id,
