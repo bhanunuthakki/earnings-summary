@@ -453,6 +453,8 @@ def render_journal_panel(
   <button type="submit" class="k-btn k-btn-quiet">Filter</button>
   <span class="jr-count" id="jr-count"></span>
 </form>
+<div id="jr-feedback" class="k-well" role="status" aria-live="polite" hidden></div>
+<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-jr-retry hidden>Retry</button>
 <div id="jr-list">{note_list}</div>
 <p class="jr-hint">{hint}</p>
 </div>
@@ -461,20 +463,38 @@ def render_journal_panel(
   var root = document.getElementById('jr-root');
   if (!root || root.dataset.wired) return;
   root.dataset.wired = '1';
+  var generation = 0;
+  var controller = null;
   function refresh() {{
+    var request = ++generation;
+    if (controller) controller.abort();
+    controller = new AbortController();
     var f = document.getElementById('jr-filters');
-    var qs = new URLSearchParams({{
-      ticker: f.ticker.value.trim().toUpperCase(),
+    var status = root.querySelector('#jr-feedback');
+    var retry = root.querySelector('[data-jr-retry]');
+    status.textContent = 'Refreshing notes…'; status.hidden = false; retry.hidden = true;
+    var ticker = f.ticker.value.trim().toUpperCase();
+    var qs = new URLSearchParams({{ticker: ticker,
       kind: f.kind.value, status: f.status.value, fragment: 'list'{item_query}
     }});
-    fetch('/api/panel/journal?' + qs).then(function (r) {{ return r.text(); }})
-      .then(function (html) {{ document.getElementById('jr-list').innerHTML = html; }});
-    var rq = new URLSearchParams({{
-      ticker: f.ticker.value.trim().toUpperCase(), fragment: 'reconcile'{item_query}
+    var rq = new URLSearchParams({{ticker: ticker, fragment: 'reconcile'{item_query}}});
+    var failures = 0;
+    function read(query, target) {{
+      return window.uiFetch('/api/panel/journal?' + query, {{signal: controller.signal}})
+        .then(function (r) {{ return r.text(); }})
+        .then(function (html) {{
+          if (request === generation && root.isConnected) root.querySelector(target).innerHTML = html;
+        }})
+        .catch(function () {{ failures++; }});
+    }}
+    Promise.all([read(qs, '#jr-list'), read(rq, '#jr-reconcile')]).then(function () {{
+      if (request !== generation || !root.isConnected) return;
+      status.hidden = !failures;
+      status.textContent = failures ? 'Some notes could not refresh. Previous entries remain visible in those sections.' : '';
+      retry.hidden = !failures;
     }});
-    fetch('/api/panel/journal?' + rq).then(function (r) {{ return r.text(); }})
-      .then(function (html) {{ document.getElementById('jr-reconcile').innerHTML = html; }});
   }}
+  root.querySelector('[data-jr-retry]').addEventListener('click', refresh);
   document.getElementById('jr-filters').addEventListener('submit', function (ev) {{
     ev.preventDefault(); refresh();
   }});
@@ -620,6 +640,8 @@ def render_research_items_band(
   if (!root || root.dataset.wired) return;
   root.dataset.wired = '1';
   var activeStatus = 'open';
+  var generation = 0;
+  var controller = null;
   var retry = null;
   function feedback(message, retryAction) {{
     var node = root.querySelector('[data-rib-feedback]');
@@ -630,15 +652,19 @@ def render_research_items_band(
   }}
   function refresh(status) {{
     activeStatus = status || activeStatus;
+    var request = ++generation;
+    if (controller) controller.abort();
+    controller = new AbortController();
+    feedback('Refreshing research items…', null);
     root.querySelectorAll('[data-rib-status]').forEach(function (button) {{
       var selected = button.getAttribute('data-rib-status') === activeStatus;
       button.classList.toggle('is-on', selected); button.setAttribute('aria-pressed', String(selected));
     }});
     var ticker = root.getAttribute('data-ticker') || '';
-    fetch('/api/panel/journal?items=1&fragment=list&status=' + encodeURIComponent(activeStatus) + '&ticker=' + encodeURIComponent(ticker))
+    window.uiFetch('/api/panel/journal?items=1&fragment=list&status=' + encodeURIComponent(activeStatus) + '&ticker=' + encodeURIComponent(ticker), {{signal: controller.signal}})
       .then(function (r) {{ if (!r.ok) throw new Error('refresh:' + r.status); return r.text(); }})
-      .then(function (html) {{ var list = root.querySelector('[data-rib-list]'); if (list) list.innerHTML = html; feedback('', null); }})
-      .catch(function () {{ feedback('Research items could not refresh. Retry when the local store is available.', function () {{ refresh(activeStatus); }}); }});
+      .then(function (html) {{ if (request !== generation || !root.isConnected) return; var list = root.querySelector('[data-rib-list]'); if (list) list.innerHTML = html; feedback('', null); }})
+      .catch(function () {{ if (request !== generation || !root.isConnected) return; feedback('Research items could not refresh. Retry when the local store is available.', function () {{ refresh(activeStatus); }}); }});
   }}
   function runAction(url, payload) {{
     function attempt() {{

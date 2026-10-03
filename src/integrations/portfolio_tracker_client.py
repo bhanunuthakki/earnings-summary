@@ -1656,9 +1656,15 @@ def fetch_portfolio_analytics(
     return out
 
 
-def _get_obj(base: str, path: str, *, timeout: float) -> dict[str, object]:
+def _get_obj(
+    base: str, path: str, *, timeout: float, total_timeout: float | None = None
+) -> dict[str, object]:
     """GET a JSON object (the analytics endpoints' shape; ``_get`` covers lists)."""
-    resp = requests.get(base + path, timeout=(_CONNECT_TIMEOUT_SECONDS, timeout))
+    connect_timeout = _CONNECT_TIMEOUT_SECONDS
+    if total_timeout is not None:
+        connect_timeout = min(connect_timeout, total_timeout / 2)
+        timeout = min(timeout, total_timeout - connect_timeout)
+    resp = requests.get(base + path, timeout=(connect_timeout, timeout))
     resp.raise_for_status()
     data = resp.json()
     if not isinstance(data, dict):
@@ -3265,7 +3271,11 @@ def _fetch_portfolio_analytics_v1(
     # work per call (risk = beta+drawdown, position-performance carries the
     # counterfactual series) and measured >6s live. Floor the read budget at
     # the v1 transport's own default; a caller-passed LARGER timeout still wins.
-    client = TrackerV1Client(base_url=base, analytics_read_timeout=max(timeout, 20.0))
+    client = TrackerV1Client(
+        base_url=base,
+        analytics_read_timeout=max(timeout, 20.0),
+        total_timeout_seconds=max(30.0, timeout),
+    )
     out = PortfolioAnalytics(available=False, api_url=base)
     metas: list[V1Meta] = []
 
@@ -3326,7 +3336,19 @@ def _fetch_portfolio_analytics_v1(
             out.errors["positioning"] = f"v1: {positioning.error}"
     if want("policy"):
         try:
-            out.policy = _parse_policy(_get_obj(base, "/api/policy", timeout=timeout))
+            remaining = client.remaining_budget_seconds()
+            if remaining is not None and remaining <= 0:
+                out.errors["policy"] = "total_deadline_exceeded"
+            else:
+                policy_budget = timeout if remaining is None else min(timeout, remaining / 2)
+                policy = _parse_policy(
+                    _get_obj(base, "/api/policy", timeout=policy_budget, total_timeout=remaining)
+                )
+                remaining = client.remaining_budget_seconds()
+                if remaining is not None and remaining <= 0:
+                    out.errors["policy"] = "total_deadline_exceeded"
+                else:
+                    out.policy = policy
         except requests.RequestException as exc:
             out.errors["policy"] = f"{type(exc).__name__}: {exc}"
         except ValueError as exc:
