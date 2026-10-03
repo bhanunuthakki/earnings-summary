@@ -79,6 +79,12 @@ scheduler, writer, or service-health claim. A failed README status read disables
 Apply until the current status is verified. Route and read-lifecycle tests cover
 these preserved boundaries.
 
+Company Desk loading and same-company Retry preserve the prior company identity
+and evidence until the response identity validates. The additive selected-observation
+lookup index changes query access only. It retains resolution revisions, current-head
+selection, and the existing snapshot/readiness migration and rollback procedures.
+No operator action, scheduler, writer, or source authority is added.
+
 `execution/sync_list_type_from_holdings.py --apply --onboard-untracked` is the
 primary operator surface for approving reviewed tracker holdings into the
 research roster. It reuses `db.track_company` for SEC validation, issuer
