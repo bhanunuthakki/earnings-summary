@@ -396,7 +396,34 @@ def test_windows_success_closes_owned_descriptor_before_stable_target_reopen(
     payload = b"issuer bytes"
     root_fd = _open_test_root(root)
     temporary = root / ".owned.tmp"
-    descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT, 0o600)
+    if os.name == "nt":
+        # This mocked pathname rename needs delete sharing. Production uses
+        # handle-relative rename and deliberately keeps a stricter share mode.
+        ffi = getattr(install, "_WINDOWS_FFI")
+        kernel = ffi.load_library("kernel32", use_last_error=True)
+        create = kernel.CreateFileW
+        create.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        ]
+        create.restype = ctypes.c_void_p
+        raw_handle = create(str(temporary), 0xC0010000, 0x07, None, 1, 0x80, None)
+        assert raw_handle not in (None, ctypes.c_void_p(-1).value)
+        try:
+            descriptor = ffi.open_osfhandle(raw_handle, os.O_RDWR | getattr(os, "O_BINARY", 0))
+        except OSError:
+            close_handle = kernel.CloseHandle
+            close_handle.argtypes = [ctypes.c_void_p]
+            close_handle.restype = ctypes.c_int
+            close_handle(raw_handle)
+            raise
+    else:
+        descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT, 0o600)
     metadata = os.fstat(descriptor)
     closed: list[int] = []
     original_close = install.os.close
