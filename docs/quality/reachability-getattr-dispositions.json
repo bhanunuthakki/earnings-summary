@@ -101,8 +101,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "Dynamic level selects only standard logging adapter methods.",
-      "fingerprint": "03bf293148ab27f28ede6109c2ad5e573f599a56f26a4fd321ffa61ee4f9a7f4",
-      "line": 684,
+      "fingerprint": "51d3f7caaaffba6bb709bd18169ee185c80fa5238909a21284aa2ba05022e344",
+      "line": 685,
       "path": "execution/comments_server.py",
       "targets": [
         "logging"
@@ -454,8 +454,8 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr reads only _COMPARE_METRIC_ROWS TickerMetrics fields.",
-      "fingerprint": "6dc3224b96d501764786f2821d3183b286a5a1cb2c45afeeb9660c86b1f255ca",
-      "line": 1949,
+      "fingerprint": "1498cc273afcbb5370d22a2a10b09d19ba4bd6baf37bb098a91cf4487ba85b1f",
+      "line": 1952,
       "path": "src/pipeline/peeks.py",
       "targets": [
         "_COMPARE_METRIC_ROWS"
@@ -701,7 +701,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "f73242ce59ff51922a0c98b5fe6c8660c83c8ac19a0ca59a2b01c9e1a10c37fc",
+      "source_sha256": "4b7e11d96515b1bc19992465e95c58af301bb400d779cef48273f743f25f3f3d",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

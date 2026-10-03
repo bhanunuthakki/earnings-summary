@@ -131,7 +131,7 @@ from risk_reward import RiskRewardGap, RiskRewardGapRow, build_risk_reward_gap
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from thesis_collision import CachedReport, read_cached_report
 from ui import living_grid as lg
-from ui.controls import chip_tone_class, k_empty, thesis_status_tone, ticker_label
+from ui.controls import chip_tone_class, k_empty, read_request_js, thesis_status_tone, ticker_label
 from ui.time import stamp_html
 from ui.tokens import CHART_SERIES
 
@@ -366,19 +366,62 @@ _WINDOW_JS = r"""
     var cb = document.getElementById('pf-backfill');
     return !!(cb && cb.checked);
   }
+  var ownedTarget = null;
+  var ownedController = null;
+  var cancelNotice = null;
+  var lifetime = new MutationObserver(function () {
+    if (!ownedTarget || (bar.isConnected && !ownedTarget.closest('[hidden], [aria-hidden="true"]'))) return;
+    var requests = window.__portfolioWindowRequests;
+    if (requests && requests.get(ownedTarget) === ownedController) {
+      requests.delete(ownedTarget); ownedController.abort();
+      ownedTarget.removeAttribute('aria-busy');
+      if (bar.isConnected && cancelNotice) cancelNotice();
+    }
+    if (!bar.isConnected) lifetime.disconnect();
+  });
+  lifetime.observe(document.body, {childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-hidden']});
   function refetch(start, end, backfill) {
     var targetSelector = bar.getAttribute('data-refresh-target');
     var target = (targetSelector && document.querySelector(targetSelector)) ||
       bar.closest('.cc-panel-body') || bar.parentElement || document.body;
     var endpoint = bar.getAttribute('data-refresh-endpoint') || '/api/panel/portfolio';
-    var qs = [];
-    if (start) qs.push('start_date=' + encodeURIComponent(start));
-    if (end) qs.push('end_date=' + encodeURIComponent(end));
-    if (backfill) qs.push('include_backfill=1');
-    target.innerHTML = '<div class="cc-loading">Loading…</div>';
-    fetch(endpoint + (qs.length ? '?' + qs.join('&') : ''))
+    var url = new URL(endpoint, window.location.href);
+    ['start_date', 'end_date', 'include_backfill'].forEach(function (key) { url.searchParams.delete(key); });
+    if (start) url.searchParams.set('start_date', start);
+    if (end) url.searchParams.set('end_date', end);
+    if (backfill) url.searchParams.set('include_backfill', '1');
+    var requests = window.__portfolioWindowRequests || (window.__portfolioWindowRequests = new WeakMap());
+    var prior = requests.get(target);
+    if (prior) prior.abort();
+    var controller = new AbortController();
+    requests.set(target, controller);
+    var timer = setTimeout(function () { controller.abort(); }, 45000);
+    var notice = target.querySelector('[data-pf-window-status]');
+    if (!notice) {
+      notice = document.createElement('p');
+      notice.className = 'muted'; notice.setAttribute('data-pf-window-status', '');
+      target.prepend(notice);
+    }
+    notice.setAttribute('role', 'status');
+    notice.textContent = 'Loading the selected window. Previous chart retained until the new view is ready.';
+    target.setAttribute('aria-busy', 'true');
+    ownedTarget = target; ownedController = controller;
+    function refreshFailure(message) {
+      notice.setAttribute('role', 'alert');
+      notice.textContent = message + ' Previous chart retained; it does not reflect the selected window. ';
+      var retry = document.createElement('button');
+      retry.type = 'button'; retry.className = 'k-btn k-btn-quiet k-btn-sm';
+      retry.textContent = 'Retry refresh';
+      retry.setAttribute('data-pf-window-retry', '');
+      retry.addEventListener('click', function () { refetch(start, end, backfill); });
+      notice.appendChild(retry);
+    }
+    cancelNotice = function () { refreshFailure('Refresh cancelled.'); };
+    (window.uiFetch || fetch)(url.pathname + url.search, {signal: controller.signal, timeoutMs: 45000})
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
       .then(function (html) {
+        if (requests.get(target) !== controller || !target.isConnected) return;
+        if (target.dataset.consoleEndpoint) target.dataset.consoleEndpoint = url.pathname + url.search;
         target.innerHTML = html;
         var scripts = target.querySelectorAll('script');
         for (var i = 0; i < scripts.length; i++) {
@@ -389,7 +432,13 @@ _WINDOW_JS = r"""
         }
       })
       .catch(function (e) {
-        target.innerHTML = '<div class="cc-empty">Failed to load (' + e.message + ').</div>';
+        if (requests.get(target) !== controller || !target.isConnected) return;
+        refreshFailure('Could not load the selected window.');
+      }).finally(function () {
+        clearTimeout(timer);
+        if (requests.get(target) === controller) {
+          requests.delete(target); target.removeAttribute('aria-busy');
+        }
       });
   }
   bar.addEventListener('click', function (ev) {
@@ -443,27 +492,49 @@ _START_TRACKER_JS = """
       old.parentNode.replaceChild(s, old);
     }
   }
+  var pollController = null;
+  var pollVersion = 0;
+  var pollUntil = 0;
+  var pollTimer = 0;
+  function active() { return banner.isConnected && !banner.closest('[hidden], [aria-hidden="true"]'); }
+  function pollFailure() {
+    msg.innerHTML = 'Tracker read unavailable. Previous view retained. For recovery, inspect the Scheduler task details below. <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-tracker-refresh-retry>Retry refresh</button>';
+    CCAction.release(btn);
+  }
   function pollPanel(tries) {
-    if (tries <= 0) {
-      msg.textContent = 'tracker still not reachable — inspect the Scheduler task details below';
-      CCAction.release(btn);
-      return;
-    }
+    if (!active()) return;
+    if (!pollUntil) pollUntil = Date.now() + 90000;
+    if (tries <= 0 || Date.now() >= pollUntil) { pollFailure(); return; }
+    var version = ++pollVersion;
+    if (pollController) pollController.abort();
+    pollController = new AbortController();
     var endpoint = banner.getAttribute('data-refresh-endpoint') || '/api/panel/portfolio';
-    fetch(endpoint).then(function (r) { return r.text(); }).then(function (html) {
+    window.uiFetch(endpoint, {signal: pollController.signal, timeoutMs: Math.min(45000, pollUntil - Date.now())})
+      .then(function (r) { return r.text(); }).then(function (html) {
+      if (!active() || version !== pollVersion) return;
       if (html.indexOf('pf-live-offline') === -1) {
-        // A tracker gate can live inside one section of a composite console.
-        // Refresh only that section; replacing .cc-panel-body destroys the
-        // entire Health/Allocation page around it.
         var targetSelector = banner.getAttribute('data-refresh-target');
         var target = (targetSelector && document.querySelector(targetSelector)) ||
           banner.closest('.console-sec') || banner.closest('.cc-panel-body');
         if (target) { reinject(target, html); } else { location.reload(); }
-      } else {
-        setTimeout(function () { pollPanel(tries - 1); }, 3000);
-      }
-    }).catch(function () { setTimeout(function () { pollPanel(tries - 1); }, 3000); });
+      } else pollTimer = setTimeout(function () { pollPanel(tries - 1); }, 3000);
+    }).catch(function () {
+      if (!active() || version !== pollVersion) return;
+      pollFailure();
+    });
   }
+  msg.addEventListener('click', function (event) {
+    if (event.target.closest('[data-tracker-refresh-retry]')) { pollUntil = 0; pollPanel(30); }
+  });
+  var lifetime = new MutationObserver(function () {
+    if (active()) return;
+    pollVersion += 1;
+    if (pollController) pollController.abort();
+    clearTimeout(pollTimer);
+    CCAction.release(btn);
+    if (!banner.isConnected) lifetime.disconnect();
+  });
+  lifetime.observe(document.body, {childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-hidden']});
   function startTracker(auto) {
     CCAction.busy(btn, auto ? undefined : 'Starting…');
     if (!auto) { msg.textContent = 'starting…'; }
@@ -551,7 +622,7 @@ def _window_bar(
         f'<label class="pf-backfill-label" title="{escape(backfill_tip)}">'
         f'<input type="checkbox" id="pf-backfill"{checked}> modeled backfill</label>'
         "</div>"
-        f"<script>{_WINDOW_JS}</script>"
+        f"<script>{read_request_js()}</script><script>{_WINDOW_JS}</script>"
     )
 
 
@@ -1541,13 +1612,35 @@ _RUN_SCENARIO_JS = """
       old.parentNode.replaceChild(s, old);
     }
   }
+  var reloadController = null;
+  var reloadVersion = 0;
   function reloadPanel() {
-    fetch('/api/panel/portfolio_risk').then(function (r) { return r.text(); }).then(function (html) {
+    if (!btn.isConnected || btn.closest('[hidden], [aria-hidden="true"]')) return;
+    var version = ++reloadVersion;
+    if (reloadController) reloadController.abort();
+    reloadController = new AbortController();
+    window.uiFetch('/api/panel/portfolio_risk', {signal: reloadController.signal, timeoutMs: 45000})
+      .then(function (r) { return r.text(); }).then(function (html) {
+      if (!btn.isConnected || version !== reloadVersion) return;
       var root = document.getElementById('pfr-root');
       var target = root ? root.closest('.cc-panel-body') : null;
       if (target) { reinject(target, html); } else { location.reload(); }
-    }).catch(function () { CCAction.release(btn); });
+    }).catch(function () {
+      if (!btn.isConnected || version !== reloadVersion) return;
+      msg.innerHTML = 'Could not refresh the digest. Previous view retained. <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-risk-refresh-retry>Retry refresh</button>';
+      CCAction.release(btn);
+    });
   }
+  msg.addEventListener('click', function (event) {
+    if (event.target.closest('[data-risk-refresh-retry]')) reloadPanel();
+  });
+  var lifetime = new MutationObserver(function () {
+    if (btn.isConnected && !btn.closest('[hidden], [aria-hidden="true"]')) return;
+    reloadVersion += 1;
+    if (reloadController) reloadController.abort();
+    if (!btn.isConnected) lifetime.disconnect();
+  });
+  lifetime.observe(document.body, {childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'aria-hidden']});
   btn.addEventListener('click', function () {
     var scenario = sel ? sel.value : '';
     if (!scenario) { msg.textContent = 'pick a scenario'; return; }
@@ -3432,7 +3525,7 @@ def _macro_stress_section(scenarios: list[tuple[str, str]], digest: str) -> str:
         "</div>"
         '<pre id="pfr-run-log" class="cli-hint pfr-log"></pre>'
         f"{body}"
-        f"<script>{_RUN_SCENARIO_JS}</script>"
+        f"<script>{read_request_js()}</script><script>{_RUN_SCENARIO_JS}</script>"
         "</section>"
     )
 
@@ -3478,7 +3571,7 @@ def _tracker_offline_banner(
         f'<p class="muted">API endpoint: <code>{escape(live.api_url)}</code>'
         f"{f' — {escape(live.error)}' if live.error else ''}</p>"
         "</details>"
-        f"<script>{_START_TRACKER_JS}</script>"
+        f"<script>{read_request_js()}</script><script>{_START_TRACKER_JS}</script>"
         "</section>"
     )
 

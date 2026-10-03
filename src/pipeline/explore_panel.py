@@ -142,27 +142,15 @@ def render_explore_panel(
         else _default_tickers(db_path, user_id)
     )
     ticker = tickers[0] if tickers else ""
-    catalog: dict[str, list[dict[str, object]]] = (
-        metric_catalog(db_path, [ticker])
-        if ticker
-        else {"fin": [], "kpi": [], "seg": [], "detail": []}
+    # Optional metric discovery belongs to the on-demand Work Bench. The
+    # conversation must remain usable while the governed catalog is expensive
+    # or unavailable; generic questions do not assert any financial facts.
+    company = ticker or "this company"
+    suggestion_chips = (
+        f'<button type="button" class="k-chip k-chip-btn" data-ask-q="What changed most recently for {escape(company)}?">What changed?</button>'
+        f'<button type="button" class="k-chip k-chip-btn" data-ask-q="Tell me about growth for {escape(company)}">Growth</button>'
+        f'<button type="button" class="k-chip k-chip-btn" data-ask-q="What are the key risks for {escape(company)}?">Key risks</button>'
     )
-    from pipeline.key_metrics import key_metric_bubbles
-
-    bubbles = key_metric_bubbles(db_path, [ticker] if ticker else [], catalog)
-    suggestion_chips = "".join(
-        f'<button type="button" class="k-chip k-chip-btn" '
-        f'data-ask-q="Tell me about {escape(b.label)} for {escape(ticker)}" '
-        f'title="{escape(b.title)}">{escape(b.label)}</button>'
-        for b in bubbles[:6]
-    )
-    if not suggestion_chips:
-        company = ticker or "this company"
-        suggestion_chips = (
-            f'<button type="button" class="k-chip k-chip-btn" data-ask-q="What changed most recently for {escape(company)}?">What changed?</button>'
-            f'<button type="button" class="k-chip k-chip-btn" data-ask-q="Tell me about growth for {escape(company)}">Growth</button>'
-            f'<button type="button" class="k-chip k-chip-btn" data-ask-q="What are the key risks for {escape(company)}?">Key risks</button>'
-        )
     transform_options = "".join(
         f'<option value="{escape(value)}"{" selected" if value == "level" else ""}>{escape(value.title())}</option>'
         for value in TRANSFORMS

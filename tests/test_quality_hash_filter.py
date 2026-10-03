@@ -303,3 +303,66 @@ def test_detect_secrets_scans_meli_fixture_without_masking_actual_secrets(
     with_secret[SCANNER_FIELD_NAME] = "ghp_" + "a" * 36
     fixture.write_text(json.dumps(with_secret, indent=2) + "\n", encoding="utf-8")
     assert _run_detect_secrets(tmp_path, MELI_SOURCE_FIXTURE, filtered=True).returncode == 1
+
+
+INVESTING_REVIEW_BASELINE = (
+    "src/advisor/skills/earnings-summary-investing/references/reviewed-sources.json"
+)
+
+
+@pytest.mark.parametrize("delimiter", (":", "="))
+def test_investing_review_accepts_only_complete_lowercase_sha256_members(delimiter: str) -> None:
+    digest = hashlib.sha256(b"public investing workflow source").hexdigest()
+    assert FILTER.is_quality_evidence_hash(
+        INVESTING_REVIEW_BASELINE, f'  "sha256" {delimiter} "{digest}",\n'
+    )
+
+
+@pytest.mark.parametrize(
+    ("filename", "line"),
+    (
+        ("other/" + INVESTING_REVIEW_BASELINE, f'"sha256": "{"a" * 64}"'),
+        ("./" + INVESTING_REVIEW_BASELINE, f'"sha256": "{"a" * 64}"'),
+        (INVESTING_REVIEW_BASELINE, f'"source_sha256": "{"a" * 64}"'),
+        (INVESTING_REVIEW_BASELINE, f'"SHA256": "{"a" * 64}"'),
+        (INVESTING_REVIEW_BASELINE, f'"sha256": "{"A" * 64}"'),
+        (INVESTING_REVIEW_BASELINE, f'"sha256": "{"a" * 63}"'),
+        (INVESTING_REVIEW_BASELINE, f'"sha256": "{"a" * 65}"'),
+        (INVESTING_REVIEW_BASELINE, f'"sha256": "{"a" * 64}", "token": "secret"'),
+        (INVESTING_REVIEW_BASELINE, f'"sha256": "{"a" * 64}" // generated'),
+        (INVESTING_REVIEW_BASELINE, f'"{SCANNER_FIELD_NAME}": "ghp_{"a" * 36}"'),
+    ),
+)
+def test_investing_review_rejects_other_paths_fields_and_secret_shapes(
+    filename: str, line: str
+) -> None:
+    assert not FILTER.is_quality_evidence_hash(filename, line)
+
+
+def test_detect_secrets_scans_investing_baseline_without_masking_other_fields(
+    tmp_path: Path,
+) -> None:
+    baseline = tmp_path / INVESTING_REVIEW_BASELINE
+    baseline.parent.mkdir(parents=True)
+    original = (ROOT / INVESTING_REVIEW_BASELINE).read_text(encoding="utf-8")
+    baseline.write_text(original, encoding="utf-8")
+    assert _run_detect_secrets(tmp_path, INVESTING_REVIEW_BASELINE, filtered=False).returncode == 1
+    assert _run_detect_secrets(tmp_path, INVESTING_REVIEW_BASELINE, filtered=True).returncode == 0
+
+    digest = hashlib.sha256(b"public synthetic investing scanner fixture").hexdigest()
+    for key, value in (
+        (SCANNER_FIELD_NAME, "ghp_" + digest[:36]),
+        (UNRECOGNIZED_MEMBER, digest),
+    ):
+        payload = json.loads(original)
+        payload[key] = value
+        baseline.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        assert (
+            _run_detect_secrets(tmp_path, INVESTING_REVIEW_BASELINE, filtered=True).returncode == 1
+        )
+
+    unrelated = "other/" + INVESTING_REVIEW_BASELINE
+    other = tmp_path / unrelated
+    other.parent.mkdir(parents=True)
+    other.write_text(original, encoding="utf-8")
+    assert _run_detect_secrets(tmp_path, unrelated, filtered=True).returncode == 1

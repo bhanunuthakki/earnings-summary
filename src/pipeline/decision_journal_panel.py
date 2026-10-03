@@ -188,6 +188,8 @@ def render_decision_journal_panel(
 {heading}
 <div id="dj-root" data-active-filter="{filter_}">
 {chip_row}
+<div id="dj-feedback" class="k-well" role="status" aria-live="polite" hidden></div>
+<button type="button" class="k-btn k-btn-quiet k-btn-sm" data-dj-retry hidden>Retry</button>
 <div id="dj-list">{body}</div>
 </div>
 <script>
@@ -195,19 +197,39 @@ def render_decision_journal_panel(
   var root = document.getElementById('dj-root');
   if (!root || root.dataset.wired) return;
   root.dataset.wired = '1';
-  root.addEventListener('click', function (ev) {{
-    var chip = ev.target.closest('[data-dj-filter]');
-    if (chip) {{
-      var qs = new URLSearchParams({{fragment: 'list', filter: chip.getAttribute('data-dj-filter')}});
-      fetch('/api/panel/ledger_decisions?' + qs).then(function (r) {{ return r.text(); }})
-        .then(function (html) {{
-          document.getElementById('dj-list').innerHTML = html;
-          root.querySelectorAll('[data-dj-filter]').forEach(function (b) {{
-            b.classList.toggle('k-chip-accent', b === chip);
-          }});
+  var generation = 0;
+  var controller = null;
+  var requestedFilter = root.getAttribute('data-active-filter') || 'owner';
+  function loadFilter(filter) {{
+    requestedFilter = filter;
+    var request = ++generation;
+    if (controller) controller.abort();
+    controller = new AbortController();
+    var status = root.querySelector('#dj-feedback');
+    var retry = root.querySelector('[data-dj-retry]');
+    status.textContent = 'Loading decisions…'; status.hidden = false; retry.hidden = true;
+    var qs = new URLSearchParams({{fragment: 'list', filter: filter}});
+    window.uiFetch('/api/panel/ledger_decisions?' + qs, {{signal: controller.signal}})
+      .then(function (r) {{ return r.text(); }})
+      .then(function (html) {{
+        if (request !== generation || !root.isConnected) return;
+        root.querySelector('#dj-list').innerHTML = html;
+        root.setAttribute('data-active-filter', filter);
+        root.querySelectorAll('[data-dj-filter]').forEach(function (b) {{
+          b.classList.toggle('k-chip-accent', b.getAttribute('data-dj-filter') === filter);
         }});
-      return;
-    }}
+        status.hidden = true;
+      }})
+      .catch(function () {{
+        if (request !== generation || !root.isConnected) return;
+        status.textContent = 'Decisions could not refresh. Previous entries remain visible.';
+        retry.hidden = false;
+      }});
+  }}
+  root.addEventListener('click', function (ev) {{
+    if (ev.target.closest('[data-dj-retry]')) {{ loadFilter(requestedFilter); return; }}
+    var chip = ev.target.closest('[data-dj-filter]');
+    if (chip) {{ loadFilter(chip.getAttribute('data-dj-filter')); return; }}
     var pqBtn = ev.target.closest('[data-pq]');
     if (!pqBtn) return;
     var quality = pqBtn.getAttribute('data-pq');

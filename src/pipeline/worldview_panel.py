@@ -43,9 +43,28 @@ def worldview_enabled() -> bool:
 _WORLDVIEW_JS = """<script>(function(){
   if(window.__worldviewWired){ return; }
   window.__worldviewWired = true;
+  var reloadGeneration = 0;
+  var reloadController = null;
   function reload(){
-    fetch('/api/panel/musings?fragment=worldview').then(function(r){return r.text();})
-      .then(function(h){ var el=document.getElementById('worldview'); if(el){ el.outerHTML=h; } });
+    var request = ++reloadGeneration;
+    if(reloadController){ reloadController.abort(); }
+    reloadController = new AbortController();
+    (window.uiFetch || fetch)('/api/panel/musings?fragment=worldview', {signal:reloadController.signal})
+      .then(function(r){ if(!r.ok){ throw new Error('Read unavailable'); } return r.text(); })
+      .then(function(h){
+        if(request !== reloadGeneration){ return; }
+        var el=document.getElementById('worldview'); if(el){ el.outerHTML=h; }
+      }).catch(function(){
+        if(request !== reloadGeneration){ return; }
+        var el=document.getElementById('worldview'); if(!el){ return; }
+        var prior=el.querySelector('[data-refresh-error]'); if(prior){ prior.remove(); }
+        var feedback=document.createElement('div'); feedback.className='k-well';
+        feedback.setAttribute('data-refresh-error',''); feedback.setAttribute('role','status');
+        feedback.textContent='Could not refresh. Previous entries remain visible. ';
+        var retry=document.createElement('button'); retry.type='button';
+        retry.className='k-btn k-btn-quiet k-btn-sm'; retry.textContent='Retry refresh';
+        retry.addEventListener('click',reload); feedback.appendChild(retry); el.prepend(feedback);
+      });
   }
   document.addEventListener('click', function(e){
     var add=e.target.closest('#wv-add-btn');
