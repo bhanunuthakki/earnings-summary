@@ -618,3 +618,39 @@ def test_cli_forwards_exact_target_and_rejects_unpaired_flags(
     assert calls[0]["period_end"] == "2026-06-30"
     assert calls[0]["fiscal_period_type"] == "Q2"
     assert calls[0]["only_tickers"] == {"WIX"}
+
+
+@pytest.mark.parametrize(
+    ("trace_id", "cutoff"),
+    [
+        ("trace:one", None),
+        (None, "2026-08-01T00:00:00+00:00"),
+        ("trace:one", "2026-08-01T00:00:00"),
+        ("", "2026-08-01T00:00:00+00:00"),
+    ],
+)
+def test_retained_evidence_requires_paired_aware_identity(
+    db: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    trace_id: str | None,
+    cutoff: str | None,
+) -> None:
+    from datetime import datetime
+
+    import earnings_readout
+
+    def forbidden(*_args: object, **_kwargs: object) -> str:
+        pytest.fail("invalid retained evidence must stop before the model")
+
+    monkeypatch.setattr(earnings_readout, "call_llm", forbidden)
+    with pytest.raises(ValueError, match=r"evidence|cutoff|trace"):
+        earnings_readout.generate_for_ticker(
+            db,
+            tmp_path,
+            "MELI",
+            period_end="2026-06-30",
+            fiscal_period_type="Q2",
+            retrieval_trace_id=trace_id,
+            knowledge_cutoff=None if cutoff is None else datetime.fromisoformat(cutoff),
+        )

@@ -1526,3 +1526,155 @@ def test_weekly_packet_peek_route_serves_current_week(client: FlaskClient, db_pa
     body = resp.data.decode()
     assert "steer proposal" in body
     assert "given on Telegram" in body
+
+
+def test_readout_request_preserves_exact_fiscal_target(
+    client: FlaskClient, db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import earnings_readout
+    from llm_artifact_store import read_current
+
+    _seed_readout_ticker(db_path, list_type="evaluation")
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO transcripts (id, document_id, ticker, call_date, "
+            "fiscal_period_type, period_end, source_url) VALUES "
+            "(9002, 9002, 'NU', '2026-05-01', 'Q1', '2026-03-31', "
+            "'https://example.test/q1-transcript')"
+        )
+    prompts: list[str] = []
+
+    def fake_call(prompt: str, **_kwargs: object) -> str:
+        prompts.append(prompt)
+        return "## Quarter in one line\nExact requested quarter."
+
+    monkeypatch.setattr(earnings_readout, "call_llm", fake_call)
+
+    def allow_budget(*_a: object, **_kw: object) -> None:
+        return None
+
+    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", allow_budget)
+    payload = {"ticker": "NU", "period_end": "2026-03-31", "fiscal_period_type": "Q1"}
+    first = client.post("/api/earnings-readout/generate", json=payload)
+    assert first.status_code == 200
+    assert first.get_json()["fiscal_period"] == "2026-03-31"
+    assert "quarter ended 2026-03-31" in prompts[0]
+    assert (
+        read_current(
+            ticker="NU",
+            purpose=earnings_readout.PURPOSE,
+            fiscal_period="2026-03-31",
+            db_path=db_path,
+        )
+        is not None
+    )
+    again = client.post("/api/earnings-readout/generate", json=payload)
+    assert again.status_code == 200
+    assert again.get_json()["status"] == "cache_hit"
+    assert len(prompts) == 1
+
+
+@pytest.mark.parametrize(
+    "selectors",
+    [
+        {"period_end": "2026-03-31"},
+        {"fiscal_period_type": "Q1"},
+        {"period_end": "bad", "fiscal_period_type": "Q1"},
+        {"period_end": "2026-03-31", "fiscal_period_type": "Q5"},
+        {"period_end": [], "fiscal_period_type": "Q1"},
+        {"period_end": "2026-03-31", "fiscal_period_type": {}},
+    ],
+)
+def test_readout_request_rejects_invalid_fiscal_target_before_model(
+    client: FlaskClient,
+    db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selectors: dict[str, object],
+) -> None:
+    import earnings_readout
+
+    _seed_readout_ticker(db_path, list_type="evaluation")
+
+    def forbidden(*_args: object, **_kwargs: object) -> str:
+        pytest.fail("invalid request must not invoke the model")
+
+    monkeypatch.setattr(earnings_readout, "call_llm", forbidden)
+    response = client.post("/api/earnings-readout/generate", json={"ticker": "NU", **selectors})
+    assert response.status_code == 400
+    assert response.get_json()["error"]
+
+
+def test_readout_request_does_not_expose_generation_value_error(
+    client: FlaskClient, db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import earnings_readout
+
+    _seed_readout_ticker(db_path, list_type="evaluation")
+
+    def failed_generation(*_args: object, **_kwargs: object) -> str:
+        raise ValueError("private diagnostic detail")
+
+    monkeypatch.setattr(earnings_readout, "call_llm", failed_generation)
+
+    def allow_budget(*_a: object, **_kw: object) -> None:
+        return None
+
+    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", allow_budget)
+    response = client.post("/api/earnings-readout/generate", json={"ticker": "NU"})
+    assert response.status_code == 503
+    assert "private diagnostic detail" not in response.get_data(as_text=True)
+
+
+def test_readout_request_unavailable_target_never_falls_back_to_latest(
+    client: FlaskClient, db_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import earnings_readout
+
+    _seed_readout_ticker(db_path, list_type="evaluation")
+
+    def forbidden(*_args: object, **_kwargs: object) -> str:
+        pytest.fail("unavailable target must not invoke the model")
+
+    monkeypatch.setattr(earnings_readout, "call_llm", forbidden)
+    response = client.post(
+        "/api/earnings-readout/generate",
+        json={"ticker": "NU", "period_end": "2099-06-30", "fiscal_period_type": "Q2"},
+    )
+    assert response.status_code == 404
+    assert "2099-06-30" in response.get_json()["error"]
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        {"retrieval_trace_id": "trace:one"},
+        {"knowledge_cutoff": "2026-08-01T00:00:00+00:00"},
+        {"retrieval_trace_id": "trace:one", "knowledge_cutoff": "bad"},
+        {"retrieval_trace_id": "trace:one", "knowledge_cutoff": "2026-08-01T00:00:00"},
+        {"retrieval_trace_id": [], "knowledge_cutoff": "2026-08-01T00:00:00+00:00"},
+    ],
+)
+def test_readout_request_rejects_invalid_retained_identity(
+    client: FlaskClient,
+    db_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    evidence: dict[str, object],
+) -> None:
+    import earnings_readout
+
+    _seed_readout_ticker(db_path, list_type="evaluation")
+
+    def forbidden(*_args: object, **_kwargs: object) -> str:
+        pytest.fail("invalid evidence request must not invoke the model")
+
+    monkeypatch.setattr(earnings_readout, "call_llm", forbidden)
+    response = client.post(
+        "/api/earnings-readout/generate",
+        json={
+            "ticker": "NU",
+            "period_end": "2026-06-30",
+            "fiscal_period_type": "Q2",
+            **evidence,
+        },
+    )
+    assert response.status_code == 400

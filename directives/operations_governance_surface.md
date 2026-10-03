@@ -873,6 +873,15 @@ network responses alone are synthetic fixtures.
 
 ### Investing workflow maintenance and brief inputs
 
+The existing explicit post-earnings HTTP request also accepts paired fiscal
+selectors and a paired saved retrieval-trace ID/aware knowledge cutoff. Its
+server-configured state root and database remain the only read authorities.
+The request verifies saved scope, seals and raw bytes before reuse or synthesis.
+It retains exact source spans and partial coverage in the existing artifact JSON.
+This extends the existing request contract; it adds no Operations control, job,
+provider purpose, acquisition path, schema or schedule. Current-schema synthetic
+pipeline, HTTP, cache and raw-byte failure tests establish local behavior only.
+
 Disposition: **no Operations surface change**. The internal post-earnings CLI
 adds an optional paired fiscal-period selector with complete-scope validation.
 Its scheduled default remains latest reported active portfolio quarters. The
