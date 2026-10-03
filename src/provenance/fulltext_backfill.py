@@ -468,7 +468,7 @@ def _plan_candidate(
             status="quarantined_unrecorded",
             reason="missing_document_version",
         )
-    if _has_substantive_coverage(conn, candidate.document_version_id, identity):
+    if has_substantive_coverage(conn, candidate.document_version_id, identity):
         return _CandidatePlan(candidate=candidate, identity=identity, status="covered")
     try:
         raw_bytes = _verified_bytes(conn, candidate, allowed_roots)
@@ -1545,11 +1545,12 @@ def _new_node(
     )
 
 
-def _has_substantive_coverage(
+def has_substantive_coverage(
     conn: sqlite3.Connection,
     document_version_id: str,
     identity: FulltextExtractorIdentity,
 ) -> bool:
+    """Check the owning extractor identity and substantive retained nodes."""
     node_predicate = (
         "(node.node_kind <> 'document' OR "
         "(node.parent_node_id IS NOT NULL AND node.text LIKE "
