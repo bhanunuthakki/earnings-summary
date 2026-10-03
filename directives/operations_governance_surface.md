@@ -836,3 +836,20 @@ Its bounded review does not run the application, acquire financial data, change
 owner policy, or mutate canonical Windows state. The deterministic checker has
 no network or database access. Readout, brief and maintenance regression tests
 establish local behavior; they do not establish deployment or a future job run.
+
+### SEC ingestion deadline and bounded provenance work
+
+The registered SEC task, schedule, provider and write lane remain unchanged.
+The managed supervisor now enforces the checked task XML's finite elapsed-time
+limit for scheduled SEC children. A deadline returns 124 and records failed,
+incomplete health and operation-journal evidence. It does not replay ingestion.
+After child-tree exit, canonical run accounting fails only the exact attributed
+SEC attempt under its retained lane and bounded database lock. Unavailable or
+ambiguous attribution stays explicit; no broad attempt sweep is permitted.
+
+Ticker-scoped immutable-source reuse and successor-first resolution queries
+reduce repeated work without changing fact admission, manifests, temporal
+eligibility or completeness. Migration 0050 adds only a nonunique KPI
+supersedes lookup index. There is no new operator action or external effect.
+Regression and native child-tree checks establish the correction; a genuine
+subsequent scheduled run remains required for recurrence verification.

@@ -165,7 +165,7 @@ def resolution_indexes(conn: sqlite3.Connection) -> set[str]:
 def test_current_schema_indexes_selected_observations(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
-    path = migrated_db(tmp_path / "current.db")
+    path = migrated_db(tmp_path / "current.db", target=REVISION)
     with sqlite3.connect(path) as conn:
         assert INDEX in resolution_indexes(conn)
         assert [str(row[2]) for row in conn.execute(f"PRAGMA index_info({INDEX})")] == [
