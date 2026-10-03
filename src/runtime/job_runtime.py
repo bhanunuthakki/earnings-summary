@@ -23,7 +23,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol, cast
 from uuid import uuid4
-from xml.etree import ElementTree
+from xml.etree.ElementTree import ParseError
+
+from defusedxml import ElementTree
+from defusedxml.common import DefusedXmlException
 
 from log_redact import sanitize_operational_text
 from runtime.python_process import ensure_managed_python_argv
@@ -460,6 +463,8 @@ def _scheduled_deadline_seconds(code_root: Path, job_name: str) -> float | None:
     policy = code_root / "cron/fetch_sec_xbrl.task.xml"
     try:
         root = ElementTree.parse(policy).getroot()
+        if root is None:
+            raise OSError("SEC ExecutionTimeLimit policy has no root")
         duration = (
             root.findtext(
                 "task:Settings/task:ExecutionTimeLimit",
@@ -467,7 +472,7 @@ def _scheduled_deadline_seconds(code_root: Path, job_name: str) -> float | None:
             )
             or ""
         )
-    except (OSError, ElementTree.ParseError) as exc:
+    except (OSError, ParseError, DefusedXmlException) as exc:
         raise OSError("SEC ExecutionTimeLimit policy unavailable") from exc
     match = re.fullmatch(r"P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?", duration)
     seconds = (

@@ -1505,3 +1505,16 @@ def test_sec_deadline_without_journal_keeps_failed_receipt_and_does_not_sweep(
     assert receipt["status"] == "failed"
     assert receipt["journal_state"] == "unavailable"
     assert "attempt reconciliation unavailable: operation journal not accepted" in receipt["detail"]
+
+
+def test_sec_deadline_policy_rejects_xml_entities(tmp_path: Path) -> None:
+    task = tmp_path / "cron" / "fetch_sec_xbrl.task.xml"
+    task.parent.mkdir()
+    task.write_text(
+        '<!DOCTYPE Task [<!ENTITY duration "PT2H">]>'
+        '<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">'
+        "<Settings><ExecutionTimeLimit>&duration;</ExecutionTimeLimit></Settings></Task>",
+        encoding="utf-8",
+    )
+    with pytest.raises(OSError, match="policy unavailable"):
+        runtime_test_api.scheduled_deadline_seconds(tmp_path, "fetch-sec-xbrl")
