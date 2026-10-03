@@ -12,6 +12,8 @@ from pathlib import Path
 import pytest
 
 import provenance.fulltext_backfill as fulltext
+from ask.sealed_retrieval import PromotionVerificationError, load_verified_trace_evidence
+from ask.sealed_retrieval import _fact_item as fact_item_for_test
 from provenance.analysis_scope import AnalysisScopeRequest, build_analysis_scope
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 from provenance.filing_xbrl_extraction_ledger import FilingXbrlExtractionLedger
@@ -459,3 +461,40 @@ def test_current_schema_scoped_snapshot_yields_verified_trace(
 ) -> None:
     conn, receipt = scoped_retrieval_trace
     assert verify_heterogeneous_retrieval_trace(conn, receipt.trace_id) == receipt
+    items = load_verified_trace_evidence(conn, receipt.trace_id)
+    assert len(items) == 1
+    assert items[0].kind == "fact"
+    assert items[0].period == "2024-12-31"
+    assert items[0].value == "120 USD"
+
+
+@pytest.mark.parametrize("mismatch", ("generation", "commitment"))
+def test_current_schema_fact_reader_rejects_wrong_exact_binding(
+    scoped_retrieval_trace: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt],
+    mismatch: str,
+) -> None:
+    conn, receipt = scoped_retrieval_trace
+    conn.row_factory = sqlite3.Row
+    candidate = conn.execute(
+        "SELECT candidate_id,source_commitment_sha256 FROM heterogeneous_retrieval_trace_candidates "
+        "WHERE trace_id=? AND candidate_kind='fact'",
+        (receipt.trace_id,),
+    ).fetchone()
+    assert candidate is not None
+    if mismatch == "commitment":
+        candidate = conn.execute(
+            "SELECT ? AS candidate_id,? AS source_commitment_sha256",
+            (candidate["candidate_id"], "0" * 64),
+        ).fetchone()
+    with pytest.raises(PromotionVerificationError, match="fact source commitment is missing"):
+        fact_item_for_test(
+            conn,
+            receipt,
+            candidate,
+            receipt.ordered_results[0],
+            n=1,
+            cutoff=NOW,
+            fact_generation_id=(
+                "absent-generation" if mismatch == "generation" else "projection:checkpoint"
+            ),
+        )

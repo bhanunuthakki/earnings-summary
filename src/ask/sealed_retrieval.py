@@ -1313,7 +1313,7 @@ def load_verified_trace_evidence(
     )
     conn.row_factory = sqlite3.Row
     header = conn.execute(
-        "SELECT cutoff_at FROM heterogeneous_retrieval_trace_headers WHERE trace_id=?",
+        "SELECT cutoff_at,fact_generation_id FROM heterogeneous_retrieval_trace_headers WHERE trace_id=?",
         (trace_id,),
     ).fetchone()
     if header is None:
@@ -1353,6 +1353,7 @@ def load_verified_trace_evidence(
                 result,
                 n=index,
                 cutoff=_datetime(header["cutoff_at"]),
+                fact_generation_id=str(header["fact_generation_id"]),
             )
         else:
             raise PromotionVerificationError(
@@ -1453,12 +1454,13 @@ def _fact_item(
     *,
     n: int,
     cutoff: datetime,
+    fact_generation_id: str,
 ) -> SealedEvidenceItem:
     row = conn.execute(
         "SELECT * FROM canonical_fact_projection_entries "
-        "WHERE canonical_metric_cell_id=? AND entry_sha256=? "
-        "AND change_kind='upsert' ORDER BY recorded_at DESC LIMIT 1",
-        (candidate["candidate_id"], candidate["source_commitment_sha256"]),
+        "WHERE generation_id=? AND canonical_metric_cell_id=? AND entry_sha256=? "
+        "AND change_kind='upsert'",
+        (fact_generation_id, candidate["candidate_id"], candidate["source_commitment_sha256"]),
     ).fetchone()
     if row is None:
         raise PromotionVerificationError(
