@@ -2150,14 +2150,14 @@ def _verify_research_universe(
 
 
 def _universe_payload(universe: ResearchUniverse) -> dict[str, object]:
+    # This table commits the four-field universe. AnalysisScope is committed by
+    # the immutable request header and checked against processing references.
     payload: dict[str, object] = {
         "document_version_ids": list(universe.document_version_ids),
         "issuer_id": universe.issuer_id,
         "reporting_entity_ids": list(universe.reporting_entity_ids),
         "source_obligation_revision_ids": list(universe.source_obligation_revision_ids),
     }
-    if universe.analysis_scope is not None:
-        payload["analysis_scope"] = universe.analysis_scope.model_dump(mode="json")
     return payload
 
 

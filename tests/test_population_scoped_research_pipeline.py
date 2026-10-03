@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import sqlite3
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
@@ -19,6 +21,7 @@ from provenance.population_document_processing import (
 )
 from provenance.population_research_snapshots import assemble_research_snapshot_request
 from provenance.reporting_entity_registry import ReportingEntityRegistry, SourceObligationRevision
+from provenance.research_snapshot import build_research_snapshot, verify_research_snapshot
 from provenance.source_coverage import (
     CoverageAssessment,
     ExpectedDocument,
@@ -317,6 +320,38 @@ def test_current_schema_scoped_processing_and_autoassembly(
         )
         assert request.research_universe.analysis_scope == scope
         assert request.canonical_fact_resolution_snapshot_id == "resolution:checkpoint"
+        admission = build_research_snapshot(conn, request)
+        assert admission.admitted
+        assert verify_research_snapshot(conn, request.research_snapshot_id) == admission
+        assert build_research_snapshot(conn, request) == admission
+        header = conn.execute(
+            "SELECT request_json,request_sha256 FROM research_snapshot_headers "
+            "WHERE research_snapshot_id=?",
+            (request.research_snapshot_id,),
+        ).fetchone()
+        assert json.loads(header[0])["research_universe"]["analysis_scope"] == scope.model_dump(
+            mode="json"
+        )
+        assert hashlib.sha256(header[0].encode()).hexdigest() == header[1]
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute(
+                "UPDATE research_snapshot_headers SET request_json='{}' WHERE research_snapshot_id=?",
+                (request.research_snapshot_id,),
+            )
+        assert verify_research_snapshot(conn, request.research_snapshot_id) == admission
+        changed_scope = build_analysis_scope(
+            conn, scope.request.model_copy(update={"purpose": "thesis_review"})
+        )
+        changed_request = request.model_copy(
+            update={
+                "research_universe": request.research_universe.model_copy(
+                    update={"analysis_scope": changed_scope}
+                )
+            }
+        )
+        with pytest.raises(ValueError, match="scope"):
+            build_research_snapshot(conn, changed_request)
+        assert verify_research_snapshot(conn, request.research_snapshot_id) == admission
         replay = populate_document_processing(
             conn,
             DocumentProcessingPopulationRequest(
