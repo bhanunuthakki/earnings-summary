@@ -1,25 +1,13 @@
-"""Asymmetric expected return from a DCF's bull/base/bear scenario range.
+"""Probability-weighted upside from price to present DCF fair value.
 
-The redesigned FCFF refresher persists a ``scenarios`` block into
-``dcf_runs.assumption_snapshot_json`` — bull / base / bear fair values per
-share (the same block ``report.sections.snapshot._scenario_range`` reads for the
-valuation card). Three allocation surfaces consume DCF reward — the next-dollar
-``ret`` factor, the sizing audit's valuation-tension flag, and the risk-budget
-allocator's reward leg — and all three historically read only the *base* point
-estimate (``npv_per_share / price − 1``), throwing away the asymmetry the
-scenario range encodes. A name whose bear case is far below today's price while
-its bull case is only modestly above is *not* the same reward as a symmetric one
-with the same midpoint, and a point estimate hides that.
+The stored base NPV per share and scenario tails are present values. Their gap
+to price is not a forward holding-period return or Sharpe numerator. No holding
+horizon, exit price, shareholder payouts or accepted probability model is supplied.
 
-This module is the single producer of the asymmetry-aware reward, so the three
-surfaces can never diverge. It is pure (stdlib only) — give it a live price, the
-value-of-record base fair value, and the snapshot JSON, and it returns the
-probability-weighted expected return plus the per-leg returns for display. The
-scenario probabilities are a visible, documented prior (not fitted) — a coarse
-25 / 50 / 25 over bull / base / bear, renormalized when only one tail is on
-file. When no tails are present it degrades to exactly the base point estimate
-(``has_scenarios=False``), so a row without a scenario range behaves exactly as
-before.
+The legacy analytical convention uses per-name weights when present, otherwise
+25/50/25. Missing tails are omitted and weights are renormalized. With no tails,
+the calculation retains the base point estimate. These conventions do not grant
+scenario or prior acceptance. The module is pure and does not refresh models.
 """
 
 from __future__ import annotations
@@ -39,15 +27,13 @@ SCENARIO_PROBABILITIES: dict[str, float] = {"bull": 0.25, "base": 0.50, "bear": 
 
 @dataclass(frozen=True, slots=True)
 class ScenarioReward:
-    """Asymmetry-aware DCF reward for one name at a given price.
+    """Present-value gap for one name at a given price.
 
-    ``expected_return`` is the probability-weighted return over the scenarios
-    actually on file (a fraction; +0.12 = +12% expected upside on price). When no
-    tail scenarios are present it equals ``base_return`` exactly and
-    ``has_scenarios`` is False — the honest point-estimate fallback. ``skew`` is
-    ``expected_return − base_return``: negative means the bear tail drags the
-    expectation below the midpoint (downside-skewed reward), the asymmetry a
-    point estimate would have hidden."""
+    ``valuation_upside`` is Σp_s(V_0,s/P_0−1), as a fraction. The legacy
+    ``expected_return`` and per-leg ``*_return`` fields remain for compatibility;
+    all represent valuation gaps, with no time horizon or annualization.
+    ``skew`` is the weighted gap minus the base gap, not return uncertainty.
+    """
 
     expected_return: float
     base_return: float
@@ -56,23 +42,36 @@ class ScenarioReward:
     has_scenarios: bool
     probabilities: dict[str, float]
     detail: str
-    # Where ``probabilities`` came from: ``"per_name"`` (the LLM/owner scenario_prior
-    # on the run's snapshot) or ``"global"`` (the symmetric 25/50/25 fallback). Lets
-    # a surface show whether a name carries a real per-name prior. Defaulted so any
-    # external constructor / older test keeps working.
+    # Prior origin only; neither value establishes accepted scenario authority.
     weights_source: str = "global"
 
     @property
+    def valuation_upside(self) -> float:
+        """Probability-weighted gap to present fair value; not forward return."""
+        return self.expected_return
+
+    @property
     def skew(self) -> float:
-        """How far the asymmetric expectation sits below (−) or above (+) the
-        base point estimate. 0.0 when there are no tails."""
+        """Weighted valuation gap minus the base gap. Zero with no tails."""
         return self.expected_return - self.base_return
+
+
+def parse_scenario_fair_value(value: object) -> float | None:
+    """Admit one positive, finite scenario value; shared by calculation and cards."""
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value > 0
+    ):
+        return float(value)
+    return None
 
 
 def parse_scenario_fair_values(snapshot_json: object) -> dict[str, float]:
     """Bull / base / bear per-share fair values from a ``dcf_runs`` assumption
-    snapshot. Mirrors ``snapshot._scenario_range`` parsing but returns all three
-    legs that are present + positive. Tolerates absent / malformed / null /
+    snapshot. This owner admits the legs used by the calculation and report
+    range. Tolerates absent / malformed / null /
     non-redesign snapshots (returns an empty dict)."""
     if not isinstance(snapshot_json, str) or not snapshot_json:
         return {}
@@ -91,9 +90,9 @@ def parse_scenario_fair_values(snapshot_json: object) -> dict[str, float]:
         if not isinstance(block, dict):
             continue
         v = cast("dict[str, object]", block).get("fair_value_per_share_usd")
-        # bool is an int subclass — exclude it (matches snapshot._scenario_range).
-        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0:
-            out[key] = float(v)
+        admitted = parse_scenario_fair_value(v)
+        if admitted is not None:
+            out[key] = admitted
     return out
 
 
@@ -156,7 +155,7 @@ def parse_scenario_prior_weights(snapshot_json: object) -> dict[str, float] | No
             return None
         out[key] = float(v)
     total = out["bull"] + out["base"] + out["bear"]
-    if total <= 0:
+    if not math.isfinite(total) or total <= 0:
         return None
     return {k: v / total for k, v in out.items()}
 
@@ -164,18 +163,27 @@ def parse_scenario_prior_weights(snapshot_json: object) -> dict[str, float] | No
 def scenario_reward(
     *, price: float | None, base_fv: float | None, snapshot_json: object = None
 ) -> ScenarioReward | None:
-    """Asymmetry-aware expected return for one name.
+    """Probability-weighted upside to present fair value for one name.
 
     ``base_fv`` is the value-of-record fair value (``dcf_runs.npv_per_share``) —
     authoritative for the base leg even if the snapshot's own ``base`` differs;
     the bull/bear tails come from ``snapshot_json``. Returns None when the inputs
-    can't yield a meaningful return (no price, non-positive base fair value).
+    are not finite positive numbers. Boolean operands are invalid.
 
-    The expectation is ``Σ p_s · (fv_s / price − 1)`` over the scenarios on file,
+    The valuation gap is ``Σ p_s · (fv_s / price − 1)`` over the scenarios on file,
     with ``p_s`` from :data:`SCENARIO_PROBABILITIES` renormalized to the present
     legs. With no tails it is exactly the base point estimate.
     """
-    if price is None or price <= 0 or base_fv is None or base_fv <= 0:
+    if (
+        price is None
+        or isinstance(price, bool)
+        or not math.isfinite(price)
+        or price <= 0
+        or base_fv is None
+        or isinstance(base_fv, bool)
+        or not math.isfinite(base_fv)
+        or base_fv <= 0
+    ):
         return None
 
     fair_values = dict(parse_scenario_fair_values(snapshot_json))
@@ -188,6 +196,12 @@ def scenario_reward(
     base_return = base_fv / price - 1.0
     bull_return = ret("bull")
     bear_return = ret("bear")
+    # Every consumer displays a percentage; reject overflow in that conversion too.
+    if any(
+        value is not None and (not math.isfinite(value) or not math.isfinite(value * 100.0))
+        for value in (base_return, bull_return, bear_return)
+    ):
+        return None
     has_scenarios = bull_return is not None or bear_return is not None
 
     # Per-name prior (LLM/owner) when the run carries one, else the global 25/50/25.
@@ -197,16 +211,30 @@ def scenario_reward(
     weights_source = "per_name" if prior is not None else "global"
     present = [s for s in weights if s in fair_values]
     mass = sum(weights[s] for s in present)
-    probabilities = {s: weights[s] / mass for s in present} if mass > 0 else {}
+    if not math.isfinite(mass) or mass <= 0:
+        return None
+    probabilities = {s: weights[s] / mass for s in present}
     expected_return = sum(probabilities[s] * (fair_values[s] / price - 1.0) for s in present)
+    if not math.isfinite(expected_return):
+        return None
 
     if has_scenarios:
         legs = " / ".join(
             f"${fair_values[s]:,.2f}" for s in ("bear", "base", "bull") if s in fair_values
         )
-        detail = f"exp {expected_return * 100.0:+.0f}% · {legs} vs ${price:,.2f}"
+        prior_label = (
+            "per-name prior (unaccepted)" if prior is not None else "default prior (unaccepted)"
+        )
+        partial = "; partial scenarios; weights renormalized" if len(fair_values) < 3 else ""
+        detail = (
+            f"upside to present fair value {expected_return * 100.0:+.0f}% · {legs} vs ${price:,.2f}"
+            f" · {prior_label}{partial}"
+        )
     else:
-        detail = f"fair ${base_fv:,.2f} vs ${price:,.2f}"
+        detail = (
+            f"upside to present fair value {base_return * 100.0:+.0f}% · fair ${base_fv:,.2f}"
+            f" vs ${price:,.2f} · base point estimate; scenarios unavailable"
+        )
 
     return ScenarioReward(
         expected_return=expected_return,

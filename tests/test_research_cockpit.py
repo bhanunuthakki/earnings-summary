@@ -1476,7 +1476,7 @@ def test_render_sharpe_delta_column(conn: sqlite3.Connection, repo_root: Path) -
     retired Fit chip does not reappear even with a v2 candidate-fit cache."""
     _write_fit_cache_v2(repo_root, target_source="intent")
     html = render_research_cockpit(build_cockpit_rows(conn, repo_root))
-    assert html.count(">ΔSR<") == 1
+    assert html.count(">Historical ΔSharpe<") == 1
     assert "sortBy('dsr','num')" in html
     assert "data-peek-url='/api/peek/whatif?ticker=V'" in html
     assert ">+12bp</a>" in html

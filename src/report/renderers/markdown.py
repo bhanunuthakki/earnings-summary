@@ -359,9 +359,9 @@ def _valuation_card_md(out: StringIO, v: ValuationSnapshot) -> None:
             f"{_fv(v.consolidated_npv_per_share)} / {_fv(v.bull_npv_per_share)} |\n"
         )
     if v.current_price is not None:
-        suffix = ""
+        suffix = " *(quote date unavailable)*"
         if v.live_price_at is not None:
-            suffix = f" *(as of {v.live_price_at.date().isoformat()})*"
+            suffix = f" *(quote {v.live_price_at.date().isoformat()})*"
         out.write(f"| Live price | ${v.current_price:,.2f}{suffix} |\n")
     if v.over_under_pct is not None:
         out.write(
@@ -425,20 +425,24 @@ _SCEN_SRC_LABEL = {"llm": "LLM-set", "owner": "owner-set", "global": "default"}
 
 
 def _scenario_prior_card_md(out: StringIO, v: ValuationSnapshot) -> None:
-    """Scenario prior on the card: the per-name Bull/Base/Bear odds + the
-    probability-weighted expected value E[V], its skew, and the LLM/owner rationale.
-    Silent when the run carries no scenario_prior block."""
+    """Unaccepted prior and scenario-weighted upside to present fair value."""
     w = v.scenario_weights
     if w is None:
         return
     src = _SCEN_SRC_LABEL.get(v.scenario_set_by or "", "")
     parts: list[str] = []
-    if v.scenario_expected_return is not None:
-        parts.append(f"E[V] {v.scenario_expected_return * 100:+.0f}%")
+    upside = v.scenario_valuation_upside
+    value = (
+        f"{upside * 100:+.0f}%"
+        if upside is not None
+        else "unavailable: no usable scenario-weighted valuation gap"
+    )
+    parts.append(f"Scenario-weighted upside to present fair value {value}")
     if v.scenario_skew is not None:
         parts.append(f"skew {v.scenario_skew * 100:+.1f}pts")
     weights = f"{w['bull'] * 100:.0f}/{w['base'] * 100:.0f}/{w['bear'] * 100:.0f}"
     parts.append(f"weights (bull/base/bear) {weights}" + (f" · {src}" if src else ""))
+    parts.append(v.scenario_prior_status)
     out.write("**Scenario prior** — " + " · ".join(parts) + "\n\n")
     if v.scenario_rationale:
         out.write(f"> {v.scenario_rationale}\n\n")

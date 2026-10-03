@@ -1,10 +1,9 @@
-"""The next-dollar allocation model: blend three factors into a distribution.
+"""Supporting allocation factor library: blend three factors into a distribution.
 
-Where should the next incremental dollar go, across the current portfolio
-holdings? Three inspectable factors per holding (each visible in the panel's
-waterfall, never a black-box composite):
+The analyst workflow can inspect three factors per holding. This library does
+not restore the retired next-dollar panel or issue a trade instruction:
 
-  ret   — absolute expected return: the probability-weighted DCF upside over
+  ret   — valuation upside to present fair value: the probability-weighted DCF upside over
           the latest ``dcf_runs`` row's bull/base/bear scenario range
           (``dcf.scenario_reward``), so the reward leg reflects the asymmetry of
           the range, not just its midpoint. Degrades to the base point estimate
@@ -12,10 +11,13 @@ waterfall, never a black-box composite):
           The base leg is recomputed from the row's own two fields, never read
           from ``over_under_pct`` (same convention rule as
           ``research_cockpit.latest_dcf_runs``).
+          Only an exact run qualified by shared valuation readiness at an
+          aware evaluation cutoff can carry this factor. Stored amounts alone
+          do not establish valuation-factor eligibility.
   div   — diversification: −(∂σ_p/∂w_i), the marginal volatility the next
           dollar of the name adds to the modeled book, off a Ledoit–Wolf
           shrunk covariance of ~1y of daily log returns at current weights.
-          This is the risk leg of marginal Sharpe; the return leg is ``ret``.
+          This historical risk measure and the valuation gap do not form Sharpe.
   macro — macro sentiment tilt: Σ_series β(ticker, series) × momentum(series),
           betas from ``macro_sensitivities`` (weekly-log-return OLS) and
           momentum as the trailing ~90-calendar-day log change of each
@@ -32,15 +34,17 @@ surfaced. Full model documentation: directives/next_dollar_model.md.
 from __future__ import annotations
 
 import math
+import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import numpy as np
 
 from allocation.book_risk import build_book_risk
-from dcf.latest import latest_dcf_rows_from_db
+from dcf.latest import latest_dcf_rows
+from dcf.readiness import load_valuation_readiness
 from dcf.scenario_reward import scenario_reward
 from macro_store import (
     RATE_SERIES_IDS,
@@ -67,7 +71,7 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 # execution/import_owner_capacity.py --seed-appetite).
 BLEND_WEIGHTS: dict[str, float] = {"ret": 0.50, "div": 0.30, "macro": 0.20}
 FACTOR_LABELS: dict[str, str] = {
-    "ret": "expected return",
+    "ret": "valuation upside",
     "div": "diversification",
     "macro": "macro tilt",
 }
@@ -208,7 +212,8 @@ def build_next_dollar_model(
 
     weights, weights_source = _current_weights(tickers, live_values)
     blend_weights, blend_weights_source = _effective_blend_weights(db_path)
-    ret_readings = _dcf_upside(db_path, tickers)
+    return_unavailable: dict[str, str] = {}
+    ret_readings = _dcf_upside(db_path, tickers, unavailable=return_unavailable)
     div = _diversification(repo_root, tickers, weights)
     macro_readings = _macro_tilt(db_path, tickers)
 
@@ -225,7 +230,11 @@ def build_next_dollar_model(
         if key == "div":
             hidden[key] = div.hidden_reason or "fewer than two holdings with price history"
         elif key == "ret":
-            hidden[key] = "no DCF runs with fair value + price for these holdings"
+            hidden[key] = "fewer than two holdings with readiness-qualified DCF valuation gaps"
+            if return_unavailable:
+                hidden[key] += "; " + "; ".join(
+                    f"{ticker}: {reason}" for ticker, reason in return_unavailable.items()
+                )
         else:
             hidden[key] = (
                 "no macro betas/series on file (run fetch_macro_series + "
@@ -296,7 +305,11 @@ def build_next_dollar_model(
         excluded=excluded,
         blend_weights_source=blend_weights_source,
         cash_to_deploy_usd=cash_to_deploy_usd,
-        notes=div.notes,
+        notes=div.notes
+        + [
+            f"Valuation upside unavailable for {ticker}: {reason}"
+            for ticker, reason in return_unavailable.items()
+        ],
     )
 
 
@@ -325,10 +338,16 @@ def _current_weights(
     return dict.fromkeys(tickers, 1.0 / n), "equal"
 
 
-def _dcf_upside(db_path: Path, tickers: Sequence[str]) -> dict[str, tuple[float, str]]:
-    """Latest DCF *expected* upside per ticker, asymmetry-aware.
+def _dcf_upside(
+    db_path: Path,
+    tickers: Sequence[str],
+    *,
+    as_of: datetime | None = None,
+    unavailable: dict[str, str] | None = None,
+) -> dict[str, tuple[float, str]]:
+    """Latest DCF upside to present fair value per ticker, asymmetry-aware.
 
-    The reward leg is the probability-weighted return over the run's bull/base/
+    The reward leg is the probability-weighted valuation gap over the run's bull/base/
     bear scenario range (``dcf.scenario_reward``) — not the bare base point
     estimate — so a name whose bear case is far below price is rewarded less than
     a symmetric one with the same midpoint. Falls back to exactly the base point
@@ -345,21 +364,64 @@ def _dcf_upside(db_path: Path, tickers: Sequence[str]) -> dict[str, tuple[float,
     ``sanity_flag`` — the model failed the trust gate) is EXCLUDED entirely:
     this is a ranking/valuation leg, and an unreviewed outlier valuation must
     not drive the next-dollar allocation any more than it may drive
-    eligibility (``allocation.eligibility``)."""
+    eligibility (``allocation.eligibility``).
+
+    Shared ``dcf.readiness`` must qualify this exact row at an aware cutoff.
+    The row and readiness reads share one read-only snapshot. No legacy schema
+    or query failure can substitute for readiness. ``unavailable`` carries
+    rejection reasons to the existing model notes and hidden-factor state.
+    Readiness remains conservative; this consumer does not grant admission.
+    """
+    cutoff = as_of if as_of is not None else datetime.now(UTC)
+    if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+        raise ValueError("as_of must have a timezone")
+    cutoff = cutoff.astimezone(UTC)
     want = set(tickers)
     out: dict[str, tuple[float, str]] = {}
-    for t, row in latest_dcf_rows_from_db(db_path).items():
-        if t not in want or row.sanity_flag:
-            continue
-        reward = scenario_reward(
-            price=row.live_price,
-            base_fv=row.npv_per_share,
-            snapshot_json=row.assumption_snapshot_json,
-        )
-        if reward is None:
-            continue
-        as_of = row.valuation_date or "?"
-        out[t] = (reward.expected_return, f"{reward.detail} ({as_of})")
+    rejected = unavailable if unavailable is not None else {}
+    if not db_path.exists():
+        rejected.update(dict.fromkeys(want, "dcf_database_missing"))
+        return out
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    except sqlite3.Error:
+        rejected.update(dict.fromkeys(want, "valuation_evidence_query_failed"))
+        return out
+    try:
+        conn.execute("BEGIN")
+        rows = latest_dcf_rows(conn)
+        for t in sorted(want):
+            row = rows.get(t)
+            readiness = load_valuation_readiness(conn, t, as_of=cutoff)
+            if not readiness.ready or readiness.status != "ready":
+                rejected[t] = ", ".join(readiness.reason_codes) or readiness.status
+                continue
+            if row is None:
+                rejected[t] = "dcf_run_unavailable"
+                continue
+            if readiness.run_id != row.id or readiness.ticker != t:
+                rejected[t] = "valuation_readiness_run_mismatch"
+                continue
+            if row.sanity_flag:
+                rejected[t] = "dcf_sanity_flag"
+                continue
+            reward = scenario_reward(
+                price=row.live_price,
+                base_fv=row.npv_per_share,
+                snapshot_json=row.assumption_snapshot_json,
+            )
+            if reward is None:
+                rejected[t] = "dcf_reward_unavailable"
+                continue
+            valuation_date = row.valuation_date or "?"
+            out[t] = (reward.valuation_upside, f"{reward.detail} ({valuation_date})")
+    except sqlite3.Error:
+        rejected.update(dict.fromkeys(want, "valuation_evidence_query_failed"))
+        return {}
+    finally:
+        if conn.in_transaction:
+            conn.rollback()
+        conn.close()
     return out
 
 

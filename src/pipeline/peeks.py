@@ -680,13 +680,14 @@ def render_what_if_peek(
     except ValueError as exc:
         return _whatif_error_html(str(exc))
 
+    risk_free = _opt("risk_free_annual")
     try:
         r = compute_what_if(
             repo_root,
             t,
             w,
             book_weights=weights,
-            risk_free_annual=_opt("risk_free_annual"),
+            risk_free_annual=risk_free,
             book_growth_tilt=_opt("growth_tilt"),
             funding_mode=funding_mode,
             db_path=db_path,
@@ -733,11 +734,11 @@ def render_what_if_peek(
 
     rows = [
         _row("Vol (ann.)", r.vol_before_ann, r.vol_after_ann, ".1f", 100.0),
-        _row("Sharpe", r.sharpe_before, r.sharpe_after, "+.3f", 1.0),
+        _row("Historical Sharpe", r.sharpe_before, r.sharpe_after, "+.3f", 1.0),
         _row("Growth tilt", r.growth_tilt_before, r.growth_tilt_after, "+.2f", 1.0),
     ]
     delta = (
-        f'<div class="cc-score-formula">&Delta;Sharpe = <b>{r.sharpe_delta_bps:+.0f}bp</b></div>'
+        f'<div class="cc-score-formula">Historical what-if &Delta;Sharpe = <b>{r.sharpe_delta_bps:+.0f}bp</b></div>'
         if r.sharpe_delta_bps is not None
         else ""
     )
@@ -796,8 +797,15 @@ def render_what_if_peek(
         if r.funding_mode == "new_cash"
         else "funded via pro-rata reallocation (selling this fraction of every holding)"
     )
+    risk_free_note = (
+        f"risk-free {risk_free * 100:.1f}%/yr"
+        if risk_free is not None
+        else "risk-free treatment unavailable"
+    )
     legend = (
-        f'<div class="cc-score-legend">modeled book (local price caches); {funding_note} '
+        '<div class="cc-score-legend">Historical aligned daily log returns '
+        "(dividend-adjusted close; close fallback); "
+        f"{risk_free_note}; {funding_note} "
         f"((1&minus;w)&middot;book + w&middot;{escape(t)}){obs}{through}</div>"
     )
     foot = (

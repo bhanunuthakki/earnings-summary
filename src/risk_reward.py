@@ -1,23 +1,13 @@
-"""Risk-budget allocator (L7): does each position earn the risk it consumes?
+"""Compare modeled book risk, valuation upside and recorded conviction.
 
-Nothing in the book joined risk contribution to reward contribution. Three pure
-engines sat one seam apart: ``allocation.book_risk`` (per-name share of total
-book risk off a shrunk covariance), the DCF bull/base/bear range
-(``dcf.scenario_reward`` — asymmetry-aware expected return on the L6 price-leg-
-fresh price), and the owner's recorded conviction (``position_sizing_intent``).
-This module joins them into one **risk-parity-gap** ranking: each name's share of
-book RISK vs its share of expected REWARD vs the stated CONVICTION, flagging the
-mismatches ("22% of book risk but 9% of expected reward, rated 3/5").
+The DCF leg measures a gap to present fair value, with no forward-return horizon.
+It requires exact persisted-run readiness. Missing, failed or unaccepted evidence
+leaves this leg unavailable and cannot score a valuation mismatch. Independent
+conviction-versus-risk evidence remains usable. Modeled upside shares describe
+only covered names; they are not expected portfolio returns or trade instructions.
 
-Honesty is load-bearing. The reward leg is DCF-dependent, so a name whose DCF is
-**missing or stale** is marked *low-confidence* and its gap is shown but NOT
-scored as a confident mismatch — a confident-but-wrong flag computed off a stale
-fair value is worse than no flag. The conviction-vs-risk signal (B below) does
-not touch the DCF, so it still fires honestly on a low-confidence row.
-
-The join is pure (``build_gap_rows`` over already-assembled inputs);
-``build_risk_reward_gap`` assembles the inputs (covariance from the price cache,
-DCF rows + conviction intents from the DB).
+``build_gap_rows`` is the pure join. ``build_risk_reward_gap`` reads existing
+model evidence, covariance from the price cache and recorded conviction.
 """
 
 from __future__ import annotations
@@ -25,12 +15,13 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from statistics import median
 
 from allocation.book_risk import BookRisk, build_book_risk
-from dcf.latest import latest_dcf_rows_from_db
+from dcf.latest import latest_dcf_rows
+from dcf.readiness import load_valuation_readiness
 from dcf.scenario_reward import scenario_reward
 from identity import DEFAULT_USER_ID
 from sources.market_price_policy import PRICE_STALE_DAYS as PRICE_STALE_DAYS
@@ -42,11 +33,11 @@ GAP_FLAG_PP = 5.0  # risk_share - reward_share (pp) to count as a parity gap
 RISK_FLOOR_PP = 6.0  # only flag names carrying a material share of book risk
 LOW_CONVICTION = 2.0  # at/below this, conviction is "low"
 HIGH_CONVICTION = 4.0  # at/above this, conviction is "high"
-CONV_REWARD_MIN_PCT = 5.0  # a high-conviction name the DCF expects less than this from is a tension
-# Winsorize the expected return that feeds the reward-SHARE denominator, so one
+CONV_REWARD_MIN_PCT = 5.0  # valuation-upside floor for high-conviction tension
+# Winsorize the valuation upside that feeds the reward-SHARE denominator, so one
 # deep-value/stale DCF (a +400% point estimate) can't swamp every other name's
 # share and manufacture false "over-risked" flags. Mirrors the next-dollar
-# model's RET_CLAMP rationale; the true expected return is still displayed.
+# model's RET_CLAMP rationale; the true valuation upside is still displayed.
 REWARD_CLAMP = 1.0  # +-100%
 
 # Freshness — the reward leg's confidence. The fair value moves on a fundamentals
@@ -61,11 +52,16 @@ CONVICTION_KIND = "conviction"
 class Reward:
     """The asymmetry-aware reward leg for one name, with its confidence."""
 
-    expected_return: float | None  # fraction; None when there is no usable DCF reward
+    expected_return: float | None  # compatibility field: fraction of present-value upside
     has_scenarios: bool
     low_confidence: bool
     confidence_reason: str | None
     detail: str | None
+
+    @property
+    def valuation_upside(self) -> float | None:
+        """Gap to present fair value; no holding horizon or forward return."""
+        return self.expected_return
 
 
 @dataclass(slots=True)
@@ -76,8 +72,8 @@ class RiskRewardGapRow:
     weight_pct: float  # modeled-book weight (renormalized over the covariance names)
     risk_share_pct: float  # share of total book risk (sums to ~100%)
     marginal_vol_ann_pct: float  # annualized marginal vol (waterfall substrate)
-    expected_return_pct: float | None  # asymmetric DCF expected return
-    reward_share_pct: float | None  # share of the book's measured expected upside
+    expected_return_pct: float | None  # compatibility field: present-value upside percentage
+    reward_share_pct: float | None  # signed contribution / positive gross modeled upside
     gap_pct: float | None  # risk_share - reward_share (+ = over-risked for the reward)
     conviction: float | None  # latest recorded conviction (1-5)
     has_scenarios: bool  # the reward used a bull/base/bear range (not just the base point)
@@ -86,6 +82,11 @@ class RiskRewardGapRow:
     reward_detail: str | None
     mismatch_score: float = 0.0
     mismatch_reasons: list[str] = field(default_factory=list[str])
+
+    @property
+    def valuation_upside_pct(self) -> float | None:
+        """Present-value gap as a percentage; retained legacy field is an alias."""
+        return self.expected_return_pct
 
 
 @dataclass(slots=True)
@@ -136,7 +137,7 @@ def _score_row(
     ):
         pts += min(gap_pct, 25.0) * 0.5
         reasons.append(
-            f"{risk_share_pct:.0f}% of book risk vs {reward_share_pct:.0f}% of expected reward"
+            f"{risk_share_pct:.0f}% of book risk vs {reward_share_pct:.0f}% of modeled valuation upside"
         )
 
     # B. Conviction undersized vs risk — low conviction carrying a high risk
@@ -159,7 +160,7 @@ def _score_row(
     ):
         pts += (conviction - 3.0) * 1.5
         reasons.append(
-            f"rated {conviction:g}/5 but the DCF expects only {expected_return_pct:+.0f}%"
+            f"rated {conviction:g}/5 but DCF valuation upside is only {expected_return_pct:+.0f}%"
         )
 
     # Honest framing: a material-risk name whose reward we can't trust is shown,
@@ -177,10 +178,10 @@ def build_gap_rows(
 ) -> tuple[list[RiskRewardGapRow], int]:
     """Join risk shares × reward legs × conviction into the ranked rows.
 
-    Returns ``(rows, valued_names)``. Reward shares distribute the book's
-    *measured* expected upside — the sum of positive weight×expected-return
-    contributions over the names that carry a DCF reward — so a name without a
-    DCF reads as low-confidence with no reward share, not a fabricated zero."""
+    Returns ``(rows, valued_names)``. Each reward share is a signed
+    weight×valuation-upside contribution (gap clamped to ±REWARD_CLAMP), divided
+    by the sum of positive contributions over names with a DCF reward. Negative gaps have negative
+    shares; rows need not sum to 100%. A name without a DCF has no reward share."""
     contrib: dict[str, float] = {
         t: book.weights.get(t, 0.0) * max(-REWARD_CLAMP, min(REWARD_CLAMP, r.expected_return))
         for t, r in rewards.items()
@@ -252,60 +253,92 @@ def _parse_date(raw: object) -> date | None:
             return None
 
 
-def _dcf_reward_legs(db_path: Path, tickers: Sequence[str], today: date) -> dict[str, Reward]:
-    """Asymmetry-aware reward leg per ticker, with freshness-derived confidence.
+def _dcf_reward_legs(
+    db_path: Path, tickers: Sequence[str], today: date, *, as_of: datetime | None = None
+) -> dict[str, Reward]:
+    """Read valuation upside only for an exact readiness-qualified model run.
 
-    Reads the latest TOP-LEVEL (unsegmented, current-version) ``dcf_runs`` row
-    per name through the canonical shared reader (``dcf.latest``, PR:
-    canonical latest_dcf_run reader) — a segment or superseded row can't win
-    this reward leg. The L6 price-leg-fresh ``live_price`` and the value-of-
-    record ``npv_per_share`` feed ``dcf.scenario_reward``; ``valuation_date``
-    (fair-value leg) and ``live_price_at`` (price leg) drive the low-
-    confidence framing. A name with no row simply gets no entry (the caller
-    treats it as 'no DCF on file').
-
-    A sanity-flagged run (migration 0182) skips the fair-value leg entirely —
-    ``scenario_reward`` is never called, so ``expected_return`` reads None,
-    same shape as "no usable price / fair value" — an unreviewed outlier
-    valuation must not drive the risk-parity-gap ranking any more than it may
-    drive eligibility (``allocation.eligibility``)."""
+    Latest-row and readiness reads share one read-only snapshot. The public
+    readiness owner retains source, native-fact, completeness, numerical-model
+    and scenario-acceptance gates. Fresh prices alone do not qualify a model.
+    A date cutoff includes that completed day, bounded by the current clock;
+    callers can supply an exact aware cutoff. Rejected models retain precise
+    reasons and cannot enter the upside-share denominator or mismatch score.
+    Independent conviction-versus-risk evidence remains available.
+    """
+    cutoff = (
+        as_of
+        if as_of is not None
+        else min(datetime.combine(today, time.max, tzinfo=UTC), datetime.now(UTC))
+    )
+    if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+        raise ValueError("as_of must have a timezone")
+    cutoff = cutoff.astimezone(UTC)
     want = {t.upper() for t in tickers}
     out: dict[str, Reward] = {}
-    for t, row in latest_dcf_rows_from_db(db_path).items():
-        if t not in want:
-            continue
-        if row.sanity_flag:
-            out[t] = Reward(
-                None, False, True, f"DCF sanity-flagged (outlier: {row.sanity_flag!r})", None
+    if not db_path.exists():
+        return {t: Reward(None, False, True, "dcf_database_missing", None) for t in want}
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    except sqlite3.Error:
+        return {t: Reward(None, False, True, "valuation_evidence_query_failed", None) for t in want}
+    try:
+        conn.execute("BEGIN")
+        rows = latest_dcf_rows(conn)
+        for t in sorted(want):
+            row = rows.get(t)
+            readiness = load_valuation_readiness(conn, t, as_of=cutoff)
+            if row is None:
+                if readiness.status != "missing":
+                    reason = "; ".join(readiness.reason_codes) or readiness.status
+                    out[t] = Reward(None, False, True, reason, None)
+                continue
+            if row.sanity_flag:
+                reason = f"DCF sanity-flagged (outlier: {row.sanity_flag!r})"
+                if readiness.reason_codes:
+                    reason += "; " + "; ".join(readiness.reason_codes)
+            elif not readiness.ready or readiness.status != "ready":
+                reason = "; ".join(readiness.reason_codes) or readiness.status
+            elif readiness.run_id != row.id or readiness.ticker != t:
+                reason = "valuation_readiness_run_mismatch"
+            else:
+                reason = None
+            if reason:
+                out[t] = Reward(None, False, True, reason, None)
+                continue
+            reward = scenario_reward(
+                price=row.live_price,
+                base_fv=row.npv_per_share,
+                snapshot_json=row.assumption_snapshot_json,
             )
-            continue
-        reward = scenario_reward(
-            price=row.live_price,
-            base_fv=row.npv_per_share,
-            snapshot_json=row.assumption_snapshot_json,
-        )
-        if reward is None:
-            out[t] = Reward(None, False, True, "DCF has no usable price / fair value", None)
-            continue
-        val_date = _parse_date(row.valuation_date)
-        priced_date = _parse_date(row.live_price_at)
-        stale_bits: list[str] = []
-        if val_date is None:
-            stale_bits.append("fair value undated")
-        elif (today - val_date).days > REWARD_STALE_DAYS:
-            stale_bits.append(f"fair value {(today - val_date).days}d stale")
-        if priced_date is None:
-            stale_bits.append("price never recorded")
-        elif (today - priced_date).days > PRICE_STALE_DAYS:
-            stale_bits.append(f"price {(today - priced_date).days}d stale")
-        low_conf = bool(stale_bits)
-        out[t] = Reward(
-            expected_return=reward.expected_return,
-            has_scenarios=reward.has_scenarios,
-            low_confidence=low_conf,
-            confidence_reason="; ".join(stale_bits) if stale_bits else None,
-            detail=reward.detail,
-        )
+            if reward is None:
+                out[t] = Reward(
+                    None,
+                    False,
+                    True,
+                    "DCF valuation gap unavailable: price, fair value or probability mass unusable",
+                    None,
+                )
+                continue
+            val_date = _parse_date(row.valuation_date)
+            stale_bits: list[str] = []
+            if val_date is None:
+                stale_bits.append("fair value undated")
+            elif (cutoff.date() - val_date).days > REWARD_STALE_DAYS:
+                stale_bits.append(f"fair value {(cutoff.date() - val_date).days}d stale")
+            out[t] = Reward(
+                expected_return=reward.valuation_upside,
+                has_scenarios=reward.has_scenarios,
+                low_confidence=bool(stale_bits),
+                confidence_reason="; ".join(stale_bits) if stale_bits else None,
+                detail=reward.detail,
+            )
+    except sqlite3.Error:
+        return {t: Reward(None, False, True, "valuation_evidence_query_failed", None) for t in want}
+    finally:
+        if conn.in_transaction:
+            conn.rollback()
+        conn.close()
     return out
 
 

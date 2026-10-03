@@ -12,8 +12,13 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, SupportsFloat, SupportsIndex, cast
 
+from dcf.scenario_reward import (
+    SCENARIO_PROBABILITIES,
+    parse_scenario_fair_values,
+    scenario_reward,
+)
 from report.models import (
     DecisionBadge,
     KpiSnapshotRow,
@@ -25,7 +30,7 @@ from report.models import (
 )
 from report.rules import load_rules
 from report.sections._common import has_table, missing, open_repo_db
-from report.sections.thesis import _split_stub_warning
+from report.sections.thesis import split_stub_warning
 
 
 def build(
@@ -72,7 +77,7 @@ def build(
             recent_decisions=recent_decisions,
         )
 
-    thesis_clean, _ = _split_stub_warning(holdings or {})
+    thesis_clean, _ = split_stub_warning(holdings or {})
     return SnapshotSection(
         status=SectionStatus.OK if valuation.consolidated_npv_per_share else SectionStatus.PARTIAL,
         ticker=ticker.upper(),
@@ -149,23 +154,25 @@ def _latest_price(ticker: str, repo_root: Path) -> float | None:
 def _read_latest_close(path: Path) -> float | None:
     try:
         with open(path, encoding="utf-8") as f:
-            data = json.load(f)
+            data: object = json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
-    records = (
-        data
-        if isinstance(data, list)
-        else data.get("historical")
-        if isinstance(data, dict)
-        else None
-    )
+    records: object = data
+    if isinstance(data, dict):
+        records = cast("dict[str, object]", data).get("historical")
     if not isinstance(records, list) or not records:
         return None
-    sorted_records = sorted(
-        (r for r in records if isinstance(r, dict) and isinstance(r.get("date"), str)),
-        key=lambda r: r["date"],
-        reverse=True,
-    )
+    dated_records: list[tuple[str, dict[str, object]]] = []
+    for raw_record in cast("list[object]", records):
+        if not isinstance(raw_record, dict):
+            continue
+        record = cast("dict[str, object]", raw_record)
+        recorded_date = record.get("date")
+        if isinstance(recorded_date, str):
+            dated_records.append((recorded_date, record))
+    sorted_records = [
+        record for _stamp, record in sorted(dated_records, key=lambda item: item[0], reverse=True)
+    ]
     for r in sorted_records:
         for key in ("adjClose", "close", "price"):
             v = r.get(key)
@@ -252,6 +259,9 @@ def _valuation_snapshot(
     exp_return, skew = _scenario_ev_skew(
         live_price, cons_npv_per_share, row["assumption_snapshot_json"]
     )
+    if exp_return is not None and sp_weights is None:
+        sp_weights = dict(SCENARIO_PROBABILITIES)
+        sp_set_by = "global"
     sync_status = (
         str(row["assumptions_sync_status"])
         if has_sync_cols and row["assumptions_sync_status"] is not None
@@ -297,28 +307,11 @@ def _scenario_range(snapshot_json: object) -> tuple[float | None, float | None]:
     The "scenarios" block is written by execution/refresh_dcf.py for the
     redesigned FCFF archetype; rows that predate it (or other archetypes) have
     none — both values None and the card keeps its single-point readout. An
-    un-valuable scenario is persisted as null and stays None here.
+    unusable scenario stays None here. The calculation owner supplies the same
+    admitted positive, finite tail set to the range and the prior status.
     """
-    if not isinstance(snapshot_json, str) or not snapshot_json:
-        return None, None
-    try:
-        data: object = json.loads(snapshot_json)
-    except ValueError:
-        return None, None
-    if not isinstance(data, dict):
-        return None, None
-    scenarios = cast("dict[str, object]", data).get("scenarios")
-    if not isinstance(scenarios, dict):
-        return None, None
-
-    def fair_value(key: str) -> float | None:
-        block = cast("dict[str, object]", scenarios).get(key)
-        if not isinstance(block, dict):
-            return None
-        v = cast("dict[str, object]", block).get("fair_value_per_share_usd")
-        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
-
-    return fair_value("bull"), fair_value("bear")
+    admitted = parse_scenario_fair_values(snapshot_json)
+    return admitted.get("bull"), admitted.get("bear")
 
 
 def _priced_in(snapshot_json: object) -> PricedInCard | None:
@@ -432,15 +425,16 @@ def _scenario_prior_card(
 def _scenario_ev_skew(
     price: float | None, base_fv: float | None, snapshot_json: object
 ) -> tuple[float | None, float | None]:
-    """The probability-weighted expected value E[V] + its skew vs the base point
-    estimate, for the card (``dcf.scenario_reward``). Both None unless the run
-    carries a real scenario range (tails) — a point estimate has no skew to show."""
-    from dcf.scenario_reward import scenario_reward
+    """Present-fair-value upside and skew, retaining the legacy helper name.
+
+    Both are unavailable without usable price/value/probability mass and at
+    least one tail. This calculation does not establish scenario acceptance.
+    """
 
     reward = scenario_reward(price=price, base_fv=base_fv, snapshot_json=snapshot_json)
     if reward is None or not reward.has_scenarios:
         return None, None
-    return reward.expected_return, reward.skew
+    return reward.valuation_upside, reward.skew
 
 
 # Snapshot "model" tag (stamped by the bespoke builders) → card-facing label.
@@ -522,16 +516,17 @@ def _sum_of_segments_npv_per_share(
     if breakdown_json is None:
         return None
     try:
-        components = json.loads(breakdown_json)
+        components: object = json.loads(breakdown_json)
     except (TypeError, ValueError):
         return None
     if not isinstance(components, list):
         return None
     seg_npv_total = 0.0
     found_segment = False
-    for c in components:
-        if not isinstance(c, dict):
+    for raw_component in cast("list[object]", components):
+        if not isinstance(raw_component, dict):
             continue
+        c = cast("dict[str, object]", raw_component)
         if c.get("component_type") != "segment":
             continue
         npv = c.get("npv")
@@ -541,7 +536,11 @@ def _sum_of_segments_npv_per_share(
     if not found_segment:
         return None
     try:
-        shares = float(shares_outstanding) if shares_outstanding is not None else None
+        shares = (
+            float(shares_outstanding)
+            if isinstance(shares_outstanding, (str, bytes, bytearray, SupportsFloat, SupportsIndex))
+            else None
+        )
     except (TypeError, ValueError):
         shares = None
     if not shares or shares <= 0:
@@ -632,12 +631,13 @@ def _tier_1_strip(holdings: dict[str, object] | None) -> list[KpiSnapshotRow]:
     if holdings is None:
         return []
     rows: list[KpiSnapshotRow] = []
-    kpis = holdings.get("tier_1_kpis") or []
+    kpis = holdings.get("tier_1_kpis")
     if not isinstance(kpis, list):
         return []
-    for k in kpis:
-        if not isinstance(k, dict):
+    for raw_kpi in cast("list[object]", kpis):
+        if not isinstance(raw_kpi, dict):
             continue
+        k = cast("dict[str, object]", raw_kpi)
         rows.append(
             KpiSnapshotRow(
                 name=str(k.get("name", "")),

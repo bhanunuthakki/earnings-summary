@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from dcf.scenario_reward import parse_scenario_fair_value
 from sources.discovery_market import DiscoveryMarketContext
 from sources.report_financials import FinancialTableProjection
 
@@ -178,18 +179,31 @@ class ValuationSnapshot(BaseModel):
     # runs predating the block; the card then shows an explicit n/a.
     priced_in: PricedInCard | None = None
 
-    # Feature 2 — the per-name DCF scenario prior surfaced on the card: the
-    # LLM/owner Bull/Base/Bear weights + rationale (dcf_runs.assumption_snapshot_json
-    # ["scenario_prior"]), plus the probability-weighted expected value E[V] and its
-    # skew vs the base point estimate (dcf.scenario_reward over the live price +
-    # scenario fair values). Until now only the allocation surfaces saw E[V]/skew.
-    # None when the run carries no scenario_prior block / no usable reward.
-    # scenario_set_by is "llm" / "owner" / "global".
+    # Scenario prior origin and present-value gap. Legacy return fields remain
+    # compatible; weights and owner/LLM attribution do not grant acceptance.
     scenario_weights: dict[str, float] | None = None
     scenario_rationale: str | None = None
     scenario_set_by: str | None = None
-    scenario_expected_return: float | None = None  # E[V], a fraction (+0.12 = +12%)
-    scenario_skew: float | None = None  # E[V] - base point estimate, a fraction
+    scenario_expected_return: float | None = None  # compatibility: fractional valuation gap
+    scenario_skew: float | None = None  # weighted valuation gap minus base gap
+
+    @property
+    def scenario_valuation_upside(self) -> float | None:
+        """Scenario-weighted gap to present fair value, with no holding horizon."""
+        return self.scenario_expected_return
+
+    @property
+    def scenario_prior_status(self) -> str:
+        """Prior origin and coverage; neither is accepted scenario authority."""
+        origin = "default prior" if self.scenario_set_by == "global" else "per-name prior"
+        status = f"{origin} (unaccepted)"
+        bull_present = parse_scenario_fair_value(self.bull_npv_per_share) is not None
+        bear_present = parse_scenario_fair_value(self.bear_npv_per_share) is not None
+        if bull_present != bear_present:
+            status += "; partial scenarios; weights renormalized"
+        elif not bull_present and self.scenario_valuation_upside is not None:
+            status += "; scenario coverage unavailable"
+        return status
 
     # S11 — workbook→assumptions-JSON sync outcome from dcf_runs (migration
     # 0091): 'synced' / 'created' / 'failed: <detail>' + the naive-UTC stamp.

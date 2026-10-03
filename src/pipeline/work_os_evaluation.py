@@ -19,7 +19,7 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from allocation.candidate_fit import CandidateFit
+from allocation.candidate_fit import HISTORICAL_SHARPE_LABEL, CandidateFit
 from candidate_fit_cache import read_materialized_candidate_fit
 from dcf.availability import resolve_dcf_route_artifact
 from etf_score_cache import read_materialized_etf_loadings, read_materialized_etf_whatif
@@ -193,7 +193,7 @@ def _portfolio_projection(
     indicators = [
         WorkOsPortfolioIndicator(
             key=factor.key,
-            label=factor.label,
+            label=HISTORICAL_SHARPE_LABEL if factor.key == "sharpe" else factor.label,
             detail=factor.detail,
             effect=_factor_effect(factor.multiplier, missing=factor.missing),
             missing=factor.missing,
@@ -223,9 +223,9 @@ def _portfolio_projection(
             labels.append("Sector crowding")
     if sharpe_delta_bps is not None:
         if sharpe_delta_bps > 0:
-            labels.append("Risk-adjusted accretive")
+            labels.append("Historical Sharpe improves")
         elif sharpe_delta_bps < 0:
-            labels.append("Risk-adjusted dilutive")
+            labels.append("Historical Sharpe declines")
     return indicators, labels
 
 

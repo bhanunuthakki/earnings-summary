@@ -169,6 +169,10 @@ def _split_stub_warning(holdings: dict[str, object]) -> tuple[str | None, str | 
     return (raw_thesis, None)
 
 
+# Shared report readers use this public alias; retain the private name for compatibility.
+split_stub_warning = _split_stub_warning
+
+
 def _stub_banner(status_value: str) -> str:
     """Human-readable banner text for the stub-warning callout."""
     if status_value == "stub_regenerated_from_corruption":

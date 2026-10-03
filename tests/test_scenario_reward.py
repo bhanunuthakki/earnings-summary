@@ -9,15 +9,10 @@ the downside-skew case, and the point-estimate fallback.
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from dcf.scenario_reward import (  # noqa: E402
+from dcf.scenario_reward import (
     SCENARIO_PROBABILITIES,
     parse_scenario_fair_values,
     scenario_reward,
@@ -71,7 +66,8 @@ def test_no_scenarios_is_base_point_estimate() -> None:
     assert r.base_return == pytest.approx(0.20)
     assert r.skew == pytest.approx(0.0)
     assert r.bull_return is None and r.bear_return is None
-    assert r.detail == "fair $120.00 vs $100.00"
+    assert "fair $120.00 vs $100.00" in r.detail
+    assert "base point estimate; scenarios unavailable" in r.detail
 
 
 def test_symmetric_range_equals_base() -> None:
@@ -99,7 +95,7 @@ def test_downside_skew_drags_expectation_below_base() -> None:
     assert r.skew == pytest.approx(-0.125)
     assert r.bull_return == pytest.approx(0.30)
     assert r.bear_return == pytest.approx(-0.60)
-    assert "exp -2%" in r.detail
+    assert "upside to present fair value -2%" in r.detail
     assert "$40.00" in r.detail and "$130.00" in r.detail
 
 
@@ -132,3 +128,54 @@ def test_guards_return_none() -> None:
 def test_probability_prior_is_visible_and_sums_to_one() -> None:
     assert SCENARIO_PROBABILITIES == {"bull": 0.25, "base": 0.50, "bear": 0.25}
     assert sum(SCENARIO_PROBABILITIES.values()) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf"), True, False])
+def test_nonfinite_or_boolean_operands_are_unavailable(invalid: float) -> None:
+    assert scenario_reward(price=invalid, base_fv=120.0) is None
+    assert scenario_reward(price=100.0, base_fv=invalid) is None
+
+
+def test_valuation_upside_preserves_unannualized_present_value_gap() -> None:
+    reward = scenario_reward(price=100.0, base_fv=121.0, snapshot_json=_snap(141, 121, 101))
+    assert reward is not None
+    assert reward.valuation_upside == pytest.approx(0.21)
+    assert reward.valuation_upside == reward.expected_return
+    assert "upside to present fair value" in reward.detail
+    assert "default prior (unaccepted)" in reward.detail
+    assert "exp " not in reward.detail
+
+
+def test_partial_prior_and_per_name_prior_are_explicitly_unaccepted() -> None:
+    snapshot = json.loads(_snap(150, 100, None))
+    snapshot["scenario_prior"] = {
+        "weights": {"bull": 0.2, "base": 0.5, "bear": 0.3},
+        "set_by": "owner",
+    }
+    reward = scenario_reward(price=100.0, base_fv=100.0, snapshot_json=json.dumps(snapshot))
+    assert reward is not None
+    assert reward.valuation_upside == pytest.approx((0.2 / 0.7) * 0.5)
+    assert "per-name prior (unaccepted)" in reward.detail
+    assert "partial scenarios; weights renormalized" in reward.detail
+
+
+def test_finite_operands_with_overflowing_value_gap_are_unavailable() -> None:
+    assert scenario_reward(price=1e-308, base_fv=1e308) is None
+    # The fractional ratio can be finite while its displayed percentage overflows.
+    assert scenario_reward(price=1, base_fv=1e308) is None
+    assert scenario_reward(price=1e-308, base_fv=1e-308, snapshot_json=_snap(1e308, 1, 1)) is None
+
+
+def test_overflowing_prior_total_uses_the_visible_default_prior() -> None:
+    snapshot = json.loads(_snap(150, 100, 50))
+    snapshot["scenario_prior"] = {"weights": {"bull": 1e308, "base": 1e308, "bear": 1e308}}
+    reward = scenario_reward(price=100, base_fv=100, snapshot_json=json.dumps(snapshot))
+    assert reward is not None
+    assert reward.probabilities == SCENARIO_PROBABILITIES
+    assert reward.valuation_upside == pytest.approx(0)
+    assert "default prior (unaccepted)" in reward.detail
+
+
+def test_zero_probability_mass_on_present_legs_is_unavailable() -> None:
+    snapshot = {"scenario_prior": {"weights": {"bull": 0.5, "base": 0, "bear": 0.5}}}
+    assert scenario_reward(price=100, base_fv=120, snapshot_json=json.dumps(snapshot)) is None

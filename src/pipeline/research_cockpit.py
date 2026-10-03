@@ -1161,10 +1161,10 @@ def _render_list_section(
             # the full what-if.
             + (
                 _sort_th(
-                    "ΔSR",
+                    "Historical ΔSharpe",
                     "dsr",
                     "num",
-                    title="modeled-book Sharpe change (basis points) of a 3% position, "
+                    title="Historical modeled-book Sharpe change (basis points) of a 3% position, "
                     "pro-rata funded; click for the full before/after what-if with a "
                     "weight selector",
                 )
@@ -1303,8 +1303,8 @@ def _sharpe_delta_cell(row: CockpitRow) -> str:
         f"<a class='{cls}' href='/ticker/{t}' "
         f"data-peek-url='/api/peek/whatif?ticker={t}' "
         f"data-peek-title='What-if · {t}' "
-        f"title='modeled-book Sharpe change at a 3% position, pro-rata funded; "
-        f"click for the full what-if'>{v:+.0f}bp</a>"
+        f"title='Historical modeled-book Sharpe change at a 3% position, pro-rata funded; "
+        f"click for the aligned price window and risk-free input'>{v:+.0f}bp</a>"
     )
 
 
