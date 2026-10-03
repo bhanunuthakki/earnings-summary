@@ -14,6 +14,18 @@
 
 ## Outcome
 
+### Scheduler job receipt authority
+
+The Operations panel and review bundle read each job receipt from its declared
+writer root. `cron/run_python.bat` defaults to the deployed code checkout.
+`prepare-kpi-semantic-review` is the explicit exception: its wrapper derives
+the product-state root from the configured database path and passes that root
+to the job runtime. The dashboard uses the same resolved database declaration
+for this exception. Dashboard scratch artifacts do not replace either writer
+root. Missing, stale and invalid receipts remain explicit; another root never
+supplies fallback evidence. This changes receipt observation only. It adds no
+scheduler operation, job execution or financial-state write.
+
 ### Cached host-owner monitoring endpoint
 
 Disposition: **linked governed view**. `GET /api/operations/host-runtime`
