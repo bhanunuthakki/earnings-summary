@@ -4099,6 +4099,7 @@ def create_app(
             return ("", 204)
         from earnings_readout import (
             BUDGET_SKIPPED,
+            InvalidReadoutTargetError,
             ReadoutUnavailableError,
             generate_for_ticker,
         )
@@ -4108,10 +4109,24 @@ def create_app(
             ticker = ticker_validation.safe_ticker(str(body.get("ticker") or ""))
         except ValueError:
             return ({"error": "valid ticker required"}, 400)
+        period_end = body.get("period_end")
+        fiscal_period_type = body.get("fiscal_period_type")
+        if (period_end is not None and not isinstance(period_end, str)) or (
+            fiscal_period_type is not None and not isinstance(fiscal_period_type, str)
+        ):
+            return ({"error": "period_end and fiscal_period_type must be strings"}, 400)
         try:
-            outcome = generate_for_ticker(db_path, repo_root, ticker)
+            outcome = generate_for_ticker(
+                db_path,
+                repo_root,
+                ticker,
+                period_end=period_end,
+                fiscal_period_type=fiscal_period_type,
+            )
         except ReadoutUnavailableError as exc:
             return ({"error": str(exc)}, 404)
+        except InvalidReadoutTargetError as exc:
+            return ({"error": str(exc)}, 400)
         except Exception as exc:
             _log_redacted_failure(f"post earnings readout request failed for {ticker}", exc)
             return (

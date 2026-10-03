@@ -57,6 +57,10 @@ _PERSIST_RETRY_SLEEP_S = 8.0
 _MAX_TRANSCRIPT_CHARS = 60_000
 
 
+class InvalidReadoutTargetError(ValueError):
+    """The explicit fiscal selectors are incomplete or invalid."""
+
+
 class ReadoutUnavailableError(ValueError):
     """The name is out of scope or has no selected reported quarter."""
 
@@ -149,16 +153,18 @@ def _validated_target(
     if period_end is None and fiscal_period_type is None:
         return None, None
     if period_end is None or fiscal_period_type is None:
-        raise ValueError("period_end and fiscal_period_type must be supplied together")
+        raise InvalidReadoutTargetError(
+            "period_end and fiscal_period_type must be supplied together"
+        )
     try:
         parsed = date.fromisoformat(period_end)
     except ValueError as exc:
-        raise ValueError("period_end must be a valid YYYY-MM-DD date") from exc
+        raise InvalidReadoutTargetError("period_end must be a valid YYYY-MM-DD date") from exc
     if parsed.isoformat() != period_end:
-        raise ValueError("period_end must be a valid YYYY-MM-DD date")
+        raise InvalidReadoutTargetError("period_end must be a valid YYYY-MM-DD date")
     fpt = fiscal_period_type.upper()
     if fpt not in {"Q1", "Q2", "Q3", "Q4"}:
-        raise ValueError("fiscal_period_type must be Q1, Q2, Q3 or Q4")
+        raise InvalidReadoutTargetError("fiscal_period_type must be Q1, Q2, Q3 or Q4")
     return period_end, fpt
 
 
