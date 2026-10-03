@@ -38,7 +38,7 @@ def _semantic_input(*, observed_value: str = "11.0") -> ForwardSemanticInput:
         ticker="wix",
         thesis_content_sha256="a" * 64,
         ruleset_version="wix-break-rules/v3",
-        evaluator_semantic_version="thesis-evaluator/v2",
+        evaluator_semantic_version="thesis-evaluator/v1",
         hard_rules=(
             SemanticRuleInput(
                 rule_id="growth-floor",

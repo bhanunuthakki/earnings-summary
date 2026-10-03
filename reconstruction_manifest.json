@@ -131,18 +131,22 @@
         "src/compute/metrics_engine/engine.py",
         "src/compute/metrics_engine/io.py",
         "src/compute/kpi_extract_summaries.py",
-        "src/dcf/valuation.py"
+        "src/dcf/valuation.py",
+        "src/compute/thesis_evaluator.py",
+        "src/compute/thesis_evaluation_episodes.py",
+        "src/compute/soft_rule_evaluator.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
-        "pytest tests/test_metrics_engine.py -q"
+        "pytest tests/test_metrics_engine.py -q",
+        "pytest tests/test_thesis_check_context.py -q"
       ],
       "documentation": [
         "directives/data_provenance.md"
       ],
-      "version_ownership": "Deterministic metric ontology version & valuation model parameter schemas",
+      "version_ownership": "Deterministic metric ontology version & valuation model parameter schemas; thesis-evaluator/v2 and thesis-check-context/v1 preserve forward_v1 episode identity separately from exact per-check inputs",
       "backup_ownership": "Git version control (formulas, DCF models, compute code) plus cron/backup_db.py and execution/restore_drill.py for derived database tables",
       "ownership_paths": [
         {"field": "version_ownership", "path": "src/compute", "kind": "directory", "required_in_checkout": true},
@@ -154,7 +158,8 @@
       "invariants": [
         "Zero LLM dependency in deterministic valuation and financial math",
         "Unit and currency checks on every numeric fact before persistence",
-        "Reproducible DCF and reverse-DCF valuations from persisted parameters"
+        "Reproducible DCF and reverse-DCF valuations from persisted parameters",
+        "Thesis check context is bound to its execution receipt and supports offline deterministic replay; old context remains explicitly unavailable and financial provenance remains partial"
       ],
       "exit_ready_boundary": "Pure deterministic Python compute library with NumPy/Pandas; portable to any runtime environment"
     },

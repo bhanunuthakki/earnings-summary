@@ -7,6 +7,9 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -166,12 +169,17 @@ def test_current_schema_indexes_selected_observations(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
     path = migrated_db(tmp_path / "current.db")
+    root = Path(__file__).resolve().parents[1]
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "alembic"))
+    current_head = ScriptDirectory.from_config(config).get_current_head()
+    assert current_head is not None
     with sqlite3.connect(path) as conn:
         assert INDEX in resolution_indexes(conn)
         assert [str(row[2]) for row in conn.execute(f"PRAGMA index_info({INDEX})")] == [
             "selected_observation_id"
         ]
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (REVISION,)
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (current_head,)
 
 
 def test_selected_lookup_instruction_work_is_bounded_by_matches(
