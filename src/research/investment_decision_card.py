@@ -15,7 +15,7 @@ Flow (see :func:`generate_card`):
    authored/system thesis (``compute.thesis_evaluator.load_holdings_spec``),
    the comp set (optional, None-safe), candidate fit, and the expected
    Concentration Zone for a hypothetical 3%-of-book add.
-2. ONE governed structured call (``call_llm_structured``,
+2. ONE governed structured call (``call_llm_structured_with_raw``,
    purpose=``investment_decision_card``) composes the seven sections'
    JUDGMENT text from those grounded facts.
 3. ``model_validate`` + a deterministic post-pass that OVERWRITES
@@ -24,8 +24,8 @@ Flow (see :func:`generate_card`):
    inputs â€” **the LLM can never set ``decision_ready=True`` when the
    assessment says blocked**, and can never invent a price.
 4. Persist via ``llm_artifact_store.upsert`` â€” scope='ticker',
-   purpose='investment_decision_card', cached on (assessment.input_sha,
-   thesis hash, dcf run ref, bear artifact id, fit computed_at).
+   purpose='investment_decision_card', with retained effective inputs and
+   exact available exchanges. The input content and base prompt own the cache key.
 
 Error handling (Â§10.6):
 budget-exceeded and transient LLM failures degrade to a labeled
@@ -44,12 +44,20 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    TypeAdapter,
+    ValidationError,
+    model_validator,
+)
 
 import llm_artifact_store
 from allocation.candidate_fit import CandidateFit
@@ -59,9 +67,9 @@ from candidate_fit_cache import read_materialized_candidate_fit, read_materializ
 from compute.thesis_evaluator import HoldingsSpec, load_holdings_spec
 from db_paths import resolve_db_path
 from identity import DEFAULT_USER_ID
-from llm.cli import LLMBudgetExceeded, is_hard_stop
+from llm.cli import LLM_MODELS, LLMBudgetExceeded, is_hard_stop
 from llm.prompt_versions import prompt_version_for
-from llm.structured import StructuredParseError, call_llm_structured
+from llm.structured import StructuredParseError, call_llm_structured_with_raw
 from llm_budget import should_skip_for_budget
 from models.companies import ListType
 from portfolio_weights import read_materialized_weights
@@ -91,13 +99,15 @@ __all__ = [
     "Uncertainty",
     "act_on_card",
     "generate_card",
+    "read_card_record",
 ]
 
 PURPOSE = "investment_decision_card"
 # v3 makes the persisted markdown a lossless decision-useful projection of the
 # validated card schema. Keep this version in the artifact cache inputs so a
 # renderer change cannot silently reuse prose produced by an older projection.
-ENGINE_VERSION = "v4"
+_CONTEXT_ENGINE_VERSION = "v5"
+ENGINE_VERSION = _CONTEXT_ENGINE_VERSION
 
 # A hypothetical add sized as 3% of book value â€” the Â§8.1 "expected
 # Concentration Zone if funded" preview. Not a recommendation of size; purely
@@ -168,6 +178,84 @@ def _unavailable_profile_suggestion() -> InvestmentProfileSuggestion:
     )
 
 
+class _RetainedModel(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class CardBearContext(_RetainedModel):
+    artifact_id: int = Field(gt=0)
+    ticker: str | None
+    input_sha256: str
+    output_sha256: str | None
+    generated_at: datetime
+    content_md: str
+    source_doc_ids: tuple[int, ...]
+    parent_artifact_ids: tuple[int, ...]
+
+
+class CardInputContext(_RetainedModel):
+    ticker: str
+    assessment: DecisionReadyAssessment
+    holdings_spec: HoldingsSpec | None
+    dcf_row: dict[str, JsonValue] | None
+    dcf_outlier: bool
+    bear_case: CardBearContext | None
+    candidate_fit: CandidateFit | None
+    fit_asof: str | None
+    comp_set_summary: str | None
+    expected_zone: str | None
+    hypothesis_origin: Literal["user_authored", "system_drafted", "missing"]
+
+
+class CardConfiguration(_RetainedModel):
+    purpose: Literal["investment_decision_card"] = PURPOSE
+    engine_version: str
+    prompt_version: str
+    configured_model: str | None
+    output_schema: dict[str, JsonValue]
+    hypothetical_add_fraction: float
+    call_attribution: Literal["unavailable_from_structured_api"] = "unavailable_from_structured_api"
+    exchange_coverage: Literal["final_schema_valid_exchange_per_call"] = (
+        "final_schema_valid_exchange_per_call"
+    )
+    # The API returns final prompt/response text, not resolved runtime attribution
+    # or failed internal schema-repair exchanges. A configured pin is not a call ID.
+
+
+class CardExchange(_RetainedModel):
+    requested_prompt: str
+    prompt: str | None
+    raw_response: str | None
+    validation_reasons: tuple[str, ...] = ()
+    schema_repair_reason: str | None = None
+    failure_class: str | None = None
+
+    @model_validator(mode="after")
+    def _exchange_shape(self) -> CardExchange:
+        if self.failure_class is None:
+            if self.prompt is None or self.raw_response is None:
+                raise ValueError("successful card exchange requires original prompt and response")
+        elif self.prompt is not None or self.raw_response is not None:
+            raise ValueError("failed card exchange cannot invent unavailable prompt or response")
+        return self
+
+
+class CardResearchContext(_RetainedModel):
+    format_version: Literal["card-context-v1"] = "card-context-v1"
+    inputs: CardInputContext
+    configuration: CardConfiguration
+    base_prompt: str
+    exchanges: tuple[CardExchange, ...]
+    allowed_refs: tuple[str, ...]
+    used_refs: tuple[str, ...]
+    selection_mode: Literal["llm", "deterministic_fallback"]
+    degraded_reasons: tuple[str, ...]
+    output_sha256: str
+
+
+_CONTEXT_FIELDS = {"record_format", "research_context", "research_context_sha256"}
+
+
 class InvestmentDecisionCard(BaseModel):
     """The full Â§8.1 structured output â€” the Pydantic BOUNDARY model between
     the LLM's raw JSON and everything downstream (persistence, routes,
@@ -194,6 +282,39 @@ class InvestmentDecisionCard(BaseModel):
     evidence_readiness: EvidenceReadiness
     suggested_disposition: Literal["pass", "watch", "research_further", "promote"]
     uncertainty: Uncertainty
+    record_format: Literal["legacy_unavailable", "card-context-v1"] = "legacy_unavailable"
+    research_context: CardResearchContext | None = None
+    research_context_sha256: str | None = None
+
+    @model_validator(mode="after")
+    def _retained_context_integrity(self) -> InvestmentDecisionCard:
+        context = self.research_context
+        if self.record_format == "legacy_unavailable":
+            if context is not None or self.research_context_sha256 is not None:
+                raise ValueError("legacy card context must be explicitly unavailable")
+            return self
+        if context is None:
+            raise ValueError("new card context is missing")
+        if self.research_context_sha256 != _sha(context.model_dump(mode="json")):
+            raise ValueError("card context commitment mismatch")
+        if (
+            context.output_sha256 != _sha(self.model_dump(mode="json", exclude=_CONTEXT_FIELDS))
+            or context.used_refs != tuple(self.source_refs)
+            or not set(context.used_refs).issubset(context.allowed_refs)
+            or context.inputs.ticker != self.ticker
+            or context.configuration.engine_version != self.engine_version
+            or context.configuration.prompt_version != self.prompt_version
+            or self.input_sha
+            != _context_input_sha(context.inputs, context.configuration, context.base_prompt)
+        ):
+            raise ValueError("card context does not match its input, output or references")
+        if context.selection_mode == "llm" and (
+            not context.exchanges
+            or context.exchanges[-1].failure_class is not None
+            or context.exchanges[-1].validation_reasons
+        ):
+            raise ValueError("LLM card context requires an accepted exchange")
+        return self
 
     def validate_grounding(self, *, allowed_refs: set[str]) -> list[str]:
         """Â§10.5 structural checks that go beyond schema shape: required
@@ -266,6 +387,108 @@ def _sha(payload: object) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def _context_input_sha(
+    inputs: CardInputContext, configuration: CardConfiguration, base_prompt: str
+) -> str:
+    return _sha(
+        {
+            "inputs": inputs.model_dump(mode="json"),
+            "configuration": configuration.model_dump(mode="json"),
+            "base_prompt": base_prompt,
+        }
+    )
+
+
+def _configuration() -> CardConfiguration:
+    return CardConfiguration(
+        engine_version=ENGINE_VERSION,
+        prompt_version=prompt_version_for(PURPOSE),
+        configured_model=LLM_MODELS.get(PURPOSE),
+        output_schema=TypeAdapter(dict[str, JsonValue]).validate_python(
+            _InvestmentDecisionCardDraft.model_json_schema()
+        ),
+        hypothetical_add_fraction=_HYPOTHETICAL_ADD_FRACTION,
+    )
+
+
+def _input_context(inputs: _Inputs) -> CardInputContext:
+    bear = inputs.bear_artifact
+    return CardInputContext(
+        ticker=inputs.assessment.ticker,
+        assessment=inputs.assessment,
+        holdings_spec=inputs.spec,
+        dcf_row=(
+            TypeAdapter(dict[str, JsonValue]).validate_python(dict(inputs.dcf_row))
+            if inputs.dcf_row is not None
+            else None
+        ),
+        dcf_outlier=inputs.dcf_outlier,
+        bear_case=(
+            CardBearContext(
+                artifact_id=bear.id,
+                ticker=bear.ticker,
+                input_sha256=bear.input_sha256,
+                output_sha256=bear.output_sha256,
+                generated_at=bear.generated_at,
+                content_md=bear.content_md or "",
+                source_doc_ids=tuple(bear.source_doc_ids),
+                parent_artifact_ids=tuple(bear.parent_artifact_ids),
+            )
+            if bear is not None
+            else None
+        ),
+        candidate_fit=inputs.fit,
+        fit_asof=inputs.fit_asof,
+        comp_set_summary=inputs.comp_set_summary,
+        expected_zone=inputs.expected_zone,
+        hypothesis_origin=inputs.hypothesis_origin,
+    )
+
+
+def read_card_record(artifact_id: int, *, db_path: Path) -> InvestmentDecisionCard | None:
+    """Open original retained context without gathering inputs or calling a provider.
+
+    Legacy cards remain readable with ``record_format=legacy_unavailable``.
+    New records fail explicitly on missing context, rather than reconstructing
+    it from current mutable sources. This verifies retained content, not admission.
+    """
+    artifact = llm_artifact_store.read_artifact(artifact_id, db_path=db_path)
+    if artifact is None:
+        return None
+    if artifact.purpose != PURPOSE or not isinstance(artifact.content_json, dict):
+        raise ValueError("saved card context is unavailable or invalid")
+    content = cast("dict[str, object]", artifact.content_json)
+    if (
+        content.get("engine_version") == _CONTEXT_ENGINE_VERSION
+        and content.get("record_format") != "card-context-v1"
+    ):
+        raise ValueError("new card context format is missing")
+    card = InvestmentDecisionCard.model_validate(content)
+    context = card.research_context
+    if context is not None:
+        bear = context.inputs.bear_case
+        expected_sha = llm_artifact_store.compute_input_sha256(
+            prompt_version=card.prompt_version,
+            cache_inputs=[
+                card.engine_version,
+                card.input_sha,
+                context.selection_mode,
+                _sha(context.degraded_reasons),
+            ],
+        )
+        if (
+            artifact.ticker != card.ticker
+            or artifact.scope != "ticker"
+            or artifact.input_sha256 != expected_sha
+            or artifact.parent_artifact_ids != ([bear.artifact_id] if bear is not None else [])
+            or artifact.source_doc_ids != (list(bear.source_doc_ids) if bear is not None else [])
+        ):
+            raise ValueError(
+                "saved card context does not match its artifact identity or references"
+            )
+    return card
+
+
 def _ro_conn(db_path: Path) -> sqlite3.Connection | None:
     if not db_path.exists():
         return None
@@ -317,9 +540,20 @@ def _latest_dcf_row(db_path: Path, ticker: str) -> sqlite3.Row | None:
         seg_pred = "COALESCE(segment_name, '') = ''" if "segment_name" in cols else "1 = 1"
         sanity_sel = "sanity_flag" if "sanity_flag" in cols else "NULL AS sanity_flag"
         price_at_sel = "live_price_at" if "live_price_at" in cols else "NULL AS live_price_at"
+        provenance_select = ", ".join(
+            name if name in cols else f"NULL AS {name}"
+            for name in (
+                "currency",
+                "input_sha256",
+                "workbook_sha256",
+                "engine_version",
+                "inputs_as_of",
+                "provenance_json",
+            )
+        )
         return conn.execute(
             f"SELECT ticker, valuation_date, npv_per_share, live_price, "
-            f"{price_at_sel}, {sanity_sel}, created_at, id FROM dcf_runs "
+            f"{price_at_sel}, {sanity_sel}, created_at, id, {provenance_select} FROM dcf_runs "
             f"WHERE UPPER(ticker) = ? AND {is_latest_pred} AND {seg_pred} "
             "ORDER BY created_at DESC, id DESC LIMIT 1",
             (ticker,),
@@ -405,26 +639,7 @@ def _gather_inputs(db_path: Path, repo_root: Path, ticker: str, *, list_type: st
     expected_zone = _expected_zone_if_funded(repo_root, ticker)
     origin = _hypothesis_origin(spec)
 
-    thesis_hash = hashlib.sha256((spec.thesis if spec else "").encode("utf-8")).hexdigest()
-    dcf_ref = f"{dcf_row['id']}:{dcf_row['valuation_date']}" if dcf_row is not None else ""
-    bear_ref = str(bear_artifact.id) if bear_artifact is not None else ""
-    cache_inputs = [
-        ENGINE_VERSION,
-        assessment.input_sha,
-        thesis_hash,
-        dcf_ref,
-        bear_ref,
-        fit_asof or "",
-    ]
-
-    payload = {
-        "assessment_sha": assessment.input_sha,
-        "thesis_hash": thesis_hash,
-        "dcf_ref": dcf_ref,
-        "bear_ref": bear_ref,
-        "fit_asof": fit_asof or "",
-    }
-    return _Inputs(
+    inputs = _Inputs(
         assessment=assessment,
         dcf_row=dcf_row,
         dcf_outlier=dcf_outlier,
@@ -435,9 +650,13 @@ def _gather_inputs(db_path: Path, repo_root: Path, ticker: str, *, list_type: st
         comp_set_summary=comp_set_summary,
         expected_zone=expected_zone,
         hypothesis_origin=origin,
-        input_sha=_sha(payload),
-        cache_inputs=cache_inputs,
+        input_sha="",
+        cache_inputs=[],
     )
+    input_sha = _context_input_sha(
+        _input_context(inputs), _configuration(), _build_prompt(ticker, inputs)
+    )
+    return replace(inputs, input_sha=input_sha, cache_inputs=[ENGINE_VERSION, input_sha])
 
 
 def _build_evidence_readiness(inputs: _Inputs) -> EvidenceReadiness:
@@ -817,34 +1036,43 @@ def _call_and_validate(
     *,
     as_of: str,
     db_path: Path,
+    exchanges: list[CardExchange],
     corrective_reasons: list[str] | None = None,
 ) -> tuple[InvestmentDecisionCard, list[str]]:
     prompt = _build_prompt(ticker, inputs, corrective_reasons=corrective_reasons)
-    payload = call_llm_structured(
-        prompt,
-        purpose=PURPOSE,
-        ticker=ticker,
-        scope="ticker",
-        expect="object",
-        required_keys=(
-            "company_hypothesis",
-            "security_setup",
-            "portfolio_fit",
-            "investment_profile",
-            "disconfirming_case",
-            "suggested_disposition",
-            "uncertainty",
-        ),
-        schema=TypeAdapter(_InvestmentDecisionCardDraft),
-        db_path=db_path,
-    )
-    # Test doubles and older internal injectors may still return the decoded
-    # dict; validate that compatibility seam through the same exact contract.
-    draft = (
-        payload
-        if isinstance(payload, _InvestmentDecisionCardDraft)
-        else _InvestmentDecisionCardDraft.model_validate(payload)
-    )
+    schema_repair_reason: str | None = None
+
+    def repair_prompt(reason: str) -> str:
+        nonlocal schema_repair_reason
+        schema_repair_reason = reason
+        return (
+            "IMPORTANT: your previous response was not the valid JSON requested. "
+            "Return ONLY the JSON specified at the end of this prompt — no markdown "
+            "fences, no commentary, no prefatory prose.\n\n" + prompt
+        )
+
+    try:
+        exchange = call_llm_structured_with_raw(
+            prompt,
+            purpose=PURPOSE,
+            ticker=ticker,
+            scope="ticker",
+            schema=TypeAdapter(_InvestmentDecisionCardDraft),
+            db_path=db_path,
+            repair_prompt=repair_prompt,
+        )
+    except Exception as exc:
+        exchanges.append(
+            CardExchange(
+                requested_prompt=prompt,
+                prompt=None,
+                raw_response=None,
+                schema_repair_reason=schema_repair_reason,
+                failure_class=type(exc).__name__,
+            )
+        )
+        raise
+    draft = _InvestmentDecisionCardDraft.model_validate(exchange.value)
     raw = cast("dict[str, object]", draft.model_dump())
     raw["ticker"] = ticker
     raw["as_of"] = as_of
@@ -864,6 +1092,15 @@ def _call_and_validate(
         ) from exc
     card = _apply_deterministic_overrides(card, inputs)
     reasons = card.validate_grounding(allowed_refs=_allowed_refs(inputs))
+    exchanges.append(
+        CardExchange(
+            requested_prompt=prompt,
+            prompt=exchange.prompt,
+            raw_response=exchange.raw_response,
+            validation_reasons=tuple(reasons),
+            schema_repair_reason=schema_repair_reason,
+        )
+    )
     return card, reasons
 
 
@@ -921,6 +1158,7 @@ def generate_card(db_path: Path, repo_root: Path, ticker: str) -> CardResult:
 
     inputs = _gather_inputs(db_path, repo_root, ticker, list_type=list_type)
     degraded: list[str] = []
+    exchanges: list[CardExchange] = []
 
     if not inputs.assessment.eligible:
         blockers = "; ".join(inputs.assessment.blocking_reasons[:5])
@@ -940,7 +1178,14 @@ def generate_card(db_path: Path, repo_root: Path, ticker: str) -> CardResult:
                 degraded_reasons=tuple(degraded),
                 failure_reason="blocked assessment could not produce an explicit blocker card",
             )
-        artifact_id, cache_hit = _persist(card, inputs, db_path=db_path)
+        artifact_id, cache_hit, card = _persist(
+            card,
+            inputs,
+            db_path=db_path,
+            exchanges=exchanges,
+            selection_mode="deterministic_fallback",
+            degraded_reasons=tuple(degraded),
+        )
         return CardResult(
             artifact_id=artifact_id,
             card=card,
@@ -962,7 +1207,14 @@ def generate_card(db_path: Path, repo_root: Path, ticker: str) -> CardResult:
                 degraded_reasons=tuple(degraded),
                 failure_reason="budget forgone and no thesis on file for a deterministic fallback",
             )
-        artifact_id, cache_hit = _persist(card, inputs, db_path=db_path)
+        artifact_id, cache_hit, card = _persist(
+            card,
+            inputs,
+            db_path=db_path,
+            exchanges=exchanges,
+            selection_mode="deterministic_fallback",
+            degraded_reasons=tuple(degraded),
+        )
         return CardResult(
             artifact_id=artifact_id,
             card=card,
@@ -972,10 +1224,17 @@ def generate_card(db_path: Path, repo_root: Path, ticker: str) -> CardResult:
         )
 
     try:
-        card, reasons = _call_and_validate(ticker, inputs, as_of=as_of, db_path=db_path)
+        card, reasons = _call_and_validate(
+            ticker, inputs, as_of=as_of, db_path=db_path, exchanges=exchanges
+        )
         if reasons:
             card, reasons = _call_and_validate(
-                ticker, inputs, as_of=as_of, db_path=db_path, corrective_reasons=reasons
+                ticker,
+                inputs,
+                as_of=as_of,
+                db_path=db_path,
+                exchanges=exchanges,
+                corrective_reasons=reasons,
             )
         if reasons:
             degraded.append(f"LLM output rejected: {'; '.join(reasons[:5])}")
@@ -994,7 +1253,14 @@ def generate_card(db_path: Path, repo_root: Path, ticker: str) -> CardResult:
                     degraded_reasons=tuple(degraded),
                     failure_reason="; ".join(reasons[:5]),
                 )
-            artifact_id, cache_hit = _persist(card, inputs, db_path=db_path)
+            artifact_id, cache_hit, card = _persist(
+                card,
+                inputs,
+                db_path=db_path,
+                exchanges=exchanges,
+                selection_mode="deterministic_fallback",
+                degraded_reasons=tuple(degraded),
+            )
             return CardResult(
                 artifact_id=artifact_id,
                 card=card,
@@ -1014,7 +1280,14 @@ def generate_card(db_path: Path, repo_root: Path, ticker: str) -> CardResult:
                 degraded_reasons=tuple(degraded),
                 failure_reason=f"budget exceeded and no thesis on file: {exc}",
             )
-        artifact_id, cache_hit = _persist(card, inputs, db_path=db_path)
+        artifact_id, cache_hit, card = _persist(
+            card,
+            inputs,
+            db_path=db_path,
+            exchanges=exchanges,
+            selection_mode="deterministic_fallback",
+            degraded_reasons=tuple(degraded),
+        )
         return CardResult(
             artifact_id=artifact_id,
             card=card,
@@ -1038,7 +1311,14 @@ def generate_card(db_path: Path, repo_root: Path, ticker: str) -> CardResult:
                 degraded_reasons=tuple(degraded),
                 failure_reason=f"transient LLM failure and no thesis on file: {exc}",
             )
-        artifact_id, cache_hit = _persist(card, inputs, db_path=db_path)
+        artifact_id, cache_hit, card = _persist(
+            card,
+            inputs,
+            db_path=db_path,
+            exchanges=exchanges,
+            selection_mode="deterministic_fallback",
+            degraded_reasons=tuple(degraded),
+        )
         return CardResult(
             artifact_id=artifact_id,
             card=card,
@@ -1047,7 +1327,14 @@ def generate_card(db_path: Path, repo_root: Path, ticker: str) -> CardResult:
             degraded_reasons=tuple(degraded),
         )
 
-    artifact_id, cache_hit = _persist(card, inputs, db_path=db_path)
+    artifact_id, cache_hit, card = _persist(
+        card,
+        inputs,
+        db_path=db_path,
+        exchanges=exchanges,
+        selection_mode="llm",
+        degraded_reasons=tuple(degraded),
+    )
     return CardResult(
         artifact_id=artifact_id,
         card=card,
@@ -1058,20 +1345,56 @@ def generate_card(db_path: Path, repo_root: Path, ticker: str) -> CardResult:
 
 
 def _persist(
-    card: InvestmentDecisionCard, inputs: _Inputs, *, db_path: Path
-) -> tuple[int | None, bool]:
-    return llm_artifact_store.upsert(
+    card: InvestmentDecisionCard,
+    inputs: _Inputs,
+    *,
+    db_path: Path,
+    exchanges: list[CardExchange],
+    selection_mode: Literal["llm", "deterministic_fallback"],
+    degraded_reasons: tuple[str, ...],
+) -> tuple[int | None, bool, InvestmentDecisionCard]:
+    context = CardResearchContext(
+        inputs=_input_context(inputs),
+        configuration=_configuration(),
+        base_prompt=_build_prompt(card.ticker, inputs),
+        exchanges=tuple(exchanges),
+        allowed_refs=tuple(sorted(_allowed_refs(inputs))),
+        used_refs=tuple(card.source_refs),
+        selection_mode=selection_mode,
+        degraded_reasons=degraded_reasons,
+        output_sha256=_sha(card.model_dump(mode="json", exclude=_CONTEXT_FIELDS)),
+    )
+    retained = InvestmentDecisionCard.model_validate(
+        {
+            **card.model_dump(mode="json"),
+            "record_format": "card-context-v1",
+            "research_context": context.model_dump(mode="json"),
+            "research_context_sha256": _sha(context.model_dump(mode="json")),
+        }
+    )
+    bear = inputs.bear_artifact
+    artifact_id, cache_hit = llm_artifact_store.upsert(
         llm_artifact_store.UpsertRequest(
             ticker=card.ticker,
             scope="ticker",
             purpose=PURPOSE,
-            content_json=card.model_dump(mode="json"),
+            content_json=retained.model_dump(mode="json"),
             content_md=_render_markdown(card),
             prompt_version=card.prompt_version,
-            cache_inputs=cast("list[bytes | str]", inputs.cache_inputs),
+            cache_inputs=[*inputs.cache_inputs, selection_mode, _sha(degraded_reasons)],
+            parent_artifact_ids=[bear.id] if bear is not None else [],
+            source_doc_ids=bear.source_doc_ids if bear is not None else [],
         ),
         db_path=db_path,
     )
+    # A cache hit must return the original saved exchange and time, not the
+    # newer candidate response attached to an older artifact identity.
+    if artifact_id is not None:
+        saved = read_card_record(artifact_id, db_path=db_path)
+        if saved is None:
+            raise ValueError("saved card context disappeared after persistence")
+        retained = saved
+    return artifact_id, cache_hit, retained
 
 
 # --------------------------------------------------------------------------- #
