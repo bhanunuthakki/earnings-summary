@@ -10,17 +10,54 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
+from importlib import import_module
 from pathlib import Path
+from typing import Protocol, cast
 
 import numpy as np
 import pytest
 
-from allocation.model import (
-    _dcf_upside,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
-    _zscore,  # pyright: ignore[reportPrivateUsage]  # internal seam under test
-    build_next_dollar_model,
+from allocation.model import build_next_dollar_model
+from dcf.latest import latest_dcf_row
+from dcf.readiness import ValuationReadiness
+
+
+class Zscore(Protocol):
+    def __call__(
+        self, readings: Mapping[str, tuple[float, str]], *, clamp: float | None = None
+    ) -> dict[str, float]: ...
+
+
+# Typed seams preserve private-helper coverage without suppressing type checks.
+_dcf_upside = cast(
+    Callable[[Path, Sequence[str]], dict[str, tuple[float, str]]],
+    getattr(import_module("allocation.model"), "_dcf_upside"),
 )
+_zscore = cast(Zscore, getattr(import_module("allocation.model"), "_zscore"))
+
+
+@pytest.fixture()
+def qualified_synthetic_dcf(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Qualify synthetic rows to isolate factor math and latest-row selection.
+
+    These scalar fixtures do not establish real financial-input admission.
+    test_allocation_return_readiness exercises the shared gate and rejection.
+    """
+
+    def qualified(conn: sqlite3.Connection, ticker: str, *, as_of: datetime) -> ValuationReadiness:
+        row = latest_dcf_row(conn, ticker)
+        return ValuationReadiness(
+            ticker=ticker,
+            evaluated_at=as_of.isoformat(),
+            ready=row is not None,
+            status="ready" if row is not None else "missing",
+            run_id=row.id if row is not None else None,
+        )
+
+    monkeypatch.setattr("allocation.model.load_valuation_readiness", qualified)
+
 
 TICKERS = ["AAA", "BBB", "CCC"]
 
@@ -61,7 +98,8 @@ def _schema(conn: sqlite3.Connection) -> None:
 
 
 @pytest.fixture()
-def repo_root(tmp_path: Path) -> Path:
+def repo_root(tmp_path: Path, qualified_synthetic_dcf: None) -> Path:
+    del qualified_synthetic_dcf
     db = tmp_path / "data" / "portfolio.db"
     db.parent.mkdir(parents=True)
     conn = sqlite3.connect(db)
@@ -358,6 +396,7 @@ def _seed_dcf_with_scenarios(db: Path) -> None:
         conn.close()
 
 
+@pytest.mark.usefixtures("qualified_synthetic_dcf")
 def test_dcf_upside_uses_scenario_asymmetry(tmp_path: Path) -> None:
     db = tmp_path / "portfolio.db"
     _seed_dcf_with_scenarios(db)
@@ -432,6 +471,7 @@ def _insert_versioned_dcf(
         conn.close()
 
 
+@pytest.mark.usefixtures("qualified_synthetic_dcf")
 def test_dcf_upside_ignores_segment_row_even_when_newer(tmp_path: Path) -> None:
     """PART A: a segment row (segment_name set) landed AFTER the consolidated
     row must not win the ret factor's reward leg — the exact bug the shared
@@ -454,6 +494,7 @@ def test_dcf_upside_ignores_segment_row_even_when_newer(tmp_path: Path) -> None:
     assert aaa_raw == pytest.approx(0.20)  # from the consolidated 120/100 row, not the segment one
 
 
+@pytest.mark.usefixtures("qualified_synthetic_dcf")
 def test_dcf_upside_excludes_sanity_flagged_row(tmp_path: Path) -> None:
     """Caller policy (ratified): the ret factor is a ranking/valuation leg,
     so a sanity-flagged (outlier) run is excluded entirely — same rule
