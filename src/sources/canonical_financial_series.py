@@ -14,8 +14,9 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_plane_v2 import FactDimensionV2
-from provenance.fact_read_model import FactReadModel, ProvenanceBundle
+from provenance.fact_read_model import FactReadModel, ProvenanceBundle, ProvenanceBundleRead
 from provenance.metric_ontology import CanonicalMetricDefinitionRevision, MetricOntology
+from provenance.overrides import DEFAULT_USER_ID, FINANCIAL_FACT, chip_override_map, qualify_note
 
 FINANCIAL_CONCEPT_NAMESPACE = "urn:earnings-summary:legacy:financial"
 _QUARTER_DAYS = (70, 105)
@@ -28,6 +29,7 @@ class CanonicalFinancialReadError(RuntimeError):
 
 
 class FinancialCadence(StrEnum):
+    ANNUAL = "annual"
     QUARTERLY = "quarterly"
     SEMIANNUAL = "semiannual"
     REPORTED_TTM = "reported_ttm"
@@ -204,6 +206,8 @@ def _duration_days(start: object, end: object) -> int | None:
 
 def _label_matches(cadence: FinancialCadence, fiscal_period: object) -> bool:
     label = str(fiscal_period) if fiscal_period is not None else ""
+    if cadence is FinancialCadence.ANNUAL:
+        return label == "FY"
     if cadence is FinancialCadence.QUARTERLY:
         return label in {"Q1", "Q2", "Q3", "Q4"}
     if cadence is FinancialCadence.SEMIANNUAL:
@@ -214,7 +218,9 @@ def _label_matches(cadence: FinancialCadence, fiscal_period: object) -> bool:
 def _duration_matches(cadence: FinancialCadence, days: int | None) -> bool:
     if days is None:
         return False
-    if cadence is FinancialCadence.QUARTERLY:
+    if cadence is FinancialCadence.ANNUAL:
+        minimum, maximum = _REPORTED_TTM_DAYS
+    elif cadence is FinancialCadence.QUARTERLY:
         minimum, maximum = _QUARTER_DAYS
     elif cadence is FinancialCadence.SEMIANNUAL:
         minimum, maximum = _SEMIANNUAL_DAYS
@@ -293,12 +299,29 @@ class CanonicalFinancialSeriesReader:
         self._resolver = CanonicalFactResolutionEngine(conn)
         self._ontology = MetricOntology(conn)
         self._reader = FactReadModel(conn)
+        self._bundles: dict[str, ProvenanceBundle] = {}
+        self._bundle_reads: dict[str, ProvenanceBundleRead] = {}
         self._cache: dict[
             tuple[str, FinancialCadence, SeriesContinuity], CanonicalFinancialSeries
         ] = {}
         self._coordinate_cache: dict[
             tuple[str, FinancialCadence], CanonicalFinancialCoordinateProjection
         ] = {}
+
+    def _provenance_bundles(
+        self, observation_ids: tuple[str, ...]
+    ) -> tuple[ProvenanceBundleRead, ...]:
+        missing = tuple(item for item in observation_ids if item not in self._bundle_reads)
+        if missing:
+            for item in self._reader.provenance_bundles(missing, cutoff=self._cutoff):
+                self._bundle_reads[item.observation_id] = item
+                if item.bundle is not None:
+                    self._bundles[item.observation_id] = item.bundle
+        return tuple(self._bundle_reads[item] for item in observation_ids)
+
+    def provenance_for(self, observation_id: str) -> ProvenanceBundle | None:
+        """Return evidence already admitted in this reader's caller-owned snapshot."""
+        return self._bundles.get(observation_id)
 
     def read(
         self,
@@ -513,7 +536,7 @@ class CanonicalFinancialSeriesReader:
             )
         selected_ids = tuple(item[3] for item in selected)
         try:
-            reads = self._reader.provenance_bundles(selected_ids, cutoff=self._cutoff)
+            reads = self._provenance_bundles(selected_ids)
         except (sqlite3.Error, ValueError):
             return failed("unavailable", "canonical_financial_provenance_unavailable")
         bundles = {item.observation_id: item.bundle for item in reads if item.bundle is not None}
@@ -793,7 +816,7 @@ class CanonicalFinancialSeriesReader:
             )
         selected_ids = tuple(item[3] for item in selected)
         try:
-            reads = self._reader.provenance_bundles(selected_ids, cutoff=self._cutoff)
+            reads = self._provenance_bundles(selected_ids)
         except (sqlite3.Error, ValueError):
             return self._unavailable(
                 metric,
@@ -1009,7 +1032,13 @@ class CanonicalFinancialSeriesReader:
             return "incomparable_financial_series_coordinate"
         if continuity is SeriesContinuity.WINDOWED or cadence is FinancialCadence.REPORTED_TTM:
             return None
-        labels = ("Q1", "Q2", "Q3", "Q4") if cadence is FinancialCadence.QUARTERLY else ("Q2", "Q4")
+        labels = (
+            ("FY",)
+            if cadence is FinancialCadence.ANNUAL
+            else ("Q1", "Q2", "Q3", "Q4")
+            if cadence is FinancialCadence.QUARTERLY
+            else ("Q2", "Q4")
+        )
         for older, newer in pairwise(ordered):
             if newer.period_start.date() != older.period_end.date() + timedelta(days=1):
                 return (
@@ -1033,3 +1062,188 @@ class CanonicalFinancialSeriesReader:
                     else "financial_fiscal_year_mismatch"
                 )
         return None
+
+
+class FinancialConsumerPoint(BaseModel):
+    """An admitted point and its exact retained source evidence."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    observation: CanonicalFinancialObservation
+    provenance: ProvenanceBundle
+    source_url: str | None = None
+    source_kind: str | None = None
+    legacy_document_id: int | None = None
+    source_retrieved_at: datetime | None = None
+    qualifications: tuple[str, ...] = ()
+
+    @property
+    def available(self) -> bool:
+        return True
+
+
+class FinancialConsumerSeries(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    series: CanonicalFinancialSeries
+    coordinates: CanonicalFinancialCoordinateProjection
+    points: tuple[FinancialConsumerPoint, ...] = ()
+
+    def manifest(self) -> dict[str, object]:
+        return self.model_dump(mode="json")
+
+
+def financial_metric_catalog(
+    conn: sqlite3.Connection,
+    tickers: list[str],
+    *,
+    limit: int = 250,
+    include_legacy: bool = False,
+) -> tuple[tuple[str, int], ...]:
+    """Enumerate retained financial concepts; names do not imply admission."""
+    symbols = list(dict.fromkeys(ticker.upper() for ticker in tickers))
+    if not symbols:
+        return ()
+    marks = ",".join("?" for _ in symbols)
+    try:
+        rows = conn.execute(
+            f"SELECT source.concept_name,COUNT(DISTINCT upper(document.ticker)) "
+            "FROM fact_cells_v2 source JOIN fact_observations_v2 observation "
+            "ON observation.fact_cell_id=source.fact_cell_id "
+            "JOIN evidence_document_versions document "
+            "ON document.document_version_id=observation.document_version_id "
+            f"WHERE upper(document.ticker) IN ({marks}) AND source.concept_namespace=? "
+            "GROUP BY source.concept_name ORDER BY source.concept_name LIMIT ?",
+            (*symbols, FINANCIAL_CONCEPT_NAMESPACE, limit),
+        ).fetchall()
+    except sqlite3.Error:
+        rows = []
+    names = {str(row[0]): int(row[1]) for row in rows}
+    if include_legacy:
+        try:
+            legacy = conn.execute(
+                "SELECT line_item,COUNT(DISTINCT upper(ticker)) FROM financial_facts "
+                f"WHERE upper(ticker) IN ({marks}) GROUP BY line_item ORDER BY line_item LIMIT ?",
+                (*symbols, limit),
+            ).fetchall()
+        except sqlite3.Error:
+            legacy = []
+        for name, count in legacy:
+            names.setdefault(str(name), int(count))
+    return tuple(sorted(names.items()))[:limit]
+
+
+def _financial_override_reason(
+    conn: sqlite3.Connection, ticker: str, metric: str, cutoff: datetime
+) -> str | None:
+    """Mutable scalar history can reject admission, never create an observation."""
+    try:
+        rows = conn.execute(
+            "SELECT created_at,retired_at,status FROM fact_overrides WHERE user_id=? AND ticker=? AND fact_kind=? AND fact_key=? AND action IN ('replace','drop')",
+            (DEFAULT_USER_ID, ticker.upper(), FINANCIAL_FACT, metric),
+        ).fetchall()
+    except sqlite3.OperationalError as exc:
+        if "no such table" in str(exc):
+            return None
+        return "financial_override_history_unavailable"
+    for created, retired, status in rows:
+        try:
+            created_at = _clock(created)
+            retired_at = None if retired is None else _clock(retired)
+        except (TypeError, ValueError):
+            return "financial_override_history_unavailable"
+        if created_at <= cutoff and (retired_at is None or retired_at > cutoff):
+            if status not in {"active", "retired"}:
+                return "financial_override_history_unavailable"
+            return "unreviewed_scalar_override"
+    return None
+
+
+def read_financial_consumer_series(
+    conn: sqlite3.Connection,
+    ticker: str,
+    metric: str,
+    *,
+    cutoff: datetime,
+    cadence: FinancialCadence,
+    continuity: SeriesContinuity = SeriesContinuity.WINDOWED,
+) -> FinancialConsumerSeries:
+    """Admit a complete financial population and retain source evidence once."""
+    if cutoff.tzinfo is None or cutoff > datetime.now(UTC):
+        raise ValueError("financial consumer cutoff must be aware and not future")
+    cutoff = cutoff.astimezone(UTC)
+    owns_snapshot = not conn.in_transaction
+    if owns_snapshot:
+        conn.execute("BEGIN")
+    try:
+        reader = CanonicalFinancialSeriesReader(conn, ticker, cutoff=cutoff)
+        series = reader.read(metric, cadence=cadence, continuity=continuity)
+        coordinates = reader.project_coordinates(metric, cadence=cadence)
+        reason = None
+        override_reason = _financial_override_reason(conn, ticker, metric, cutoff)
+        if override_reason is not None:
+            reason = override_reason
+        elif coordinates.status == "unavailable":
+            reason = coordinates.reason_code
+        elif any(item.status != "admitted" for item in coordinates.coordinates):
+            reason = next(
+                item.reason_code for item in coordinates.coordinates if item.status != "admitted"
+            )
+        if reason:
+            series = series.model_copy(
+                update={"status": "unavailable", "reason_code": reason, "observations": ()}
+            )
+        if series.status == "available" and any(
+            item.unit
+            not in (
+                {f"{item.currency}/share", f"{item.currency}/shares"}
+                if metric == "eps_diluted"
+                else {item.currency}
+            )
+            for item in series.observations
+        ):
+            series = series.model_copy(
+                update={
+                    "status": "unavailable",
+                    "reason_code": "financial_native_unit_unavailable",
+                    "observations": (),
+                }
+            )
+        qualifications = chip_override_map(
+            conn,
+            ticker=ticker,
+            fact_kind=FINANCIAL_FACT,
+            fact_key=metric,
+            period_types={item.fiscal_period for item in series.observations},
+        )
+        points: list[FinancialConsumerPoint] = []
+        if series.status == "available":
+            for observation in series.observations:
+                bundle = reader.provenance_for(observation.observation_id)
+                if bundle is None or bundle.evidence is None:
+                    raise ValueError("admitted evidence unavailable")
+                row = conn.execute(
+                    "SELECT source.source_url,source.source_kind,document.legacy_document_id,source.retrieved_at FROM evidence_document_versions document JOIN evidence_source_observations source ON source.observation_id=document.observation_id WHERE document.document_version_id=?",
+                    (observation.document_version_id,),
+                ).fetchone()
+                points.append(
+                    FinancialConsumerPoint(
+                        observation=observation,
+                        provenance=bundle,
+                        qualifications=tuple(
+                            qualify_note(ov)
+                            for key, ov in qualifications.items()
+                            if key == observation.period_end.date().isoformat()
+                            and ov.action == "qualify"
+                            and _clock(ov.created_at) <= cutoff
+                        ),
+                        source_url=None if row is None or row[0] is None else str(row[0]),
+                        source_kind=None if row is None or row[1] is None else str(row[1]),
+                        legacy_document_id=None if row is None or row[2] is None else int(row[2]),
+                        source_retrieved_at=None
+                        if row is None or row[3] is None
+                        else _clock(row[3]),
+                    )
+                )
+        return FinancialConsumerSeries(series=series, coordinates=coordinates, points=tuple(points))
+    finally:
+        if owns_snapshot and conn.in_transaction:
+            conn.rollback()

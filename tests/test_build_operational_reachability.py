@@ -189,7 +189,23 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    assert len(graph.unknown_edges) == 125
+    assert len(graph.unknown_edges) == 131
+    # Six new synthetic children test artifact ownership and database refusal.
+    # Their executable choices remain test-only and visible in this inventory.
+    remedy_children = {
+        ("tests/test_dcf_artifact_ownership.py", 232),
+        ("tests/test_dcf_artifact_ownership.py", 242),
+        ("tests/test_dcf_artifact_ownership.py", 252),
+        ("tests/test_dcf_artifact_ownership.py", 312),
+        ("tests/test_retained_tool_database_authority.py", 35),
+        ("tests/test_retained_tool_database_authority.py", 182),
+    }
+    assert {
+        (edge.source, edge.line)
+        for edge in graph.unknown_edges
+        if edge.source in {source for source, _line in remedy_children}
+        and edge.target == "<dynamic process entrypoint>"
+    } == remedy_children
     # Exact-period CLI and skill-maintenance checks add two test-owned calls.
     # Keep their computed entrypoints explicit without admitting production gaps.
     assert (
@@ -229,7 +245,7 @@ def test_actual_head_is_supported() -> None:
         ("tests/test_work_os_read_lifecycle.py", 63),
         ("tests/test_work_os_read_lifecycle.py", 98),
         ("tests/test_workspace_dcf_read_lifecycle.py", 63),
-        ("tests/test_workspace_dcf_read_lifecycle.py", 218),
+        ("tests/test_workspace_dcf_read_lifecycle.py", 220),
     }
     assert {
         (edge.source, edge.line)

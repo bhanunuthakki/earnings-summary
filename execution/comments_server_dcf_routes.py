@@ -156,15 +156,26 @@ def create_dcf_blueprint(context: DcfRouteContext) -> Blueprint:
         except ValueError:
             return ({"error": "invalid ticker"}, 400)
         result = refresh_dcf.apply_edits(t, repo_root, db_path, inp)
-        if result.get("status") != "ok":
+        if result.get("status") not in {"ok", "committed_cleanup_failed"}:
             reason = str(result.get("reason", "save failed"))
-            code = 409 if "no redesigned workbook" in reason else 500
+            code = 409 if "no redesigned workbook" in reason or reason == "dcf_writer_busy" else 500
             return ({"error": reason, "result": result}, code)
-        saved_inp = dcf_redesign.read_inputs(repo_root / "dcf" / f"{t}.xlsx")
+        saved_raw = result.get("inputs")
+        saved_inp = (
+            dcf_redesign.RedesignInputs.from_dict(cast("dict[str, object]", saved_raw))
+            if isinstance(saved_raw, dict)
+            else None
+        )
         response_payload = recompute_payload(saved_inp) if saved_inp is not None else {}
         if saved_inp is not None:
             response_payload["inputs"] = saved_inp.to_dict()
-        return {**response_payload, "saved": True, "result": result}
+        return {
+            **response_payload,
+            "saved": True,
+            "result": result,
+            "recovery_required": result.get("recovery_required", False),
+            "cleanup_warning": result.get("cleanup_warning"),
+        }
 
     return blueprint
 

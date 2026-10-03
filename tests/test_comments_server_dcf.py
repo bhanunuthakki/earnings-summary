@@ -9,13 +9,16 @@ inputs GET seeds the editable card from the live workbook.
 from __future__ import annotations
 
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import comments_server
 import pytest
+import refresh_dcf
 
 from dcf import redesign
+from dcf.artifact_promotion import hold_dcf_artifacts
 
 if TYPE_CHECKING:
     from flask.testing import FlaskClient
@@ -289,6 +292,48 @@ def test_save_409_when_no_workbook(client: FlaskClient) -> None:
     resp = client.post("/api/dcf/save", json={"ticker": "NU", "inputs": BASE_INPUTS.to_dict()})
     assert resp.status_code == 409
     assert "no redesigned workbook" in resp.get_json()["error"]
+
+
+def test_save_reports_busy_without_dispatching_write(client: FlaskClient, tmp_path: Path) -> None:
+    with (
+        hold_dcf_artifacts(tmp_path, "NU", owner="refresh", wait_s=0),
+        ThreadPoolExecutor(max_workers=1) as pool,
+    ):
+        future = pool.submit(
+            client.post, "/api/dcf/save", json={"ticker": "NU", "inputs": BASE_INPUTS.to_dict()}
+        )
+        response = future.result(timeout=5)
+    assert response.status_code == 409
+    assert response.get_json()["error"] == "dcf_writer_busy"
+    assert not (tmp_path / "dcf" / "NU.xlsx").exists()
+
+
+def test_save_reports_committed_cleanup_warning_with_saved_inputs(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    saved = BASE_INPUTS.to_dict()
+    saved["beta"] = 1.7
+    saved["wacc"] = 0.14
+
+    def committed_save(
+        ticker: str, repo_root: Path, db_path: Path, inp: redesign.RedesignInputs
+    ) -> dict[str, object]:
+        assert ticker == "NU" and inp.beta == BASE_INPUTS.beta
+        return {
+            "status": "committed_cleanup_failed",
+            "inputs": saved,
+            "recovery_required": True,
+            "cleanup_warning": "retained accepted backup",
+        }
+
+    monkeypatch.setattr(refresh_dcf, "apply_edits", committed_save)
+    response = client.post("/api/dcf/save", json={"ticker": "NU", "inputs": BASE_INPUTS.to_dict()})
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["saved"] is True and payload["recovery_required"] is True
+    assert payload["cleanup_warning"] == "retained accepted backup"
+    assert payload["inputs"]["beta"] == 1.7
+    assert payload["wacc"] == pytest.approx(0.14)
 
 
 def test_save_validates_driver_wacc_before_stale_preview(client: FlaskClient) -> None:

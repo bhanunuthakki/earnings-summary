@@ -24,7 +24,6 @@ propagate them (same PR) instead of degrading to UNKNOWN/None/[].
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import time
@@ -43,6 +42,9 @@ from evals.harness import (
     now_naive_utc,
     resolve_git_sha,
     sha256_file,
+)
+from evals.harness import (
+    load_golden_document as _load_doc,
 )
 from llm.cli import DEFAULT_MODEL, LLM_MODELS, is_hard_stop
 from llm.prompt_versions import prompt_version_for
@@ -101,27 +103,6 @@ class ClassifierCase:
     case_id: str
     inputs: dict[str, object]
     expected: object
-
-
-def _load_doc(path: Path, purpose: str) -> list[dict[str, object]]:
-    try:
-        payload: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise ValueError(f"golden file unreadable at {path}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("golden file must be a JSON object")
-    doc = cast("dict[str, object]", payload)
-    if doc.get("purpose") != purpose:
-        raise ValueError(f"golden file purpose must be {purpose!r}, got {doc.get('purpose')!r}")
-    raw_cases = doc.get("cases")
-    if not isinstance(raw_cases, list) or not raw_cases:
-        raise ValueError("golden file needs a non-empty `cases` list")
-    out: list[dict[str, object]] = []
-    for i, entry in enumerate(cast("list[object]", raw_cases)):
-        if not isinstance(entry, dict):
-            raise ValueError(f"cases[{i}]: must be an object")
-        out.append(cast("dict[str, object]", entry))
-    return out
 
 
 def _require_str(c: dict[str, object], key: str, label: str, errors: list[str]) -> str:
@@ -188,7 +169,15 @@ def load_intake_classifier_golden(path: Path) -> list[ClassifierCase]:
     return cases
 
 
-_CONDITION_GRADED_FIELDS = ("metric", "metric_source", "op", "threshold", "unit", "for_periods")
+_CONDITION_GRADED_FIELDS = (
+    "metric",
+    "metric_source",
+    "op",
+    "threshold",
+    "unit",
+    "for_periods",
+    "financial_cadence",
+)
 
 
 def _str_list(value: object) -> list[str] | None:
@@ -233,6 +222,8 @@ def load_decision_conditions_golden(path: Path) -> list[ClassifierCase]:
                 errors.append(f"{label} ({case_id}): expected[{j}] must be an object")
                 continue
             entry_obj = cast("dict[str, object]", entry)
+            if entry_obj.get("financial_cadence") not in (None, "quarterly", "annual"):
+                errors.append(f"{label} ({case_id}): expected[{j}] invalid financial_cadence")
             missing = [k for k in _CONDITION_GRADED_FIELDS if k not in entry_obj]
             if missing:
                 errors.append(f"{label} ({case_id}): expected[{j}] missing {missing}")
@@ -606,6 +597,7 @@ def _condition_key(obj: dict[str, object]) -> tuple[object, ...]:
         threshold_f,
         obj.get("unit"),
         obj.get("for_periods"),
+        obj.get("financial_cadence"),
     )
 
 

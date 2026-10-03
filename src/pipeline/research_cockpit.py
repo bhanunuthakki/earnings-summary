@@ -55,6 +55,11 @@ from cockpit_fundamentals import (
 )
 from compute.kpi_resolver import semantic_series_identity_sql
 from compute.thesis_evaluation_episodes import episode_history_source
+from compute.thesis_evaluator import (
+    KpiInputReference,
+    kpi_input_projection_sql,
+    kpi_input_reference,
+)
 from dashboard._styles import COCKPIT_CSS
 from dcf.latest import latest_dcf_rows
 from expected_earnings import upcoming_by_ticker
@@ -119,6 +124,8 @@ class KpiDelta:
     prior_period: str  # ISO date
     tone: str  # "bad" | "warn" | "ok" | "neutral" (from a matching break rule)
     tone_why: str = ""  # the matched break rule + its status ("" when neutral)
+    latest_input: KpiInputReference | None = None
+    prior_input: KpiInputReference | None = None
 
     @property
     def is_pp(self) -> bool:
@@ -910,7 +917,8 @@ def tier1_kpi_deltas(
     # present in this result. Future rows remain in the slice until after the
     # superseded-id set is built, preserving the prior query's rule that a
     # future-dated correction still retires its predecessor.
-    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
+    selected_relation = canonical_fact_relation(conn, "kpi_facts")
+    fact_relation = selected_relation.sql
     semantic_join, semantic_where = semantic_admission_sql(
         conn, fact_alias="f", context_alias="ksc", fail_closed=True
     )
@@ -920,12 +928,15 @@ def tier1_kpi_deltas(
         context_alias="ksc",
         fact_relation=fact_relation,
     )
+    input_projection = kpi_input_projection_sql(
+        conn, fact_alias="f", definition_alias="d", semantic_joined=bool(semantic_join)
+    )
     rows = _safe_rows(
         conn,
         f"SELECT f.id AS fact_id, f.supersedes_id AS supersedes_id, "
         f"       f.ticker AS ticker, d.id AS def_id, d.name AS name, f.unit AS unit, "
         f"       f.period_end AS period_end, date(f.period_end) AS period_date, "
-        f"       f.value AS value "
+        f"       f.value AS value, {input_projection} "
         f"FROM (SELECT * FROM {fact_relation} "
         f"WHERE ticker IN ({marks}) AND kpi_definition_id IN ({definition_marks})) f "
         "JOIN kpi_definitions d ON d.id = f.kpi_definition_id AND d.ticker = f.ticker "
@@ -967,6 +978,12 @@ def tier1_kpi_deltas(
                 latest_period=str(latest["period_end"])[:10],
                 prior_period=str(prior["period_end"])[:10],
                 tone="neutral",
+                latest_input=kpi_input_reference(
+                    latest, selection_mode=selected_relation.selection_mode
+                ),
+                prior_input=kpi_input_reference(
+                    prior, selection_mode=selected_relation.selection_mode
+                ),
             )
         )
     return out
@@ -1033,6 +1050,8 @@ def _toned(deltas: list[KpiDelta], rule_tones: dict[str, str]) -> list[KpiDelta]
                 prior_period=d.prior_period,
                 tone=tone,
                 tone_why=why,
+                latest_input=d.latest_input,
+                prior_input=d.prior_input,
             )
         )
     toned.sort(key=lambda d: (_TONE_PRIORITY.get(d.tone, 2), -d.magnitude, d.name))
