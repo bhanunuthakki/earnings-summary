@@ -82,17 +82,41 @@ _PANEL_JS = """
     target.textContent = src ? src.textContent : '';
     if (src) src.remove();
   }
+  var reads = {list: {generation: 0}, sources: {generation: 0}};
+  function readFragment(kind, query, target, after) {
+    var state = reads[kind];
+    var request = ++state.generation;
+    if (state.controller) state.controller.abort();
+    state.controller = new AbortController();
+    var feedback = el('dq-' + kind + '-feedback');
+    var retry = el('dq-' + kind + '-retry');
+    feedback.textContent = 'Refreshing ' + (kind === 'list' ? 'discovery candidates' : 'source weights') + '…';
+    feedback.hidden = false; retry.hidden = true;
+    window.uiFetch('/api/panel/discovery?' + query, {signal: state.controller.signal})
+      .then(function (r) { return r.text(); })
+      .then(function (html) {
+        if (request !== state.generation || !root.isConnected) return;
+        el(target).innerHTML = html;
+        if (after) after();
+        feedback.hidden = true;
+      })
+      .catch(function () {
+        if (request !== state.generation || !root.isConnected) return;
+        feedback.textContent = 'Could not refresh. Previous entries remain visible.';
+        retry.hidden = false;
+      });
+  }
   function refresh() {
     var qs = new URLSearchParams({
       fragment: 'list', status: currentStatus(), min_score: el('dq-min-score').value
     });
-    fetch('/api/panel/discovery?' + qs).then(function (r) { return r.text(); })
-      .then(function (h) { el('dq-list').innerHTML = h; relocateCount(); });
+    readFragment('list', qs, 'dq-list', relocateCount);
   }
   function refreshSources() {
-    fetch('/api/panel/discovery?fragment=sources').then(function (r) { return r.text(); })
-      .then(function (h) { el('dq-sources-body').innerHTML = h; });
+    readFragment('sources', 'fragment=sources', 'dq-sources-body');
   }
+  el('dq-list-retry').addEventListener('click', refresh);
+  el('dq-sources-retry').addEventListener('click', refreshSources);
   function checked() {
     return Array.prototype.slice.call(
       root.querySelectorAll('input[data-pick]:checked')
@@ -697,9 +721,13 @@ def render_discovery_panel(
     return f"""{_PANEL_STYLE}
 <div id="dq-root">
 {toolbar}
+<div id="dq-list-feedback" class="k-well" role="status" aria-live="polite" hidden></div>
+<button type="button" class="k-btn k-btn-quiet k-btn-sm" id="dq-list-retry" hidden>Retry</button>
 <div id="dq-list">{listing}</div>
 <section class="dq-sources k-well" id="dq-sources" hidden>
   <div class="k-label">Source weight registry — editing a weight re-ranks the queue</div>
+  <div id="dq-sources-feedback" role="status" aria-live="polite" hidden></div>
+  <button type="button" class="k-btn k-btn-quiet k-btn-sm" id="dq-sources-retry" hidden>Retry</button>
   <div id="dq-sources-body"></div>
 </section>
 <pre class="dq-log" id="dq-log"></pre>

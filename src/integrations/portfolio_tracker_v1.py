@@ -1033,12 +1033,27 @@ class TrackerV1Client:
         read_timeout: float = _READ_TIMEOUT_SECONDS,
         analytics_read_timeout: float = _ANALYTICS_READ_TIMEOUT_SECONDS,
         session: requests.Session | None = None,
+        total_timeout_seconds: float | None = None,
     ) -> None:
         self.base_url = _resolve_base_url(base_url)
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
         self._analytics_read_timeout = analytics_read_timeout
         self._session = session or requests.Session()
+        # Requests' read timeout bounds inactivity, not a continuously
+        # trickling response. This deadline bounds admission of later reads
+        # and rejects late results; it does not forcibly interrupt Python.
+        self._deadline = (
+            time.monotonic() + max(0.0, total_timeout_seconds)
+            if total_timeout_seconds is not None
+            else None
+        )
+
+    def remaining_budget_seconds(self) -> float | None:
+        """Remaining aggregate allowance, shared by discovery and pagination."""
+        if self._deadline is None:
+            return None
+        return max(0.0, self._deadline - time.monotonic())
 
     # -- telemetry -----------------------------------------------------
 
@@ -1073,8 +1088,15 @@ class TrackerV1Client:
     ) -> V1Fetch[ModelT]:
         url = f"{self.base_url}{endpoint}"
         start = time.monotonic()
+        remaining = self.remaining_budget_seconds()
+        if remaining is not None and remaining <= 0:
+            return V1Fetch(available=False, endpoint=endpoint, error="total_deadline_exceeded")
+        connect_timeout = self._connect_timeout
+        if remaining is not None:
+            connect_timeout = min(connect_timeout, remaining / 2)
+            timeout = min(timeout, remaining - connect_timeout)
         try:
-            resp = self._session.get(url, params=params, timeout=(self._connect_timeout, timeout))
+            resp = self._session.get(url, params=params, timeout=(connect_timeout, timeout))
         except requests.Timeout as exc:
             self._log_request(
                 endpoint=endpoint,
@@ -1142,6 +1164,15 @@ class TrackerV1Client:
                 error=f"unexpected_shape: expected a JSON object, got {type(body).__name__}",
             )
 
+        remaining = self.remaining_budget_seconds()
+        if remaining is not None and remaining <= 0:
+            self._log_request(
+                endpoint=endpoint,
+                duration_ms=(time.monotonic() - start) * 1000,
+                status=resp.status_code,
+                schema_version=None,
+            )
+            return V1Fetch(available=False, endpoint=endpoint, error="total_deadline_exceeded")
         payload = cast("dict[str, object]", body)
         schema_version = _extract_schema_version(payload)
 

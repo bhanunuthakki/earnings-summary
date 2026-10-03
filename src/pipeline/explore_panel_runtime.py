@@ -40,6 +40,46 @@ window.initExplorePanel = function () {
   var catalogExpanded = false;
   var selected = {};
   var drawerMetric = null;
+  var catalogController = null;
+  var catalogVersion = 0;
+  var analysisController = null;
+  var analysisVersion = 0;
+  var workbenchVersion = 0;
+  var savedController = null;
+  var savedVersion = 0;
+  function retireAnalysis() {
+    analysisVersion += 1;
+    if (analysisController) analysisController.abort();
+    analysisController = null;
+    if (isCurrent()) {
+      if (window.CCAction) window.CCAction.release(el('vx-run'));
+      var result = el('vx-result');
+      if (result.querySelector('.vx-result') && !result.querySelector('[data-prior-analysis]')) {
+        var notice = document.createElement('div');
+        notice.className = 'vx-meta';
+        notice.setAttribute('role', 'status');
+        notice.setAttribute('data-prior-analysis', '');
+        notice.textContent = 'Previous analysis. Run again to apply the current selections.';
+        result.prepend(notice);
+      }
+    }
+  }
+  function retireWorkbench() {
+    workbenchVersion += 1;
+    catalogVersion += 1;
+    if (catalogController) catalogController.abort();
+    catalogController = null;
+    retireAnalysis();
+  }
+  var lifetimeObserver = new MutationObserver(function () {
+    if (isCurrent()) return;
+    retireWorkbench();
+    savedVersion += 1;
+    if (savedController) savedController.abort();
+    lifetimeObserver.disconnect();
+  });
+  lifetimeObserver.observe(document.body, {childList: true, subtree: true});
+
 
   function setStatus(message) {
     var node = el('explore-status');
@@ -195,7 +235,8 @@ window.initExplorePanel = function () {
     workbenchTickers = values.map(function (value) { return String(value).trim().toUpperCase(); }).filter(Boolean);
     sessionId = null;
     lastSpec = null;
-    loadCatalog([]);
+    retireWorkbench();
+    if (el('vx-workbench').open) loadCatalog([]);
   });
 
   function normalizeEntries(raw) {
@@ -218,6 +259,7 @@ window.initExplorePanel = function () {
   function selectedTokens() { return Object.keys(selected); }
   function entryFor(token) { return catalog.find(function (entry) { return entry.token === token; }); }
   function selectMetric(token, on) {
+    retireAnalysis();
     if (on === false) delete selected[token];
     else {
       selected[token] = true;
@@ -273,9 +315,17 @@ window.initExplorePanel = function () {
   }
   function loadCatalog(keep, callback) {
     var universe = workbenchTickers.length ? workbenchTickers : (ticker() ? [ticker()] : []);
-    fetch('/api/viewspec/catalog?tickers=' + encodeURIComponent(universe.join(','))).then(function (r) { return r.json(); })
+    retireAnalysis();
+    var version = ++catalogVersion;
+    if (catalogController) catalogController.abort();
+    catalogController = new AbortController();
+    el('vx-field-catalog').setAttribute('aria-busy', 'true');
+    window.uiFetch('/api/viewspec/catalog?tickers=' + encodeURIComponent(universe.join(',')),
+      {signal: catalogController.signal}).then(function (r) { return r.json(); })
       .then(function (raw) {
-        if (!isCurrent()) return;
+        if (!isCurrent() || version !== catalogVersion) return;
+        el('vx-field-catalog').removeAttribute('aria-busy');
+        catalogController = null;
         catalog = normalizeEntries(raw);
         catalogExpanded = false;
         selected = {};
@@ -285,7 +335,9 @@ window.initExplorePanel = function () {
         renderSelected();
         if (callback) callback();
       }).catch(function () {
-        if (!isCurrent()) return;
+        if (!isCurrent() || version !== catalogVersion) return;
+        el('vx-field-catalog').removeAttribute('aria-busy');
+        catalogController = null;
         catalog = [];
         selected = {};
         renderSelected();
@@ -319,6 +371,7 @@ window.initExplorePanel = function () {
   }
   function applySpec(spec, shouldRun) {
     if (!spec) return;
+    retireWorkbench();
     workbenchTickers = Array.isArray(spec.tickers) ? spec.tickers.map(function (value) {
       return String(value).trim().toUpperCase();
     }).filter(Boolean) : workbenchTickers;
@@ -348,6 +401,8 @@ window.initExplorePanel = function () {
     loadCatalog(tokens, shouldRun ? runView : null);
   }
   function compileForWorkbench(query, contextSpec) {
+    var version = ++workbenchVersion;
+    retireAnalysis();
     el('vx-active-prompt').textContent = query || 'New company-data analysis';
     if (!query) return;
     fetch('/api/viewspec/compile', {method: 'POST', headers: {'Content-Type': 'application/json'},
@@ -355,14 +410,15 @@ window.initExplorePanel = function () {
         tickers: workbenchTickers.length ? workbenchTickers : (ticker() ? [ticker()] : []),
         context_spec: contextSpec || null})})
       .then(function (r) { return r.json(); }).then(function (result) {
-        if (!isCurrent()) return;
+        if (!isCurrent() || version !== workbenchVersion) return;
         if (result.status === 'ok' && result.spec) applySpec(result.spec, true);
         else showWorkbenchError(result.message || 'Could not reshape this analysis.');
       }).catch(function () {
-        if (isCurrent()) showWorkbenchError('Could not reshape this analysis.');
+        if (isCurrent() && version === workbenchVersion) showWorkbenchError('Could not reshape this analysis.');
       });
   }
   function openWorkbench(query, spec, opener) {
+    retireWorkbench();
     workbenchOpener = opener || document.activeElement;
     workbenchTickers = spec && Array.isArray(spec.tickers) ? spec.tickers.slice() : (ticker() ? [ticker()] : []);
     syncWorkbenchCompanies();
@@ -386,32 +442,55 @@ window.initExplorePanel = function () {
     el('vx-back').focus();
   }
   function closeWorkbench() {
+    retireWorkbench();
     if (el('vx-workbench').open) el('vx-workbench').close();
     document.body.classList.remove('explore-workbench-open');
     if (workbenchOpener && document.contains(workbenchOpener)) workbenchOpener.focus();
     workbenchOpener = null;
   }
   function showWorkbenchError(message) {
-    el('vx-result').innerHTML = '<div class="vx-error" role="alert">' + esc(message) + '</div>';
+    var result = el('vx-result');
+    var notice = document.createElement('div');
+    notice.className = 'vx-error';
+    notice.setAttribute('role', 'alert');
+    notice.setAttribute('data-workbench-read-error', '');
+    notice.textContent = message;
+    if (result.querySelector('.vx-result')) {
+      var previousError = result.querySelector('[data-workbench-read-error]');
+      if (previousError) previousError.remove();
+      result.prepend(notice);
+    } else result.replaceChildren(notice);
   }
   function runView() {
     var spec = buildSpec();
     if (!spec.metrics.length) { showWorkbenchError('Choose at least one field.'); return; }
+    retireAnalysis();
+    var version = analysisVersion;
+    var controller = new AbortController();
+    analysisController = controller;
+    var deadline = window.setTimeout(function () {
+      controller.abort(new DOMException('Analysis timed out', 'TimeoutError'));
+    }, 30000);
     var button = el('vx-run');
     if (window.CCAction) window.CCAction.busy(button, 'Running…');
+    // This POST computes a view without persisting state. Its own request owner
+    // supplies cancellation; uiFetch leaves POST and stream lifecycles alone.
     fetch('/api/viewspec/run', {method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({spec: spec})}).then(function (response) {
-        if (response.ok) return response.text().then(function (html) {
-          if (!isCurrent()) return;
-          lastSpec = spec;
-          el('vx-result').innerHTML = html;
-          if (window.CCAction) window.CCAction.release(button);
-        });
+      signal: controller.signal, body: JSON.stringify({spec: spec})}).then(function (response) {
+        if (response.ok) return response.text();
         return response.json().then(function (error) { throw new Error(error.error || 'View failed'); });
+      }).then(function (html) {
+        if (!isCurrent() || version !== analysisVersion || JSON.stringify(buildSpec()) !== JSON.stringify(spec)) return;
+        lastSpec = spec;
+        el('vx-result').innerHTML = html;
       }).catch(function (error) {
-        if (!isCurrent()) return;
+        if (!isCurrent() || version !== analysisVersion) return;
+        showWorkbenchError(controller.signal.aborted ? 'Analysis timed out. Try again.' : error.message || 'View failed');
+      }).finally(function () {
+        window.clearTimeout(deadline);
+        if (!isCurrent() || version !== analysisVersion) return;
+        analysisController = null;
         if (window.CCAction) window.CCAction.release(button);
-        showWorkbenchError(error.message || 'View failed');
       });
   }
   function saveView() {
@@ -454,8 +533,16 @@ window.initExplorePanel = function () {
   }
 
   function refreshSavedViews() {
-    fetch('/api/panel/explore?fragment=views').then(function (response) { return response.text(); })
-      .then(function (html) { if (isCurrent()) el('vx-saved-list').innerHTML = html; });
+    var version = ++savedVersion;
+    if (savedController) savedController.abort();
+    savedController = new AbortController();
+    window.uiFetch('/api/panel/explore?fragment=views', {signal: savedController.signal})
+      .then(function (response) { return response.text(); })
+      .then(function (html) {
+        if (isCurrent() && version === savedVersion) el('vx-saved-list').innerHTML = html;
+      }).catch(function () {
+        if (isCurrent() && version === savedVersion) el('vx-saved-list').innerHTML = '<span class="vx-none" role="alert">Could not load saved analyses. Close and reopen Saved to retry.</span>';
+      });
   }
   function toggleSavedViews() {
     var panel = el('vx-saved-panel');
@@ -483,6 +570,7 @@ window.initExplorePanel = function () {
   el('vx-workbench-company').addEventListener('change', function (event) {
     var value = String(event.currentTarget.value || '').trim().toUpperCase();
     if (!value) return;
+    retireWorkbench();
     workbenchTickers = [value];
     selected = {};
     updateWorkbenchTitle();
@@ -562,7 +650,9 @@ window.initExplorePanel = function () {
   }
   wireResizer(el('vx-fields-resizer'), el('vx-fields-rail'), 240, 520);
   wireResizer(el('vx-inspector-resizer'), el('vx-inspector'), 260, 560);
-  loadCatalog([]);
+  ['vx-transform', 'vx-cadence', 'vx-periods', 'vx-cagr-years'].forEach(function (id) {
+    el(id).addEventListener('change', retireAnalysis);
+  });
 };
 window.initExplorePanel();
 """
