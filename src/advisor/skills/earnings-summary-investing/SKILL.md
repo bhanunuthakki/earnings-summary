@@ -9,6 +9,16 @@ Help the owner decide what changed, whether it changes the investment case, and
 what evidence supports the conclusion. Use this project's workflow directly.
 Do not load the generic Public Equity Investing plugin as a routine dependency.
 
+## Procedure maintenance
+
+Read current source owners before executing a route. The installed skill points
+to its tracked source; procedure edits are read immediately, but its route map
+needs semantic review when an interface or owner changes. Run
+`python3 scripts/check_investing_skill.py --check` to detect source changes and
+broken references. The existing Monthly prompt architecture refresh job reviews
+that result and updates this project-owned skill. Hash drift prompts review; it
+does not approve a policy change. See [maintenance](references/routes.md#maintenance).
+
 ## Resolve the task and authority
 
 Resolve this file's real path; the installed skill can be a symlink. Its repository

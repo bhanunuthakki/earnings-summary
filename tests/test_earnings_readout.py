@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import runpy
 import sqlite3
+import sys
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from typing import cast
@@ -16,6 +19,10 @@ def _readout_text(*_args: object, **_kwargs: object) -> str:
 
 def _no_budget_skip(*_args: object, **_kwargs: object) -> None:
     return None
+
+
+def _budget_skip(*_args: object, **_kwargs: object) -> object:
+    return object()
 
 
 def _net_retention_text(*_args: object, **_kwargs: object) -> str:
@@ -178,12 +185,13 @@ def test_scheduled_generation_is_portfolio_only_and_idempotent(
     from llm_artifact_store import read_current
 
     calls: list[str] = []
-    monkeypatch.setattr(
-        earnings_readout,
-        "call_llm",
-        lambda prompt, **kwargs: calls.append(str(kwargs["ticker"])) or "# Persisted readout",
-    )
-    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", lambda *a, **k: None)
+
+    def capture_llm(prompt: str, **kwargs: object) -> str:
+        calls.append(str(kwargs["ticker"]))
+        return "# Persisted readout"
+
+    monkeypatch.setattr(earnings_readout, "call_llm", capture_llm)
+    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", _no_budget_skip)
 
     first = earnings_readout.generate_all(db, db.parent, today=date(2026, 8, 4))
     second = earnings_readout.generate_all(db, db.parent, today=date(2026, 8, 4))
@@ -209,12 +217,13 @@ def test_evaluation_name_generates_only_when_explicitly_requested(
     from llm_artifact_store import read_current
 
     calls: list[str] = []
-    monkeypatch.setattr(
-        earnings_readout,
-        "call_llm",
-        lambda prompt, **kwargs: calls.append(str(kwargs["ticker"])) or "# NU readout",
-    )
-    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", lambda *a, **k: None)
+
+    def capture_llm(prompt: str, **kwargs: object) -> str:
+        calls.append(str(kwargs["ticker"]))
+        return "# NU readout"
+
+    monkeypatch.setattr(earnings_readout, "call_llm", capture_llm)
+    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", _no_budget_skip)
 
     outcome = earnings_readout.generate_for_ticker(db, db.parent, "NU")
 
@@ -364,8 +373,8 @@ def test_new_reported_quarter_creates_a_distinct_current_artifact(
     import earnings_readout
     from llm_artifact_store import quarter_index
 
-    monkeypatch.setattr(earnings_readout, "call_llm", lambda *a, **k: "readout")
-    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", lambda *a, **k: None)
+    monkeypatch.setattr(earnings_readout, "call_llm", _readout_text)
+    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", _no_budget_skip)
     assert earnings_readout.generate_for_ticker(db, db.parent, "WIX").status == "generated"
 
     conn = sqlite3.connect(db)
@@ -397,14 +406,215 @@ def test_budget_skip_prevents_on_request_token_burn(
     import earnings_readout
 
     calls: list[str] = []
-    monkeypatch.setattr(
-        earnings_readout,
-        "call_llm",
-        lambda *a, **k: calls.append("burn") or "readout",
-    )
-    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", lambda *a, **k: object())
+
+    def capture_llm(*args: object, **kwargs: object) -> str:
+        calls.append("burn")
+        return "readout"
+
+    monkeypatch.setattr(earnings_readout, "call_llm", capture_llm)
+    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", _budget_skip)
 
     outcome = earnings_readout.generate_for_ticker(db, db.parent, "NU")
 
     assert outcome.status == earnings_readout.BUDGET_SKIPPED
     assert calls == []
+
+
+def test_exact_target_uses_requested_quarter_not_latest_and_has_own_cache(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import earnings_readout
+    from llm_artifact_store import read_current
+
+    with sqlite3.connect(db) as conn:
+        _seed_quarter(
+            conn,
+            ticker="WIX",
+            list_type="portfolio",
+            transcript_id=3,
+            document_id=103,
+            period_end="2026-09-30",
+            fpt="Q3",
+        )
+        conn.execute("UPDATE transcript_segments SET text = 'Q3 only' WHERE transcript_id = 3")
+    prompts: list[str] = []
+
+    def capture_llm(prompt: str, **kwargs: object) -> str:
+        prompts.append(prompt)
+        return "readout"
+
+    monkeypatch.setattr(earnings_readout, "call_llm", capture_llm)
+    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", _no_budget_skip)
+    ref = date(2026, 11, 1)
+    latest = earnings_readout.generate_for_ticker(db, db.parent, "WIX", today=ref)
+    exact = earnings_readout.generate_for_ticker(
+        db, db.parent, "WIX", today=ref, period_end="2026-06-30", fiscal_period_type="q2"
+    )
+    cached = earnings_readout.generate_for_ticker(
+        db, db.parent, "WIX", today=ref, period_end="2026-06-30", fiscal_period_type="Q2"
+    )
+
+    assert latest.fiscal_period == "2026-09-30"
+    assert exact.fiscal_period == "2026-06-30"
+    assert cached.status == earnings_readout.CACHE_HIT
+    assert len(prompts) == 2
+    assert "Q3 only" in prompts[0] and "Q3 only" not in prompts[1]
+    assert "fiscal_period_type=Q2" in prompts[1]
+    artifact = read_current(
+        ticker="WIX",
+        purpose=earnings_readout.PURPOSE,
+        fiscal_period=exact.fiscal_period,
+        db_path=db,
+    )
+    assert artifact is not None and artifact.source_doc_ids == [101]
+    manifest = cast(dict[str, object], artifact.content_json)
+    assert manifest["grounding_status"] == "partial"
+
+
+@pytest.mark.parametrize(
+    ("period_end", "fiscal_period_type"),
+    [
+        ("2026-06-30", None),
+        (None, "Q2"),
+        ("2026-02-30", "Q2"),
+        ("20260630", "Q2"),
+        ("2026-06-30T00:00:00", "Q2"),
+        ("2026-06-30", "Q5"),
+        ("2026-06-30", "QUARTER"),
+    ],
+)
+def test_invalid_target_stops_before_generation(
+    db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    period_end: str | None,
+    fiscal_period_type: str | None,
+) -> None:
+    import earnings_readout
+
+    def unexpected_generation(*args: object, **kwargs: object) -> None:
+        pytest.fail("invalid target reached generation")
+
+    monkeypatch.setattr(earnings_readout, "_generate_quarter", unexpected_generation)
+    with pytest.raises(ValueError):
+        earnings_readout.generate_for_ticker(
+            db, db.parent, "WIX", period_end=period_end, fiscal_period_type=fiscal_period_type
+        )
+
+
+@pytest.mark.parametrize("scope", ["missing", "wrong_type", "inactive", "archived"])
+def test_exact_target_requires_active_matching_scope(
+    db: Path, monkeypatch: pytest.MonkeyPatch, scope: str
+) -> None:
+    import earnings_readout
+
+    with sqlite3.connect(db) as conn:
+        if scope == "inactive":
+            conn.execute("ALTER TABLE transcripts ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1")
+            conn.execute("UPDATE transcripts SET is_active = 0 WHERE ticker = 'WIX'")
+        if scope == "archived":
+            conn.execute(
+                "UPDATE tracked_companies SET archived_at = '2026-08-05' WHERE ticker='WIX'"
+            )
+    period_end = "2026-03-31" if scope == "missing" else "2026-06-30"
+    fpt = "Q1" if scope == "wrong_type" else "Q2"
+
+    def unexpected_generation(*args: object, **kwargs: object) -> None:
+        pytest.fail("unavailable target reached generation")
+
+    monkeypatch.setattr(earnings_readout, "_generate_quarter", unexpected_generation)
+    with pytest.raises(earnings_readout.ReadoutUnavailableError):
+        earnings_readout.generate_for_ticker(
+            db, db.parent, "WIX", period_end=period_end, fiscal_period_type=fpt
+        )
+
+
+@pytest.mark.parametrize(
+    ("period_end", "call_date"), [("2026-12-31", "2026-08-04"), ("2026-09-30", "2026-11-04")]
+)
+def test_future_period_or_call_cannot_be_selected(
+    db: Path, monkeypatch: pytest.MonkeyPatch, period_end: str, call_date: str
+) -> None:
+    import earnings_readout
+
+    with sqlite3.connect(db) as conn:
+        _seed_quarter(
+            conn,
+            ticker="WIX",
+            list_type="portfolio",
+            transcript_id=3,
+            document_id=103,
+            period_end=period_end,
+            fpt="Q3",
+        )
+        conn.execute("UPDATE transcripts SET call_date = ? WHERE id = 3", (call_date,))
+    ref = date(2026, 10, 2)
+    latest = earnings_readout.latest_reported_quarter(db, "WIX", today=ref)
+    assert latest is not None and latest.period_end == "2026-06-30"
+
+    def unexpected_generation(*args: object, **kwargs: object) -> None:
+        pytest.fail("future target reached generation")
+
+    monkeypatch.setattr(earnings_readout, "_generate_quarter", unexpected_generation)
+    with pytest.raises(earnings_readout.ReadoutUnavailableError):
+        earnings_readout.generate_for_ticker(
+            db, db.parent, "WIX", today=ref, period_end=period_end, fiscal_period_type="Q3"
+        )
+
+
+@pytest.mark.parametrize("unavailable", ["NU", "MISSING", "NVDA"])
+def test_exact_bulk_scope_is_preflighted_before_any_generation(
+    db: Path, monkeypatch: pytest.MonkeyPatch, unavailable: str
+) -> None:
+    import earnings_readout
+
+    if unavailable == "NVDA":
+        with sqlite3.connect(db) as conn:
+            _seed_quarter(
+                conn,
+                ticker="NVDA",
+                list_type="portfolio",
+                transcript_id=3,
+                document_id=103,
+                period_end="2026-07-31",
+            )
+
+    def unexpected_generation(*args: object, **kwargs: object) -> None:
+        pytest.fail("partial or nonportfolio bulk scope reached generation")
+
+    monkeypatch.setattr(earnings_readout, "_generate_quarter", unexpected_generation)
+    with pytest.raises(earnings_readout.ReadoutUnavailableError):
+        earnings_readout.generate_all(
+            db,
+            db.parent,
+            only_tickers={"WIX", unavailable},
+            period_end="2026-06-30",
+            fiscal_period_type="Q2",
+        )
+
+
+def test_cli_forwards_exact_target_and_rejects_unpaired_flags(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import earnings_readout
+
+    calls: list[dict[str, object]] = []
+
+    def capture_run(db_path: Path, repo_root: Path, **kwargs: object) -> dict[str, int]:
+        calls.append({"db_path": db_path, **kwargs})
+        return {"generated": 0}
+
+    monkeypatch.setattr(earnings_readout, "generate_all", capture_run)
+    script = Path(__file__).resolve().parents[1] / "execution/generate_post_earnings_readouts.py"
+    main = cast(Callable[[], int], runpy.run_path(str(script))["main"])
+    argv = [str(script), "--db-path", str(db), "--ticker", "WIX", "--period-end", "2026-06-30"]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2
+    assert not calls
+
+    monkeypatch.setattr(sys, "argv", [*argv, "--fiscal-period-type", "q2"])
+    assert main() == 0
+    assert calls[0]["period_end"] == "2026-06-30"
+    assert calls[0]["fiscal_period_type"] == "Q2"
+    assert calls[0]["only_tickers"] == {"WIX"}

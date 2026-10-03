@@ -50,7 +50,7 @@ route is not authority to run it on production.
 | SEC expected coverage and financial facts | Existing issuer/filing identity and coverage receipts | `execution/sync_sec_filing_inventory.py`; `execution/capture_expected_sec_documents.py`; `execution/ingest_sec_filing_xbrl.py`; `execution/fetch_sec_xbrl.py` |
 | Transcript gaps / provenance | `transcripts/`; `execution/audit_transcript_evidence.py` | `execution/backfill_transcripts.py`; `execution/scan_ir_transcripts.py`; `execution/ingest_transcripts.py`; do not collect audio/webcasts |
 | Reviewed KPI and segment population | `src/compute/kpi_resolver.py`; `src/pipeline/kpi_report_reference_resolver.py` | `execution/produce_issuer_fact_manifest.py` creates inert reviewed input; `execution/apply_issuer_fact_manifest.py` admits KPI and segment facts only |
-| Sealed financial-statement facts | `src/provenance/fact_read_model.py`; exact analysis-scope and extraction receipts | `execution/populate_source_fact_plane.py` plans publication from governed extraction runs; inspect its scope and commitments before authorized `--apply` |
+| Sealed financial-statement facts | `src/provenance/fact_read_model.py`; declared issuer/document scope and governed extraction receipts | `execution/populate_source_fact_plane.py` plans publication from governed extraction runs; inspect its scope and commitments before authorized `--apply` |
 | Research snapshot / completeness | `src/provenance/research_snapshot.py`; `src/provenance/population_research_snapshots.py` | `execution/populate_research_snapshots.py --db <explicit>`; inspect receipt before authorized `--apply` |
 
 ## Route limits and traps
@@ -61,15 +61,20 @@ route is not authority to run it on production.
 - The post-earnings CLI is portfolio-only. The explicit cockpit generation route
   supports owner-requested evaluation names. The stored fiscal period comes from
   the selected transcript; fiscal labels in filenames do not establish identity.
-- Neither earnings CLI selects an explicit fiscal Q2 or Q3. `--as-of` changes the
-  run date, not the selected reported quarter. If current selection differs from
-  the request, report that limitation and use a supported exact-period path;
-  never relabel the generated body or change live transcript selection to fit it.
+- The post-earnings CLI supports a paired `--period-end <YYYY-MM-DD>` and
+  `--fiscal-period-type <Q1|Q2|Q3|Q4>` selector. It requires an active selected,
+  reported transcript and validates the complete requested portfolio scope
+  before generation. Without the pair, it selects the latest reported quarter.
+  Verify the deployed version before live use. The cockpit API still selects
+  the latest quarter; the pre-earnings CLI has no exact fiscal selector.
+  `--as-of` changes the run date. Never relabel a body or change live transcript
+  selection to fit a requested period.
 - `capture_issuer_document_inventory.py` v1 validates calendar quarter ends. It
-  cannot represent every off-calendar fiscal period. Inspect the exact-date
-  `execution/plan_analysis_evidence_scope.py` route and its inventory prerequisites;
-  do not round issuer dates to make a request validate. Verify that this route
-  exists in the deployed runtime before using it on the live host.
+  cannot represent every off-calendar fiscal period. The released workflow has
+  no exact-date analysis-scope planner. Retain the precise issuer dates and mark
+  this capability unavailable; do not round dates or route through unmerged code.
+  The released research-snapshot path uses full-population scope. A selected
+  brief quarter does not narrow that scope or prove archive completeness.
 - `execution/track_evaluation_names.py` has a fixed ticker list and checkout-local
   database assumptions. It is not the general evaluation-list route.
 - Model preflight is read-only and does not fetch facts or grant write authority.
@@ -109,3 +114,22 @@ For live verification, follow host operations, compare the live runtime revision
 with the prepared revision, and inspect the artifact selected in the front end.
 Report commit, deployment, availability and public disclosure as separate states.
 Do not start a local replacement server to verify the canonical host.
+
+## Maintenance
+
+The monthly job checks a freshly fetched, pinned remote default-branch revision
+in an isolated checkout and compares the installed skill with that revision.
+An unchanged retained worktree is not evidence that app procedures are current.
+Missing released workflow files or installed differences produce an explicit
+hold. Prepared corrections require integration before release currency can be
+claimed. Preserve the worktree that owns an installed skill.
+
+`scripts/check_investing_skill.py` compares current source files with
+`src/advisor/skills/earnings-summary-investing/references/reviewed-sources.json`.
+It does not open a database or invoke a model. Exit 0 means no source drift;
+exit 1 means a source changed; exit 2 means invalid input or broken references.
+For drift, inspect the changed procedure or executable route, correct the affected
+skill instructions, and validate them before recording a new review baseline.
+Use `--record-review --review-note` and explicit `--reviewed-source` arguments.
+A renamed owner also requires `--replace-reviewed-source OLD=NEW` and corrected
+route references. Do not accept a hash merely to remove a warning.
