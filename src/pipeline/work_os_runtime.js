@@ -1134,6 +1134,13 @@
     workOsCompanyRequestController = controller;
     if (companyPickerStatus) companyPickerStatus.textContent = 'Loading ' + normalized + ' company desk';
     screen.setAttribute('aria-busy', 'true');
+    const warningBox = document.getElementById('deskWarnings');
+    if (warningBox) {
+      screen.prepend(warningBox);
+      warningBox.hidden = false;
+      warningBox.setAttribute('role', 'status');
+      warningBox.textContent = 'Loading ' + normalized + ' company desk. Previous company details remain visible until this request succeeds.';
+    }
     try {
       try { await workOsEnsureResearchCompanies(); } catch (error) { if (companyPickerStatus) companyPickerStatus.textContent = 'Company list unavailable. Open the picker to retry.'; }
       if (requestSequence !== workOsCompanyRequestSequence) return false;
@@ -1145,7 +1152,7 @@
       const sayDo = desk.say_do || { status: 'unavailable', commitments: [], quarters: [] };
       if (requestSequence !== workOsCompanyRequestSequence) return false;
       const identity = desk.company || {};
-      const identityTicker = String(identity.ticker || normalized).toUpperCase();
+      const identityTicker = String(identity.ticker || '').toUpperCase();
       if (identityTicker !== normalized) throw new Error('Company response mismatch');
       document.getElementById('deskTicker').textContent = identity.ticker || normalized;
       document.getElementById('deskCompanyName').textContent = identity.name || company.name;
@@ -1413,7 +1420,14 @@
     } catch (error) {
       if ((error && error.name === 'AbortError') || requestSequence !== workOsCompanyRequestSequence) return false;
       const warningBox = document.getElementById('deskWarnings');
-      if (warningBox) { warningBox.hidden = false; warningBox.textContent = 'Unable to switch company desks. The prior company remains open.'; }
+      if (warningBox) {
+        warningBox.hidden = false;
+        warningBox.setAttribute('role', 'alert');
+        warningBox.innerHTML = 'Unable to load ' + escapeWorkOsHtml(normalized) + '. Previous company details remain visible. <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-work-os-company-retry>Retry ' + escapeWorkOsHtml(normalized) + '</button>';
+        warningBox.querySelector('[data-work-os-company-retry]').addEventListener('click', function () {
+          return window.switchCompanyWorkspace(normalized);
+        });
+      }
       if (companyPickerStatus) companyPickerStatus.textContent = normalized + ' could not be loaded; ' + workOsCurrentCompanyTicker() + ' remains open';
       return false;
     } finally {
@@ -1548,6 +1562,7 @@
 
   window.switchCompanyWorkspace = async function (ticker, options) {
     const requested = workOsNormalizeTicker(ticker) || workOsCurrentCompanyTicker();
+    window.navigateTo('screen-workspace', { fromHistory: true, companyReady: true });
     const committed = await workOsRenderCompanyDesk(requested);
     if (!committed) return false;
     workOsWriteCompanyContext(requested, 'company-desk', options);
