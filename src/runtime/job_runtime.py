@@ -462,8 +462,8 @@ def _scheduled_deadline_seconds(code_root: Path, job_name: str) -> float | None:
         root = ElementTree.parse(policy).getroot()
         duration = (
             root.findtext(
-                "{http://schemas.microsoft.com/windows/2004/02/mit/task}Settings/"
-                "{http://schemas.microsoft.com/windows/2004/02/mit/task}ExecutionTimeLimit"
+                "task:Settings/task:ExecutionTimeLimit",
+                namespaces={"task": "http://schemas.microsoft.com/windows/2004/02/mit/task"},
             )
             or ""
         )
