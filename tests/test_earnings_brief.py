@@ -9,9 +9,11 @@ The LLM is always monkeypatched — zero real calls in this file.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -54,6 +56,26 @@ CREATE TABLE llm_artifacts (
     superseded_by_id INTEGER, dirty INTEGER NOT NULL DEFAULT 0, dirty_reason TEXT,
     source_doc_ids TEXT, parent_artifact_ids TEXT, llm_call_id INTEGER);
 """
+
+
+def _no_op(*args: object, **kwargs: object) -> None:
+    return None
+
+
+def _budget_skip(*args: object, **kwargs: object) -> object:
+    return object()
+
+
+def _empty_response(*args: object, **kwargs: object) -> str:
+    return "   "
+
+
+def _brief_body(*args: object, **kwargs: object) -> str:
+    return "brief body"
+
+
+def _lost_persist(*args: object, **kwargs: object) -> tuple[None, bool]:
+    return None, False
 
 
 @pytest.fixture
@@ -100,7 +122,7 @@ def fake_llm(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         return "**What this quarter must show** — canned brief body."
 
     monkeypatch.setattr(earnings_brief, "call_llm", _fake)
-    monkeypatch.setattr(earnings_brief, "should_skip_for_budget", lambda *a, **k: None)
+    monkeypatch.setattr(earnings_brief, "should_skip_for_budget", _no_op)
     return calls
 
 
@@ -176,8 +198,11 @@ def test_input_drift_refreshes_only_inside_t1(db: Path, fake_llm: list[str]) -> 
 
     original = eb.assemble_context
 
-    def _drifted(*args: object, **kwargs: object) -> list[str]:
-        return [*original(*args, **kwargs), "## New watch item\n- NIM trajectory"]  # type: ignore[arg-type]
+    def _drifted(db_path: Path, repo_root: Path, ticker: str, *, today: date) -> list[str]:
+        return [
+            *original(db_path, repo_root, ticker, today=today),
+            "## New watch item\n- NIM trajectory",
+        ]
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(eb, "assemble_context", _drifted)
@@ -215,7 +240,7 @@ def test_transient_failure_defers_that_ticker_only(
         return "brief body"
 
     monkeypatch.setattr(earnings_brief, "call_llm", _flaky)
-    monkeypatch.setattr(earnings_brief, "should_skip_for_budget", lambda *a, **k: None)
+    monkeypatch.setattr(earnings_brief, "should_skip_for_budget", _no_op)
     tally = generate_all(db, db.parent, today=TODAY)
     assert tally[DEFERRED_TRANSIENT] == 1
     assert tally[GENERATED] == 1
@@ -231,8 +256,8 @@ def test_transient_failure_defers_that_ticker_only(
 def test_empty_response_is_transient_and_never_persisted(
     db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(earnings_brief, "call_llm", lambda prompt, **k: "   ")
-    monkeypatch.setattr(earnings_brief, "should_skip_for_budget", lambda *a, **k: None)
+    monkeypatch.setattr(earnings_brief, "call_llm", _empty_response)
+    monkeypatch.setattr(earnings_brief, "should_skip_for_budget", _no_op)
     tally = generate_all(db, db.parent, today=TODAY)
     assert tally[DEFERRED_TRANSIENT] == 2
     assert tally[GENERATED] == 0
@@ -244,10 +269,10 @@ def test_lost_persist_is_deferred_not_reported_generated(
     """A generated brief whose artifact write fails (db locked past every
     retry) must NOT tally as generated — that's a silent loss. It defers and
     the absent artifact retries next run."""
-    monkeypatch.setattr(earnings_brief, "call_llm", lambda prompt, **k: "brief body")
-    monkeypatch.setattr(earnings_brief, "should_skip_for_budget", lambda *a, **k: None)
-    monkeypatch.setattr(earnings_brief, "upsert", lambda req, **k: (None, False))
-    monkeypatch.setattr(earnings_brief.time, "sleep", lambda s: None)
+    monkeypatch.setattr(earnings_brief, "call_llm", _brief_body)
+    monkeypatch.setattr(earnings_brief, "should_skip_for_budget", _no_op)
+    monkeypatch.setattr(earnings_brief, "upsert", _lost_persist)
+    monkeypatch.setattr(earnings_brief.time, "sleep", _no_op)
     tally = generate_all(db, db.parent, today=TODAY)
     assert tally[DEFERRED_TRANSIENT] == 2
     assert tally[GENERATED] == 0
@@ -260,15 +285,147 @@ def test_hard_stop_propagates(db: Path, monkeypatch: pytest.MonkeyPatch) -> None
         raise LLMSetupError("no CLI on PATH")
 
     monkeypatch.setattr(earnings_brief, "call_llm", _hard)
-    monkeypatch.setattr(earnings_brief, "should_skip_for_budget", lambda *a, **k: None)
+    monkeypatch.setattr(earnings_brief, "should_skip_for_budget", _no_op)
     with pytest.raises(LLMSetupError):
         generate_all(db, db.parent, today=TODAY)
 
 
 def test_budget_skip_stops_before_any_call(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[str] = []
-    monkeypatch.setattr(earnings_brief, "call_llm", lambda prompt, **k: calls.append("x") or "body")
-    monkeypatch.setattr(earnings_brief, "should_skip_for_budget", lambda *a, **k: object())
+
+    def _capture(prompt: str, **kwargs: object) -> str:
+        calls.append("x")
+        return "body"
+
+    monkeypatch.setattr(earnings_brief, "call_llm", _capture)
+    monkeypatch.setattr(earnings_brief, "should_skip_for_budget", _budget_skip)
     tally = generate_all(db, db.parent, today=TODAY)
     assert tally[BUDGET_SKIPPED] == 1
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    "sections", [[], ["## Thesis\nOwner thesis", "## Evidence\n[doc:999] Issuer wording\n"]]
+)
+def test_manifest_reconstructs_prompt_without_claiming_fiscal_or_source_identity(
+    db: Path, monkeypatch: pytest.MonkeyPatch, sections: list[str]
+) -> None:
+    prompts: list[str] = []
+
+    def context(*args: object, **kwargs: object) -> list[str]:
+        return sections
+
+    def llm(prompt: str, **kwargs: object) -> str:
+        prompts.append(prompt)
+        return "brief"
+
+    monkeypatch.setattr(earnings_brief, "assemble_context", context)
+    monkeypatch.setattr(earnings_brief, "call_llm", llm)
+    candidate = BriefCandidate("NU", date(2026, 8, 5), 4)
+    assert generate_brief(db, db.parent, candidate, today=TODAY) == GENERATED
+    artifact = read_current(
+        ticker="NU", purpose=earnings_brief.PURPOSE, fiscal_period="2026-08-05", db_path=db
+    )
+    assert artifact is not None and isinstance(artifact.content_json, dict)
+    manifest = cast(dict[str, object], artifact.content_json)
+    assert manifest["schema_version"] == "pre_earnings_brief_context@1"
+    assert manifest["ticker"] == "NU"
+    assert manifest["as_of"] == TODAY.isoformat()
+    assert manifest["expected_earnings_date"] == "2026-08-05"
+    assert manifest["days_until"] == 4
+    assert manifest["grounding_status"] == "partial"
+    fiscal = cast(dict[str, object], manifest["fiscal_target"])
+    assert fiscal["identity_status"] == "unresolved"
+    assert fiscal["period_end"] is None and fiscal["fiscal_period_type"] is None
+    assert fiscal["fiscal_year"] is None
+    assert manifest["artifact_key_semantics"] == "expected_earnings_event_date"
+    blocks = cast(list[dict[str, object]], manifest["blocks"])
+    rendered = [str(block["content"]) for block in blocks]
+    assert rendered == sections
+    assert str(manifest["prompt_header"]) + "\n\n" + "\n\n".join(rendered) == prompts[0]
+    assert all(
+        cast(dict[str, object], block["source"])["identity_status"] == "missing" for block in blocks
+    )
+    assert all(
+        cast(dict[str, object], block["source"])["source_doc_id"] is None for block in blocks
+    )
+    assert not artifact.source_doc_ids
+    if not sections:
+        assert "context_sections" in cast(list[str], manifest["missing_source_identities"])
+
+
+def test_manifest_and_metadata_are_bound_into_artifact_hash(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from llm_artifact_store import compute_input_sha256
+
+    sections = ["## Context\nReported evidence"]
+
+    def context(*args: object, **kwargs: object) -> list[str]:
+        return sections
+
+    def llm(prompt: str, **kwargs: object) -> str:
+        return "brief"
+
+    monkeypatch.setattr(earnings_brief, "assemble_context", context)
+    monkeypatch.setattr(earnings_brief, "call_llm", llm)
+    candidate = BriefCandidate("NU", date(2026, 8, 5), 4)
+    assert generate_brief(db, db.parent, candidate, today=TODAY) == GENERATED
+    artifact = read_current(
+        ticker="NU", purpose=earnings_brief.PURPOSE, fiscal_period="2026-08-05", db_path=db
+    )
+    assert artifact is not None
+    manifest = cast(dict[str, object], artifact.content_json)
+    serialized = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    inputs: list[str | bytes] = ["2026-08-05", *sections, serialized]
+    assert artifact.input_sha256 == compute_input_sha256(
+        prompt_version=artifact.prompt_version, cache_inputs=inputs
+    )
+    for key, replacement in [("as_of", "2026-08-02"), ("schema_version", "future")]:
+        changed = {**manifest, key: replacement}
+        assert artifact.input_sha256 != compute_input_sha256(
+            prompt_version=artifact.prompt_version,
+            cache_inputs=[
+                "2026-08-05",
+                *sections,
+                json.dumps(changed, sort_keys=True, separators=(",", ":")),
+            ],
+        )
+
+
+def test_legacy_manifest_gap_respects_refresh_window_instead_of_cache_hit(
+    db: Path, fake_llm: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from llm.prompt_versions import prompt_version_for
+    from llm_artifact_store import UpsertRequest, upsert
+
+    sections = ["## Context\nExisting context"]
+
+    def context(*args: object, **kwargs: object) -> list[str]:
+        return sections
+
+    monkeypatch.setattr(earnings_brief, "assemble_context", context)
+    artifact_id, _ = upsert(
+        UpsertRequest(
+            ticker="NU",
+            purpose=earnings_brief.PURPOSE,
+            fiscal_period="2026-08-05",
+            content_md="legacy",
+            prompt_version=prompt_version_for(earnings_brief.PURPOSE),
+            cache_inputs=["2026-08-05", *sections],
+        ),
+        db_path=db,
+    )
+    assert artifact_id is not None
+    assert (
+        generate_brief(db, db.parent, BriefCandidate("NU", date(2026, 8, 5), 4), today=TODAY)
+        == HELD_FOR_REFRESH_WINDOW
+    )
+    assert fake_llm == []
+    assert (
+        generate_brief(
+            db, db.parent, BriefCandidate("NU", date(2026, 8, 5), 1), today=date(2026, 8, 4)
+        )
+        == GENERATED
+    )
+    assert fake_llm == ["NU"]

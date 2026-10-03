@@ -454,8 +454,8 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr reads only _COMPARE_METRIC_ROWS TickerMetrics fields.",
-      "fingerprint": "6dc3224b96d501764786f2821d3183b286a5a1cb2c45afeeb9660c86b1f255ca",
-      "line": 1949,
+      "fingerprint": "1498cc273afcbb5370d22a2a10b09d19ba4bd6baf37bb098a91cf4487ba85b1f",
+      "line": 1952,
       "path": "src/pipeline/peeks.py",
       "targets": [
         "_COMPARE_METRIC_ROWS"
@@ -676,7 +676,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "8f36a58e668b1a830e0e71727fd07cab37f80e0210a455c3d958af2ca9968465",
+      "source_sha256": "cba52d2c835eefd86fa8db951704063b8c5a2ad805a97e3419654bb299556437",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
