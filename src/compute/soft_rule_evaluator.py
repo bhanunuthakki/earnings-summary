@@ -477,10 +477,14 @@ def _fetch_series_live(
 
 
 def _definition_rows(
-    context: _EvaluationContext, source: FactSource, financial: CanonicalFinancialSeries | None
-) -> tuple[dict[str, JsonValue], ...]:
+    context: _EvaluationContext,
+    source: FactSource,
+    financial: CanonicalFinancialSeries | None,
+    *,
+    rows: list[dict[str, JsonValue]],
+) -> None:
     if context.conn is None:
-        return ()
+        return
     queries: list[tuple[str, tuple[object, ...]]] = []
     if source is FactSource.FINANCIAL and financial is not None:
         queries = [
@@ -499,7 +503,6 @@ def _definition_rows(
                 (context.ticker.upper(), context.selected_definition),
             )
         ]
-    rows: list[dict[str, JsonValue]] = []
     for query, params in queries:
         cursor = context.conn.execute(query, params)
         for row in cursor.fetchall():
@@ -511,7 +514,6 @@ def _definition_rows(
                 )
             )
             rows.append(TypeAdapter(dict[str, JsonValue]).validate_python(values))
-    return tuple(rows)
 
 
 def _fetch_series(
@@ -533,23 +535,14 @@ def _fetch_series(
     context.disposition = "selected"
     context.rows = ()
     context.overrides = ()
+    series: list[tuple[datetime, float]] = []
+    financial: CanonicalFinancialSeries | None = None
+    definition_rows: list[dict[str, JsonValue]] = []
     try:
         series = _fetch_series_live(context, metric, source)
-    except Exception as exc:
-        context.reads.append(
-            SoftSeriesCapture(
-                metric=metric,
-                source=source,
-                series=(),
-                disposition="read_failed",
-                error_type=type(exc).__name__,
-                error_message=str(exc),
-            )
-        )
-        raise
-    financial = _read_financial(context, metric) if source is FactSource.FINANCIAL else None
-    context.reads.append(
-        SoftSeriesCapture(
+        financial = _read_financial(context, metric) if source is FactSource.FINANCIAL else None
+        _definition_rows(context, source, financial, rows=definition_rows)
+        capture = SoftSeriesCapture(
             metric=metric,
             source=source,
             series=tuple(series),
@@ -558,9 +551,26 @@ def _fetch_series(
             disposition=context.disposition,
             rows=context.rows,
             overrides=context.overrides,
-            definition_rows=_definition_rows(context, source, financial),
+            definition_rows=tuple(definition_rows),
         )
-    )
+    except Exception as exc:
+        context.reads.append(
+            SoftSeriesCapture(
+                metric=metric,
+                source=source,
+                series=tuple(series),
+                financial=financial,
+                selected_definition=context.selected_definition,
+                disposition="read_failed",
+                rows=context.rows,
+                overrides=context.overrides,
+                definition_rows=tuple(definition_rows),
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+            )
+        )
+        raise
+    context.reads.append(capture)
     return series
 
 

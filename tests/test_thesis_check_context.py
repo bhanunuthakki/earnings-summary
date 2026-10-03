@@ -356,6 +356,87 @@ def test_caught_read_failure_replays_without_retry(monkeypatch: pytest.MonkeyPat
     assert replay_soft_capture(captures[0]) == results
 
 
+def test_definition_read_failure_is_retained_with_following_rule(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    _create_schema(connection)
+    _seed_kpi(connection, "TEST", "Metric", [("2026-03-31", 10)])
+    _seed_kpi(connection, "TEST", "Other", [("2026-03-31", 30)])
+    _write_holdings(
+        tmp_path,
+        soft=[
+            _rule(
+                "series_below",
+                {"metric": metric, "source": "kpi", "threshold": 20, "periods": 1},
+                name=metric,
+            )
+            for metric in ("Metric", "Other")
+        ],
+    )
+    deny_metadata = False
+    denied = 0
+
+    def trace(statement: str) -> None:
+        nonlocal deny_metadata
+        if "retained_semantic_context_json" in statement and "'Metric'" in statement:
+            deny_metadata = True
+
+    def authorize(
+        action: int,
+        table: str | None,
+        column: str | None,
+        database_name: str | None,
+        trigger: str | None,
+    ) -> int:
+        nonlocal deny_metadata, denied
+        del column, database_name, trigger
+        if deny_metadata and action == sqlite3.SQLITE_READ and table == "kpi_definitions":
+            deny_metadata = False
+            denied += 1
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    connection.set_trace_callback(trace)
+    connection.set_authorizer(authorize)
+    verdict = evaluate_ticker_thesis(connection, ticker="TEST", holdings_dir=tmp_path)
+    connection.set_authorizer(None)
+    connection.set_trace_callback(None)
+    assert denied == 1
+    assert verdict.soft_rule_results[0].status.value == "unresolved"
+    assert verdict.soft_rule_results[1].status.value == "green"
+    context = verdict.retained_context
+    assert context is not None
+    assert replay_check_context(context).soft_rule_results == verdict.soft_rule_results
+    reads = context.soft_inputs[0].reads
+    assert len(reads) == 2
+    assert reads[0].series[0][1] == 10
+    assert reads[0].rows and reads[0].selected_definition == "Metric"
+    assert reads[0].error_type == "DatabaseError"
+    assert reads[1].metric == "Other" and reads[1].error_message is None
+    connection.close()
+    database = tmp_path / "definition-failure.db"
+    migrated_db(database, target="head")
+    connection = sqlite3.connect(database)
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        "INSERT INTO ingestion_runs(run_id,started_at,directive,ticker_scope,status) "
+        "VALUES ('definition-failure','2026-10-03T00:00:00+00:00','test','[]','ok')"
+    )
+    connection.commit()
+    persist_verdict(connection, verdict, run_id="definition-failure")
+    receipt = connection.execute(
+        "SELECT receipt_id FROM thesis_evaluation_episode_check_receipts "
+        "WHERE run_id='definition-failure'"
+    ).fetchone()
+    saved = read_check_context(connection, receipt_id=str(receipt[0]))
+    connection.close()
+    (tmp_path / "TEST.json").unlink()
+    assert saved.context is not None
+    assert replay_check_context(saved.context).soft_rule_results == verdict.soft_rule_results
+
+
 def _save_empty(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> tuple[sqlite3.Connection, ThesisVerdict, str]:
