@@ -878,3 +878,26 @@ eligibility or completeness. Migration 0050 adds only a nonunique KPI
 supersedes lookup index. There is no new operator action or external effect.
 Regression and native child-tree checks establish the correction; a genuine
 subsequent scheduled run remains required for recurrence verification.
+
+### Approved thesis KPI registrations and calculated review rules
+
+Persisted thesis evaluations through the existing deterministic and quarterly
+refresh actions consume
+optional `kpi_registry_candidates` from the approved holdings configuration.
+It checks exact governed report references and eight admitted, comparable
+quarterly observations before inserting a missing user registry row. Existing
+owner settings remain unchanged. New rows have no scalar threshold and are not
+marked thesis breakers. The thesis evaluator owns numerical thresholds,
+adjacent-quarter persistence, TTM calculations and compound review warnings.
+Missing definitions, approximate source bands, incomparable populations and
+unavailable discrete-quarter inputs remain unresolved. A pending candidate does
+not become a zero-valued fact or a passing check. The approved holdings tiers
+retain disclosure and actual-source-cadence research watches.
+
+`metric_expression` hard rules and `metric_threshold` soft predicates use the
+same admitted calculated-series reader. Stored evaluation evidence retains
+source manifests and calculation definitions. Distinct company/market entities
+require explicitly matching source populations. TTM monetary sums require typed
+standalone-quarter durations; YTD labels cannot substitute for those inputs.
+No new scheduler, listener, provider request or external message action is added.
+The existing evaluation and attention lifecycle remains the delivery owner.
