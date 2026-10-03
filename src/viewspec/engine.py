@@ -727,7 +727,12 @@ def _kpi_name_resolution(
             # pass over the resolved relation runs once per view, not once per
             # ticker (the per-ticker form re-derived it per ticker: ~11 s of a
             # 12.8 s view on the 40-issuer synthetic benchmark).
-            anchor_sql = semantic_series_identity_anchor_sql(conn, fact_relation=fact_relation)
+            marks = ",".join("?" * len(tickers))
+            anchor_relation = (
+                f"(SELECT * FROM {fact_relation} WHERE kpi_definition_id IN "
+                f"(SELECT kpi_definition_id FROM {fact_relation} WHERE ticker IN ({marks})))"
+            )
+            anchor_sql = semantic_series_identity_anchor_sql(conn, fact_relation=anchor_relation)
             if anchor_sql is None:
                 identity_join = ""
                 semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
@@ -737,14 +742,13 @@ def _kpi_name_resolution(
                     "ON series_identity_anchor.definition_id = kf.kpi_definition_id"
                 )
                 semantic_identity = semantic_series_identity_flat_sql(conn)
-            marks = ",".join("?" * len(tickers))
             rows = conn.execute(
                 "SELECT kf.ticker AS ticker, kd.name AS name, COUNT(*) AS n "
                 f"FROM {fact_relation} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
                 f"{semantic_join} {identity_join} WHERE kf.ticker IN ({marks}) "
                 f"AND {semantic_where} AND {semantic_identity} "
                 "GROUP BY kf.ticker, kd.name",
-                tickers,
+                tickers if anchor_sql is None else (*tickers, *tickers),
             ).fetchall()
         except (RuntimeError, sqlite3.Error):
             return out
@@ -1280,7 +1284,14 @@ def _grouped_kpi_catalog(
         # (~19x faster than the correlated predicate on aggregate queries,
         # identical rows). Legacy schemas without the identity columns keep
         # the correlated predicate, which degrades to 1=1 there anyway.
-        anchor_sql = semantic_series_identity_anchor_sql(conn, fact_relation=fact_relation)
+        # Keep the complete anchor history for each relevant definition, but
+        # do not sort the history of every unrelated issuer. Candidate IDs
+        # and complete anchor history both use the canonical resolver relation.
+        anchor_relation = (
+            f"(SELECT * FROM {fact_relation} WHERE kpi_definition_id IN "
+            f"(SELECT kpi_definition_id FROM {fact_relation} WHERE ticker IN ({marks})))"
+        )
+        anchor_sql = semantic_series_identity_anchor_sql(conn, fact_relation=anchor_relation)
         if anchor_sql is None:
             identity_join = ""
             semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
@@ -1299,7 +1310,7 @@ def _grouped_kpi_catalog(
             WHERE kf.ticker IN ({marks}) AND {semantic_where} AND {semantic_identity}
             GROUP BY kd.name, kf.ticker
             """,
-            tuple(symbols),
+            tuple(symbols) if anchor_sql is None else (*symbols, *symbols),
         ).fetchall()
     except (RuntimeError, sqlite3.Error):
         return []

@@ -201,3 +201,39 @@ def test_policy_editor_fails_closed_for_pending_or_noncanonical_provider_mix(
     assert 'type="submit" class="k-btn k-btn-primary" disabled' in pending
     assert 'data-write-ready="false"' in expanded
     assert "cannot be safely edited" in expanded
+
+
+def test_lazy_performance_shell_does_not_call_dependencies(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def blocked(*args: object, **kwargs: object) -> str:
+        raise AssertionError("Tracker work must not block the shell")
+
+    monkeypatch.setattr(panel, "render_portfolio_panel", blocked)
+    monkeypatch.setattr(panel, "fetch_portfolio_allocation", blocked)
+    monkeypatch.setattr(panel, "render_portfolio_posture_section", blocked)
+    html = panel.render_performance_risk_panel(
+        tmp_path / "unused.db", tmp_path, lazy=True, start_date="2026-01-01"
+    )
+    assert "fragment=performance&amp;start_date=2026-01-01" in html
+    assert "fragment=allocation" in html
+    assert "fragment=posture" in html
+    assert 'data-pr-panel="correlation"' in html
+
+
+def test_performance_fragment_excludes_unrelated_allocation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def benchmark(**kwargs: object) -> str:
+        assert kwargs["include_position_drivers"] is False
+        assert kwargs["refresh_endpoint"] == "/api/panel/performance_risk?fragment=performance"
+        return "BENCHMARK"
+
+    def blocked() -> PortfolioAllocationProjection:
+        raise AssertionError("Allocation must be independently loaded")
+
+    monkeypatch.setattr(panel, "render_portfolio_panel", benchmark)
+    monkeypatch.setattr(panel, "fetch_portfolio_allocation", blocked)
+    html = panel.render_performance_risk_fragment(tmp_path / "unused.db", tmp_path, "performance")
+    assert "BENCHMARK" in html
+    assert "Policy mix unavailable" in html

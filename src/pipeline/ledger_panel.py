@@ -54,6 +54,28 @@ _DECISIONS_HASH = f"/#{_DECISIONS_PANEL}"
 
 _PANEL_STYLE = ""
 
+_FRAGMENT_REFRESH_JS = """
+  function refreshLedgerFragment(target, url){
+    var request=(target.__readGeneration||0)+1; target.__readGeneration=request;
+    if(target.__readController){ target.__readController.abort(); }
+    target.__readController=new AbortController();
+    (window.uiFetch || fetch)(url,{signal:target.__readController.signal})
+      .then(function(r){ if(!r.ok){ throw new Error('Read unavailable'); } return r.text(); })
+      .then(function(h){ if(request===target.__readGeneration && target.isConnected){ target.innerHTML=h; } })
+      .catch(function(){
+        if(request!==target.__readGeneration || !target.isConnected){ return; }
+        var prior=target.querySelector('[data-refresh-error]'); if(prior){ prior.remove(); }
+        var feedback=document.createElement('div'); feedback.className='k-well';
+        feedback.setAttribute('data-refresh-error',''); feedback.setAttribute('role','status');
+        feedback.textContent='Saved, but the list could not refresh. Previous entries remain visible. ';
+        var retry=document.createElement('button'); retry.type='button';
+        retry.className='k-btn k-btn-quiet k-btn-sm'; retry.textContent='Retry refresh';
+        retry.addEventListener('click',function(){ refreshLedgerFragment(target,url); });
+        feedback.appendChild(retry); target.prepend(feedback);
+      });
+  }
+"""
+
 LEDGER_CAPTURE_JS = """<script>(function(){
   var btn=document.getElementById('ledger-cap-btn');
   var ta=document.getElementById('ledger-cap-text');
@@ -118,11 +140,18 @@ LEDGER_CAPTURE_JS = """<script>(function(){
   // paint the freshly-captured card and, later, to swap the "Answering..."
   // block for the stored answer once the background answer lands.
   function patchCard(id){
-    fetch('/api/panel/musings?fragment=card&note='+encodeURIComponent(id))
+    (window.uiFetch || fetch)('/api/panel/musings?fragment=card&note='+encodeURIComponent(id))
       .then(function(r){ return r.ok ? r.text() : ''; })
       .then(function(h){
         var cur=document.getElementById('om-note-'+id);
         if(cur && h){ cur.outerHTML=h; }
+      }).catch(function(){
+        var cur=document.getElementById('om-note-'+id); if(!cur){ return; }
+        var prior=cur.querySelector('[data-card-refresh-retry]'); if(prior){ return; }
+        var retry=document.createElement('button'); retry.type='button';
+        retry.className='k-btn k-btn-quiet k-btn-sm'; retry.textContent='Retry loading answer';
+        retry.setAttribute('data-card-refresh-retry','');
+        retry.addEventListener('click',function(){ retry.remove(); patchCard(id); }); cur.appendChild(retry);
       });
   }
   // The answer is generated on a background thread server-side (the capture
@@ -131,7 +160,7 @@ LEDGER_CAPTURE_JS = """<script>(function(){
   function pollAnswer(id, n){
     if(n>24){ patchCard(id); return; }
     setTimeout(function(){
-      fetch('/api/onmymind/'+id+'/answer')
+      (window.uiFetch || fetch)('/api/onmymind/'+id+'/answer')
         .then(function(r){ return r.json(); })
         .then(function(res){
           if(res && res.pending && !res.answer){ pollAnswer(id, n+1); return; }
@@ -162,7 +191,7 @@ LEDGER_CAPTURE_JS = """<script>(function(){
         // the cards below. Legacy (flag-off) list keeps its full refresh.
         var om=document.getElementById('onmymind-list');
         if(om && res && res.note_id){
-          fetch('/api/panel/musings?fragment=card&note='+encodeURIComponent(res.note_id))
+          (window.uiFetch || fetch)('/api/panel/musings?fragment=card&note='+encodeURIComponent(res.note_id))
             .then(function(r){ return r.ok ? r.text() : ''; })
             .then(function(h){
               if(h){
@@ -170,15 +199,15 @@ LEDGER_CAPTURE_JS = """<script>(function(){
                 if(empty){ empty.remove(); }
                 om.insertAdjacentHTML('afterbegin', h);
               } else {
-                fetch('/api/panel/musings?fragment=onmymind').then(function(r){return r.text();}).then(function(h2){ om.innerHTML=h2; });
+                refreshLedgerFragment(om,'/api/panel/musings?fragment=onmymind');
               }
               if(res.answering){ pollAnswer(res.note_id, 0); }
-            });
+            }).catch(function(){ refreshLedgerFragment(om,'/api/panel/musings?fragment=onmymind'); });
           return;
         }
-        if(om){ fetch('/api/panel/musings?fragment=onmymind').then(function(r){return r.text();}).then(function(h){ om.innerHTML=h; }); return; }
+        if(om){ refreshLedgerFragment(om,'/api/panel/musings?fragment=onmymind'); return; }
         var list=document.getElementById('ledger-list');
-        if(list){ fetch('/api/panel/musings?fragment=list').then(function(r){return r.text();}).then(function(h){ list.innerHTML=h; }); }
+        if(list){ refreshLedgerFragment(list,'/api/panel/musings?fragment=list'); }
       })
       .catch(function(){ if(st){ st.textContent='Could not reach the server - try again.'; } })
       .finally(function(){ btn.disabled=false; setTimeout(function(){ if(st){ st.textContent=''; } },4000); });
@@ -191,7 +220,9 @@ LEDGER_CAPTURE_JS = """<script>(function(){
 # f-string-escaping every JS {..} would be fragile. Two ordinary string
 # literals join at import time, same spirit as open_loops.py's interpolated
 # _DECISIONS_HASH (never a single '#dec...' literal for the hex-scan guard).
-LEDGER_CAPTURE_JS = LEDGER_CAPTURE_JS.replace("__DECISIONS_HASH__", _DECISIONS_HASH)
+LEDGER_CAPTURE_JS = LEDGER_CAPTURE_JS.replace("__DECISIONS_HASH__", _DECISIONS_HASH).replace(
+    "(function(){", "(function(){" + _FRAGMENT_REFRESH_JS, 1
+)
 
 
 def _capture_box() -> str:
@@ -318,9 +349,28 @@ _VIEW_VERBS: tuple[tuple[str, str, str, str], ...] = (
 _RESEARCH_JS = """<script>(function(){
   if(window.__ledgerResearchWired){ return; }
   window.__ledgerResearchWired = true;
+  var reloadGeneration = 0;
+  var reloadController = null;
   function reload(){
-    fetch('/api/panel/musings?fragment=research').then(function(r){return r.text();})
-      .then(function(h){ var el=document.getElementById('ledger-research'); if(el){ el.outerHTML=h; } });
+    var request = ++reloadGeneration;
+    if(reloadController){ reloadController.abort(); }
+    reloadController = new AbortController();
+    (window.uiFetch || fetch)('/api/panel/musings?fragment=research', {signal:reloadController.signal})
+      .then(function(r){ if(!r.ok){ throw new Error('Read unavailable'); } return r.text(); })
+      .then(function(h){
+        if(request !== reloadGeneration){ return; }
+        var el=document.getElementById('ledger-research'); if(el){ el.outerHTML=h; }
+      }).catch(function(){
+        if(request !== reloadGeneration){ return; }
+        var el=document.getElementById('ledger-research'); if(!el){ return; }
+        var prior=el.querySelector('[data-refresh-error]'); if(prior){ prior.remove(); }
+        var feedback=document.createElement('div'); feedback.className='k-well';
+        feedback.setAttribute('data-refresh-error',''); feedback.setAttribute('role','status');
+        feedback.textContent='Could not refresh. Previous entries remain visible. ';
+        var retry=document.createElement('button'); retry.type='button';
+        retry.className='k-btn k-btn-quiet k-btn-sm'; retry.textContent='Retry refresh';
+        retry.addEventListener('click',reload); feedback.appendChild(retry); el.prepend(feedback);
+      });
   }
   // The run endpoint returns immediately ({started:true}) and researches on a
   // server thread — poll the task's status until it leaves 'running'. A
@@ -329,7 +379,7 @@ _RESEARCH_JS = """<script>(function(){
   function pollRun(tid, btn, n){
     if(n>120){ btn.textContent='Still running - check back'; return; }
     setTimeout(function(){
-      fetch('/api/research/task/'+tid+'/status')
+      (window.uiFetch || fetch)('/api/research/task/'+tid+'/status')
         .then(function(r){ if(!r.ok){ throw new Error(); } return r.json(); })
         .then(function(res){
           var s=res && res.status;
@@ -683,9 +733,28 @@ _RECONCILE_VERDICTS: tuple[tuple[str, str, str, str], ...] = (
 _RECONCILE_JS = """<script>(function(){
   if(window.__ledgerReconcileWired){ return; }
   window.__ledgerReconcileWired = true;
+  var reloadGeneration = 0;
+  var reloadController = null;
   function reload(){
-    fetch('/api/panel/musings?fragment=reconcile').then(function(r){return r.text();})
-      .then(function(h){ var el=document.getElementById('ledger-reconcile'); if(el){ el.outerHTML=h; } });
+    var request = ++reloadGeneration;
+    if(reloadController){ reloadController.abort(); }
+    reloadController = new AbortController();
+    (window.uiFetch || fetch)('/api/panel/musings?fragment=reconcile', {signal:reloadController.signal})
+      .then(function(r){ if(!r.ok){ throw new Error('Read unavailable'); } return r.text(); })
+      .then(function(h){
+        if(request !== reloadGeneration){ return; }
+        var el=document.getElementById('ledger-reconcile'); if(el){ el.outerHTML=h; }
+      }).catch(function(){
+        if(request !== reloadGeneration){ return; }
+        var el=document.getElementById('ledger-reconcile'); if(!el){ return; }
+        var prior=el.querySelector('[data-refresh-error]'); if(prior){ prior.remove(); }
+        var feedback=document.createElement('div'); feedback.className='k-well';
+        feedback.setAttribute('data-refresh-error',''); feedback.setAttribute('role','status');
+        feedback.textContent='Could not refresh. Previous entries remain visible. ';
+        var retry=document.createElement('button'); retry.type='button';
+        retry.className='k-btn k-btn-quiet k-btn-sm'; retry.textContent='Retry refresh';
+        retry.addEventListener('click',reload); feedback.appendChild(retry); el.prepend(feedback);
+      });
   }
   // The ratify receipt ("armed"/"queued for arming") renders into
   // #ledger-receipt — a SIBLING of #ledger-reconcile the reload() swap above
@@ -1113,10 +1182,10 @@ ON_MY_MIND_CARD_JS = """<script>(function(){
     if(more){
       var cur=more.getAttribute('data-om-more'); if(!cur){ return; }
       more.disabled=true;
-      fetch('/api/panel/musings?fragment=onmymind&cursor='+encodeURIComponent(cur))
+      (window.uiFetch || fetch)('/api/panel/musings?fragment=onmymind&cursor='+encodeURIComponent(cur))
         .then(function(r){ return r.text(); })
         .then(function(h){ var el=document.getElementById('onmymind-more'); if(el){ el.outerHTML=h; } })
-        .catch(function(){ more.disabled=false; });
+        .catch(function(){ more.disabled=false; more.textContent='Retry loading more'; more.setAttribute('aria-label','Could not load more entries. Retry loading more'); });
     }
   });
 })();</script>"""
@@ -1515,21 +1584,24 @@ _SET_TICKER_JS = """<script>(function(){
         // (flag-off) list has no per-card fragment — fall back to its refresh.
         var om=document.getElementById('onmymind-list');
         if(om){
-          fetch('/api/panel/musings?fragment=card&note='+encodeURIComponent(noteId))
+          (window.uiFetch || fetch)('/api/panel/musings?fragment=card&note='+encodeURIComponent(noteId))
             .then(function(r){ return r.ok ? r.text() : ''; })
             .then(function(h){
               var cur=document.getElementById('om-note-'+noteId);
               if(cur && h){ cur.outerHTML=h; return; }
-              fetch('/api/panel/musings?fragment=onmymind').then(function(r){return r.text();}).then(function(h2){ om.innerHTML=h2; });
-            });
+              refreshLedgerFragment(om,'/api/panel/musings?fragment=onmymind');
+            }).catch(function(){ btn.disabled=false; refreshLedgerFragment(om,'/api/panel/musings?fragment=onmymind'); });
           return;
         }
         var list=document.getElementById('ledger-list');
-        if(list){ fetch('/api/panel/musings?fragment=list').then(function(r){return r.text();}).then(function(h){ list.innerHTML=h; }); }
+        if(list){ refreshLedgerFragment(list,'/api/panel/musings?fragment=list'); }
       })
       .catch(function(){ btn.disabled=false; });
   });
 })();</script>"""
+
+
+_SET_TICKER_JS = _SET_TICKER_JS.replace("(function(){", "(function(){" + _FRAGMENT_REFRESH_JS, 1)
 
 
 def render_ledger_list(db_path: Path | str | None, *, user_id: str = DEFAULT_USER_ID) -> str:

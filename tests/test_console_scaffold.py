@@ -103,3 +103,22 @@ def test_console_omits_only_an_explicitly_excluded_section_heading() -> None:
 
     assert ">Alpha</h2>" not in html
     assert ">Beta</h2>" in html
+
+
+def test_deferred_sections_do_not_execute_builders() -> None:
+    def blocked() -> str:
+        raise AssertionError("A deferred builder must not run before first paint")
+
+    html = render_console(
+        "Record",
+        [("decisions", "Decisions", blocked)],
+        wrap_class="record",
+        deferred={"decisions": "/api/panel/portfolio_record?fragment=decisions"},
+    )
+    assert 'data-console-endpoint="/api/panel/portfolio_record?fragment=decisions"' in html
+    assert 'aria-busy="true"' in html
+    assert "active.size >= 2" in html
+    assert "if (!response.ok)" in html
+    assert "IntersectionObserver" in html
+    assert "data-console-retry" in html
+    assert "visibilitychange" in html

@@ -82,7 +82,7 @@ resets with the server.</p>
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
   function ms(x) { return x == null ? '—' : x + ' ms'; }
-  fetch('/api/metrics/panel').then(function (r) { return r.json(); }).then(function (j) {
+  (window.uiFetch || fetch)('/api/metrics/panel').then(function (r) { return r.json(); }).then(function (j) {
     var rows = (j && j.rows) || [];
     if (!rows.length) {
       holder.innerHTML = '<p class="muted">No samples yet this server run — ' +
