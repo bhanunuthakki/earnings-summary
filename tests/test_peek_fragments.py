@@ -1549,7 +1549,11 @@ def test_readout_request_preserves_exact_fiscal_target(
         return "## Quarter in one line\nExact requested quarter."
 
     monkeypatch.setattr(earnings_readout, "call_llm", fake_call)
-    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", lambda *_a, **_kw: None)
+
+    def allow_budget(*_a: object, **_kw: object) -> None:
+        return None
+
+    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", allow_budget)
     payload = {"ticker": "NU", "period_end": "2026-03-31", "fiscal_period_type": "Q1"}
     first = client.post("/api/earnings-readout/generate", json=payload)
     assert first.status_code == 200
@@ -1611,7 +1615,11 @@ def test_readout_request_does_not_expose_generation_value_error(
         raise ValueError("private diagnostic detail")
 
     monkeypatch.setattr(earnings_readout, "call_llm", failed_generation)
-    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", lambda *_a, **_kw: None)
+
+    def allow_budget(*_a: object, **_kw: object) -> None:
+        return None
+
+    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", allow_budget)
     response = client.post("/api/earnings-readout/generate", json={"ticker": "NU"})
     assert response.status_code == 503
     assert "private diagnostic detail" not in response.get_data(as_text=True)
