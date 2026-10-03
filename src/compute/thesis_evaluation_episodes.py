@@ -15,8 +15,16 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, field_validator
+
+from compute.soft_rule_evaluator import (
+    SoftEvaluationCapture,
+    SoftRule,
+    SoftRuleResult,
+    soft_result_economic_payload,
+)
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _POLICY_VERSION = "forward_v1"
@@ -158,6 +166,62 @@ class ForwardSemanticInput(_FrozenModel):
         return _sha256(_canonical_json(self.canonical_payload()))
 
 
+class CapturedKpiObservation(_FrozenModel):
+    period_end: datetime
+    value: str
+    unit: str
+    provenance: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class HardRuleCapture(_FrozenModel):
+    rule: dict[str, JsonValue]
+    json_pointer: str
+    selected_definition: str | None
+    disposition: Literal[
+        "selected",
+        "definition_unresolved",
+        "unverified_report_reference",
+        "active_scalar_override",
+        "no_admitted_rows",
+    ]
+    selection_details: dict[str, JsonValue]
+    observations: tuple[CapturedKpiObservation, ...] | None
+    selected_definition_content: dict[str, JsonValue] | None = None
+
+
+class RetainedThesisContext(_FrozenModel):
+    format_version: Literal["thesis-check-context/v1"] = "thesis-check-context/v1"
+    ticker: str
+    holdings_payload: dict[str, JsonValue]
+    belief_payload: dict[str, JsonValue]
+    original_spec: dict[str, JsonValue]
+    hard_inputs: tuple[HardRuleCapture, ...]
+    soft_inputs: tuple[SoftEvaluationCapture, ...]
+    effective_soft_rules: tuple[SoftRule, ...]
+    soft_result_order: tuple[int, ...]
+    blocked_soft_results: tuple[SoftRuleResult, ...] = ()
+    reference_selections: tuple[dict[str, JsonValue], ...] = ()
+    evaluated_at: datetime
+    semantic: ForwardSemanticInput
+    severity: EpisodeSeverity
+    evidence_as_of: datetime | None
+    rule_outputs: tuple[dict[str, JsonValue], ...]
+    soft_outputs: tuple[dict[str, JsonValue], ...] | None
+    stable_soft_outputs: tuple[dict[str, JsonValue], ...]
+
+    _evaluated_at = field_validator("evaluated_at")(_validate_aware)
+
+    @property
+    def content_sha256(self) -> str:
+        return _sha256(_canonical_json(self.model_dump(mode="json")))
+
+
+class CheckContextRead(_FrozenModel):
+    receipt_id: str
+    status: Literal["retained", "legacy_context_unavailable"]
+    context: RetainedThesisContext | None
+
+
 class EpisodeCheckInput(_FrozenModel):
     """One forward evaluator execution and its episode-level projection."""
 
@@ -169,6 +233,7 @@ class EpisodeCheckInput(_FrozenModel):
     rule_evaluations: tuple[dict[str, JsonValue], ...]
     soft_rule_results: tuple[dict[str, JsonValue], ...] | None = None
     raw_evaluation_id: int | None = Field(default=None, ge=1)
+    retained_context: RetainedThesisContext | None = None
 
     _checked_at = field_validator("checked_at")(_validate_aware)
 
@@ -255,6 +320,8 @@ def _receipt_sha256(
         "rule_evaluations_json": rule_json,
         "soft_rule_results_json": soft_json,
     }
+    if check.retained_context is not None:
+        payload["context_sha256"] = check.retained_context.content_sha256
     return _sha256(_canonical_json(payload))
 
 
@@ -280,6 +347,51 @@ def _existing_episode_result(
     )
 
 
+def _stable_result(
+    semantic: ForwardSemanticInput, check: EpisodeCheckInput, rule_json: str, soft_json: str | None
+) -> dict[str, JsonValue]:
+    payload: dict[str, JsonValue] = {
+        "severity": check.severity.value,
+        "provenance_completeness": check.provenance_completeness.value,
+        "evidence_as_of": None
+        if check.evidence_as_of is None
+        else check.evidence_as_of.isoformat(),
+        "rule_evaluations_json": rule_json,
+        "soft_rule_results_json": soft_json,
+    }
+    if semantic.evaluator_semantic_version == "thesis-evaluator/v2":
+        context = check.retained_context
+        if context is None:
+            raise EpisodeStoreError("v2 check requires retained context")
+        if (
+            context.semantic != semantic
+            or context.ticker != semantic.ticker
+            or context.severity != check.severity
+            or context.evidence_as_of != check.evidence_as_of
+        ):
+            raise EpisodeStoreError("retained context differs from check identity")
+        if (
+            _projection_json(context.rule_outputs) != rule_json
+            or _projection_json(context.soft_outputs) != soft_json
+        ):
+            raise EpisodeStoreError("retained context differs from check output")
+        expected_soft = tuple(
+            soft_result_economic_payload(result)
+            for capture in context.soft_inputs
+            for result in capture.results
+        ) + tuple(soft_result_economic_payload(result) for result in context.blocked_soft_results)
+        if sorted(expected_soft, key=_canonical_json) != sorted(
+            context.stable_soft_outputs, key=_canonical_json
+        ):
+            raise EpisodeStoreError("retained stable soft output differs")
+        payload["soft_rule_results_json"] = (
+            _projection_json(context.stable_soft_outputs)
+            if context.soft_outputs is not None
+            else None
+        )
+    return payload
+
+
 def record_forward_episode(
     connection: sqlite3.Connection,
     *,
@@ -300,15 +412,7 @@ def record_forward_episode(
     if rule_json is None:
         raise EpisodeStoreError("rule_evaluations cannot be null")
     soft_json = _projection_json(check.soft_rule_results)
-    result_payload: dict[str, JsonValue] = {
-        "severity": check.severity.value,
-        "provenance_completeness": check.provenance_completeness.value,
-        "evidence_as_of": (
-            None if check.evidence_as_of is None else check.evidence_as_of.isoformat()
-        ),
-        "rule_evaluations_json": rule_json,
-        "soft_rule_results_json": soft_json,
-    }
+    result_payload = _stable_result(semantic, check, rule_json, soft_json)
     result_sha256 = _sha256(_canonical_json(result_payload))
     receipt_sha256 = _receipt_sha256(
         episode_id=episode_id,
@@ -398,8 +502,10 @@ def record_forward_episode(
     else:
         if (
             existing[1] != evidence_as_of
-            or str(existing[2]) != rule_json
-            or existing[3] != soft_json
+            or (
+                semantic.evaluator_semantic_version != "thesis-evaluator/v2"
+                and (str(existing[2]) != rule_json or existing[3] != soft_json)
+            )
             or str(existing[4]) != result_sha256
             or str(existing[5]) != check.provenance_completeness.value
         ):
@@ -453,24 +559,41 @@ def record_forward_episode(
                 ),
             )
 
+    context_json = (
+        None
+        if check.retained_context is None
+        else _canonical_json(check.retained_context.model_dump(mode="json"))
+    )
+    context_hash = None if check.retained_context is None else check.retained_context.content_sha256
+    has_context_columns = any(
+        str(row[1]) == "context_json"
+        for row in connection.execute("PRAGMA table_info(thesis_evaluation_episode_check_receipts)")
+    )
+    if context_json is not None and not has_context_columns:
+        raise EpisodeStoreError("retained check schema is unavailable")
+    columns = ",context_json,context_sha256" if has_context_columns else ""
+    placeholders = ",?,?" if has_context_columns else ""
+    values: tuple[object, ...] = (
+        check_id,
+        _sha256(f"{semantic.ticker}\n{check.run_id}"),
+        episode_id,
+        semantic.ticker,
+        check.run_id,
+        checked_at,
+        "created" if created else "deduplicated_no_change",
+        semantic.semantic_input_sha256,
+        result_sha256,
+        receipt_sha256,
+    )
+    if has_context_columns:
+        values += (context_json, context_hash)
     try:
         connection.execute(
             "INSERT INTO thesis_evaluation_episode_check_receipts "
             "(receipt_id,idempotency_key_sha256,episode_id,ticker,run_id,checked_at,"
-            "outcome,semantic_input_sha256,result_sha256,receipt_sha256) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (
-                check_id,
-                _sha256(f"{semantic.ticker}\n{check.run_id}"),
-                episode_id,
-                semantic.ticker,
-                check.run_id,
-                checked_at,
-                "created" if created else "deduplicated_no_change",
-                semantic.semantic_input_sha256,
-                result_sha256,
-                receipt_sha256,
-            ),
+            f"outcome,semantic_input_sha256,result_sha256,receipt_sha256{columns}) "
+            f"VALUES (?,?,?,?,?,?,?,?,?,?{placeholders})",  # nosec B608 -- closed schema-column choice
+            values,
         )
     except sqlite3.IntegrityError as exc:
         raise EpisodeIdempotencyConflictError("run_id receipt insert conflicted") from exc
@@ -480,6 +603,86 @@ def record_forward_episode(
         created=created,
         deduplicated=not created,
     )
+
+
+def read_check_context(connection: sqlite3.Connection, *, receipt_id: str) -> CheckContextRead:
+    """Verify one actual execution receipt; never reconstruct from current inputs."""
+    cursor = connection.execute(
+        "SELECT * FROM thesis_evaluation_episode_check_receipts WHERE receipt_id=?", (receipt_id,)
+    )
+    row = cursor.fetchone()
+    if row is None or cursor.description is None:
+        raise EpisodeStoreError("check receipt is unavailable")
+    values = dict(zip((str(column[0]) for column in cursor.description), tuple(row), strict=True))
+    episode = connection.execute(
+        "SELECT evaluator_semantic_version,semantic_input_json,semantic_input_sha256,result_sha256,ticker,overall_status,thesis_content_sha256,ruleset_sha256 FROM thesis_evaluation_episodes WHERE episode_id=?",
+        (values["episode_id"],),
+    ).fetchone()
+    if episode is None:
+        raise EpisodeStoreError("check episode is unavailable")
+    raw_context = values.get("context_json")
+    if raw_context is None:
+        if str(episode[0]) == "thesis-evaluator/v2" or values.get("context_sha256") is not None:
+            raise EpisodeStoreError("retained check context is missing")
+        return CheckContextRead(
+            receipt_id=receipt_id, status="legacy_context_unavailable", context=None
+        )
+    try:
+        context = RetainedThesisContext.model_validate_json(str(raw_context))
+        if context.content_sha256 != values.get("context_sha256"):
+            raise EpisodeStoreError("retained check context hash differs")
+        check = EpisodeCheckInput(
+            run_id=str(values["run_id"]),
+            checked_at=datetime.fromisoformat(str(values["checked_at"])),
+            evidence_as_of=context.evidence_as_of,
+            severity=context.severity,
+            provenance_completeness=ProvenanceCompleteness.PARTIAL,
+            rule_evaluations=context.rule_outputs,
+            soft_rule_results=context.soft_outputs,
+            retained_context=context,
+        )
+        rule_json = _projection_json(check.rule_evaluations)
+        if rule_json is None:
+            raise EpisodeStoreError("check hard output is missing")
+        soft_json = _projection_json(check.soft_rule_results)
+        result_sha = _sha256(
+            _canonical_json(_stable_result(context.semantic, check, rule_json, soft_json))
+        )
+        expected_episode = forward_episode_id(semantic=context.semantic, severity=context.severity)
+        if (
+            json.loads(str(episode[1])) != context.semantic.canonical_payload()
+            or str(episode[2]) != context.semantic.semantic_input_sha256
+            or str(episode[3]) != result_sha
+            or str(episode[4]) != context.ticker
+            or str(episode[5]) != context.severity.value
+            or str(episode[6]) != context.semantic.thesis_content_sha256
+            or str(episode[7]) != context.semantic.ruleset_sha256
+        ):
+            raise EpisodeStoreError("retained context differs from linked episode")
+        if (
+            values["episode_id"] != expected_episode
+            or values["ticker"] != context.ticker
+            or values["semantic_input_sha256"] != context.semantic.semantic_input_sha256
+            or values["result_sha256"] != result_sha
+            or str(episode[0]) != context.semantic.evaluator_semantic_version
+            or receipt_id != _check_id(ticker=context.ticker, run_id=check.run_id)
+            or values["idempotency_key_sha256"] != _sha256(f"{context.ticker}\n{check.run_id}")
+        ):
+            raise EpisodeStoreError("retained context identity differs from receipt")
+        if values["receipt_sha256"] != _receipt_sha256(
+            episode_id=expected_episode,
+            semantic=context.semantic,
+            check=check,
+            rule_json=rule_json,
+            soft_json=soft_json,
+            result_sha256=result_sha,
+        ):
+            raise EpisodeStoreError("retained context receipt hash differs")
+    except (ValidationError, TypeError, KeyError, ValueError) as exc:
+        if isinstance(exc, EpisodeStoreError):
+            raise
+        raise EpisodeStoreError("retained check context is invalid") from exc
+    return CheckContextRead(receipt_id=receipt_id, status="retained", context=context)
 
 
 def episode_history_relation(connection: sqlite3.Connection) -> str:
@@ -520,6 +723,8 @@ def episode_history_source(connection: sqlite3.Connection) -> EpisodeHistorySour
 
 __all__ = [
     "AcceptedObservationInput",
+    "CapturedKpiObservation",
+    "CheckContextRead",
     "EpisodeCheckInput",
     "EpisodeHistorySource",
     "EpisodeIdempotencyConflictError",
@@ -528,10 +733,13 @@ __all__ = [
     "EpisodeStoreError",
     "EpisodeWriteResult",
     "ForwardSemanticInput",
+    "HardRuleCapture",
     "ProvenanceCompleteness",
+    "RetainedThesisContext",
     "SemanticRuleInput",
     "episode_history_relation",
     "episode_history_source",
     "forward_episode_id",
+    "read_check_context",
     "record_forward_episode",
 ]
