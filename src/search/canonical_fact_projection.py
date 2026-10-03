@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from io import StringIO
 from pathlib import Path
-from typing import Literal, Self, cast
+from typing import Final, Literal, LiteralString, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -685,8 +685,7 @@ def load_canonical_fact_entry(
     admit_canonical_projection_for_read(conn, generation_id)
     entry = _row(
         conn,
-        _CURRENT_STATE_CTE + " SELECT * FROM current_state "
-        "WHERE canonical_metric_cell_id=? AND change_kind='upsert'",
+        _CURRENT_STATE_ENTRY_SQL,
         (generation_id, canonical_metric_cell_id),
     )
     if entry is None or str(entry["entry_sha256"]) != entry_sha256:
@@ -2131,7 +2130,7 @@ _SELECTED_FACT_SQL = (
     "ORDER BY member.canonical_metric_cell_id LIMIT ?"
 )
 
-_CURRENT_STATE_CTE = """
+_CURRENT_STATE_CTE: Final[LiteralString] = """
 WITH RECURSIVE lineage(generation_id,parent_generation_id,depth) AS (
  SELECT generation_id,parent_generation_id,0
  FROM canonical_fact_projection_generations WHERE generation_id=?
@@ -2155,3 +2154,9 @@ current_state AS (
  SELECT * FROM ranked WHERE state_rank=1
 )
 """
+
+# Fixed SQL structure is owned here; generation and cell identities remain bound values.
+_CURRENT_STATE_ENTRY_SELECT: Final[LiteralString] = (
+    " SELECT * FROM current_state WHERE canonical_metric_cell_id=? AND change_kind='upsert'"
+)
+_CURRENT_STATE_ENTRY_SQL: Final[LiteralString] = _CURRENT_STATE_CTE + _CURRENT_STATE_ENTRY_SELECT
