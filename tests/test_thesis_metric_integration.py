@@ -296,6 +296,7 @@ def test_legacy_semantic_dictionary_and_hash_keep_v1_baseline() -> None:
     assert semantic.canonical_payload() == {
         "fingerprint_policy_version": "forward_v1",
         "ticker": "SYNTH",
+        # pragma: allowlist nextline secret -- fixed synthetic regression SHA-256
         "thesis_content_sha256": "372ede2541381b640ccac78ff832fd1e93bae3c1195dc87d069c23fe8c45fc1e",
         "rules": {
             "ruleset_version": "holdings-break-rules/v1",
@@ -331,6 +332,7 @@ def test_legacy_semantic_dictionary_and_hash_keep_v1_baseline() -> None:
     }
     assert (
         semantic.semantic_input_sha256
+        # pragma: allowlist nextline secret -- fixed synthetic regression SHA-256
         == "d1b3aa45bea5b9e9836968d410682e2d3ca12f4165a2c56b26feaa528955e862"
     )
     soft = SoftRuleResult(
@@ -378,6 +380,7 @@ def test_legacy_semantic_dictionary_and_hash_keep_v1_baseline() -> None:
         payload={"thesis": spec.thesis}, spec=spec, evaluations=[evaluation], soft_results=[soft]
     )
     assert legacy_soft.accepted_observations[-1].accepted_value == (
+        # pragma: allowlist nextline secret -- fixed synthetic regression SHA-256
         "9974e1393601f2906b19349a616f3242016539ff6bd95ff4ed09b8fd48a67baa"
     )
 
