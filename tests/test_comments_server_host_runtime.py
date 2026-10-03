@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlunsplit
+from uuid import uuid4
 
 import comments_server
 import pytest
@@ -90,7 +92,10 @@ def test_host_runtime_refuses_missing_or_non_https_authority(
 def test_host_runtime_rejects_invalid_configured_origin_without_disclosure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    invalid = "https://user:DO_NOT_DISCLOSE@review.example.ts.net/private?token=hidden"
+    marker = uuid4().hex
+    invalid = urlunsplit(
+        ("https", f"{uuid4().hex}:{marker}@review.example.ts.net", "/private", "token=hidden", "")
+    )
     monkeypatch.setenv("EARNINGS_SUMMARY_PRIVATE_BASE_URL", invalid)
     response = (
         comments_server.create_app(tmp_path, db_path=tmp_path / "unused.db")
@@ -98,4 +103,4 @@ def test_host_runtime_rejects_invalid_configured_origin_without_disclosure(
         .get("/api/operations/host-runtime")
     )
     assert response.status_code == 503
-    assert "DO_NOT_DISCLOSE" not in response.get_data(as_text=True)
+    assert marker not in response.get_data(as_text=True)
