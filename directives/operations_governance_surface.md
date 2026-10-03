@@ -865,6 +865,23 @@ No source duty taxonomy, schema, provider, schedule or financial readiness rule
 changes. Mixed-inventory tests use the actual migrated ledger and duty bindings;
 network responses alone are synthetic fixtures.
 
+### Windows job-owner liveness
+
+The shared `src/runtime/job_runtime.py` process probe uses a zero-time wait on a
+Windows process handle. A signaled handle proves that the process has terminated,
+even if another handle keeps its kernel object available. A failed or unavailable
+probe retains ownership. A positive creation-identity mismatch still proves that
+the recorded owner is no longer the current process. Creation-time calls use
+explicit pointer-sized Windows argument and result types.
+
+Disposition: **no surface change**. The existing `OperationsRegistry`, Jobs
+projection, job identities, health-receipt format, lock tokens, write sets and
+Scheduler cadence remain unchanged. This corrects the existing stale-lock and
+scheduler-owner checks; it adds no retry action, service, scheduled job or
+operator control. `tests/test_job_runtime.py` covers signaled, running, unknown
+and identity-mismatch decisions. `tests/test_job_runtime_process_tree.py` retains
+the Windows held-handle and process-tree checks. Local tests do not establish
+deployment or a successful future scheduled run.
 ### Investing workflow maintenance and brief inputs
 
 Disposition: **no Operations surface change**. The internal post-earnings CLI

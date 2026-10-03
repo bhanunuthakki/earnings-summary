@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Regression coverage for the shared scheduled/interactive job runtime."""
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TypedDict
+from typing import Protocol, TypedDict
 
 import pytest
 
@@ -22,10 +21,6 @@ from runtime.job_runtime import (
     SCHEMA_DRIFT_TOLERANT_JOBS,
     JobAlreadyRunningError,
     JobLock,
-    _run_managed_child,
-    _scheduler_write_sets,
-    _windows_mutex_name,
-    _write_set_lock_path,
     allow_nested_job_locks,
     inherited_lock_is_valid,
     main,
@@ -33,6 +28,25 @@ from runtime.job_runtime import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+_run_managed_child = getattr(job_runtime, "_run_managed_child")
+_scheduler_write_sets = getattr(job_runtime, "_scheduler_write_sets")
+_windows_mutex_name = getattr(job_runtime, "_windows_mutex_name")
+_write_set_lock_path = getattr(job_runtime, "_write_set_lock_path")
+
+
+class JournalHandleShape(Protocol):
+    @property
+    def operation_id(self) -> str: ...
+
+    @property
+    def trace_id(self) -> str: ...
+
+    @property
+    def accepted(self) -> bool: ...
+
+    @property
+    def started(self) -> bool: ...
 
 
 class _RequestFields(TypedDict):
@@ -80,7 +94,10 @@ def test_schema_preflight_uses_state_database_and_code_migrations(
     monkeypatch.setattr(job_runtime, "portfolio_db_path", portfolio_db_path)
     monkeypatch.setattr(schema_compat, "describe_drift", describe_drift)
 
-    assert job_runtime._schema_preflight(state_root, "unit-job", code_root=code_root) == "blocked"
+    assert (
+        getattr(job_runtime, "_schema_preflight")(state_root, "unit-job", code_root=code_root)
+        == "blocked"
+    )
     assert captured == {"db_path": expected_db, "project_root": code_root}
 
 
@@ -163,6 +180,243 @@ class _PollingProcess:
 
     def kill(self) -> None:
         self.terminated = True
+
+
+class _ProcessWaitKernel:
+    def __init__(self, wait_result: int, *, handle: int = 1 << 40) -> None:
+        self.wait_result = wait_result
+        self.handle = handle
+        self.opened: list[tuple[int, bool, int]] = []
+        self.waited: list[tuple[int, int]] = []
+        self.closed: list[int] = []
+
+    def OpenProcess(self, desired_access: int, inherit_handle: bool, pid: int) -> int:
+        self.opened.append((desired_access, inherit_handle, pid))
+        return self.handle
+
+    def WaitForSingleObject(self, handle: int, milliseconds: int) -> int:
+        self.waited.append((handle, milliseconds))
+        return self.wait_result
+
+    def CloseHandle(self, handle: int) -> int:
+        self.closed.append(handle)
+        return 1
+
+
+def _install_process_wait_kernel(
+    monkeypatch: pytest.MonkeyPatch, kernel: _ProcessWaitKernel
+) -> None:
+    # Keep pathlib on the host platform while exercising only the Windows probe.
+    monkeypatch.setattr(job_runtime, "os", SimpleNamespace(**{**vars(os), "name": "nt"}))
+    monkeypatch.setattr(job_runtime, "_load_process_query_kernel32", lambda: kernel)
+
+
+@pytest.mark.parametrize(
+    ("wait_result", "expected_alive"),
+    [(0, False), (0x102, True), (0xFFFFFFFF, True), (0x80, True)],
+)
+def test_windows_process_probe_checks_termination_and_closes_handle(
+    monkeypatch: pytest.MonkeyPatch, wait_result: int, expected_alive: bool
+) -> None:
+    kernel = _ProcessWaitKernel(wait_result)
+    _install_process_wait_kernel(monkeypatch, kernel)
+
+    assert getattr(job_runtime, "_pid_is_alive")(12345) is expected_alive
+    assert kernel.opened == [(0x100000, False, 12345)]
+    assert kernel.waited == [(kernel.handle, 0)]
+    assert kernel.closed == [kernel.handle]
+
+
+@pytest.mark.parametrize(("error", "expected_alive"), [(87, False), (5, True), (6, True)])
+def test_windows_process_open_failure_requires_positive_absence_evidence(
+    monkeypatch: pytest.MonkeyPatch, error: int, expected_alive: bool
+) -> None:
+    import ctypes
+
+    kernel = _ProcessWaitKernel(0, handle=0)
+    _install_process_wait_kernel(monkeypatch, kernel)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: error, raising=False)
+
+    assert getattr(job_runtime, "_pid_is_alive")(12345) is expected_alive
+    assert kernel.waited == []
+    assert kernel.closed == []
+
+
+@pytest.mark.parametrize("times_available", [True, False])
+def test_windows_creation_identity_uses_full_handle_and_closes_on_query_failure(
+    monkeypatch: pytest.MonkeyPatch, times_available: bool
+) -> None:
+    from ctypes import wintypes
+
+    kernel = _ProcessWaitKernel(0x102)
+    _install_process_wait_kernel(monkeypatch, kernel)
+    api = getattr(job_runtime, "_load_process_query_kernel32")()
+    times_handles: list[int] = []
+
+    def process_times(
+        handle: int, created: object, _exited: object, _kernel: object, _user: object
+    ) -> bool:
+        times_handles.append(handle)
+        filetime = getattr(created, "_obj")
+        assert isinstance(filetime, wintypes.FILETIME)
+        filetime.dwHighDateTime = 0x12345678
+        filetime.dwLowDateTime = 0x87654321
+        return times_available
+
+    api.GetProcessTimes = process_times
+
+    # Refuse a fresh untyped DLL route; this function must use the typed loader.
+    def untyped_dll(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("creation identity bypassed the typed process-query loader")
+
+    import ctypes
+
+    monkeypatch.setattr(ctypes, "WinDLL", untyped_dll, raising=False)
+    expected = f"win:{(0x12345678 << 32) | 0x87654321}" if times_available else None
+    assert getattr(job_runtime, "_process_start_identity")(12345) == expected
+    assert kernel.opened == [(0x1000, False, 12345)]
+    assert times_handles == [kernel.handle]
+    assert kernel.closed == [kernel.handle]
+
+
+def test_windows_process_loader_declares_handle_and_filetime_pointer_abi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    class NativeFunction:
+        argtypes: list[object] | None = None
+        restype: object | None = None
+
+    api = SimpleNamespace(
+        OpenProcess=NativeFunction(),
+        WaitForSingleObject=NativeFunction(),
+        GetProcessTimes=NativeFunction(),
+        CloseHandle=NativeFunction(),
+    )
+
+    def load_dll(_name: str, *, use_last_error: bool) -> SimpleNamespace:
+        assert use_last_error
+        return api
+
+    monkeypatch.setattr(job_runtime.sys, "platform", "win32")
+    monkeypatch.setattr(ctypes, "WinDLL", load_dll, raising=False)
+    assert getattr(job_runtime, "_load_process_query_kernel32")() is api
+    assert api.OpenProcess.restype is wintypes.HANDLE
+    assert api.OpenProcess.argtypes == [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    assert api.GetProcessTimes.argtypes == [
+        wintypes.HANDLE,
+        *([ctypes.POINTER(wintypes.FILETIME)] * 4),
+    ]
+    assert api.GetProcessTimes.restype is wintypes.BOOL
+    assert api.WaitForSingleObject.argtypes == [wintypes.HANDLE, wintypes.DWORD]
+    assert api.CloseHandle.argtypes == [wintypes.HANDLE]
+
+
+@pytest.mark.parametrize("wait_result", [0, 0x102, 0xFFFFFFFF, 0x80])
+def test_windows_owner_wait_state_controls_stale_lock_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wait_result: int
+) -> None:
+    from contextlib import nullcontext
+
+    kernel = _ProcessWaitKernel(wait_result)
+    _install_process_wait_kernel(monkeypatch, kernel)
+
+    def no_transition_guard(_path: Path) -> nullcontext[None]:
+        return nullcontext()
+
+    def start_identity(_pid: int) -> str:
+        return "win:same"
+
+    monkeypatch.setattr(job_runtime, "_lock_transition_guard", no_transition_guard)
+    monkeypatch.setattr(job_runtime, "_process_start_identity", start_identity)
+    lock_path = _write_set_lock_path(tmp_path, "unit-liveness")
+    lock_path.parent.mkdir(parents=True)
+    lock_path.write_text(
+        json.dumps({"pid": 12345, "token": "exited-owner", "process_start": "win:same"}),
+        encoding="utf-8",
+    )
+
+    if wait_result == 0:
+        with JobLock(tmp_path, "successor", ["unit-liveness"], wait_s=0):
+            assert json.loads(lock_path.read_text(encoding="utf-8"))["token"] != "exited-owner"
+        assert not lock_path.exists()
+    else:
+        with (
+            pytest.raises(JobAlreadyRunningError),
+            JobLock(tmp_path, "successor", ["unit-liveness"], wait_s=0),
+        ):
+            pass
+        assert json.loads(lock_path.read_text(encoding="utf-8"))["token"] == "exited-owner"
+    assert kernel.waited
+    assert kernel.closed == [kernel.handle] * len(kernel.waited)
+
+
+@pytest.mark.parametrize(
+    ("wait_result", "observed_start", "expected_exit"),
+    [
+        (0, "win:same", -15),
+        (0x102, "win:same", 17),
+        (0xFFFFFFFF, "win:same", 17),
+        (0x80, "win:same", 17),
+        (0x102, None, 17),
+        (0x102, "win:other", -15),
+    ],
+)
+def test_windows_scheduler_owner_wait_state_controls_child_termination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    wait_result: int,
+    observed_start: str | None,
+    expected_exit: int,
+) -> None:
+    kernel = _ProcessWaitKernel(wait_result)
+    _install_process_wait_kernel(monkeypatch, kernel)
+    process = _PollingProcess()
+    polls = 0
+
+    def poll() -> int | None:
+        nonlocal polls
+        polls += 1
+        # Bound the old implementation's failure without leaving a worker loop.
+        return -15 if process.terminated else 17 if polls > 1 else None
+
+    monkeypatch.setattr(process, "poll", poll)
+
+    def fake_popen(*_args: object, **_kwargs: object) -> _PollingProcess:
+        return process
+
+    def no_process_tree_job(_process: object) -> None:
+        return None
+
+    def start_identity(_pid: int) -> str | None:
+        return observed_start
+
+    def no_sleep(_seconds: float) -> None:
+        pass
+
+    monkeypatch.setattr(job_runtime.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(job_runtime, "_create_process_tree_job", no_process_tree_job)
+    monkeypatch.setattr(job_runtime, "_process_start_identity", start_identity)
+    monkeypatch.setattr(job_runtime.time, "sleep", no_sleep)
+    terminated: list[int] = []
+
+    def terminate_tree(target: _PollingProcess) -> None:
+        terminated.append(target.pid)
+        target.terminated = True
+
+    monkeypatch.setattr(job_runtime, "_terminate_process_tree", terminate_tree)
+
+    assert (
+        _run_managed_child(
+            ["python", "worker.py"], cwd=tmp_path, env={}, scheduler_owner=(12345, "win:same")
+        )
+        == expected_exit
+    )
+    assert terminated == ([process.pid] if expected_exit == -15 else [])
+    assert kernel.waited == [(kernel.handle, 0)]
+    assert kernel.closed == [kernel.handle]
 
 
 def test_scheduler_owner_exit_terminates_managed_child_tree(
@@ -320,7 +574,7 @@ def test_concurrent_stale_lock_contenders_leave_one_owner(
         json.dumps({"job": "dead", "pid": 12345, "token": "stale-owner"}),
         encoding="utf-8",
     )
-    real_pid_is_alive = job_runtime._pid_is_alive
+    real_pid_is_alive = getattr(job_runtime, "_pid_is_alive")
 
     def pid_is_alive(pid: int) -> bool:
         return False if pid == 12345 else real_pid_is_alive(pid)
@@ -805,8 +1059,8 @@ def test_run_job_propagates_complete_journal_context_and_service_origin(
     terminal: dict[str, object] = {}
     monkeypatch.setattr(job_runtime, "_schema_preflight", _no_schema_drift)
 
-    def accept(**_kwargs: object) -> job_runtime._JournalHandle:
-        return job_runtime._JournalHandle(operation_id, trace_id, True)
+    def accept(**_kwargs: object) -> JournalHandleShape:
+        return getattr(job_runtime, "_JournalHandle")(operation_id, trace_id, True)
 
     def mark_started(**_kwargs: object) -> None:
         return None
@@ -866,8 +1120,8 @@ def test_lock_skipped_request_has_terminal_but_no_started_event(
     monkeypatch.setenv("ES_JOB_LOCK_WAIT_S", "0")
     monkeypatch.setattr(job_runtime, "_schema_preflight", _no_schema_drift)
 
-    def accept(**_kwargs: object) -> job_runtime._JournalHandle:
-        return job_runtime._JournalHandle(operation_id, trace_id, True)
+    def accept(**_kwargs: object) -> JournalHandleShape:
+        return getattr(job_runtime, "_JournalHandle")(operation_id, trace_id, True)
 
     def started(**kwargs: object) -> None:
         events.append(("started", kwargs))
@@ -915,7 +1169,7 @@ def test_journal_failure_never_changes_child_outcome(
 ) -> None:
     monkeypatch.setattr(job_runtime, "_schema_preflight", _no_schema_drift)
 
-    def fail_journal(**_kwargs: object) -> job_runtime._JournalHandle:
+    def fail_journal(**_kwargs: object) -> JournalHandleShape:
         raise RuntimeError("journal unavailable")
 
     monkeypatch.setattr(job_runtime, "_accept_operation_journal", fail_journal)
@@ -977,7 +1231,7 @@ def test_health_receipt_serialization_redacts_and_bounds_detail(tmp_path: Path) 
         journal_reason=f"x-api-key: {journal_sentinel} " + "y" * 500,
     )
 
-    job_runtime._write_health(tmp_path, record)
+    getattr(job_runtime, "_write_health")(tmp_path, record)
 
     receipt = json.loads(
         (tmp_path / ".tmp" / "job_health" / "unit-job" / "latest.json").read_text(encoding="utf-8")
@@ -1011,7 +1265,7 @@ def test_health_receipt_masks_complete_header_and_assignment_values(tmp_path: Pa
         journal_reason=f"x-api-key: prefix {sentinel} suffix; retry=closed",
     )
 
-    job_runtime._write_health(tmp_path, record)
+    getattr(job_runtime, "_write_health")(tmp_path, record)
 
     receipt = json.loads(
         (tmp_path / ".tmp" / "job_health" / "unit-job" / "latest.json").read_text(encoding="utf-8")
@@ -1035,7 +1289,7 @@ def test_health_receipt_masks_bearer_b64token_and_preserves_safe_suffix(tmp_path
         journal_reason="request failed Bearer " + credential + "; retry=closed",
     )
 
-    job_runtime._write_health(tmp_path, record)
+    getattr(job_runtime, "_write_health")(tmp_path, record)
 
     receipt = json.loads(
         (tmp_path / ".tmp" / "job_health" / "unit-job" / "latest.json").read_text(encoding="utf-8")
@@ -1064,7 +1318,7 @@ def test_health_receipt_preserves_non_b64token_bearer_delimiter(
         detail="request failed Bearer " + credential + delimiter + " suffix=safe",
     )
 
-    job_runtime._write_health(tmp_path, record)
+    getattr(job_runtime, "_write_health")(tmp_path, record)
 
     receipt = json.loads(
         (tmp_path / ".tmp" / "job_health" / "unit-job" / "latest.json").read_text(encoding="utf-8")
