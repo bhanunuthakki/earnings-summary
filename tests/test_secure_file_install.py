@@ -74,6 +74,13 @@ def _fixed_token_hex(_byte_count: int) -> str:
     return "a" * 32
 
 
+def _open_test_root(root: Path) -> int:
+    """Use a real directory handle before injecting Windows transaction seams."""
+    if os.name == "nt":
+        return install._windows_open_root(root)
+    return os.open(root, os.O_RDONLY)
+
+
 def _return_root_descriptor(descriptor: int) -> Callable[[Path], int]:
     def open_root(_root: Path) -> int:
         return descriptor
@@ -164,7 +171,7 @@ def test_failed_verification_never_deletes_replacement(
 
     monkeypatch.setattr(install, "read_stable_artifact", replace_before_verify)
     with pytest.raises(install.SecureFileInstallError, match="installed_target_conflict"):
-        install.install_bytes_no_clobber(root, "source.pdf", b"issuer bytes")
+        install.install_bytes_no_clobber(root, "source.pdf", b"issuer bytes", read_only=False)
     assert (root / "source.pdf").read_bytes() == b"replacement"
 
 
@@ -200,7 +207,7 @@ def test_installer_completes_short_writes_before_publishing_target(
 
 def test_created_token_is_replacement_safe_and_reused_has_no_token(tmp_path: Path) -> None:
     root = tmp_path / "attempt"
-    first = install.install_bytes_no_clobber(root, "source.pdf", b"issuer bytes")
+    first = install.install_bytes_no_clobber(root, "source.pdf", b"issuer bytes", read_only=False)
     assert first.created and first.ownership is not None
     first.path.unlink()
     first.path.write_bytes(b"replacement")
@@ -211,6 +218,7 @@ def test_created_token_is_replacement_safe_and_reused_has_no_token(tmp_path: Pat
     assert not replay.created and replay.ownership is None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-descriptor contract")
 def test_atomic_rename_collision_replays_without_replacing_existing_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -229,6 +237,7 @@ def test_atomic_rename_collision_replays_without_replacing_existing_target(
     assert len(result.residue_paths) == 1 and result.residue_paths[0].exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-descriptor contract")
 def test_precommit_root_failure_reports_retained_temporary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -273,6 +282,7 @@ def test_failed_final_verification_retains_transaction_issued_ownership(
     assert cleanup.remaining and not cleanup.removed
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-descriptor contract")
 def test_posix_root_replacement_is_rejected_before_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -295,6 +305,7 @@ def test_posix_root_replacement_is_rejected_before_publication(
     assert not (moved / "source.pdf").exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-descriptor contract")
 def test_posix_temp_replacement_survives_identity_bound_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -325,7 +336,7 @@ def test_windows_collision_closes_the_owned_descriptor(
     root.mkdir()
     target = root / "source.pdf"
     target.write_bytes(b"issuer bytes")
-    root_fd = os.open(root, os.O_RDONLY)
+    root_fd = _open_test_root(root)
     temporary = root / ".owned.tmp"
     temporary.write_bytes(b"issuer bytes")
     descriptor = os.open(temporary, os.O_RDWR)
@@ -371,7 +382,7 @@ def test_windows_success_closes_owned_descriptor_before_stable_target_reopen(
     root.mkdir()
     target = root / "source.pdf"
     payload = b"issuer bytes"
-    root_fd = os.open(root, os.O_RDONLY)
+    root_fd = _open_test_root(root)
     temporary = root / ".owned.tmp"
     descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT, 0o600)
     metadata = os.fstat(descriptor)
@@ -419,7 +430,7 @@ def test_windows_owned_descriptor_byte_mismatch_prevents_target_reopen(
     root.mkdir()
     target = root / "source.pdf"
     payload = b"issuer bytes"
-    root_fd = os.open(root, os.O_RDONLY)
+    root_fd = _open_test_root(root)
     temporary = root / ".owned.tmp"
     descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT, 0o600)
     metadata = os.fstat(descriptor)
@@ -467,7 +478,7 @@ def test_windows_failed_owned_delete_reports_named_residue(
     root.mkdir()
     target = root / "source.pdf"
     target.write_bytes(b"issuer bytes")
-    root_fd = os.open(root, os.O_RDONLY)
+    root_fd = _open_test_root(root)
     temporary = root / ".owned.tmp"
     temporary.write_bytes(b"issuer bytes")
     descriptor = os.open(temporary, os.O_RDWR)
@@ -512,7 +523,7 @@ def test_windows_raw_handle_adoption_failure_reports_named_residue(
     root = tmp_path / "attempt"
     root.mkdir()
     digest = hashlib.sha256(b"issuer bytes").hexdigest()
-    root_fd = os.open(root, os.O_RDONLY)
+    root_fd = _open_test_root(root)
 
     def deny_adoption(_path: Path) -> int:
         raise OSError("injected adoption failure")
@@ -538,7 +549,7 @@ def test_windows_adopted_descriptor_fstat_failure_reports_named_residue(
     root = tmp_path / "attempt"
     root.mkdir()
     digest = hashlib.sha256(b"issuer bytes").hexdigest()
-    root_fd = os.open(root, os.O_RDONLY)
+    root_fd = _open_test_root(root)
     owned: list[int] = []
 
     def adopt(path: Path) -> int:
@@ -583,7 +594,7 @@ def test_windows_unsafe_adopted_metadata_reports_named_residue(
     root = tmp_path / "attempt"
     root.mkdir()
     digest = hashlib.sha256(b"issuer bytes").hexdigest()
-    root_fd = os.open(root, os.O_RDONLY)
+    root_fd = _open_test_root(root)
     owned: list[int] = []
 
     def adopt(path: Path) -> int:
