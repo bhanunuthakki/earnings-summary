@@ -313,7 +313,6 @@
     "execution/spot_check_eval_judge.py",
     "execution/submit_saydo_batch.py",
     "execution/sync_competitive_kpis.py",
-    "execution/sync_ir_source_inventory.py",
     "execution/sync_issuer_registry.py",
     "execution/sync_position_lifecycle.py",
     "execution/track_comp_metrics.py",
