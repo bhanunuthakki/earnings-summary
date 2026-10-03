@@ -293,6 +293,20 @@ class PositionLotV1(V1Model):
     cost_basis: MoneyOrNone
     cost_basis_source: str | None
     tax_treatment: TaxTreatment
+    quantity_unit: Literal["shares", "underlying_units", "unknown"] = "shares"
+    contract_quantity: MoneyOrNone = None
+
+
+class OptionContractV1(V1Model):
+    """Provider-identified contract; no inferred multiplier or sensitivity."""
+
+    underlying_ticker: str
+    contract_type: Literal["call", "put"]
+    expiration_date: date
+    strike_price: Money
+    multiplier: MoneyOrNone = None
+    metadata_source: str
+    multiplier_source: str | None = None
 
 
 class PositionV1(V1Model):
@@ -312,6 +326,9 @@ class PositionV1(V1Model):
     unrealized_pnl: MoneyOrNone
     percent_of_portfolio: MoneyOrNone
     accounts: list[PositionLotV1] = Field(default_factory=list[PositionLotV1])
+    option_contract: OptionContractV1 | None = None
+    quantity_unit: Literal["shares", "underlying_units", "unknown"] = "shares"
+    contract_quantity: MoneyOrNone = None
 
 
 class EquityFractionV1(V1Model):
@@ -488,6 +505,7 @@ class SecurityV1(V1Model):
     region: str | None
     classification_source: str | None
     classification_updated_at: datetime | None
+    option_contract: OptionContractV1 | None = None
 
 
 class SecuritiesV1Result(V1Model):
@@ -1501,6 +1519,7 @@ __all__ = [
     "HealthV1",
     "Money",
     "MoneyOrNone",
+    "OptionContractV1",
     "PerformancePoint",
     "PerformanceSeries",
     "PerformanceV1Result",

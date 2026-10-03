@@ -18,6 +18,7 @@ from integrations.portfolio_tracker_v1 import (
     PortfolioSnapshotV1,
     PositionLotV1,
     PositionsV1Result,
+    PositionV1,
     TrackerV1Client,
     TransactionV1,
     V1Fetch,
@@ -199,7 +200,9 @@ class PortfolioPositionAdapter:
         coverage_error = validate_snapshot_account_coverage(snapshot, health)
         if coverage_error is not None:
             return _unavailable(*coverage_error)
-        reconciliation_error = validate_positions_snapshot(positions)
+        reconciliation_error = validate_positions_snapshot(
+            positions, allowed_short_security_ids=typed_short_call_security_ids(positions.positions)
+        )
         if reconciliation_error is not None:
             return _unavailable(*reconciliation_error)
         matching_positions = [
@@ -305,7 +308,10 @@ class PortfolioPositionAdapter:
                     provenance=provenance,
                 )
         else:
-            if not Decimal(0) <= percent_of_portfolio <= Decimal(100):
+            if percent_of_portfolio < 0 or (
+                percent_of_portfolio > 100
+                and not typed_short_call_security_ids(positions.positions)
+            ):
                 return _unavailable(
                     "position_lot_reconciliation_failed",
                     "position percent of portfolio must be between zero and one hundred",
@@ -554,11 +560,15 @@ def _position_lots_reconcile(
 
 
 def _position_structure_reconcile(
-    quantity: Decimal, market_value: Decimal | None, accounts: list[PositionLotV1]
+    quantity: Decimal,
+    market_value: Decimal | None,
+    accounts: list[PositionLotV1],
+    *,
+    allow_short: bool = False,
 ) -> bool:
     """Validate quantity and market-value structure without optional cost facts."""
 
-    if quantity < 0 or any(lot.quantity < 0 for lot in accounts):
+    if not allow_short and (quantity < 0 or any(lot.quantity < 0 for lot in accounts)):
         return False
     if quantity == 0 and any(lot.market_value not in (None, Decimal(0)) for lot in accounts):
         return False
@@ -574,12 +584,15 @@ def _position_structure_reconcile(
     )
 
 
-def _portfolio_total_reconcile(positions: PositionsV1Result) -> bool:
+def _portfolio_total_reconcile(
+    positions: PositionsV1Result, allowed_short_security_ids: frozenset[int] = frozenset()
+) -> bool:
     if any(
         not _position_structure_reconcile(
             item.quantity,
             item.market_value,
             item.accounts,
+            allow_short=item.security_id in allowed_short_security_ids,
         )
         for item in positions.positions
     ):
@@ -593,13 +606,43 @@ def _portfolio_total_reconcile(positions: PositionsV1Result) -> bool:
     )
 
 
+def typed_short_call_security_ids(positions: list[PositionV1]) -> frozenset[int]:
+    """Opt in only provider-described calls with explicit signed unit evidence."""
+    return frozenset(
+        row.security_id
+        for row in positions
+        if row.option_contract is not None
+        and row.option_contract.contract_type == "call"
+        and row.option_contract.metadata_source
+        in {"plaid.option_contract", "snaptrade.option_symbol", "occ_symbol"}
+        and row.option_contract.strike_price.is_finite()
+        and row.option_contract.strike_price > 0
+        and bool(row.option_contract.underlying_ticker.strip())
+        and row.quantity_unit == "underlying_units"
+        and row.quantity < 0
+        and row.market_value is not None
+        and row.market_value <= 0
+        and bool(row.accounts)
+        and all(
+            lot.quantity_unit == "underlying_units"
+            and lot.quantity < 0
+            and lot.market_value is not None
+            and lot.market_value <= 0
+            for lot in row.accounts
+        )
+    )
+
+
 def validate_positions_snapshot(
     positions: PositionsV1Result,
+    *,
+    allowed_short_security_ids: frozenset[int] = frozenset(),
 ) -> tuple[str, str] | None:
     """Validate every row before any ticker absence decision is made."""
 
     if any(
-        item.quantity < 0 or any(lot.quantity < 0 for lot in item.accounts)
+        (item.quantity < 0 or any(lot.quantity < 0 for lot in item.accounts))
+        and item.security_id not in allowed_short_security_ids
         for item in positions.positions
     ):
         return (
@@ -614,7 +657,7 @@ def validate_positions_snapshot(
             "duplicate_account_snapshot",
             "tracker position contains duplicate account evidence",
         )
-    if not _portfolio_total_reconcile(positions):
+    if not _portfolio_total_reconcile(positions, allowed_short_security_ids):
         return (
             "portfolio_total_reconciliation_failed",
             "portfolio total market value does not reconcile to its positions",
@@ -801,6 +844,7 @@ __all__ = [
     "SnapshotTransaction",
     "resolve_configured_position",
     "supported_schema_major",
+    "typed_short_call_security_ids",
     "validate_equity_evidence",
     "validate_positions_snapshot",
     "validate_snapshot_account_coverage",
