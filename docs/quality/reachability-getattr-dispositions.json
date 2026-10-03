@@ -101,8 +101,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "Dynamic level selects only standard logging adapter methods.",
-      "fingerprint": "51d3f7caaaffba6bb709bd18169ee185c80fa5238909a21284aa2ba05022e344",
-      "line": 685,
+      "fingerprint": "df115f2280dd8272dc6cb5aa04cd0676b0ebddfdfe0a0e9c63e9a7d3b029b738",
+      "line": 686,
       "path": "execution/comments_server.py",
       "targets": [
         "logging"
@@ -701,7 +701,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "77eff405444a9ad569739eb7ff1881f08f8bedbf83882ab809b7b24df16511a2",
+      "source_sha256": "0487824a2c4b7c6b1fed0a738f3548c358b2cdaff6cc6ab81c6868c08356af21",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

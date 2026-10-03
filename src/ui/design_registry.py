@@ -38,7 +38,7 @@ from ui.tokens import (
     RAIL_TOKENS as _RAIL_TOKENS,
 )
 
-REGISTRY_VERSION = "1.12.1"
+REGISTRY_VERSION = "1.12.2"
 
 # The canonical token module owns mutable dictionaries for generation and
 # composition. This registry exposes read-only views so its public import
@@ -1046,7 +1046,7 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "execution/build_earnings_calendar.py": "a2257779753cf8476f0ab93478569ffbd1d116856e596b46d12afcf8e45de114",  # pragma: allowlist secret
         "pipeline/analysis_styles.py": "75476869a35c0e1f08ba3faa1d35c1f08d5e506efe77ed3b1a52f33bc937942a",  # pragma: allowlist secret
         "pipeline/operations_styles.py": "137755c548ddc80fa25d51832b0b3de479a8c159864696f1deb10a5d34c10c5e",  # pragma: allowlist secret
-        "pipeline/portfolio_styles.py": "596388526bd3d0cc6c64747d990b57391cbd2be2d734fb3eb75a38e954b1e759",  # pragma: allowlist secret
+        "pipeline/portfolio_styles.py": "88bec250b02c80761ab69302703115750239037aafe2c903d488124141341904",  # pragma: allowlist secret
         "pipeline/research_panel_styles.py": "d96812258b5b52e07525a58768ff33de9b2a52fd54fdaf1cbbd2f813a4a4fcbe",  # pragma: allowlist secret
         # Work OS owns the existing Explore heading's token-sized title and top spacing.
         "pipeline/work_os_styles.py": "4c47e7e8462ff4bb8413f1252cc57dc9aa5d85a29887bdbbcbcdf44a1deed264",  # pragma: allowlist secret
