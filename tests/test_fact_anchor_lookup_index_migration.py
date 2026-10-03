@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from pathlib import Path
 
+import pytest
 from alembic.config import Config
 
 from alembic import command
+from tests import test_resolution_selected_observation_index as selected_index
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = "0258_fact_anchor_run_lookup_index"
@@ -84,5 +87,58 @@ def test_0258_adds_reversible_covering_extraction_run_lookup(
             (TRIGGER,),
         ).fetchone() == (1,)
         assert conn.execute(f"SELECT COUNT(*) FROM {TABLE}").fetchone() == (2,)
+    finally:
+        conn.close()
+
+
+def test_index_upgrade_and_downgrade_preserve_ledger_and_current_selection(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    path = migrated_db(tmp_path / "round-trip.db", target=selected_index.PARENT)
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        selected_index.seed_resolution_ledger(conn)
+        ledger = conn.execute(
+            "SELECT * FROM observation_resolution_revisions ORDER BY revision"
+        ).fetchall()
+        candidates = conn.execute(
+            "SELECT * FROM observation_resolution_candidates ORDER BY resolution_id,observation_id"
+        ).fetchall()
+        selected = conn.execute("SELECT * FROM v_observation_resolution_current").fetchall()
+        assert len(ledger) == 2
+        assert len(selected) == 1
+        assert selected[0][0] == "resolution-2"
+        assert selected_index.INDEX not in selected_index.resolution_indexes(conn)
+        for target in (selected_index.REVISION, selected_index.PARENT):
+            if target == selected_index.REVISION:
+                command.upgrade(_config(path), target)
+            else:
+                command.downgrade(_config(path), target)
+            assert (selected_index.INDEX in selected_index.resolution_indexes(conn)) == (
+                target == selected_index.REVISION
+            )
+            assert (
+                conn.execute(
+                    "SELECT * FROM observation_resolution_revisions ORDER BY revision"
+                ).fetchall()
+                == ledger
+            )
+            assert (
+                conn.execute(
+                    "SELECT * FROM observation_resolution_candidates ORDER BY resolution_id,observation_id"
+                ).fetchall()
+                == candidates
+            )
+            assert (
+                conn.execute("SELECT * FROM v_observation_resolution_current").fetchall()
+                == selected
+            )
+            assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+            with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+                conn.execute(
+                    "DELETE FROM observation_resolution_revisions WHERE resolution_id='resolution-1'"
+                )
+            conn.rollback()
     finally:
         conn.close()
