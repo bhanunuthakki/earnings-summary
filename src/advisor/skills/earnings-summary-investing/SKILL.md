@@ -1,6 +1,6 @@
 ---
 name: earnings-summary-investing
-description: Use the earnings-summary project's existing sources and tools for public-company and ETF research, earnings previews and readouts, thesis checks, valuation, investment decision cards, evaluation-list review, portfolio risk, and investment memos. Prefer this workflow for research in earnings-summary and its portfolio or evaluation names. Route next-dollar allocation to the existing next-dollar-allocation skill. Does not execute trades or authorize publication.
+description: Use the earnings-summary project's existing sources and tools for public-company and ETF research, earnings previews and readouts, valuation and thesis review, thesis revision from notes or articles, investment decision cards, evaluation-list review, full-book portfolio risk, and investment memos. Prefer this workflow for research in earnings-summary and its portfolio or evaluation names. Route next-dollar allocation to the existing next-dollar-allocation skill. Does not execute trades or authorize publication.
 ---
 
 # Earnings-summary investing
@@ -17,13 +17,18 @@ needs semantic review when an interface or owner changes. Run
 `python3 scripts/check_investing_skill.py --check` to detect source changes and
 broken references. The existing Monthly prompt architecture refresh job reviews
 that result and updates this project-owned skill. Hash drift prompts review; it
-does not approve a policy change. See [maintenance](references/routes.md#maintenance).
+does not approve a policy change. See [maintenance](references/routes.md#maintenance) and the monthly
+[assessment loop](references/assessment.md).
 
 ## Resolve the task and authority
 
 Resolve this file's real path; the installed skill can be a symlink. Its repository
 is four parents above the skill directory. Read the repository's current
 `AGENTS.md`. Use [routes](references/routes.md) for the smallest task owner.
+Select the relevant [analysis path](references/analysis-paths.md) from the request;
+valuation review, thesis revision and portfolio risk need no special tag.
+Combine paths when the request crosses them. A simple definition or grammar edit
+does not require an investing workflow.
 Read `directives/directive_manifest.json` before treating a directive as policy:
 canonical files own policy, runbooks supply mechanics, drafts remain proposals.
 
