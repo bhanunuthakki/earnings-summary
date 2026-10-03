@@ -73,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         if not isinstance(args.request_id, str) or not args.request_id or len(args.request_id) > 64:
             raise RefreshBoundaryError("invalid_request_id")
         if any(
-            character not in "abcdefghijklmnopqrstuvwxyz0123456789_-"
+            not ("a" <= character <= "z" or "0" <= character <= "9" or character in "_-")
             for character in args.request_id
         ):
             raise RefreshBoundaryError("invalid_request_id")
