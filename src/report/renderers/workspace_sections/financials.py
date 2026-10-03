@@ -699,19 +699,27 @@ def _line_items_levels_panel(body: StringIO, fin: FinancialsSection, seg: Segmen
             f'<td><span class="fin-chev">{chev}</span> {_esc(li.line_item)}'
             f"{' (' + _esc(li.unit) + ')' if '/share' in li.unit else ''}</td>"
         )
-        for v in li.values[-12:]:
+        values = li.values[-12:]
+        for index, v in enumerate(values):
+            source_index = len(li.sources_full) - len(values) + index
+            source = li.sources_full[source_index] if source_index >= 0 else None
+            chip = (
+                _source_chip_html(source, link_only=True)
+                if source is not None and source.canonical_reference is not None
+                else ""
+            )
             if v is None:
                 body.write('<td class="num muted">—</td>')
             elif li.unit == fin.currency or li.unit in {
                 f"{fin.currency}/share",
                 f"{fin.currency}/shares",
             }:
-                body.write(f'<td class="num">{v:.2f}</td>')
+                body.write(f'<td class="num">{v:.2f}{chip}</td>')
             elif li.unit == f"{fin.currency} millions":
                 if v < 0:
-                    body.write(f'<td class="num neg">({abs(v):.1f})</td>')
+                    body.write(f'<td class="num neg">({abs(v):.1f}){chip}</td>')
                 else:
-                    body.write(f'<td class="num">{v:.1f}</td>')
+                    body.write(f'<td class="num">{v:.1f}{chip}</td>')
             else:
                 body.write('<td class="num muted">—</td>')
         g = li.growth

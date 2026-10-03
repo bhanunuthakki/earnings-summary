@@ -203,7 +203,9 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # -2 retired score/fit presentation peeks.
     # +1 read-only degraded earnings draft peek.
     # +1 bounded cached host-runtime evidence endpoint.
-    assert len(rules) == 176
+    # +1 exact, read-only canonical financial evidence peek.
+    assert len(rules) == 177
+    assert rules["peek_canonical_financial"] == "/api/peek/canonical-financial"
     assert rules["operations_host_runtime_api"] == "/api/operations/host-runtime"
     assert rules["tracker_read_health"] == "/portfolio-tracker/api/v1/health"
     assert rules["tracker_read_snapshot"] == "/portfolio-tracker/api/v1/portfolio-snapshot"
@@ -212,6 +214,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
             "tracker_read_health",
             "tracker_read_snapshot",
             "operations_host_runtime_api",
+            "peek_canonical_financial",
         }:
             assert rule.methods == {"GET", "HEAD", "OPTIONS"}
     assert rules["dcf.dcf_grade_evidence"] == "/api/dcf/evidence/<ticker>"

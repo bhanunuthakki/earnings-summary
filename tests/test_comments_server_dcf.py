@@ -9,24 +9,18 @@ inputs GET seeds the editable card from the live workbook.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import comments_server
 import pytest
+
+from dcf import redesign
 
 if TYPE_CHECKING:
     from flask.testing import FlaskClient
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-from dcf import redesign  # noqa: E402
-
-_BASE = redesign.RedesignInputs(
+BASE_INPUTS = redesign.RedesignInputs(
     segments=("Total company",),
     base_revenue_by_segment={"Total company": 1000.0},
     near_growth_by_segment={"Total company": 0.10},
@@ -67,16 +61,16 @@ def client(tmp_path: Path) -> FlaskClient:
 
 
 def test_recompute_returns_scenarios_and_grid(client: FlaskClient) -> None:
-    resp = client.post("/api/dcf/recompute", json={"inputs": _BASE.to_dict()})
+    resp = client.post("/api/dcf/recompute", json={"inputs": BASE_INPUTS.to_dict()})
     assert resp.status_code == 200
     body = resp.get_json()
     base = body["fair_value_per_share_usd"]
-    assert base == pytest.approx(redesign.value(_BASE).value_per_share_usd)
+    assert base == pytest.approx(redesign.value(BASE_INPUTS).value_per_share_usd)
     sc = body["scenarios"]
     assert sc["bear"] < sc["base"] < sc["bull"]
     assert sc["base"] == pytest.approx(base)
     # over/under is the decimal (live-fair)/fair convention (0076).
-    assert body["over_under_pct"] == pytest.approx((_BASE.current_price - base) / base)
+    assert body["over_under_pct"] == pytest.approx((BASE_INPUTS.current_price - base) / base)
     grid = body["sensitivity"]
     assert len(grid["wacc_axis"]) == 7
     assert len(grid["values"]) == 7 and len(grid["values"][0]) == 7
@@ -84,11 +78,51 @@ def test_recompute_returns_scenarios_and_grid(client: FlaskClient) -> None:
 
 
 def test_recompute_reflects_an_edit(client: FlaskClient) -> None:
-    edited = _BASE.to_dict()
+    edited = BASE_INPUTS.to_dict()
     edited["wacc"] = 0.13
     resp = client.post("/api/dcf/recompute", json={"inputs": edited})
     assert resp.status_code == 200
-    assert resp.get_json()["fair_value_per_share_usd"] < redesign.value(_BASE).value_per_share_usd
+    assert (
+        resp.get_json()["fair_value_per_share_usd"]
+        < redesign.value(BASE_INPUTS).value_per_share_usd
+    )
+
+
+def test_recompute_driver_mode_includes_country_risk_and_tax(client: FlaskClient) -> None:
+    edited = BASE_INPUTS.to_dict()
+    edited["country_risk_premium"] = 0.025
+    edited["tax_rate"] = 0.30
+    edited["wacc"] = 0.50  # Stale preview value must not own a driver edit.
+    response = client.post("/api/dcf/recompute", json={"inputs": edited, "wacc_mode": "drivers"})
+    equity_weight = (50.0 * 100.0) / (50.0 * 100.0 + 200.0)
+    expected = equity_weight * (0.043 + 1.2 * 0.045 + 0.025) + (1.0 - equity_weight) * 0.045 * (
+        1.0 - 0.30
+    )
+    assert response.status_code == 200
+    assert response.get_json()["wacc"] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("mode", ["override", None])
+def test_recompute_keeps_explicit_or_legacy_wacc_override(
+    client: FlaskClient, mode: str | None
+) -> None:
+    edited = BASE_INPUTS.to_dict()
+    edited["wacc"] = 0.13
+    payload: dict[str, object] = {"inputs": edited}
+    if mode is not None:
+        payload["wacc_mode"] = mode
+    response = client.post("/api/dcf/recompute", json=payload)
+    assert response.status_code == 200
+    assert response.get_json()["wacc"] == 0.13
+
+
+@pytest.mark.parametrize("mode", ["unknown", "DRIVERS", "", None, True, 1, [], {}])
+def test_recompute_rejects_invalid_wacc_mode(client: FlaskClient, mode: object) -> None:
+    response = client.post(
+        "/api/dcf/recompute", json={"inputs": BASE_INPUTS.to_dict(), "wacc_mode": mode}
+    )
+    assert response.status_code == 400
+    assert "wacc_mode" in response.get_json()["error"]
 
 
 def test_recompute_requires_inputs(client: FlaskClient) -> None:
@@ -96,7 +130,7 @@ def test_recompute_requires_inputs(client: FlaskClient) -> None:
 
 
 def test_recompute_rejects_invalid_inputs(client: FlaskClient) -> None:
-    bad = _BASE.to_dict()
+    bad = BASE_INPUTS.to_dict()
     del bad["wacc"]
     resp = client.post("/api/dcf/recompute", json={"inputs": bad})
     assert resp.status_code == 400
@@ -106,7 +140,7 @@ def test_recompute_rejects_invalid_inputs(client: FlaskClient) -> None:
 def test_recompute_degenerate_base_returns_422(client: FlaskClient) -> None:
     """A perpetuity terminal with WACC ≤ g is well-formed but un-valuable —
     surfaced as 422 with the reason, not a 500."""
-    degenerate = _BASE.to_dict()
+    degenerate = BASE_INPUTS.to_dict()
     degenerate["terminal_method"] = "Perpetuity"
     degenerate["wacc"] = 0.025
     degenerate["terminal_growth_g"] = 0.03
@@ -245,23 +279,39 @@ def test_evidence_route_rejects_nonfinite_financial_value(tmp_path: Path) -> Non
 
 
 def test_save_requires_ticker_and_inputs(client: FlaskClient) -> None:
-    assert client.post("/api/dcf/save", json={"inputs": _BASE.to_dict()}).status_code == 400
+    assert client.post("/api/dcf/save", json={"inputs": BASE_INPUTS.to_dict()}).status_code == 400
     assert client.post("/api/dcf/save", json={"ticker": "NU"}).status_code == 400
 
 
 def test_save_409_when_no_workbook(client: FlaskClient) -> None:
     """A well-formed save with no redesigned workbook to edit is a 409, not a
     500 — the durable-save end-to-end path is covered in test_dcf_redesign."""
-    resp = client.post("/api/dcf/save", json={"ticker": "NU", "inputs": _BASE.to_dict()})
+    resp = client.post("/api/dcf/save", json={"ticker": "NU", "inputs": BASE_INPUTS.to_dict()})
     assert resp.status_code == 409
     assert "no redesigned workbook" in resp.get_json()["error"]
 
 
+def test_save_validates_driver_wacc_before_stale_preview(client: FlaskClient) -> None:
+    edited = BASE_INPUTS.to_dict()
+    edited["terminal_method"] = "Perpetuity"
+    edited["terminal_growth_g"] = 0.03
+    edited["wacc"] = 0.02  # Invalid direct preview left while a driver edit waits.
+    edited["beta"] = 1.4
+    response = client.post("/api/dcf/save", json={"ticker": "NU", "inputs": edited})
+    assert response.status_code == 409  # Valid drivers reach the missing-workbook guard.
+    assert "no redesigned workbook" in response.get_json()["error"]
+
+
 def test_save_rejects_degenerate_inputs(client: FlaskClient) -> None:
-    degenerate = _BASE.to_dict()
+    degenerate = BASE_INPUTS.to_dict()
     degenerate["terminal_method"] = "Perpetuity"
     degenerate["wacc"] = 0.025
     degenerate["terminal_growth_g"] = 0.03
+    # Save derives its rate from drivers; only a degenerate durable model fails.
+    degenerate["risk_free_rate"] = 0.005
+    degenerate["beta"] = 0.0
+    degenerate["country_risk_premium"] = 0.0
+    degenerate["cost_of_debt"] = 0.005
     resp = client.post("/api/dcf/save", json={"ticker": "NU", "inputs": degenerate})
     assert resp.status_code == 422
 

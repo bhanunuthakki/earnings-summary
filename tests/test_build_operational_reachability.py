@@ -189,7 +189,7 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    assert len(graph.unknown_edges) == 124
+    assert len(graph.unknown_edges) == 125
     # Exact-period CLI and skill-maintenance checks add two test-owned calls.
     # Keep their computed entrypoints explicit without admitting production gaps.
     assert (
@@ -216,7 +216,7 @@ def test_actual_head_is_supported() -> None:
         )
         in graph.unknown_edges
     )
-    # Ten bounded Node children exercise synthetic browser request lifecycles.
+    # Eleven bounded Node children exercise synthetic browser request lifecycles.
     # Keep their exact test-only inventory visible without admitting production edges.
     lifecycle_children = {
         ("tests/test_company_desk_read_lifecycle.py", 97),
@@ -229,6 +229,7 @@ def test_actual_head_is_supported() -> None:
         ("tests/test_work_os_read_lifecycle.py", 63),
         ("tests/test_work_os_read_lifecycle.py", 98),
         ("tests/test_workspace_dcf_read_lifecycle.py", 63),
+        ("tests/test_workspace_dcf_read_lifecycle.py", 218),
     }
     assert {
         (edge.source, edge.line)

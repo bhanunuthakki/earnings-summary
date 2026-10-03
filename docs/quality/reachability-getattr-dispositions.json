@@ -257,8 +257,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only _SCALAR_ROW_ATTR dashboard scalar attributes.",
-      "fingerprint": "2ec4687179e271c047f87b2c4500e35c0ae3fc50376e5b4ca6c6d2450016431e",
-      "line": 1464,
+      "fingerprint": "90b15a52dcf79ed10d08b00b3c3e98e62a9b10ef6d54d3586ad8e34962abf733",
+      "line": 1491,
       "path": "src/dcf/redesign.py",
       "targets": [
         "_SCALAR_ROW_ATTR"
@@ -454,8 +454,8 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr reads only _COMPARE_METRIC_ROWS TickerMetrics fields.",
-      "fingerprint": "1498cc273afcbb5370d22a2a10b09d19ba4bd6baf37bb098a91cf4487ba85b1f",
-      "line": 1952,
+      "fingerprint": "8a0dfeeb3a3f85dfecd666cea37b2d2b835273ae950a56e9b5bbe241399e4ec4",
+      "line": 2004,
       "path": "src/pipeline/peeks.py",
       "targets": [
         "_COMPARE_METRIC_ROWS"
@@ -676,7 +676,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "c49373041703e44c46992b83b53b78c85c73de7090ff7a2278c649679f40631f",
+      "source_sha256": "3abc63020b0ccb5779c907f18b639d9a8c25161bf02555ec7590ee30850758c8",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
