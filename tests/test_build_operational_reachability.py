@@ -189,7 +189,7 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    assert len(graph.unknown_edges) == 132
+    assert len(graph.unknown_edges) == 135
     # A checked private-helper lookup removes the scheduled test's broad type
     # suppression. Its dynamic name remains visible as one test-only seam.
     assert (
@@ -270,6 +270,24 @@ def test_actual_head_is_supported() -> None:
         edge.kind == "unknown" and edge.target == "<dynamic process entrypoint>"
         for edge in graph.unknown_edges
         if (edge.source, edge.line) in lifecycle_children
+    )
+
+    # Three bounded Node harnesses exercise rail state, exact-edition routing,
+    # and lazy research disclosures. Keep them visible as test-only processes.
+    compact_reader_children = {
+        ("tests/test_compact_brief_reader.py", 162),
+        ("tests/test_compact_brief_routing.py", 23),
+        ("tests/test_full_brief_chrome.py", 133),
+    }
+    assert {
+        (edge.source, edge.line)
+        for edge in graph.unknown_edges
+        if edge.source in {source for source, _line in compact_reader_children}
+    } == compact_reader_children
+    assert all(
+        edge.kind == "unknown" and edge.target == "<dynamic process entrypoint>"
+        for edge in graph.unknown_edges
+        if (edge.source, edge.line) in compact_reader_children
     )
 
     assert (

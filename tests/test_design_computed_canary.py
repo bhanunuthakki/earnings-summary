@@ -510,6 +510,14 @@ def test_full_brief_canary_uses_production_loader_and_controls_shadow_content(
             page = context.new_page()
             _load_route_canary(page, html)
             page.wait_for_selector("#workOsBriefReader .work-os-report-host", state="visible")
+            assert page.locator("#workOsBriefEditionDetails").get_attribute("open") is None
+            assert page.locator("#workOsBriefReaderMeta").is_visible()
+            assert (
+                "k-card"
+                not in (
+                    page.locator("#workOsBriefReaderSections").get_attribute("class") or ""
+                ).split()
+            )
             sections_toggle = page.locator("#workOsBriefSectionsToggle")
             if sections_toggle.get_attribute("aria-expanded") == "false":
                 sections_toggle.click()

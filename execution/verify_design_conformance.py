@@ -756,7 +756,12 @@ def _browser_canary_findings(
             };
             const normalized = (value) => value.replace(/[\"']/g, '').replace(/\\s+/g, ' ').trim().toLowerCase();
             const cards = scopedMatches('.k-card').filter(visible);
-            if (!cards.length) findings.push({kind: 'card', actual: 'route has no visible typed cards'});
+            // Registered editorial documents use reading flow; optional disclosures can be closed.
+            const documents = scopedMatches('.k-doc[data-conformance-card-exemption="editorial-document"]')
+              .filter(visible);
+            if (!cards.length && !documents.length) {
+              findings.push({kind: 'card', actual: 'route has no visible typed cards or editorial document'});
+            }
             cards.forEach((card, index) => {
               const matches = cardContracts.filter((contract) => card.matches(contract.selector));
               if (matches.length !== 1) {

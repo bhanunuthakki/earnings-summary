@@ -32,7 +32,7 @@ def render_brief_reader_shell() -> str:
       <button class="k-btn k-btn-quiet k-icon-btn work-os-rail-toggle" id="workOsBriefSectionsToggle" type="button" aria-controls="workOsBriefReaderSections" aria-expanded="true" aria-label="Collapse brief sections" title="Collapse brief sections">{icon_svg("collapse")}</button>
       <h3 class="k-card-title" id="workOsBriefSectionTitle">Company</h3>
       <details class="work-os-reader-disclosure" id="workOsBriefEditionDetails">
-        <summary class="k-btn k-btn-quiet k-btn-sm" aria-label="Edition and data context"><span id="workOsBriefReaderMeta">Edition and data context</span> ⓘ</summary>
+        <summary class="k-btn k-btn-quiet k-btn-sm" aria-label="Edition and data context"><span class="k-card-meta" id="workOsBriefReaderMeta">Edition and data context</span> ⓘ</summary>
         <div class="work-os-reader-context k-card k-card-section">
           <p class="k-card-meta">Saved report scope and current decision state remain separate.</p>
   <div class="work-os-reader-decision" id="workOsBriefReaderDecision" aria-label="Current decision state" aria-live="polite">
@@ -47,7 +47,7 @@ def render_brief_reader_shell() -> str:
     </div>
   </header>
   <div class="work-os-reader-layout">
-    <nav class="work-os-reader-sections k-card k-card-nav" id="workOsBriefReaderSections"
+    <nav class="work-os-reader-sections" id="workOsBriefReaderSections"
          aria-label="Brief sections"></nav>
     <div class="work-os-reader-body" id="workOsBriefReaderBody" role="region"
          aria-live="polite"></div>

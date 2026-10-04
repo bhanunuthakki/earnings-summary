@@ -6,13 +6,13 @@
 - **Target:** every shipped component or emitter that changes rendered UI.
 - **Inputs:** task, hierarchy, state, and owning master.
 - **Output:** registered markup or a tested master/registry extension.
-- **Refresh:** only when the decision model changes, not when inventory changes.
-- **Logical Idempotency Key:** owning master or canonical contract plus the named visual decision.
-- **Content Identity:** digest of master, registry, or rendered evidence.
-- **Observation Version:** current master and registry revision inspected for the change.
-- **Attempt Identity:** unique validation or browser-audit invocation and its receipt.
+- **Refresh:** decision-model changes only.
+- **Logical Idempotency Key:** master/contract and visual decision.
+- **Content Identity:** master, registry, or evidence digest.
+- **Observation Version:** inspected master and registry revision.
+- **Attempt Identity:** validation/browser invocation and receipt.
 - **Rate-limit budget:** none; verification is local and deterministic.
-- **Failure policy:** reject the change; never widen an approval to make a check green.
+- **Failure policy:** reject drift; never widen approval to pass.
 
 ## 1. Authority boundary
 
@@ -31,34 +31,35 @@ Visual decisions are closed: consumers select a master recipe; they do not creat
 
 ## 2. Consumer contract
 
-A governed surface may provide content, semantic HTML, data attributes, and nonvisual hooks. UI comes from:
+Surfaces provide content, semantic HTML, data attributes, and nonvisual hooks. UI comes from:
 
 1. the global tokens and controls;
 2. one registered family master for surface-specific arrangement; and
 3. an exact typed contract for any approved dynamic or runtime visual state.
 
-Consumers must not add local visual CSS, inline styles, runtime style mutation, arbitrary SVG presentation, or open-ended `style` APIs.
+Consumers must not add local visual CSS, inline styles, runtime style mutations, arbitrary SVG
+presentation, or open-ended `style` APIs.
 
-If no recipe fits, choose the nearest variant or extend the owning master. Cross-family reuse is global.
+Use the nearest variant or extend the master. Cross-family reuse is global.
 
 ### Same-project page continuity
 
-For a new or reworked page, start from the nearest shipped sibling serving the same task.
-Preserve its registered shell, navigation, four type roles, controls, density, responsive
-behavior, and state anatomy; incidental content need not match.
+Start from the nearest shipped sibling serving the same task. Preserve its registered shell,
+navigation, four type roles, controls, density, responsive behavior, and state anatomy; content
+may differ.
 
-A new visual family is allowed only when no existing family can express the task. Use the
-extension protocol with a typed rationale and an adversarial continuity test.
+Add a visual family only when existing families cannot express the task. Use the extension
+protocol with a typed rationale and adversarial continuity test.
 
 ## 3. Visual grammar
 
-Literal values live only in executable masters.
+Only masters own literal values.
 ### Typography
 
 - Use four visible roles: display, title, body, and meta.
 - Use the sans family for prose and labels.
 - Use mono only for financial values, tickers, timestamps, code, and source locators.
-- Weight and case communicate hierarchy; consumers cannot invent another type role.
+- Weight and case express hierarchy; consumers cannot add type roles.
 
 ### Color
 
@@ -82,7 +83,7 @@ Literal values live only in executable masters.
 
 ## 4. Composition grammar
 
-Use the canonical primitives rather than lookalikes:
+Use canonical primitives:
 | Intent | Primitive |
 |---|---|
 | Action | `.k-btn` with a registered intent/size variant |
@@ -101,40 +102,37 @@ semantics, keyboard access, focus, labels, contrast, non-color cues, and reduced
 - Application surfaces optimize for decisions: one dominant operating band, compact controls,
   explicit state, and progressive disclosure.
 - Research documents optimize for reading: clear hierarchy, restrained density, and traceable evidence.
-- Responsive behavior, empty/loading/error states, and overlays use registered recipes.
+- Use registered recipes for responsive, empty, loading, error, and overlay states.
 
 ### Collapsible panels and vertical space
 
-- Supporting navigation and side panels must be collapsible. Use the shared quiet icon
-  button and collapse icon; keep the expand control visible at the closed panel edge.
-  The family master owns geometry. Closing a panel releases space for the selected content.
-- Combine identity, period, state, and primary actions in one compact row. Wrap at narrow
-  widths. Avoid separate title, edition, status, and action rows without a distinct task.
-- Put tactical identifiers, capture details, diagnostics, and general disclaimers in compact
-  disclosures or linked footnotes. Keep material period, unit, basis, stale state, and data
-  gaps visible beside the affected claim; a compact status can expose its full explanation.
-- Compare the space above useful content with panels open and closed. Every remaining row
-  needs a distinct task or material state purpose.
+- Supporting navigation and side panels must collapse with the shared quiet icon button and
+  collapse icon. Keep the expand control visible at the closed edge. Masters own geometry.
+  Closing panels releases space for selected content without losing context.
+- Combine identity, period, state, and actions in one compact row; wrap at narrow widths.
+- Put tactical identifiers, capture details, diagnostics, and general disclaimers in disclosures
+  or footnotes. Keep material period, unit, basis, stale state, and gaps beside the affected claim.
+- Compare the space above useful content with panels open and closed. Each row must support
+  a distinct task or material state.
 
 ### Compositional restraint
 
 The shared `frontend-quality` procedure owns the generic rubric. This project narrows it:
-- Use only the four visible roles needed by the hierarchy; sans remains prose/labels and mono
-  remains limited to the named financial, code, ticker, timestamp, and locator roles.
-- Start in normal flow and use registered family recipes. Every nested boxed region needs a named
-  semantic, state, interaction, or ownership boundary; flatten the rest.
-- Accent remains interaction/selection/focus/unread only, while status retains its separate
-  semantic role and non-color cue. Decorative left rails and ornamental variation are not recipes.
-- Equivalent sections share a registered composition grammar. Bullets and indentation represent
-  actual content structure, not texture; subtitles add information rather than repeat titles.
-- Before the composed guard, perform the page-level reduction pass: remove non-semantic
-  decoration, redundant containers, headings, subtitles, badges, dividers, and icons. A remaining
-  visual difference needs a typed master rationale and adversarial test under the extension protocol.
-- For material work, inspect the sibling and affected page in a browser before implementation,
-  then exercise final states and widths. Mockup CSS is prototype-only; production recomposes it
-  through registered masters.
+- Use the four visible type roles; sans is prose/labels. Mono is limited to financial values,
+  code, tickers, timestamps, and locators.
+- Start in normal flow with registered recipes. Each nested box needs a semantic, state,
+  interaction, or ownership boundary; flatten the rest.
+- Accent marks interaction, selection, focus, or unread state. Status has a separate semantic
+  role and a non-color cue. Decorative rails and ornamental variation are prohibited.
+- Equivalent sections share a registered grammar. Bullets and indents express structure;
+  subtitles add information rather than repeat titles.
+- Before the composed guard, remove redundant decoration, containers, headings, subtitles,
+  badges, dividers, and icons. Remaining visual differences need a typed master rationale
+  and an adversarial extension test.
+- For material work, inspect the sibling and affected page before implementation; verify
+  final states and widths in a browser. Production uses masters; mockup CSS is prototype-only.
 
-Product behavior is owned elsewhere. Do not copy it into this directive:
+Keep product behavior in its owners:
 
 - navigation and destination hierarchy: `directives/navigation_ia.md`; executable routes and shell
   tests remain authority, and the directive is draft evidence only until owner approval;
@@ -148,7 +146,7 @@ Product behavior is owned elsewhere. Do not copy it into this directive:
 - discovery and ingestion policy: `directives/news_sources_plan.md` and
   `directives/ir_events_ingestion.md`.
 
-Those contracts may specify behavior, data, and state. They do not authorize a new visual recipe.
+Behavior contracts do not authorize visual recipes.
 ## 6. Extension protocol
 
 For a legitimate new visual need:
@@ -162,21 +160,21 @@ For a legitimate new visual need:
    master set, geometry, evidence mode, or approval changes.
 5. Regenerate mirrors and run the merge-facing check.
 
-Approvals are exact and typed. Permanent exemptions are limited to nonvisual policy infrastructure.
-Quarantine is temporary, owned, and shrink-only; debt may shrink but not grow.
+Approvals are exact and typed. Only nonvisual policy infrastructure has permanent exemptions.
+Quarantine is temporary, owned, and shrink-only; debt must not grow.
 
-Edit this directive only when an agent's decision rule changes. Do not add history, diaries,
-generated tables, surface counts, or product specifications.
+Edit only when a decision rule changes. Exclude history, diaries, generated tables, counts,
+and product specifications.
 
 ## 7. Verification
 
-Run the composed guard for every visual change:
+Run the composed guard after visual changes:
 
 ```powershell
 python scripts/check_design_sync.py
 ```
 
-For conformance work, inspect the deterministic receipt directly:
+For conformance, inspect the receipt:
 
 ```powershell
 python execution/verify_design_conformance.py --check --route-canaries
