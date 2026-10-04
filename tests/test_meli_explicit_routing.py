@@ -62,6 +62,7 @@ def test_clean_checkout_routes_explicit_meli_package(
         tmp_path / "db",
         valuation_year=2026,
         meli_assumptions_path=None if via_environment else artifact,
+        source_state_root=tmp_path / "state",
     )
     assert result["format"] == "meli_platform_sotp"
     assert len(seen) == 1

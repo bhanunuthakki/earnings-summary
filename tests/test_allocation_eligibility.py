@@ -7,10 +7,12 @@ the tables/columns each check reads are created.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -27,7 +29,10 @@ from allocation.eligibility import (
     assess_universe,
     cash_assessment,
 )
+from dcf import input_evidence
 from dcf.readiness import ValuationReadiness
+from tests.test_model_source_bytes import captured_source as captured_source
+from tests.test_model_source_bytes import verified_input
 
 
 @pytest.fixture(autouse=True)
@@ -629,3 +634,84 @@ def test_legacy_cache_age_is_unknown_not_fresh_source(tmp_path: Path) -> None:
     assert a.eligible
     assert "weights" not in a.source_freshness
     assert any("source age unknown" in warning for warning in a.warning_reasons)
+
+
+def test_eligibility_digest_retains_stable_physical_witness_and_tamper_hold(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    captured_source: tuple[sqlite3.Connection, Path, Path],
+) -> None:
+    """Financial eligibility is isolated; actual source bytes supply physical proof."""
+    from allocation import eligibility
+
+    source_conn, source_root, source_path = captured_source
+    db_path = _make_db(tmp_path)
+    _fully_eligible(db_path, tmp_path, "ONON")
+    source_context = input_evidence.SourceReadContext(content_roots=(source_root,))
+    payloads: list[object] = []
+    digest = eligibility.allocation_payload_sha
+
+    def capture_payload(payload: object) -> str:
+        payloads.append(payload)
+        return digest(payload)
+
+    def current_source(
+        conn: sqlite3.Connection,
+        ticker: str,
+        *,
+        as_of: datetime,
+        source_context: input_evidence.SourceReadContext | None = None,
+    ) -> ValuationReadiness:
+        del conn
+        try:
+            witnesses = input_evidence.verify_input_source_bytes(
+                source_conn, (verified_input(),), source_context
+            )
+        except input_evidence.InputEvidenceError as exc:
+            return ValuationReadiness(
+                ticker=ticker, evaluated_at=as_of.isoformat(), reason_codes=(str(exc),)
+            )
+        return ValuationReadiness(
+            ticker=ticker,
+            evaluated_at=as_of.isoformat(),
+            ready=True,
+            status="ready",
+            source_integrity="present_bytes_verified",
+            raw_document_verifications=witnesses,
+        )
+
+    monkeypatch.setattr(eligibility, "allocation_payload_sha", capture_payload)
+    monkeypatch.setattr(eligibility, "load_valuation_readiness", current_source)
+    first = assess_eligibility(
+        db_path, tmp_path, "ONON", list_type="evaluation", source_context=source_context
+    )
+    second = assess_eligibility(
+        db_path, tmp_path, "ONON", list_type="evaluation", source_context=source_context
+    )
+    assert first.eligible and second.eligible
+    assert first.input_sha == second.input_sha
+    assert isinstance(payloads[0], dict)
+    payload = cast(dict[str, object], payloads[0])
+    persisted_raw = payload["valuation_evidence"]
+    assert isinstance(persisted_raw, dict)
+    persisted = cast(dict[str, object], persisted_raw)
+    assert "evaluated_at" not in persisted
+    witnesses_raw = persisted["raw_document_verifications"]
+    assert isinstance(witnesses_raw, list)
+    witnesses = cast(list[object], witnesses_raw)
+    assert len(witnesses) == 1
+    assert witnesses[0] == {
+        "document_version_id": "physical-document",
+        "blob_sha256": hashlib.sha256(source_path.read_bytes()).hexdigest(),
+        "byte_size": source_path.stat().st_size,
+        "reader_policy": "bounded-stable-source/v1",
+        "storage_uri_sha256": hashlib.sha256(source_path.as_uri().encode()).hexdigest(),
+    }
+    source_path.write_bytes(b"X" * source_path.stat().st_size)
+    changed = assess_eligibility(
+        db_path, tmp_path, "ONON", list_type="evaluation", source_context=source_context
+    )
+    assert not changed.eligible
+    assert not changed.checks[CHECK_USABLE_DCF].passed
+    assert "model_input_source_" in changed.checks[CHECK_USABLE_DCF].reason
+    assert changed.input_sha != first.input_sha

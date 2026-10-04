@@ -14,6 +14,7 @@ from dcf.input_evidence import (
     InputEvidenceError,
     ModelInputReceipt,
     ModelInputRequest,
+    RawDocumentWitness,
     VerifiedInput,
     canonical_digest,
 )
@@ -105,6 +106,17 @@ def proof() -> ModelInputReceipt:
         },
     )
     return ModelInputReceipt(
+        schema_version="dcf_model_inputs.v3",
+        source_integrity="present_bytes_verified",
+        raw_documents=(
+            RawDocumentWitness(
+                document_version_id="doc",
+                blob_sha256="d" * 64,
+                byte_size=12,
+                verified_at=NOW,
+                storage_uri_sha256="e" * 64,
+            ),
+        ),
         recipe=onon_inputs.RECIPE,
         request=request,
         verified_at=NOW,
@@ -353,3 +365,18 @@ def test_canonical_nonlease_liability_scope_cannot_use_legacy_debt_fields() -> N
         )
         is None
     )
+
+
+def test_legacy_onon_receipt_cannot_claim_physical_verification() -> None:
+    receipt = proof().model_copy(
+        update={
+            "schema_version": "dcf_model_inputs.v2",
+            "source_integrity": "unverified",
+            "raw_documents": (),
+        }
+    )
+    with (
+        sqlite3.connect(":memory:") as conn,
+        pytest.raises(InputEvidenceError, match="model_input_source_legacy_receipt_unverified"),
+    ):
+        onon_inputs.verify_onon_inputs(conn, receipt, effective_inputs=memo_inputs(), as_of=NOW)

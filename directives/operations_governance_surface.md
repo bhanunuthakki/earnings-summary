@@ -1045,3 +1045,36 @@ owners. It is not a new workspace action or automatic pipeline stage. Native
 host, canonical route, current production authority and concrete reviewed
 request/receipt gates remain external prerequisites. No scheduler or live
 write capability is added by the read-only inventory route.
+
+
+### Physical source verification for existing MELI and ONON consumers
+
+The existing verified builders and persisted valuation readers now require an
+explicit `SourceReadContext`. `execution/refresh_dcf.py` and
+`execution/valuation_preflight.py` accept `--state-root`; the specialized child
+builders receive `DCF_SOURCE_STATE_ROOT`. The SEC capture owner stores blobs
+under `<state-root>/data/evidence/blobs`. A code checkout, database path, or
+workbook output root grants no source-read authority. The dashboard passes its
+explicit state-root context to valuation consumers and child actions.
+`execution/run_advisor_memos.py`, `execution/run_socratic_questions.py`, and
+`execution/dcf_sheets.py import` accept the same explicit `--state-root`.
+Socratic questions and memo synthesis forward that context to their existing
+advisor reader. The code/output root and source state root remain separate.
+`execution/refresh_dispatch.py --state-root` retains its existing data/output
+meaning. Its separate `--source-state-root` is the model byte-read authority.
+The dashboard forwards that separate flag only from its explicit source state
+root. Direct `refresh_dcf.py --state-root` retains the source-read meaning.
+
+`dcf_model_inputs.v3` records fresh, bounded, stable byte verification for every
+source document used by the recipe. Missing, changed, linked, oversized, or
+out-of-root source files fail closed. The present-byte verification clock is
+separate from the financial knowledge cutoff. A v2 receipt remains readable
+but cannot qualify a verified MELI or ONON valuation. Source-byte verification
+does not replace source completeness, semantic admission, role review, model
+reconstruction, or assumption and scenario acceptance.
+
+Existing allocation and risk-reward consumers exclude unqualified MELI and
+ONON valuations from their reward legs. Their other ticker routes and scenario
+formulas retain their existing behavior. This is a read-only verification
+change. It creates no provider acquisition, scheduler, database writer,
+Operations control, or automatic receipt upgrade.

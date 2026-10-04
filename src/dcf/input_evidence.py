@@ -12,6 +12,7 @@ import sqlite3
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Literal
 
 from pydantic import (
@@ -22,10 +23,16 @@ from pydantic import (
     TypeAdapter,
     ValidationError,
     field_validator,
+    model_validator,
 )
 
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
+from provenance.evidence_native_candidates import (
+    resolve_local_storage_uri,
+    select_evidence_native_candidates_by_id,
+)
 from provenance.fact_read_model import FactReadModel
+from provenance.immutable_artifact import read_stable_artifact
 from provenance.metric_ontology import CanonicalDimension, MetricOntology, canonical_json
 from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
 from provenance.sec_package_subject_witness import (
@@ -183,8 +190,50 @@ class VerifiedInput(FrozenModel):
     extraction_completed_at: datetime | None = None
 
 
+class SourceReadContext(FrozenModel):
+    """Explicit read authority; ledger paths and database locations grant none."""
+
+    content_roots: tuple[Path, ...]
+    max_documents: int = Field(default=28, gt=0, le=28, strict=True)
+    max_document_bytes: int = Field(default=100_000_000, gt=0, le=100_000_000, strict=True)
+    max_total_bytes: int = Field(default=250_000_000, gt=0, le=250_000_000, strict=True)
+
+    @field_validator("content_roots")
+    @classmethod
+    def explicit_roots(cls, roots: tuple[Path, ...]) -> tuple[Path, ...]:
+        if not roots or any(not root.is_absolute() or root == Path(root.anchor) for root in roots):
+            raise ValueError("explicit absolute content roots are required")
+        if any(".." in root.parts for root in roots):
+            raise ValueError("content roots must be lexical absolute paths")
+        return roots
+
+    @classmethod
+    def for_sec_state_root(cls, state_root: Path) -> SourceReadContext:
+        """Use the capture owner's SEC blob layout under an explicit state root."""
+        if not state_root.is_absolute() or state_root == Path(state_root.anchor):
+            raise ValueError("explicit absolute state root is required")
+        return cls(content_roots=(state_root / "data" / "evidence" / "blobs",))
+
+
+class RawDocumentWitness(FrozenModel):
+    """Present local-byte verification; this clock is not a financial cutoff."""
+
+    document_version_id: str
+    blob_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    byte_size: int = Field(ge=0, strict=True)
+    verified_at: AwareDatetime
+    reader_policy: Literal["bounded-stable-source/v1"] = "bounded-stable-source/v1"
+    storage_uri_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class ModelInputReceipt(FrozenModel):
-    schema_version: Literal["dcf_model_inputs.v2"] = "dcf_model_inputs.v2"
+    schema_version: Literal["dcf_model_inputs.v2", "dcf_model_inputs.v3"] = "dcf_model_inputs.v2"
+    source_integrity: Literal["unverified", "present_bytes_verified"] = Field(
+        default="unverified", exclude_if=lambda value: value == "unverified"
+    )
+    raw_documents: tuple[RawDocumentWitness, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
     recipe: str
     request: ModelInputRequest
     verified_at: AwareDatetime
@@ -201,6 +250,95 @@ class ModelInputReceipt(FrozenModel):
     coverage_policy: Literal["current-authoritative-inventory-24h/v1"] = (
         "current-authoritative-inventory-24h/v1"
     )
+
+    @model_validator(mode="after")
+    def raw_document_population(self) -> ModelInputReceipt:
+        if self.schema_version == "dcf_model_inputs.v2":
+            if self.source_integrity != "unverified" or self.raw_documents:
+                raise ValueError("legacy receipt cannot claim physical source verification")
+        else:
+            expected = {item.document_version_id for item in self.inputs}
+            actual = [item.document_version_id for item in self.raw_documents]
+            if (
+                not expected
+                or None in expected
+                or set(actual) != expected
+                or len(actual) != len(set(actual))
+                or self.source_integrity != "present_bytes_verified"
+            ):
+                raise ValueError("physical source witness population mismatch")
+        return self
+
+
+def verify_input_source_bytes(
+    conn: sqlite3.Connection, inputs: tuple[VerifiedInput, ...], context: SourceReadContext | None
+) -> tuple[RawDocumentWitness, ...]:
+    """Freshly verify only the admitted documents; no acquisition or ledger writes."""
+    if context is None:
+        raise InputEvidenceError("model_input_source_context_unavailable")
+    ids = tuple(sorted({item.document_version_id for item in inputs if item.document_version_id}))
+    if not ids or any(item.document_version_id is None for item in inputs):
+        raise InputEvidenceError("model_input_source_document_missing")
+    if len(ids) > context.max_documents:
+        raise InputEvidenceError("model_input_source_population_limit")
+    original_factory = conn.row_factory
+    try:
+        conn.row_factory = sqlite3.Row
+        candidates = select_evidence_native_candidates_by_id(
+            conn, document_version_ids=ids, include_legacy=True
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise InputEvidenceError("model_input_source_metadata_unavailable") from exc
+    finally:
+        conn.row_factory = original_factory
+    candidate_ids = [item.document_version_id for item in candidates]
+    if set(candidate_ids) != set(ids) or len(candidate_ids) != len(ids):
+        raise InputEvidenceError("model_input_source_population_mismatch")
+    remaining = context.max_total_bytes
+    witnesses: list[RawDocumentWitness] = []
+    # Each document gets its own location proof and consumes its actual read budget.
+    for candidate in sorted(candidates, key=lambda item: item.document_version_id):
+        limit = min(context.max_document_bytes, remaining)
+        if limit <= 0 or candidate.byte_size > limit:
+            raise InputEvidenceError(
+                "model_input_source_byte_limit:" + candidate.document_version_id
+            )
+        path = resolve_local_storage_uri(
+            candidate.storage_uri, allowed_roots=context.content_roots, follow_links=False
+        )
+        if path is None:
+            raise InputEvidenceError(
+                "model_input_source_location_unapproved:" + candidate.document_version_id
+            )
+        root = next(root for root in context.content_roots if path.is_relative_to(root))
+        try:
+            if path.lstat().st_nlink != 1:
+                raise ValueError("source file has multiple links")
+            source, _payload = read_stable_artifact(
+                path, max_bytes=min(limit, max(1, candidate.byte_size)), allowed_root=root
+            )
+            if path.lstat().st_nlink != 1:
+                raise ValueError("source file link population changed")
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise InputEvidenceError(
+                "model_input_source_bytes_unavailable:" + candidate.document_version_id
+            ) from exc
+        del _payload
+        remaining -= source.size_bytes
+        if source.file_sha256 != candidate.blob_sha256 or source.size_bytes != candidate.byte_size:
+            raise InputEvidenceError(
+                "model_input_source_digest_or_size_mismatch:" + candidate.document_version_id
+            )
+        witnesses.append(
+            RawDocumentWitness(
+                document_version_id=candidate.document_version_id,
+                blob_sha256=candidate.blob_sha256,
+                byte_size=source.size_bytes,
+                verified_at=datetime.now(UTC),
+                storage_uri_sha256=hashlib.sha256(candidate.storage_uri.encode()).hexdigest(),
+            )
+        )
+    return tuple(witnesses)
 
 
 def canonical_digest(value: object) -> str:
@@ -475,6 +613,7 @@ def verify_model_inputs(
     effective_inputs: Mapping[str, float],
     assumption_keys: frozenset[str],
     as_of: datetime,
+    source_context: SourceReadContext | None = None,
 ) -> ModelInputReceipt:
     """Reconstruct every required actual through the canonical sealed read APIs."""
     if as_of.tzinfo is None:
@@ -620,7 +759,11 @@ def verify_model_inputs(
                 else None,
             )
         )
+    raw_documents = verify_input_source_bytes(conn, tuple(inputs), source_context)
     return ModelInputReceipt(
+        schema_version="dcf_model_inputs.v3",
+        source_integrity="present_bytes_verified",
+        raw_documents=raw_documents,
         recipe=recipe,
         request=request,
         verified_at=cutoff,

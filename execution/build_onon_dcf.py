@@ -31,6 +31,7 @@ from dcf.input_evidence import (
     InputEvidenceError,
     ModelInputReceipt,
     ModelInputRequest,
+    SourceReadContext,
     canonical_digest,
 )
 from dcf.onon_inputs import (
@@ -94,6 +95,7 @@ def load_verified_inputs(
     as_of: datetime,
     expected_sha256: str | None = None,
     input_receipt: ModelInputReceipt | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> tuple[dict[str, float], ModelInputReceipt, dict[str, object]]:
     request, payload, digest = read_request(assumptions_path, expected_sha256=expected_sha256)
     if frozenset(request.assumptions) != ASSUMPTION_KEYS:
@@ -106,7 +108,9 @@ def load_verified_inputs(
         raise InputEvidenceError("onon_market_observation_clock_mismatch")
     with connect_sqlite(require_db_path(db_path), role=SQLiteConnectionRole.READ_ONLY) as conn:
         conn.execute("BEGIN")
-        values, receipt = prepare_onon_inputs(conn, request, effective_inputs=values, as_of=as_of)
+        values, receipt = prepare_onon_inputs(
+            conn, request, effective_inputs=values, as_of=as_of, source_context=source_context
+        )
         if input_receipt is not None:
             if (
                 input_receipt.request != request
@@ -114,7 +118,13 @@ def load_verified_inputs(
                 or input_receipt.assumptions_source_sha256 != digest
             ):
                 raise InputEvidenceError("model_input_receipt_authority_mismatch")
-            verify_onon_inputs(conn, input_receipt, effective_inputs=values, as_of=as_of)
+            verify_onon_inputs(
+                conn,
+                input_receipt,
+                effective_inputs=values,
+                as_of=as_of,
+                source_context=source_context,
+            )
             receipt = input_receipt
     return (
         values,
@@ -265,6 +275,7 @@ def persist_dcf_run(
     artifact_promotion: ArtifactPromotion,
     scenario_acceptance: ScenarioAcceptance | None = None,
     scenario_acceptance_path: Path | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> bool:
     if (
         receipt.assumptions_source_path != str(assumptions_path.resolve())
@@ -300,7 +311,11 @@ def persist_dcf_run(
     ) as conn:
         conn.execute("BEGIN IMMEDIATE")
         bridge = build_onon_equity_bridge(
-            conn, receipt, effective_inputs=inputs, as_of=calculated_at
+            conn,
+            receipt,
+            effective_inputs=inputs,
+            as_of=calculated_at,
+            source_context=source_context,
         )
         provenance = build_file_provenance(
             ticker="ONON",
@@ -369,12 +384,17 @@ def _main_owned() -> int:
     prior_receipt = (
         ModelInputReceipt.model_validate_json(Path(prior_path).read_bytes()) if prior_path else None
     )
+    source_root = os.environ.get("DCF_SOURCE_STATE_ROOT")
+    source_context = (
+        SourceReadContext.for_sec_state_root(Path(source_root)) if source_root else None
+    )
     inputs, receipt, payload = load_verified_inputs(
         db_path=db,
         assumptions_path=assumptions_path,
         as_of=datetime.now(UTC),
         expected_sha256=os.environ.get("DCF_ONON_ASSUMPTIONS_SHA256"),
         input_receipt=prior_receipt,
+        source_context=source_context,
     )
     output = model_output(inputs)
     reviewed = os.environ.get("DCF_ONON_SCENARIO_ACCEPTANCE_PATH", "").strip()
@@ -396,6 +416,7 @@ def _main_owned() -> int:
         artifact_promotion=promotion,
         scenario_acceptance=review,
         scenario_acceptance_path=review_path,
+        source_context=source_context,
     )
     print(
         f"RESULT\tONON\tvalue/sh=${float(cast(float, output['vps'])):.2f}\tdcf_runs={'ok' if persisted else 'skip'}"

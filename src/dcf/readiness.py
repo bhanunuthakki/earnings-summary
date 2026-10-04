@@ -12,11 +12,17 @@ import sqlite3
 from datetime import UTC, date, datetime, timedelta
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from dcf import meli_inputs, onon_inputs
 from dcf.grade_evidence import DcfGradeEvidence, load_dcf_grade_evidence
-from dcf.input_evidence import InputEvidenceError, ModelInputReceipt, canonical_digest
+from dcf.input_evidence import (
+    InputEvidenceError,
+    ModelInputReceipt,
+    RawDocumentWitness,
+    SourceReadContext,
+    canonical_digest,
+)
 from dcf.scenario_acceptance import ScenarioAcceptance, verify_scenario_acceptance
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import (
@@ -61,6 +67,10 @@ class ValuationReadiness(BaseModel):
     financial_inputs: tuple[FinancialInputEvidence, ...] = ()
     financial_input_completeness: Literal["verified", "unverified"] = "unverified"
     latest_reporting_period_status: Literal["verified", "unverified"] = "unverified"
+    source_integrity: Literal["unverified", "present_bytes_verified"] = "unverified"
+    raw_document_verifications: tuple[RawDocumentWitness, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
     assumption_reviewed_at: str | None = None
     scenario_reviewed_at: str | None = None
     scenario_review_attribution: Literal["analyst", "owner"] | None = None
@@ -218,7 +228,12 @@ def _legacy_inputs(
     return inputs
 
 
-def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> ValuationReadiness:
+def _assess(
+    conn: sqlite3.Connection,
+    ticker: str,
+    cutoff: datetime,
+    source_context: SourceReadContext | None,
+) -> ValuationReadiness:
     evidence = load_dcf_grade_evidence(conn, ticker)
     if evidence.status != "available":
         return ValuationReadiness(
@@ -269,6 +284,7 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
     inputs: tuple[FinancialInputEvidence, ...] = ()
     scenario_reviewed_at: str | None = None
     scenario_review_attribution: Literal["analyst", "owner"] | None = None
+    raw_documents: tuple[RawDocumentWitness, ...] = ()
     raw_receipt = (evidence.provenance or {}).get("model_input_receipt")
     if ticker in {"MELI", "ONON"} and raw_receipt is not None:
         try:
@@ -285,7 +301,11 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
                     _mapping(snapshot.get("effective_model_inputs"))
                 )
                 verified = meli_inputs.verify_meli_inputs(
-                    conn, receipt, effective_inputs=effective, as_of=cutoff
+                    conn,
+                    receipt,
+                    effective_inputs=effective,
+                    as_of=cutoff,
+                    source_context=source_context,
                 )
                 replay = meli_inputs.model_output(effective)
             else:
@@ -293,7 +313,11 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
                     _mapping(snapshot.get("effective_model_inputs"))
                 )
                 verified = onon_inputs.verify_onon_inputs(
-                    conn, receipt, effective_inputs=effective, as_of=cutoff
+                    conn,
+                    receipt,
+                    effective_inputs=effective,
+                    as_of=cutoff,
+                    source_context=source_context,
                 )
                 if evidence.checks is None or not evidence.checks.market_price_consistent:
                     raise InputEvidenceError("market_price_receipt_mismatch")
@@ -324,7 +348,11 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
                     raise InputEvidenceError("reviewed_market_clock_mismatch")
                 replay = onon_inputs.model_output(effective)
                 bridge = onon_inputs.build_onon_equity_bridge(
-                    conn, receipt, effective_inputs=effective, as_of=cutoff
+                    conn,
+                    receipt,
+                    effective_inputs=effective,
+                    as_of=cutoff,
+                    source_context=source_context,
                 )
                 bridge_detail = bridge.to_dict()
                 if canonical_digest(
@@ -357,6 +385,7 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
                 )
                 for item in verified.inputs
             )
+            raw_documents = verified.raw_documents
             verified_population = True
             outputs = [
                 ("vps", evidence.npv_per_share),
@@ -450,6 +479,8 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
         market_status=market_status,
         financial_period_end=max(periods, default=None),
         financial_inputs=inputs,
+        source_integrity="present_bytes_verified" if raw_documents else "unverified",
+        raw_document_verifications=raw_documents,
         assumption_reviewed_at=assumption_reviewed_at,
         scenario_reviewed_at=scenario_reviewed_at,
         scenario_review_attribution=scenario_review_attribution,
@@ -489,7 +520,11 @@ def _scenario_replay(
 
 
 def load_valuation_readiness(
-    conn: sqlite3.Connection, ticker: str, *, as_of: datetime
+    conn: sqlite3.Connection,
+    ticker: str,
+    *,
+    as_of: datetime,
+    source_context: SourceReadContext | None = None,
 ) -> ValuationReadiness:
     """Assess persisted evidence under one read snapshot; no writes/network/fallback.
 
@@ -508,7 +543,7 @@ def load_valuation_readiness(
         owns_snapshot = not conn.in_transaction
         if owns_snapshot:
             conn.execute("BEGIN")
-        return _assess(conn, ticker, cutoff)
+        return _assess(conn, ticker, cutoff, source_context)
     except sqlite3.Error:
         return ValuationReadiness(
             ticker=ticker,

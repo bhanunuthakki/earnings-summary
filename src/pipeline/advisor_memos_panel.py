@@ -40,6 +40,7 @@ from advisor.context import (
     screen_swap_candidates,
 )
 from advisor.store import AdvisorMemoRow, StanceScoreRow, list_memos, list_scores_for_memos
+from dcf.input_evidence import SourceReadContext
 from identity import DEFAULT_USER_ID
 from pipeline.allocation_decisions_panel import portfolio_holdings
 from pipeline.cc_action import CC_ACTION_CSS, CC_ACTION_JS
@@ -64,13 +65,14 @@ def render_advisor_memos_panel(
     *,
     user_id: str = DEFAULT_USER_ID,
     margin_pp: float = DEFAULT_MARGIN_PP,
+    source_context: SourceReadContext | None = None,
 ) -> str:
     """The Memos tab fragment. Pure DB reads — memo generation only ever
     happens through the run bar's explicit POST (LLM spend stays deliberate)."""
     conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
     try:
-        holdings_val, candidates_val = load_valuations(conn)
+        holdings_val, candidates_val = load_valuations(conn, source_context=source_context)
         holdings = portfolio_holdings(conn)
     finally:
         conn.close()

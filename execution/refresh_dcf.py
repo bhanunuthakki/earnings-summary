@@ -71,7 +71,7 @@ from dcf.artifact_promotion import (
     hold_dcf_artifacts,
     unique_staged_path,
 )
-from dcf.input_evidence import InputEvidenceError, ModelInputRequest
+from dcf.input_evidence import InputEvidenceError, ModelInputRequest, SourceReadContext
 from dcf.meli_inputs import RECIPE as MELI_INPUT_RECIPE
 from dcf.onon_inputs import RECIPE as ONON_INPUT_RECIPE
 from dcf.provenance import DcfInputProvenance, input_clock_summary
@@ -493,6 +493,7 @@ def main() -> int:
             valuation_year=args.valuation_year,
             meli_assumptions_path=args.meli_assumptions_path,
             onon_assumptions_path=args.onon_assumptions_path,
+            source_state_root=args.state_root,
         )
         results.append(result)
     print(json.dumps(results, indent=2, default=str))
@@ -516,6 +517,7 @@ def _parse_args() -> argparse.Namespace:
         default=PROJECT_ROOT,
         help="Repo root containing data/, dcf/, micro_thesis/. Default: this repo.",
     )
+    p.add_argument("--state-root", type=Path, help="Explicit model source-byte read authority.")
     p.add_argument(
         "--workbook",
         type=Path,
@@ -623,6 +625,7 @@ def refresh_one(
     meli_assumptions_path: Path | None = None,
     onon_assumptions_path: Path | None = None,
     input_workbook: Path | None = None,
+    source_state_root: Path | None = None,
 ) -> dict[str, object]:
     """Refresh under one artifact owner; imported inputs never replace live bytes."""
     try:
@@ -637,6 +640,7 @@ def refresh_one(
                 meli_assumptions_path=meli_assumptions_path,
                 onon_assumptions_path=onon_assumptions_path,
                 input_workbook=input_workbook,
+                source_state_root=source_state_root,
             )
     except JobAlreadyRunningError:
         return {"ticker": ticker, "status": "blocked", "reason": "dcf_writer_busy"}
@@ -659,6 +663,7 @@ def _refresh_one_owned(
     meli_assumptions_path: Path | None = None,
     onon_assumptions_path: Path | None = None,
     input_workbook: Path | None = None,
+    source_state_root: Path | None = None,
 ) -> dict[str, object]:
     """Refresh one ticker's redesigned DCF. Returns a structured result dict.
 
@@ -685,17 +690,31 @@ def _refresh_one_owned(
         explicit_path = meli_assumptions_path or (Path(raw_path) if raw_path else None)
         if explicit_path is not None:
             return _refresh_meli_sotp(
-                ticker, repo_root, db_path=db_path, assumptions_path=explicit_path
+                ticker,
+                repo_root,
+                db_path=db_path,
+                assumptions_path=explicit_path,
+                source_state_root=source_state_root,
             )
     if ticker.upper() == "ONON":
         raw_path = os.environ.get("DCF_ONON_ASSUMPTIONS_PATH", "").strip()
         explicit_path = onon_assumptions_path or (Path(raw_path) if raw_path else None)
         if explicit_path is not None:
-            return _refresh_onon(ticker, repo_root, db_path=db_path, assumptions_path=explicit_path)
+            return _refresh_onon(
+                ticker,
+                repo_root,
+                db_path=db_path,
+                assumptions_path=explicit_path,
+                source_state_root=source_state_root,
+            )
     model, suggestion = _valuation_model(repo_root, ticker)
     if model == "onon_economic_fcff":
         return _refresh_onon(
-            ticker, repo_root, db_path=db_path, assumptions_path=onon_assumptions_path
+            ticker,
+            repo_root,
+            db_path=db_path,
+            assumptions_path=onon_assumptions_path,
+            source_state_root=source_state_root,
         )
     if model == "bank_excess_return":
         return _refresh_bank(ticker, repo_root, db_path=db_path)
@@ -707,7 +726,11 @@ def _refresh_one_owned(
         return _refresh_platform(ticker, repo_root, db_path=db_path)
     if model == "meli_platform_sotp":
         return _refresh_meli_sotp(
-            ticker, repo_root, db_path=db_path, assumptions_path=meli_assumptions_path
+            ticker,
+            repo_root,
+            db_path=db_path,
+            assumptions_path=meli_assumptions_path,
+            source_state_root=source_state_root,
         )
     if model != "fcff_dcf":
         # "new" (Opus proposed an archetype the pipeline doesn't have yet), "none",
@@ -1038,7 +1061,12 @@ def _refresh_platform(ticker: str, repo_root: Path, *, db_path: Path) -> dict[st
 
 
 def _refresh_meli_sotp(
-    ticker: str, repo_root: Path, *, db_path: Path, assumptions_path: Path | None
+    ticker: str,
+    repo_root: Path,
+    *,
+    db_path: Path,
+    assumptions_path: Path | None,
+    source_state_root: Path | None = None,
 ) -> dict[str, object]:
     """Build the MELI sum-of-the-parts platform DCF
     (``execution/build_meli_platform_dcf.py``) to ``dcf/<T>.xlsx`` — values
@@ -1063,6 +1091,20 @@ def _refresh_meli_sotp(
         assumptions_path, authority_sha256 = _meli_authority(repo_root, assumptions_path)
     except InputEvidenceError as exc:
         return {"ticker": ticker.upper(), "status": "error", "reason": str(exc)}
+    if source_state_root is None:
+        return {
+            "ticker": ticker.upper(),
+            "status": "error",
+            "reason": "model_input_source_context_unavailable",
+        }
+    try:
+        SourceReadContext.for_sec_state_root(source_state_root)
+    except ValueError:
+        return {
+            "ticker": ticker.upper(),
+            "status": "error",
+            "reason": "model_input_source_context_invalid",
+        }
     t = ticker.upper()
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
     tmp = unique_staged_path(dest, "rebuild")
@@ -1071,6 +1113,7 @@ def _refresh_meli_sotp(
         os.environ,
         DCF_TICKER=t,
         DCF_REPO_ROOT=str(repo_root),
+        DCF_SOURCE_STATE_ROOT=str(source_state_root),
         DCF_DEST=str(tmp),
         DCF_PROMOTE_DEST=str(dest),
         EARNINGS_SUMMARY_DB_PATH=str(db_path),
@@ -1112,7 +1155,12 @@ def _refresh_meli_sotp(
 
 
 def _refresh_onon(
-    ticker: str, repo_root: Path, *, db_path: Path, assumptions_path: Path | None
+    ticker: str,
+    repo_root: Path,
+    *,
+    db_path: Path,
+    assumptions_path: Path | None,
+    source_state_root: Path | None = None,
 ) -> dict[str, object]:
     """Refresh the verified five-year economic FCFF through the existing owner."""
     if assumptions_path is None:
@@ -1136,6 +1184,20 @@ def _refresh_onon(
         )
     except InputEvidenceError as exc:
         return {"ticker": ticker.upper(), "status": "error", "reason": str(exc)}
+    if source_state_root is None:
+        return {
+            "ticker": ticker.upper(),
+            "status": "error",
+            "reason": "model_input_source_context_unavailable",
+        }
+    try:
+        SourceReadContext.for_sec_state_root(source_state_root)
+    except ValueError:
+        return {
+            "ticker": ticker.upper(),
+            "status": "error",
+            "reason": "model_input_source_context_invalid",
+        }
     t = ticker.upper()
     dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
     tmp = unique_staged_path(dest, "rebuild")
@@ -1144,6 +1206,7 @@ def _refresh_onon(
         os.environ,
         DCF_TICKER=t,
         DCF_REPO_ROOT=str(repo_root),
+        DCF_SOURCE_STATE_ROOT=str(source_state_root),
         DCF_DEST=str(tmp),
         DCF_PROMOTE_DEST=str(dest),
         EARNINGS_SUMMARY_DB_PATH=str(db_path),

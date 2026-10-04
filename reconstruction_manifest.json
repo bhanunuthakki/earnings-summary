@@ -77,13 +77,19 @@
       "entrypoints": [
         "execution/run_morning_pipeline.py",
         "execution/refresh_expected_earnings.py",
-        "execution/refresh_cache.py"
+        "execution/refresh_cache.py",
+        "execution/refresh_dcf.py",
+        "execution/refresh_dispatch.py",
+        "execution/dcf_sheets.py",
+        "execution/run_advisor_memos.py",
+        "execution/run_socratic_questions.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
-        "pytest tests/test_pipeline*.py -q"
+        "pytest tests/test_pipeline*.py -q",
+        "pytest tests/test_source_context_entrypoints.py tests/test_refresh_dispatch.py -q"
       ],
       "documentation": [
         "AGENTS.md",
@@ -190,7 +196,9 @@
         "src/compute/thesis_metric_series.py",
         "src/evals/kpi_repair_judge.py",
         "src/dcf/reviewed_input_roles.py",
-        "execution/review_onon_input_roles.py"
+        "execution/review_onon_input_roles.py",
+        "src/dcf/input_evidence.py",
+        "src/dcf/readiness.py"
       ],
       "dependencies": [
         "core_data_layer"
@@ -198,7 +206,8 @@
       "test_commands": [
         "pytest tests/test_metrics_engine.py -q",
         "pytest tests/test_onon_model.py tests/test_onon_inputs.py tests/test_build_onon_dcf.py tests/test_scenario_acceptance.py -q",
-        "pytest tests/test_reviewed_input_roles.py tests/test_review_onon_input_roles.py -q"
+        "pytest tests/test_reviewed_input_roles.py tests/test_review_onon_input_roles.py -q",
+        "pytest tests/test_model_source_bytes.py tests/test_source_context_entrypoints.py tests/test_meli_input_evidence.py tests/test_onon_explicit_routing.py -q"
       ],
       "documentation": [
         "directives/data_provenance.md"

@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from db_paths import require_db_path
+from dcf.input_evidence import SourceReadContext
 from dcf.readiness import load_valuation_readiness
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -22,7 +23,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-path", type=Path)
     parser.add_argument("--ticker", required=True)
+    parser.add_argument("--state-root", type=Path)
     args = parser.parse_args(argv)
+    source_context = (
+        SourceReadContext.for_sec_state_root(args.state_root) if args.state_root else None
+    )
     try:
         db_path = require_db_path(args.db_path)
     except (RuntimeError, FileNotFoundError):
@@ -36,7 +41,9 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "unavailable", "reason_code": "database_open_failed"}))
         return 3
     try:
-        receipt = load_valuation_readiness(conn, args.ticker, as_of=datetime.now(UTC))
+        receipt = load_valuation_readiness(
+            conn, args.ticker, as_of=datetime.now(UTC), source_context=source_context
+        )
     finally:
         conn.close()
     print(json.dumps(receipt.model_dump(mode="json"), indent=2, sort_keys=True))

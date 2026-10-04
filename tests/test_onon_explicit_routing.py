@@ -31,6 +31,50 @@ def package(path: Path) -> Path:
     return path
 
 
+def test_explicit_onon_source_authority_is_forwarded_separately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = package(tmp_path / "reviewed.json")
+    state = tmp_path / "state"
+    code = tmp_path / "code"
+    seen: list[dict[str, str]] = []
+
+    def child(
+        args: list[str], *, env: dict[str, str], **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        seen.append(env)
+        assert env["DCF_SOURCE_STATE_ROOT"] == str(state)
+        assert env["DCF_REPO_ROOT"] == str(code)
+        return subprocess.CompletedProcess(args, 1, stdout="", stderr="synthetic child")
+
+    monkeypatch.setattr(refresh_dcf.subprocess, "run", child)
+    result = refresh_dcf.refresh_one(
+        "ONON",
+        code,
+        tmp_path / "db",
+        valuation_year=2026,
+        onon_assumptions_path=artifact,
+        source_state_root=state,
+    )
+    assert result["format"] == "onon_economic_fcff"
+    assert len(seen) == 1
+
+
+def test_onon_code_and_database_paths_do_not_grant_source_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    artifact = package(tmp_path / "reviewed.json")
+
+    def no_child(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise AssertionError("Missing source authority must refuse before child launch")
+
+    monkeypatch.setattr(refresh_dcf.subprocess, "run", no_child)
+    result = refresh_dcf.refresh_one(
+        "ONON", tmp_path, tmp_path / "db", valuation_year=2026, onon_assumptions_path=artifact
+    )
+    assert result["reason"] == "model_input_source_context_unavailable"
+
+
 @pytest.mark.parametrize("via_environment", [False, True])
 def test_clean_checkout_routes_explicit_onon_package(
     tmp_path: Path,
@@ -60,6 +104,7 @@ def test_clean_checkout_routes_explicit_onon_package(
         tmp_path / "db",
         valuation_year=2026,
         onon_assumptions_path=None if via_environment else artifact,
+        source_state_root=tmp_path / "state",
     )
     assert result["format"] == "onon_economic_fcff"
     assert len(seen) == 1
@@ -173,6 +218,7 @@ def test_onon_child_failure_or_wrong_result_cannot_claim_success(
         tmp_path / "synthetic.db",
         valuation_year=2026,
         onon_assumptions_path=artifact,
+        source_state_root=tmp_path / "state",
     )
     assert result["status"] == "failed"
     assert live.read_bytes() == b"previous workbook must survive"
