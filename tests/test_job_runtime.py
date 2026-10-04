@@ -104,6 +104,7 @@ def test_schema_preflight_uses_state_database_and_code_migrations(
 _PORTFOLIO_DB_POLICY = {
     "backfill-earnings-surprises-fetch": "market-data-refresh",
     "backfill-earnings-surprises-ingest": "market-data-refresh",
+    "backfill-financial-fact-resolutions": "portfolio-db",
     "backfill-transcripts": "transcript-refresh",
     "check-comp-set-drift": "comp-metrics",
     "coach-pings": "notification-delivery",
@@ -659,12 +660,15 @@ def test_every_cron_portfolio_db_job_has_an_explicit_reviewed_classification() -
 
 def test_only_proven_bounded_database_jobs_keep_the_coarse_mutex() -> None:
     # db-gc owns deliberate batch/VACUUM maintenance; expiry is a bounded row
-    # update; weekly validation is a measured seconds-long confidence rescore.
+    # update; weekly validation is a measured seconds-long confidence rescore;
+    # the financial-fact resolution backfill is one bounded, checkpointed
+    # ledger+selection transaction per run with no external I/O.
     # Every job that reads a large file corpus or can perform external I/O is
     # intentionally absent even when it eventually writes portfolio.db.
     assert {
         job_name for job_name, lane in _PORTFOLIO_DB_POLICY.items() if lane == "portfolio-db"
     } == {
+        "backfill-financial-fact-resolutions",
         "db-gc",
         "weekly-cleanup-expire-research",
         "weekly-validation",

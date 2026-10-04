@@ -895,3 +895,38 @@ operator control. `tests/test_job_runtime.py` covers signaled, running, unknown
 and identity-mismatch decisions. `tests/test_job_runtime_process_tree.py` retains
 the Windows held-handle and process-tree checks. Local tests do not establish
 deployment or a successful future scheduled run.
+
+### Scheduled financial-fact resolution backfill
+
+`earnings-summary\backfill_financial_fact_resolutions` (daily 07:45,
+`cron/backfill_financial_fact_resolutions.task.xml`) registers the previously
+manual-only resolution-ledger backfill CLI as a scheduled task, replacing the
+manual-only execution path. The wrapper invokes
+`execution/backfill_financial_fact_resolutions.py --apply --batch-size 500`
+with no `--db`, so the job resolves the configured runtime database authority
+exactly like every other portfolio-writer job; the targeted
+`--fact-table/--fact-row-id` repair mode remains deliberately internal-only
+with its own `targeted-fact-resolution` lock owner. Each run takes one
+bounded, transactionally committed capture/resolve batch with its explicit
+`.tmp/financial-fact-resolution-cutover/state.json` checkpoint (dry-run stays
+the CLI default and writes nothing), then converges one bounded window of the
+`current_fact_selection` materialization (migration 0049) toward the immutable
+resolution ledger. The window writes only real differences, wraps at the end of
+the captured key space, and issues no writes once converged; the materialized
+table is written only by the resolution layer, never by readers. The job is
+deterministic local database work with no LLM leg, so no
+`directives/llm_quota_scheduling.md` window applies.
+
+Operations surface disposition: `primary surface`. The canonical manifest owns
+this task, so the existing dynamic Jobs projection shows its declaration, daily
+cadence, registered identity, latest attempt, and failure state; the standard
+job-runtime health receipt remains the run's truthful evidence. The wrapper
+keeps the coarse `portfolio-db` write set: the job is a proven-bounded, purely
+local database batch with no external I/O, so it joins `db-gc` and
+`weekly-validation` in the reviewed coarse-mutex classifications instead of
+getting a narrow lane. No new dashboard control, provider, or operator action
+is added. Tests: `tests/test_current_fact_selection.py`
+(bounded/checkpointed/idempotent semantics, single-writer boundary,
+materialization equality), `tests/test_scheduler_manifest.py` (manifest and
+artifact coverage), and `tests/test_job_runtime.py` (reviewed write-set
+classification and coarse-mutex whitelist).

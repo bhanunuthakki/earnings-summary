@@ -29,6 +29,10 @@ $existing = Get-ScheduledTask -TaskName 'backfill_earnings_surprises' -TaskPath 
 if ($existing) { Export-ScheduledTask -TaskName 'backfill_earnings_surprises' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'backfill_earnings_surprises.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'backfill_earnings_surprises' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'backfill_earnings_surprises.task.xml')
 & $taskSecurityScript -TaskPath '\earnings-summary\backfill_earnings_surprises' -RenderedXmlPath (Join-Path $renderDir 'backfill_earnings_surprises.task.xml')
+$existing = Get-ScheduledTask -TaskName 'backfill_financial_fact_resolutions' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
+if ($existing) { Export-ScheduledTask -TaskName 'backfill_financial_fact_resolutions' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'backfill_financial_fact_resolutions.task.xml') -Encoding Unicode }
+Register-ManifestTask -TaskName 'backfill_financial_fact_resolutions' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'backfill_financial_fact_resolutions.task.xml')
+& $taskSecurityScript -TaskPath '\earnings-summary\backfill_financial_fact_resolutions' -RenderedXmlPath (Join-Path $renderDir 'backfill_financial_fact_resolutions.task.xml')
 $existing = Get-ScheduledTask -TaskName 'backfill_transcripts' -TaskPath '\earnings-summary\' -ErrorAction SilentlyContinue
 if ($existing) { Export-ScheduledTask -TaskName 'backfill_transcripts' -TaskPath '\earnings-summary\' | Set-Content -LiteralPath (Join-Path $rollbackDir 'backfill_transcripts.task.xml') -Encoding Unicode }
 Register-ManifestTask -TaskName 'backfill_transcripts' -TaskPath '\earnings-summary\' -XmlPath (Join-Path $renderDir 'backfill_transcripts.task.xml')

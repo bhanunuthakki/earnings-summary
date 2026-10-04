@@ -4,6 +4,12 @@ The database migration captures future fact writes.  This module owns the
 bounded legacy backfill, complete-candidate resolution policy, and the one
 read-side compatibility boundary.  It never averages or deletes candidates:
 material ambiguity is recorded and canonical reads fail closed.
+
+This module is also the single writer of ``current_fact_selection``, the
+physical materialization of the resolution ledger's current resolved
+selection (migration 0049).  The table mirrors the ledger inside each persist
+transaction, and the bounded, checkpointed convergence window keeps it exactly
+equal to what the resolved views serve.
 """
 
 from __future__ import annotations
@@ -91,6 +97,7 @@ class FactCutoverCheckpoint(_CutoverModel):
     table_index: int = Field(default=0, ge=0, le=len(_TABLES))
     last_row_id: int = Field(default=0, ge=0)
     updated_at: datetime
+    selection_cursor: str = Field(default="")
 
 
 class FactCutoverSummary(BaseModel):
@@ -107,6 +114,10 @@ class FactCutoverSummary(BaseModel):
     resolutions_created: int = 0
     resolutions_replayed: int = 0
     unresolved_material: int = 0
+    selection_keys_examined: int = 0
+    selection_rows_written: int = 0
+    selection_rows_deleted: int = 0
+    selection_pass_wrapped: bool = False
     checkpoint_complete: bool = False
     finding_counts: dict[str, int] = Field(default_factory=dict[str, int])
 
@@ -676,6 +687,15 @@ def execute_fact_cutover(
                 summary.resolutions_replayed += 1
             if result.resolution_status == "unresolved_material":
                 summary.unresolved_material += 1
+        selection = refresh_current_fact_selection(
+            conn,
+            batch_size=request.batch_size,
+            cursor=checkpoint.selection_cursor,
+        )
+        summary.selection_keys_examined = selection.keys_examined
+        summary.selection_rows_written = selection.rows_written
+        summary.selection_rows_deleted = selection.rows_deleted
+        summary.selection_pass_wrapped = selection.wrapped
         conn.commit()
     except Exception:
         conn.rollback()
@@ -686,6 +706,7 @@ def execute_fact_cutover(
             table_index=next_checkpoint.table_index,
             last_row_id=next_checkpoint.last_row_id,
             updated_at=datetime.now(UTC),
+            selection_cursor=selection.next_cursor,
         ),
     )
     summary.checkpoint_complete = _is_complete(conn, next_checkpoint)
@@ -818,6 +839,8 @@ def resolve_fact_logical_key(
         candidate_count=len(candidates),
         material_dissent=material_dissent,
     )
+    if _reconcile_current_fact_selection(conn, logical_key):
+        _emit_event("current_fact_selection_reconciled", logical_key=logical_key)
     return FactResolutionResult(
         resolution_id=resolution_id,
         logical_key=logical_key,
@@ -985,6 +1008,182 @@ def capture_fact_row_observation(
         recorded_at=recorded_at,
     )
     return created
+
+
+@dataclass(frozen=True, slots=True)
+class FactLogicalKeyComponents:
+    """The governed-reader lookup columns decomposed from one fact logical key."""
+
+    fact_table: FactTable
+    ticker: str
+    concept_key: str
+    period_end: str
+    fiscal_period_type: str
+
+
+def parse_fact_logical_key(logical_key: str) -> FactLogicalKeyComponents:
+    """Split ``{fact_table}:{ticker}:{concept}:{period_end}:{fpt}`` into columns.
+
+    The concept segment may itself contain colons (``kpi_definition:<id>``),
+    so only the first two and last two segments are positional. The fact table
+    segment must name one of the two governed legacy fact tables.
+    """
+
+    parts = logical_key.split(":")
+    if len(parts) < 5 or parts[0] not in _TABLES or not parts[1] or not parts[-2] or not parts[-1]:
+        raise ValueError(f"not a fact logical key: {logical_key!r}")
+    fact_table: FactTable = parts[0]  # narrowed by the _TABLES membership check
+    return FactLogicalKeyComponents(
+        fact_table=fact_table,
+        ticker=parts[1],
+        concept_key=":".join(parts[2:-2]),
+        period_end=parts[-2],
+        fiscal_period_type=parts[-1],
+    )
+
+
+class CurrentFactSelectionSync(BaseModel):
+    """Machine-readable result of one bounded selection-convergence window."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    available: bool = True
+    keys_examined: int = 0
+    rows_written: int = 0
+    rows_deleted: int = 0
+    wrapped: bool = False
+    next_cursor: str = ""
+
+
+def refresh_current_fact_selection(
+    conn: sqlite3.Connection,
+    *,
+    batch_size: int,
+    cursor: str = "",
+) -> CurrentFactSelectionSync:
+    """Reconcile one bounded window of logical keys with the ledger's current state.
+
+    ``current_fact_selection`` is a derived materialization of exactly what the
+    resolved views serve: the latest ``observation_resolution_revisions`` row
+    per logical key whose ``fact_resolution_outcomes`` status is ``resolved``.
+    Each window recomputes the ledger's exact row for every captured key in a
+    bounded key range — and for any table row inside that same range — writing
+    only actual differences and deleting rows the ledger no longer selects, so
+    a converged database issues no writes at all. When a forward pass exhausts
+    the captured keys, the cursor wraps so later bounded passes re-verify the
+    whole key space. The caller owns the transaction: a failed window rolls
+    back with its caller's batch.
+    """
+
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    if not _current_fact_selection_available(conn):
+        log.info(
+            "current_fact_selection_unavailable",
+            extra={"event": "current_fact_selection_unavailable"},
+        )
+        return CurrentFactSelectionSync(available=False, next_cursor=cursor)
+    rows_written = 0
+    rows_deleted = 0
+    wrapped = False
+    window = conn.execute(
+        "SELECT DISTINCT logical_key FROM fact_observation_revisions "
+        "WHERE logical_key > ? ORDER BY logical_key LIMIT ?",
+        (cursor, batch_size),
+    ).fetchall()
+    if not window:
+        # No captured key remains beyond the cursor, so every selection row
+        # there lacks a ledger anchor and is drift by definition. Delete the
+        # stragglers before the pass wraps (or finishes, when no key exists).
+        strays = conn.execute(
+            "SELECT logical_key FROM current_fact_selection WHERE logical_key > ?",
+            (cursor,),
+        ).fetchall()
+        for stray in strays:
+            conn.execute(
+                "DELETE FROM current_fact_selection WHERE logical_key = ?",
+                (str(stray[0]),),
+            )
+        rows_deleted = len(strays)
+        if cursor == "":
+            return CurrentFactSelectionSync(rows_deleted=rows_deleted, next_cursor="")
+        wrapped = True
+        cursor = ""
+        window = conn.execute(
+            "SELECT DISTINCT logical_key FROM fact_observation_revisions "
+            "WHERE logical_key > '' ORDER BY logical_key LIMIT ?",
+            (batch_size,),
+        ).fetchall()
+        if not window:
+            return CurrentFactSelectionSync(
+                rows_deleted=rows_deleted,
+                wrapped=True,
+                next_cursor="",
+            )
+    next_cursor = str(window[-1][0])
+    desired = {
+        str(row["logical_key"]): row
+        for row in conn.execute(
+            "SELECT link.logical_key, link.fact_table, link.fact_row_id, "
+            "link.fact_revision, link.observation_id, resolution.resolution_id, "
+            "resolution.revision AS resolution_revision "
+            "FROM fact_observation_revisions AS link "
+            "JOIN v_observation_resolution_current AS resolution "
+            "ON resolution.selected_observation_id = link.observation_id "
+            "JOIN fact_resolution_outcomes AS outcome "
+            "ON outcome.resolution_id = resolution.resolution_id "
+            "WHERE link.logical_key > ? AND link.logical_key <= ? "
+            "AND outcome.resolution_status = 'resolved' "
+            "AND link.fact_revision = (SELECT MAX(latest.fact_revision) "
+            "FROM fact_observation_revisions AS latest "
+            "WHERE latest.fact_table = link.fact_table "
+            "AND latest.fact_row_id = link.fact_row_id)",
+            (cursor, next_cursor),
+        ).fetchall()
+    }
+    existing = {
+        str(row["logical_key"]): row
+        for row in conn.execute(
+            "SELECT logical_key, fact_table, fact_row_id, fact_revision, "
+            "observation_id, resolution_id, resolution_revision, ticker, "
+            "concept_key, period_end, fiscal_period_type "
+            "FROM current_fact_selection "
+            "WHERE logical_key > ? AND logical_key <= ?",
+            (cursor, next_cursor),
+        ).fetchall()
+    }
+    rows_written = 0
+    # The window enumerates captured keys, but any table row inside the same
+    # range is in scope too: a row whose key has no desired ledger state is
+    # drift and must not survive the window just because no link names it.
+    in_scope = sorted({str(row[0]) for row in window} | set(existing))
+    for logical_key in in_scope:
+        ledger_row = desired.get(logical_key)
+        table_row = existing.get(logical_key)
+        if ledger_row is None:
+            if table_row is not None:
+                conn.execute(
+                    "DELETE FROM current_fact_selection WHERE logical_key = ?",
+                    (logical_key,),
+                )
+                rows_deleted += 1
+            continue
+        components = parse_fact_logical_key(logical_key)
+        payload = _selection_payload(ledger_row, components)
+        if table_row is not None and tuple(table_row)[1:] == payload:
+            continue
+        conn.execute(
+            _SELECTION_UPSERT_SQL,
+            (logical_key, *payload),
+        )
+        rows_written += 1
+    return CurrentFactSelectionSync(
+        keys_examined=len(window),
+        rows_written=rows_written,
+        rows_deleted=rows_deleted,
+        wrapped=wrapped,
+        next_cursor=next_cursor,
+    )
 
 
 def _capture_fact_row(
@@ -1551,6 +1750,103 @@ def _current_resolution(conn: sqlite3.Connection, logical_key: str) -> sqlite3.R
     if not isinstance(row, sqlite3.Row):
         raise RuntimeError("fact resolution requires sqlite3.Row row_factory")
     return row
+
+
+def _current_fact_selection_available(conn: sqlite3.Connection) -> bool:
+    return _object_exists(conn, "current_fact_selection", object_type="table")
+
+
+_SELECTION_UPSERT_SQL = (
+    "INSERT INTO current_fact_selection "
+    "(logical_key, fact_table, fact_row_id, fact_revision, observation_id, "
+    "resolution_id, resolution_revision, ticker, concept_key, period_end, "
+    "fiscal_period_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+    "ON CONFLICT(logical_key) DO UPDATE SET "
+    "fact_table=excluded.fact_table, fact_row_id=excluded.fact_row_id, "
+    "fact_revision=excluded.fact_revision, observation_id=excluded.observation_id, "
+    "resolution_id=excluded.resolution_id, "
+    "resolution_revision=excluded.resolution_revision, ticker=excluded.ticker, "
+    "concept_key=excluded.concept_key, period_end=excluded.period_end, "
+    "fiscal_period_type=excluded.fiscal_period_type"
+)
+
+
+def _selection_payload(
+    ledger_row: sqlite3.Row, components: FactLogicalKeyComponents
+) -> tuple[str, int, int, str, str, int, str, str, str, str]:
+    """Build the ten non-key column values for one selection row."""
+
+    return (
+        str(ledger_row["fact_table"]),
+        int(ledger_row["fact_row_id"]),
+        int(ledger_row["fact_revision"]),
+        str(ledger_row["observation_id"]),
+        str(ledger_row["resolution_id"]),
+        int(ledger_row["resolution_revision"]),
+        components.ticker,
+        components.concept_key,
+        components.period_end,
+        components.fiscal_period_type,
+    )
+
+
+def _current_selection_row(conn: sqlite3.Connection, logical_key: str) -> sqlite3.Row | None:
+    """Derive one key's exact selection exactly as the resolved views derive it."""
+
+    return conn.execute(
+        "SELECT link.fact_table, link.fact_row_id, link.fact_revision, "
+        "link.observation_id, resolution.resolution_id, "
+        "resolution.revision AS resolution_revision "
+        "FROM fact_observation_revisions AS link "
+        "JOIN v_observation_resolution_current AS resolution "
+        "ON resolution.selected_observation_id = link.observation_id "
+        "JOIN fact_resolution_outcomes AS outcome "
+        "ON outcome.resolution_id = resolution.resolution_id "
+        "WHERE link.logical_key = ? "
+        "AND outcome.resolution_status = 'resolved' "
+        "AND link.fact_revision = (SELECT MAX(latest.fact_revision) "
+        "FROM fact_observation_revisions AS latest "
+        "WHERE latest.fact_table = link.fact_table "
+        "AND latest.fact_row_id = link.fact_row_id)",
+        (logical_key,),
+    ).fetchone()
+
+
+def _reconcile_current_fact_selection(conn: sqlite3.Connection, logical_key: str) -> bool:
+    """Mirror one logical key's current resolution into ``current_fact_selection``.
+
+    Runs inside the caller's persist transaction, so a ledger revision and its
+    materialized selection flip or vanish together. A key whose current
+    resolution is not ``resolved`` — or whose selected observation's capture is
+    no longer the latest revision for its fact row — has no view row and
+    therefore no selection row. Returns ``True`` only when a row was written
+    or deleted; an already-mirrored decision issues no writes. Pre-0049
+    schemas skip the mirror rather than failing the persist.
+    """
+
+    if not _current_fact_selection_available(conn):
+        return False
+    components = parse_fact_logical_key(logical_key)
+    desired = _current_selection_row(conn, logical_key)
+    existing = conn.execute(
+        "SELECT fact_table, fact_row_id, fact_revision, observation_id, "
+        "resolution_id, resolution_revision, ticker, concept_key, period_end, "
+        "fiscal_period_type FROM current_fact_selection WHERE logical_key = ?",
+        (logical_key,),
+    ).fetchone()
+    if desired is None:
+        if existing is None:
+            return False
+        conn.execute(
+            "DELETE FROM current_fact_selection WHERE logical_key = ?",
+            (logical_key,),
+        )
+        return True
+    payload = _selection_payload(desired, components)
+    if existing is not None and tuple(existing) == payload:
+        return False
+    conn.execute(_SELECTION_UPSERT_SQL, (logical_key, *payload))
+    return True
 
 
 def _same_current_decision(

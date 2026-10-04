@@ -5,6 +5,7 @@ Generated from `cron/task_manifest.json`; do not edit by hand.
 | Task | Schedule | XML | Wrapper | Owner |
 |---|---|---|---|---|
 | `\earnings-summary\backfill_earnings_surprises` | daily at 06:15:00 | `backfill_earnings_surprises.task.xml` | `run_backfill_earnings_surprises.bat` | Task Scheduler |
+| `\earnings-summary\backfill_financial_fact_resolutions` | daily at 07:45:00 | `backfill_financial_fact_resolutions.task.xml` | `run_backfill_financial_fact_resolutions.bat` | Task Scheduler |
 | `\earnings-summary\backfill_transcripts` | daily at 02:00:00 | `backfill_transcripts.task.xml` | `run_backfill_transcripts.bat` | Task Scheduler |
 | `\earnings-summary\backup_db` | daily at 02:45:00 | `backup_db.task.xml` | `run_backup_db.bat` | Task Scheduler |
 | `\earnings-summary\capture_poller` | LogonTrigger | `capture_poller.task.xml` | `run_capture_poller.bat` | Windows service |

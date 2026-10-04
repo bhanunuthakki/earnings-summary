@@ -9,7 +9,7 @@ under the `\earnings-summary\` namespace.
 
 ## Active crons
 
-45 operational declarations total — 44 Task Scheduler registrations and one
+46 operational declarations total — 45 Task Scheduler registrations and one
 separately managed Windows service. The authoritative set is
 `cron/task_manifest.json`; `cron/TASKS.generated.md` is its deterministic
 human-readable inventory. Run
@@ -93,6 +93,7 @@ continuation runs as a bounded morning stage; it adds no LLM schedule.
 | `earnings-summary\fetch_fmp_earnings_calendar` | Daily 05:45 | `fetch_fmp_earnings_calendar.task.xml` | `run_fetch_fmp_earnings_calendar.bat` | Two steps. (1) Refreshes `data/historical/fmp/<TICKER>_earnings_calendar.json` for every portfolio + watchlist + evaluation ticker — on free/basic tier FMP refuses (402 since 2026-06-10) and the cache stays at its last good state. (2) Runs `execution/refresh_expected_earnings.py`, which materializes the **canonical `expected_earnings` table** via `next_earnings_date` (FMP cache → yfinance fallback); the Home rail's upcoming-earnings strip, the Home cockpit, and the portfolio-tracker's read-only bridge all read that table. Step 2 runs even when step 1 fails. |
 | `earnings-summary\backfill_earnings_surprises` | Daily 06:15 | `backfill_earnings_surprises.task.xml` | `run_backfill_earnings_surprises.bat` | For every active-universe ticker, merges `<TICKER>_earnings_calendar.json` (FMP primary, full EPS + Revenue surprise) with `yfinance.Ticker.earnings_dates` (fallback, EPS-only) into `data/surprise/<TICKER>_surprises.json`, then upserts into `earnings_surprises`. Idempotent. Revenue surprise degrades to NULL when FMP coverage lapses. |
 | `earnings-summary\daily_fetch_and_brief` | Daily 06:30 | `daily_fetch_and_brief.task.xml` | `run_daily_fetch_and_brief.bat` | Drains active portfolio/evaluation `brief_dirty` rows only: P1 daily and P2 when at least 7 days old, then material-change and evaluation-cadence gates. Watchlist/P3 rows never enter the full brief, DCF, or LLM builder. |
+| `earnings-summary\backfill_financial_fact_resolutions` | Daily 07:45 | `backfill_financial_fact_resolutions.task.xml` | `run_backfill_financial_fact_resolutions.bat` | **Financial-fact resolution ledger backfill.** Runs `execution/backfill_financial_fact_resolutions.py --apply --batch-size 500` against the configured database authority: captures any legacy fact rows still missing immutable observations, resolves their logical keys under the canonical policy, and converges one bounded checkpointed window of the `current_fact_selection` materialization (migration 0049) toward the ledger. Idempotent — repeated runs write nothing once converged, and the cursor wraps to re-verify the whole key space. Deterministic local DB work; no LLM leg, no network. Keeps the resolution ledger and its materialized selection within one day of ingestion. |
 
 The daily fetch/brief crons run as a chain: backfill_transcripts (02:00) pulls
 fresh Q&A transcripts + commitments, scan_ir_transcripts (02:15) catches the

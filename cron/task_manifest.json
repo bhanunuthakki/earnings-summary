@@ -18,6 +18,21 @@
    }
   },
   {
+   "task_name": "\\earnings-summary\\backfill_financial_fact_resolutions",
+   "xml": "backfill_financial_fact_resolutions.task.xml",
+   "wrapper": "run_backfill_financial_fact_resolutions.bat",
+   "schedule": {
+    "trigger": "CalendarTrigger",
+    "start_boundary": "2026-10-06T07:45:00",
+    "repetition_interval": null,
+    "days_interval": 1,
+    "weeks_interval": null,
+    "days_of_week": [],
+    "days_of_month": [],
+    "months": []
+   }
+  },
+  {
    "task_name": "\\earnings-summary\\backfill_transcripts",
    "xml": "backfill_transcripts.task.xml",
    "wrapper": "run_backfill_transcripts.bat",

@@ -58,6 +58,7 @@ _SERVICE_ORIGIN_JOBS: frozenset[str] = frozenset({"capture-poller"})
 _SCHEDULER_PORTFOLIO_DB_POLICY: tuple[tuple[str, str], ...] = (
     ("backfill-earnings-surprises-fetch", "market-data-refresh"),
     ("backfill-earnings-surprises-ingest", "market-data-refresh"),
+    ("backfill-financial-fact-resolutions", "portfolio-db"),
     ("backfill-transcripts", "transcript-refresh"),
     ("check-comp-set-drift", "comp-metrics"),
     ("coach-pings", "notification-delivery"),
