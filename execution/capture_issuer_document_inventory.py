@@ -16,18 +16,18 @@ import sys
 import tempfile
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC = PROJECT_ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from pipeline.issuer_document_inventory import (  # noqa: E402
+from pipeline.issuer_document_inventory import (
     IssuerDocumentInventoryError,
-    IssuerDocumentInventoryReceipt,
-    IssuerDocumentInventoryRequest,
+    IssuerDocumentInventoryReceiptAny,
     build_issuer_document_inventory,
+    load_issuer_document_inventory_receipt,
+    load_issuer_document_inventory_request,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class InventoryBuildError(RuntimeError):
@@ -84,17 +84,19 @@ def _link_or_reparse(path: Path) -> bool:
     )
 
 
-def _validated_readback(path: Path, expected: IssuerDocumentInventoryReceipt) -> None:
+def _validated_readback(path: Path, expected: IssuerDocumentInventoryReceiptAny) -> None:
     try:
         raw = path.read_text(encoding="utf-8")
-        persisted = IssuerDocumentInventoryReceipt.model_validate_json(raw)
+        persisted = load_issuer_document_inventory_receipt(raw)
     except (OSError, ValueError):
         raise InventoryBuildError("output_readback_failed", path=path) from None
     if persisted != expected or raw != expected.canonical_json + "\n":
         raise InventoryBuildError("output_readback_failed", path=path)
 
 
-def _replay_existing(path: Path, payload: bytes, receipt: IssuerDocumentInventoryReceipt) -> bool:
+def _replay_existing(
+    path: Path, payload: bytes, receipt: IssuerDocumentInventoryReceiptAny
+) -> bool:
     if path.is_symlink():
         raise InventoryBuildError("output_conflict", path=path)
     try:
@@ -118,7 +120,7 @@ def _unlink_published_file(path: Path, published: os.stat_result | None) -> None
         path.unlink(missing_ok=True)
 
 
-def _write_receipt(path: Path, receipt: IssuerDocumentInventoryReceipt) -> bool:
+def _write_receipt(path: Path, receipt: IssuerDocumentInventoryReceiptAny) -> bool:
     """Write once atomically; return True when exactly replaying existing bytes."""
     payload = (receipt.canonical_json + "\n").encode("utf-8")
     if path.exists() or path.is_symlink():
@@ -186,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         output = _safe_output_path(args.repo_root, args.output)
         try:
-            request = IssuerDocumentInventoryRequest.model_validate_json(
+            request = load_issuer_document_inventory_request(
                 args.request.read_text(encoding="utf-8")
             )
         except (OSError, ValueError):

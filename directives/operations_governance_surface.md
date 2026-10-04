@@ -948,3 +948,24 @@ authority. Internal financial derivation helpers publish source-bound formula an
 operand evidence only through the existing provenance repository. Source capture,
 semantic admission and threshold eligibility remain distinct. The migration graph
 owns the expected schema head; do not hardcode it in the Operations projection.
+
+
+### Exact retained IR source aliases
+
+`execution/capture_issuer_document_inventory.py` accepts the explicit
+`issuer_document_inventory_request.v2_alias` read-only route. Each selected
+alias binds a legacy document ID, native version, exact blob SHA, persisted
+source observation and document link, selected issuer/reporting subject,
+quarter/type and aware knowledge/observation cutoffs. The owner verifies actual
+local bytes and seals the original registered URL plus exact immutable lineage
+in a separate v2 receipt. Missing, ambiguous, superseded or future evidence
+fails closed. The existing v1 exact-URL route and staging/publishing callers
+remain strict v1. This command performs no acquisition, source identity write,
+archive completeness certification or financial admission.
+
+The source alias write preparation for Booking remains a private, separately
+reviewed adapter over existing SourceObservation and DocumentObservationLink
+owners. It is not a new workspace action or automatic pipeline stage. Native
+host, canonical route, current production authority and concrete reviewed
+request/receipt gates remain external prerequisites. No scheduler or live
+write capability is added by the read-only inventory route.
