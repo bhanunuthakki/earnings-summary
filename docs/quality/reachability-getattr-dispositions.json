@@ -43,8 +43,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-growth scenario attribute tuple.",
-      "fingerprint": "578c87501b26ab365ab9e62598a2ae2fafa85d0e9594a0330c94ac01d9f0d42e",
-      "line": 300,
+      "fingerprint": "ad1d6f625bff200433df0198ed1ce7b7a805073e19cc8d759edea0f61e77a461",
+      "line": 301,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_near",
@@ -55,8 +55,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-growth scenario attribute tuple.",
-      "fingerprint": "82f58f898cd79bf4bb398226749732e5fbc40e3f5e9944fb87b8462b495c3f27",
-      "line": 302,
+      "fingerprint": "1581c3643fbbfbdf595998695348d8f13c526064df4b07f13e7e4bb87749565f",
+      "line": 303,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_term",
@@ -67,8 +67,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-margin scenario attribute tuple.",
-      "fingerprint": "b8fefab87249d283a496c7242115a5374d00f81f4d24c638605c88315682a9c1",
-      "line": 304,
+      "fingerprint": "8b7d6dd5763fd3ca58233eb8735fcbbde93b17bffb010e529a400796d7eb05b7",
+      "line": 305,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_near",
@@ -79,8 +79,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-margin scenario attribute tuple.",
-      "fingerprint": "c8b51e5422ce6ac4908c0d2774021482b8b0f9713580a93a1d58eb66854388c4",
-      "line": 306,
+      "fingerprint": "b05ec111cb11835332f8495a214ebe4049cf115ad3ecd6936cf8b0238ca0e412",
+      "line": 307,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_term",
@@ -101,8 +101,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "Dynamic level selects only standard logging adapter methods.",
-      "fingerprint": "b2a609a9c9780173f964767f2b3895bb948f3b3d9d13d26c79b229705d75a50b",
-      "line": 696,
+      "fingerprint": "429094327816a8155bfcc5f5f935bf2defd8c6e0694d3f42c0213f935cbb3d04",
+      "line": 705,
       "path": "execution/comments_server.py",
       "targets": [
         "logging"
@@ -737,7 +737,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "03507244df4fdbfd4683f04c924be1d15e715642a7089b62bb770e27e1ebd9ad",
+      "source_sha256": "76f3aea588b1acc24ebb6a7ae5a0cbba3aec741b2e40d63297894ec9c135fedd",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
