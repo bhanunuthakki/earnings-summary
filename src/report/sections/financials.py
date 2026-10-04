@@ -54,9 +54,15 @@ from report.sections._common import (
     calendar_quarter_key,
     compute_growth,
     has_table,
+    level_cagr,
     missing,
     open_repo_db,
     quarter_label,
+)
+from sources.financial_growth_evidence import (
+    GROWTH_WINDOWS,
+    FinancialGrowthReference,
+    GrowthFormula,
 )
 from sources.report_financials import (
     FinancialEvidenceReference,
@@ -1195,6 +1201,99 @@ def _canonical_growth(
     )
 
 
+_LEVEL_GROWTH_FORMULAS: tuple[tuple[int, GrowthFormula], ...] = (
+    (1, "cagr_1y_level"),
+    (2, "cagr_2y_level"),
+    (3, "cagr_3y_level"),
+)
+
+
+def _growth_reference(
+    cells: list[FinancialTableCell | None], formula: GrowthFormula, *, ticker: str, as_of: datetime
+) -> FinancialGrowthReference | None:
+    size = GROWTH_WINDOWS[formula]
+    window = cells[-size:]
+    if len(window) != size or not _comparable_window(window):
+        return None
+    if formula.endswith("_level"):
+        years = {"cagr_1y_level": 1, "cagr_2y_level": 2, "cagr_3y_level": 3}[formula]
+        if not annual_comparison_supported(_source_period_ends(window), 0, size - 1):
+            return None
+        values = [
+            float(cell.display_value)
+            if cell is not None and cell.display_value is not None
+            else None
+            for cell in window
+        ]
+        value = level_cagr(values[-1], values[0], years)
+    else:
+        growth = _canonical_growth(
+            window,
+            [
+                float(cell.display_value)
+                if cell is not None and cell.display_value is not None
+                else None
+                for cell in window
+            ],
+        )
+        value = {
+            "qoq": growth.qoq,
+            "yoy": growth.yoy,
+            "cagr_1y_ttm": growth.cagr_1y_ttm,
+            "cagr_3y_ttm": growth.cagr_3y_ttm,
+        }[formula]
+    if value is None:
+        return None
+    sources = [_canonical_source(cell, ticker=ticker, as_of=as_of) for cell in window]
+    refs = tuple(
+        source.canonical_reference
+        for source in sources
+        if source is not None and source.canonical_reference is not None
+    )
+    if len(refs) != size:
+        return None
+    return FinancialGrowthReference(formula=formula, inputs=refs)
+
+
+def read_growth_evidence(
+    conn: sqlite3.Connection, reference: FinancialGrowthReference
+) -> tuple[float, tuple[FinancialTableCell, ...]] | None:
+    """Reconstruct the original calculation through the report admission owner."""
+    first = reference.inputs[0]
+    projection = read_financial_table(conn, first.ticker, as_of=first.as_of)
+    selected = {cell.canonical_metric_cell_id: cell for cell in projection.cells if cell.available}
+    cells: list[FinancialTableCell] = []
+    for expected in reference.inputs:
+        cell = selected.get(expected.canonical_metric_cell_id)
+        if cell is None:
+            return None
+        source = _canonical_source(cell, ticker=projection.ticker, as_of=projection.as_of)
+        if source is None or source.canonical_reference != expected:
+            return None
+        cells.append(cell)
+    window: list[FinancialTableCell | None] = list(cells)
+    if (
+        _growth_reference(window, reference.formula, ticker=first.ticker, as_of=first.as_of)
+        != reference
+    ):
+        return None
+    values = [
+        float(cell.display_value) if cell.display_value is not None else None for cell in cells
+    ]
+    if reference.formula.endswith("_level"):
+        years = {"cagr_1y_level": 1, "cagr_2y_level": 2, "cagr_3y_level": 3}[reference.formula]
+        value = level_cagr(values[-1], values[0], years)
+    else:
+        growth = _canonical_growth(window, values)
+        value = {
+            "qoq": growth.qoq,
+            "yoy": growth.yoy,
+            "cagr_1y_ttm": growth.cagr_1y_ttm,
+            "cagr_3y_ttm": growth.cagr_3y_ttm,
+        }[reference.formula]
+    return (value, tuple(cells)) if value is not None else None
+
+
 def build(
     ticker: str,
     repo_root: Path,
@@ -1285,6 +1384,41 @@ def build(
                             for cell in qcells
                         ],
                         growth=_canonical_growth(qcells, qvalues),
+                        growth_evidence={
+                            formula: reference
+                            for formula in ("qoq", "yoy", "cagr_1y_ttm", "cagr_3y_ttm")
+                            if (
+                                reference := _growth_reference(
+                                    qcells,
+                                    formula,
+                                    ticker=projection.ticker,
+                                    as_of=projection.as_of,
+                                )
+                            )
+                            is not None
+                        },
+                        yoy_evidence_full=[
+                            _growth_reference(
+                                qcells[: index + 1],
+                                "yoy",
+                                ticker=projection.ticker,
+                                as_of=projection.as_of,
+                            )
+                            for index in range(len(qcells))
+                        ],
+                        level_cagr_evidence={
+                            str(years): reference
+                            for years, formula in _LEVEL_GROWTH_FORMULAS
+                            if (
+                                reference := _growth_reference(
+                                    qcells,
+                                    formula,
+                                    ticker=projection.ticker,
+                                    as_of=projection.as_of,
+                                )
+                            )
+                            is not None
+                        },
                         comparison_period_ends=_source_period_ends(qcells),
                         comparison_eligible_edges=[
                             False,

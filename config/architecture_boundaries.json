@@ -103,7 +103,6 @@
     "execution/daily_fetch_and_brief.py",
     "execution/db_gc.py",
     "execution/refresh_dcf_assumptions.py",
-    "execution/dcf_sheets.py",
     "execution/dedupe_transcripts.py",
     "execution/deferred_fmp_log.py",
     "execution/derive_kpis_from_fmp.py",

@@ -24,23 +24,26 @@ import sqlite3
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import db  # noqa: E402
-from compute.platform_diagram import extract_for_ticker  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+import db
+from compute.platform_diagram import extract_for_ticker
+from db_paths import configured_db_path, db_path_context, require_db_path
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> int:
     args = _parse_args()
     repo_root = args.repo_root.resolve()
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
-        print(f"[error] no DB at {db_path}", file=sys.stderr)
+    try:
+        db_path = require_db_path(args.db_path or configured_db_path(PROJECT_ROOT))
+    except (OSError, RuntimeError) as exc:
+        print(f"[error] {exc}", file=sys.stderr)
         return 1
 
-    tickers = _resolve_tickers(repo_root, args)
+    tickers = _resolve_tickers(db_path, args)
     if not tickers:
         print("[]")
         return 0
@@ -51,9 +54,10 @@ def main() -> int:
     try:
         for ticker in tickers:
             try:
-                result = extract_for_ticker(
-                    ticker, repo_root, conn, fiscal_year=args.year, refresh=args.refresh
-                )
+                with db_path_context(db_path):
+                    result = extract_for_ticker(
+                        ticker, repo_root, conn, fiscal_year=args.year, refresh=args.refresh
+                    )
             except Exception as e:
                 summary.append({"ticker": ticker, "error": f"{type(e).__name__}: {e}"})
                 continue
@@ -88,14 +92,19 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--year", type=int, default=None, help="Specific fiscal year (default: latest)")
     p.add_argument("--refresh", action="store_true", help="Ignore cache and re-extract")
+    p.add_argument(
+        "--db-path",
+        type=Path,
+        default=None,
+        help="Existing database (default: configured authority)",
+    )
     p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     return p.parse_args()
 
 
-def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
+def _resolve_tickers(db_path: Path, args: argparse.Namespace) -> list[str]:
     if args.ticker:
         return [args.ticker.upper()]
-    db_path = repo_root / "data" / "portfolio.db"
     conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     cur = conn.cursor()
     # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) — these
