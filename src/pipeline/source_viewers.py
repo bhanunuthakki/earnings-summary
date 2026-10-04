@@ -157,6 +157,13 @@ def _fragment(title: str, meta_html: str, body: str) -> str:
     )
 
 
+def render_record_view(title: str, body: str, *, fragment: bool = False) -> str:
+    """Use the existing source-viewer chrome for already escaped retained evidence."""
+    if fragment:
+        return _fragment(title, "", body)
+    return _page(title, f'<span class="sv-title">{escape(title)}</span>', body)
+
+
 def _doc_meta_html(doc: SourceDocRow) -> str:
     bits = [f'<span class="sv-meta">doc #{doc.id} · {escape(doc.doc_type)}</span>']
     if doc.accession_number:

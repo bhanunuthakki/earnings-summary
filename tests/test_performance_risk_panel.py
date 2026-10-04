@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
@@ -10,6 +11,8 @@ import pytest
 
 import pipeline.performance_risk_panel as panel
 from integrations.portfolio_allocation import (
+    CoveredCallExposure,
+    CoveredCallLeg,
     PortfolioAllocationBucket,
     PortfolioAllocationBuckets,
     PortfolioAllocationProjection,
@@ -44,6 +47,50 @@ def _allocation(
         ),
         reason_codes=("portfolio_allocation_incomplete",) if state == "incomplete" else (),
     )
+
+
+def test_covered_call_details_distinguish_stock_capital_net_value_and_missing_delta() -> None:
+    allocation = _allocation().model_copy(
+        update={
+            "covered_calls": (
+                CoveredCallExposure(
+                    underlying_ticker="SYNTH",
+                    gross_stock_capital=Decimal(12000),
+                    option_market_value=Decimal(-300),
+                    net_market_value=Decimal(11700),
+                    net_weight_pct=Decimal("58.5"),
+                    stock_weight_pct=Decimal(60),
+                    option_weight_pct=Decimal("-1.5"),
+                    legs=(
+                        CoveredCallLeg(
+                            account_id=1,
+                            account_name="Synthetic <account>",
+                            contracts=None,
+                            represented_shares=Decimal(100),
+                            covered_shares=Decimal(100),
+                            uncovered_shares=Decimal(0),
+                            strike_price=Decimal(130),
+                            expiration_date=date(2026, 11, 20),
+                            metadata_source="plaid.option_contract",
+                        ),
+                    ),
+                ),
+            )
+        }
+    )
+    html = panel.render_allocation_card(allocation)
+    assert "Gross stock capital 12,000.00 USD" in html
+    assert "Signed option value -300.00" in html
+    assert "Net market value 11,700.00" in html
+    assert "Unified position weight 58.50%" in html
+    assert "Long stock · 60.00%" in html
+    assert "Written calls · -1.50%" in html
+    assert "100/100 shares covered in this account" in html
+    assert "strike 130.00" in html and "expiry 2026-11-20" in html
+    assert "Contract count unavailable" in html
+    assert "no sourced option delta" in html
+    assert "It does not remove stock downside" in html
+    assert "Synthetic &lt;account&gt;" in html
 
 
 def test_unified_panel_composes_read_only_sections_and_correlation_first(

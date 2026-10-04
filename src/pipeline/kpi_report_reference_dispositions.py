@@ -199,6 +199,50 @@ def is_canonical_financial_chart_priority(label: str) -> bool:
     return canonical_financial_chart_priority(label) is not None
 
 
+def _expression_kpi_references(
+    *,
+    ticker: str,
+    source_path: str,
+    expression: object,
+    pointer: str,
+    kind: ReportKpiReferenceKind,
+) -> tuple[list[ReportKpiReference], str | None]:
+    """Inventory every KPI leaf in a calculated metric at its authored pointer."""
+    if not isinstance(expression, dict):
+        return [], "report_metric_expression_invalid"
+    spec = cast("dict[str, object]", expression)
+    if spec.get("operation") == "level":
+        if spec.get("source", "financial") != "kpi":
+            return [], None
+        name = spec.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return [], "report_metric_expression_kpi_name_invalid"
+        return [
+            _reference(
+                ticker=ticker,
+                source_path=source_path,
+                pointer=f"{pointer}/name",
+                kind=kind,
+                label=name,
+            )
+        ], None
+    out: list[ReportKpiReference] = []
+    for key in ("numerator", "denominator", "input", "left", "right"):
+        if key not in spec or spec[key] is None:
+            continue
+        refs, reason = _expression_kpi_references(
+            ticker=ticker,
+            source_path=source_path,
+            expression=spec[key],
+            pointer=f"{pointer}/{key}",
+            kind=kind,
+        )
+        out.extend(refs)
+        if reason is not None:
+            return out, reason
+    return out, None
+
+
 def _soft_rule_kpi_references(
     *,
     ticker: str,
@@ -217,6 +261,15 @@ def _soft_rule_kpi_references(
     params = cast("dict[str, object]", params_value)
     params_pointer = f"{pointer}/params"
     out: list[ReportKpiReference] = []
+
+    if predicate_type == "metric_threshold":
+        return _expression_kpi_references(
+            ticker=ticker,
+            source_path=source_path,
+            expression=params.get("expression"),
+            pointer=f"{params_pointer}/expression",
+            kind=ReportKpiReferenceKind.SOFT_RULE_KPI,
+        )
 
     def add_label(key: str, label: object) -> str | None:
         if not isinstance(label, str) or not label.strip():
@@ -363,6 +416,28 @@ def load_report_kpi_reference_inventory(
             continue
         ticker_references: list[ReportKpiReference] = []
         invalid_reason: str | None = None
+        registry_candidates = root.get("kpi_registry_candidates", [])
+        if not isinstance(registry_candidates, list):
+            invalid_reason = "report_registry_candidates_invalid"
+        else:
+            for index, value in enumerate(cast("list[object]", registry_candidates)):
+                if not isinstance(value, dict):
+                    invalid_reason = "report_registry_candidate_invalid"
+                    break
+                candidate = cast("dict[str, object]", value)
+                label = candidate.get("name")
+                if not isinstance(label, str) or not label.strip():
+                    invalid_reason = "report_registry_candidate_name_invalid"
+                    break
+                ticker_references.append(
+                    _reference(
+                        ticker=ticker,
+                        source_path=relative,
+                        pointer=f"/kpi_registry_candidates/{index}/name",
+                        kind=ReportKpiReferenceKind.SOFT_RULE_KPI,
+                        label=label,
+                    )
+                )
         priorities = root.get("chart_priorities")
         if priorities is not None and not isinstance(priorities, list):
             invalid_reason = "report_chart_priorities_invalid"
@@ -423,6 +498,19 @@ def load_report_kpi_reference_inventory(
                     invalid_reason = "report_break_rule_entry_invalid"
                     break
                 row = cast("dict[str, object]", value)
+                if row.get("metric_expression") is not None:
+                    refs, reason = _expression_kpi_references(
+                        ticker=ticker,
+                        source_path=relative,
+                        expression=row["metric_expression"],
+                        pointer=f"/break_rules/{index}/metric_expression",
+                        kind=ReportKpiReferenceKind.BREAK_RULE,
+                    )
+                    ticker_references.extend(refs)
+                    if reason is not None:
+                        invalid_reason = reason
+                        break
+                    continue
                 label = row.get("kpi_name")
                 if not isinstance(label, str) or not label.strip():
                     invalid_reason = "report_break_rule_name_invalid"
@@ -449,6 +537,19 @@ def load_report_kpi_reference_inventory(
                     invalid_reason = "report_business_model_rule_entry_invalid"
                     break
                 row = cast("dict[str, object]", value)
+                if row.get("metric_expression") is not None:
+                    refs, reason = _expression_kpi_references(
+                        ticker=ticker,
+                        source_path=relative,
+                        expression=row["metric_expression"],
+                        pointer=f"/business_model_rules/{index}/metric_expression",
+                        kind=ReportKpiReferenceKind.BUSINESS_MODEL_RULE,
+                    )
+                    ticker_references.extend(refs)
+                    if reason is not None:
+                        invalid_reason = reason
+                        break
+                    continue
                 label = row.get("kpi_name")
                 if not isinstance(label, str) or not label.strip():
                     invalid_reason = "report_business_model_rule_name_invalid"

@@ -27,6 +27,8 @@ from typing import cast
 
 from models.facts import FactLocator, LocatorKind
 from report.models import CellSource
+from sources.canonical_financial_series import FinancialConsumerPoint, FinancialConsumerSeries
+from sources.report_financials import financial_series_reference
 
 SOURCE_CHIP_ABBREV: dict[str, str] = {
     "sec_official": "SEC",
@@ -119,6 +121,9 @@ def viewer_href(src: CellSource) -> str | None:
     click-through program's Phase A and ``pdf_slide`` by Phase B,
     docs/design/provenance_clickthrough.md section 6.1).
 
+    Canonical financial references open exact admitted evidence at the report's
+    cutoff before any legacy reference is considered.
+
     ``fmp_json_table`` / ``vendor_field`` / ``pdf_slide`` locators (when the
     cell carries a ``fact_id``) link the peek dispatcher (``/api/peek/
     provenance/<fact_table>:<id>``) directly — the peek is the primary click
@@ -130,6 +135,12 @@ def viewer_href(src: CellSource) -> str | None:
     deep link (Phase B). None when the cell carries neither a
     fact_id-bearing peek target nor a document id.
     """
+    if src.calculation_reference is not None:
+        query = urllib.parse.urlencode({"reference": src.calculation_reference.model_dump_json()})
+        return f"/api/peek/financial-calculation?{query}"
+    if src.canonical_reference is not None:
+        query = urllib.parse.urlencode({"reference": src.canonical_reference.model_dump_json()})
+        return f"/api/peek/canonical-financial?{query}"
     loc = _parse_locator(src.locator)
     if loc is not None and src.fact_id is not None and loc.effective_kind() in _PEEK_KINDS:
         return f"/api/peek/provenance/{src.fact_table}:{src.fact_id}"
@@ -229,7 +240,7 @@ def _lineage_rows(computed_from: str) -> list[str]:
     return rows
 
 
-def source_chip_html(src: CellSource) -> str:
+def source_chip_html(src: CellSource, *, link_only: bool = False) -> str:
     """Clickable per-number source chip: hover = tier + fetched-at; click
     opens a JS-free <details> popover with the document identity (doc type,
     accession, filing date, sub-document locator), the scored confidence %,
@@ -238,13 +249,25 @@ def source_chip_html(src: CellSource) -> str:
     in-app /source viewer (P4.3) plus the original document URL.
     """
     abbrev = SOURCE_CHIP_ABBREV.get(src.source, src.source[:3].upper() or "?")
-    hint = _locator_hint(src, _parse_locator(src.locator))
+    hint = (
+        f"{len(src.calculation_reference.inputs)} inputs"
+        if src.calculation_reference is not None
+        else _locator_hint(src, _parse_locator(src.locator))
+    )
     chip_label = f"{abbrev} · {hint}" if hint else abbrev
     tier_slug = src.source.replace("_", "-")
     pct = confidence_pct(src)
     low_conf = (
         pct is not None and src.confidence is not None and src.confidence < LOW_CONFIDENCE_THRESHOLD
     )
+    viewer = viewer_href(src)
+    if link_only and viewer is not None:
+        low_cls = " src-lowconf" if low_conf else ""
+        return (
+            f'<a class="src-chip src-{_esc(tier_slug)}{low_cls}" href="{_esc(viewer)}" '
+            f'target="_blank" rel="noopener" title="{_esc(source_hover_title(src))}">'
+            f"{_esc(chip_label)}</a>"
+        )
     rows: list[str] = [f'<div class="src-pop-row"><b>{_esc(src.source)}</b></div>']
     if src.override:
         # Company-doc override (provenance-override P6): the displayed figure comes
@@ -269,7 +292,6 @@ def source_chip_html(src: CellSource) -> str:
         rows.append(f'<div class="src-pop-row mono">{acc}{filed}</div>')
     if src.locator:
         rows.append(_locator_row_html(src.locator))
-    viewer = viewer_href(src)
     is_peek = viewer is not None and viewer.startswith("/api/peek/")
     if viewer:
         rows.append(
@@ -283,9 +305,14 @@ def source_chip_html(src: CellSource) -> str:
             f'rel="noopener">{label}</a></div>'
         )
     low_cls = " src-lowconf" if low_conf else ""
+    peek_viewer = (
+        viewer + "&fragment=1"
+        if (src.canonical_reference is not None or src.calculation_reference is not None) and viewer
+        else viewer
+    )
     peek_attrs = (
-        f' data-peek-url="{_esc(viewer)}" data-peek-title="{_esc(source_hover_title(src))}"'
-        if is_peek and viewer is not None
+        f' data-peek-url="{_esc(peek_viewer)}" data-peek-title="{_esc(source_hover_title(src))}"'
+        if is_peek and peek_viewer is not None
         else ""
     )
     return (
@@ -346,6 +373,39 @@ SOURCE_CHIP_CSS = """
 # iframe). A document that wants chip-Escape inlines this once after CCOverlay.
 SOURCE_CHIP_JS = r"""
 (function () {
+  // File reports use only their explicitly configured evidence server.
+  // No checkout or localhost authority is inferred from a file location.
+  function resolveCanonicalLinks() {
+    if (window.location.protocol !== 'file:') return;
+    var origin = null;
+    try {
+      var el = document.getElementById('workspace-boot');
+      var boot = el ? JSON.parse(el.textContent) : {};
+      if (typeof boot.server_url === 'string') {
+        var server = new URL(boot.server_url);
+        if (/^https?:$/.test(server.protocol) && !server.username && !server.password)
+          origin = server.origin;
+      }
+    } catch (e) {}
+    document.querySelectorAll('a[href^="/api/peek/canonical-financial?"], '
+      + '[data-peek-url^="/api/peek/canonical-financial?"], '
+      + 'a[href^="/api/peek/financial-calculation?"], '
+      + '[data-peek-url^="/api/peek/financial-calculation?"]').forEach(function (el) {
+      ['href', 'data-peek-url'].forEach(function (attr) {
+        var path = el.getAttribute(attr);
+        if (!path || (path.indexOf('/api/peek/canonical-financial?') !== 0
+          && path.indexOf('/api/peek/financial-calculation?') !== 0)) return;
+        if (origin) el.setAttribute(attr, origin + path);
+        else {
+          el.removeAttribute(attr);
+          el.setAttribute('title', 'Evidence server is not configured.');
+        }
+      });
+    });
+  }
+  if (document.readyState === 'loading')
+    document.addEventListener('DOMContentLoaded', resolveCanonicalLinks, {once: true});
+  else resolveCanonicalLinks();
   if (window.__ccSrcChipEsc || !window.CCOverlay) return;
   window.__ccSrcChipEsc = true;
   window.CCOverlay.addPopoverDismisser(function () {
@@ -355,3 +415,26 @@ SOURCE_CHIP_JS = r"""
   });
 })();
 """
+
+
+def financial_consumer_source(
+    point: FinancialConsumerPoint, result: FinancialConsumerSeries
+) -> CellSource:
+    """Use the admitted series identity for both display and click-through."""
+    item, series = point.observation, result.series
+    reference = financial_series_reference(
+        point,
+        ticker=series.ticker,
+        cutoff=series.cutoff,
+        cadence=series.cadence,
+        continuity=series.continuity,
+    )
+    return CellSource(
+        source=point.source_kind or "canonical_reported",
+        source_url=point.source_url,
+        doc_id=point.legacy_document_id,
+        locator=json.dumps(item.source_locator),
+        fetched_at=point.source_retrieved_at.isoformat() if point.source_retrieved_at else None,
+        canonical_reference=reference,
+        issues=list(point.qualifications),
+    )

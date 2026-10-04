@@ -92,7 +92,11 @@ data/deferred_fmp/*
 
 # Per-account/per-portfolio thesis snapshots are private runtime inputs. The
 # public tree may retain anonymized research fixtures elsewhere in this area.
-/micro_thesis/holdings/
+/micro_thesis/holdings/*
+!/micro_thesis/holdings/CPNG.json
+!/micro_thesis/holdings/LITE.json
+!/micro_thesis/holdings/ONON.json
+!/micro_thesis/holdings/TSM.json
 
 # Auto-generated per-run thesis tracker markdowns (micro_thesis/holdings/
 # JSON schemas ARE checked in; the dated tracker outputs are not).

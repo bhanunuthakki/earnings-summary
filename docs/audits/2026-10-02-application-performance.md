@@ -84,6 +84,42 @@ The isolated release passes 223 integration cases and 519 closure/regression cas
 
 ## Remaining verification boundary
 
-The revised application is a local candidate. Live Windows after-change timing and behavior require deployment of a concrete reviewed version through the canonical host procedure. Browser cancellation cannot stop a synchronous server calculation already running. Cache coordination and tracker allowances bound the relevant waiting and subsequent work. The Python requests read timeout measures socket inactivity; a continuously trickling response can exceed the nominal wall-clock allowance before returning. Late results are rejected and subsequent reads stop, but a hard transport deadline is not claimed.
+At the initial review, the revised application was a local candidate. Live Windows after-change timing and behavior require deployment of a concrete reviewed version through the canonical host procedure. Browser cancellation cannot stop a synchronous server calculation already running. Cache coordination and tracker allowances bound the relevant waiting and subsequent work. The Python requests read timeout measures socket inactivity; a continuously trickling response can exceed the nominal wall-clock allowance before returning. Late results are rejected and subsequent reads stop, but a hard transport deadline is not claimed.
 
 No production data write or application replacement is authorized by this review alone.
+
+## Live release backtest and follow-up
+
+The reviewed service release and native Windows fixture correction merged in PRs
+1611 and 1612. Both complete CI matrices passed. The code-only release was installed
+on the canonical Windows runtime at commit `c5707d05`. Installed source bytes,
+removals, retained state junctions, service identities, database snapshot parity,
+private routing, and all 44 saved scheduler states were verified.
+
+The live backtest found two remaining expensive reads. Company Desk took 18.3 seconds
+and could fail the 15-second browser deadline before navigation completed. The
+on-demand field catalog took 25.5 seconds during concurrent diagnostics. A serial
+read-only profile isolated decision projection and thesis history as Desk costs, and
+KPI admission/identity resolution as the main catalog cost.
+
+A materialized-query candidate returned identical data but became slower on the
+verified Windows snapshot. It was rejected and was not deployed. The snapshot test
+then added a selected-observation lookup index to an explicit disposable copy. With
+unchanged application queries, Desk fell from 13.136 to 1.244 seconds and catalog
+from 17.108 to 7.808 seconds. Complete response hashes matched before and after.
+These are single snapshot observations, not live percentile measurements.
+
+The follow-up candidate adds this index through the Alembic migration graph. It
+also opens Company Desk with an explicit loading message, retains prior identity
+and evidence until the response validates, and provides Retry for the requested
+company. It skips model-condition history reads whose results would be discarded
+when populated owner conditions govern the returned projection.
+
+Seven deployed screens passed browser checks at both supported widths with no
+JavaScript errors or horizontal overflow. Audit failure, Retry, and late-response
+rejection also passed. Existing analytics still report missing cash-flow/benchmark
+source coverage and unsupported negative-quantity allocation explicitly. Service
+availability does not establish financial-data completeness. Sol 6.1 independently reviewed the follow-up application and returned PASS. The
+follow-up passes 296 targeted cases, including migration reversibility, ledger
+preservation, request lifecycle, and report golden comparisons. Native release
+validation, deployment, and all-eight screen backtest evidence remain release gates. Private receipts remain under `.tmp/`.

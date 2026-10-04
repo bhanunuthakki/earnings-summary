@@ -14,9 +14,17 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import cast
+from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from models.facts import Unit
 
@@ -68,6 +76,28 @@ class KpiSemanticStatus(StrEnum):
     ADMITTED = "admitted"
     QUARANTINED = "quarantined"
     LEGACY_UNKNOWN = "legacy_unknown"
+
+
+class KpiSourcePrecision(BaseModel):
+    """Reviewed source precision, including wording inherited from a table.
+
+    This describes the reported value. It does not approve an uncertainty
+    interval or a numerical threshold comparison.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["exact", "approximate", "lower_bound", "upper_bound", "range", "unknown"]
+    qualifiers: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _wording(self) -> KpiSourcePrecision:
+        if any(not text.strip() or len(text) > 1024 for text in self.qualifiers):
+            raise ValueError("source precision qualifiers require retained source wording")
+        if self.kind == "exact" and self.qualifiers:
+            raise ValueError("exact source precision cannot carry uncertainty qualifiers")
+        if self.kind not in {"exact", "unknown"} and not self.qualifiers:
+            raise ValueError("nonexact source precision requires source qualifiers")
+        return self
 
 
 _ADMITTED_UNIT_SCALES_BY_PERSISTED_UNIT: Mapping[Unit, frozenset[KpiUnitScale]] = {
@@ -144,6 +174,7 @@ class KpiSemanticContext(BaseModel):
 
     metric_name_as_reported: str = Field(min_length=1, max_length=256)
     reported_period_end: date | None = None
+    reported_period_start: date | None = None
     period_role: KpiPeriodRole
     publication_lane: KpiPublicationLane
     accounting_basis: KpiAccountingBasis
@@ -153,8 +184,23 @@ class KpiSemanticContext(BaseModel):
     source_row_label: str | None = Field(default=None, max_length=512)
     source_column_header: str | None = Field(default=None, max_length=512)
     source_value_text: str | None = Field(default=None, min_length=1, max_length=80)
+    source_precision: KpiSourcePrecision | None = None
     status: KpiSemanticStatus
     reason_code: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @model_serializer(mode="wrap")
+    def _legacy_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        # Preserve hashes of earlier immutable review artifacts. Absence does
+        # not assert exactness; current exact-only consumers fail closed.
+        value = handler(self)
+        if not isinstance(value, dict):
+            raise TypeError("semantic context serializer must return an object")
+        payload = cast("dict[str, object]", value)
+        if self.source_precision is None:
+            payload.pop("source_precision", None)
+        if self.reported_period_start is None:
+            payload.pop("reported_period_start", None)
+        return payload
 
     @model_validator(mode="before")
     @classmethod
@@ -173,6 +219,11 @@ class KpiSemanticContext(BaseModel):
 
     @model_validator(mode="after")
     def _qualification_contract(self) -> KpiSemanticContext:
+        if self.reported_period_start is not None and (
+            self.reported_period_end is None
+            or self.reported_period_start > self.reported_period_end
+        ):
+            raise ValueError("reported period start requires a matching later period end")
         if self.status is KpiSemanticStatus.ADMITTED:
             if self.reported_period_end is None:
                 raise ValueError("source-qualified KPI facts require reported_period_end")
@@ -423,6 +474,11 @@ def _context_from_row(row: Mapping[str, object], *, has_lane: bool) -> KpiSemant
             if row["reported_period_end"] is not None
             else None
         ),
+        reported_period_start=(
+            date.fromisoformat(str(row["reported_period_start"]))
+            if "reported_period_start" in row and row["reported_period_start"] is not None
+            else None
+        ),
         period_role=role,
         publication_lane=(
             KpiPublicationLane(str(row["publication_lane"]))
@@ -443,6 +499,11 @@ def _context_from_row(row: Mapping[str, object], *, has_lane: bool) -> KpiSemant
             None
             if "source_value_text" not in row or row["source_value_text"] is None
             else str(row["source_value_text"])
+        ),
+        source_precision=(
+            KpiSourcePrecision.model_validate_json(str(row["source_precision_json"]))
+            if "source_precision_json" in row and row["source_precision_json"] is not None
+            else None
         ),
         status=KpiSemanticStatus(str(row["status"])),
         reason_code=None if row["reason_code"] is None else str(row["reason_code"]),
@@ -530,6 +591,10 @@ def persist_kpi_semantic_context(
         return None
     columns = _columns(conn, table)
     observed = knowledge_at or datetime.now(UTC)
+    if context.source_precision is not None and "source_precision_json" not in columns:
+        raise ValueError("KPI semantic context schema cannot store source precision")
+    if context.reported_period_start is not None and "reported_period_start" not in columns:
+        raise ValueError("KPI semantic context schema cannot store source period start")
     if observed.tzinfo is None:
         raise ValueError("semantic context knowledge_at must be timezone-aware")
     has_definition_binding = "kpi_definition_revision_id" in columns
@@ -640,6 +705,16 @@ def persist_kpi_semantic_context(
     if "source_value_text" in columns:
         field_names.append("source_value_text")
         payload.append(source_value_text)
+    if "source_precision_json" in columns:
+        field_names.append("source_precision_json")
+        payload.append(
+            context.source_precision.model_dump_json() if context.source_precision else None
+        )
+    if "reported_period_start" in columns:
+        field_names.append("reported_period_start")
+        payload.append(
+            context.reported_period_start.isoformat() if context.reported_period_start else None
+        )
     values: list[object] = [kpi_fact_id]
     insert_fields = ["kpi_fact_id"]
     if has_revisions:

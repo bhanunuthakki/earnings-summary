@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Handle-pinned staging installer regressions independent of network fetches."""
 
 from __future__ import annotations
@@ -16,6 +15,19 @@ from typing import Any, cast
 import pytest
 
 import provenance.secure_file_install as install
+
+# These typed seams are intentionally private fault-injection boundaries.
+# Resolve them explicitly so tests do not export internals as product APIs.
+windows_open_root = cast(Callable[[Path], int], getattr(install, "_windows_open_root"))
+windows_install = cast(
+    Callable[[Path, str, bytes, str], install.SecureFileInstallResult],
+    getattr(install, "_install_windows_handle_relative"),
+)
+write_all = cast(Callable[[int, bytes], None], getattr(install, "_write_all"))
+assert_posix_root_stable = cast(
+    Callable[[Path, int, tuple[int, int]], None],
+    getattr(install, "_assert_posix_root_stable"),
+)
 
 
 class _FakeWindowsFunction:
@@ -72,6 +84,13 @@ class _TempCreationFFI:
 
 def _fixed_token_hex(_byte_count: int) -> str:
     return "a" * 32
+
+
+def _open_test_root(root: Path) -> int:
+    """Use a real directory handle before injecting Windows transaction seams."""
+    if os.name == "nt":
+        return windows_open_root(root)
+    return os.open(root, os.O_RDONLY)
 
 
 def _return_root_descriptor(descriptor: int) -> Callable[[Path], int]:
@@ -164,7 +183,7 @@ def test_failed_verification_never_deletes_replacement(
 
     monkeypatch.setattr(install, "read_stable_artifact", replace_before_verify)
     with pytest.raises(install.SecureFileInstallError, match="installed_target_conflict"):
-        install.install_bytes_no_clobber(root, "source.pdf", b"issuer bytes")
+        install.install_bytes_no_clobber(root, "source.pdf", b"issuer bytes", read_only=False)
     assert (root / "source.pdf").read_bytes() == b"replacement"
 
 
@@ -200,7 +219,7 @@ def test_installer_completes_short_writes_before_publishing_target(
 
 def test_created_token_is_replacement_safe_and_reused_has_no_token(tmp_path: Path) -> None:
     root = tmp_path / "attempt"
-    first = install.install_bytes_no_clobber(root, "source.pdf", b"issuer bytes")
+    first = install.install_bytes_no_clobber(root, "source.pdf", b"issuer bytes", read_only=False)
     assert first.created and first.ownership is not None
     first.path.unlink()
     first.path.write_bytes(b"replacement")
@@ -211,6 +230,7 @@ def test_created_token_is_replacement_safe_and_reused_has_no_token(tmp_path: Pat
     assert not replay.created and replay.ownership is None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-descriptor contract")
 def test_atomic_rename_collision_replays_without_replacing_existing_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -229,12 +249,13 @@ def test_atomic_rename_collision_replays_without_replacing_existing_target(
     assert len(result.residue_paths) == 1 and result.residue_paths[0].exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-descriptor contract")
 def test_precommit_root_failure_reports_retained_temporary(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root = tmp_path / "attempt"
     root.mkdir()
-    original = install._assert_posix_root_stable
+    original = assert_posix_root_stable
     calls = 0
 
     def fail_after_temp(path: Path, descriptor: int, expected: tuple[int, int]) -> None:
@@ -273,6 +294,7 @@ def test_failed_final_verification_retains_transaction_issued_ownership(
     assert cleanup.remaining and not cleanup.removed
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-descriptor contract")
 def test_posix_root_replacement_is_rejected_before_publication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -281,7 +303,7 @@ def test_posix_root_replacement_is_rejected_before_publication(
     moved = tmp_path / "moved"
     root.mkdir()
     replacement.mkdir()
-    original_write_all = install._write_all
+    original_write_all = write_all
 
     def replace_root(descriptor: int, payload: bytes) -> None:
         original_write_all(descriptor, payload)
@@ -295,6 +317,7 @@ def test_posix_root_replacement_is_rejected_before_publication(
     assert not (moved / "source.pdf").exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory-descriptor contract")
 def test_posix_temp_replacement_survives_identity_bound_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -302,7 +325,7 @@ def test_posix_temp_replacement_survives_identity_bound_cleanup(
     root.mkdir()
     victim = tmp_path / "victim.txt"
     victim.write_bytes(b"replacement")
-    original_write_all = install._write_all
+    original_write_all = write_all
 
     def replace_temp(descriptor: int, payload: bytes) -> None:
         original_write_all(descriptor, payload)
@@ -325,7 +348,7 @@ def test_windows_collision_closes_the_owned_descriptor(
     root.mkdir()
     target = root / "source.pdf"
     target.write_bytes(b"issuer bytes")
-    root_fd = os.open(root, os.O_RDONLY)
+    root_fd = _open_test_root(root)
     temporary = root / ".owned.tmp"
     temporary.write_bytes(b"issuer bytes")
     descriptor = os.open(temporary, os.O_RDWR)
@@ -358,7 +381,7 @@ def test_windows_collision_closes_the_owned_descriptor(
     monkeypatch.setattr(install, "_windows_rename_no_replace", collision)
     monkeypatch.setattr(install, "_windows_delete_owned", delete_temp)
     monkeypatch.setattr(install.os, "close", record_close)
-    result = install._install_windows_handle_relative(
+    result = windows_install(
         root, target.name, b"issuer bytes", hashlib.sha256(b"issuer bytes").hexdigest()
     )
     assert not result.created and descriptor in closed
@@ -371,9 +394,36 @@ def test_windows_success_closes_owned_descriptor_before_stable_target_reopen(
     root.mkdir()
     target = root / "source.pdf"
     payload = b"issuer bytes"
-    root_fd = os.open(root, os.O_RDONLY)
+    root_fd = _open_test_root(root)
     temporary = root / ".owned.tmp"
-    descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT, 0o600)
+    if os.name == "nt":
+        # This mocked pathname rename needs delete sharing. Production uses
+        # handle-relative rename and deliberately keeps a stricter share mode.
+        ffi = getattr(install, "_WINDOWS_FFI")
+        kernel = ffi.load_library("kernel32", use_last_error=True)
+        create = kernel.CreateFileW
+        create.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_void_p,
+        ]
+        create.restype = ctypes.c_void_p
+        raw_handle = create(str(temporary), 0xC0010000, 0x07, None, 1, 0x80, None)
+        assert raw_handle not in (None, ctypes.c_void_p(-1).value)
+        try:
+            descriptor = ffi.open_osfhandle(raw_handle, os.O_RDWR | getattr(os, "O_BINARY", 0))
+        except OSError:
+            close_handle = kernel.CloseHandle
+            close_handle.argtypes = [ctypes.c_void_p]
+            close_handle.restype = ctypes.c_int
+            close_handle(raw_handle)
+            raise
+    else:
+        descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT, 0o600)
     metadata = os.fstat(descriptor)
     closed: list[int] = []
     original_close = install.os.close
@@ -403,9 +453,7 @@ def test_windows_success_closes_owned_descriptor_before_stable_target_reopen(
     monkeypatch.setattr(install, "read_stable_artifact", read_target_only_after_close)
     monkeypatch.setattr(install.os, "close", record_close)
 
-    result = install._install_windows_handle_relative(
-        root, target.name, payload, hashlib.sha256(payload).hexdigest()
-    )
+    result = windows_install(root, target.name, payload, hashlib.sha256(payload).hexdigest())
 
     assert result.created and result.ownership is not None
     assert target.read_bytes() == payload
@@ -419,7 +467,7 @@ def test_windows_owned_descriptor_byte_mismatch_prevents_target_reopen(
     root.mkdir()
     target = root / "source.pdf"
     payload = b"issuer bytes"
-    root_fd = os.open(root, os.O_RDONLY)
+    root_fd = _open_test_root(root)
     temporary = root / ".owned.tmp"
     descriptor = os.open(temporary, os.O_RDWR | os.O_CREAT, 0o600)
     metadata = os.fstat(descriptor)
@@ -454,9 +502,7 @@ def test_windows_owned_descriptor_byte_mismatch_prevents_target_reopen(
     monkeypatch.setattr(install, "read_stable_artifact", target_reopen_forbidden)
 
     with pytest.raises(install.SecureFileInstallError, match="windows_handle_install_failed"):
-        install._install_windows_handle_relative(
-            root, target.name, payload, hashlib.sha256(payload).hexdigest()
-        )
+        windows_install(root, target.name, payload, hashlib.sha256(payload).hexdigest())
     assert not target.exists()
 
 
@@ -467,7 +513,7 @@ def test_windows_failed_owned_delete_reports_named_residue(
     root.mkdir()
     target = root / "source.pdf"
     target.write_bytes(b"issuer bytes")
-    root_fd = os.open(root, os.O_RDONLY)
+    root_fd = _open_test_root(root)
     temporary = root / ".owned.tmp"
     temporary.write_bytes(b"issuer bytes")
     descriptor = os.open(temporary, os.O_RDWR)
@@ -500,7 +546,7 @@ def test_windows_failed_owned_delete_reports_named_residue(
     with pytest.raises(
         install.SecureFileInstallError, match="windows_handle_install_failed"
     ) as raised:
-        install._install_windows_handle_relative(
+        windows_install(
             root, target.name, b"issuer bytes", hashlib.sha256(b"issuer bytes").hexdigest()
         )
     assert raised.value.residue_paths == (temporary,)
@@ -512,7 +558,7 @@ def test_windows_raw_handle_adoption_failure_reports_named_residue(
     root = tmp_path / "attempt"
     root.mkdir()
     digest = hashlib.sha256(b"issuer bytes").hexdigest()
-    root_fd = os.open(root, os.O_RDONLY)
+    root_fd = _open_test_root(root)
 
     def deny_adoption(_path: Path) -> int:
         raise OSError("injected adoption failure")
@@ -525,7 +571,7 @@ def test_windows_raw_handle_adoption_failure_reports_named_residue(
     with pytest.raises(
         install.SecureFileInstallError, match="windows_handle_install_failed"
     ) as raised:
-        install._install_windows_handle_relative(root, "source.pdf", b"issuer bytes", digest)
+        windows_install(root, "source.pdf", b"issuer bytes", digest)
 
     assert raised.value.residue_paths == (ffi.residue,)
     assert ffi.residue.exists()
@@ -538,7 +584,7 @@ def test_windows_adopted_descriptor_fstat_failure_reports_named_residue(
     root = tmp_path / "attempt"
     root.mkdir()
     digest = hashlib.sha256(b"issuer bytes").hexdigest()
-    root_fd = os.open(root, os.O_RDONLY)
+    root_fd = _open_test_root(root)
     owned: list[int] = []
 
     def adopt(path: Path) -> int:
@@ -569,7 +615,7 @@ def test_windows_adopted_descriptor_fstat_failure_reports_named_residue(
     with pytest.raises(
         install.SecureFileInstallError, match="windows_handle_install_failed"
     ) as raised:
-        install._install_windows_handle_relative(root, "source.pdf", b"issuer bytes", digest)
+        windows_install(root, "source.pdf", b"issuer bytes", digest)
 
     assert raised.value.residue_paths == (ffi.residue,)
     assert ffi.residue.exists()
@@ -583,7 +629,7 @@ def test_windows_unsafe_adopted_metadata_reports_named_residue(
     root = tmp_path / "attempt"
     root.mkdir()
     digest = hashlib.sha256(b"issuer bytes").hexdigest()
-    root_fd = os.open(root, os.O_RDONLY)
+    root_fd = _open_test_root(root)
     owned: list[int] = []
 
     def adopt(path: Path) -> int:
@@ -614,7 +660,7 @@ def test_windows_unsafe_adopted_metadata_reports_named_residue(
     with pytest.raises(
         install.SecureFileInstallError, match="windows_handle_install_failed"
     ) as raised:
-        install._install_windows_handle_relative(root, "source.pdf", b"issuer bytes", digest)
+        windows_install(root, "source.pdf", b"issuer bytes", digest)
 
     assert raised.value.residue_paths == (ffi.residue,)
     assert ffi.residue.exists()

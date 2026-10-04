@@ -595,6 +595,11 @@ def _assert_reviewed_source_binding(
     source_value_text = capture.context.source_value_text
     if source_value_text is None or source_value_text not in excerpt:
         raise ValueError("reviewed KPI capture requires an exact source value token")
+    precision = capture.context.source_precision
+    if precision is None or precision.kind == "unknown":
+        raise ValueError("reviewed KPI capture requires a source precision review")
+    if any(qualifier not in str(row["text"]) for qualifier in precision.qualifiers):
+        raise ValueError("reviewed KPI precision qualifier must occur in its evidence node")
     if (
         normalize_source_numeric(
             parse_source_numeric(source_value_text),

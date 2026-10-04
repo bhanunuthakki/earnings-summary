@@ -56,7 +56,7 @@ from runtime.portfolio_tracker import RuntimeReceipt
 
 _MAX_ROWS = 100
 _MAX_RECEIPT_BYTES = 64 * 1024
-_RUNTIME_RECEIPT_TTL = timedelta(minutes=15)
+RUNTIME_RECEIPT_TTL = timedelta(minutes=15)
 _DAILY_REFRESH_RECEIPT_TTL = timedelta(hours=26)
 _OBSERVED_TABLES = (
     "alembic_version",
@@ -390,7 +390,7 @@ def _runtime_state(
     supplied_by_key = {name.casefold(): (name, state) for name, state in supplied}
     gaps = set(expected_by_key) - set(supplied_by_key)
     extras = set(supplied_by_key) - set(expected_by_key)
-    age_stale = recorded_at is not None and observed_at - recorded_at > _RUNTIME_RECEIPT_TTL
+    age_stale = recorded_at is not None and observed_at - recorded_at > RUNTIME_RECEIPT_TTL
     state = "stale" if age_stale else "current"
     detail_parts: list[str] = []
     if gaps or extras:
@@ -542,7 +542,7 @@ def _portfolio_tracker_runtime_state(
             evidence_source=str(receipt_path),
             detail=str(exc),
         )
-    age_stale = observed_at - receipt.recorded_at > _RUNTIME_RECEIPT_TTL
+    age_stale = observed_at - receipt.recorded_at > RUNTIME_RECEIPT_TTL
     stale_planes: list[str] = []
     invalid_planes: list[str] = []
     plane_times = {
@@ -551,7 +551,7 @@ def _portfolio_tracker_runtime_state(
         "daily refresh": receipt.refresh.completed_at if receipt.refresh else None,
     }
     plane_ttls = {
-        "listener": _RUNTIME_RECEIPT_TTL,
+        "listener": RUNTIME_RECEIPT_TTL,
         "scheduler": _DAILY_REFRESH_RECEIPT_TTL,
         "daily refresh": _DAILY_REFRESH_RECEIPT_TTL,
     }
