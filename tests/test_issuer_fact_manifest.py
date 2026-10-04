@@ -100,6 +100,8 @@ def _document(
     sha: str = "a" * 64,
     period_end: str = "2026-06-30",
     fetched_at: str = "2026-08-05T00:00:00Z",
+    source_type: str = "ir_doc",
+    doc_type: str = "ir_presentation",
 ) -> None:
     conn.execute(
         "INSERT INTO documents "
@@ -108,8 +110,8 @@ def _document(
         (
             doc_id,
             "MELI",
-            "ir_doc",
-            "ir_presentation",
+            source_type,
+            doc_type,
             period_end,
             "fixture.pdf",
             sha,
@@ -736,7 +738,7 @@ def test_source_sha_tampering_is_rejected(migrated_db: Callable[..., Path], tmp_
         conn.close()
 
 
-def _seed_v2_authority(conn: sqlite3.Connection) -> EvidenceLocator:
+def _seed_v2_authority(conn: sqlite3.Connection, *, sec_form: str | None = None) -> EvidenceLocator:
     stamp = "2026-08-05T00:00:00Z"
     locator = EvidenceLocator(slide_number=3)
     conn.execute(
@@ -767,7 +769,9 @@ def _seed_v2_authority(conn: sqlite3.Connection) -> EvidenceLocator:
             "observation-meli",
             "observation:meli",
             "ir_document",
-            "https://example.invalid/meli.pdf",
+            "https://example.invalid/meli.pdf"
+            if sec_form is None
+            else "https://www.sec.gov/Archives/edgar/data/1099590/000109959026000023/meli.htm",
             "a" * 64,
             stamp,
             stamp,
@@ -778,8 +782,8 @@ def _seed_v2_authority(conn: sqlite3.Connection) -> EvidenceLocator:
     conn.execute(
         "INSERT INTO evidence_document_versions "
         "(document_version_id,document_key,version_sequence,observation_id,blob_sha256,"
-        "issuer_id,ticker,document_type,form_type,period_end,language,legacy_document_id,recorded_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "issuer_id,ticker,document_type,form_type,period_end,language,legacy_document_id,recorded_at,accession_number) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             "document-meli-v1",
             "document:meli",
@@ -788,14 +792,59 @@ def _seed_v2_authority(conn: sqlite3.Connection) -> EvidenceLocator:
             "a" * 64,
             "issuer-meli",
             "MELI",
-            "earnings_release",
-            "earnings_release",
+            "earnings_release" if sec_form is None else "filing",
+            "earnings_release" if sec_form is None else sec_form,
             "2026-06-30",
             "en",
             9001,
             stamp,
+            None if sec_form is None else "0001099590-26-000023",
         ),
     )
+    if sec_form is not None:
+        from provenance.issuer_registry import (
+            IdentifierAssertion,
+            IdentifierResolution,
+            IssuerRegistry,
+            identifier_candidate_digest,
+        )
+
+        clock = datetime(2026, 8, 5, tzinfo=UTC)
+        registry = IssuerRegistry(conn)
+        assertion = IdentifierAssertion(
+            assertion_id="meli-test-cik",
+            idempotency_key="meli-test-cik",
+            issuer_id="issuer-meli",
+            identifier_type="sec_cik",
+            identifier_value="1099590",
+            normalized_value="0001099590",
+            authority="sec_registry",
+            source_observation_id="observation-meli",
+            effective_at=clock,
+            knowledge_at=clock,
+            recorded_at=clock,
+        )
+        registry.persist(assertion)
+        registry.persist(
+            IdentifierResolution(
+                resolution_id="meli-test-cik-resolution",
+                idempotency_key="meli-test-cik-resolution",
+                resolution_key=assertion.resolution_key,
+                revision=1,
+                outcome="selected",
+                selected_assertion_id=assertion.assertion_id,
+                candidate_digest_sha256=identifier_candidate_digest((assertion,)),
+                policy_name="synthetic-test",
+                policy_version="1",
+                policy_config_sha256="a" * 64,
+                reason_code="test",
+                reason_details=(("fixture", "synthetic"),),
+                material_dissent=False,
+                effective_at=clock,
+                knowledge_at=clock,
+                recorded_at=clock,
+            )
+        )
     conn.execute(
         "INSERT INTO evidence_extraction_runs "
         "(extraction_run_id,idempotency_key,document_version_id,input_sha256,extractor_name,"
@@ -1597,5 +1646,33 @@ def test_v2_receipt_rejects_rehashed_forged_definition_binding(
 
         with pytest.raises(ValueError, match="definition replay conflicts"):
             persist_document_coverage_receipt(conn, forged_receipt)
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("document_type,form_type", [("sec_20f", "20-F"), ("sec_6k", "6-K")])
+def test_reviewed_sec_v2_requires_exact_native_identity(
+    migrated_db: Callable[..., Path], tmp_path: Path, document_type: str, form_type: str
+) -> None:
+    conn = sqlite3.connect(migrated_db(tmp_path / "reviewed-sec-manifest.db"))
+    conn.row_factory = sqlite3.Row
+    register_sqlite_integrity_functions(conn)
+    try:
+        _document(conn, source_type="sec_xbrl", doc_type=document_type)
+        locator = _seed_v2_authority(conn, sec_form=form_type)
+        conn.commit()
+        base = _v2_manifest(locator)
+        # SEC extension is qualified for reviewed KPI captures only.
+        kpis = tuple(value for value in base.values if value.kind is IssuerManifestFactKind.KPI)
+        expected = tuple(value.expected() for value in kpis)
+        manifest = base.model_copy(update={"values": kpis, "expected": expected})
+        result = apply_issuer_fact_manifest(conn, manifest)
+        assert not result.applied
+        assert (
+            conn.execute("SELECT source_type,doc_type FROM documents WHERE id=9001").fetchone()[0]
+            == "sec_xbrl"
+        )
+        with pytest.raises(ValueError, match="reviewed v2"):
+            apply_issuer_fact_manifest(conn, _manifest())
     finally:
         conn.close()

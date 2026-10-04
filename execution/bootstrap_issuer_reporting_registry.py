@@ -15,10 +15,12 @@ from typing import cast
 
 import requests
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from provenance.issuer_registry_bootstrap import (  # noqa: E402
+from provenance.issuer_registry_bootstrap import (
     SEC_COMPANY_TICKERS_URL,
     BootstrapRequest,
     BootstrapResult,
@@ -26,8 +28,9 @@ from provenance.issuer_registry_bootstrap import (  # noqa: E402
     bootstrap_issuer_reporting_registry,
     fetch_sec_company_tickers,
 )
-from runtime.job_runtime import JobLock  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from runtime.job_runtime import JobLock
+from sec_identity import sec_user_agent
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def _event(event: str, **fields: object) -> None:
@@ -37,6 +40,9 @@ def _event(event: str, **fields: object) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, required=True)
+    parser.add_argument(
+        "--ticker", action="append", default=[], help="Narrow the existing reporting universe"
+    )
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument(
         "--company-tickers-json",
@@ -55,7 +61,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--user-agent",
-        help="SEC-declared User-Agent; required with --fetch-sec-company-tickers",
+        help="SEC-declared User-Agent; defaults to the configured project contact",
     )
     parser.add_argument(
         "--blob-root",
@@ -68,13 +74,11 @@ def _parser() -> argparse.ArgumentParser:
 
 def _load_body(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bytes:
     if args.fetch_sec_company_tickers:
-        if not args.user_agent:
-            parser.error("--fetch-sec-company-tickers requires --user-agent")
         with requests.Session() as session:
             return fetch_sec_company_tickers(
                 cast(HTTPSession, session),
                 source_url=str(args.source_url),
-                user_agent=str(args.user_agent),
+                user_agent=str(args.user_agent or sec_user_agent()),
             )
     path = cast(Path, args.company_tickers_json)
     return path.read_bytes()
@@ -96,6 +100,7 @@ def _run(args: argparse.Namespace, raw_body: bytes) -> BootstrapResult:
                 blob_root=args.blob_root,
                 apply=bool(args.apply),
                 recorded_at=datetime.now(UTC),
+                ticker_scope=tuple(args.ticker),
             ),
         )
     finally:
