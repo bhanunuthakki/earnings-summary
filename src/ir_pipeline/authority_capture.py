@@ -19,6 +19,7 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Literal, Protocol, Self, cast
 from urllib.parse import parse_qsl, urldefrag, urljoin, urlparse
+from urllib.request import url2pathname
 
 import requests
 from defusedxml import ElementTree
@@ -37,6 +38,12 @@ from ir_pipeline.authority import (
 from log_redact import redact
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 from provenance.evidence_links import BlobLocationObservation, EvidenceLinkLedger
+from provenance.evidence_native_candidates import resolve_local_storage_uri
+from provenance.immutable_artifact import (
+    ImmutableArtifactConflictError,
+    read_stable_artifact,
+    require_no_reparse_points,
+)
 from provenance.issuer_registry import (
     AuthoritySurfaceRevision,
     IssuerRegistry,
@@ -654,6 +661,21 @@ def _persist_surfaces(
                 surface.raw_sha256,
                 storage_uri,
             )
+            # The replica's first verification is immutable. A fresh source
+            # capture keeps its own clocks without revising that acquisition.
+            existing_location = conn.execute(
+                "SELECT verified_at, recorded_at FROM evidence_blob_location_observations "
+                "WHERE location_observation_id = ?",
+                (location_id,),
+            ).fetchone()
+            verified_at, recorded_at = (
+                (request.asserted_at, request.asserted_at)
+                if existing_location is None
+                else (
+                    datetime.fromisoformat(str(existing_location[0])),
+                    datetime.fromisoformat(str(existing_location[1])),
+                )
+            )
             created, replayed = _account(
                 EvidenceLinkLedger(conn)
                 .persist_location(
@@ -665,10 +687,10 @@ def _persist_surfaces(
                         location_kind="local",
                         availability_state="present",
                         location_sequence=1,
-                        verified_at=request.asserted_at,
+                        verified_at=verified_at,
                         verified_byte_size=surface.byte_size,
                         verified_sha256=surface.raw_sha256,
-                        recorded_at=request.asserted_at,
+                        recorded_at=recorded_at,
                     )
                 )
                 .created,
@@ -770,7 +792,31 @@ def _ensure_blob(
         (digest,),
     ).fetchone()
     if existing is not None:
-        return str(existing[0])
+        storage_uri = str(existing[0])
+        parsed = urlparse(storage_uri)
+        if (
+            parsed.scheme != "file"
+            or parsed.netloc not in {"", "localhost"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise IRAuthorityCaptureError("registered blob has no verifiable local storage")
+        lexical_path = Path(url2pathname(parsed.path))
+        if not lexical_path.is_absolute():
+            raise IRAuthorityCaptureError("registered blob has no absolute local storage")
+        try:
+            # Check the original URI before the resolver follows path aliases.
+            require_no_reparse_points(lexical_path)
+            require_no_reparse_points(blob_root)
+            path = resolve_local_storage_uri(storage_uri, allowed_roots=(blob_root,))
+            if path is None:
+                raise IRAuthorityCaptureError("registered blob leaves the approved content root")
+            snapshot, retained = read_stable_artifact(path)
+        except (OSError, ImmutableArtifactConflictError):
+            raise IRAuthorityCaptureError("registered blob is unavailable") from None
+        if snapshot.size_bytes != len(body) or snapshot.file_sha256 != digest or retained != body:
+            raise IRAuthorityCaptureError("registered blob conflicts with fetched bytes")
+        return storage_uri
     target = blob_root / digest[:2] / digest
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():

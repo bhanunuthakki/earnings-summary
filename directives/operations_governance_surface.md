@@ -46,6 +46,24 @@ rejection tests; financial consumer and growth evidence tests; portfolio cache,
 tracker adoption and morning pipeline tests. The release audit records exact
 test and rendered results. Those checks establish code behavior, not live health.
 
+### Publisher authority capture repair — 2026-10-04
+
+Disposition: **no Operations surface change**. The existing authority capture
+command uses the shared portfolio database writer lane. Apply requires an
+explicit configured database and rejects another target before connection or
+network access. Repeated captures of identical publisher bytes retain the
+original immutable blob-location clocks and record a separate source observation.
+Reuse verifies the retained local bytes within the supplied actual content root.
+Missing, corrupt, outside-root and reparse-path replicas fail closed without
+replacement or a new observation. Existing request, receipt, coverage and source
+admission contracts remain unchanged. An observed archive response still does
+not prove exhaustion or acquisition completeness.
+
+Evidence: capture renewal and replay tests; writer contention and configured
+route tests; retained-byte, local-path and immutable-artifact tests. Native
+Windows verification remains a separate release gate. No new action, scheduler,
+service, schema or financial-data admission is introduced.
+
 ### Scheduler job receipt authority
 
 The Operations panel and review bundle read each job receipt from its declared

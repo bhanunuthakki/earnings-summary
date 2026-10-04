@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -11,16 +12,18 @@ from typing import cast
 
 import requests
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ir_pipeline.authority_capture import (  # noqa: E402
+from db_paths import configured_db_path
+from ir_pipeline.authority_capture import (
     IRAuthorityCaptureRequest,
     SessionLike,
     capture_ir_authority_surfaces,
 )
-from runtime.job_runtime import JobLock  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from runtime.job_runtime import JobLock
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _event(event: str, **fields: object) -> None:
@@ -49,6 +52,11 @@ def main(argv: list[str] | None = None) -> int:
         request = IRAuthorityCaptureRequest.model_validate_json(
             args.request.read_text(encoding="utf-8")
         )
+        if args.apply:
+            if not os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip():
+                raise ValueError("explicit configured database authority required for apply")
+            if args.db.resolve() != configured_db_path(PROJECT_ROOT):
+                raise ValueError("apply database differs from configured authority")
         _event(
             "ir_authority_capture_started",
             issuer_id=request.issuer_id,
@@ -58,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         role = SQLiteConnectionRole.WRITER if args.apply else SQLiteConnectionRole.READ_ONLY
         write_sets = [
-            f"sqlite:{args.db.resolve()}",
+            "portfolio-db",
             f"evidence-blobs:{args.blob_root.resolve()}",
         ]
         if args.apply:

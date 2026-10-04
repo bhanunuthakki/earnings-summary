@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
+import subprocess
 from collections.abc import Callable, Iterator, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlunsplit
 
@@ -15,16 +17,20 @@ import pytest
 from execution import capture_ir_authority_surfaces as cli
 from ir_pipeline.authority import SurfaceOutcome
 from ir_pipeline.authority_capture import (
+    IRAuthorityCaptureError,
     IRAuthorityCaptureIdentityError,
     IRAuthorityCaptureRequest,
     IRAuthorityCaptureSpec,
     capture_ir_authority_surfaces,
 )
+from provenance.evidence_native_candidates import resolve_local_storage_uri
 from provenance.issuer_registry import (
     IssuerEntity,
     IssuerRegistry,
     LegacyIssuerBindingRevision,
 )
+from run_lock import hold_run_lock, lock_path_for
+from sqlite_runtime import SQLiteConnectionRole
 
 ROOT = Path(__file__).resolve().parents[1]
 STAMP = datetime(2026, 7, 27, 21, 0, tzinfo=UTC)
@@ -345,6 +351,136 @@ def test_exact_apply_replay_is_idempotent(tmp_path: Path, migrated_db: Callable[
         conn.close()
 
 
+@pytest.mark.parametrize("outcome", ["observed", "exhausted"])
+def test_fresh_identical_capture_retains_location_and_new_source_clock(
+    tmp_path: Path, migrated_db: Callable[..., Path], outcome: SurfaceOutcome
+) -> None:
+    conn = _full_conn(tmp_path, migrated_db)
+    blob_root = tmp_path / "blobs"
+    request = _request(outcome=outcome)
+    try:
+        first = capture_ir_authority_surfaces(
+            conn, request, blob_root=blob_root, apply=True, session=FakeSession([FakeResponse()])
+        )
+        first_blob = conn.execute("SELECT * FROM evidence_content_blobs").fetchall()
+        first_location = conn.execute(
+            "SELECT * FROM evidence_blob_location_observations"
+        ).fetchall()
+        later = STAMP + timedelta(seconds=1)
+        updates: dict[str, object] = {"asserted_at": later}
+        if outcome == "exhausted":
+            previous = conn.execute(
+                "SELECT surface_revision_id FROM issuer_authority_surface_revisions"
+            ).fetchone()
+            assert previous is not None
+            updates["surfaces"] = (
+                request.surfaces[0].model_copy(
+                    update={"revision": 2, "supersedes_surface_revision_id": previous[0]}
+                ),
+            )
+        renewed = request.model_copy(update=updates)
+        second = capture_ir_authority_surfaces(
+            conn, renewed, blob_root=blob_root, apply=True, session=FakeSession([FakeResponse()])
+        )
+        assert conn.execute("SELECT * FROM evidence_content_blobs").fetchall() == first_blob
+        assert (
+            conn.execute("SELECT * FROM evidence_blob_location_observations").fetchall()
+            == first_location
+        )
+        assert first.items[0].source_observation_id != second.items[0].source_observation_id
+        rows = conn.execute(
+            "SELECT blob_sha256,observed_at,retrieved_at,retrieval_config_sha256 "
+            "FROM evidence_source_observations ORDER BY observed_at"
+        ).fetchall()
+        assert len(rows) == 2
+        assert rows[0][0] == rows[1][0] == hashlib.sha256(BODY).hexdigest()
+        assert datetime.fromisoformat(rows[1][1]) == later
+        assert datetime.fromisoformat(rows[1][2]) == later
+        assert rows[0][3] != rows[1][3]
+        assert second.records_replayed == 2
+        assert second.records_created == (2 if outcome == "exhausted" else 1)
+        replay = capture_ir_authority_surfaces(
+            conn, renewed, blob_root=blob_root, apply=True, session=FakeSession([FakeResponse()])
+        )
+        assert replay.records_created == 0
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("failure", ["missing", "corrupt", "outside_root", "reparse"])
+def test_fresh_capture_rejects_unusable_retained_blob_without_repair(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    failure: str,
+) -> None:
+    conn = _full_conn(tmp_path, migrated_db)
+    blob_root = tmp_path / "blobs"
+    request = _request(outcome="observed")
+    try:
+        capture_ir_authority_surfaces(
+            conn, request, blob_root=blob_root, apply=True, session=FakeSession([FakeResponse()])
+        )
+        uri = conn.execute("SELECT storage_uri FROM evidence_content_blobs").fetchone()[0]
+        path = resolve_local_storage_uri(uri, allowed_roots=(blob_root,))
+        assert path is not None and path.read_bytes() == BODY
+        directory = path.parent
+        if failure == "missing":
+            path.unlink()
+        elif failure == "corrupt":
+            path.write_bytes(b"wrong retained bytes")
+        elif failure == "outside_root":
+            blob_root = tmp_path / "different-approved-root"
+        else:
+            retained = directory.with_name("retained-original")
+            directory.rename(retained)
+            if os.name == "nt":
+                subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(directory), str(retained)],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            else:
+                directory.symlink_to(retained, target_is_directory=True)
+        before_blobs = conn.execute("SELECT * FROM evidence_content_blobs").fetchall()
+        before_locations = conn.execute(
+            "SELECT * FROM evidence_blob_location_observations"
+        ).fetchall()
+        before_observations = conn.execute("SELECT * FROM evidence_source_observations").fetchall()
+        with pytest.raises(IRAuthorityCaptureError):
+            capture_ir_authority_surfaces(
+                conn,
+                request.model_copy(update={"asserted_at": STAMP + timedelta(seconds=1)}),
+                blob_root=blob_root,
+                apply=True,
+                session=FakeSession([FakeResponse()]),
+            )
+        assert conn.execute("SELECT * FROM evidence_content_blobs").fetchall() == before_blobs
+        assert (
+            conn.execute("SELECT * FROM evidence_blob_location_observations").fetchall()
+            == before_locations
+        )
+        assert (
+            conn.execute("SELECT * FROM evidence_source_observations").fetchall()
+            == before_observations
+        )
+        assert not conn.in_transaction
+        if failure == "missing":
+            assert not path.exists()
+        elif failure == "corrupt":
+            assert path.read_bytes() == b"wrong retained bytes"
+        elif failure == "outside_root":
+            assert not blob_root.exists()
+        else:
+            assert path.read_bytes() == BODY
+            if os.name == "nt":
+                directory.rmdir()
+            else:
+                directory.unlink()
+    finally:
+        conn.close()
+
+
 def test_failed_required_surface_is_not_verified_or_complete(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:
@@ -507,6 +643,7 @@ def test_cli_uses_job_lock_and_json_contract(
             return None
 
     monkeypatch.setattr(cli, "JobLock", FakeLock)
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
     monkeypatch.setattr(cli.requests, "Session", lambda: FakeSession([FakeResponse()]))
     exit_code = cli.main(
         [
@@ -522,6 +659,127 @@ def test_cli_uses_job_lock_and_json_contract(
     output = capsys.readouterr()
     assert exit_code == 0, output
     assert entered[0][0] == "ir-authority-surface-capture"
+    assert entered[0][1] == ("portfolio-db", f"evidence-blobs:{(tmp_path / 'blobs').resolve()}")
     payload = json.loads(output.out)
     assert payload["authority_evidence"]["surfaces"][0]["raw_sha256"]
     assert "ir_authority_capture_completed" in output.err
+
+
+def test_cli_canonical_writer_lock_blocks_before_connection_or_network(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    migrated_db: Callable[..., Path],
+) -> None:
+    conn = _full_conn(tmp_path, migrated_db)
+    db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    conn.close()
+    request_path = tmp_path / "request.json"
+    request_path.write_text(_request().model_dump_json(), encoding="utf-8")
+    session = FakeSession([FakeResponse()])
+    connections: list[Path] = []
+    connect = cli.connect_sqlite
+
+    def observed_connect(
+        path: Path, *, role: SQLiteConnectionRole, schema_preflight: bool | None = None
+    ) -> sqlite3.Connection:
+        connections.append(path)
+        return connect(path, role=role, schema_preflight=schema_preflight)
+
+    monkeypatch.setattr(cli, "connect_sqlite", observed_connect)
+    monkeypatch.setattr(cli.requests, "Session", lambda: session)
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db_path))
+    monkeypatch.setenv("ES_JOB_LOCK_WAIT_S", "0")
+    with hold_run_lock(db_path, owner="synthetic-canonical-writer", timeout_s=0):
+        before = lock_path_for(db_path).read_bytes()
+        result = cli.main(
+            [
+                "--db",
+                str(db_path),
+                "--request",
+                str(request_path),
+                "--blob-root",
+                str(tmp_path / "blobs"),
+                "--apply",
+            ]
+        )
+        assert result == 1
+        assert lock_path_for(db_path).read_bytes() == before
+    assert connections == []
+    assert session.calls == []
+    assert "JobAlreadyRunningError" in capsys.readouterr().err
+    assert not lock_path_for(db_path).exists()
+
+
+def test_cli_rejects_apply_database_outside_configured_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    migrated_db: Callable[..., Path],
+) -> None:
+    conn = _full_conn(tmp_path, migrated_db)
+    db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+    conn.close()
+    request_path = tmp_path / "request.json"
+    request_path.write_text(_request().model_dump_json(), encoding="utf-8")
+    session = FakeSession([FakeResponse()])
+    monkeypatch.setattr(cli.requests, "Session", lambda: session)
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "other-authority.db"))
+    result = cli.main(
+        [
+            "--db",
+            str(db_path),
+            "--request",
+            str(request_path),
+            "--blob-root",
+            str(tmp_path / "blobs"),
+            "--apply",
+        ]
+    )
+    assert result == 1
+    assert session.calls == []
+    assert "ValueError" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("configured", [None, "   "])
+def test_cli_rejects_unconfigured_apply_before_checkout_fallback(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    configured: str | None,
+) -> None:
+    root = tmp_path / "synthetic-checkout"
+    (root / "data").mkdir(parents=True)
+    db = migrated_db(root / "data" / "portfolio.db")
+    conn = sqlite3.connect(db)
+    _seed_registry(conn)
+    conn.close()
+    request_path = root / "request.json"
+    request_path.write_text(_request().model_dump_json(), encoding="utf-8")
+    monkeypatch.setattr(cli, "PROJECT_ROOT", root)
+    if configured is None:
+        monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
+    else:
+        monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", configured)
+    session = FakeSession([FakeResponse()])
+    monkeypatch.setattr(cli.requests, "Session", lambda: session)
+    result = cli.main(
+        [
+            "--db",
+            str(db),
+            "--request",
+            str(request_path),
+            "--blob-root",
+            str(root / "blobs"),
+            "--apply",
+        ]
+    )
+    assert result == 1
+    assert session.calls == []
+    assert "ValueError" in capsys.readouterr().err
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone() == (0,)
+    finally:
+        conn.close()
