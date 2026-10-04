@@ -2,7 +2,7 @@
 
 This follow-up closes the wider source-of-truth assessment after PR1627. It connects selected values, rules, saved evidence and interfaces through their existing owners. It repairs retained tools and removes only behavior whose retirement has direct evidence. The initial code census and lifecycle decisions are in [cleanup dispositions](2026-10-03-cleanup-dispositions.md).
 
-Candidate record: local implementation and verification on `codex/broader-truth-remedies`, based on `e05c3457`. Independent plan reviews passed. DCF and financial/portfolio implementation reviews passed. The KPI source review and all 11 focused retention checks passed. Final independent acceptance is required before push; the complete CI matrix is required before merge. The pull request and Git history own the later delivery status. Nothing here is deployed or live-verified.
+Candidate record: local implementation and verification on `codex/broader-truth-remedies`, based on `e05c3457`. Independent plan reviews passed. DCF and financial/portfolio implementation reviews passed. The KPI source review and all 11 focused retention checks passed. The initial source candidate passed independent acceptance and its normal pre-push hooks. The complete CI matrix found one strict Ask connection defect, catalogue security findings and stale test fixtures. Those findings require a repaired, independently reviewed combined candidate before the next push; the complete matrix remains required before merge. The pull request and Git history own the later delivery status. Nothing here is deployed or live-verified.
 
 ## Completed source changes
 
@@ -38,6 +38,14 @@ The intentional golden changes preserve numerical values. File-report source scr
 The financial extraction schema adds nullable explicit cadence and advances its prompt version. Offline classifier goldens grade annual, quarterly and unresolved intent. No provider, model pin, budget or scheduling priority changed. The existing fleet usage-index registration and application entrypoint remain authoritative. Mocked context reconstruction checks do not establish probabilistic qualification.
 
 Operations has an explicit tested no-surface-change disposition. Read-only evidence views, existing action boundaries and retained source telemetry remain owned by their original interfaces. No new operator action or scheduler activation is introduced. The complete dependency review covers 172 declared dynamic seats. Production references have no unresolved or unknown edges. Six added synthetic process seams remain explicit in the test inventory; they grant no production authority.
+
+## Complete-suite recovery and integration
+
+The first full CI run was not accepted. Strict Ask wrapped SQLite but did not expose the transaction state, row factory and function registration needed by the canonical reader. The wrapper now delegates those exact operations and retains retrieval-error translation. Its per-point citation test covers both strict and non-strict reads; the broader Ask boundary batch passed 66 tests. The catalogue now uses fixed SQL and bound ticker lists through SQLite `json_each`, including its name-only legacy enumeration. That legacy query cannot supply financial values. The architecture regression rejects an added legacy value read.
+
+Old Explore and source-tier fixtures now create admitted canonical evidence with one immutable version binding per legacy document. They retain the original numerical and source-selection assertions, including a higher-ID unadmitted competitor. Saved conditions with no cadence retain the explicit unavailable state. These three complete test files passed 77 tests. The registry, route, cadence-golden, DCF authority and morning-artifact checks passed a separate 143-test batch. The added evidence route is GET-only and the synthetic database stays unchanged. No check was deleted or skipped to obtain these repairs.
+
+PR1632 advanced `main` during verification. Its evaluation-thesis changes are preserved. The conflict was limited to shared quality records. The combined branch keeps the stronger descending ceilings and the reviewed dynamic references. Its evaluation-thesis and company-command-centre batch passed 31 tests. Current dependency provenance, static ceilings and the complete CI matrix must describe that combined candidate. Local Bandit is unavailable; the next CI security job supplies that required evidence.
 
 ## Retained boundaries
 

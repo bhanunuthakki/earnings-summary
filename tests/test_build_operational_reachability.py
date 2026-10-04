@@ -189,7 +189,21 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    assert len(graph.unknown_edges) == 131
+    assert len(graph.unknown_edges) == 132
+    # A checked private-helper lookup removes the scheduled test's broad type
+    # suppression. Its dynamic name remains visible as one test-only seam.
+    assert (
+        GraphEdge(
+            source="tests/test_scheduled_singleflight.py",
+            target="<dynamic attribute>",
+            kind="getattr",
+            evidence="dynamic getattr expression",
+            confidence="low",
+            line=27,
+            unknown=True,
+        )
+        in graph.unknown_edges
+    )
     # Six new synthetic children test artifact ownership and database refusal.
     # Their executable choices remain test-only and visible in this inventory.
     remedy_children = {
