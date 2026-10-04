@@ -14,6 +14,38 @@
 
 ## Outcome
 
+### Shared truth remedies — 2026-10-03
+
+Disposition: **no Operations surface change**. Explore, Ask, saved financial
+conditions and Financials evidence use the existing provenance-aware readers.
+`GET /api/peek/canonical-financial` supports the exact table or series reference.
+`GET /api/peek/financial-calculation` reconstructs growth from its original
+inputs and calculation version. Both are read-only product evidence views.
+They add no operator action, source acquisition or financial write. Invalid
+references fail before database access. Missing admission remains unavailable.
+
+The existing DCF save, rebuild and Sheet import operations retain their action
+boundaries. One per-ticker artifact owner now covers their writes. All durable
+builders use the selected configured database. A committed result with failed
+backup cleanup remains saved, names the recovery requirement and blocks another
+write. It must not be displayed as a rejected candidate. Sheet export transfers
+captured accepted bytes; import validates an editable candidate before promotion.
+This repair does not create a new action or authorize a live Sheet transfer.
+
+Retained extractor, repair and seed commands, and source telemetry, use the
+existing database resolver. Artifact roots are explicit and independent of
+database placement. Portfolio cache displays and decision reads share validation,
+source date and degraded state. Tracker v1 rejects incompatible position and
+transaction snapshots. No transport switch or scheduled operation is activated.
+The removed foreign arithmetic helper had no operator surface. Its retained CLI
+still refuses unsupported financial writes. Shared evaluation-file parsing keeps
+the same purpose validation and grading contracts.
+
+Evidence: retained-tool authority tests; DCF artifact ownership and real import
+rejection tests; financial consumer and growth evidence tests; portfolio cache,
+tracker adoption and morning pipeline tests. The release audit records exact
+test and rendered results. Those checks establish code behavior, not live health.
+
 ### Scheduler job receipt authority
 
 The Operations panel and review bundle read each job receipt from its declared

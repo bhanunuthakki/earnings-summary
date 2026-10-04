@@ -298,12 +298,10 @@ def test_override_only_fact_pickable_and_rendered(tmp_path: Path) -> None:
         {"tickers": ["TST"], "metrics": ["fin:remaining_performance_obligations"], "periods": 4}
     )
     result = execute_view(spec, db_path=db)
-    (row,) = result.rows
-    cell = row.cells[-1]
-    assert cell.raw == 4200.0
-    assert cell.source is not None
-    assert cell.source.source == "sec_8k"
-    assert cell.source.accession_number == "0001-26-01"
+    assert result.rows == []
+    assert result.warnings == [
+        "TST: fin:remaining_performance_obligations omitted: unreviewed_scalar_override"
+    ]
 
 
 def test_override_for_existing_base_row_not_duplicated(tmp_path: Path) -> None:

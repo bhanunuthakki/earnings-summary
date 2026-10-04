@@ -13,6 +13,7 @@ class ArgumentProfile(StrEnum):
 
     NONE = "none"
     DB_PATH = "db_path"
+    DB_PATH_AND_REPO_ROOT = "db_path_and_repo_root"
     DB = "db"
     DB_AND_STATE_ROOT = "db_and_state_root"
     REPO_ROOT_FROM_DB = "repo_root_from_db"
@@ -106,7 +107,7 @@ STAGE_MANIFEST: tuple[StageSpec, ...] = (
         120,
         (STAGE_LIST_TYPE, STAGE_DECISIONS),
         ("skip_triggers",),
-        ArgumentProfile.DB_PATH,
+        ArgumentProfile.DB_PATH_AND_REPO_ROOT,
     ),
     StageSpec(
         STAGE_DECISION_ACTIONS,

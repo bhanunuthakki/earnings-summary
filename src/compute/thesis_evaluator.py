@@ -25,9 +25,9 @@ from decimal import Decimal
 from enum import StrEnum
 from itertools import pairwise
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
-from pydantic import BaseModel, Field, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from compute.kpi_resolver import (
     ANNUAL_FACT_PERIOD_TYPES,
@@ -50,6 +50,8 @@ from compute.thesis_evaluation_episodes import (
     AcceptedObservationInput,
     CapturedKpiObservation,
     EpisodeCheckInput,
+    EpisodeIdempotencyConflictError,
+    EpisodeNondeterminismError,
     EpisodeSeverity,
     EpisodeStoreError,
     ForwardSemanticInput,
@@ -59,6 +61,9 @@ from compute.thesis_evaluation_episodes import (
     SemanticRuleInput,
     forward_episode_id,
     record_forward_episode,
+)
+from compute.thesis_evaluation_episodes import (
+    KpiInputReference as KpiInputReference,
 )
 from compute.thesis_kpi_registration import refresh_thesis_kpi_registration
 from compute.thesis_metric_series import (
@@ -169,6 +174,88 @@ class HoldingsSpec(BaseModel):
     soft_rules: list[SoftRule] = Field(default_factory=lambda: list[SoftRule]())
 
 
+def kpi_input_projection_sql(
+    conn: sqlite3.Connection,
+    *,
+    fact_alias: Literal["kf", "f"],
+    definition_alias: Literal["kd", "d"],
+    semantic_joined: bool,
+) -> str:
+    """Annotate the existing selection in the same SQL read, without reselection."""
+    fact_columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(kpi_facts)")}
+    context_columns: set[str] = (
+        {str(row[1]) for row in conn.execute("PRAGMA table_info(kpi_fact_semantic_contexts)")}
+        if semantic_joined
+        else set()
+    )
+    fields = [
+        f"{fact_alias}.id AS input_fact_id",
+        f"{fact_alias}.ticker AS input_ticker",
+        f"{definition_alias}.id AS input_definition_id",
+        f"{definition_alias}.name AS input_definition_name",
+    ]
+    for name in ("source_doc_id", "locator", "fiscal_period_type"):
+        expression = f"{fact_alias}.{name}" if name in fact_columns else "NULL"
+        fields.append(f"{expression} AS input_{name}")
+    for name, alias in (
+        ("id", "semantic_context_id"),
+        ("kpi_definition_revision_id", "definition_revision_id"),
+        ("source_row_label", "source_row_label"),
+        ("source_column_header", "source_column_header"),
+        ("source_value_text", "source_value_text"),
+    ):
+        expression = f"ksc.{name}" if name in context_columns else "NULL"
+        fields.append(f"{expression} AS input_{alias}")
+    return ", ".join(fields)
+
+
+def kpi_input_reference(row: sqlite3.Row, *, selection_mode: str) -> KpiInputReference:
+    """Project only fields of the exact selected row; absent fields remain absent."""
+
+    def text_field(name: str) -> str | None:
+        value = row[f"input_{name}"]
+        return None if value is None else str(value)
+
+    def id_field(name: str) -> int | None:
+        value = row[f"input_{name}"]
+        return None if value is None else int(value)
+
+    return KpiInputReference(
+        selection_mode=selection_mode,
+        ticker=str(row["input_ticker"]),
+        fact_id=int(row["input_fact_id"]),
+        definition_id=int(row["input_definition_id"]),
+        definition_name=str(row["input_definition_name"]),
+        original_value=str(row["value"]),
+        original_unit=str(row["unit"]),
+        period_end=str(row["period_end"]),
+        fiscal_period_type=text_field("fiscal_period_type"),
+        source_doc_id=id_field("source_doc_id"),
+        locator=text_field("locator"),
+        semantic_context_id=id_field("semantic_context_id"),
+        definition_revision_id=text_field("definition_revision_id"),
+        source_row_label=text_field("source_row_label"),
+        source_column_header=text_field("source_column_header"),
+        source_value_text=text_field("source_value_text"),
+    )
+
+
+class _SelectedKpiValue(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    input: KpiInputReference | None
+    reconciled_value: str
+    reconciled_unit: str
+    period_end: str
+
+
+class _PlainKpiManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    schema_version: Literal["kpi_selected_inputs@1"] = "kpi_selected_inputs@1"
+    reader_policy: Literal["current_projection"] = "current_projection"
+    identity_status: Literal["partial"] = "partial"
+    inputs: tuple[_SelectedKpiValue, ...] = Field(min_length=1, max_length=12)
+
+
 @dataclass(frozen=True)
 class KpiObservation:
     """One historical kpi_facts value pulled for evaluation."""
@@ -181,6 +268,7 @@ class KpiObservation:
     )
     fiscal_period_type: str | None = None
     fiscal_year: int | None = None
+    input_reference: KpiInputReference | None = None
 
 
 @dataclass(frozen=True)
@@ -247,6 +335,36 @@ def _semantic_evidence(value: JsonValue) -> JsonValue:
     if isinstance(value, list):
         return [_semantic_evidence(item) for item in value]
     return value
+
+
+def _plain_evidence_manifest(
+    manifest: dict[str, JsonValue] | None,
+    *,
+    calculated: bool,
+) -> _PlainKpiManifest | None:
+    if calculated or manifest is None:
+        return None
+    try:
+        return _PlainKpiManifest.model_validate_json(_canonical_json(manifest))
+    except ValidationError:
+        return None
+
+
+def _plain_kpi_manifest(observations: tuple[KpiObservation, ...]) -> dict[str, JsonValue] | None:
+    if not any(point.input_reference is not None for point in observations):
+        return None
+    manifest = _PlainKpiManifest(
+        inputs=tuple(
+            _SelectedKpiValue(
+                input=point.input_reference,
+                reconciled_value=str(point.value),
+                reconciled_unit=point.unit.value,
+                period_end=point.period_end.isoformat(),
+            )
+            for point in observations
+        )
+    )
+    return _HOLDINGS_PAYLOAD_ADAPTER.validate_python(manifest.model_dump(mode="json"))
 
 
 def _read_holdings_payload(path: Path) -> dict[str, JsonValue]:
@@ -420,6 +538,10 @@ def _build_semantic_input(
         manifest_hash = (
             _sha256_json(_semantic_evidence(evaluation.source_manifest))
             if evaluation.source_manifest is not None
+            and _plain_evidence_manifest(
+                evaluation.source_manifest, calculated=evaluation.rule.metric_expression is not None
+            )
+            is None
             else None
         )
         if manifest_hash is not None and not evaluation.observations:
@@ -708,13 +830,16 @@ def _fetch_kpi_history_for_resolved_definition(
     )
     if trace is not None:
         trace["selection_mode"] = fact_relation.selection_mode
+    input_projection = kpi_input_projection_sql(
+        conn, fact_alias="kf", definition_alias="kd", semantic_joined=bool(semantic_join)
+    )
     if fact_relation.selection_mode == "legacy_pre_cutover":
         # Pre-cutover fixtures have no canonical resolver relation. Preserve
         # their historic one-row-per-period shape by stable fact-row identity;
         # this is deliberately not a source-document ranking policy.
         query = (
             "WITH eligible AS ("
-            f"SELECT kf.*{context_projection}, "
+            f"SELECT kf.*{context_projection}, {input_projection}, "
             "ROW_NUMBER() OVER (PARTITION BY kf.kpi_definition_id, kf.period_end, "
             "kf.fiscal_period_type ORDER BY kf.id DESC) AS rn "
             f"FROM {fact_relation.sql} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "  # nosec B608 -- canonical relation is a closed internal identifier
@@ -725,7 +850,7 @@ def _fetch_kpi_history_for_resolved_definition(
         )
     else:
         query = (
-            f"SELECT kf.*{context_projection} "
+            f"SELECT kf.*{context_projection}, {input_projection} "
             f"FROM {fact_relation.sql} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "  # nosec B608 -- canonical relation is a closed internal identifier
             f"{semantic_join} "
             "WHERE kf.ticker = ? AND kd.name = ? AND " + semantic_where + period_filter + " "
@@ -780,6 +905,9 @@ def _fetch_kpi_history_for_resolved_definition(
                 unit=unit,
                 provenance=_HOLDINGS_PAYLOAD_ADAPTER.validate_python(dict(row)),
                 fiscal_period_type=period_type,
+                input_reference=kpi_input_reference(
+                    row, selection_mode=fact_relation.selection_mode
+                ),
             )
         )
     # The definition resolver can find fact-carrying definitions whose rows are
@@ -918,6 +1046,7 @@ def evaluate_rule(rule: BreakRule, observations: list[KpiObservation] | None) ->
                 provenance=obs.provenance,
                 fiscal_period_type=obs.fiscal_period_type,
                 fiscal_year=obs.fiscal_year,
+                input_reference=obs.input_reference,
             )
         )
     observations = reconciled
@@ -1327,6 +1456,9 @@ def _evaluate_hard_rule(
                 conn, ticker, rule.kpi_name, rule.consecutive_periods, trace=trace
             )
         evaluation = evaluate_rule(rule, history)
+        evaluation = replace(
+            evaluation, source_manifest=_plain_kpi_manifest(evaluation.observations)
+        )
     selected_name = trace.get("selected_definition")
     definition_row = (
         None
@@ -1355,6 +1487,7 @@ def _evaluate_hard_rule(
                         value=str(obs.value),
                         unit=obs.unit.value,
                         provenance=obs.provenance,
+                        input_reference=obs.input_reference,
                         fiscal_period_type=obs.fiscal_period_type,
                         fiscal_year=obs.fiscal_year,
                     )
@@ -1535,11 +1668,15 @@ def replay_check_context(context: RetainedThesisContext) -> ThesisVerdict:
                         value=Decimal(obs.value),
                         unit=Unit(obs.unit),
                         provenance=obs.provenance,
+                        input_reference=obs.input_reference,
                         fiscal_period_type=obs.fiscal_period_type,
                         fiscal_year=obs.fiscal_year,
                     )
                     for obs in capture.observations
                 ],
+            )
+            evaluation = replace(
+                evaluation, source_manifest=_plain_kpi_manifest(evaluation.observations)
             )
         evaluations.append(evaluation)
     executed = [
@@ -1644,6 +1781,7 @@ def _serialize_rule_evaluations(verdict: ThesisVerdict) -> str:
                 if _new_hard_semantics(e.rule)
                 else {}
             ),
+            **({"source_manifest": e.source_manifest} if e.source_manifest is not None else {}),
             "observations": [
                 {
                     "period_end": obs.period_end.isoformat(),
@@ -1667,11 +1805,93 @@ def _episode_schema_active(conn: sqlite3.Connection) -> bool:
 
 def _episode_rule_projection(verdict: ThesisVerdict) -> tuple[dict[str, JsonValue], ...]:
     parsed = _RULE_PROJECTION_ADAPTER.validate_json(_serialize_rule_evaluations(verdict))
+    for row in parsed:
+        manifest = row.get("source_manifest")
+        if (
+            isinstance(manifest, dict)
+            and _plain_evidence_manifest(
+                manifest, calculated=row.get("metric_expression") is not None
+            )
+            is not None
+        ):
+            if "metric_expression" in row:
+                row["source_manifest"] = None  # preexisting v2 plain field
+            else:
+                row.pop("source_manifest")  # preexisting v1 plain projection
     if not _new_verdict_semantics(verdict):
         return tuple(parsed)
     return tuple(
         _HOLDINGS_PAYLOAD_ADAPTER.validate_python(_semantic_evidence(row)) for row in parsed
     )
+
+
+def _plain_annotation_json(rule_json: str) -> str:
+    rows = _RULE_PROJECTION_ADAPTER.validate_json(rule_json)
+    annotations: dict[str, JsonValue] = {}
+    for row in rows:
+        manifest = row.get("source_manifest")
+        rule_id = row.get("rule_id")
+        if not isinstance(manifest, dict) or not isinstance(rule_id, str):
+            continue
+        admitted = _plain_evidence_manifest(
+            manifest, calculated=row.get("metric_expression") is not None
+        )
+        if admitted is not None:
+            annotations[rule_id] = _HOLDINGS_PAYLOAD_ADAPTER.validate_python(
+                admitted.model_dump(mode="json")
+            )
+    return _canonical_json(_semantic_evidence(annotations))
+
+
+def _check_plain_annotation_replay(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    run_id: str,
+    annotation: str,
+) -> bool:
+    """Check exact run evidence before writes; clocks cannot prove membership."""
+    receipt = conn.execute(
+        "SELECT episode_id FROM thesis_evaluation_episode_check_receipts WHERE ticker=? AND run_id=?",
+        (ticker, run_id),
+    ).fetchone()
+    if receipt is None:
+        return False
+    rows = conn.execute(
+        "SELECT e.rule_evaluations_json FROM thesis_evaluation_episode_members m "
+        "JOIN thesis_evaluations e ON e.id=m.evaluation_id "
+        "WHERE m.episode_id=? AND e.run_id=?",
+        (str(receipt[0]), run_id),
+    ).fetchall()
+    if not rows:
+        rows = conn.execute(
+            "SELECT e.rule_evaluations_json FROM thesis_evaluation_episode_members m "
+            "JOIN thesis_evaluations e ON e.id=m.evaluation_id WHERE m.episode_id=?",
+            (str(receipt[0]),),
+        ).fetchall()
+    retained = {_plain_annotation_json(str(row[0])) for row in rows}
+    if retained != {annotation}:
+        raise EpisodeIdempotencyConflictError(
+            "ticker/run_id source annotation changed or cannot be proved from immutable episode members"
+        )
+    return True
+
+
+def _needs_plain_evidence_anchor(
+    conn: sqlite3.Connection,
+    *,
+    episode_id: str,
+    annotation: str,
+) -> bool:
+    if annotation == "{}":
+        return False
+    latest = conn.execute(
+        "SELECT e.rule_evaluations_json FROM thesis_evaluation_episode_members m "
+        "JOIN thesis_evaluations e ON e.id=m.evaluation_id WHERE m.episode_id=? "
+        "ORDER BY m.member_ordinal DESC LIMIT 1",
+        (episode_id,),
+    ).fetchone()
+    return latest is None or _plain_annotation_json(str(latest[0])) != annotation
 
 
 def _episode_soft_projection(
@@ -2015,8 +2235,15 @@ def persist_verdict(
             or _episode_rule_projection(replayed) != _episode_rule_projection(verdict)
             or _episode_soft_projection(replayed) != _episode_soft_projection(verdict)
             or replayed.overall_status != verdict.overall_status
+            or _plain_annotation_json(_serialize_rule_evaluations(replayed))
+            != _plain_annotation_json(_serialize_rule_evaluations(verdict))
         ):
-            raise EpisodeStoreError("verdict differs from retained deterministic context")
+            raise EpisodeNondeterminismError("verdict differs from retained deterministic context")
+    annotation = _plain_annotation_json(_serialize_rule_evaluations(verdict))
+    annotation_replayed = _check_plain_annotation_replay(
+        conn, ticker=verdict.ticker, run_id=run_id, annotation=annotation
+    )
+
     prior = conn.execute(
         "SELECT thesis, breach_status, raw_json FROM thesis_state WHERE ticker = ?",
         (verdict.ticker,),
@@ -2064,7 +2291,11 @@ def persist_verdict(
             "SELECT 1 FROM thesis_evaluation_episodes WHERE episode_id=?",
             (episode_id,),
         ).fetchone()
-        raw_id = _insert_raw_evaluation(conn, verdict, run_id=run_id) if existing is None else None
+        retain_anchor = existing is None or (
+            not annotation_replayed
+            and _needs_plain_evidence_anchor(conn, episode_id=episode_id, annotation=annotation)
+        )
+        raw_id = _insert_raw_evaluation(conn, verdict, run_id=run_id) if retain_anchor else None
         episode_write = record_forward_episode(
             conn,
             semantic=semantic,

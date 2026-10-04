@@ -202,11 +202,48 @@ class ForwardSemanticInput(_FrozenModel):
         return _sha256(_canonical_json(self.canonical_payload()))
 
 
+class KpiInputReference(BaseModel):
+    """Exact selected current row; stored numeric text is not issuer raw bytes.
+
+    Current KPI facts do not prove immutable canonical observation identities.
+    Retain their real input coordinates and declare this boundary explicitly.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    reader_policy: Literal["current_projection"] = "current_projection"
+    identity_status: Literal["partial"] = "partial"
+    selection_mode: str = Field(min_length=1, max_length=80)
+    ticker: str = Field(min_length=1, max_length=32)
+    fact_id: int = Field(gt=0)
+    definition_id: int = Field(gt=0)
+    definition_name: str = Field(min_length=1, max_length=512)
+    original_value: str = Field(min_length=1, max_length=128)
+    original_unit: str = Field(min_length=1, max_length=80)
+    period_end: str = Field(min_length=1, max_length=80)
+    fiscal_period_type: str | None = Field(default=None, max_length=80)
+    source_doc_id: int | None = Field(default=None, gt=0)
+    locator: str | None = None
+    semantic_context_id: int | None = Field(default=None, gt=0)
+    definition_revision_id: str | None = Field(default=None, min_length=1, max_length=128)
+    source_row_label: str | None = None
+    source_column_header: str | None = None
+    source_value_text: str | None = None
+    missing_source_identities: tuple[str, ...] = (
+        "immutable_observation_version",
+        "canonical_resolution",
+        "canonical_reader_admission",
+    )
+
+
 class CapturedKpiObservation(_FrozenModel):
     period_end: datetime
     value: str
     unit: str
     provenance: dict[str, JsonValue] = Field(default_factory=dict)
+    input_reference: KpiInputReference | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     fiscal_period_type: str | None = Field(default=None, exclude_if=lambda value: value is None)
     fiscal_year: int | None = Field(default=None, exclude_if=lambda value: value is None)
 
@@ -787,6 +824,7 @@ __all__ = [
     "EpisodeWriteResult",
     "ForwardSemanticInput",
     "HardRuleCapture",
+    "KpiInputReference",
     "ProvenanceCompleteness",
     "RetainedThesisContext",
     "SemanticRuleInput",

@@ -23,6 +23,7 @@ from integrations.portfolio_tracker_v1 import (
     TransactionV1,
     V1Fetch,
     V1Warning,
+    transaction_snapshot_error,
 )
 
 # Percent-of-portfolio is a percentage-point wire value; four decimal places
@@ -257,7 +258,7 @@ class PortfolioPositionAdapter:
                 "stale portfolio evidence cannot be presented as a current position",
                 provenance=provenance,
             )
-        history_state, history_error, transactions = self._history(normalized)
+        history_state, history_error, transactions = self._history(normalized, provenance)
         if position is None:
             if provenance.is_stale:
                 return _unavailable(
@@ -395,7 +396,7 @@ class PortfolioPositionAdapter:
         )
 
     def _history(
-        self, ticker: str
+        self, ticker: str, provenance: PositionProvenance
     ) -> tuple[
         Literal["available", "partial", "unavailable"], str | None, list[SnapshotTransaction]
     ]:
@@ -408,6 +409,14 @@ class PortfolioPositionAdapter:
         fetched = typed_fetch()
         if not fetched.available or fetched.data is None:
             return "partial", fetched.error or "transaction history is unavailable", []
+        agreement_error = transaction_snapshot_error(
+            provenance.snapshot_as_of,
+            fetched.meta,
+            currency=provenance.currency,
+            included_account_ids=set(provenance.included_account_ids),
+        )
+        if agreement_error is not None:
+            return "partial", f"transaction history {agreement_error}", []
         return (
             "partial",
             "open and closed decision history is not part of the tracker v1 read contract",

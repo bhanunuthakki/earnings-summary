@@ -24,6 +24,7 @@ import json
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -401,7 +402,7 @@ def test_decision_conditions_extract_prompt_version_bumped() -> None:
     single bump-point registry."""
     from llm.prompt_versions import prompt_version_for
 
-    assert prompt_version_for("decision_conditions_extract") == "v2"
+    assert prompt_version_for("decision_conditions_extract") == "v3"
 
 
 def test_extract_conditions_parse_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -975,3 +976,47 @@ def test_load_all_open_decisions_spans_tickers(db: Path) -> None:
 
 def test_load_all_open_decisions_missing_db_degrades(tmp_path: Path) -> None:
     assert dc.load_all_open_decisions(tmp_path / "nope.db") == []
+
+
+@pytest.mark.parametrize("cadence", ["quarterly", "annual", None])
+def test_extract_conditions_preserves_explicit_nullable_financial_cadence(
+    monkeypatch: pytest.MonkeyPatch, cadence: str | None
+) -> None:
+    seen: list[str] = []
+
+    def fake_structured(prompt: str, **kwargs: object) -> object:
+        seen.append(prompt)
+        return [
+            _good_condition_obj(
+                metric="revenue", metric_source="financial", financial_cadence=cadence
+            )
+        ]
+
+    monkeypatch.setattr(dc, "call_llm_structured", fake_structured)
+    result = extract_conditions("intent", ticker="SYNTH", kpi_names=[], line_items=["revenue"])
+    assert len(result) == 1 and result[0].financial_cadence == cadence
+    assert result[0].as_json_obj()["financial_cadence"] == cadence
+    assert "milestone deadline does not establish measurement cadence" in seen[0]
+
+
+def test_decision_condition_goldens_grade_financial_cadence() -> None:
+    from evals.golden_classifiers import (
+        grade_decision_conditions_case,
+        load_decision_conditions_golden,
+    )
+
+    cases = load_decision_conditions_golden(
+        Path(__file__).resolve().parents[1] / "evals/golden/decision_conditions_extract.json"
+    )
+    annual = next(case for case in cases if case.case_id == "dc-cadence-annual")
+    assert isinstance(annual.expected, list)
+    expected = cast("list[object]", annual.expected)[0]
+    assert isinstance(expected, dict)
+    good = grade_decision_conditions_case(annual, fn=lambda *args, **kwargs: [expected])
+    wrong = grade_decision_conditions_case(
+        annual, fn=lambda *args, **kwargs: [{**expected, "financial_cadence": "quarterly"}]
+    )
+    assert good.passed and good.score == 1
+    assert not wrong.passed and wrong.score == 0
+    ids = {case.case_id for case in cases}
+    assert {"dc-cadence-missing", "dc-cadence-milestone", "dc-cadence-ambiguous"} <= ids

@@ -110,7 +110,6 @@ AUDITED_LEGACY_FACT_READS = {
     "execution/prune_misscaled_capture_facts.py": 1,
     "execution/retype_misfiled_sec_ir_docs.py": 2,
     "src/allocation/eligibility.py": 1,
-    "src/ask/grounding.py": 3,
     "src/bear_case_grader.py": 1,
     "src/competitive/holdings_sync.py": 1,
     "src/compute/fmp_derived_kpis.py": 1,
@@ -125,7 +124,7 @@ AUDITED_LEGACY_FACT_READS = {
     "src/compute/segments.py": 1,
     "src/credibility/observations.py": 3,
     "src/dcf/fact_drivers.py": 1,
-    "src/decision_conditions.py": 4,
+    "src/decision_conditions.py": 2,
     "src/pipeline/confidence.py": 2,
     "src/pipeline/key_metrics.py": 1,
     "src/pipeline/kpi_persistence.py": 4,
@@ -179,6 +178,18 @@ class _TransitionalReadExemption:
 # immutable observations can be captured atomically. Keep it outside the
 # frozen reader-debt count, but make both its scope and deletion gate executable.
 _TRANSITIONAL_READ_EXEMPTIONS = {
+    # The existing Ask name discovery moved to the shared financial catalogue.
+    # It enumerates names and coverage only; it cannot supply financial values.
+    "src/sources/canonical_financial_series.py": (
+        _TransitionalReadExemption(
+            function_name="financial_metric_catalog",
+            read_count=1,
+            retirement_criterion=(
+                "Retire after the canonical catalogue can enumerate unresolved legacy "
+                "metric names and coverage without reading the legacy projection."
+            ),
+        ),
+    ),
     "src/pipeline/kpi_source_review.py": (
         _TransitionalReadExemption(
             function_name="bind_source_reviewed_kpi_definition",
@@ -482,5 +493,32 @@ def test_shadow_reader_raw_reads_are_exact_and_extra_reads_remain_debt() -> None
     assert _legacy_read_count_for_tree(relative, tree) == 0
     with_unapproved_read = ast.parse(
         source + "\ndef _unapproved_reader():\n    return 'SELECT id FROM kpi_facts'\n"
+    )
+    assert _legacy_read_count_for_tree(relative, with_unapproved_read) == 1
+
+
+def test_financial_catalogue_compatibility_is_name_only_and_extra_reads_remain_debt() -> None:
+    relative = "src/sources/canonical_financial_series.py"
+    source = (ROOT / relative).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    catalogue = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "financial_metric_catalog"
+    )
+    legacy_sql = [
+        node.value
+        for node in ast.walk(catalogue)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and _DIRECT_READ.search(node.value)
+    ]
+    assert len(legacy_sql) == 1
+    assert legacy_sql[0].startswith(
+        "SELECT line_item,COUNT(DISTINCT upper(ticker)) FROM financial_facts "
+    )
+    assert _legacy_read_count_for_tree(relative, tree) == 0
+    with_unapproved_read = ast.parse(
+        source + "\ndef _unapproved_reader():\n    return 'SELECT value FROM financial_facts'\n"
     )
     assert _legacy_read_count_for_tree(relative, with_unapproved_read) == 1

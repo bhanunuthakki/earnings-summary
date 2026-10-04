@@ -76,12 +76,16 @@ def db_path_context(db_path: Path | str | None) -> Generator[None]:
         _AMBIENT_DB_PATH.reset(token)
 
 
-def resolve_db_path(override: Path | str | None) -> Path | None:
+def resolve_db_path(
+    override: Path | str | None, *, configured_root: Path | None = None
+) -> Path | None:
     """Resolve the target DB path: an explicit ``override`` wins; then an
     active :func:`db_path_context`; otherwise ``db.DB_PATH`` if importable (the
     global a CLI's ``--db-path`` re-points via ``db.set_db_path``); else
     ``None`` when the caller has no DB context.
 
+    ``configured_root`` selects the environment authority as the fallback
+    after an explicit or scoped path, instead of the mutable DB global.
     ``db`` is imported lazily so importing *this* module stays side-effect-free.
     """
     if override is not None:
@@ -89,6 +93,8 @@ def resolve_db_path(override: Path | str | None) -> Path | None:
     ambient = _AMBIENT_DB_PATH.get()
     if ambient is not None:
         return Path(ambient)
+    if configured_root is not None:
+        return configured_db_path(configured_root)
     try:
         from db import DB_PATH
     except ImportError:

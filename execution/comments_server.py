@@ -2099,7 +2099,9 @@ def create_app(
                 )
             if fragment:
                 return Response(
-                    render_health_fragment(db_path, fragment, conn=get_read_db()),
+                    render_health_fragment(
+                        db_path, fragment, repo_root=repo_root, conn=get_read_db()
+                    ),
                     mimetype="text/html",
                 )
             return Response(
@@ -2123,7 +2125,7 @@ def create_app(
             from pipeline.portfolio_panel import render_portfolio_synthesis_panel
 
             return Response(
-                render_portfolio_synthesis_panel(db_path, conn=get_read_db()),
+                render_portfolio_synthesis_panel(db_path, repo_root=repo_root, conn=get_read_db()),
                 mimetype="text/html",
             )
 
@@ -2146,7 +2148,9 @@ def create_app(
             from pipeline.portfolio_panel import render_portfolio_risk_panel
 
             return Response(
-                render_portfolio_risk_panel(db_path=db_path, conn=get_read_db()),
+                render_portfolio_risk_panel(
+                    db_path=db_path, repo_root=repo_root, conn=get_read_db()
+                ),
                 mimetype="text/html",
             )
 
@@ -2171,7 +2175,9 @@ def create_app(
             fragment = request.args.get("fragment")
             if fragment:
                 return Response(
-                    render_health_fragment(db_path, fragment, conn=get_read_db()),
+                    render_health_fragment(
+                        db_path, fragment, repo_root=repo_root, conn=get_read_db()
+                    ),
                     mimetype="text/html",
                 )
             user_id = DEFAULT_USER_ID
