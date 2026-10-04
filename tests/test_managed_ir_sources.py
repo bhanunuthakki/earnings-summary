@@ -37,6 +37,14 @@ from pipeline.managed_ir_sources import (
 from runtime.job_runtime import JobLock
 
 
+@pytest.fixture(autouse=True)
+def configured_synthetic_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Each test owns this synthetic authority, independent of its launch environment.
+    monkeypatch.setenv(
+        "EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "state" / "data" / "portfolio.db")
+    )
+
+
 def _sha(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
