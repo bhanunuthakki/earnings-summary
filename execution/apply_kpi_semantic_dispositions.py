@@ -8,8 +8,10 @@ import json
 import os
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from time import perf_counter
 from typing import Literal
 from uuid import uuid4
 
@@ -20,6 +22,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "execution"))
 
 from apply_kpi_semantic_refresh import (
     RepairBlockedError as DispositionBlockedError,
+)
+from apply_kpi_semantic_refresh import (
+    emit_repair_phase_diagnostics,
+    validate_repair_review_preconditions,
 )
 from apply_kpi_semantic_refresh import (
     repair_database_authority as _disposition_database,
@@ -33,7 +39,10 @@ from apply_kpi_semantic_refresh import (
 from apply_kpi_semantic_refresh import (
     validate_external_repair_evidence as validate_disposition_external_evidence,
 )
-from backup_restore_readiness_receipt import BackupRestoreReadinessReceipt
+from backup_restore_readiness_receipt import (
+    BackupRestoreReadinessReceipt,
+    validate_receipt_for_source,
+)
 from fetch_windows_review_bundle import (
     WindowsReviewPins,
     identity_sha256,
@@ -222,6 +231,7 @@ def judge_authorizes(
     manifest_sha: str,
     manifest: KpiSemanticDispositionManifest,
     executor_code_sha: str,
+    now: datetime | None = None,
 ) -> bool:
     return bool(
         dry_run.mode == "dry_run"
@@ -237,7 +247,7 @@ def judge_authorizes(
         and judge.review_bundle_sha256 == manifest.review_bundle_sha256
         and judge.executor_code_sha256 == executor_code_sha
         and judge.purpose == "kpi_semantic_disposition"
-        and judge_qualification_is_current(judge, now=datetime.now(UTC))
+        and judge_qualification_is_current(judge, now=now if now is not None else datetime.now(UTC))
     )
 
 
@@ -343,13 +353,17 @@ def execute_disposition_transaction(
     executor_code_sha: str,
     review_bundle: OperationsReviewBundle,
     apply: bool,
+    validate_current_authority: Callable[[], None],
+    max_review_age: timedelta = timedelta(minutes=20),
 ) -> KpiSemanticDispositionResult:
+    transaction_started = perf_counter()
     conn = open_db(db_path)
     try:
         if _schema_revision(conn) != manifest.expected_schema_revision:
             raise DispositionBlockedError("database_schema_revision_changed")
         if not _database_identity_matches(conn, manifest=manifest, review_bundle=review_bundle):
             raise DispositionBlockedError("database_lineage_identity_changed")
+        validate_current_authority()
         conn.execute("BEGIN IMMEDIATE")
         result = apply_kpi_semantic_disposition_manifest(
             conn, repo_root=repo_root, manifest=manifest
@@ -363,10 +377,24 @@ def execute_disposition_transaction(
                 executor_code_sha=executor_code_sha,
                 result=result,
             )
-        if tuple(str(row[0]) for row in conn.execute("PRAGMA integrity_check")) != ("ok",) or tuple(
-            conn.execute("PRAGMA foreign_key_check")
-        ):
-            raise DispositionBlockedError("post_disposition_database_invalid")
+        checks_started = perf_counter()
+        try:
+            if tuple(str(row[0]) for row in conn.execute("PRAGMA integrity_check")) != (
+                "ok",
+            ) or tuple(conn.execute("PRAGMA foreign_key_check")):
+                raise DispositionBlockedError("post_disposition_database_invalid")
+            validate_current_authority()
+        finally:
+            emit_repair_phase_diagnostics(
+                phase="post_write_checks",
+                started_monotonic=checks_started,
+                review_bundle=review_bundle,
+                max_review_age=max_review_age,
+                now=datetime.now(UTC),
+            )
+        # Diagnostics can block on their output sink. Fence the actual
+        # transaction boundary after that work, not before it.
+        validate_current_authority()
         if apply:
             conn.commit()
         else:
@@ -377,6 +405,13 @@ def execute_disposition_transaction(
         raise
     finally:
         conn.close()
+        emit_repair_phase_diagnostics(
+            phase="transaction_validation",
+            started_monotonic=transaction_started,
+            review_bundle=review_bundle,
+            max_review_age=max_review_age,
+            now=datetime.now(UTC),
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -414,6 +449,39 @@ def main(argv: list[str] | None = None) -> int:
         replayed_reference_rows=0,
     )
     state: Literal["passed", "applied", "replayed", "blocked", "failed"] = "failed"
+    dry_run: KpiDispositionAttemptReceipt | None = None
+    judge: KpiDispositionJudgeReceipt | None = None
+    authority_checked_at = started
+
+    def validate_current_authority() -> None:
+        nonlocal authority_checked_at
+        now = datetime.now(UTC)
+        if manifest.knowledge_at > now + timedelta(minutes=5):
+            raise DispositionBlockedError("manifest_knowledge_at_from_future")
+        validate_repair_review_preconditions(
+            manifest=manifest,
+            review_bundle=review_bundle,
+            trusted_pins=trusted_pins,
+            backup=backup,
+            now=now,
+            max_review_age=timedelta(seconds=args.max_review_age_seconds),
+            not_before=authority_checked_at,
+        )
+        if args.apply and (
+            dry_run is None
+            or judge is None
+            or not judge_authorizes(
+                dry_run=dry_run,
+                judge=judge,
+                manifest_sha=manifest_sha,
+                manifest=manifest,
+                executor_code_sha=executor_code_sha,
+                now=now,
+            )
+        ):
+            raise DispositionBlockedError("judge_receipt_not_authorizing")
+        authority_checked_at = now
+
     try:
         if args.user_id != manifest.user_id:
             raise DispositionBlockedError("manifest_user_identity_mismatch")
@@ -422,15 +490,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.max_review_age_seconds <= 0:
             raise DispositionBlockedError("invalid_review_age")
         if not args.apply:
-            validate_disposition_external_evidence(
-                manifest=manifest,
-                db_path=args.db,
-                review_bundle=review_bundle,
-                trusted_pins=trusted_pins,
-                backup=backup,
-                now=datetime.now(UTC),
-                max_review_age=timedelta(seconds=args.max_review_age_seconds),
-            )
+            validate_current_authority()
         if args.apply:
             _validate_apply_authority(
                 db_path=args.db,
@@ -450,14 +510,20 @@ def main(argv: list[str] | None = None) -> int:
             judge = KpiDispositionJudgeReceipt.model_validate_json(
                 args.judge_receipt.read_text(encoding="utf-8")
             )
+            judge_checked_at = datetime.now(UTC)
+            if judge_checked_at < authority_checked_at:
+                raise DispositionBlockedError("repair_clock_moved_backwards")
             if not judge_authorizes(
                 dry_run=dry_run,
                 judge=judge,
                 manifest_sha=manifest_sha,
                 manifest=manifest,
                 executor_code_sha=executor_code_sha,
+                now=judge_checked_at,
             ):
                 raise DispositionBlockedError("judge_receipt_not_authorizing")
+            authority_checked_at = judge_checked_at
+            validate_current_authority()
         with JobLock(
             _lock_root(args.db),
             "kpi-semantic-dispositions",
@@ -477,10 +543,23 @@ def main(argv: list[str] | None = None) -> int:
                 else None
             )
             if recovered is not None:
+                validate_current_authority()
+                # A committed repair changed the live contents. Preserve the
+                # exact immutable rollback proof without demanding that the
+                # source still equal its pre-repair snapshot.
+                reasons = validate_receipt_for_source(
+                    backup,
+                    source_db=args.db,
+                    source_revision=manifest.expected_schema_revision,
+                    require_current_identity=False,
+                )
+                if reasons:
+                    raise DispositionBlockedError(reasons[0])
+                validate_current_authority()
                 result = recovered
                 state = "replayed"
             else:
-                validate_disposition_external_evidence(
+                authority_checked_at = validate_disposition_external_evidence(
                     manifest=manifest,
                     db_path=args.db,
                     review_bundle=review_bundle,
@@ -488,10 +567,20 @@ def main(argv: list[str] | None = None) -> int:
                     backup=backup,
                     now=datetime.now(UTC),
                     max_review_age=timedelta(seconds=args.max_review_age_seconds),
+                    not_before=authority_checked_at,
                 )
+                validate_current_authority()
+                clone_started = perf_counter()
                 with _disposition_database(
                     live_db=args.db, backup=backup, apply=args.apply
                 ) as work_db:
+                    emit_repair_phase_diagnostics(
+                        phase="clone_hash",
+                        started_monotonic=clone_started,
+                        review_bundle=review_bundle,
+                        max_review_age=timedelta(seconds=args.max_review_age_seconds),
+                        now=datetime.now(UTC),
+                    )
                     result = execute_disposition_transaction(
                         db_path=work_db,
                         repo_root=args.repo_root,
@@ -501,6 +590,8 @@ def main(argv: list[str] | None = None) -> int:
                         executor_code_sha=executor_code_sha,
                         review_bundle=review_bundle,
                         apply=args.apply,
+                        validate_current_authority=validate_current_authority,
+                        max_review_age=timedelta(seconds=args.max_review_age_seconds),
                     )
                 state = "applied" if args.apply else "passed"
     except JobAlreadyRunningError:
@@ -538,7 +629,15 @@ def main(argv: list[str] | None = None) -> int:
         replayed_reference_rows=result.replayed_reference_rows,
         blocker_codes=blocker_codes,
     )
+    publication_started = perf_counter()
     summary = publish_disposition_receipt(receipt_root=receipt_root, receipt=receipt)
+    emit_repair_phase_diagnostics(
+        phase="receipt_publication",
+        started_monotonic=publication_started,
+        review_bundle=review_bundle,
+        max_review_age=timedelta(seconds=args.max_review_age_seconds),
+        now=datetime.now(UTC),
+    )
     sys.stderr.write(
         json.dumps(
             {

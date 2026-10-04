@@ -46,6 +46,24 @@ rejection tests; financial consumer and growth evidence tests; portfolio cache,
 tracker adoption and morning pipeline tests. The release audit records exact
 test and rendered results. Those checks establish code behavior, not live health.
 
+### Publisher authority capture repair — 2026-10-04
+
+Disposition: **no Operations surface change**. The existing authority capture
+command uses the shared portfolio database writer lane. Apply requires an
+explicit configured database and rejects another target before connection or
+network access. Repeated captures of identical publisher bytes retain the
+original immutable blob-location clocks and record a separate source observation.
+Reuse verifies the retained local bytes within the supplied actual content root.
+Missing, corrupt, outside-root and reparse-path replicas fail closed without
+replacement or a new observation. Existing request, receipt, coverage and source
+admission contracts remain unchanged. An observed archive response still does
+not prove exhaustion or acquisition completeness.
+
+Evidence: capture renewal and replay tests; writer contention and configured
+route tests; retained-byte, local-path and immutable-artifact tests. Native
+Windows verification remains a separate release gate. No new action, scheduler,
+service, schema or financial-data admission is introduced.
+
 ### Scheduler job receipt authority
 
 The Operations panel and review bundle read each job receipt from its declared
@@ -1007,3 +1025,23 @@ A passing analyst review establishes research evidence readiness. It does not
 establish owner approval or trade authority. Existing MELI reviews and generic
 foreign-filer captures keep their prior gates. No schema, provider, schedule,
 listener or Operations UI control is added.
+
+### Exact retained IR source aliases
+
+`execution/capture_issuer_document_inventory.py` accepts the explicit
+`issuer_document_inventory_request.v2_alias` read-only route. Each selected
+alias binds a legacy document ID, native version, exact blob SHA, persisted
+source observation and document link, selected issuer/reporting subject,
+quarter/type and aware knowledge/observation cutoffs. The owner verifies actual
+local bytes and seals the original registered URL plus exact immutable lineage
+in a separate v2 receipt. Missing, ambiguous, superseded or future evidence
+fails closed. The existing v1 exact-URL route and staging/publishing callers
+remain strict v1. This command performs no acquisition, source identity write,
+archive completeness certification or financial admission.
+
+The source alias write preparation for Booking remains a private, separately
+reviewed adapter over existing SourceObservation and DocumentObservationLink
+owners. It is not a new workspace action or automatic pipeline stage. Native
+host, canonical route, current production authority and concrete reviewed
+request/receipt gates remain external prerequisites. No scheduler or live
+write capability is added by the read-only inventory route.
