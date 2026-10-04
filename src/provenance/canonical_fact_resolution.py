@@ -487,11 +487,17 @@ class CanonicalFactResolutionEngine:
             receipt is not None
             and receipt.status == "resolved"
             and receipt.selected_observation_id is not None
-            and not self.observation_lineage_current(
-                receipt.selected_observation_id, cutoff_at, observed_through=observed_through
-            )
         ):
-            return None
+            # Broken selected-source evidence is a provenance failure, not an
+            # absent resolution. Retain the typed failure for every consumer.
+            observed = cutoff_at if observed_through is None else observed_through
+            bundle = FactReadModel(self._conn).provenance_bundle(
+                receipt.selected_observation_id, cutoff=_utc(observed)
+            )
+            if bundle.derivation is not None and not self.observation_lineage_current(
+                receipt.selected_observation_id, cutoff_at, observed_through=observed_through
+            ):
+                return None
         return receipt
 
     def _stored_as_known(

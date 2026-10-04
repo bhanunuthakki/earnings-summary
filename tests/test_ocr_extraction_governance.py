@@ -103,7 +103,9 @@ def test_pdf_preflight_distinguishes_restrictions_from_opening_password(password
     writer = PdfWriter()
     writer.add_blank_page(width=300, height=200)
     writer.encrypt(
-        password, owner_password="dummy-owner-only", permissions_flag=UserAccessPermissions.PRINT
+        password,
+        owner_password="dummy-owner-only",  # pragma: allowlist secret -- synthetic PDF fixture
+        permissions_flag=UserAccessPermissions.PRINT,
     )
     output = io.BytesIO()
     writer.write(output)

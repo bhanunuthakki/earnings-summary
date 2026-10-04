@@ -58,7 +58,7 @@ def test_segment_drill_names_its_bounded_evidence_state() -> None:
         "reference={}&extra=1",
         "reference={}&fragment=0",
         "reference={}&fragment=1&fragment=1",
-        "reference=" + "x" * 32769,
+        pytest.param("reference=" + "x" * 32769, id="oversized-reference"),
     ],
 )
 def test_invalid_growth_reference_precedes_database(query: str, tmp_path: Path) -> None:

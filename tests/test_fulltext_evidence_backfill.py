@@ -1491,7 +1491,7 @@ def _encrypted_pdf(user_password: str) -> bytes:
     page[NameObject("/Contents")] = content
     writer.encrypt(
         user_password,
-        owner_password="dummy-owner-only",
+        owner_password="dummy-owner-only",  # pragma: allowlist secret -- synthetic PDF fixture
         permissions_flag=UserAccessPermissions.PRINT,
     )
     output = io.BytesIO()

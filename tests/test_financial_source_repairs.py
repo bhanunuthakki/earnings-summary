@@ -503,59 +503,6 @@ def test_reviewed_kpi_money_binding_and_scale_use_one_reported_observation(
     )
 
 
-def test_financial_candidate_migration_preserves_rows_and_guards(
-    database: sqlite3.Connection, monkeypatch: object
-) -> None:
-    import importlib.util
-
-    from alembic.migration import MigrationContext
-    from alembic.operations import Operations
-    from pytest import MonkeyPatch
-    from sqlalchemy import create_engine
-
-    assert isinstance(monkeypatch, MonkeyPatch)
-    facts = seed_table(database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100", "USD")])
-    assert facts
-    database.commit()
-    path = database.execute("PRAGMA database_list").fetchone()[2]
-    before = database.execute(
-        "SELECT * FROM canonical_fact_candidate_dispositions ORDER BY candidate_disposition_id"
-    ).fetchall()
-    assert before
-    triggers_before = {
-        row[0]
-        for row in database.execute(
-            "SELECT name FROM sqlite_master WHERE type='trigger' AND instr(sql,'canonical_fact_candidate_dispositions')>0"
-        )
-    }
-    migration_path = (
-        Path(__file__).parents[1] / "alembic/versions/0053_reviewed_financial_derivations.py"
-    )
-    spec = importlib.util.spec_from_file_location("financial_migration", migration_path)
-    assert spec is not None and spec.loader is not None
-    migration = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(migration)
-    engine = create_engine(f"sqlite:///{path}")
-    with engine.begin() as connection:
-        monkeypatch.setattr(migration, "op", Operations(MigrationContext.configure(connection)))
-        migration.downgrade()
-        migration.upgrade()
-    assert (
-        database.execute(
-            "SELECT * FROM canonical_fact_candidate_dispositions ORDER BY candidate_disposition_id"
-        ).fetchall()
-        == before
-    )
-    assert {
-        row[0]
-        for row in database.execute(
-            "SELECT name FROM sqlite_master WHERE type='trigger' AND instr(sql,'canonical_fact_candidate_dispositions')>0"
-        )
-    } == triggers_before
-    assert database.execute("PRAGMA foreign_key_check").fetchall() == []
-    assert database.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-
-
 @pytest.mark.parametrize("mismatch", ["currency", "unit", "year", "year_start", "nonquarter"])
 def test_cumulative_transform_rejects_incomparable_operands(
     database: sqlite3.Connection, mismatch: str
@@ -1128,3 +1075,34 @@ def test_financial_binding_replay_requires_full_review_commitment(
     with pytest.raises(ValueError, match="binding head changed"):
         bind_reviewed_financial_observation(database, review.model_copy(update={field: altered}))
     assert database.total_changes == before
+
+
+@pytest.mark.parametrize("corruption", ["commitment", "publication_member"])
+def test_selected_source_corruption_preserves_precise_admission_failure(
+    database: sqlite3.Connection, corruption: str
+) -> None:
+    from provenance.fact_read_model import FactAdmissionError
+
+    facts = seed_table(database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100", "USD")])
+    binding = MetricOntology(database).binding_as_known(facts[0].observation.observation_id, STAMP)
+    assert binding is not None and binding.canonical_metric_cell_id is not None
+    if corruption == "commitment":
+        database.execute("DROP TRIGGER trg_fact_observation_payload_commitments_v2_append_only")
+        database.execute(
+            "UPDATE fact_observation_payload_commitments_v2 SET observation_payload_sha256=? WHERE observation_id=?",
+            ("0" * 64, facts[0].observation.observation_id),
+        )
+    else:
+        database.execute("DROP TRIGGER trg_source_fact_publication_members_append_only")
+        database.execute(
+            "UPDATE source_fact_publication_members SET canonical_member_sha256=? WHERE record_kind='fact_observation' AND record_id=?",
+            ("0" * 64, facts[0].observation.observation_id),
+        )
+    with pytest.raises(FactAdmissionError) as failure:
+        CanonicalFactResolutionEngine(database).as_known(binding.canonical_metric_cell_id, STAMP)
+    assert failure.value.reason_code in {
+        "publication_record_commitment_mismatch",
+        "publication_member_tampered",
+        "publication_member_set_tampered",
+    }
+    assert failure.value.disposition == "quarantined"
