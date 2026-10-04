@@ -131,7 +131,8 @@
         "src/compute/metrics_engine/engine.py",
         "src/compute/metrics_engine/io.py",
         "src/compute/kpi_extract_summaries.py",
-        "src/dcf/valuation.py"
+        "src/dcf/valuation.py",
+        "execution/preview_meli_inputs.py"
       ],
       "dependencies": [
         "core_data_layer"

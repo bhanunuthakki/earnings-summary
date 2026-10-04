@@ -22,9 +22,11 @@ import pytest
 
 from dcf import input_evidence as evidence
 from dcf import meli_inputs
+from dcf.meli_input_preview import preview_meli_inputs
 from dcf.readiness import load_valuation_readiness
 from dcf.specialized_price import SpecializedPriceObservation
 from execution import build_meli_platform_dcf as meli
+from execution import preview_meli_inputs as preview_cli
 from provenance.canonical_fact_resolution import (
     CanonicalFactResolutionEngine,
     ResolutionPolicy,
@@ -37,6 +39,7 @@ from provenance.fact_plane_v2 import (
     FactDimensionV2,
 )
 from provenance.fact_read_model import FactReadModel
+from provenance.immutable_artifact import ImmutableArtifactConflictError
 from provenance.issuer_registry import IssuerRegistry, Security
 from provenance.metric_ontology import (
     BindingRevision,
@@ -1477,3 +1480,243 @@ def test_real_builder_persistence_keeps_subsecond_calculation_clock(
     conn.execute("UPDATE dcf_runs SET created_at=?", (NOW.replace(microsecond=0).isoformat(),))
     truncated = load_valuation_readiness(conn, "MELI", as_of=NOW)
     assert "model_input_receipt_after_calculation" in truncated.reason_codes
+
+
+def test_input_preview_selects_all_reported_roles_without_writes_or_priors(
+    shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+) -> None:
+    # This existing fixture mocks only source-coverage verification. Publication,
+    # metric revisions, dimensions, resolver and provenance reads remain real.
+    conn, request = shared_revenue_inputs
+    conn.execute("PRAGMA query_only=ON")
+    changes = conn.total_changes
+    result = preview_meli_inputs(
+        conn,
+        research_snapshot_id=request.research_snapshot_id,
+        financial_period_end=END,
+        as_of=NOW,
+    )
+    assert result.state == "reported_inputs_verified_not_model_ready"
+    assert result.model_ready is False
+    assert len(result.slots) == 28
+    assert all(slot.state == "matched" for slot in result.slots)
+    assert result.facts == request.facts
+    assert conn.total_changes == changes
+    assert not hasattr(result, "assumptions")
+    assert not hasattr(result, "model_output_sha256")
+    assert result == preview_meli_inputs(
+        conn,
+        research_snapshot_id=request.research_snapshot_id,
+        financial_period_end=END,
+        as_of=NOW,
+    )
+
+
+@pytest.mark.parametrize("role", [None, "meli.comm_rev0"])
+def test_input_preview_refuses_missing_or_ambiguous_roles_without_partial_bindings(
+    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    role: str | None,
+) -> None:
+    conn, request = real_inputs
+    ontology = MetricOntology(conn)
+    metric_id = request.facts["revenue_total_ytd"].metric_id
+    old = ontology.metric_definition_as_known(metric_id, NOW)
+    assert old is not None
+    scope = {key: value for key, value in old.scope_constraints.items() if key != "valuation_role"}
+    if role is not None:
+        scope["valuation_role"] = role
+    ontology.persist_metric_definition(
+        old.model_copy(
+            update={
+                "metric_definition_revision_id": old.metric_definition_revision_id + ":preview-v2",
+                "idempotency_key": old.idempotency_key + ":preview-v2",
+                "revision": 2,
+                "supersedes_metric_definition_revision_id": old.metric_definition_revision_id,
+                "scope_constraints": scope,
+                "effective_at": NOW,
+                "knowledge_at": NOW,
+                "recorded_at": NOW,
+            }
+        )
+    )
+    conn.commit()
+    conn.execute("PRAGMA query_only=ON")
+    result = preview_meli_inputs(
+        conn,
+        research_snapshot_id=request.research_snapshot_id,
+        financial_period_end=END,
+        as_of=NOW,
+    )
+    slots = {slot.key: slot for slot in result.slots}
+    assert slots["revenue_total_ytd"].state == "missing"
+    assert slots["comm_rev0_ytd"].state == ("matched" if role is None else "ambiguous")
+    assert len(slots["comm_rev0_ytd"].candidate_cell_ids) == (1 if role is None else 2)
+    assert result.state == "incomplete"
+    assert result.model_ready is False
+    assert result.facts == {}
+
+
+def test_input_preview_rejects_missing_source_coverage_before_reading_candidates(
+    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn, request = real_inputs
+
+    def unavailable(
+        _conn: sqlite3.Connection,
+        _request: evidence.ModelInputRequest,
+        _cutoff: datetime,
+    ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
+        raise evidence.InputEvidenceError("current_sec_inventory_missing")
+
+    monkeypatch.setattr(evidence, "verify_source_coverage", unavailable)
+    with pytest.raises(evidence.InputEvidenceError, match="current_sec_inventory_missing"):
+        preview_meli_inputs(
+            conn,
+            research_snapshot_id=request.research_snapshot_id,
+            financial_period_end=END,
+            as_of=NOW,
+        )
+
+
+def test_input_preview_cli_reads_explicit_database_and_preserves_existing_output(
+    shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    conn, request = shared_revenue_inputs
+    database = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
+    output = tmp_path / "preview.json"
+    monkeypatch.setattr(preview_cli, "PROJECT_ROOT", tmp_path)
+    arguments = [
+        "--db",
+        str(database),
+        "--snapshot-id",
+        request.research_snapshot_id,
+        "--period-end",
+        END.isoformat(),
+        "--as-of",
+        NOW.isoformat(),
+        "--output",
+        str(output),
+    ]
+    assert preview_cli.main(arguments) == 0
+    result = json.loads(output.read_text())
+    assert result["model_ready"] is False
+    assert len(result["facts"]) == 28
+    assert (
+        result["facts"]["comm_rev0_ytd"]["observation_id"]
+        == request.facts["comm_rev0_ytd"].observation_id
+    )
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["matched_inputs"] == 28
+    assert summary["model_ready"] is False
+    original = output.read_bytes()
+    # The canonical publisher permits exact replay, but never replaces bytes.
+    assert preview_cli.main(arguments) == 0
+    assert output.read_bytes() == original
+    output.write_text("previous different artifact")
+    with pytest.raises(ImmutableArtifactConflictError):
+        preview_cli.main(arguments)
+    assert output.read_text() == "previous different artifact"
+
+
+def test_input_preview_excludes_old_basis_cell_after_definition_reclassification(
+    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+) -> None:
+    conn, request = real_inputs
+    ontology = MetricOntology(conn)
+    credit = ontology.metric_definition_as_known(request.facts["cb0"].metric_id, NOW)
+    cash = ontology.metric_definition_as_known(
+        request.facts["reported_available_cash_and_investments"].metric_id, NOW
+    )
+    assert credit is not None and cash is not None
+    assert credit.accounting_basis == "us_gaap" and cash.accounting_basis == "management"
+    ontology.persist_metric_definition(
+        credit.model_copy(
+            update={
+                "metric_definition_revision_id": credit.metric_definition_revision_id
+                + ":new-basis",
+                "idempotency_key": credit.idempotency_key + ":new-basis",
+                "revision": 2,
+                "supersedes_metric_definition_revision_id": credit.metric_definition_revision_id,
+                "accounting_basis": cash.accounting_basis,
+                "scope_constraints": cash.scope_constraints,
+                "effective_at": NOW,
+                "knowledge_at": NOW,
+                "recorded_at": NOW,
+            }
+        )
+    )
+    conn.commit()
+    conn.execute("PRAGMA query_only=ON")
+    result = preview_meli_inputs(
+        conn,
+        research_snapshot_id=request.research_snapshot_id,
+        financial_period_end=END,
+        as_of=NOW,
+    )
+    slots = {slot.key: slot for slot in result.slots}
+    selected = slots["reported_available_cash_and_investments"]
+    assert selected.state == "matched"
+    assert selected.candidate_cell_ids == (
+        request.facts["reported_available_cash_and_investments"].canonical_metric_cell_id,
+    )
+    assert slots["cb0"].state == "missing"
+    assert result.facts == {} and result.model_ready is False
+
+
+def test_input_preview_excludes_retired_binding_from_apparent_competing_role(
+    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+) -> None:
+    conn, request = real_inputs
+    ontology = MetricOntology(conn)
+    total = ontology.metric_definition_as_known(request.facts["revenue_total_ytd"].metric_id, NOW)
+    commerce = ontology.metric_definition_as_known(request.facts["comm_rev0_ytd"].metric_id, NOW)
+    assert total is not None and commerce is not None
+    ontology.persist_metric_definition(
+        total.model_copy(
+            update={
+                "metric_definition_revision_id": total.metric_definition_revision_id + ":new-role",
+                "idempotency_key": total.idempotency_key + ":new-role",
+                "revision": 2,
+                "supersedes_metric_definition_revision_id": total.metric_definition_revision_id,
+                "scope_constraints": commerce.scope_constraints,
+                "effective_at": NOW,
+                "knowledge_at": NOW,
+                "recorded_at": NOW,
+            }
+        )
+    )
+    binding = ontology.binding_as_known(request.facts["revenue_total_ytd"].observation_id, NOW)
+    assert binding is not None
+    ontology.persist_binding(
+        binding.model_copy(
+            update={
+                "binding_revision_id": binding.binding_revision_id + ":retired",
+                "idempotency_key": binding.idempotency_key + ":retired",
+                "revision": 2,
+                "supersedes_binding_revision_id": binding.binding_revision_id,
+                "binding_status": "retired",
+                "effective_at": NOW,
+                "knowledge_at": NOW,
+                "recorded_at": NOW,
+            }
+        )
+    )
+    conn.commit()
+    conn.execute("PRAGMA query_only=ON")
+    result = preview_meli_inputs(
+        conn,
+        research_snapshot_id=request.research_snapshot_id,
+        financial_period_end=END,
+        as_of=NOW,
+    )
+    slots = {slot.key: slot for slot in result.slots}
+    assert slots["comm_rev0_ytd"].state == "matched"
+    assert slots["comm_rev0_ytd"].candidate_cell_ids == (
+        request.facts["comm_rev0_ytd"].canonical_metric_cell_id,
+    )
+    assert slots["revenue_total_ytd"].state == "missing"
+    assert result.facts == {} and result.model_ready is False

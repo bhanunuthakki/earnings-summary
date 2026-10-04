@@ -120,11 +120,12 @@ class ValuationRoleSelector(FrozenModel):
 _ROLE_SELECTORS = TypeAdapter(dict[str, ValuationRoleSelector])
 
 
-def _role_matches(
+def input_role_matches(
     scope: dict[str, object],
     requirement: InputRequirement,
     dimensions: tuple[CanonicalDimension, ...],
 ) -> bool:
+    """Match the reviewed economic role and complete canonical dimensions."""
     if "valuation_role_selectors" in scope:
         if "valuation_role" in scope:
             return False
@@ -364,7 +365,7 @@ def verify_model_inputs(
             or definition is None
             or definition.lifecycle != "active"
             or definition.metric_definition_revision_id != ref.metric_definition_revision_id
-            or not _role_matches(definition.scope_constraints, requirement, dimensions)
+            or not input_role_matches(definition.scope_constraints, requirement, dimensions)
             or (
                 requirement.accounting_basis is not None
                 and (

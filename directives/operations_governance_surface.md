@@ -690,6 +690,17 @@ batch behavior. No browser or service change is made.
 
 ### MELI verified refresh: explicit assumptions artifact
 
+`execution/preview_meli_inputs.py --db <explicit-db> --snapshot-id <id>
+--period-end <date> --as-of <aware-time> --output <new-artifact>` is a read-only
+input preview. It checks current source coverage and selects the fixed recipe's
+exact economic roles, fiscal periods, dimensions, units and accounting basis.
+One missing or ambiguous input produces an incomplete result with no usable
+fact bindings and exit code 2. Complete selections pass the existing canonical
+model-input verifier before the preview emits bindings. The command writes only
+its new output artifact and its task lock. It does not acquire sources, assign
+metric roles, supply forecast assumptions, accept scenarios, create a model
+readiness receipt, or update a valuation. Its `model_ready` field is always false.
+
 The existing MELI refresh operation now requires a separately configured reviewed
 assumptions artifact. Pass `--meli-assumptions-path <approved-state-file>` to
 `execution/refresh_dcf.py --ticker MELI`, or set `DCF_MELI_ASSUMPTIONS_PATH`.
