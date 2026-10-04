@@ -51,7 +51,12 @@ Threshold assessment uses `src/compute/thesis_evaluator.py` and its
 `evaluate_ticker_thesis` no-write function with an explicit read-only connection
 and the canonical holdings directory. Use `src/sqlite_runtime.py` connection role
 `READ_ONLY`, row access and a caller-owned read transaction for one snapshot.
-Missing semantic bindings remain unresolved.
+Missing semantic bindings remain unresolved. Approved calculated rules require
+admitted, comparable source periods; TTM flows require standalone quarters.
+Saved-check replay repeats the exact reads and calculations without current
+files or databases. New calculated checks use evaluator v3. Saved scalar v2
+contexts remain compatible; earlier calculated v2 checks without saved inputs
+are explicitly unavailable for replay. Replay does not prove current freshness.
 The evaluator CLI's dry run still writes operational logs. The legacy pressure-test
 CLI is excluded by the route map; the analyst can still form a cited counter-case.
 

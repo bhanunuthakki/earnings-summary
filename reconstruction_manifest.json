@@ -141,12 +141,12 @@
       ],
       "test_commands": [
         "pytest tests/test_metrics_engine.py -q",
-        "pytest tests/test_thesis_check_context.py -q"
+        "pytest tests/test_thesis_check_context.py tests/test_thesis_metric_check_context.py tests/test_thesis_metric_context_migration.py -q"
       ],
       "documentation": [
         "directives/data_provenance.md"
       ],
-      "version_ownership": "Deterministic metric ontology version & valuation model parameter schemas; thesis-evaluator/v2 and thesis-check-context/v1 preserve forward_v1 episode identity separately from exact per-check inputs",
+      "version_ownership": "Deterministic metric ontology version & valuation model parameter schemas; thesis-evaluator/v2 scalar checks, thesis-evaluator/v3 calculated checks and thesis-check-context/v1 preserve forward_v1 episode identity separately from exact per-check inputs",
       "backup_ownership": "Git version control (formulas, DCF models, compute code) plus cron/backup_db.py and execution/restore_drill.py for derived database tables",
       "ownership_paths": [
         {"field": "version_ownership", "path": "src/compute", "kind": "directory", "required_in_checkout": true},
