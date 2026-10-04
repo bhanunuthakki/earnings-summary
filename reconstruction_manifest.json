@@ -1,5 +1,5 @@
 {
-  "manifest_version": "2026-08-28.1",
+  "manifest_version": "2026-10-04.1",
   "workspace_name": "earnings-summary",
   "description": "11-subsystem reconstruction manifest and deterministic inventory definition for the earnings-summary research platform.",
   "canonical_runtime": {
@@ -41,9 +41,24 @@
       "version_ownership": "alembic/versions/ migration graph and alembic_version table; verification discovers the active head and requires exactly one head",
       "backup_ownership": "cron/backup_db.py online SQLite snapshot and execution/restore_drill.py throwaway restore verification; canonical Windows database authority uses WAL mode",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "alembic/versions", "kind": "directory", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "cron/backup_db.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "execution/restore_drill.py", "kind": "file", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "alembic/versions",
+          "kind": "directory",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "cron/backup_db.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "execution/restore_drill.py",
+          "kind": "file",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "durable_database",
       "reconstruction_tier": "tier_0_data_backbone",
@@ -77,8 +92,18 @@
       "version_ownership": "Git commit SHA & execution script CLI parameter specifications",
       "backup_ownership": "Git version control (code) and ephemeral checkpoint state in .tmp/ (excluded from static backup)",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "execution", "kind": "directory", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": ".tmp", "kind": "directory", "required_in_checkout": false}
+        {
+          "field": "version_ownership",
+          "path": "execution",
+          "kind": "directory",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": ".tmp",
+          "kind": "directory",
+          "required_in_checkout": false
+        }
       ],
       "state_classification": "deterministic_orchestration",
       "reconstruction_tier": "tier_1_pipeline_execution",
@@ -101,13 +126,18 @@
         "src/sources/registry.py",
         "src/pipeline/source_policy.py",
         "src/pipeline/managed_ir_sources.py",
-        "src/provenance/fulltext_extractor_identity.py"
+        "src/provenance/fulltext_extractor_identity.py",
+        "src/filings/sec_financial_classification.py",
+        "src/provenance/sec_package_subject_witness.py",
+        "src/provenance/reviewed_sec_financial_tables.py",
+        "execution/publish_reviewed_sec_financial_tables.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
-        "pytest tests/test_source_policy_contract.py -q"
+        "pytest tests/test_source_policy_contract.py -q",
+        "pytest tests/test_sec_financial_classification.py tests/test_reviewed_sec_financial_tables.py tests/test_publish_reviewed_sec_financial_tables.py tests/test_onon_retained_integration.py -q"
       ],
       "documentation": [
         "directives/design_language.md"
@@ -115,9 +145,24 @@
       "version_ownership": "Issuer Acquisition Policy hash & source policy versioning",
       "backup_ownership": "Git version control (code) and immutable source documents in ir_documents/ and transcripts/",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "src/pipeline/source_policy.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "ir_documents", "kind": "directory", "required_in_checkout": false},
-        {"field": "backup_ownership", "path": "transcripts", "kind": "directory", "required_in_checkout": false}
+        {
+          "field": "version_ownership",
+          "path": "src/pipeline/source_policy.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "ir_documents",
+          "kind": "directory",
+          "required_in_checkout": false
+        },
+        {
+          "field": "backup_ownership",
+          "path": "transcripts",
+          "kind": "directory",
+          "required_in_checkout": false
+        }
       ],
       "state_classification": "source_ingestion_adapter",
       "reconstruction_tier": "tier_1_pipeline_execution",
@@ -138,14 +183,22 @@
         "src/compute/metrics_engine/io.py",
         "src/compute/kpi_extract_summaries.py",
         "src/dcf/valuation.py",
+        "src/dcf/onon_model.py",
+        "src/dcf/onon_inputs.py",
+        "src/dcf/scenario_acceptance.py",
+        "execution/build_onon_dcf.py",
         "src/compute/thesis_metric_series.py",
-        "src/evals/kpi_repair_judge.py"
+        "src/evals/kpi_repair_judge.py",
+        "src/dcf/reviewed_input_roles.py",
+        "execution/review_onon_input_roles.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
-        "pytest tests/test_metrics_engine.py -q"
+        "pytest tests/test_metrics_engine.py -q",
+        "pytest tests/test_onon_model.py tests/test_onon_inputs.py tests/test_build_onon_dcf.py tests/test_scenario_acceptance.py -q",
+        "pytest tests/test_reviewed_input_roles.py tests/test_review_onon_input_roles.py -q"
       ],
       "documentation": [
         "directives/data_provenance.md"
@@ -153,9 +206,24 @@
       "version_ownership": "Deterministic metric ontology version & valuation model parameter schemas",
       "backup_ownership": "Git version control (formulas, DCF models, compute code) plus cron/backup_db.py and execution/restore_drill.py for derived database tables",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "src/compute", "kind": "directory", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "cron/backup_db.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "execution/restore_drill.py", "kind": "file", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "src/compute",
+          "kind": "directory",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "cron/backup_db.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "execution/restore_drill.py",
+          "kind": "file",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "deterministic_compute",
       "reconstruction_tier": "tier_1_pipeline_execution",
@@ -190,9 +258,24 @@
       "version_ownership": "Playbook revision & research lens template versioning",
       "backup_ownership": "Git version control (lens logic, report generators) plus cron/backup_db.py and execution/restore_drill.py for research artifacts",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "HOW_TO_USE_REPORTS.md", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "cron/backup_db.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "execution/restore_drill.py", "kind": "file", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "HOW_TO_USE_REPORTS.md",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "cron/backup_db.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "execution/restore_drill.py",
+          "kind": "file",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "synthesis_research_lens",
       "reconstruction_tier": "tier_2_synthesis_lens",
@@ -227,8 +310,18 @@
       "version_ownership": "Model ladder configuration version & eval dataset SHA-256 hashes",
       "backup_ownership": "Git version control (eval cases, grader rubrics, CLI routers) and evals/ test corpus",
       "ownership_paths": [
-        {"field": "backup_ownership", "path": "evals", "kind": "directory", "required_in_checkout": true},
-        {"field": "version_ownership", "path": "evals", "kind": "directory", "required_in_checkout": true}
+        {
+          "field": "backup_ownership",
+          "path": "evals",
+          "kind": "directory",
+          "required_in_checkout": true
+        },
+        {
+          "field": "version_ownership",
+          "path": "evals",
+          "kind": "directory",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "eval_router_harness",
       "reconstruction_tier": "tier_2_synthesis_lens",
@@ -260,9 +353,24 @@
       "version_ownership": "Governance surface contract version & circuit state schema",
       "backup_ownership": "Git version control (telemetry renderers) plus cron/backup_db.py and execution/restore_drill.py for provider circuit rows",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "src/pipeline/operations_panel.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "cron/backup_db.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "execution/restore_drill.py", "kind": "file", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "src/pipeline/operations_panel.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "cron/backup_db.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "execution/restore_drill.py",
+          "kind": "file",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "governance_telemetry",
       "reconstruction_tier": "tier_3_presentation_cockpit",
@@ -295,8 +403,18 @@
       "version_ownership": "Design system token dictionary & CSS custom variable contract",
       "backup_ownership": "Git version control (server routes, UI templates, design tokens)",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "src/ui/tokens.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "src/ui", "kind": "directory", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "src/ui/tokens.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "src/ui",
+          "kind": "directory",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "interactive_cockpit",
       "reconstruction_tier": "tier_3_presentation_cockpit",
@@ -328,9 +446,24 @@
       "version_ownership": "Journal note schema version & thesis state revision stamps",
       "backup_ownership": "cron/backup_db.py online SQLite snapshot and execution/restore_drill.py throwaway restore verification for analyst notes and decision tables",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "src/user_state/notes.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "cron/backup_db.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "execution/restore_drill.py", "kind": "file", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "src/user_state/notes.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "cron/backup_db.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "execution/restore_drill.py",
+          "kind": "file",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "durable_memory",
       "reconstruction_tier": "tier_0_data_backbone",
@@ -362,8 +495,18 @@
       "version_ownership": "Batch script Git versioning & Task Scheduler XML task definitions",
       "backup_ownership": "Git version control (cron batch scripts, scheduler documentation)",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "cron", "kind": "directory", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "cron/task_manifest.json", "kind": "file", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "cron",
+          "kind": "directory",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "cron/task_manifest.json",
+          "kind": "file",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "scheduled_automation",
       "reconstruction_tier": "tier_1_pipeline_execution",
@@ -395,8 +538,18 @@
       "version_ownership": "pyproject.toml tool configurations & requirements.lock pinned dependencies",
       "backup_ownership": "Git version control (tests, fixtures, lint and type-check configuration)",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "pyproject.toml", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "tests", "kind": "directory", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "pyproject.toml",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "tests",
+          "kind": "directory",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "hermetic_verification",
       "reconstruction_tier": "tier_0_data_backbone",

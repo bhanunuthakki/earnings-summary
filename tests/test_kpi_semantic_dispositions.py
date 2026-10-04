@@ -3,10 +3,13 @@ from __future__ import annotations
 import hashlib
 import inspect
 import sqlite3
-from collections.abc import Callable
-from datetime import UTC, datetime
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
+import apply_kpi_semantic_refresh as refresh
 import pytest
 
 import execution.apply_kpi_semantic_dispositions as disposition_executor
@@ -25,6 +28,8 @@ from execution.apply_kpi_semantic_dispositions import (
 )
 from execution.apply_kpi_semantic_dispositions import main as apply_dispositions_main
 from execution.audit_kpi_semantics import summarize_kpi_semantic_audit
+from execution.backup_restore_readiness_receipt import BackupRestoreReadinessReceipt
+from execution.fetch_windows_review_bundle import WindowsReviewPins
 from execution.prepare_kpi_semantic_dispositions import (
     OPERATIONS_GOVERNANCE_DISPOSITION as PREPARE_SURFACE_DISPOSITION,
 )
@@ -38,8 +43,15 @@ from operations.kpi_repair_receipts import (
     KpiDispositionJudgeReceipt,
     repair_executor_code_sha256,
     seal_disposition_attempt,
+    seal_disposition_judgment,
 )
-from operations.review_bundle import OperationsReviewBundle, ReviewIdentity
+from operations.review_bundle import (
+    OperationsReviewBundle,
+    ReviewIdentity,
+    ReviewObservation,
+    ReviewScheduler,
+    ReviewSchema,
+)
 from pipeline.kpi_report_reference_dispositions import (
     ReportKpiReferenceDisposition,
     ReportKpiReferenceStatus,
@@ -49,6 +61,7 @@ from pipeline.kpi_report_reference_dispositions import (
     report_kpi_references,
 )
 from pipeline.kpi_semantic_dispositions import (
+    KpiSemanticDispositionManifest,
     apply_kpi_semantic_disposition_manifest,
     prepare_kpi_semantic_disposition_manifest,
 )
@@ -87,7 +100,7 @@ def test_disposition_executor_reuses_the_reviewed_repair_authority_seam() -> Non
     assert "expected_database_instance_id" not in actions
     assert (
         inspect.getsource(apply_dispositions_main).count("validate_disposition_external_evidence(")
-        == 2
+        == 1
     )
     prepare_actions = {action.dest: action for action in prepare_parser()._actions}
     for required in (
@@ -377,6 +390,13 @@ def test_post_commit_receipt_failure_recovers_as_exact_replay_without_second_mut
     )
     manifest_sha = manifest.content_sha256()
     logical_sha = hashlib.sha256(manifest.logical_idempotency_key.encode()).hexdigest()
+    authority_checks: list[str] = []
+
+    def validate_transaction_authority() -> None:
+        assert review_bundle.identity.database_instance_sha256 == (
+            manifest.expected_database_instance_sha256
+        )
+        authority_checks.append("checked")
 
     applied = execute_disposition_transaction(
         db_path=db_path,
@@ -387,7 +407,9 @@ def test_post_commit_receipt_failure_recovers_as_exact_replay_without_second_mut
         executor_code_sha=code_sha,
         review_bundle=review_bundle,
         apply=True,
+        validate_current_authority=validate_transaction_authority,
     )
+    assert authority_checks == ["checked", "checked", "checked"]
     assert applied.inserted_context_rows == 1
     assert applied.inserted_reference_rows == 1
     before = sqlite3.connect(db_path)
@@ -760,3 +782,764 @@ def test_foreign_ticker_report_configuration_is_rejected_without_references(
 
     assert inventory.references == ()
     assert inventory.source_states[0].reason_code == "report_configuration_ticker_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("apply", "elapsed_seconds", "blocker"),
+    [
+        (False, 901, "scheduler_runtime_evidence_stale"),
+        (True, 901, "scheduler_runtime_evidence_stale"),
+        (False, 1201, "review_bundle_stale"),
+        (True, 1201, "review_bundle_stale"),
+        (True, 2, "judge_receipt_not_authorizing"),
+    ],
+)
+def test_disposition_rolls_back_when_full_postwrite_checks_consume_authority_window(
+    migrated_db: Callable[..., Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    apply: bool,
+    elapsed_seconds: int,
+    blocker: str,
+) -> None:
+    db_path = migrated_db(tmp_path / "disposition.db")
+    source = open_db(db_path)
+    _seed_resolved_kpi_fact(source)
+    repo = _repo(tmp_path)
+    manifest = prepare_kpi_semantic_disposition_manifest(
+        source,
+        repo_root=repo,
+        user_id="owner",
+        reviewer="source-review:owner",
+        logical_idempotency_key="expiry-before-commit",
+        expected_schema_revision=expected_head(),
+        review_bundle_sha256="d" * 64,
+        backup_restore_evidence_id="e" * 64,
+        knowledge_at=NOW,
+    )
+    source.commit()
+    source.close()
+    clock = [NOW]
+    events: list[str] = []
+    observation = ReviewObservation.model_construct(
+        state="current", observed_at=NOW, evidence_recorded_at=NOW
+    )
+    bundle = OperationsReviewBundle.model_construct(
+        observed_at=NOW,
+        content_sha256=manifest.review_bundle_sha256,
+        identity=ReviewIdentity.model_construct(
+            database_instance_sha256=manifest.expected_database_instance_sha256
+        ),
+        scheduler=ReviewScheduler.model_construct(observation=observation, tasks=()),
+        schema_revision=ReviewSchema.model_construct(
+            matches=True, actual_heads=(manifest.expected_schema_revision,)
+        ),
+    )
+    backup = BackupRestoreReadinessReceipt.model_construct(
+        evidence_id=manifest.backup_restore_evidence_id
+    )
+
+    def record_query(sql: str) -> None:
+        if sql == "PRAGMA foreign_key_check":
+            events.append("post-write-FK-check")
+            clock[0] = NOW + timedelta(seconds=elapsed_seconds)
+
+    def open_transaction(path: Path) -> sqlite3.Connection:
+        connection = sqlite3.connect(path)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.set_trace_callback(record_query)
+        return connection
+
+    def accept_pins(**_kwargs: object) -> None:
+        return None
+
+    dry: KpiDispositionAttemptReceipt | None = None
+    judge: KpiDispositionJudgeReceipt | None = None
+    if blocker == "judge_receipt_not_authorizing":
+        dry = seal_disposition_attempt(
+            attempt_id="1" * 32,
+            logical_idempotency_key_sha256="2" * 64,
+            manifest_sha256=manifest.content_sha256(),
+            review_bundle_sha256=manifest.review_bundle_sha256,
+            backup_restore_evidence_id=manifest.backup_restore_evidence_id,
+            executor_code_sha256="f" * 64,
+            mode="dry_run",
+            state="passed",
+            started_at=NOW,
+            completed_at=NOW,
+            validated_fact_dispositions=1,
+            validated_reference_dispositions=1,
+            inserted_context_rows=1,
+            replayed_context_rows=0,
+            inserted_reference_rows=1,
+            replayed_reference_rows=0,
+            blocker_codes=(),
+        )
+        qualification = qualification_fixture("kpi_semantic_disposition", NOW).model_copy(
+            update={"expires_at": NOW + timedelta(seconds=1)}
+        )
+        qualification = qualification.model_copy(
+            update={
+                "content_sha256": refresh.canonical_sha256(
+                    qualification.model_dump(mode="json", exclude={"content_sha256"})
+                )
+            }
+        )
+        judge = seal_disposition_judgment(
+            manifest_sha256=manifest.content_sha256(),
+            dry_run_receipt_sha256=dry.content_sha256,
+            review_bundle_sha256=manifest.review_bundle_sha256,
+            executor_code_sha256="f" * 64,
+            purpose="kpi_semantic_disposition",
+            rubric_version="j3-v1",
+            evidence_tier="J3",
+            judge_model="synthetic-judge",
+            qualification=qualification,
+            judge_run_id="synthetic-local-only",
+            prompt_sha256="3" * 64,
+            response_sha256="4" * 64,
+            verdict="PASS",
+            findings=(),
+            observed_at=NOW,
+            issuance_identity_sha256="5" * 64,
+        )
+
+    def guard() -> None:
+        events.append("authority-check")
+        refresh.validate_repair_review_preconditions(
+            manifest=manifest,
+            review_bundle=bundle,
+            trusted_pins=WindowsReviewPins.model_construct(),
+            backup=backup,
+            now=clock[0],
+            max_review_age=timedelta(seconds=1200),
+            not_before=NOW,
+        )
+
+        if (
+            judge is not None
+            and dry is not None
+            and not judge_authorizes(
+                dry_run=dry,
+                judge=judge,
+                manifest_sha=manifest.content_sha256(),
+                manifest=manifest,
+                executor_code_sha="f" * 64,
+            )
+        ):
+            raise disposition_executor.DispositionBlockedError("judge_receipt_not_authorizing")
+
+    monkeypatch.setattr(refresh, "validate_pinned_identity", accept_pins)
+    monkeypatch.setattr(disposition_executor, "open_db", open_transaction)
+
+    def now(_tz: object) -> datetime:
+        return clock[0]
+
+    monkeypatch.setattr(disposition_executor, "datetime", SimpleNamespace(now=now))
+    with pytest.raises(disposition_executor.DispositionBlockedError, match=blocker):
+        execute_disposition_transaction(
+            db_path=db_path,
+            repo_root=repo,
+            manifest=manifest,
+            manifest_sha=manifest.content_sha256(),
+            logical_key_sha=hashlib.sha256(manifest.logical_idempotency_key.encode()).hexdigest(),
+            executor_code_sha="f" * 64,
+            review_bundle=bundle,
+            apply=apply,
+            validate_current_authority=guard,
+        )
+    assert events == ["authority-check", "post-write-FK-check", "authority-check"]
+    with sqlite3.connect(db_path) as check:
+        for table in (
+            "kpi_fact_semantic_contexts",
+            "report_kpi_reference_resolution_revisions",
+            "kpi_semantic_disposition_commits",
+        ):
+            assert check.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("expiry_stage", "apply"),
+    [
+        (None, False),
+        ("proof", False),
+        ("clone", False),
+        ("proof_backwards", False),
+        ("clone_backwards", False),
+        ("postwrite_backwards", True),
+    ],
+)
+def test_disposition_command_proves_source_once_under_lock_before_snapshot_clone(
+    migrated_db: Callable[..., Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    expiry_stage: str | None,
+    apply: bool,
+) -> None:
+    db_path = migrated_db(tmp_path / "disposition.db")
+    source = open_db(db_path)
+    _seed_resolved_kpi_fact(source)
+    repo = _repo(tmp_path)
+    manifest = prepare_kpi_semantic_disposition_manifest(
+        source,
+        repo_root=repo,
+        user_id="owner",
+        reviewer="source-review:owner",
+        logical_idempotency_key="one-locked-proof",
+        expected_schema_revision=expected_head(),
+        review_bundle_sha256="d" * 64,
+        backup_restore_evidence_id="e" * 64,
+        knowledge_at=NOW,
+    )
+    source.commit()
+    source.close()
+    snapshot = tmp_path / "snapshot.db"
+    snapshot.write_bytes(db_path.read_bytes())
+    observation = ReviewObservation.model_construct(
+        state="current", observed_at=NOW, evidence_recorded_at=NOW
+    )
+    bundle = OperationsReviewBundle.model_construct(
+        observed_at=NOW,
+        content_sha256=manifest.review_bundle_sha256,
+        identity=ReviewIdentity.model_construct(
+            database_instance_sha256=manifest.expected_database_instance_sha256
+        ),
+        scheduler=ReviewScheduler.model_construct(observation=observation, tasks=()),
+        schema_revision=ReviewSchema.model_construct(
+            matches=True, actual_heads=(manifest.expected_schema_revision,)
+        ),
+    )
+    backup = BackupRestoreReadinessReceipt.model_construct(
+        evidence_id=manifest.backup_restore_evidence_id,
+        snapshot_resolved_path=str(snapshot),
+        snapshot_byte_size=snapshot.stat().st_size,
+        snapshot_sha256=hashlib.sha256(snapshot.read_bytes()).hexdigest(),
+    )
+    clock = [
+        NOW + timedelta(seconds=800) if expiry_stage and expiry_stage.endswith("backwards") else NOW
+    ]
+    lock_owned = [False]
+    events: list[str] = []
+
+    def now(_tz: object) -> datetime:
+        return clock[0]
+
+    def load_artifacts(
+        _args: object,
+    ) -> tuple[
+        KpiSemanticDispositionManifest,
+        OperationsReviewBundle,
+        WindowsReviewPins,
+        BackupRestoreReadinessReceipt,
+    ]:
+        return manifest, bundle, WindowsReviewPins.model_construct(), backup
+
+    @contextmanager
+    def lock(*_args: object, **_kwargs: object) -> Generator[None, None, None]:
+        lock_owned[0] = True
+        try:
+            yield
+        finally:
+            lock_owned[0] = False
+
+    def proof(**_kwargs: object) -> datetime:
+        assert lock_owned[0]
+        events.append("proof")
+        if expiry_stage == "proof":
+            clock[0] = NOW + timedelta(seconds=901)
+        elif expiry_stage and expiry_stage.endswith("backwards"):
+            clock[0] = NOW + timedelta(seconds=850)
+            if expiry_stage == "proof_backwards":
+                clock[0] = NOW + timedelta(seconds=830)
+                return NOW + timedelta(seconds=850)
+        return clock[0]
+
+    original_database = getattr(disposition_executor, "_disposition_database")
+
+    @contextmanager
+    def clone(**kwargs: object) -> Generator[Path, None, None]:
+        assert lock_owned[0]
+        events.append("clone")
+        with original_database(**kwargs) as work_db:
+            if expiry_stage == "clone":
+                clock[0] = NOW + timedelta(seconds=901)
+            elif expiry_stage == "clone_backwards":
+                clock[0] = NOW + timedelta(seconds=830)
+            yield work_db
+
+    def accept_pins(**_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(disposition_executor, "PROJECT_ROOT", repo)
+    monkeypatch.setattr(disposition_executor, "datetime", SimpleNamespace(now=now))
+    monkeypatch.setattr(disposition_executor, "_load_authority_artifacts", load_artifacts)
+    monkeypatch.setattr(disposition_executor, "JobLock", lock)
+    monkeypatch.setattr(disposition_executor, "validate_disposition_external_evidence", proof)
+    monkeypatch.setattr(disposition_executor, "_disposition_database", clone)
+    monkeypatch.setattr(refresh, "validate_pinned_identity", accept_pins)
+    apply_arguments: list[str] = []
+    if apply:
+        executor_sha = repair_executor_code_sha256(repo)
+        dry = seal_disposition_attempt(
+            attempt_id="1" * 32,
+            logical_idempotency_key_sha256="2" * 64,
+            manifest_sha256=manifest.content_sha256(),
+            review_bundle_sha256=manifest.review_bundle_sha256,
+            backup_restore_evidence_id=manifest.backup_restore_evidence_id,
+            executor_code_sha256=executor_sha,
+            mode="dry_run",
+            state="passed",
+            started_at=NOW,
+            completed_at=NOW,
+            validated_fact_dispositions=1,
+            validated_reference_dispositions=1,
+            inserted_context_rows=1,
+            replayed_context_rows=0,
+            inserted_reference_rows=1,
+            replayed_reference_rows=0,
+            blocker_codes=(),
+        )
+        judge = seal_disposition_judgment(
+            manifest_sha256=manifest.content_sha256(),
+            dry_run_receipt_sha256=dry.content_sha256,
+            review_bundle_sha256=manifest.review_bundle_sha256,
+            executor_code_sha256=executor_sha,
+            purpose="kpi_semantic_disposition",
+            rubric_version="j3-v1",
+            evidence_tier="J3",
+            judge_model="synthetic-judge",
+            qualification=qualification_fixture("kpi_semantic_disposition", NOW),
+            judge_run_id="synthetic-local-only",
+            prompt_sha256="3" * 64,
+            response_sha256="4" * 64,
+            verdict="PASS",
+            findings=(),
+            observed_at=NOW,
+            issuance_identity_sha256="5" * 64,
+        )
+        dry_path, judge_path = tmp_path / "dry.json", tmp_path / "judge.json"
+        dry_path.write_text(dry.model_dump_json())
+        judge_path.write_text(judge.model_dump_json())
+        apply_arguments = [
+            "--apply",
+            "--approved-manifest-sha256",
+            manifest.content_sha256(),
+            "--dry-run-receipt",
+            str(dry_path),
+            "--judge-receipt",
+            str(judge_path),
+        ]
+
+        def accept_apply_authority(**_kwargs: object) -> None:
+            return None
+
+        def trace(sql: str) -> None:
+            if sql == "PRAGMA foreign_key_check":
+                clock[0] = NOW + timedelta(seconds=830)
+
+        def open_transaction(path: Path) -> sqlite3.Connection:
+            connection = sqlite3.connect(path)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.set_trace_callback(trace)
+            return connection
+
+        monkeypatch.setattr(
+            disposition_executor, "_validate_apply_authority", accept_apply_authority
+        )
+        monkeypatch.setattr(disposition_executor, "open_db", open_transaction)
+    receipt_root = tmp_path / "receipts"
+    placeholder = str(tmp_path / "not-read.json")
+    result = apply_dispositions_main(
+        [
+            "--manifest",
+            placeholder,
+            "--user-id",
+            "owner",
+            "--db",
+            str(db_path),
+            "--repo-root",
+            str(repo),
+            "--review-bundle",
+            placeholder,
+            "--trusted-review-pins",
+            placeholder,
+            "--backup-restore-receipt",
+            placeholder,
+            "--receipt-root",
+            str(receipt_root),
+            *apply_arguments,
+        ]
+    )
+    assert result == (0 if expiry_stage is None else 2)
+    assert events == (
+        ["proof"] if expiry_stage in {"proof", "proof_backwards"} else ["proof", "clone"]
+    )
+    assert not lock_owned[0]
+    receipt = KpiDispositionAttemptReceipt.model_validate_json(
+        next((receipt_root / "attempts").glob("*.json")).read_text()
+    )
+    assert receipt.state == ("passed" if expiry_stage is None else "blocked")
+    assert receipt.blocker_codes == (
+        ()
+        if expiry_stage is None
+        else (
+            "repair_clock_moved_backwards"
+            if expiry_stage.endswith("backwards")
+            else "scheduler_runtime_evidence_stale",
+        )
+    )
+    with sqlite3.connect(db_path) as check:
+        assert check.execute("SELECT COUNT(*) FROM kpi_fact_semantic_contexts").fetchone()[0] == 0
+        assert (
+            check.execute("SELECT COUNT(*) FROM kpi_semantic_disposition_commits").fetchone()[0]
+            == 0
+        )
+
+
+@pytest.mark.parametrize(
+    ("evidence_change", "blocker"),
+    [
+        (None, None),
+        ("scheduler_stale", "scheduler_runtime_evidence_stale"),
+        ("review_stale", "review_bundle_stale"),
+        ("bundle_hash", "review_bundle_hash_mismatch"),
+        ("pins", "trusted_review_pin_mismatch"),
+        ("backup_id", "backup_restore_evidence_id_mismatch"),
+        ("snapshot_bytes", "backup_restore_snapshot_identity_mismatch"),
+        ("backup_unverified", "backup_restore_not_verified"),
+        ("artifact_expiry", "scheduler_runtime_evidence_stale"),
+        ("artifact_backwards", "repair_clock_moved_backwards"),
+    ],
+)
+def test_disposition_command_replay_requires_fresh_bound_review_and_immutable_rollback(
+    migrated_db: Callable[..., Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    evidence_change: str | None,
+    blocker: str | None,
+) -> None:
+    from execution.backup_restore_readiness_receipt import (
+        collect_backup_restore_receipt,
+        validate_receipt_for_source,
+    )
+    from sqlite_snapshot import SnapshotRequest, create_snapshot
+
+    db_path = migrated_db(tmp_path / "disposable.db")
+    source = open_db(db_path)
+    _seed_resolved_kpi_fact(source)
+    source.commit()
+    source.close()
+    snapshot = tmp_path / "rollback.db"
+    create_snapshot(SnapshotRequest(source_path=db_path, destination_path=snapshot))
+    backup = collect_backup_restore_receipt(source_db=db_path, snapshot_db=snapshot)
+    assert backup.verified
+    if evidence_change == "backup_unverified":
+        backup = backup.model_copy(update={"verified": False})
+        backup = backup.model_copy(
+            update={
+                "evidence_id": refresh.canonical_sha256(
+                    backup.model_dump(mode="json", exclude={"evidence_id"})
+                )
+            }
+        )
+    repo = _repo(tmp_path)
+    source = open_db(db_path)
+    manifest = prepare_kpi_semantic_disposition_manifest(
+        source,
+        repo_root=repo,
+        user_id="owner",
+        reviewer="source-review:owner",
+        logical_idempotency_key="guarded-committed-replay",
+        expected_schema_revision=expected_head(),
+        review_bundle_sha256="d" * 64,
+        backup_restore_evidence_id=backup.evidence_id,
+        knowledge_at=NOW,
+    )
+    source.close()
+    bundle = OperationsReviewBundle.model_construct(
+        observed_at=NOW,
+        content_sha256=manifest.review_bundle_sha256,
+        identity=ReviewIdentity.model_construct(
+            database_instance_sha256=manifest.expected_database_instance_sha256
+        ),
+        scheduler=ReviewScheduler.model_construct(
+            observation=ReviewObservation.model_construct(
+                state="current", observed_at=NOW, evidence_recorded_at=NOW
+            ),
+            tasks=(),
+        ),
+        schema_revision=ReviewSchema.model_construct(
+            matches=True, actual_heads=(manifest.expected_schema_revision,)
+        ),
+    )
+    executor_sha = repair_executor_code_sha256(repo)
+    execute_disposition_transaction(
+        db_path=db_path,
+        repo_root=repo,
+        manifest=manifest,
+        manifest_sha=manifest.content_sha256(),
+        logical_key_sha=hashlib.sha256(manifest.logical_idempotency_key.encode()).hexdigest(),
+        executor_code_sha=executor_sha,
+        review_bundle=bundle,
+        apply=True,
+        validate_current_authority=lambda: None,
+    )
+    # A real successful disposition changed the live DB. Its pre-write
+    # rollback artifact remains valid, but no longer equals current content.
+    assert db_path.read_bytes() != snapshot.read_bytes()
+    source_before_replay = db_path.read_bytes()
+    clock = [NOW]
+    if evidence_change == "scheduler_stale":
+        clock[0] = NOW + timedelta(seconds=901)
+    elif evidence_change == "review_stale":
+        clock[0] = NOW + timedelta(seconds=1201)
+    elif evidence_change == "artifact_backwards":
+        clock[0] = NOW + timedelta(seconds=800)
+    elif evidence_change == "bundle_hash":
+        bundle = bundle.model_copy(update={"content_sha256": "0" * 64})
+    elif evidence_change == "backup_id":
+        backup = backup.model_copy(update={"evidence_id": "0" * 64})
+    elif evidence_change == "snapshot_bytes":
+        with snapshot.open("ab") as handle:
+            handle.write(b"changed rollback bytes")
+    dry = seal_disposition_attempt(
+        attempt_id="1" * 32,
+        logical_idempotency_key_sha256="2" * 64,
+        manifest_sha256=manifest.content_sha256(),
+        review_bundle_sha256=manifest.review_bundle_sha256,
+        backup_restore_evidence_id=manifest.backup_restore_evidence_id,
+        executor_code_sha256=executor_sha,
+        mode="dry_run",
+        state="passed",
+        started_at=NOW,
+        completed_at=NOW,
+        validated_fact_dispositions=1,
+        validated_reference_dispositions=1,
+        inserted_context_rows=1,
+        replayed_context_rows=0,
+        inserted_reference_rows=1,
+        replayed_reference_rows=0,
+        blocker_codes=(),
+    )
+    judge = seal_disposition_judgment(
+        manifest_sha256=manifest.content_sha256(),
+        dry_run_receipt_sha256=dry.content_sha256,
+        review_bundle_sha256=manifest.review_bundle_sha256,
+        executor_code_sha256=executor_sha,
+        purpose="kpi_semantic_disposition",
+        rubric_version="j3-v1",
+        evidence_tier="J3",
+        judge_model="synthetic-judge",
+        qualification=qualification_fixture("kpi_semantic_disposition", NOW),
+        judge_run_id="synthetic-local-only",
+        prompt_sha256="3" * 64,
+        response_sha256="4" * 64,
+        verdict="PASS",
+        findings=(),
+        observed_at=NOW,
+        issuance_identity_sha256="5" * 64,
+    )
+    dry_path, judge_path = tmp_path / "dry.json", tmp_path / "judge.json"
+    dry_path.write_text(dry.model_dump_json())
+    judge_path.write_text(judge.model_dump_json())
+    artifact_calls: list[bool] = []
+
+    def artifact_guard(
+        receipt: BackupRestoreReadinessReceipt,
+        *,
+        source_db: Path,
+        source_revision: str | None,
+        require_current_identity: bool = True,
+    ) -> tuple[str, ...]:
+        artifact_calls.append(require_current_identity)
+        reasons = validate_receipt_for_source(
+            receipt,
+            source_db=source_db,
+            source_revision=source_revision,
+            require_current_identity=require_current_identity,
+        )
+        if evidence_change == "artifact_expiry":
+            clock[0] = NOW + timedelta(seconds=901)
+        elif evidence_change == "artifact_backwards":
+            clock[0] = NOW + timedelta(seconds=799)
+        return reasons
+
+    def load_artifacts(
+        _args: object,
+    ) -> tuple[
+        KpiSemanticDispositionManifest,
+        OperationsReviewBundle,
+        WindowsReviewPins,
+        BackupRestoreReadinessReceipt,
+    ]:
+        return manifest, bundle, WindowsReviewPins.model_construct(), backup
+
+    def accept_pins(**_kwargs: object) -> None:
+        if evidence_change == "pins":
+            raise ValueError("synthetic pinned identity mismatch")
+
+    def forbidden_prewrite(**_kwargs: object) -> None:
+        raise AssertionError("committed replay must not clone or compare current source contents")
+
+    def now(_tz: object) -> datetime:
+        return clock[0]
+
+    def accept_apply_authority(**_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(disposition_executor, "PROJECT_ROOT", repo)
+    monkeypatch.setattr(disposition_executor, "datetime", SimpleNamespace(now=now))
+    monkeypatch.setattr(disposition_executor, "_load_authority_artifacts", load_artifacts)
+    monkeypatch.setattr(disposition_executor, "_validate_apply_authority", accept_apply_authority)
+    monkeypatch.setattr(
+        disposition_executor, "validate_disposition_external_evidence", forbidden_prewrite
+    )
+    monkeypatch.setattr(disposition_executor, "_disposition_database", forbidden_prewrite)
+    monkeypatch.setattr(disposition_executor, "open_db", forbidden_prewrite)
+    monkeypatch.setattr(
+        disposition_executor, "validate_receipt_for_source", artifact_guard, raising=False
+    )
+    monkeypatch.setattr(refresh, "validate_pinned_identity", accept_pins)
+    receipts = tmp_path / "receipts"
+    placeholder = str(tmp_path / "unused.json")
+    result = apply_dispositions_main(
+        [
+            "--manifest",
+            placeholder,
+            "--user-id",
+            "owner",
+            "--db",
+            str(db_path),
+            "--repo-root",
+            str(repo),
+            "--review-bundle",
+            placeholder,
+            "--trusted-review-pins",
+            placeholder,
+            "--backup-restore-receipt",
+            placeholder,
+            "--receipt-root",
+            str(receipts),
+            "--apply",
+            "--approved-manifest-sha256",
+            manifest.content_sha256(),
+            "--dry-run-receipt",
+            str(dry_path),
+            "--judge-receipt",
+            str(judge_path),
+        ]
+    )
+    assert result == (0 if blocker is None else 2)
+    receipt = KpiDispositionAttemptReceipt.model_validate_json(
+        next((receipts / "attempts").glob("*.json")).read_text()
+    )
+    assert receipt.state == ("replayed" if blocker is None else "blocked")
+    assert receipt.blocker_codes == (() if blocker is None else (blocker,))
+    assert receipt.inserted_context_rows == receipt.inserted_reference_rows == 0
+    assert artifact_calls == (
+        [False]
+        if evidence_change
+        in {None, "snapshot_bytes", "backup_unverified", "artifact_expiry", "artifact_backwards"}
+        else []
+    )
+    assert db_path.read_bytes() == source_before_replay
+
+
+@pytest.mark.parametrize("apply", [False, True])
+@pytest.mark.parametrize("clock_fault", ["expiry", "backwards"])
+def test_disposition_rechecks_authority_after_diagnostics_before_commit_or_dryrollback(
+    migrated_db: Callable[..., Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    apply: bool,
+    clock_fault: str,
+) -> None:
+    db_path = migrated_db(tmp_path / "disposable.db")
+    source = open_db(db_path)
+    _seed_resolved_kpi_fact(source)
+    repo = _repo(tmp_path)
+    manifest = prepare_kpi_semantic_disposition_manifest(
+        source,
+        repo_root=repo,
+        user_id="owner",
+        reviewer="source-review:owner",
+        logical_idempotency_key="diagnostic-clock-fence",
+        expected_schema_revision=expected_head(),
+        review_bundle_sha256="d" * 64,
+        backup_restore_evidence_id="e" * 64,
+        knowledge_at=NOW,
+    )
+    source.commit()
+    source.close()
+    bundle = OperationsReviewBundle.model_construct(
+        observed_at=NOW,
+        content_sha256=manifest.review_bundle_sha256,
+        identity=ReviewIdentity.model_construct(
+            database_instance_sha256=manifest.expected_database_instance_sha256
+        ),
+        scheduler=ReviewScheduler.model_construct(
+            observation=ReviewObservation.model_construct(
+                state="current", observed_at=NOW, evidence_recorded_at=NOW
+            ),
+            tasks=(),
+        ),
+        schema_revision=ReviewSchema.model_construct(
+            matches=True, actual_heads=(manifest.expected_schema_revision,)
+        ),
+    )
+    clock = [NOW + timedelta(seconds=850)]
+    last_accepted = [clock[0]]
+    events: list[str] = []
+
+    def guard() -> None:
+        events.append("authority")
+        refresh.validate_repair_review_preconditions(
+            manifest=manifest,
+            review_bundle=bundle,
+            trusted_pins=WindowsReviewPins.model_construct(),
+            backup=BackupRestoreReadinessReceipt.model_construct(
+                evidence_id=manifest.backup_restore_evidence_id
+            ),
+            now=clock[0],
+            max_review_age=timedelta(seconds=1200),
+            not_before=last_accepted[0],
+        )
+        last_accepted[0] = clock[0]
+
+    def diagnostics(*, phase: str, **_kwargs: object) -> None:
+        if phase == "post_write_checks":
+            events.append("diagnostics")
+            clock[0] = NOW + timedelta(seconds=901 if clock_fault == "expiry" else 849)
+
+    def accept_pins(**_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(refresh, "validate_pinned_identity", accept_pins)
+    monkeypatch.setattr(disposition_executor, "emit_repair_phase_diagnostics", diagnostics)
+    blocker = (
+        "scheduler_runtime_evidence_stale"
+        if clock_fault == "expiry"
+        else "repair_clock_moved_backwards"
+    )
+    with pytest.raises(disposition_executor.DispositionBlockedError, match=blocker):
+        execute_disposition_transaction(
+            db_path=db_path,
+            repo_root=repo,
+            manifest=manifest,
+            manifest_sha=manifest.content_sha256(),
+            logical_key_sha=hashlib.sha256(manifest.logical_idempotency_key.encode()).hexdigest(),
+            executor_code_sha="f" * 64,
+            review_bundle=bundle,
+            apply=apply,
+            validate_current_authority=guard,
+        )
+    assert events == ["authority", "authority", "diagnostics", "authority"]
+    with sqlite3.connect(db_path) as reader:
+        for table in (
+            "kpi_fact_semantic_contexts",
+            "report_kpi_reference_resolution_revisions",
+            "kpi_semantic_disposition_commits",
+        ):
+            assert reader.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0

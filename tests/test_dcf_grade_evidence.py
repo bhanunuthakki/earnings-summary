@@ -113,6 +113,7 @@ def test_generic_receipts_are_projected_without_regrading_them() -> None:
         "primary_fact_overlay": {"status": "ok"},
         "equity_bridge_receipt": {"status": "verified"},
         "country_risk_context": {"authority": "systematic_default_zero"},
+        "scenario_acceptance": {"attribution": "analyst", "model_output_sha256": "c" * 64},
     }
     conn.execute(
         """
@@ -137,6 +138,8 @@ def test_generic_receipts_are_projected_without_regrading_them() -> None:
     assert evidence.checks.primary_fact_overlay_status == "ok"
     assert evidence.checks.equity_bridge_status == "verified"
     assert evidence.checks.market_price_consistent is True
+    assert evidence.provenance is not None
+    assert evidence.provenance["scenario_acceptance"] == provenance["scenario_acceptance"]
 
 
 def test_projection_excludes_primary_fact_history_and_stays_below_bound() -> None:

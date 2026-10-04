@@ -329,7 +329,21 @@ def test_real_commit_recovery_checks_current_capture_and_source_identity(
         "executor_code_sha": "d" * 64,
         "review_bundle": review,
     }
-    execute_disposition_transaction(**arguments, repo_root=tmp_path, apply=True)
+    authority_checks: list[str] = []
+
+    def validate_transaction_authority() -> None:
+        assert review.identity.database_instance_sha256 == (
+            manifest.expected_database_instance_sha256
+        )
+        authority_checks.append("checked")
+
+    execute_disposition_transaction(
+        **arguments,
+        repo_root=tmp_path,
+        apply=True,
+        validate_current_authority=validate_transaction_authority,
+    )
+    assert authority_checks == ["checked", "checked", "checked"]
     before = _counts(conn)
     replay = recover_committed_disposition(**arguments)
     assert replay is not None and replay.replayed_context_rows == 1
