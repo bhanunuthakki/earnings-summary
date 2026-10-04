@@ -27,16 +27,14 @@ from typing import IO, Literal, Protocol, cast
 
 from pydantic import BaseModel, ConfigDict
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC = PROJECT_ROOT / "src"
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(SRC))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from execution.design_route_canaries import (  # noqa: E402
+from execution.design_route_canaries import (
     ROUTE_SCREEN_IDS,
     render_route_canary,
 )
-from ui.conformance_scan import (  # noqa: E402
+from ui.conformance_scan import (
     css_text,
     discover_emitters,
     finding_debt_id,
@@ -45,7 +43,7 @@ from ui.conformance_scan import (  # noqa: E402
     scan_surface_evidence,
     unverifiable_debt_id,
 )
-from ui.design_registry import (  # noqa: E402
+from ui.design_registry import (
     CARD_ARCHETYPES,
     GOVERNED,
     QUARANTINE_ENTRIES,
@@ -53,6 +51,9 @@ from ui.design_registry import (  # noqa: E402
     REGISTRY_VERSION,
     VISUAL_EMITTER_MANIFEST,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC = PROJECT_ROOT / "src"
 
 
 class _NoCanaryRedirectHandler(urllib.request.HTTPRedirectHandler):

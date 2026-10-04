@@ -1246,9 +1246,7 @@ def test_design_directive_routes_product_behavior_to_owned_contracts() -> None:
     assert "`directives/interaction_paradigm_2026_06.md`" in directive
     assert "comments and chat: `directives/report_comments_and_chat.md`" in directive
     assert "operational controls: `directives/operations_governance_surface.md`" in directive
-    assert "Those contracts may specify behavior, data, and state" in directive
-    assert "do not authorize a" in directive
-    assert "new visual recipe" in directive
+    assert "Behavior contracts do not authorize visual recipes." in directive
 
 
 def test_company_desk_renders_governed_valuation_provenance() -> None:
