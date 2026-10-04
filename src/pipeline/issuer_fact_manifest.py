@@ -16,6 +16,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import Literal, Self, TypeAlias
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
@@ -70,6 +71,8 @@ from pipeline.kpi_source_review import (
 )
 from pipeline.segment_junction_writer import write_segment_facts_junction
 from provenance.evidence_ledger import EvidenceLocator
+from provenance.issuer_registry import IssuerRegistry
+from provenance.reviewed_sec_financial_tables import assert_sec_source_identity
 
 MAX_EXTRACTED_AT_FUTURE_SKEW = timedelta(minutes=5)
 MAX_REVIEW_KNOWLEDGE_AT_FUTURE_SKEW = timedelta(minutes=5)
@@ -468,7 +471,7 @@ class IssuerManifestApplyResult(BaseModel):
 
 def _source_document(conn: sqlite3.Connection, manifest: IssuerFactManifestAny) -> sqlite3.Row:
     row = conn.execute(
-        "SELECT id, ticker, source_type, period_end, sha256, fetched_at "
+        "SELECT id, ticker, source_type, doc_type, period_end, sha256, fetched_at "
         "FROM documents WHERE id = ?",
         (manifest.source_doc_id,),
     ).fetchone()
@@ -476,8 +479,10 @@ def _source_document(conn: sqlite3.Connection, manifest: IssuerFactManifestAny) 
         raise ValueError(f"source document {manifest.source_doc_id} does not exist")
     if str(row["ticker"]).upper() != manifest.ticker.upper():
         raise ValueError("manifest ticker does not match source document")
-    if str(row["source_type"]) != SourceType.IR_DOC.value:
-        raise ValueError("issuer manifest source document must be an issuer IR document")
+    if str(row["source_type"]) == SourceType.SEC_XBRL.value:
+        _assert_reviewed_sec_source(conn, manifest, str(row["doc_type"]))
+    elif str(row["source_type"]) != SourceType.IR_DOC.value:
+        raise ValueError("issuer manifest source document must be IR or reviewed SEC")
     document_period = _parse_datetime(row["period_end"], field="period_end").date()
     if document_period != manifest.period_end:
         raise ValueError("manifest period does not match source document period")
@@ -489,6 +494,48 @@ def _source_document(conn: sqlite3.Connection, manifest: IssuerFactManifestAny) 
     if manifest.extracted_at.astimezone(UTC) > datetime.now(UTC) + MAX_EXTRACTED_AT_FUTURE_SKEW:
         raise ValueError("manifest extracted_at exceeds the allowed future clock skew")
     return row
+
+
+def _assert_reviewed_sec_source(
+    conn: sqlite3.Connection, manifest: IssuerFactManifestAny, document_type: str
+) -> None:
+    if (
+        not isinstance(manifest, IssuerFactManifestV2)
+        or not manifest.reviewed_kpi_definition_captures
+    ):
+        raise ValueError("SEC issuer facts require sealed reviewed v2 captures")
+    if document_type not in {"sec_20f", "sec_6k"}:
+        raise ValueError("reviewed SEC issuer facts require an exact 20-F or 6-K source kind")
+    if any(value.kind is not IssuerManifestFactKind.KPI for value in manifest.values):
+        raise ValueError("SEC segment facts require a separately qualified review route")
+    for capture in manifest.reviewed_kpi_definition_captures:
+        native = conn.execute(
+            "SELECT version.form_type,version.accession_number,version.issuer_id,version.blob_sha256,source.source_url "
+            "FROM evidence_document_versions version JOIN evidence_source_observations source ON source.observation_id=version.observation_id "
+            "WHERE version.document_version_id=? AND version.legacy_document_id=?",
+            (capture.evidence_document_version_id, manifest.source_doc_id),
+        ).fetchone()
+        if native is None or native[1] is None or str(native[3]) != manifest.source_doc_sha256:
+            raise ValueError(
+                "reviewed SEC manifest requires exact immutable native document identity"
+            )
+        parts = urlsplit(str(native[4])).path.split("/")
+        if len(parts) < 7 or not parts[4].isdecimal():
+            raise ValueError("reviewed SEC document has no exact source CIK")
+        cik = parts[4].zfill(10)
+        source_kind = "sec_20f" if document_type == "sec_20f" else "sec_6k"
+        assert_sec_source_identity(
+            source_kind=source_kind,
+            form_type=str(native[0]),
+            accession_number=str(native[1]),
+            sec_cik=cik,
+            source_url=str(native[4]),
+        )
+        issuer = IssuerRegistry(conn).resolve_identifier(
+            "sec_cik", cik, knowledge_at=capture.knowledge_at
+        )
+        if issuer.issuer_id != str(native[2]) or issuer.material_dissent:
+            raise ValueError("reviewed SEC document CIK conflicts with its captured issuer")
 
 
 def _parse_datetime(raw: object, *, field: str) -> datetime:
