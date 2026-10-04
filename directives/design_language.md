@@ -1,11 +1,8 @@
 # Design language
 
-**Status:** canonical agent contract for the visual system.
-
-Governs visual decisions; inventories live in code.
+**Status:** canonical visual contract. Inventories live in code.
 
 ## Operating metadata
-
 - **Target:** every shipped component or emitter that changes rendered UI.
 - **Inputs:** task, hierarchy, state, and owning master.
 - **Output:** registered markup or a tested master/registry extension.
@@ -20,7 +17,6 @@ Governs visual decisions; inventories live in code.
 ## 1. Authority boundary
 
 Visual decisions are closed: consumers select a master recipe; they do not create one.
-
 | Concern | Executable authority |
 |---|---|
 | Tokens and scales | `src/ui/tokens.py` |
@@ -57,7 +53,6 @@ extension protocol with a typed rationale and an adversarial continuity test.
 ## 3. Visual grammar
 
 Literal values live only in executable masters.
-
 ### Typography
 
 - Use four visible roles: display, title, body, and meta.
@@ -88,7 +83,6 @@ Literal values live only in executable masters.
 ## 4. Composition grammar
 
 Use the canonical primitives rather than lookalikes:
-
 | Intent | Primitive |
 |---|---|
 | Action | `.k-btn` with a registered intent/size variant |
@@ -99,9 +93,8 @@ Use the canonical primitives rather than lookalikes:
 | Ticker plus company | `ticker_label()` |
 | Stored or model-generated prose | `ui.prose.render_prose()` |
 
-An on-scale token does not legitimize a hand-built component. Compose the kit.
-
-Recipes include semantics, keyboard access, focus, labels, contrast, non-color cues, and reduced motion.
+Compose the kit; an on-scale token does not legitimize a hand-built component. Recipes include
+semantics, keyboard access, focus, labels, contrast, non-color cues, and reduced motion.
 
 ## 5. Arrangement
 
@@ -112,25 +105,20 @@ Recipes include semantics, keyboard access, focus, labels, contrast, non-color c
 
 ### Collapsible panels and vertical space
 
-- Secondary navigation and supporting side panels must be collapsible. Use the shared quiet
-  icon button and collapse icon. Keep the expand control visible at the panel edge when closed.
-  Apply the same control treatment across families; the family master owns panel geometry.
-- Keep the selected primary content visible. Closing a supporting panel releases its space
-  for the main task. Preserve a compact label or material status when the closed state needs it.
-- Combine page identity, period, state, and primary actions in one compact operating row.
-  Let the row wrap at narrow widths. Do not stack separate title, edition, status, and action
-  rows when one row can express the hierarchy clearly.
+- Supporting navigation and side panels must be collapsible. Use the shared quiet icon
+  button and collapse icon; keep the expand control visible at the closed panel edge.
+  The family master owns geometry. Closing a panel releases space for the selected content.
+- Combine identity, period, state, and primary actions in one compact row. Wrap at narrow
+  widths. Avoid separate title, edition, status, and action rows without a distinct task.
 - Put tactical identifiers, capture details, diagnostics, and general disclaimers in compact
-  disclosures or linked footnotes. Do not give them full-width bands above the primary content.
-  Keep material period, unit, basis, stale state, and data gaps visible beside the affected claim;
-  a compact status control can expose the full explanation.
-- During design review, inspect the space above the first useful content and compare open and
-  closed panel states. Every remaining row needs a distinct task or material state purpose.
+  disclosures or linked footnotes. Keep material period, unit, basis, stale state, and data
+  gaps visible beside the affected claim; a compact status can expose its full explanation.
+- Compare the space above useful content with panels open and closed. Every remaining row
+  needs a distinct task or material state purpose.
 
 ### Compositional restraint
 
 The shared `frontend-quality` procedure owns the generic rubric. This project narrows it:
-
 - Use only the four visible roles needed by the hierarchy; sans remains prose/labels and mono
   remains limited to the named financial, code, ticker, timestamp, and locator roles.
 - Start in normal flow and use registered family recipes. Every nested boxed region needs a named
@@ -161,11 +149,9 @@ Product behavior is owned elsewhere. Do not copy it into this directive:
   `directives/ir_events_ingestion.md`.
 
 Those contracts may specify behavior, data, and state. They do not authorize a new visual recipe.
-
 ## 6. Extension protocol
 
 For a legitimate new visual need:
-
 1. Identify the owning global or family master. If none exists, add one typed
    master entry rather than styling the consumer.
 2. Add the smallest closed vocabulary: semantic token, component variant, family

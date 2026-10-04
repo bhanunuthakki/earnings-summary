@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import inspect
+import shutil
+import subprocess
 from datetime import datetime
+from pathlib import Path
 
+import pytest
 from bs4 import BeautifulSoup
 
 from pipeline.work_os_research import render_brief_reader_shell
@@ -74,13 +78,62 @@ def test_brief_reader_shell_and_decision_band_markup() -> None:
 
 def test_full_brief_has_a_live_research_items_band_outside_the_persisted_body() -> None:
     html = render_brief_reader_shell()
+    soup = BeautifulSoup(html, "html.parser")
+    disclosure = soup.select_one("details#workOsBriefLiveContext")
+    assert disclosure is not None and not disclosure.has_attr("open")
+    assert disclosure.select_one("#workOsBriefResearchItemsMount") is not None
     assert 'id="workOsBriefResearchItemsMount"' in html
     assert html.index("workOsBriefResearchItemsMount") < html.index("workOsBriefReaderBody")
 
     shell = render_work_os_shell()
     assert "function workOsLoadBriefResearchItems(ticker)" in shell
     assert "items=1&band=brief&ticker=" in shell
-    assert shell.count("void workOsLoadBriefResearchItems(artifact.ticker)") == 1
+    # Optional live state loads on disclosure. Reading a saved report needs no
+    # journal request and cannot expose another company's research items.
+    assert "void workOsLoadBriefResearchItems(artifact.ticker)" not in shell
+
+
+def test_full_brief_live_context_loads_only_when_open_for_the_current_report() -> None:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node required for lazy research context checks")
+    runtime = (Path(__file__).parents[1] / "src/pipeline/work_os_runtime.js").read_text()
+    binding = runtime.split("  const briefLiveContext =", 1)[1].split(
+        "  const briefSwitchEdition =", 1
+    )[0]
+    script = (
+        r"""
+const assert = require('node:assert/strict');
+const calls = [];
+let onToggle = null, workOsReaderContext = {ticker:'NU'};
+const disclosure = {open:false,addEventListener(event,handler){assert.equal(event,'toggle');onToggle=handler;}};
+global.document = {getElementById(id){assert.equal(id,'workOsBriefLiveContext');return disclosure;}};
+function workOsLoadBriefResearchItems(ticker){calls.push(ticker);}
+const briefLiveContext =
+"""
+        + binding
+        + r"""
+assert.deepEqual(calls, []);
+onToggle();
+assert.deepEqual(calls, [], 'Closed context fetched optional live state');
+disclosure.open = true;
+workOsReaderContext = null;
+onToggle();
+assert.deepEqual(calls, [], 'No report selected but journal was requested');
+workOsReaderContext = {ticker:'NU'};
+onToggle();
+workOsReaderContext = {ticker:'GOOG'};
+onToggle();
+assert.deepEqual(calls, ['NU','GOOG'], 'Disclosure used a stale company');
+disclosure.open = false;
+onToggle();
+assert.equal(calls.length, 2);
+"""
+    )
+    result = subprocess.run(
+        [node, "-"], input=script, text=True, capture_output=True, timeout=10, check=False
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_full_brief_research_items_band_has_reachable_archive_restore_and_retry_chrome() -> None:

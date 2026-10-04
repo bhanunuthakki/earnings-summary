@@ -207,7 +207,8 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # +1 bounded cached host-runtime evidence endpoint.
     # +1 exact, read-only canonical financial evidence peek.
     # +1 read-only calculation peek that opens the original reported inputs.
-    assert len(rules) == 178
+    # +1 exact-edition descriptor for shared-reader reload and historical links.
+    assert len(rules) == 179
     assert rules["peek_canonical_financial"] == "/api/peek/canonical-financial"
     assert rules["peek_financial_calculation"] == "/api/peek/financial-calculation"
     assert rules["operations_host_runtime_api"] == "/api/operations/host-runtime"
@@ -220,6 +221,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
             "operations_host_runtime_api",
             "peek_canonical_financial",
             "peek_financial_calculation",
+            "brief_descriptor_api",
         }:
             assert rule.methods == {"GET", "HEAD", "OPTIONS"}
     assert rules["dcf.dcf_grade_evidence"] == "/api/dcf/evidence/<ticker>"
@@ -266,6 +268,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
             "ticker_page",
             "latest_report_for_ticker",
             "brief_library_api",
+            "brief_descriptor_api",
             "brief_body_api",
             "report_reader_css",
             "company_desk_api",
@@ -309,6 +312,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
         "ticker_page": "/ticker/<ticker>",
         "latest_report_for_ticker": "/reports/<ticker>",
         "brief_library_api": "/api/work-os/briefs",
+        "brief_descriptor_api": "/api/work-os/briefs/<artifact_id>",
         "brief_body_api": "/api/work-os/briefs/<artifact_id>/body",
         "report_reader_css": "/api/work-os/report-reader.css",
         "company_desk_api": "/api/work-os/companies/<ticker>/desk",
