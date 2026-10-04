@@ -72,6 +72,10 @@ log = logging.getLogger(__name__)
 # (truncation at the section boundary), not a smart compressor.
 ANCHOR_BLOCK_CHAR_CAP = 3500
 
+# Opt-in owner watch context fits ahead of even a long thesis, without changing
+# the existing total thesis budget or the output of holdings without watches.
+_EARNINGS_WATCH_CHAR_CAP = 1800
+
 # IR-narrative anchor is deliberately tighter (~2K vs 3.5K). The content is
 # company-biased framing, so we want it present in the context but downweighted
 # relative to the analyst's own thesis + bear blocks.
@@ -176,6 +180,67 @@ def _business_rule_anchor_lines(payload: dict[str, object]) -> list[str]:
         if isinstance(narrative, str) and narrative.strip():
             lines.append(f"- {narrative.strip()}")
     return lines
+
+
+def _earnings_language_watch_block(payload: dict[str, object]) -> str:
+    """Render complete owner watch records; disclose invalid/oversized omissions.
+
+    These are reading cues and questions, not detected events or reported facts.
+    A record contains a topic, a nonempty string list of phrases, and a question.
+    Whole records retain their source order. No phrase or question is cut.
+    """
+    raw = payload.get("earnings_language_watchlist")
+    if raw is None or raw == []:
+        return ""
+    header = (
+        "**Earnings language watches (owner questions and reading cues; "
+        "not reported facts or automatic detections):**"
+    )
+    if not isinstance(raw, list):
+        return header + "\n[Watch list omitted: invalid format; review the saved holdings file.]"
+    entries = cast("list[object]", raw)
+    invalid = 0
+    oversized = 0
+    lines: list[str] = []
+    # Reserve a complete notice even when the final record fills the budget.
+    notice_budget = len(
+        f"\n[Watch records omitted: {len(entries)} invalid; {len(entries)} exceed "
+        "the context cap. Review the saved holdings file.]"
+    )
+    remaining = _EARNINGS_WATCH_CHAR_CAP - len(header) - notice_budget
+    for entry in entries:
+        if not isinstance(entry, dict):
+            invalid += 1
+            continue
+        item = cast("dict[str, object]", entry)
+        topic, question, phrases = item.get("topic"), item.get("question"), item.get("phrases")
+        if (
+            not isinstance(topic, str)
+            or not topic.strip()
+            or not isinstance(question, str)
+            or not question.strip()
+            or not isinstance(phrases, list)
+            or not phrases
+        ):
+            invalid += 1
+            continue
+        phrase_values = cast("list[object]", phrases)
+        if any(not isinstance(phrase, str) or not phrase.strip() for phrase in phrase_values):
+            invalid += 1
+            continue
+        phrase_text = "; ".join(cast("str", phrase).strip() for phrase in phrase_values)
+        line = f"- {topic.strip()}: {phrase_text}. Question: {question.strip()}"
+        if len(line) + 1 > remaining:
+            oversized += 1
+            continue
+        lines.append(line)
+        remaining -= len(line) + 1
+    if invalid or oversized:
+        lines.append(
+            f"[Watch records omitted: {invalid} invalid; {oversized} exceed "
+            "the context cap. Review the saved holdings file.]"
+        )
+    return "\n".join([header, *lines])
 
 
 # Canonical financial line items always worth statistically profiling — the
@@ -316,6 +381,12 @@ def load_thesis_anchor(repo_root: Path, ticker: str) -> str:
         return ""
 
     parts: list[str] = ["## THESIS ANCHOR (analyst's own framing of this name)"]
+
+    # Owner-approved watch context takes priority over long narrative text.
+    # The fixed sub-budget keeps complete records inside the existing cap.
+    watch_block = _earnings_language_watch_block(payload)
+    if watch_block:
+        parts.append(f"\n{watch_block}")
 
     # Recently-IPO'd issuers: tell the LLM the narrative source is the S-1,
     # not the 10-K — so it stops phrasing claims as "the company's most-recent

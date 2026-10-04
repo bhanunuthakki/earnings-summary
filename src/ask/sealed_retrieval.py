@@ -22,6 +22,7 @@ from provenance.scope_identity import (
     validate_retrieval_scope_identity,
     validate_source_scope_revision_id,
 )
+from search.canonical_fact_projection import CanonicalFactProjectionError, load_canonical_fact_entry
 from search.embedding_promotion import LocalVectorRuntimeConfig
 from search.exact_semantic import ExactSemanticRuntime
 from search.heterogeneous_retrieval import (
@@ -1313,7 +1314,7 @@ def load_verified_trace_evidence(
     )
     conn.row_factory = sqlite3.Row
     header = conn.execute(
-        "SELECT cutoff_at FROM heterogeneous_retrieval_trace_headers WHERE trace_id=?",
+        "SELECT cutoff_at,fact_generation_id FROM heterogeneous_retrieval_trace_headers WHERE trace_id=?",
         (trace_id,),
     ).fetchone()
     if header is None:
@@ -1353,6 +1354,7 @@ def load_verified_trace_evidence(
                 result,
                 n=index,
                 cutoff=_datetime(header["cutoff_at"]),
+                fact_generation_id=str(header["fact_generation_id"]),
             )
         else:
             raise PromotionVerificationError(
@@ -1453,17 +1455,19 @@ def _fact_item(
     *,
     n: int,
     cutoff: datetime,
+    fact_generation_id: str,
 ) -> SealedEvidenceItem:
-    row = conn.execute(
-        "SELECT * FROM canonical_fact_projection_entries "
-        "WHERE canonical_metric_cell_id=? AND entry_sha256=? "
-        "AND change_kind='upsert' ORDER BY recorded_at DESC LIMIT 1",
-        (candidate["candidate_id"], candidate["source_commitment_sha256"]),
-    ).fetchone()
-    if row is None:
+    try:
+        row = load_canonical_fact_entry(
+            conn,
+            generation_id=fact_generation_id,
+            canonical_metric_cell_id=str(candidate["candidate_id"]),
+            entry_sha256=str(candidate["source_commitment_sha256"]),
+        )
+    except CanonicalFactProjectionError as exc:
         raise PromotionVerificationError(
             "trace_verification_failed", "fact source commitment is missing"
-        )
+        ) from exc
     version_id = str(row["evidence_document_version_id"])
     node_id = str(row["evidence_node_id"])
     document = _document_metadata(conn, document_version_id=version_id)

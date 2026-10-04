@@ -202,6 +202,7 @@ from logging_config import (
     set_correlation_id,
 )
 from operations.attention_projection import build_attention_panel_view
+from operations.host_runtime import build_host_bundle
 from operations.kpi_semantic_review_export import (
     KPI_SEMANTIC_EXPORT_RELATIVE_ROOT,
     KpiSemanticReviewExportError,
@@ -640,6 +641,16 @@ def create_app(
     # rather than paying the full build merely to discover the ETag is unchanged.
     panel_cache = PanelResponseCache(ttl_seconds=30.0, max_entries=256)
     declared_operations = operations_registry or build_operations_registry(resolved_code_root)
+    # run_python.bat writes scheduler receipts under the deployed checkout.
+    # The semantic-review wrapper alone selects the declared DB's state root.
+    operations_job_receipt_roots: dict[str, Path] = {
+        step.job: (
+            resolved_db_path.parent.parent
+            if step.job == "prepare-kpi-semantic-review"
+            else resolved_code_root
+        )
+        for step in declared_operations.job_steps
+    }
     operations_review_code_identity = review_code_identity(resolved_code_root)
     app.config["CODE_ROOT"] = resolved_code_root
     app.config["OPERATIONS_REGISTRY"] = declared_operations
@@ -1870,6 +1881,31 @@ def create_app(
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
+    @app.route("/api/operations/host-runtime", methods=["GET"])
+    def operations_host_runtime_api():
+        """Serve bounded cached host evidence without probing or recovery."""
+        configured_private_origin = private_mobile_origin(
+            config_path=secret_read_path("private_mobile_base_url", repo_root=repo_root)
+        )
+        if (
+            configured_private_origin is None
+            or urllib.parse.urlparse(configured_private_origin).scheme != "https"
+        ):
+            return _client_error(
+                "private review origin is not configured as HTTPS; refusing to emit an identity",
+                503,
+            )
+        bundle = build_host_bundle(
+            repo_root,
+            datetime.now(UTC),
+            configured_private_origin,
+            operations_review_code_identity,
+        )
+        response = app.json.response(bundle.model_dump(mode="json"))
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["ETag"] = f'"{bundle.content_sha256}"'
+        return response
+
     @app.route("/api/operations/review-bundle", methods=["GET"])
     def operations_review_bundle_api():
         """Sanitized, typed Windows authority projection for Mac review."""
@@ -1892,6 +1928,7 @@ def create_app(
             observed_at=datetime.now(UTC),
             scheduler_receipt_path=scheduler_receipt_path(repo_root),
             service_receipt_path=service_receipt_path(repo_root),
+            job_receipt_roots=operations_job_receipt_roots,
         )
         semantic_rows = scoped_kpi_definitions(
             operations_conn,
@@ -1998,6 +2035,7 @@ def create_app(
                 observed_at=datetime.now(UTC),
                 scheduler_receipt_path=scheduler_receipt_path(repo_root),
                 service_receipt_path=service_receipt_path(repo_root),
+                job_receipt_roots=operations_job_receipt_roots,
             )
             return Response(
                 render_operations_panel(
@@ -2061,7 +2099,9 @@ def create_app(
                 )
             if fragment:
                 return Response(
-                    render_health_fragment(db_path, fragment, conn=get_read_db()),
+                    render_health_fragment(
+                        db_path, fragment, repo_root=repo_root, conn=get_read_db()
+                    ),
                     mimetype="text/html",
                 )
             return Response(
@@ -2085,7 +2125,7 @@ def create_app(
             from pipeline.portfolio_panel import render_portfolio_synthesis_panel
 
             return Response(
-                render_portfolio_synthesis_panel(db_path, conn=get_read_db()),
+                render_portfolio_synthesis_panel(db_path, repo_root=repo_root, conn=get_read_db()),
                 mimetype="text/html",
             )
 
@@ -2108,7 +2148,9 @@ def create_app(
             from pipeline.portfolio_panel import render_portfolio_risk_panel
 
             return Response(
-                render_portfolio_risk_panel(db_path=db_path, conn=get_read_db()),
+                render_portfolio_risk_panel(
+                    db_path=db_path, repo_root=repo_root, conn=get_read_db()
+                ),
                 mimetype="text/html",
             )
 
@@ -2133,7 +2175,9 @@ def create_app(
             fragment = request.args.get("fragment")
             if fragment:
                 return Response(
-                    render_health_fragment(db_path, fragment, conn=get_read_db()),
+                    render_health_fragment(
+                        db_path, fragment, repo_root=repo_root, conn=get_read_db()
+                    ),
                     mimetype="text/html",
                 )
             user_id = DEFAULT_USER_ID

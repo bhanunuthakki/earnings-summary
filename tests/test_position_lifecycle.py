@@ -207,7 +207,7 @@ def _txn(ticker: str, type_: str, date: str, quantity: float, amount: float) -> 
 def test_open_on_new_portfolio_name_tracker_offline(repo: Path) -> None:
     _set_portfolio(repo, ["NU"])
     before = _utc_today()
-    tally = sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    tally = sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     after = _utc_today()
     assert tally == {
         "opened": 1,
@@ -215,6 +215,11 @@ def test_open_on_new_portfolio_name_tracker_offline(repo: Path) -> None:
         "unchanged": 0,
         "tracker_available": False,
         "db_unavailable": 0,
+        "tracker_as_of": None,
+        "tracker_is_stale": False,
+        "tracker_is_partial": False,
+        "tracker_warnings": [],
+        "artifact_root_available": True,
     }
     [entry] = list_entries(db_path=_db(repo), ticker="NU")
     assert entry.is_open
@@ -245,7 +250,7 @@ def test_open_uses_buy_transaction_then_avg_cost(repo: Path) -> None:
         ],
     )
     before = _utc_today()
-    sync_position_lifecycle(db_path=_db(repo), portfolio=tracker)
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=tracker)
     after = _utc_today()
 
     [nu] = list_entries(db_path=_db(repo), ticker="NU")
@@ -270,7 +275,7 @@ def test_reconciler_materializes_position_weights(repo: Path) -> None:
             LivePosition("MELI", None, 1.0, None, None, None, 4.0),
         ]
     )
-    sync_position_lifecycle(db_path=_db(repo), portfolio=tracker)
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=tracker)
     assert pw.read_materialized_weights(repo) == {"NU": 0.30, "MELI": 0.04}
 
 
@@ -282,21 +287,22 @@ def test_reconciler_offline_preserves_last_good_weights(repo: Path) -> None:
     _set_portfolio(repo, ["NU"])
     sync_position_lifecycle(
         db_path=_db(repo),
+        repo_root=repo,
         portfolio=_online(positions=[LivePosition("NU", None, 1.0, None, None, None, 50.0)]),
     )
     assert pw.read_materialized_weights(repo) == {"NU": 0.50}
 
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     assert pw.read_materialized_weights(repo) == {"NU": 0.50}  # unchanged
 
 
 def test_close_on_portfolio_exit_with_sell_enrichment(repo: Path) -> None:
     _set_portfolio(repo, ["NU"])
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
 
     _set_portfolio(repo, [])  # NU leaves the portfolio
     tracker = _online(transactions=[_txn("NU", "sell", "2026-06-10", 150.0, 1920.0)])
-    tally = sync_position_lifecycle(db_path=_db(repo), portfolio=tracker)
+    tally = sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=tracker)
     assert tally["closed"] == 1
 
     [entry] = list_entries(db_path=_db(repo), ticker="NU")
@@ -322,11 +328,11 @@ def test_close_logs_postmortem_pending_without_changing_tally(
     import logging
 
     _set_portfolio(repo, ["NU"])
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
 
     _set_portfolio(repo, [])  # NU leaves the portfolio -> a close this run
     with caplog.at_level(logging.INFO, logger="position_lifecycle"):
-        tally = sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+        tally = sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
 
     assert tally == {
         "opened": 0,
@@ -334,6 +340,11 @@ def test_close_logs_postmortem_pending_without_changing_tally(
         "unchanged": 0,
         "tracker_available": False,
         "db_unavailable": 0,
+        "tracker_as_of": None,
+        "tracker_is_stale": False,
+        "tracker_is_partial": False,
+        "tracker_warnings": [],
+        "artifact_root_available": True,
     }
     events = [
         cast(dict[str, object], r.msg)
@@ -351,7 +362,9 @@ def test_no_close_does_not_log_postmortem_pending(
 
     _set_portfolio(repo, ["NU"])
     with caplog.at_level(logging.INFO, logger="position_lifecycle"):
-        sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())  # opens, no closes
+        sync_position_lifecycle(
+            db_path=_db(repo), repo_root=repo, portfolio=_offline()
+        )  # opens, no closes
 
     events = [
         cast(dict[str, object], r.msg)
@@ -379,40 +392,40 @@ def _add_thesis_eval(db: Path, ticker: str, status: str, evaluated_at: str) -> N
 def test_close_prefills_outcome_broke_from_breach_history(repo: Path) -> None:
     # seam 9: a breach preceded the exit → prefill "broke" (confirm/override).
     _set_portfolio(repo, ["NU"])
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     _add_thesis_eval(_db(repo), "NU", "breach", "2026-05-01T00:00:00")
     _set_portfolio(repo, [])
     tracker = _online(transactions=[_txn("NU", "sell", "2026-06-10", 150.0, 1920.0)])
-    sync_position_lifecycle(db_path=_db(repo), portfolio=tracker)
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=tracker)
     [entry] = list_entries(db_path=_db(repo), ticker="NU")
     assert entry.outcome_vs_thesis == "broke"
 
 
 def test_close_prefills_played_out_when_thesis_held(repo: Path) -> None:
     _set_portfolio(repo, ["NU"])
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     _add_thesis_eval(_db(repo), "NU", "ok", "2026-05-01T00:00:00")
     _set_portfolio(repo, [])
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     [entry] = list_entries(db_path=_db(repo), ticker="NU")
     assert entry.outcome_vs_thesis == "played_out"
 
 
 def test_close_leaves_outcome_null_without_evaluations(repo: Path) -> None:
     _set_portfolio(repo, ["NU"])
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     _set_portfolio(repo, [])
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     [entry] = list_entries(db_path=_db(repo), ticker="NU")
     assert entry.outcome_vs_thesis is None
 
 
 def test_close_tracker_offline_stamps_today(repo: Path) -> None:
     _set_portfolio(repo, ["NU"])
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     _set_portfolio(repo, [])
     before = _utc_today()
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     after = _utc_today()
     [entry] = list_entries(db_path=_db(repo), ticker="NU")
     assert entry.exit_date in {before, after}
@@ -421,15 +434,15 @@ def test_close_tracker_offline_stamps_today(repo: Path) -> None:
 
 def test_sync_is_idempotent_and_reopen_creates_second_row(repo: Path) -> None:
     _set_portfolio(repo, ["NU"])
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
-    again = sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
+    again = sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     assert again["opened"] == 0
     assert again["unchanged"] == 1
 
     _set_portfolio(repo, [])
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     _set_portfolio(repo, ["NU"])  # re-entry opens a SECOND lifecycle row
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     entries = list_entries(db_path=_db(repo), ticker="NU")
     assert len(entries) == 2
     assert sum(1 for e in entries if e.is_open) == 1
@@ -439,7 +452,7 @@ def test_sync_is_idempotent_and_reopen_creates_second_row(repo: Path) -> None:
 def test_backfill_marks_unknown_entry_date(repo: Path) -> None:
     _set_portfolio(repo, ["NU"])
     tally = sync_position_lifecycle(
-        db_path=_db(repo), portfolio=_offline(), assume_preexisting=True
+        db_path=_db(repo), repo_root=repo, portfolio=_offline(), assume_preexisting=True
     )
     assert tally["opened"] == 1
     [entry] = list_entries(db_path=_db(repo), ticker="NU")
@@ -463,7 +476,7 @@ def test_entry_snapshots_conviction_and_conditions(repo: Path) -> None:
     conn.close()
 
     _set_portfolio(repo, ["NU"])
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     [entry] = list_entries(db_path=_db(repo), ticker="NU")
     assert entry.entry_conviction == "high"  # decisions fallback
     assert entry.entry_conditions is not None
@@ -473,7 +486,7 @@ def test_entry_snapshots_conviction_and_conditions(repo: Path) -> None:
 
 def test_enrichment_fills_missing_entry_price_later(repo: Path) -> None:
     _set_portfolio(repo, ["NU"])
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     tracker = _online(
         positions=[
             LivePosition(
@@ -487,7 +500,7 @@ def test_enrichment_fills_missing_entry_price_later(repo: Path) -> None:
             )
         ]
     )
-    sync_position_lifecycle(db_path=_db(repo), portfolio=tracker)
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=tracker)
     [entry] = list_entries(db_path=_db(repo), ticker="NU")
     assert entry.entry_price == 11.8
 
@@ -519,9 +532,9 @@ def test_missing_db_and_missing_tables_degrade(tmp_path: Path) -> None:
 
 def _one_closed_entry(repo: Path) -> PositionEntry:
     _set_portfolio(repo, ["NU"])
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     _set_portfolio(repo, [])
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
     [entry] = list_entries(db_path=_db(repo), ticker="NU")
     return entry
 
@@ -567,7 +580,7 @@ def test_panel_renders_timeline_and_grade_form(repo: Path) -> None:
     conn.close()
     entry = _one_closed_entry(repo)  # closed, ungraded
     _set_portfolio(repo, ["NU"])  # and a fresh open stint
-    sync_position_lifecycle(db_path=_db(repo), portfolio=_offline())
+    sync_position_lifecycle(db_path=_db(repo), repo_root=repo, portfolio=_offline())
 
     html = render_position_lifecycle_section(_db(repo), "nu", user_id="bhanu")
     assert 'data-plc-ticker="NU"' in html
@@ -595,3 +608,20 @@ def test_panel_empty_state(repo: Path) -> None:
     html = render_position_lifecycle_section(_db(repo), "NU", user_id="bhanu")
     assert "No lifecycle rows yet" in html
     assert "data-plc-root" in html  # the refresh contract holds even when empty
+
+
+def test_reconciliation_uses_explicit_artifact_root(repo: Path, tmp_path: Path) -> None:
+    isolated_db = tmp_path / "state" / "authority.db"
+    isolated_db.parent.mkdir()
+    _set_portfolio(repo, ["NU"])
+    isolated_db.write_bytes(_db(repo).read_bytes())
+    artifacts = tmp_path / "artifacts"
+    holdings = artifacts / "micro_thesis" / "holdings"
+    holdings.mkdir(parents=True)
+    (holdings / "NU.json").write_text(json.dumps({"thesis": "Explicit artifact root."}))
+    tracker = LivePortfolio(available=True, api_url="http://test", as_of="2025-01-01")
+    sync_position_lifecycle(db_path=isolated_db, repo_root=artifacts, portfolio=tracker)
+    entries = list_entries(db_path=isolated_db, ticker="NU")
+    assert entries[0].entry_thesis_excerpt == "Explicit artifact root."
+    assert (artifacts / "data" / "portfolio_weights.json").exists()
+    assert not (isolated_db.parent.parent / "data" / "portfolio_weights.json").exists()

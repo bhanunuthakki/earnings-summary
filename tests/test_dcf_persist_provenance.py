@@ -6,13 +6,20 @@ import dataclasses
 import hashlib
 import os
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 
 import pytest
 
-from dcf.artifact_promotion import StagedFilePromotion, live_path_from_env
+from dcf import artifact_promotion
+from dcf.artifact_promotion import (
+    DcfRecoveryError,
+    StagedArtifactBundle,
+    StagedFilePromotion,
+    live_path_from_env,
+)
 from dcf.persist import DcfPromotionBlocked, DcfRunRow, upsert
 from dcf.provenance import (
     DcfInputProvenance,
@@ -193,6 +200,63 @@ def test_commit_failure_restores_workbook_and_dcf_row(tmp_path: Path) -> None:
     assert staged.read_bytes() == b"new workbook"
     assert not list(tmp_path.glob("*.rollback.*"))
     assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
+
+
+def test_commit_failure_restores_workbook_and_assumptions_bundle(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    class FailingCommitConnection(sqlite3.Connection):
+        def commit(self) -> None:
+            raise sqlite3.OperationalError("synthetic commit failure")
+
+    db = migrated_db(tmp_path / "isolated.sqlite")
+    conn = sqlite3.connect(db, factory=FailingCommitConnection)
+    workbook, assumptions = tmp_path / "META.xlsx", tmp_path / "META.json"
+    workbook.write_bytes(b"accepted workbook")
+    assumptions.write_bytes(b"accepted assumptions")
+    candidate, candidate_json = tmp_path / "candidate.xlsx", tmp_path / "candidate.json"
+    candidate.write_bytes(b"candidate workbook")
+    candidate_json.write_bytes(b"candidate assumptions")
+    try:
+        with (
+            pytest.raises(sqlite3.OperationalError, match="synthetic commit failure"),
+            StagedArtifactBundle([(candidate, workbook), (candidate_json, assumptions)]),
+        ):
+            upsert(conn, _row())
+        assert workbook.read_bytes() == b"accepted workbook"
+        assert assumptions.read_bytes() == b"accepted assumptions"
+        assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
+        assert not list(tmp_path.glob("*.rollback.*"))
+    finally:
+        conn.close()
+
+
+def test_bundle_failed_recovery_retains_original_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workbook, assumptions = tmp_path / "META.xlsx", tmp_path / "META.json"
+    workbook.write_bytes(b"accepted workbook")
+    assumptions.write_bytes(b"accepted assumptions")
+    candidate, candidate_json = tmp_path / "candidate.xlsx", tmp_path / "candidate.json"
+    candidate.write_bytes(b"candidate workbook")
+    candidate_json.write_bytes(b"candidate assumptions")
+    original_replace = os.replace
+
+    def fail_workbook_restore(source: Path, target: Path) -> None:
+        if ".rollback." in source.name and target == workbook:
+            raise OSError("synthetic recovery failure")
+        original_replace(source, target)
+
+    monkeypatch.setattr(artifact_promotion.os, "replace", fail_workbook_restore)
+    with (
+        pytest.raises(DcfRecoveryError, match="dcf_recovery_failed"),
+        StagedArtifactBundle([(candidate, workbook), (candidate_json, assumptions)]),
+    ):
+        raise sqlite3.OperationalError("synthetic commit failure")
+    assert assumptions.read_bytes() == b"accepted assumptions"
+    backups = list(tmp_path.glob("META.rollback.*.xlsx"))
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == b"accepted workbook"
 
 
 def _bridge_row(row: DcfRunRow, status: str) -> DcfRunRow:

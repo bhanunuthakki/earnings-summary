@@ -54,12 +54,14 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal, NamedTuple, cast
 
 from pydantic import BaseModel, Field
 
 from compute.kpi_resolver import resolve_kpi_definition_name, semantic_series_identity_sql
+from compute.thesis_metric_series import MetricExpression, calculate_metric_series
 from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
@@ -100,6 +102,7 @@ class PredicateType(StrEnum):
     RATIO_BREACH = "ratio_breach"
     COMPOUND = "compound"
     TRAJECTORY = "trajectory"
+    METRIC_THRESHOLD = "metric_threshold"
 
 
 class FactSource(StrEnum):
@@ -158,6 +161,7 @@ class _EvaluationContext:
     conn: sqlite3.Connection
     ticker: str
     financials: CanonicalFinancialSeriesReader
+    cutoff: datetime
 
 
 def _read_financial(context: _EvaluationContext, metric: str) -> CanonicalFinancialSeries:
@@ -838,6 +842,22 @@ def _eval_compound(context: _EvaluationContext, params: dict[str, Any]) -> _Pred
     child_outcomes = [_evaluate_predicate(context, c) for c in children]
     child_fired = [c.fired for c in child_outcomes]
     fired = _kleene_and(child_fired) if op == "and" else _kleene_or(child_fired)
+    require_same_period = params.get("require_same_period", False)
+    if not isinstance(require_same_period, bool):
+        raise ValueError("require_same_period must be boolean")
+    fired_periods = [
+        child.evidence_keys.get("last_period") for child in child_outcomes if child.fired is True
+    ]
+    mismatched_periods = (
+        require_same_period
+        and bool(fired_periods)
+        and (
+            any(period is None for period in fired_periods)
+            or len(set(str(period) for period in fired_periods)) > 1
+        )
+    )
+    if mismatched_periods:
+        fired = None
     fired_count = sum(1 for f in child_fired if f is True)
     unresolved_count = sum(1 for f in child_fired if f is None)
     if fired is None:
@@ -850,11 +870,26 @@ def _eval_compound(context: _EvaluationContext, params: dict[str, Any]) -> _Pred
         fired=fired,
         evidence_keys={
             "op": op,
+            **(
+                {
+                    "last_period": fired_periods[0]
+                    if fired_periods and not mismatched_periods
+                    else None,
+                    "reason": "compound_period_mismatch" if mismatched_periods else None,
+                }
+                if require_same_period
+                else {}
+            ),
             "children": [
                 {
                     "type": c_def.type.value,
                     "fired": c_out.fired,
                     "description": c_out.description,
+                    **(
+                        {"last_period": c_out.evidence_keys.get("last_period")}
+                        if require_same_period
+                        else {}
+                    ),
                     **(
                         {"source_manifest": c_out.evidence_keys["source_manifest"]}
                         if "source_manifest" in c_out.evidence_keys
@@ -869,6 +904,63 @@ def _eval_compound(context: _EvaluationContext, params: dict[str, Any]) -> _Pred
             f"{fired_count} fired, {unresolved_count} unresolved, "
             f"{len(children) - fired_count - unresolved_count} clear; {outcome_word}"
         ),
+    )
+
+
+def _eval_metric_threshold(context: _EvaluationContext, params: dict[str, Any]) -> _PredOutcome:
+    """Compare exact calculated values without dropping source or period evidence."""
+    expression = MetricExpression.model_validate(_param(params, "expression"))
+    comparator = str(_param(params, "comparator"))
+    comparator = {"<": "lt", "<=": "le", ">": "gt", ">=": "ge"}.get(comparator, comparator)
+    comparisons: dict[str, Callable[[Decimal, Decimal], bool]] = {
+        "lt": lambda value, threshold: value < threshold,
+        "le": lambda value, threshold: value <= threshold,
+        "gt": lambda value, threshold: value > threshold,
+        "ge": lambda value, threshold: value >= threshold,
+    }
+    if comparator not in comparisons:
+        raise ValueError("metric_threshold comparator must be lt, le, gt or ge")
+    threshold = Decimal(str(_param(params, "threshold")))
+    if not threshold.is_finite():
+        raise ValueError("metric_threshold requires a finite threshold")
+    periods = params.get("periods", 1)
+    if not isinstance(periods, int) or isinstance(periods, bool) or not 1 <= periods <= 12:
+        raise ValueError("metric_threshold periods must be an integer from 1 to 12")
+    require_adjacent = params.get("require_adjacent_quarters", True)
+    if not isinstance(require_adjacent, bool):
+        raise ValueError("require_adjacent_quarters must be boolean")
+    result = calculate_metric_series(
+        context.conn, context.ticker, expression, cutoff=context.cutoff
+    )
+    window = result.points[-periods:]
+    evidence: dict[str, Any] = {
+        "expression": expression.model_dump(mode="json"),
+        "comparator": comparator,
+        "threshold": str(threshold),
+        "periods": periods,
+        "require_adjacent_quarters": require_adjacent,
+        "source_manifest": result.model_dump(mode="json"),
+        "last_period": window[-1].period_end.isoformat() if window else None,
+        "values": [str(point.value) for point in window],
+    }
+    reason = result.reason_code
+    if result.status != "available" or len(window) < periods:
+        reason = reason or "insufficient_metric_periods"
+    elif require_adjacent and any(
+        newer.fiscal_index != older.fiscal_index + 1 for older, newer in itertools.pairwise(window)
+    ):
+        reason = "missing_adjacent_quarter"
+    if reason is not None:
+        return _PredOutcome(
+            fired=None,
+            evidence_keys={**evidence, "reason": reason},
+            description=f"unresolved: {reason} for metric_threshold",
+        )
+    fired = all(comparisons[comparator](point.value, threshold) for point in window)
+    return _PredOutcome(
+        fired=fired,
+        evidence_keys=evidence,
+        description=f"metric {comparator} {threshold} for {periods} quarterly periods: {fired}",
     )
 
 
@@ -1060,6 +1152,7 @@ _PREDICATE_DISPATCH: dict[PredicateType, _PredHandler] = {
     PredicateType.RATIO_BREACH: _eval_ratio_breach,
     PredicateType.COMPOUND: _eval_compound,
     PredicateType.TRAJECTORY: _eval_trajectory,
+    PredicateType.METRIC_THRESHOLD: _eval_metric_threshold,
 }
 
 
@@ -1185,6 +1278,7 @@ def evaluate_soft_rules(
             conn=conn,
             ticker=ticker,
             financials=CanonicalFinancialSeriesReader(conn, ticker, cutoff=cutoff),
+            cutoff=cutoff,
         )
         return _evaluate_soft_rules_in_snapshot(context, rules, cutoff)
     finally:

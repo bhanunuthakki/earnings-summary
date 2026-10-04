@@ -1493,3 +1493,21 @@ def test_render_empty_lists() -> None:
     html = render_research_cockpit({"portfolio": [], "evaluation": []})
     assert "No portfolio tickers." in html
     assert "No evaluation tickers." in html
+
+
+def test_tier1_delta_retains_both_exact_selected_input_rows(conn: sqlite3.Connection) -> None:
+    deltas = tier1_kpi_deltas(conn, {"NU"}, as_of=NOW.date())["NU"]
+    arpac = next(delta for delta in deltas if delta.name == "Monthly ARPAC (USD)")
+    assert arpac.latest_value == 12.4 and arpac.prior_value == 11.2
+    latest_input = arpac.latest_input
+    prior_input = arpac.prior_input
+    assert latest_input is not None and prior_input is not None
+    rows = conn.execute(
+        "SELECT id,source_doc_id,value,period_end FROM kpi_facts WHERE ticker='NU' AND kpi_definition_id=(SELECT id FROM kpi_definitions WHERE ticker='NU' AND name=?) AND value IN (12.4,11.2) ORDER BY period_end DESC",
+        (arpac.name,),
+    ).fetchall()
+    assert len(rows) == 2
+    for reference, row in zip((latest_input, prior_input), rows, strict=True):
+        assert reference.fact_id == row["id"]
+        assert reference.source_doc_id == row["source_doc_id"]
+        assert reference.original_value == str(row["value"])
