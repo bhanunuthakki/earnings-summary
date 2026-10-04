@@ -43,6 +43,18 @@ def test_company_desk_runtime_wires_real_dcf_bands_and_brief_doorways() -> None:
     assert "ArrowLeft" in html and "ArrowRight" in html
 
 
+def test_company_desk_valuation_sources_are_visible_beside_their_values() -> None:
+    html = render_company_desk_shell()
+    snapshot = html.split('aria-label="Company snapshot">', 1)[1].split("</header>", 1)[0]
+    compatibility = html.split('<div hidden aria-hidden="true">', 1)[1]
+
+    assert ">DCF input price</div>" in snapshot
+    for source_id in ("deskInputPriceSource", "deskFairValueSource"):
+        assert f'class="stat-subtext" id="{source_id}"' in snapshot
+        assert f'id="{source_id}"' not in compatibility
+        assert html.count(f'id="{source_id}"') == 1
+
+
 def test_company_desk_mobile_contract_does_not_hide_the_active_navigation_group() -> None:
     html = render_work_os_shell()
 
