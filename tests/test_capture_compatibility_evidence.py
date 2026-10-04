@@ -59,7 +59,7 @@ def test_temp_repo_and_scanner_ignore_outer_git_repository_env(
     receipt = capture_compatibility_evidence(requested, baseline)
 
     assert receipt.current_revision == baseline
-    assert _git(requested, "rev-parse", "--show-toplevel") == str(requested)
+    assert Path(_git(requested, "rev-parse", "--show-toplevel")).resolve() == requested.resolve()
     assert sentinel_config.read_bytes() == before
 
 
