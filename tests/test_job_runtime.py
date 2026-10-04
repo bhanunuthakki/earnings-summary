@@ -281,7 +281,8 @@ def test_windows_creation_identity_uses_full_handle_and_closes_on_query_failure(
 
     kernel = _ProcessWaitKernel(0x102)
     _install_process_wait_kernel(monkeypatch, kernel)
-    api = runtime_test_api.load_process_query_kernel32()
+    # The installed loader returns this fake; the import-time API pins the real loader.
+    api = kernel
     times_handles: list[int] = []
 
     def process_times(
