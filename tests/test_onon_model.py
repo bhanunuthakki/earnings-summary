@@ -149,7 +149,7 @@ def test_in_bracket_reverse_output_keeps_existing_shape() -> None:
     output = replay(memo_inputs())
     assert (
         canonical_digest(dict(output))
-        == "c11d7af296ed4d5ddd947df1e280fb484517260498b78504f263d6c2ddc37209"
+        == "c11d7af296ed4d5ddd947df1e280fb484517260498b78504f263d6c2ddc37209"  # pragma: allowlist secret -- fixed public replay digest
     )
     reverse = output["reverse_dcf"]
     assert set(reverse) == {

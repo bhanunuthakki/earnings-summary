@@ -35,6 +35,14 @@ from provenance.metric_ontology import (
 
 _SHA = r"^[0-9a-f]{64}$"
 _SELECTORS = TypeAdapter(dict[str, ValuationRoleSelector])
+_DOCUMENT_BLOB_QUERIES = {
+    "v_evidence_document_versions_canonical": (
+        "SELECT blob_sha256 FROM v_evidence_document_versions_canonical WHERE document_version_id=?"
+    ),
+    "evidence_document_versions": (
+        "SELECT blob_sha256 FROM evidence_document_versions WHERE document_version_id=?"
+    ),
+}
 
 
 class ReviewedInputRoleError(ValueError):
@@ -110,9 +118,8 @@ def describe_input_role_source(
         if bundle.evidence is None or definition is None or binding is None:
             raise ReviewedInputRoleError("role_source_lineage_unavailable")
         mapping = ontology.mapping_as_known(binding.source_component_id or "", cutoff)
-        relation = evidence_document_relation(conn)
         blob = conn.execute(
-            f"SELECT blob_sha256 FROM {relation} WHERE document_version_id=?",
+            _DOCUMENT_BLOB_QUERIES[evidence_document_relation(conn)],
             (bundle.evidence.document_version_id,),
         ).fetchone()
         seal = conn.execute(
@@ -236,9 +243,8 @@ def _validate_source(
         and fact.decimal_value > 0
     ):
         raise ReviewedInputRoleError("role_source_sign_conflict")
-    relation = evidence_document_relation(conn)
     doc = conn.execute(
-        f"SELECT blob_sha256 FROM {relation} WHERE document_version_id=?",
+        _DOCUMENT_BLOB_QUERIES[evidence_document_relation(conn)],
         (evidence.document_version_id,),
     ).fetchone()
     if doc is None or str(doc[0]) != item.source_document_sha256:

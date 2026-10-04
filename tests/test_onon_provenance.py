@@ -33,7 +33,7 @@ def provenance(
 def test_new_receipt_parameters_preserve_default_hash() -> None:
     assert (
         provenance().input_sha256
-        == "d0f842fce4f5d1b99670317c6cec3c5d366ad43799898b4fba612300cdf06781"
+        == "d0f842fce4f5d1b99670317c6cec3c5d366ad43799898b4fba612300cdf06781"  # pragma: allowlist secret -- fixed public provenance digest
     )
     assert (
         provenance().input_sha256

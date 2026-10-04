@@ -13,6 +13,25 @@ from typing import cast
 
 from provenance.issuer_registry import evidence_document_relation
 
+_SUBJECT_DOCUMENT_QUERIES = {
+    "v_evidence_document_versions_canonical": (
+        "SELECT document.blob_sha256,document.document_type,document.period_end,"
+        "document.accession_number,document.form_type,document.issuer_id,document.recorded_at,"
+        "observation.source_url,observation.blob_sha256 "
+        "FROM v_evidence_document_versions_canonical document "
+        "JOIN evidence_source_observations observation USING(observation_id) "
+        "WHERE document.document_version_id=?"
+    ),
+    "evidence_document_versions": (
+        "SELECT document.blob_sha256,document.document_type,document.period_end,"
+        "document.accession_number,document.form_type,document.issuer_id,document.recorded_at,"
+        "observation.source_url,observation.blob_sha256 "
+        "FROM evidence_document_versions document "
+        "JOIN evidence_source_observations observation USING(observation_id) "
+        "WHERE document.document_version_id=?"
+    ),
+}
+
 
 class SecPackageSubjectWitnessError(ValueError):
     """Stable failure to reconstruct a reviewed SEC subject witness."""
@@ -119,13 +138,8 @@ def verify_sec_package_subject_witness(
         parsed = datetime.strptime(text.replace(",", ""), "%B %d %Y").date()
         if period is None or parsed != _time(period).date() or text not in heading:
             raise SecPackageSubjectWitnessError("financial_reporting_subject_period_mismatch")
-    relation = evidence_document_relation(conn)
     document = conn.execute(
-        f"SELECT document.blob_sha256,document.document_type,document.period_end,"
-        f"document.accession_number,document.form_type,document.issuer_id,document.recorded_at,"
-        f"observation.source_url,observation.blob_sha256 FROM {relation} document "
-        "JOIN evidence_source_observations observation USING(observation_id) "
-        "WHERE document.document_version_id=?",
+        _SUBJECT_DOCUMENT_QUERIES[evidence_document_relation(conn)],
         (str(assessment[1]),),
     ).fetchone()
     if (
