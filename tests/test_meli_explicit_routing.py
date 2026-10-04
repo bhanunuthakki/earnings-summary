@@ -162,15 +162,27 @@ def test_non_meli_bulk_routing_ignores_meli_package(
     assert result["status"] == "synthetic-route"
 
 
-@pytest.mark.parametrize("field,value", [("ticker", "NU"), ("recipe", "other/v1")])
+@pytest.mark.parametrize(
+    "field,value,reason",
+    [
+        ("ticker", "NU", "model_input_request_missing_or_invalid"),
+        ("ticker", "ONON", "model_input_recipe_ticker_mismatch"),
+        ("recipe", "other/v1", "model_input_recipe_mismatch"),
+    ],
+)
 def test_child_rejects_wrong_identity_before_database_access(
-    tmp_path: Path, field: str, value: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: str, reason: str
 ) -> None:
     artifact = package(tmp_path / "reviewed.json")
     data = json.loads(artifact.read_text())
     data["input_evidence"][field] = value
     artifact.write_text(json.dumps(data))
-    with pytest.raises(InputEvidenceError):
+
+    def forbidden_database(_path: Path | str | None = None) -> Path:
+        pytest.fail("identity refusal must precede database path resolution")
+
+    monkeypatch.setattr(meli, "require_db_path", forbidden_database)
+    with pytest.raises(InputEvidenceError, match=reason):
         meli.load_verified_assumptions(
             "MELI",
             db_path=tmp_path / "missing.db",
