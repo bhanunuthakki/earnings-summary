@@ -7,10 +7,24 @@ import json
 import sqlite3
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
+from pipeline.kpi_legacy_disposition_capture import (
+    LegacyKpiDispositionCapture,
+    captured_legacy_quarantine_matches,
+    projection_json,
+    read_legacy_kpi_disposition_capture,
+)
 from pipeline.kpi_report_reference_dispositions import (
     ReportKpiReference,
     ReportKpiReferenceDisposition,
@@ -60,6 +74,17 @@ class KpiFactQuarantineDisposition(BaseModel):
     stored_definition_name: str = Field(min_length=1, max_length=256)
     stored_period_end: date
     reason_code: str = Field(min_length=1, max_length=128)
+    legacy_capture: LegacyKpiDispositionCapture | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        value = handler(self)
+        if not isinstance(value, dict):
+            raise TypeError("quarantine disposition serializer must return an object")
+        result = cast("dict[str, object]", value)
+        if self.legacy_capture is None:
+            result.pop("legacy_capture", None)
+        return result
 
     @model_validator(mode="after")
     def _heads_match(self) -> KpiFactQuarantineDisposition:
@@ -88,7 +113,9 @@ class ReportKpiReferenceDispositionEntry(BaseModel):
 class KpiSemanticDispositionManifest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["kpi_semantic_dispositions.v1"] = "kpi_semantic_dispositions.v1"
+    schema_version: Literal["kpi_semantic_dispositions.v1", "kpi_semantic_dispositions.v2"] = (
+        "kpi_semantic_dispositions.v1"
+    )
     user_id: str = Field(min_length=1, max_length=128)
     logical_idempotency_key: str = Field(min_length=1, max_length=256)
     reviewer: str = Field(min_length=1, max_length=128)
@@ -123,6 +150,16 @@ class KpiSemanticDispositionManifest(BaseModel):
         }
         if len(reference_keys) != len(self.report_reference_dispositions):
             raise ValueError("disposition manifest repeats a report reference")
+        captures = [entry.legacy_capture for entry in self.fact_dispositions]
+        if self.schema_version == "kpi_semantic_dispositions.v1" and any(captures):
+            raise ValueError("legacy disposition captures require manifest v2")
+        if self.schema_version == "kpi_semantic_dispositions.v2" and (
+            not 1 <= len(captures) <= 25
+            or not all(captures)
+            or len({entry.ticker for entry in self.fact_dispositions}) != 1
+            or self.report_reference_dispositions
+        ):
+            raise ValueError("legacy disposition v2 requires 1-25 exact facts for one ticker")
         return self
 
     def content_sha256(self) -> str:
@@ -138,6 +175,58 @@ class KpiSemanticDispositionResult(BaseModel):
     replayed_reference_rows: int = Field(ge=0)
 
 
+class LegacyKpiQuarantineRequest(BaseModel):
+    """A bounded operator selection; the preparer reads all identity fields itself."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    fact_id: int = Field(gt=0)
+    reason_code: str = Field(min_length=1, max_length=128)
+
+
+def _quarantine_context(entry: KpiFactQuarantineDisposition) -> KpiSemanticContext:
+    return KpiSemanticContext(
+        metric_name_as_reported=entry.stored_definition_name,
+        reported_period_end=entry.stored_period_end,
+        period_role=KpiPeriodRole.UNKNOWN,
+        publication_lane=KpiPublicationLane.UNCLASSIFIED,
+        accounting_basis=KpiAccountingBasis.UNKNOWN,
+        consolidation_scope=KpiConsolidationScope.UNKNOWN,
+        dimensions={},
+        unit_scale=KpiUnitScale.UNKNOWN,
+        status=KpiSemanticStatus.QUARANTINED,
+        reason_code=entry.reason_code,
+    )
+
+
+def validate_legacy_disposition_replay(
+    conn: sqlite3.Connection, *, manifest: KpiSemanticDispositionManifest
+) -> None:
+    """Prove the current sealed v2 result before recovering its commit receipt."""
+    if manifest.schema_version != "kpi_semantic_dispositions.v2":
+        raise ValueError("legacy replay validation requires disposition manifest v2")
+    owner_tickers = frozenset(portfolio_tickers(conn, user_id=manifest.user_id))
+    for entry in manifest.fact_dispositions:
+        if entry.ticker not in owner_tickers or entry.legacy_capture is None:
+            raise ValueError("legacy replay target escaped its owner scope")
+        current = current_kpi_semantic_context(conn, kpi_fact_id=entry.fact_id)
+        capture = conn.execute(
+            "SELECT manifest_sha256,payload_sha256 FROM kpi_legacy_disposition_captures "
+            "WHERE kpi_fact_id=? AND quarantine_context_id=?",
+            (entry.fact_id, None if current is None else current.id),
+        ).fetchone()
+        if (
+            current is None
+            or current.context != _quarantine_context(entry)
+            or capture is None
+            or str(capture[0]) != manifest.content_sha256()
+            or str(capture[1]) != entry.legacy_capture.payload_sha256
+            or not captured_legacy_quarantine_matches(
+                conn, fact_id=entry.fact_id, user_id=manifest.user_id
+            )
+        ):
+            raise ValueError("legacy disposition replay commitment changed")
+
+
 def prepare_kpi_semantic_disposition_manifest(
     conn: sqlite3.Connection,
     *,
@@ -149,6 +238,7 @@ def prepare_kpi_semantic_disposition_manifest(
     review_bundle_sha256: str,
     backup_restore_evidence_id: str,
     knowledge_at: datetime | None = None,
+    legacy_fact_requests: tuple[LegacyKpiQuarantineRequest, ...] | None = None,
 ) -> KpiSemanticDispositionManifest:
     """Plan exact quarantine/unresolved revisions without inferring semantics."""
     observed = knowledge_at or datetime.now(UTC)
@@ -160,6 +250,65 @@ def prepare_kpi_semantic_disposition_manifest(
     if len(identity_rows) != 1:
         raise ValueError("database lineage identity is missing or ambiguous")
     database_instance_sha256 = hashlib.sha256(str(identity_rows[0][0]).encode("utf-8")).hexdigest()
+    if legacy_fact_requests is not None:
+        if not 1 <= len(legacy_fact_requests) <= 25 or len(
+            {request.fact_id for request in legacy_fact_requests}
+        ) != len(legacy_fact_requests):
+            raise ValueError("legacy quarantine requires 1-25 distinct explicit fact IDs")
+        owner_tickers = frozenset(portfolio_tickers(conn, user_id=user_id))
+        relation = canonical_fact_relation(conn, "kpi_facts")
+        if relation.selection_mode != "resolved_view":
+            raise ValueError("legacy quarantine requires the resolved current-fact view")
+        entries: list[KpiFactQuarantineDisposition] = []
+        for request in legacy_fact_requests:
+            capture = read_legacy_kpi_disposition_capture(conn, fact_id=request.fact_id)
+            fact = capture.payload["fact"]
+            definition = capture.payload["definition"]
+            if not isinstance(fact, dict) or not isinstance(definition, dict):
+                raise ValueError("legacy quarantine projection shape is invalid")
+            ticker = str(fact["ticker"]).upper()
+            if ticker not in owner_tickers:
+                raise ValueError("legacy quarantine escaped the owner portfolio scope")
+            if (
+                conn.execute(
+                    f"SELECT 1 FROM {relation.sql} WHERE id=?",  # nosec B608 -- resolver-owned relation
+                    (request.fact_id,),
+                ).fetchone()
+                is not None
+            ):
+                raise ValueError("legacy quarantine target is canonical")
+            current = current_kpi_semantic_context(conn, kpi_fact_id=request.fact_id)
+            if current is not None:
+                raise ValueError(
+                    "legacy quarantine target already has a semantic context; replay its original manifest"
+                )
+            entries.append(
+                KpiFactQuarantineDisposition(
+                    fact_id=request.fact_id,
+                    expected_fact_head_id=request.fact_id,
+                    expected_context_head_id=None if current is None else current.id,
+                    expected_context_revision=0 if current is None else current.revision,
+                    ticker=ticker,
+                    kpi_definition_id=int(str(fact["kpi_definition_id"])),
+                    stored_definition_name=str(definition["name"]),
+                    stored_period_end=date.fromisoformat(str(fact["period_end"])[:10]),
+                    reason_code=request.reason_code,
+                    legacy_capture=capture,
+                )
+            )
+        return KpiSemanticDispositionManifest(
+            schema_version="kpi_semantic_dispositions.v2",
+            user_id=user_id,
+            logical_idempotency_key=logical_idempotency_key,
+            reviewer=reviewer,
+            knowledge_at=observed,
+            expected_schema_revision=expected_schema_revision,
+            expected_database_instance_sha256=database_instance_sha256,
+            review_bundle_sha256=review_bundle_sha256,
+            backup_restore_evidence_id=backup_restore_evidence_id,
+            fact_dispositions=tuple(entries),
+            report_reference_dispositions=(),
+        )
     review = build_kpi_semantic_review_batch(
         conn,
         repo_root=repo_root,
@@ -272,13 +421,33 @@ def apply_kpi_semantic_disposition_manifest(
     for entry in manifest.fact_dispositions:
         if entry.ticker not in owner_tickers:
             raise ValueError("fact disposition escaped the owner portfolio scope")
-        row = conn.execute(
-            f"SELECT fact.id,fact.period_end,fact.kpi_definition_id,definition.name "  # nosec B608 -- resolver-owned relation
-            f"FROM {relation.sql} fact JOIN kpi_definitions definition "
-            "ON definition.id=fact.kpi_definition_id WHERE fact.id=? AND UPPER(fact.ticker)=?",
-            (entry.expected_fact_head_id, entry.ticker),
-        ).fetchone()
-        if row is None or (int(row[0]), str(row[1])[:10], int(row[2]), str(row[3])) != (
+        if entry.legacy_capture is not None:
+            actual = read_legacy_kpi_disposition_capture(conn, fact_id=entry.fact_id)
+            if actual.payload_sha256 != entry.legacy_capture.payload_sha256:
+                raise ValueError("legacy disposition projection changed after preparation")
+            if (
+                conn.execute(
+                    f"SELECT 1 FROM {relation.sql} WHERE id=?",  # nosec B608 -- resolver-owned relation
+                    (entry.fact_id,),
+                ).fetchone()
+                is not None
+            ):
+                raise ValueError("legacy disposition target became canonical")
+            fact = actual.payload["fact"]
+            definition = actual.payload["definition"]
+            if not isinstance(fact, dict) or not isinstance(definition, dict):
+                raise ValueError("legacy disposition projection shape is invalid")
+            row = (fact["id"], fact["period_end"], fact["kpi_definition_id"], definition["name"])
+            if str(fact["ticker"]).upper() != entry.ticker:
+                raise ValueError("legacy disposition ticker commitment mismatch")
+        else:
+            row = conn.execute(
+                f"SELECT fact.id,fact.period_end,fact.kpi_definition_id,definition.name "  # nosec B608 -- resolver-owned relation
+                f"FROM {relation.sql} fact JOIN kpi_definitions definition "
+                "ON definition.id=fact.kpi_definition_id WHERE fact.id=? AND UPPER(fact.ticker)=?",
+                (entry.expected_fact_head_id, entry.ticker),
+            ).fetchone()
+        if row is None or (int(str(row[0])), str(row[1])[:10], int(str(row[2])), str(row[3])) != (
             entry.fact_id,
             entry.stored_period_end.isoformat(),
             entry.kpi_definition_id,
@@ -288,19 +457,22 @@ def apply_kpi_semantic_disposition_manifest(
         current = current_kpi_semantic_context(conn, kpi_fact_id=entry.fact_id)
         current_identity = None if current is None else current.id
         current_revision = 0 if current is None else current.revision
-        context = KpiSemanticContext(
-            metric_name_as_reported=entry.stored_definition_name,
-            reported_period_end=entry.stored_period_end,
-            period_role=KpiPeriodRole.UNKNOWN,
-            publication_lane=KpiPublicationLane.UNCLASSIFIED,
-            accounting_basis=KpiAccountingBasis.UNKNOWN,
-            consolidation_scope=KpiConsolidationScope.UNKNOWN,
-            dimensions={},
-            unit_scale=KpiUnitScale.UNKNOWN,
-            status=KpiSemanticStatus.QUARANTINED,
-            reason_code=entry.reason_code,
-        )
+        context = _quarantine_context(entry)
         if current is not None and current.context == context:
+            if entry.legacy_capture is not None:
+                captured = conn.execute(
+                    "SELECT manifest_sha256 FROM kpi_legacy_disposition_captures "
+                    "WHERE kpi_fact_id=? AND quarantine_context_id=?",
+                    (entry.fact_id, current.id),
+                ).fetchone()
+                if (
+                    not captured_legacy_quarantine_matches(
+                        conn, fact_id=entry.fact_id, user_id=manifest.user_id
+                    )
+                    or captured is None
+                    or str(captured[0]) != manifest.content_sha256()
+                ):
+                    raise ValueError("legacy disposition replay commitment changed")
             replayed_context += 1
             continue
         if (current_identity, current_revision) != (
@@ -308,6 +480,8 @@ def apply_kpi_semantic_disposition_manifest(
             entry.expected_context_revision,
         ):
             raise ValueError("fact semantic head changed after disposition preparation")
+        if entry.legacy_capture is not None and current is not None:
+            raise ValueError("legacy disposition requires an undispositioned semantic head")
         inserted_id = persist_kpi_semantic_context(
             conn,
             kpi_fact_id=entry.fact_id,
@@ -320,13 +494,32 @@ def apply_kpi_semantic_disposition_manifest(
             replayed_context += 1
         else:
             inserted_context += 1
-    current_inventory = load_report_kpi_reference_inventory(repo_root, tuple(sorted(owner_tickers)))
-    if any(source.reason_code is not None for source in current_inventory.source_states):
-        raise ValueError("report KPI configuration inventory changed or became incomplete")
-    current_references = {
-        (reference.ticker, reference.source_path, reference.json_pointer): reference
-        for reference in current_inventory.references
-    }
+        if entry.legacy_capture is not None:
+            conn.execute(
+                "INSERT INTO kpi_legacy_disposition_captures "
+                "(kpi_fact_id,quarantine_context_id,user_id,payload_json,payload_sha256,"
+                "manifest_sha256,recorded_at) VALUES (?,?,?,?,?,?,?)",
+                (
+                    entry.fact_id,
+                    inserted_id,
+                    manifest.user_id,
+                    projection_json(entry.legacy_capture.payload),
+                    entry.legacy_capture.payload_sha256,
+                    manifest.content_sha256(),
+                    manifest.knowledge_at.isoformat(),
+                ),
+            )
+    current_references: dict[tuple[str, str, str], ReportKpiReference] = {}
+    if manifest.schema_version == "kpi_semantic_dispositions.v1":
+        current_inventory = load_report_kpi_reference_inventory(
+            repo_root, tuple(sorted(owner_tickers))
+        )
+        if any(source.reason_code is not None for source in current_inventory.source_states):
+            raise ValueError("report KPI configuration inventory changed or became incomplete")
+        current_references = {
+            (reference.ticker, reference.source_path, reference.json_pointer): reference
+            for reference in current_inventory.references
+        }
     inserted_reference = replayed_reference = 0
     for entry in manifest.report_reference_dispositions:
         reference = entry.reference

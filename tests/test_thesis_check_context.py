@@ -31,7 +31,10 @@ from compute.thesis_evaluator import (
     replay_check_context,
 )
 from provenance.fact_plane_v2 import FactDimensionV2
-from sources.canonical_financial_series import CanonicalFinancialSeriesReader
+from sources.canonical_financial_series import (
+    CanonicalFinancialObservation,
+    CanonicalFinancialSeriesReader,
+)
 from tests import test_compute_soft_rule_evaluator as soft_test_helpers
 from tests import test_compute_thesis_evaluator as hard_test_helpers
 from tests.test_compute_soft_rule_evaluator import canonical_conn as canonical_conn
@@ -261,19 +264,19 @@ def test_financial_provenance_and_clocks_do_not_create_v2_events(
 
     def changed_read(reader: CanonicalFinancialSeriesReader, metric: str, **kwargs: Any):
         series = original_read(reader, metric, **kwargs)
-        return series.model_copy(
-            update={
-                "observations": tuple(
-                    item.model_copy(
-                        update={
-                            "observation_id": item.observation_id + "-new-source",
-                            "document_version_id": item.document_version_id + "-new-source",
-                        }
-                    )
-                    for item in series.observations
+        observations: list[CanonicalFinancialObservation] = []
+        for item in series.observations:
+            # This fixture changes an existing source identity, never an absent one.
+            assert item.document_version_id is not None
+            observations.append(
+                item.model_copy(
+                    update={
+                        "observation_id": item.observation_id + "-new-source",
+                        "document_version_id": item.document_version_id + "-new-source",
+                    }
                 )
-            }
-        )
+            )
+        return series.model_copy(update={"observations": tuple(observations)})
 
     monkeypatch.setattr(CanonicalFinancialSeriesReader, "read", changed_read)
     second = evaluate_ticker_thesis(canonical_conn, ticker="SYNTH", holdings_dir=holdings)

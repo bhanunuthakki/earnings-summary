@@ -948,3 +948,18 @@ The existing thesis check receipt owns this evidence. Additive migration
 calculated v3 checks. It preserves migrations 0050 and 0051 and all older rows.
 Downgrade restores the v2 guard without deleting records or context. No new
 fact store, operator action, provider request or financial admission is added.
+
+
+### Source repair disposition (2026-10-03)
+
+No workspace control, scheduled job, service or listener is added. Existing KPI
+repair prepare/dry-run/apply entrypoints retain their exact manifest approval,
+current Windows review, sole writer and verified backup boundaries. The prepared
+legacy-disposition input is an explicit one-ticker allowlist capped at 25 heads.
+Immutable capture and replay receipts expose head/source drift rather than claiming
+success. Judge recorder inputs now name the actual model and current purpose
+qualification; historical receipts remain readable and cannot grant new apply
+authority. Internal financial derivation helpers publish source-bound formula and
+operand evidence only through the existing provenance repository. Source capture,
+semantic admission and threshold eligibility remain distinct. The migration graph
+owns the expected schema head; do not hardcode it in the Operations projection.

@@ -42,12 +42,13 @@ BASE_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(
 PDF_FULLTEXT_PYPDF_VERSION = "6.19.0"
 PDF_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(
     name=FULLTEXT_EXTRACTOR_NAME,
-    code_version=f"fulltext-evidence-backfill@5-pdf-runtime;pypdf={PDF_FULLTEXT_PYPDF_VERSION}",
+    code_version=f"fulltext-evidence-backfill@6-pdf-public-access;pypdf={PDF_FULLTEXT_PYPDF_VERSION}",
     config_sha256=hashlib.sha256(
-        f"fulltext-evidence-backfill-config-v5-pdf:pdf-pages,pypdf={PDF_FULLTEXT_PYPDF_VERSION}".encode()
+        f"fulltext-evidence-backfill-config-v6-pdf:pdf-pages,empty-opening-password,"
+        f"verify-permissions,pypdf={PDF_FULLTEXT_PYPDF_VERSION}".encode()
     ).hexdigest(),
-    idempotency_namespace="fulltext-pdf-v5",
-    evidence_namespace="fulltext-pdf-v5",
+    idempotency_namespace="fulltext-pdf-v6",
+    evidence_namespace="fulltext-pdf-v6",
     hierarchy="flat",
 )
 OFFICE_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(

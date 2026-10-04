@@ -1,4 +1,4 @@
-"""Seal an attributable Sol judgment for one deterministic KPI repair dry run."""
+"""Seal an attributable qualified judgment for one deterministic KPI repair dry run."""
 
 from __future__ import annotations
 
@@ -11,19 +11,21 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from operations.kpi_repair_receipts import (  # noqa: E402
+from operations.kpi_repair_receipts import (
+    KpiJudgePurposeQualification,
     KpiRepairAttemptReceipt,
     canonical_sha256,
     repair_executor_code_sha256,
     seal_judgment,
 )
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-class SolRepairDecision(BaseModel):
-    """Machine-checkable judgment emitted by the requested Sol run."""
+
+class KpiRepairDecision(BaseModel):
+    """Machine-checkable judgment emitted by the independent Judge run."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -38,7 +40,7 @@ class SolRepairDecision(BaseModel):
     @classmethod
     def _issued_at_is_aware(cls, value: datetime) -> datetime:
         if value.tzinfo is None:
-            raise ValueError("Sol decision issued_at must be timezone-aware")
+            raise ValueError("Judge decision issued_at must be timezone-aware")
         return value
 
 
@@ -50,6 +52,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run-receipt", type=Path, required=True)
     parser.add_argument("--judge-run-id", required=True)
+    parser.add_argument("--judge-model", required=True)
+    parser.add_argument("--qualification", type=Path, required=True)
     parser.add_argument("--prompt-file", type=Path, required=True)
     parser.add_argument("--response-file", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -58,16 +62,20 @@ def main(argv: list[str] | None = None) -> int:
         args.dry_run_receipt.read_text(encoding="utf-8")
     )
     if dry_run.mode != "dry_run" or dry_run.state != "passed":
-        raise ValueError("Sol judgment requires a passed deterministic dry-run receipt")
+        raise ValueError("Judge judgment requires a passed deterministic dry-run receipt")
     prompt = args.prompt_file.read_text(encoding="utf-8")
     response = args.response_file.read_text(encoding="utf-8")
-    decision = SolRepairDecision.model_validate_json(response)
+    decision = KpiRepairDecision.model_validate_json(response)
+    qualification = KpiJudgePurposeQualification.model_validate_json(
+        args.qualification.read_text(encoding="utf-8")
+    )
     current_code_sha = repair_executor_code_sha256(PROJECT_ROOT)
     if dry_run.executor_code_sha256 != current_code_sha:
         raise ValueError("repair code changed after deterministic dry run")
     issuance_identity = canonical_sha256(
         {
-            "judge_model": "gpt-5.6-sol",
+            "judge_model": args.judge_model,
+            "qualification_sha256": qualification.content_sha256,
             "judge_run_id": args.judge_run_id,
             "decision": decision.model_dump(mode="json"),
         }
@@ -80,7 +88,8 @@ def main(argv: list[str] | None = None) -> int:
         purpose=decision.purpose,
         rubric_version=decision.rubric_version,
         evidence_tier=decision.evidence_tier,
-        judge_model="gpt-5.6-sol",
+        judge_model=args.judge_model,
+        qualification=qualification,
         judge_run_id=args.judge_run_id,
         prompt_sha256=_sha256_text(prompt),
         response_sha256=_sha256_text(response),

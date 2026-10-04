@@ -50,6 +50,7 @@ from pipeline.kpi_semantics import (
     KpiPublicationLane,
     KpiSemanticContext,
     KpiSemanticStatus,
+    KpiSourcePrecision,
     KpiUnitScale,
 )
 from pipeline.kpi_source_review import insert_source_reviewed_kpi_capture
@@ -896,6 +897,7 @@ def _v2_manifest(locator: EvidenceLocator) -> IssuerFactManifestV2:
         dimensions={},
         unit_scale=KpiUnitScale.MILLIONS,
         source_value_text="1,000",
+        source_precision=KpiSourcePrecision(kind="exact"),
         status=KpiSemanticStatus.ADMITTED,
     )
     definition = IssuerKpiDefinitionRevision(

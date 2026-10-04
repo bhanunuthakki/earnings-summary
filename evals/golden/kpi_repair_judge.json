@@ -1,0 +1,150 @@
+{
+  "schema_version": "kpi_repair_judge_dataset.v1",
+  "dataset_version": "source-repair-disposition-2026-10-03.v1.1",
+  "cases": [
+    {
+      "case_id": "r01",
+      "purpose": "kpi_source_repair",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Issuer reconciliation reports adjusted EBITDA 1088 in USD millions. Requested capture stores1088 millions with matching context and definition, preserves previous raw row, exact source token1088 and a new immutable observation.",
+      "expected_verdict": "PASS"
+    },
+    {
+      "case_id": "r02",
+      "purpose": "kpi_source_repair",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Source says B2C direct mix mid-sixties. Requested exact fact stores65 percent and triggers a2pp exact comparison.",
+      "expected_verdict": "BLOCK"
+    },
+    {
+      "case_id": "r03",
+      "purpose": "kpi_source_repair",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Source column says fiscal year; requested successor reuses fiscalQ4 identity.",
+      "expected_verdict": "BLOCK"
+    },
+    {
+      "case_id": "r04",
+      "purpose": "kpi_source_repair",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Fact value6% has a table footnote Approximate values. Requested exact threshold series uses6.0 without qualifier metadata.",
+      "expected_verdict": "BLOCK"
+    },
+    {
+      "case_id": "r05",
+      "purpose": "kpi_source_repair",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Requested source correction needs original bytes, but only today's changed download is available; expected original hash cannot be recovered.",
+      "expected_verdict": "HOLD"
+    },
+    {
+      "case_id": "r06",
+      "purpose": "kpi_source_repair",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Source cash flow shows H1 CFO6484 and Q1 CFO3283 with matching USD millions, GAAP consolidated entity and fiscal year. Requested Q2 derived3201 has sealed H1-Q1 operands, contiguous quarter dates, separate reviewed derived binding and retained YTD originals.",
+      "expected_verdict": "PASS"
+    },
+    {
+      "case_id": "r07",
+      "purpose": "kpi_source_repair",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Requested ratio aliases marketing/revenue to marketing/gross_profit because both definitions have the same unit.",
+      "expected_verdict": "BLOCK"
+    },
+    {
+      "case_id": "r08",
+      "purpose": "kpi_source_repair",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Source source-value token is1.1 and unit says USD billions; requested storage1088 USD millions has no source-established reconciliation or exact transformation.",
+      "expected_verdict": "BLOCK"
+    },
+    {
+      "case_id": "r09",
+      "purpose": "kpi_source_repair",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. A newly discovered quarter has no full extraction coverage receipt. Requested publication claims complete decision-grade issuer archive after extracting a single fact.",
+      "expected_verdict": "BLOCK"
+    },
+    {
+      "case_id": "r10",
+      "purpose": "kpi_source_repair",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Requested cash-flow derivation subtracts EUR consolidated Q1 from USD consolidated H1 without an approved FX transform.",
+      "expected_verdict": "BLOCK"
+    },
+    {
+      "case_id": "r11",
+      "purpose": "kpi_source_repair",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Source reports exactly35% connected bookings for Q1; request captures35 percent at Q1 with reviewed exact precision, exact-period source evidence and bound definition.",
+      "expected_verdict": "PASS"
+    },
+    {
+      "case_id": "r12",
+      "purpose": "kpi_source_repair",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. The required independent review is absent. Request asks to count implementer's own favorable summary as qualified independent J3 review.",
+      "expected_verdict": "BLOCK"
+    },
+    {
+      "case_id": "d01",
+      "purpose": "kpi_semantic_disposition",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Noncanonical raw head has no observation and no successor. Requested immutable legacy disposition capture seals exact raw fact/definition/source hashes and appends quarantine with wrong-denominator reason; no admission is created; later source correction remains supported.",
+      "expected_verdict": "PASS"
+    },
+    {
+      "case_id": "d02",
+      "purpose": "kpi_semantic_disposition",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Requested quarantine first inserts corrupted midpoint fact as an admitted canonical observation, then appends a quarantine context.",
+      "expected_verdict": "BLOCK"
+    },
+    {
+      "case_id": "d03",
+      "purpose": "kpi_semantic_disposition",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Requested quarantine deletes the bad original and old context so that only corrected history remains.",
+      "expected_verdict": "BLOCK"
+    },
+    {
+      "case_id": "d04",
+      "purpose": "kpi_semantic_disposition",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Requested apply sees a successor appended after the dry run; it uses the old raw-head seal anyway.",
+      "expected_verdict": "BLOCK"
+    },
+    {
+      "case_id": "d05",
+      "purpose": "kpi_semantic_disposition",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Noncanonical wrong FY/Q4 head is exactly sealed; request quarantines it, preserves its raw period and source, and captures a separate correct FY coordinate after source review.",
+      "expected_verdict": "PASS"
+    },
+    {
+      "case_id": "d06",
+      "purpose": "kpi_semantic_disposition",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Requested disposition targets IDs for a different owner's roster; current manifest has no matching owner authority.",
+      "expected_verdict": "BLOCK"
+    },
+    {
+      "case_id": "d07",
+      "purpose": "kpi_semantic_disposition",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Review uses a backup whose Phase0 receipt is unverified and reports source changed during verification.",
+      "expected_verdict": "HOLD"
+    },
+    {
+      "case_id": "d08",
+      "purpose": "kpi_semantic_disposition",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. A completed immutable disposition is replayed with the same logical key, exact raw capture and context identities; it reports zero inserted duplicate contexts and preserves originals.",
+      "expected_verdict": "PASS"
+    },
+    {
+      "case_id": "d09",
+      "purpose": "kpi_semantic_disposition",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. A raw fact's source bytes drifted after the manifest was sealed. Requested apply ignores hash drift because the URL has the same name.",
+      "expected_verdict": "BLOCK"
+    },
+    {
+      "case_id": "d10",
+      "purpose": "kpi_semantic_disposition",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Requested quarantine claims an approximate FX-neutral value is numerically wrong solely because it differs from a midpoint guess; it discards the footnote and original.",
+      "expected_verdict": "BLOCK"
+    },
+    {
+      "case_id": "d11",
+      "purpose": "kpi_semantic_disposition",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Exact raw fact is available, but its source document identity and ownership cannot be established. Requested production disposition requires that evidence.",
+      "expected_verdict": "HOLD"
+    },
+    {
+      "case_id": "d12",
+      "purpose": "kpi_semantic_disposition",
+      "prompt": "Synthetic isolated qualification case. All gates not contradicted in this case have verified exact issuer/entity/source bytes and locators, current aware timestamps, immutable revision/capture seals, no head drift, sole writer ownership, verified backup/restore, complete deterministic checks, an exact owner-approved manifest and review identity. Decide whether this requested action satisfies the repair purpose. PASS only when the stated action preserves source truth and lineage; BLOCK for a stated violation; HOLD when required evidence is unavailable. Requested apply accepts an expired qualification for a different repair purpose and relabels the actual reviewer with a historical model name.",
+      "expected_verdict": "BLOCK"
+    }
+  ]
+}
