@@ -1050,9 +1050,9 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/portfolio_styles.py": "88bec250b02c80761ab69302703115750239037aafe2c903d488124141341904",  # pragma: allowlist secret
         "pipeline/research_panel_styles.py": "d96812258b5b52e07525a58768ff33de9b2a52fd54fdaf1cbbd2f813a4a4fcbe",  # pragma: allowlist secret
         # Work OS owns the existing Explore heading's token-sized title and top spacing.
-        "pipeline/work_os_styles.py": "4c47e7e8462ff4bb8413f1252cc57dc9aa5d85a29887bdbbcbcdf44a1deed264",  # pragma: allowlist secret
+        "pipeline/work_os_styles.py": "f69463a974adc26c6b9dc0e6230d539b312961bc004f81e31b8b63e75bc96c80",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
-        "report/renderers/workspace_styles.py": "27eba0547bdad4a8bf4178452b7e8f5e8ba947a3f8d141ce05f4c5a4e90573a1",  # pragma: allowlist secret
+        "report/renderers/workspace_styles.py": "eefc919b64fe7ce4af879749c89de195f4a4979ea13d97b57a04b5616b94579a",  # pragma: allowlist secret
         "ui/cite_marks.py": "0c45d7eefb5ef340b1ec58036f32ec4042f69c41473850fc8624f4968e95783e",  # pragma: allowlist secret
         "ui/controls.py": "bd7e8e9ed70a1d975f01bc2138b996a859608739fb385760d34480d571bc491a",  # pragma: allowlist secret
         "ui/living_grid.py": "e95fb454ffbc17e2d248d48f9b5e7563ecd7383a063ad94e0b3ef9088dab4374",  # pragma: allowlist secret

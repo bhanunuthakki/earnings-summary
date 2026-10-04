@@ -205,6 +205,66 @@
   const peekDrawer = document.getElementById('peekDrawer');
   const fullPageDetail = document.getElementById('workOsFullPageDetail');
   const briefReader = document.getElementById('workOsBriefReader');
+  function workOsRestoreRailPreference(key, fallback) {
+    try {
+      const value = sessionStorage.getItem(key);
+      return value === 'true' ? true : value === 'false' ? false : fallback;
+    } catch (_) { return fallback; }
+  }
+  function workOsApplyAppSidebar(collapsed, persist) {
+    const sidebar = document.getElementById('appSidebar');
+    const toggle = document.getElementById('workOsAppSidebarToggle');
+    if (sidebar) sidebar.classList.toggle('is-collapsed', collapsed);
+    document.body.dataset.workOsSidebarCollapsed = String(collapsed);
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', String(!collapsed));
+      toggle.setAttribute('aria-label', collapsed ? 'Expand application sidebar' : 'Collapse application sidebar');
+      toggle.setAttribute('title', collapsed ? 'Expand application sidebar' : 'Collapse application sidebar');
+    }
+    if (persist) { try { sessionStorage.setItem('work-os:app-sidebar:collapsed', String(collapsed)); } catch (_) {} }
+  }
+  function workOsApplyBriefSections(collapsed, persist) {
+    const reader = document.getElementById('workOsBriefReader');
+    const sections = document.getElementById('workOsBriefReaderSections');
+    const toggle = document.getElementById('workOsBriefSectionsToggle');
+    if (collapsed && sections && sections.contains(document.activeElement) && toggle) toggle.focus();
+    if (reader) reader.classList.toggle('is-sections-collapsed', collapsed);
+    if (sections) sections.hidden = collapsed;
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', String(!collapsed));
+      toggle.setAttribute('aria-label', collapsed ? 'Expand brief sections' : 'Collapse brief sections');
+      toggle.setAttribute('title', collapsed ? 'Expand brief sections' : 'Collapse brief sections');
+    }
+    if (persist) { try { sessionStorage.setItem('work-os:brief-sections:collapsed', String(collapsed)); } catch (_) {} }
+  }
+  window.toggleSidebar = function () {
+    workOsApplyAppSidebar(document.body.dataset.workOsSidebarCollapsed !== 'true', true);
+  };
+  workOsApplyAppSidebar(workOsRestoreRailPreference('work-os:app-sidebar:collapsed', window.innerWidth <= 1250), false);
+  workOsApplyBriefSections(workOsRestoreRailPreference('work-os:brief-sections:collapsed', window.innerWidth <= 760), false);
+  const briefSectionsToggle = document.getElementById('workOsBriefSectionsToggle');
+  if (briefSectionsToggle) briefSectionsToggle.addEventListener('click', function () {
+    workOsApplyBriefSections(!briefReader.classList.contains('is-sections-collapsed'), true);
+  });
+  const briefLiveContext = document.getElementById('workOsBriefLiveContext');
+  if (briefLiveContext) briefLiveContext.addEventListener('toggle', function () {
+    if (briefLiveContext.open && workOsReaderContext) void workOsLoadBriefResearchItems(workOsReaderContext.ticker);
+  });
+  const briefSwitchEdition = document.getElementById('workOsBriefSwitchEdition');
+  if (briefSwitchEdition) briefSwitchEdition.addEventListener('click', function () {
+    const filter = document.getElementById('briefTickerFilter');
+    if (filter && workOsReaderContext) {
+      const ticker = workOsReaderContext.ticker;
+      if (!Array.from(filter.options).some(function (option) { return option.value === ticker; })) filter.add(new Option(ticker, ticker));
+      filter.value = ticker;
+      if (window.KSelect) window.KSelect.sync(filter);
+    }
+    ['briefRoleFilter', 'briefKindFilter'].forEach(function (id) {
+      const select = document.getElementById(id);
+      if (select) { select.value = ''; if (window.KSelect) window.KSelect.sync(select); }
+    });
+    window.navigateTo('screen-brief-library');
+  });
   const companyPickerRoot = document.getElementById('companyPickerRoot');
   const companyPickerTrigger = document.getElementById('companyPickerTrigger');
   const companyPickerPopover = document.getElementById('companyPickerPopover');
@@ -255,10 +315,15 @@
     onClose: function () { fullPageDetail.hidden = true; fullPageDetail.setAttribute('aria-hidden', 'true'); }
   });
   const briefReaderOverlay = briefReader && window.CCOverlay.register(briefReader, {
-    modal: true, priority: window.CCOverlay.PRIORITY.PALETTE, scrim: false,
-    trapFocus: true, restoreFocus: true, motion: 'fade',
-    group: 'work-os-reader', closeId: 'workOsBriefReaderClose', wireClose: true,
-    onOpen: function () { briefReader.hidden = false; briefReader.setAttribute('aria-hidden', 'false'); },
+    modal: false, priority: window.CCOverlay.PRIORITY.PALETTE, scrim: false,
+    trapFocus: false, restoreFocus: true, motion: 'fade',
+    group: 'work-os-reader', closeId: 'workOsBriefReaderClose', wireClose: false,
+    onOpen: function () {
+      briefReader.hidden = false;
+      briefReader.setAttribute('aria-hidden', 'false');
+      const main = document.querySelector('.app-main');
+      if (main) main.inert = true;
+    },
     onBeforeClose: function () {
       workOsBriefLookupSequence += 1;
       if (workOsBriefLookupController) workOsBriefLookupController.abort();
@@ -270,6 +335,8 @@
       briefReader.hidden = true;
       briefReader.setAttribute('aria-hidden', 'true');
       workOsReaderContext = null;
+      const main = document.querySelector('.app-main');
+      if (main) main.inert = false;
     }
   });
   const companyPickerOverlay = companyPickerPopover && window.CCOverlay.register(companyPickerPopover, {
@@ -339,23 +406,38 @@
   function workOsReportFrame(ticker, tabId, className) {
     const safeTicker = encodeURIComponent(String(ticker || 'NU').toUpperCase());
     const safeTab = encodeURIComponent(tabId || 'overview');
-    return '<iframe class="' + className + '" src="/reports/' + safeTicker + '#tab=' + safeTab + '" title="' + safeTicker + ' live research brief" loading="lazy"></iframe>';
+    return '<iframe class="' + className + '" src="/reports/' + safeTicker + '?standalone=1#tab=' + safeTab + '" title="' + safeTicker + ' live research brief" loading="lazy"></iframe>';
   }
 
-  function workOsBriefUrl(ticker, origin, focusId) {
+  function workOsBriefUrl(ticker, origin, focusId, artifactId, sectionId) {
     const url = new URL(window.location.href);
     url.searchParams.set('work_os_brief', ticker);
+    if (artifactId) url.searchParams.set('work_os_brief_artifact', artifactId);
+    else url.searchParams.delete('work_os_brief_artifact');
+    if (sectionId) url.searchParams.set('work_os_brief_section', sectionId);
+    else url.searchParams.delete('work_os_brief_section');
     url.searchParams.set('work_os_detail_origin', workOsEncodeDetailOrigin(origin));
     if (focusId) url.searchParams.set('work_os_focus', focusId);
     url.hash = origin.surface;
     return url.pathname + url.search + url.hash;
   }
   window.closeWorkOsBriefReader = function () {
-    if (window.history.state && window.history.state.workOsBriefReader) { window.history.back(); return; }
+    const state = window.history.state && window.history.state.workOsBriefReader;
+    if (state && state.pushed) { window.history.back(); return; }
+    const ticker = workOsReaderContext && workOsReaderContext.ticker || workOsNormalizeTicker(new URLSearchParams(window.location.search).get('work_os_brief'));
     if (briefReaderOverlay) briefReaderOverlay.close();
+    const url = new URL(window.location.href);
+    ['work_os_brief', 'work_os_brief_artifact', 'work_os_brief_section', 'work_os_focus', 'work_os_detail_origin'].forEach(function (key) { url.searchParams.delete(key); });
+    if (ticker) url.searchParams.set('ticker', ticker);
+    url.searchParams.set('screen', 'company-desk');
+    url.hash = 'screen-workspace';
+    window.history.replaceState({ screenId: 'screen-workspace' }, '', url.pathname + url.search + url.hash);
+    workOsRestoreCompanyContextFromHistory();
   };
   const briefReaderBack = document.getElementById('workOsBriefReaderBack');
   if (briefReaderBack) briefReaderBack.addEventListener('click', window.closeWorkOsBriefReader);
+  const briefReaderClose = document.getElementById('workOsBriefReaderClose');
+  if (briefReaderClose) briefReaderClose.addEventListener('click', window.closeWorkOsBriefReader);
 
   function escapeWorkOsHtml(value) {
     return String(value == null ? '' : value)
@@ -366,6 +448,17 @@
   const WORK_OS_BRIEF_GROUP_IDS = [
     'overview', 'quarter', 'financials', 'thesis-risk', 'valuation-comps', 'sources'
   ];
+
+  function workOsRememberBriefSection(artifact, sectionId) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('work_os_brief_artifact', artifact.artifact_id);
+    url.searchParams.set('work_os_brief_section', sectionId);
+    const previous = window.history.state || {};
+    const state = Object.assign({}, previous, { workOsBriefReader: Object.assign({}, previous.workOsBriefReader || {}, {
+      ticker: artifact.ticker, artifactId: artifact.artifact_id, sectionId: sectionId
+    }) });
+    window.history.replaceState(state, '', url.pathname + url.search + url.hash);
+  }
 
   async function workOsLoadBriefResearchItems(ticker) {
     const mount = document.getElementById('workOsBriefResearchItemsMount');
@@ -392,12 +485,26 @@
     const meta = document.getElementById('workOsBriefReaderMeta');
     const sections = document.getElementById('workOsBriefReaderSections');
     workOsReaderContext = artifact;
-    void workOsLoadBriefResearchItems(artifact.ticker);
+    const liveContext = document.getElementById('workOsBriefLiveContext');
+    const editionDetails = document.getElementById('workOsBriefEditionDetails');
+    if (liveContext) liveContext.open = false;
+    if (editionDetails) editionDetails.open = false;
+    const researchMount = document.getElementById('workOsBriefResearchItemsMount');
+    if (researchMount) {
+      workOsAbortTarget(researchMount, 'superseded');
+      researchMount.replaceChildren();
+    }
+    const savedPostureMount = document.getElementById('workOsBriefSavedPosture');
+    if (savedPostureMount) savedPostureMount.replaceChildren();
+    const dcfLink = document.getElementById('workOsBriefDcfLink');
+    if (dcfLink) dcfLink.href = '/dcf/' + encodeURIComponent(artifact.ticker);
+    const companyLink = document.getElementById('workOsBriefCompanyLink');
+    if (companyLink) companyLink.href = '/ticker/' + encodeURIComponent(artifact.ticker);
     const displayTitle = artifact.title && String(artifact.title).toUpperCase().startsWith(String(artifact.ticker).toUpperCase())
       ? artifact.title
       : artifact.ticker + ' · ' + (artifact.title || 'Full Research Brief');
     if (title) title.textContent = displayTitle;
-    if (meta) meta.textContent = artifact.report_date + ' · ' + String(artifact.coverage_role || 'unknown') + ' coverage';
+    if (meta) meta.textContent = (artifact.fiscal_period_label || 'Period unavailable') + ' · ' + artifact.report_date;
     if (sections) sections.replaceChildren();
     workOsRenderReaderDecision(null);
     if (briefReaderOverlay) briefReaderOverlay.open();
@@ -420,6 +527,7 @@
       const payload = await response.json();
       if (workOsRequests.get(body) !== state) return;
       if (!payload || payload.schema_version !== 'report_reader_payload.v1' || !payload.body_html || !payload.style_url || !payload.decision) throw new Error('invalid reader payload');
+      if (payload.artifact_id !== artifact.artifact_id || payload.ticker !== artifact.ticker) throw new Error('Brief body identity mismatch');
       workOsRenderReaderDecision(payload.decision);
       const host = document.createElement('div');
       host.className = 'work-os-report-host';
@@ -434,8 +542,32 @@
       content.className = 'work-os-report-content k-doc';
       content.dataset.readerFormat = 'editorial.v1';
       content.innerHTML = payload.body_html;
+      const companyName = content.querySelector('.company-name');
+      if (title && companyName) title.textContent = artifact.ticker + ' · ' + companyName.textContent.trim();
+      const savedPosture = document.getElementById('workOsBriefSavedPosture');
+      const posture = content.querySelector('.company-row .k-pill');
+      const postureDate = content.querySelector('.company-meta .thesis-asof');
+      if (savedPosture) {
+        savedPosture.replaceChildren();
+        if (posture) savedPosture.appendChild(posture.cloneNode(true));
+        if (postureDate) savedPosture.appendChild(postureDate.cloneNode(true));
+      }
+      const reportRoot = content.querySelector('.l1-root');
+      if (reportRoot) {
+        const contextNodes = Array.from(reportRoot.children).filter(function (node) {
+          return !node.classList.contains('l1-tabs-wrap');
+        });
+        const savedContext = document.createElement('details');
+        savedContext.className = 'reader-report-context';
+        const summary = document.createElement('summary');
+        summary.textContent = 'Saved report context ⓘ';
+        savedContext.appendChild(summary);
+        contextNodes.forEach(function (node) { savedContext.appendChild(node); });
+        reportRoot.prepend(savedContext);
+      }
       root.append(stylesheet, content);
       body.replaceChildren(host);
+      let selectPersistedSection = null;
       if (sections && Array.isArray(payload.sections)) {
         const sectionLookup = new Map(payload.sections
           .filter(function (section) { return section && section.section_id && section.dom_id; })
@@ -455,6 +587,9 @@
         const sectionGroupIds = new Map();
 
         function activateReaderSection(groupPane, sectionId, shouldScroll) {
+          const sectionTitle = document.getElementById('workOsBriefSectionTitle');
+          const selectedSection = sectionLookup.get(sectionId);
+          if (sectionTitle && selectedSection) sectionTitle.textContent = selectedSection.label;
           const sectionPanes = Array.from(groupPane.querySelectorAll('.subtab-pane[data-tab]'));
           sectionPanes.forEach(function (sectionPane) {
             const candidateSectionId = String(sectionPane.dataset.tab || '');
@@ -476,6 +611,7 @@
               }
             }
           });
+          if (workOsReaderContext) workOsRememberBriefSection(workOsReaderContext, sectionId);
         }
 
         function activateReaderGroup(groupId, shouldScroll) {
@@ -497,6 +633,20 @@
             );
           });
         }
+        selectPersistedSection = function (sectionId, anchorId) {
+          const groupId = sectionGroupIds.get(sectionId);
+          const groupPane = groupById.get(groupId);
+          if (!groupPane) return;
+          activateReaderGroup(groupId, false);
+          activateReaderSection(groupPane, sectionId, !anchorId);
+          const anchor = anchorId && root.getElementById(anchorId);
+          if (anchor) {
+            for (let parent = anchor.parentElement; parent; parent = parent.parentElement) {
+              if (parent.tagName === 'DETAILS') parent.open = true;
+            }
+            anchor.scrollIntoView({ block: 'start' });
+          }
+        };
 
         orderedGroups.forEach(function (groupPane) {
           const groupId = String(groupPane.dataset.tabGroup || '');
@@ -556,12 +706,67 @@
             return node.getAttribute('data-fact-ref') === requestedFactRef;
           });
           if (factAnchor) {
+            const sectionPane = factAnchor.closest('.subtab-pane[data-tab]');
+            const groupPane = factAnchor.closest('.tab-group-pane[data-tab-group]');
+            if (sectionPane && groupPane) {
+              activateReaderGroup(String(groupPane.dataset.tabGroup || ''), false);
+              activateReaderSection(groupPane, String(sectionPane.dataset.tab || ''), false);
+            }
+            for (let parent = factAnchor.parentElement; parent; parent = parent.parentElement) {
+              if (parent.tagName === 'DETAILS') parent.open = true;
+            }
             factAnchor.classList.add('is-cited-location');
             factAnchor.scrollIntoView({ block: 'center' });
           }
         }
       }
+      root.addEventListener('input', function (event) {
+        const input = event.target;
+        if (!input || !input.hasAttribute('data-comp-roster-filter')) return;
+        const disclosure = input.closest('details');
+        if (!disclosure) return;
+        const query = input.value.trim().toLowerCase();
+        disclosure.querySelectorAll('[data-comp-member-search]').forEach(function (row) {
+          row.hidden = !!query && !String(row.getAttribute('data-comp-member-search') || '').includes(query);
+        });
+      });
       root.addEventListener('click', function (event) {
+        const sectionLink = event.composedPath().find(function (node) { return node && node.dataset && (node.dataset.xtab || node.dataset.jump); });
+        if (sectionLink && selectPersistedSection) {
+          event.preventDefault();
+          selectPersistedSection(sectionLink.dataset.xtab || sectionLink.dataset.jump, sectionLink.dataset.anchor);
+          return;
+        }
+        const quarterButton = event.composedPath().find(function (node) { return node && node.tagName === 'BUTTON' && node.dataset && node.dataset.quarter; });
+        if (quarterButton) {
+          const group = quarterButton.closest('[data-quarter-group]');
+          if (group) {
+            const supportedGroups = new Set(Array.from(root.querySelectorAll('button[data-quarter]')).filter(function (button) {
+              return button.dataset.quarter === quarterButton.dataset.quarter;
+            }).map(function (button) { return button.closest('[data-quarter-group]').dataset.quarterGroup; }));
+            root.querySelectorAll('[data-quarter-group]').forEach(function (container) {
+              if (!supportedGroups.has(container.dataset.quarterGroup)) return;
+              if (container.hasAttribute('data-quarter-card')) container.hidden = container.dataset.quarter !== quarterButton.dataset.quarter;
+              container.querySelectorAll('button[data-quarter]').forEach(function (button) {
+                const active = button.dataset.quarter === quarterButton.dataset.quarter;
+                button.classList.toggle('active', active);
+                button.setAttribute('aria-pressed', String(active));
+              });
+            });
+          }
+          return;
+        }
+        const drill = event.composedPath().find(function (node) { return node && node.dataset && node.dataset.drillTarget; });
+        if (drill) {
+          const target = root.getElementById(drill.dataset.drillTarget);
+          if (target) {
+            target.hidden = !target.hidden;
+            drill.setAttribute('aria-expanded', String(!target.hidden));
+            const chevron = drill.querySelector('.fin-chev');
+            if (chevron) chevron.textContent = target.hidden ? '▶' : '▼';
+          }
+          return;
+        }
         const trigger = event.composedPath().find(function (node) { return node && node.dataset && node.dataset.peekUrl; });
         if (trigger) {
           event.preventDefault();
@@ -594,7 +799,7 @@
       if (!(options && options.fromHistory)) {
         const origin = workOsHistoryOrigin();
         const focusId = workOsHistoryFocusId();
-        workOsPushHistoryState(Object.assign({}, window.history.state || {}, { workOsBriefReader: { ticker: tickerOrArtifact.ticker, origin: workOsEncodeDetailOrigin(origin), focusId: focusId } }), workOsBriefUrl(tickerOrArtifact.ticker, origin, focusId));
+        workOsPushHistoryState(Object.assign({}, window.history.state || {}, { workOsBriefReader: { pushed: true, ticker: tickerOrArtifact.ticker, artifactId: tickerOrArtifact.artifact_id, sectionId: options && options.sectionId, origin: workOsEncodeDetailOrigin(origin), focusId: focusId } }), workOsBriefUrl(tickerOrArtifact.ticker, origin, focusId, tickerOrArtifact.artifact_id, options && options.sectionId));
       }
       await workOsLoadBriefArtifact(tickerOrArtifact, options);
       return;
@@ -604,7 +809,7 @@
     if (!(options && options.fromHistory)) {
       const origin = workOsHistoryOrigin();
       const focusId = workOsHistoryFocusId();
-      workOsPushHistoryState(Object.assign({}, window.history.state || {}, { workOsBriefReader: { ticker: requestedTicker, origin: workOsEncodeDetailOrigin(origin), focusId: focusId } }), workOsBriefUrl(requestedTicker, origin, focusId));
+      workOsPushHistoryState(Object.assign({}, window.history.state || {}, { workOsBriefReader: { pushed: true, ticker: requestedTicker, origin: workOsEncodeDetailOrigin(origin), focusId: focusId } }), workOsBriefUrl(requestedTicker, origin, focusId));
     }
     const title = document.getElementById('workOsBriefReaderTitle');
     const body = document.getElementById('workOsBriefReaderBody');
@@ -619,8 +824,11 @@
     body.setAttribute('aria-busy', 'true');
     if (briefReaderOverlay) briefReaderOverlay.open();
     try {
-      const response = await workOsFetch('/api/work-os/briefs?ticker=' + encodeURIComponent(requestedTicker) + '&artifact_kind=full_brief&limit=1', { signal: controller.signal, headers: { Accept: 'application/json' } });
-      const payload = response.ok ? await response.json() : null;
+      const exactArtifactId = options && options.artifactId;
+      const lookupUrl = exactArtifactId ? '/api/work-os/briefs/' + encodeURIComponent(exactArtifactId) : '/api/work-os/briefs?ticker=' + encodeURIComponent(requestedTicker) + '&artifact_kind=full_brief&limit=1';
+      const response = await workOsFetch(lookupUrl, { signal: controller.signal, headers: { Accept: 'application/json' } });
+      const result = response.ok ? await response.json() : null;
+      const payload = exactArtifactId && result ? { items: [result] } : result;
       if (lookupSequence !== workOsBriefLookupSequence || workOsRequests.get(body) !== state) return;
       if (!payload || !Array.isArray(payload.items)) throw new Error('Invalid brief inventory');
       if (!payload.items.length) {
@@ -628,6 +836,7 @@
         body.innerHTML = '<div class="k-well" role="alert">No persisted research brief is indexed for this company.</div>';
         return;
       }
+      if (exactArtifactId && (payload.items[0].artifact_id !== exactArtifactId || payload.items[0].ticker !== requestedTicker)) throw new Error('Brief identity mismatch');
       // The body read takes ownership after lookup admission, not before.
       workOsFinishRead(body, state);
       await workOsLoadBriefArtifact(payload.items[0], options);
@@ -635,7 +844,7 @@
       if (lookupSequence !== workOsBriefLookupSequence || controller.signal.aborted) return;
       body.innerHTML = '<div class="k-well" role="alert">Brief inventory is temporarily unavailable. <button type="button" class="k-btn k-btn-quiet k-btn-sm" data-work-os-brief-lookup-retry>Retry</button></div>';
       const retry = body.querySelector('[data-work-os-brief-lookup-retry]');
-      if (retry) retry.addEventListener('click', function () { window.openWorkOsBriefReader(requestedTicker, { fromHistory: true }); });
+      if (retry) retry.addEventListener('click', function () { window.openWorkOsBriefReader(requestedTicker, Object.assign({}, options, { fromHistory: true })); });
     } finally {
       state.controller.signal.removeEventListener('abort', cancelLookup);
       workOsFinishRead(body, state);
@@ -2318,6 +2527,7 @@
     const url = new URL(window.location.href);
     const params = url.searchParams;
     params.delete('screen');
+    ['work_os_brief', 'work_os_brief_artifact', 'work_os_brief_section', 'work_os_detail_origin', 'work_os_focus'].forEach(function (key) { params.delete(key); });
     url.hash = screenId;
     return url.pathname + url.search + url.hash;
   }
@@ -2470,6 +2680,7 @@
   });
 
   window.navigateTo = function (screenId, options) {
+    if (!(options && options.fromHistory) && briefReaderOverlay) briefReaderOverlay.close();
     const target = WORK_OS_ENDPOINTS[screenId] ? screenId : 'screen-cockpit';
     if (target === 'screen-workspace' && workOsPortfolioHydration && !(options && options.companyReady)) {
       const ticker = workOsCurrentCompanyTicker();
@@ -2615,7 +2826,11 @@
     if (briefTicker && workOsValidHistoryTicker(briefTicker)) {
       workOsLastTransientFocusId = briefState && typeof briefState.focusId === 'string'
         ? briefState.focusId : params.get('work_os_focus');
-      return window.openWorkOsBriefReader(briefTicker, { fromHistory: true });
+      return window.openWorkOsBriefReader(briefTicker, {
+        fromHistory: true,
+        artifactId: briefState && briefState.artifactId || params.get('work_os_brief_artifact'),
+        sectionId: briefState && briefState.sectionId || params.get('work_os_brief_section')
+      });
     }
     if (fullPageDetailOverlay) fullPageDetailOverlay.close();
     return workOsRestoreTransientFromHistory(window.history.state);

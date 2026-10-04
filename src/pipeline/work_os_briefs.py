@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Literal
 
 from bs4 import BeautifulSoup
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from pipeline.work_os_decisions import DecisionProjection
 from provenance.selection import selected_transcripts_relation
@@ -136,6 +136,13 @@ class ReportReaderSection(BaseModel):
     label: str
 
 
+def _reader_style_url() -> str:
+    # Keep the document assets lazy so inventory reads do not load the renderer.
+    from report.renderers.workspace_reader_assets import READER_STYLE_URL
+
+    return READER_STYLE_URL
+
+
 class ReportReaderPayload(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -148,7 +155,7 @@ class ReportReaderPayload(BaseModel):
     section_ids: tuple[str, ...]
     sections: tuple[ReportReaderSection, ...]
     decision: DecisionProjection
-    style_url: Literal["/api/work-os/report-reader.css"] = "/api/work-os/report-reader.css"
+    style_url: str = Field(default_factory=_reader_style_url)
 
 
 def _status(repo_root: Path, artifact: ReportArtifactRef) -> BriefStatus:
@@ -162,9 +169,13 @@ def build_brief_descriptor(
     artifact: ReportArtifactRef,
     *,
     coverage_role: CoverageRole | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> BriefLibraryItem:
     """Normalize every Work OS launcher onto one stable reader descriptor."""
 
+    if conn is not None and coverage_role is None:
+        current_roles, _names = _current_company_info(conn, {artifact.ticker})
+        coverage_role = current_roles.get(artifact.ticker)
     status = _status(repo_root, artifact)
     standalone_url = f"/reports/{artifact.ticker}?artifact_id={artifact.artifact_id}"
     return BriefLibraryItem(
@@ -188,7 +199,7 @@ def build_brief_descriptor(
             if artifact.reader_mode == "shared_body"
             else None
         ),
-        standalone_url=standalone_url,
+        standalone_url=standalone_url + "&standalone=1",
         section_count=len(artifact.section_ids),
     )
 
@@ -642,7 +653,11 @@ def load_report_reader_payload(
         ReportReaderSection(
             section_id=section_id,
             dom_id=dom_by_logical[section_id],
-            label=section_id.replace("_", " ").replace("-", " ").title(),
+            label=(
+                label.get_text(strip=True)
+                if (label := soup.select_one(f'[data-subtab="{section_id}"] .subtab-label'))
+                else section_id.replace("_", " ").replace("-", " ").title()
+            ),
         )
         for section_id in artifact.section_ids
         if section_id in dom_by_logical

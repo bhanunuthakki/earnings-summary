@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from ui.controls import icon_svg
+
 
 def render_brief_reader_shell() -> str:
     """Return the transient reader container mounted once beside the Work OS."""
 
-    return """
-<section class="work-os-reader" id="workOsBriefReader" role="dialog" aria-modal="true"
+    return f"""
+<section class="work-os-reader" id="workOsBriefReader" role="region"
          aria-hidden="true" aria-labelledby="workOsBriefReaderTitle" hidden>
   <header class="work-os-reader-header">
     <div class="work-os-reader-actions">
@@ -15,23 +17,35 @@ def render_brief_reader_shell() -> str:
               aria-label="Back to research workspace">Back</button>
     </div>
     <div class="work-os-reader-masthead">
-      <div class="k-card-meta">Brief</div>
       <h2 class="k-card-title" id="workOsBriefReaderTitle">Research brief</h2>
-      <div class="k-card-meta" id="workOsBriefReaderMeta">Persisted governed artifact</div>
+      <span id="workOsBriefSavedPosture" aria-label="Saved thesis posture"></span>
     </div>
     <div class="work-os-reader-actions">
-      <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="brief-comments" data-copilot-scope="full-brief">Discuss comments</button>
-      <button class="k-btn k-btn-primary k-btn-sm" type="button" data-research-chat="full-brief" data-copilot-scope="full-brief">Ask about this brief</button>
+      <a class="k-btn k-btn-quiet k-btn-sm" id="workOsBriefCompanyLink">Company Desk ↗</a>
+      <a class="k-btn k-btn-quiet k-btn-sm" id="workOsBriefDcfLink">DCF model ↗</a>
+      <button class="k-btn k-btn-quiet k-btn-sm" type="button" data-research-chat="brief-comments" data-copilot-scope="full-brief">Comments</button>
+      <button class="k-btn k-btn-primary k-btn-sm" type="button" data-research-chat="full-brief" data-copilot-scope="full-brief">Ask</button>
       <button class="k-btn k-btn-quiet k-btn-sm" id="workOsBriefReaderClose" type="button"
               aria-label="Close full research brief">Close</button>
     </div>
-  </header>
-  <div class="work-os-reader-decision k-card k-card-stat" id="workOsBriefReaderDecision" aria-label="Decision state" aria-live="polite">
+    <div class="work-os-reader-toolbar">
+      <button class="k-btn k-btn-quiet k-icon-btn work-os-rail-toggle" id="workOsBriefSectionsToggle" type="button" aria-controls="workOsBriefReaderSections" aria-expanded="true" aria-label="Collapse brief sections" title="Collapse brief sections">{icon_svg("collapse")}</button>
+      <h3 class="k-card-title" id="workOsBriefSectionTitle">Company</h3>
+      <details class="work-os-reader-disclosure" id="workOsBriefEditionDetails">
+        <summary class="k-btn k-btn-quiet k-btn-sm" aria-label="Edition and data context"><span id="workOsBriefReaderMeta">Edition and data context</span> ⓘ</summary>
+        <div class="work-os-reader-context k-card k-card-section">
+          <p class="k-card-meta">Saved report scope and current decision state remain separate.</p>
+  <div class="work-os-reader-decision" id="workOsBriefReaderDecision" aria-label="Current decision state" aria-live="polite">
     <div class="k-stat-cell"><div class="stat-heading">Owner posture</div><div class="stat-number" id="workOsBriefOwnerState">—</div><div class="stat-subtext" id="workOsBriefOwnerMeta">No owner decision recorded</div></div>
     <div class="k-stat-cell"><div class="stat-heading">Model recommendation</div><div class="stat-number" id="workOsBriefModelState">—</div><div class="stat-subtext" id="workOsBriefModelMeta">No model recommendation recorded</div></div>
     <div class="k-stat-cell"><div class="stat-heading">Relationship</div><div class="k-pill k-pill-warn" id="workOsBriefDecisionRelationship">Unavailable</div><div class="stat-subtext">Thesis verdict remains separately labeled in the brief</div></div>
   </div>
-  <div id="workOsBriefResearchItemsMount" aria-live="polite"></div>
+          <details id="workOsBriefLiveContext"><summary>Live research items</summary><div id="workOsBriefResearchItemsMount" aria-live="polite"></div></details>
+        </div>
+      </details>
+      <button class="k-btn k-btn-quiet k-btn-sm" id="workOsBriefSwitchEdition" type="button">Switch edition ↗</button>
+    </div>
+  </header>
   <div class="work-os-reader-layout">
     <nav class="work-os-reader-sections k-card k-card-nav" id="workOsBriefReaderSections"
          aria-label="Brief sections"></nav>

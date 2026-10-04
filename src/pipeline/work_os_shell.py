@@ -34,7 +34,7 @@ from pipeline.work_os_research import (
 from pipeline.work_os_route_contract import DESTINATION_SURFACE_IDS
 from pipeline.work_os_styles import WORK_OS_CSS
 from ui.cite_marks import CITE_MARKS_SNIPPET
-from ui.controls import controls_css, controls_js
+from ui.controls import controls_css, controls_js, icon_svg
 from ui.living_grid import head_assets as living_grid_head_assets
 from ui.tokens import FAVICON_LINK, palette_css
 
@@ -510,6 +510,18 @@ def _add_production_contract(
 ) -> str:
     html = html.replace("</title>", f"</title>{FAVICON_LINK}", 1)
     html = _SIDEBAR_COMMAND_RE.sub("", html, count=1)
+    html = re.sub(
+        r'<button type="button" class="sidebar-collapse-toggle.*?</button>',
+        '<button id="workOsAppSidebarToggle" type="button" '
+        'class="sidebar-collapse-toggle k-btn k-btn-quiet k-icon-btn work-os-rail-toggle" '
+        'onclick="toggleSidebar()" aria-controls="appSidebar" aria-expanded="true" '
+        'aria-label="Collapse application sidebar" title="Collapse application sidebar">'
+        + icon_svg("collapse")
+        + "</button>",
+        html,
+        count=1,
+        flags=re.DOTALL,
+    )
     html = html.replace("Execution Queue & Operations Hub", "Operations")
     html = html.replace("Operations & Execution Governance Hub", "Operations")
     html = html.replace("Portfolio Performance vs Index Benchmark", "Performance")
