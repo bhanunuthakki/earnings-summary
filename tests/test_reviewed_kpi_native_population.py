@@ -58,6 +58,17 @@ def reviewed(
     migrated_db: Callable[..., Path], tmp_path: Path
 ) -> Generator[tuple[sqlite3.Connection, str, int, KpiSemanticContext], None, None]:
     conn = open_db(migrated_db(tmp_path / "native.db"))
+    clock = sqlite3.connect(":memory:")
+
+    def fixture_strftime(format_text: str, instant: str) -> str | None:
+        # Capture triggers use SQLite's clock. Keep it inside this fixture's as-of window.
+        effective = STAMP.isoformat() if instant == "now" else instant
+        return cast(
+            str | None,
+            clock.execute("SELECT strftime(?,?)", (format_text, effective)).fetchone()[0],
+        )
+
+    conn.create_function("strftime", 2, fixture_strftime)
     seed_resolved_kpi_fact(conn)
     conn.execute("UPDATE documents SET doc_type='ir_press_release' WHERE id=10")
     conn.execute(
@@ -182,6 +193,7 @@ def reviewed(
         yield conn, legacy, result.fact_id, context
     finally:
         conn.close()
+        clock.close()
 
 
 def request(conn: sqlite3.Connection, legacy: str) -> SourceFactPopulationRequest:

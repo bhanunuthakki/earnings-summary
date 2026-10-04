@@ -46,7 +46,6 @@
     "execution/backup_restore_readiness_receipt.py",
     "execution/benchmark_data_infrastructure.py",
     "execution/benchmark_sqlite_runtime.py",
-    "execution/bootstrap_issuer_reporting_registry.py",
     "execution/bootstrap_sec_former_ticker.py",
     "execution/bootstrap_sec_fund_registry.py",
     "execution/bootstrap_sec_historical_issuer.py",
