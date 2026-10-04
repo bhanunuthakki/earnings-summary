@@ -12,11 +12,14 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import subprocess
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
+from calibration_guard import wilson_interval
 from llm.calibration import CalibrationScore, record_score
 
 log = logging.getLogger(__name__)
@@ -26,6 +29,28 @@ class EvalAbortError(RuntimeError):
     """The run cannot proceed for a non-quality reason (e.g. the target
     purpose is budget-skipped). Distinct from a case failing: aborting must
     not record a low score against the prompt."""
+
+
+def load_golden_document(path: Path, purpose: str) -> list[dict[str, object]]:
+    """Validate the shared envelope; each purpose validates its case fields."""
+    try:
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"golden file unreadable at {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("golden file must be a JSON object")
+    doc = cast("dict[str, object]", payload)
+    if doc.get("purpose") != purpose:
+        raise ValueError(f"golden file purpose must be {purpose!r}, got {doc.get('purpose')!r}")
+    raw_cases = doc.get("cases")
+    if not isinstance(raw_cases, list) or not raw_cases:
+        raise ValueError("golden file needs a non-empty `cases` list")
+    out: list[dict[str, object]] = []
+    for i, entry in enumerate(cast("list[object]", raw_cases)):
+        if not isinstance(entry, dict):
+            raise ValueError(f"cases[{i}]: must be an object")
+        out.append(cast("dict[str, object]", entry))
+    return out
 
 
 def now_naive_utc() -> datetime:
@@ -41,6 +66,14 @@ def now_naive_utc() -> datetime:
 # dragged bear_case's apparent avg from 0.959 to 0.706 — the score was
 # measuring the CLI outage, not the prompt.
 JUDGE_INFRA_STAGE = "judge_infra"
+
+# A set whose measured pass rate is at or above this has no headroom left: a
+# better prompt cannot show up in it. Use it to cut cost or latency, or harden
+# the set, rather than to claim a quality gain.
+SATURATION_PASS_RATE = 0.95
+
+# Separator for per-repeat case ids (``case@r2``) in a combined repeat run.
+REPEAT_SEPARATOR = "@r"
 
 
 @dataclass(slots=True)
@@ -113,6 +146,43 @@ class EvalRunSummary:
             return None
         return sum(scored) / len(scored)
 
+    @property
+    def n_measured(self) -> int:
+        """Cases with a quality outcome (infra failures excluded)."""
+        return sum(1 for c in self.cases if not c.is_infra_failure)
+
+    @property
+    def pass_rate(self) -> float | None:
+        n = self.n_measured
+        if n == 0:
+            return None
+        return sum(1 for c in self.cases if c.passed and not c.is_infra_failure) / n
+
+    @property
+    def pass_rate_ci95(self) -> tuple[float, float] | None:
+        """Wilson 95% interval on the pass rate: how far the score could move
+        by chance alone at this case count."""
+        n = self.n_measured
+        passed = sum(1 for c in self.cases if c.passed and not c.is_infra_failure)
+        return wilson_interval(passed, n)
+
+    @property
+    def avg_score_ci95(self) -> tuple[float, float] | None:
+        """Normal-approximation 95% interval on the mean scored case, clamped
+        to [0, 1]. None below two scored cases."""
+        scored = [c.score for c in self.cases if c.score is not None]
+        if len(scored) < 2:
+            return None
+        mean = sum(scored) / len(scored)
+        var = sum((x - mean) ** 2 for x in scored) / (len(scored) - 1)
+        half = 1.96 * math.sqrt(var / len(scored))
+        return max(0.0, mean - half), min(1.0, mean + half)
+
+    @property
+    def saturated(self) -> bool:
+        rate = self.pass_rate
+        return rate is not None and rate >= SATURATION_PASS_RATE
+
     def to_json_dict(self) -> dict[str, object]:
         """Stdout-friendly summary (cases included, transcripts truncated)."""
         cases: list[dict[str, object]] = []
@@ -139,8 +209,66 @@ class EvalRunSummary:
             "n_scored": self.n_scored,
             "n_infra": self.n_infra,
             "avg_score": self.avg_score,
+            "avg_score_ci95": _rounded(self.avg_score_ci95),
+            "pass_rate": self.pass_rate,
+            "pass_rate_ci95": _rounded(self.pass_rate_ci95),
+            "saturated": self.saturated,
             "cases": cases,
         }
+
+
+def _rounded(interval: tuple[float, float] | None) -> list[float] | None:
+    return None if interval is None else [round(interval[0], 4), round(interval[1], 4)]
+
+
+def combine_repeats(runs: list[EvalRunSummary]) -> tuple[EvalRunSummary, dict[str, object]]:
+    """Fold k repeats of one eval into a single run plus its noise report.
+
+    Each repeat's cases keep their own row (``case@rN``), so the combined
+    intervals reflect every observation. The noise report answers the
+    question a single run cannot: how far does the score move by chance?
+    ``flip_cases`` lists cases whose pass/fail changed between repeats.
+    """
+    if not runs:
+        raise ValueError("combine_repeats needs at least one run")
+    first = runs[0]
+    cases: list[CaseResult] = []
+    outcomes: dict[str, set[bool]] = {}
+    for index, run in enumerate(runs, start=1):
+        for case in run.cases:
+            if not case.is_infra_failure:
+                outcomes.setdefault(case.case_id, set()).add(case.passed)
+            repeat_case = CaseResult(**asdict(case))
+            repeat_case.case_id = f"{case.case_id}{REPEAT_SEPARATOR}{index}"
+            cases.append(repeat_case)
+    per_repeat = [r.avg_score for r in runs]
+    measured = [a for a in per_repeat if a is not None]
+    spread = (max(measured) - min(measured)) if measured else None
+    flips = sorted(cid for cid, seen in outcomes.items() if len(seen) > 1)
+    noise: dict[str, object] = {
+        "repeats": len(runs),
+        "per_repeat_avg_score": per_repeat,
+        "per_repeat_pass_rate": [r.pass_rate for r in runs],
+        "avg_score_spread": spread,
+        "flip_cases": flips,
+    }
+    summary_note = f"repeats={len(runs)} spread={spread} flips={len(flips)}"
+    notes = f"{first.notes}; {summary_note}" if first.notes else summary_note
+    combined = EvalRunSummary(
+        run_id=first.run_id,
+        purpose=first.purpose,
+        mode=first.mode,
+        prompt_version=first.prompt_version,
+        model=first.model,
+        judge_model=first.judge_model,
+        golden_set_sha=first.golden_set_sha,
+        started_at=first.started_at,
+        finished_at=runs[-1].finished_at,
+        git_sha=first.git_sha,
+        notes=notes,
+        cases=cases,
+    )
+    return combined, noise
 
 
 def sha256_file(path: Path) -> str:

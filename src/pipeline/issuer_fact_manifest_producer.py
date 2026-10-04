@@ -176,8 +176,13 @@ def produce_issuer_fact_manifest(
     plus its explicit rejection identities must form its exact expected set.
     No inference fills a gap, and no database writes occur in this function.
     """
-    if legacy.primary_source is not SourceType.IR_DOC:
-        raise ValueError("legacy KPI manifest primary_source must be IR_DOC")
+    if legacy.primary_source is SourceType.SEC_XBRL:
+        if reviewed_kpi_captures is None or not reviewed_kpi_captures.captures:
+            raise ValueError("SEC issuer facts require sealed reviewed KPI captures")
+        if segments.values:
+            raise ValueError("SEC segment facts require a separately qualified review route")
+    elif legacy.primary_source is not SourceType.IR_DOC:
+        raise ValueError("legacy KPI manifest primary_source must be IR_DOC or reviewed SEC_XBRL")
     _assert_header_agreement(legacy, frame, segments)
     values = (*_legacy_kpi_values(legacy), *segments.values)
     captured_by_identity = {value.expected().identity_key: value for value in values}

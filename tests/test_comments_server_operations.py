@@ -4,7 +4,8 @@ import hashlib
 import json
 import sqlite3
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import ClassVar
@@ -41,6 +42,7 @@ from operations.paths import (
 from operations.registry import build_operations_registry
 from operations.snapshot import collect_operations_snapshot
 from pipeline.operations_panel import OperationsPanelView, render_operations_panel
+from runtime.job_runtime import health_receipt_directory
 from runtime.portfolio_tracker import (
     ListenerObservation,
     RuntimeConfig,
@@ -263,6 +265,7 @@ def test_operations_panel_route_is_get_only_app_cached_and_one_connection_per_mi
         observed_at: datetime,
         scheduler_receipt_path: Path,
         service_receipt_path: Path,
+        job_receipt_roots: Mapping[str, Path],
     ) -> OperationsSnapshot:
         return collect_operations_snapshot(
             current,
@@ -271,6 +274,7 @@ def test_operations_panel_route_is_get_only_app_cached_and_one_connection_per_mi
             observed_at=observed_at,
             scheduler_receipt_path=scheduler_receipt_path,
             service_receipt_path=service_receipt_path,
+            job_receipt_roots=job_receipt_roots,
         )
 
     def render(view: OperationsPanelView) -> str:
@@ -795,6 +799,7 @@ def test_operations_route_uses_runtime_root_canonical_receipts(
         observed_at: datetime,
         scheduler_receipt_path: Path,
         service_receipt_path: Path,
+        job_receipt_roots: Mapping[str, Path],
     ) -> OperationsSnapshot:
         captured.update(
             repo_root=repo_root,
@@ -802,6 +807,7 @@ def test_operations_route_uses_runtime_root_canonical_receipts(
             observed_at=observed_at,
             scheduler_receipt_path=scheduler_receipt_path,
             service_receipt_path=service_receipt_path,
+            job_receipt_roots=job_receipt_roots,
         )
         return collect_operations_snapshot(
             current,
@@ -810,6 +816,7 @@ def test_operations_route_uses_runtime_root_canonical_receipts(
             observed_at=observed_at,
             scheduler_receipt_path=scheduler_receipt_path,
             service_receipt_path=service_receipt_path,
+            job_receipt_roots=job_receipt_roots,
         )
 
     monkeypatch.setattr(comments_server, "collect_operations_snapshot", collect)
@@ -818,12 +825,23 @@ def test_operations_route_uses_runtime_root_canonical_receipts(
         return sqlite3.connect(":memory:")
 
     monkeypatch.setattr(comments_server, "connect_sqlite", connect)
-    client = comments_server.create_app(tmp_path, operations_registry=registry).test_client()
+    code_root = tmp_path / "deployed-code"
+    state_root = tmp_path / "declared-state"
+    client = comments_server.create_app(
+        tmp_path,
+        db_path=state_root / "data" / "portfolio.db",
+        code_root=code_root,
+        operations_registry=registry,
+    ).test_client()
 
     response = client.get("/api/panel/operations")
 
     assert response.status_code == 200
     assert captured["repo_root"] == tmp_path
+    assert captured["job_receipt_roots"] == {
+        step.job: state_root if step.job == "prepare-kpi-semantic-review" else code_root
+        for step in registry.job_steps
+    }
     assert captured["scheduler_receipt_path"] == (
         tmp_path / ".tmp" / "operations" / "runtime" / "scheduler.latest.json"
     )
@@ -862,7 +880,10 @@ def test_operations_review_bundle_uses_configured_private_origin(
     def no_repair_review(**_: object) -> None:
         return None
 
-    def snapshot(*_: object, **__: object) -> Mock:
+    snapshot_roots: dict[str, object] = {}
+
+    def snapshot(*_: object, **kwargs: object) -> Mock:
+        snapshot_roots.update(kwargs)
         return Mock()
 
     monkeypatch.setattr(comments_server, "private_mobile_origin", configured_private_origin)
@@ -878,13 +899,25 @@ def test_operations_review_bundle_uses_configured_private_origin(
 
     monkeypatch.setattr(comments_server, "build_operations_review_bundle", build_bundle)
     response = (
-        comments_server.create_app(tmp_path)
+        comments_server.create_app(
+            tmp_path,
+            code_root=PROJECT_ROOT,
+            db_path=tmp_path / "declared-state" / "data" / "portfolio.db",
+        )
         .test_client()
         .get("/api/operations/review-bundle", base_url="http://127.0.0.1:7421")
     )
 
     assert response.status_code == 200
     assert captured["serving_origin"] == configured_origin
+    assert snapshot_roots["job_receipt_roots"] == {
+        step.job: (
+            tmp_path / "declared-state"
+            if step.job == "prepare-kpi-semantic-review"
+            else PROJECT_ROOT
+        )
+        for step in build_operations_registry(PROJECT_ROOT).job_steps
+    }
 
 
 def test_operations_review_bundle_fails_closed_without_private_origin(
@@ -1204,3 +1237,66 @@ def test_readme_update_action_rejects_non_object_json(tmp_path: Path) -> None:
     assert response.status_code == 400
     assert response.get_json()["error"] == "JSON request body must be an object"
     jobs.start.assert_not_called()
+
+
+@pytest.mark.parametrize("job", ["morning_pipeline", "prepare-kpi-semantic-review"])
+def test_job_receipt_declared_writer_root_has_no_other_root_fallback(
+    tmp_path: Path, job: str
+) -> None:
+    def _job_receipt(path: Path, *, job: str, lane: tuple[str, ...], ended: datetime) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1",
+                    "job": job,
+                    "write_sets": list(lane),
+                    "started_at": (ended - timedelta(minutes=1)).isoformat(),
+                    "ended_at": ended.isoformat(),
+                    "status": "ok",
+                    "exit_code": 0,
+                    "severity": "info",
+                    "detail": None,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    registry = build_operations_registry(PROJECT_ROOT)
+    now = datetime(2026, 8, 13, 12, tzinfo=UTC)
+    step = next(step for step in registry.job_steps if step.job == job)
+    state_root = tmp_path / "state"
+    code_root = tmp_path / "code"
+    scratch_root = tmp_path / "scratch"
+    writer_root = state_root if job == "prepare-kpi-semantic-review" else code_root
+    latest = health_receipt_directory(writer_root, job) / "latest.json"
+    _job_receipt(latest, job=job, lane=step.effective_lane, ended=now)
+    # A different root has usable evidence, but never supplies fallback truth.
+    _job_receipt(
+        health_receipt_directory(scratch_root, job) / "latest.json",
+        job=job,
+        lane=step.effective_lane,
+        ended=now,
+    )
+    with closing(sqlite3.connect(":memory:")) as conn:
+        snapshot = collect_operations_snapshot(
+            registry,
+            repo_root=scratch_root,
+            conn=conn,
+            observed_at=now,
+            job_receipt_roots={job: writer_root},
+        )
+        receipt = next(item for item in snapshot.job_receipts if item.job == job)
+        assert receipt.state == "current"
+        assert receipt.evidence_source == str(latest)
+        latest.unlink()
+        missing = collect_operations_snapshot(
+            registry,
+            repo_root=scratch_root,
+            conn=conn,
+            observed_at=now,
+            job_receipt_roots={job: writer_root},
+        )
+        receipt = next(item for item in missing.job_receipts if item.job == job)
+        assert receipt.state == "missing"
+        assert receipt.evidence_source == str(latest)

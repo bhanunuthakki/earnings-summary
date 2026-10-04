@@ -49,6 +49,7 @@ from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 
+from db_paths import require_db_path, resolve_db_path
 from operations.context import current as current_operation_context
 from sources.telemetry import SourceAttemptMeasurement, persist_source_attempt
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -67,9 +68,8 @@ def _cost_per_call_usd() -> float:
         return 0.0
 
 
-# Module-level DB path; overridable for tests via `set_db_path()`.
-# Defaults to <project_root>/data/portfolio.db. We resolve project_root from
-# this file's location (src/sources/registry.py -> ../../).
+# The checkout path is only a compatibility sentinel. Logging uses the
+# existing configured database or an explicit scoped/test override.
 _DB_PATH: Path = Path(__file__).resolve().parents[2] / "data" / "portfolio.db"
 
 
@@ -77,6 +77,18 @@ def set_db_path(path: Path) -> None:
     """Override the DB path used by `log_call`. Used by tests and worktree runs."""
     global _DB_PATH
     _DB_PATH = path
+
+
+def _database_path(override: Path | None = None) -> Path | None:
+    """Use one retained-state authority for logical and physical call logs."""
+    root = Path(__file__).resolve().parents[2]
+    default = root / "data" / "portfolio.db"
+    explicit = override or (_DB_PATH if default != _DB_PATH else None)
+    candidate = resolve_db_path(explicit, configured_root=root)
+    try:
+        return require_db_path(candidate)
+    except (OSError, RuntimeError):
+        return None
 
 
 def _persisted_operation_id(conn: sqlite3.Connection, *, operation_columns: set[str]) -> str | None:
@@ -122,11 +134,12 @@ def log_call(
     A logging-failure must not cascade into the caller's data path. If the DB
     is missing or locked we drop the row silently.
     """
-    if not _DB_PATH.exists():
+    database = _database_path()
+    if database is None:
         return
     status_str = status.value if isinstance(status, CallStatus) else str(status)
     try:
-        conn = connect_sqlite(_DB_PATH, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        conn = connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             operation_columns = {
                 str(row[1]) for row in conn.execute("PRAGMA table_info(source_calls)")
@@ -200,7 +213,10 @@ def log_calls_batch(calls: list[PendingSourceCall]) -> None:
     time), which is adequate for the per-(source, kind) rollup that consumes
     them.
     """
-    if not calls or not _DB_PATH.exists():
+    if not calls:
+        return
+    database = _database_path()
+    if database is None:
         return
     stamp = datetime.now().isoformat(timespec="seconds")
     rows = [
@@ -218,7 +234,7 @@ def log_calls_batch(calls: list[PendingSourceCall]) -> None:
         for c in calls
     ]
     try:
-        conn = connect_sqlite(_DB_PATH, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        conn = connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             operation_columns = {
                 str(row[1]) for row in conn.execute("PRAGMA table_info(source_calls)")
@@ -325,8 +341,8 @@ def summarize_source_calls(
     raising, so a reporting call never takes down a caller. Rows are sorted by
     descending total so the busiest source/kind reads first.
     """
-    path = db_path or _DB_PATH
-    if not Path(path).exists():
+    path = _database_path(db_path)
+    if path is None:
         return []
     # Physical transport attempts have their own measured report. The legacy
     # cockpit counts logical adapter calls and must not double-count both.
@@ -433,16 +449,9 @@ def cache_effectiveness_overview(
 
 def log_http_measurement(measurement: SourceAttemptMeasurement) -> bool:
     """Persist measured transport attempts; absence is observable, never fake zero."""
-    from runtime.job_runtime import portfolio_db_path
-
     try:
-        root = Path(__file__).resolve().parents[2]
-        # Preserve an explicit test/adapter override; the legacy implicit checkout
-        # default is never an operational database authority.
-        database = (
-            _DB_PATH if root / "data" / "portfolio.db" != _DB_PATH else portfolio_db_path(root)
-        )
-        if not database.exists():
+        database = _database_path()
+        if database is None:
             return False
         conn = connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:

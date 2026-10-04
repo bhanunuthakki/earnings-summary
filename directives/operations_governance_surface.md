@@ -14,6 +14,81 @@
 
 ## Outcome
 
+### Shared truth remedies — 2026-10-03
+
+Disposition: **no Operations surface change**. Explore, Ask, saved financial
+conditions and Financials evidence use the existing provenance-aware readers.
+`GET /api/peek/canonical-financial` supports the exact table or series reference.
+`GET /api/peek/financial-calculation` reconstructs growth from its original
+inputs and calculation version. Both are read-only product evidence views.
+They add no operator action, source acquisition or financial write. Invalid
+references fail before database access. Missing admission remains unavailable.
+
+The existing DCF save, rebuild and Sheet import operations retain their action
+boundaries. One per-ticker artifact owner now covers their writes. All durable
+builders use the selected configured database. A committed result with failed
+backup cleanup remains saved, names the recovery requirement and blocks another
+write. It must not be displayed as a rejected candidate. Sheet export transfers
+captured accepted bytes; import validates an editable candidate before promotion.
+This repair does not create a new action or authorize a live Sheet transfer.
+
+Retained extractor, repair and seed commands, and source telemetry, use the
+existing database resolver. Artifact roots are explicit and independent of
+database placement. Portfolio cache displays and decision reads share validation,
+source date and degraded state. Tracker v1 rejects incompatible position and
+transaction snapshots. No transport switch or scheduled operation is activated.
+The removed foreign arithmetic helper had no operator surface. Its retained CLI
+still refuses unsupported financial writes. Shared evaluation-file parsing keeps
+the same purpose validation and grading contracts.
+
+Evidence: retained-tool authority tests; DCF artifact ownership and real import
+rejection tests; financial consumer and growth evidence tests; portfolio cache,
+tracker adoption and morning pipeline tests. The release audit records exact
+test and rendered results. Those checks establish code behavior, not live health.
+
+### Publisher authority capture repair — 2026-10-04
+
+Disposition: **no Operations surface change**. The existing authority capture
+command uses the shared portfolio database writer lane. Apply requires an
+explicit configured database and rejects another target before connection or
+network access. Repeated captures of identical publisher bytes retain the
+original immutable blob-location clocks and record a separate source observation.
+Reuse verifies the retained local bytes within the supplied actual content root.
+Missing, corrupt, outside-root and reparse-path replicas fail closed without
+replacement or a new observation. Existing request, receipt, coverage and source
+admission contracts remain unchanged. An observed archive response still does
+not prove exhaustion or acquisition completeness.
+
+Evidence: capture renewal and replay tests; writer contention and configured
+route tests; retained-byte, local-path and immutable-artifact tests. Native
+Windows verification remains a separate release gate. No new action, scheduler,
+service, schema or financial-data admission is introduced.
+
+### Scheduler job receipt authority
+
+The Operations panel and review bundle read each job receipt from its declared
+writer root. `cron/run_python.bat` defaults to the deployed code checkout.
+`prepare-kpi-semantic-review` is the explicit exception: its wrapper derives
+the product-state root from the configured database path and passes that root
+to the job runtime. The dashboard uses the same resolved database declaration
+for this exception. Dashboard scratch artifacts do not replace either writer
+root. Missing, stale and invalid receipts remain explicit; another root never
+supplies fallback evidence. This changes receipt observation only. It adds no
+scheduler operation, job execution or financial-state write.
+
+### Cached host-owner monitoring endpoint
+
+Disposition: **linked governed view**. `GET /api/operations/host-runtime`
+restores the existing private fleet monitor's read-only transport for the
+`HostRuntimeBundle` owned by `src/operations/host_runtime.py`. It reads only
+the bounded cached host receipt from the configured product-state root.
+Missing, stale, invalid and current evidence remain explicit. The response
+uses the same configured private HTTPS origin and code identity as the
+operations review bundle; request headers cannot supply either identity.
+It returns a content digest, `ETag` and `Cache-Control: no-store`. It adds no
+host probe, database read, recovery action, financial payload or scheduler owner.
+`tests/test_comments_server_host_runtime.py` verifies those boundaries.
+
 The Operations & Governance workspace remains a truthful operator-facing map as functionality is added, removed, renamed, or changes ownership. It is not an inventory of every module or CLI. It shows supported operations, their declared ownership, current evidence, freshness, failure state, and guarded actions at the level needed to understand or operate the product safely.
 
 ## Trigger matrix
@@ -837,6 +912,139 @@ owner policy, or mutate canonical Windows state. The deterministic checker has
 no network or database access. Readout, brief and maintenance regression tests
 establish local behavior; they do not establish deployment or a future job run.
 
+### SEC ingestion deadline and bounded provenance work
+
+The registered SEC task, schedule, provider and write lane remain unchanged.
+The managed supervisor now enforces the checked task XML's finite elapsed-time
+limit for scheduled SEC children. A deadline returns 124 and records failed,
+incomplete health and operation-journal evidence. It does not replay ingestion.
+After child-tree exit, canonical run accounting fails only the exact attributed
+SEC attempt under its retained lane and bounded database lock. Unavailable or
+ambiguous attribution stays explicit; no broad attempt sweep is permitted.
+
+Ticker-scoped immutable-source reuse and successor-first resolution queries
+reduce repeated work without changing fact admission, manifests, temporal
+eligibility or completeness. Migration 0050 adds only a nonunique KPI
+supersedes lookup index. There is no new operator action or external effect.
+Regression and native child-tree checks establish the correction; a genuine
+subsequent scheduled run remains required for recurrence verification.
+
+### Approved thesis KPI registrations and calculated review rules
+
+Persisted thesis evaluations through the existing deterministic and quarterly
+refresh actions consume
+optional `kpi_registry_candidates` from the approved holdings configuration.
+It checks exact governed report references and eight admitted, comparable
+quarterly observations before inserting a missing user registry row. Existing
+owner settings remain unchanged. New rows have no scalar threshold and are not
+marked thesis breakers. The thesis evaluator owns numerical thresholds,
+adjacent-quarter persistence, TTM calculations and compound review warnings.
+Missing definitions, approximate source bands, incomparable populations and
+unavailable discrete-quarter inputs remain unresolved. A pending candidate does
+not become a zero-valued fact or a passing check. The approved holdings tiers
+retain disclosure and actual-source-cadence research watches.
+
+`metric_expression` hard rules and `metric_threshold` soft predicates use the
+same admitted calculated-series reader. Stored evaluation evidence retains
+source manifests and calculation definitions. Distinct company/market entities
+require explicitly matching source populations. TTM monetary sums require typed
+standalone-quarter durations; YTD labels cannot substitute for those inputs.
+No new scheduler, listener, provider request or external message action is added.
+The existing evaluation and attention lifecycle remains the delivery owner.
+
+
+### Source repair disposition (2026-10-03)
+
+No workspace control, scheduled job, service or listener is added. Existing KPI
+repair prepare/dry-run/apply entrypoints retain their exact manifest approval,
+current Windows review, sole writer and verified backup boundaries. The prepared
+legacy-disposition input is an explicit one-ticker allowlist capped at 25 heads.
+Immutable capture and replay receipts expose head/source drift rather than claiming
+success. Judge recorder inputs now name the actual model and current purpose
+qualification; historical receipts remain readable and cannot grant new apply
+authority. Internal financial derivation helpers publish source-bound formula and
+operand evidence only through the existing provenance repository. Source capture,
+semantic admission and threshold eligibility remain distinct. The migration graph
+owns the expected schema head; do not hardcode it in the Operations projection.
+
+
+### Reviewed foreign-filer financial packages and ONON valuation
+
+`bootstrap_issuer_reporting_registry.py --ticker ONON` narrows the existing
+tracked reporting universe. It cannot add an untracked security. The default
+remains the full tracked universe. SEC fetching uses the configured contact.
+
+`sync_sec_filing_inventory.py --package-subject-review PATH` consumes a typed
+`sec_package_subject_review.v1` review. It verifies exact source bytes, an
+unambiguous source selector, issuer/accession identity and the reported fiscal
+period. Financial statements, supplements and earnings releases can supply a
+financial period. Investor presentations and investor updates cannot. The source
+remains native SEC evidence. The authoritative package must contain every reviewed
+URL. Dry-run and apply return the same expected-document vector digest and review
+digest. Apply retains the review bytes as a required inventory component in the
+existing evidence ledger. Processing and valuation verify this component and the
+exact captured source hash. A review does not prove archive or extraction coverage.
+
+`publish_reviewed_sec_financial_tables.py --db PATH --request PATH` plans one
+closed reviewed population of native 20-F/6-K cells. Apply also requires
+`--expected-plan-sha256 SHA` and the database writer lock. Exact reported signs,
+units, dates, definitions and source spans survive publication. Split numeric
+cells and narrative numeric spans must replay from the qualified HTML extraction.
+Source publication leaves canonical semantic admission and archive completeness
+explicitly unperformed. Run entrypoints through `execution/sqlite_bootstrap.py`.
+
+`review_onon_input_roles.py --db PATH --request PATH` plans a closed analyst review
+of the exact reported recipe population: 45 interim operands or 23 annual
+operands. Apply requires `--expected-plan-sha256 SHA`,
+the database writer lock and a caller-owned transaction. The review verifies the
+sealed ontology and issuer-scoped resolution, source bytes, immutable observation
+and locator, binding, mapping, period, unit, basis, dimensions and reported signs.
+It appends definition metadata through `MetricOntology`; it does not change source
+facts or metric meaning. The review clock must follow the prior snapshot cutoff.
+New ontology and research snapshots are required before model use. Exact replay
+creates no additional revisions. Analyst review does not grant owner approval.
+
+`refresh_dcf.py --ticker ONON --onon-assumptions-path PATH` selects the explicit
+five-year `onon_economic_fcff` recipe. It uses the reviewed reported operands,
+expensed cash rent and economic stock compensation. The bridge deducts the
+reported other non-lease financial liability aggregate as a conservative allowance;
+it does not assert that this aggregate is borrowing debt. Forecasts, FX and the
+guidance midpoint remain attributed assumptions. The existing artifact owner and
+atomic database/workbook promotion apply. No implicit current seed is permitted.
+An optional exact prior input-receipt sidecar and scenario-review artifact retain
+the review's immutable input and output commitments. The builder environment
+uses `DCF_ONON_MODEL_INPUT_RECEIPT_PATH` and
+`DCF_ONON_SCENARIO_ACCEPTANCE_PATH` for these explicit artifacts.
+An out-of-range reverse DCF records an unavailable solution, its bracket and the
+endpoint values. It does not discard the fair values or the other diagnostics.
+
+Readiness reconstructs the full model and canonical bridge. It also verifies the
+input-bound bear/base/bull review. An absent or changed review remains blocked.
+The stored quote, source and date must agree with the reviewed market inputs.
+A passing analyst review establishes research evidence readiness. It does not
+establish owner approval or trade authority. Existing MELI reviews and generic
+foreign-filer captures keep their prior gates. No schema, provider, schedule,
+listener or Operations UI control is added.
+
+### Exact retained IR source aliases
+
+`execution/capture_issuer_document_inventory.py` accepts the explicit
+`issuer_document_inventory_request.v2_alias` read-only route. Each selected
+alias binds a legacy document ID, native version, exact blob SHA, persisted
+source observation and document link, selected issuer/reporting subject,
+quarter/type and aware knowledge/observation cutoffs. The owner verifies actual
+local bytes and seals the original registered URL plus exact immutable lineage
+in a separate v2 receipt. Missing, ambiguous, superseded or future evidence
+fails closed. The existing v1 exact-URL route and staging/publishing callers
+remain strict v1. This command performs no acquisition, source identity write,
+archive completeness certification or financial admission.
+
+The source alias write preparation for Booking remains a private, separately
+reviewed adapter over existing SourceObservation and DocumentObservationLink
+owners. It is not a new workspace action or automatic pipeline stage. Native
+host, canonical route, current production authority and concrete reviewed
+request/receipt gates remain external prerequisites. No scheduler or live
+write capability is added by the read-only inventory route.
 
 ### Selected SEC accession reading request
 

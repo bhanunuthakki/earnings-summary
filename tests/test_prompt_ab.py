@@ -16,6 +16,7 @@ from llm.prompt_ab import (
     AB_INSUFFICIENT,
     KEEP_BASELINE,
     PROMOTE_VARIANT,
+    TRANSPORT_DEGRADED,
     VARIANT_ERRORED,
     EditAnchorError,
     PromptEdit,
@@ -223,16 +224,19 @@ def test_decide_ab_keep_baseline_and_errors() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _seed_run(db_path: Path, experiment_id: str, rec: str, n_cases: int) -> None:
+def _seed_run(
+    db_path: Path, experiment_id: str, rec: str, n_cases: int, wins: int | None = None
+) -> None:
+    variant_wins = n_cases - 1 if wins is None else wins
     record_ab_verdict(
         db_path,
         experiment_id=experiment_id,
         purpose="bear_case",
         run_id="r",
         n_cases=n_cases,
-        variant_wins=n_cases - 1,
+        variant_wins=variant_wins,
         baseline_wins=0,
-        ties=1,
+        ties=n_cases - variant_wins,
         win_rate=0.9,
         judge_agreement=0.9,
         recommendation=rec,
@@ -262,6 +266,48 @@ def test_promotion_ready_pooled_bar(tmp_path: Path) -> None:
     _seed_run(db_path, exp, KEEP_BASELINE, 6)
     ready, why = promotion_ready(db_path, exp)
     assert ready is False and "KEEP_BASELINE" in why
+
+
+def _experiment(tmp_path: Path) -> tuple[Path, str]:
+    db_path = _db(tmp_path)
+    exp = create_experiment(
+        db_path,
+        purpose="bear_case",
+        baseline_prompt_version="v2",
+        hypothesis="h",
+        edits=_EDITS,
+        frozen_model="claude-sonnet-4-6",
+    )
+    return db_path, exp
+
+
+def test_promotion_within_noise_is_held(tmp_path: Path) -> None:
+    """Two runs that each clear the per-run 60% bar can still be a coin flip:
+    8 wins in 12 cases has a 95% lower bound well under 0.5."""
+    db_path, exp = _experiment(tmp_path)
+    _seed_run(db_path, exp, PROMOTE_VARIANT, 6, wins=4)
+    _seed_run(db_path, exp, PROMOTE_VARIANT, 6, wins=4)
+    ready, why = promotion_ready(db_path, exp)
+    assert ready is False and "within noise" in why
+
+
+def test_noise_gate_pools_hold_runs_too(tmp_path: Path) -> None:
+    """Dropping the runs that did not promote would cherry-pick the evidence."""
+    db_path, exp = _experiment(tmp_path)
+    _seed_run(db_path, exp, PROMOTE_VARIANT, 6)
+    _seed_run(db_path, exp, PROMOTE_VARIANT, 6)
+    assert promotion_ready(db_path, exp)[0] is True
+    _seed_run(db_path, exp, AB_HOLD, 6, wins=1)
+    ready, why = promotion_ready(db_path, exp)
+    assert ready is False and "11/18" in why
+
+
+def test_noise_gate_ignores_unmeasured_runs(tmp_path: Path) -> None:
+    db_path, exp = _experiment(tmp_path)
+    _seed_run(db_path, exp, PROMOTE_VARIANT, 6)
+    _seed_run(db_path, exp, PROMOTE_VARIANT, 6)
+    _seed_run(db_path, exp, TRANSPORT_DEGRADED, 6, wins=0)
+    assert promotion_ready(db_path, exp)[0] is True
 
 
 # ---------------------------------------------------------------------------

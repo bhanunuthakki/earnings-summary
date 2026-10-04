@@ -29,11 +29,13 @@ import pytest
 from ask.grounding import gather_evidence
 from provenance import overrides
 from provenance.overrides import OverrideAction
+from report.sections.financials import to_cell_source
 from timeseries.loaders import (
     load_financial_series,
     load_financial_series_with_provenance,
     load_kpi_series_with_provenance,
 )
+from ui.source_chip import viewer_href
 from viewspec.engine import execute_view
 from viewspec.spec import ViewSpec
 
@@ -323,11 +325,12 @@ def _viewspec_q4_cell(db: Path, metric: object):
 def test_no_override_all_surfaces_show_fmp(db: Path) -> None:
     """Baseline: without an override, every surface shows the FMP figure."""
     item = _ask_revenue_item(db)
-    assert item is not None
-    assert "20.94B" in item.text  # FMP value
-
-    cell = _viewspec_q4_cell(db, "fin:revenue")
-    assert cell.raw == _FMP_REVENUE_Q4
+    assert item is not None and "canonical_financial_schema_unavailable" in item.text
+    assert item.value is None and item.href is None
+    view = execute_view(
+        ViewSpec.from_dict({"tickers": ["GOOG"], "metrics": ["fin:revenue"]}), db_path=db
+    )
+    assert view.rows == [] and "canonical_financial_schema_unavailable" in view.warnings[0]
 
     series = load_financial_series("GOOG", "revenue", db_path=db)
     by_date = {str(o.period_end)[:10]: o.value for o in series}
@@ -339,30 +342,16 @@ def test_replace_override_agrees_across_ask_viewspec_report(db: Path) -> None:
     _seed_revenue_override(conn, action=OverrideAction.REPLACE)
     conn.close()
 
-    # 1) ask narrative — text carries the overridden value, NOT the FMP one, and
-    #    the cited chip describes the 8-K (the winning row), not the FMP doc.
     item = _ask_revenue_item(db)
-    assert item is not None
-    assert "17.66B" in item.text  # overridden value
-    assert "20.94B" not in item.text  # stale FMP value gone
-    assert "source: sec_8k" in item.text
-    assert item.doc_type == "sec_8k"
-    assert item.source_url == "https://sec.example/goog-8k"
-    assert item.href == "/source/2"  # the 8-K document, not the FMP doc (1)
-
-    # 2) ViewSpec / DIY — the cell value AND its chip come from the 8-K.
-    cell = _viewspec_q4_cell(db, "fin:revenue")
-    assert cell.raw == _OV_REVENUE_Q4
-    assert cell.source is not None
-    assert cell.source.source == "sec_8k"
-    assert cell.source.doc_id == 2
-
-    # 3) report — the financials section's plain reader overlays the same value.
+    assert item is not None and "unreviewed_scalar_override" in item.text
+    assert item.value is None and item.href is None
+    view = execute_view(
+        ViewSpec.from_dict({"tickers": ["GOOG"], "metrics": ["fin:revenue"]}), db_path=db
+    )
+    assert view.rows == [] and "unreviewed_scalar_override" in view.warnings[0]
+    # The legacy reader retains the exact overlay value for its remaining callers.
     series = load_financial_series("GOOG", "revenue", db_path=db)
-    report_q4 = {str(o.period_end)[:10]: o.value for o in series}["2025-12-31"]
-
-    # All three agree on the corrected figure.
-    assert cell.raw == report_q4 == _OV_REVENUE_Q4
+    assert {str(o.period_end)[:10]: o.value for o in series}["2025-12-31"] == _OV_REVENUE_Q4
 
 
 @pytest.mark.parametrize("action", [OverrideAction.REPLACE, OverrideAction.DROP])
@@ -469,9 +458,8 @@ def test_drop_override_omits_period_across_surfaces(db: Path) -> None:
     conn.close()
 
     item = _ask_revenue_item(db)
-    assert item is not None
-    assert "Q4'25" not in item.text  # dropped from the narrative series
-    assert "Q3'25" in item.text  # earlier quarters remain
+    assert item is not None and "unreviewed_scalar_override" in item.text
+    assert item.value is None and item.href is None
 
     # The admitted KPI keeps the Q4 column alive, so the financial drop must
     # remain visible as an empty revenue cell rather than a vanished period.
@@ -488,10 +476,30 @@ def test_drop_override_omits_period_across_surfaces(db: Path) -> None:
         db_path=db,
     )
     idx = result.period_labels.index("Q4'25")
-    rev_row = next(r for r in result.rows if r.metric.domain == "fin")
-    assert rev_row.cells[idx].raw is None
+    assert not any(row.metric.domain == "fin" for row in result.rows)
+    assert result.rows[0].cells[idx].raw == _FMP_GCP_GROWTH_Q4
+    assert any("unreviewed_scalar_override" in warning for warning in result.warnings)
 
     series = load_financial_series("GOOG", "revenue", db_path=db)
     dates = {str(o.period_end)[:10] for o in series}
     assert "2025-12-31" not in dates
     assert "2025-09-30" in dates
+
+
+def test_replacement_structured_chip_never_opens_superseded_fact(db: Path) -> None:
+    conn = _conn(db)
+    _seed_revenue_override(conn, action=OverrideAction.REPLACE)
+    conn.execute(
+        "UPDATE fact_overrides SET locator = ? WHERE fact_key = 'revenue'",
+        ('{"kind":"pdf_slide","pdf_page":2}',),
+    )
+    conn.commit()
+    conn.close()
+    series = load_financial_series_with_provenance("GOOG", "revenue", db_path=db)
+    point = next(item for item in series if item.period_end.date().isoformat() == "2025-12-31")
+    assert point.value == _OV_REVENUE_Q4
+    source = to_cell_source(point.provenance)
+    assert source is not None
+    assert source.doc_id == 2
+    assert viewer_href(source) == "/source/2?page=2"
+    assert source.fact_id is None

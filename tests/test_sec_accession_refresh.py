@@ -1,9 +1,12 @@
 """One selected accession uses native evidence owners without unrelated work."""
 
 import json
+import os
 import sqlite3
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -14,6 +17,7 @@ from pipeline.sec_accession_refresh import (
     apply_accession_refresh,
     plan_accession_refresh,
 )
+from provenance import immutable_artifact as artifact_owner
 from provenance.sec_native_capture import SecNativeCaptureRequest, capture_expected_sec_documents
 from provenance.source_coverage import ExpectedDocument, SourceCoverageLedger
 from tests.test_sec_native_capture import (
@@ -421,3 +425,64 @@ def test_changed_policy_role_refuses_exact_resume(
     changed = plan.model_copy(update={"coverage_role": "different"})
     with pytest.raises(owner.RefreshBoundaryError, match="no_longer_current"):
         owner.inspect_accession_refresh(database, changed)
+
+
+def test_grown_capture_is_refused_before_reading_beyond_frozen_budget(
+    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    initial = plan_accession_refresh(database, request(tmp_path))
+    apply_accession_refresh(
+        database, initial, session=FakeSession([FakeResponse()]),
+        user_agent="research-agent test@example.test",
+    )
+    file = next(path for path in initial.request.blob_root.rglob("*") if path.is_file())
+    budget = file.stat().st_size + 16
+    plan = plan_accession_refresh(
+        database, request(tmp_path).model_copy(update={"max_document_bytes": budget})
+    )
+    identity = (file.stat().st_dev, file.stat().st_ino)
+    allocated = [0]
+    real_read = os.read
+    real_fdopen = os.fdopen
+    reader: Callable[..., tuple[artifact_owner.ImmutableArtifactSnapshot, bytes]] = (
+        artifact_owner.read_stable_artifact
+    )
+
+    def selected(fd: int) -> bool:
+        observed = os.fstat(fd)
+        return (observed.st_dev, observed.st_ino) == identity
+
+    def audited_read(fd: int, size: int) -> bytes:
+        data = real_read(fd, size)
+        if selected(fd):
+            allocated[0] += len(data)
+        return data
+
+    @contextmanager
+    def audited_fdopen(fd: int, mode: str, *, closefd: bool) -> Iterator[object]:
+        with real_fdopen(fd, mode, closefd=closefd) as handle:
+            wrapped = Mock(wraps=handle)
+
+            def read(size: int = -1) -> bytes:
+                data = handle.read(size)
+                assert isinstance(data, bytes)
+                if selected(fd):
+                    allocated[0] += len(data)
+                return data
+
+            wrapped.read.side_effect = read
+            yield wrapped
+
+    def grow_before_pin(
+        path: Path, **kwargs: object
+    ) -> tuple[artifact_owner.ImmutableArtifactSnapshot, bytes]:
+        # Grow after the caller's pre-stat check, before the real reader pins it.
+        file.write_bytes(b"x" * (budget + 1))
+        return reader(path, **kwargs)
+
+    monkeypatch.setattr(os, "read", audited_read)
+    monkeypatch.setattr(os, "fdopen", audited_fdopen)
+    monkeypatch.setattr(owner, "read_stable_artifact", grow_before_pin)
+    with pytest.raises((owner.RefreshBoundaryError, artifact_owner.ImmutableArtifactConflictError)):
+        owner.inspect_accession_refresh(database, plan)
+    assert allocated[0] <= budget

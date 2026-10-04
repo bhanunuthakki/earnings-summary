@@ -3,9 +3,11 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -333,7 +335,9 @@ def test_unavailable_tool_and_malformed_machine_output_fail_closed(tmp_path: Pat
 
 
 def test_nul_paths_preserve_whitespace_and_newlines(tmp_path: Path) -> None:
-    paths = [" leading.py", "nested/line\nbreak.py", "trailing .py"]
+    paths = [" leading.py", "nested/line break [entry].py", "trailing .py"]
+    if os.name != "nt":
+        paths.append("nested/line\nbreak.py")
     for name in paths:
         target = tmp_path / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -343,6 +347,27 @@ def test_nul_paths_preserve_whitespace_and_newlines(tmp_path: Path) -> None:
 
     assert result.active == sorted(paths)
     assert result.status == "PASS"
+
+
+def test_git_nul_decoding_preserves_newlines_and_spaces_without_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = [" leading.py", "nested/line\nbreak.py", "trailing .py"]
+    checked_paths: list[str] = []
+
+    def record_path(root: Path, relative: str) -> Path:
+        assert root == tmp_path
+        checked_paths.append(relative)
+        return root / "unused.py"
+
+    monkeypatch.setattr(static_quality, "_tracked_file", record_path)
+    decoder: object = getattr(static_quality, "_tracked")
+    assert callable(decoder)
+    tracked_paths = cast(Callable[[Path, static_quality.CommandRunner], list[str]], decoder)
+
+    assert tracked_paths(tmp_path, _successful_runner(paths)) == sorted(paths)
+    assert checked_paths == sorted(paths)
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_tracked_path_escape_fails_closed(tmp_path: Path) -> None:

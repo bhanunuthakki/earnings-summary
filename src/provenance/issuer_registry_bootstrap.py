@@ -274,6 +274,15 @@ class BootstrapRequest(_ClosedModel):
     blob_root: Path
     apply: bool = False
     recorded_at: datetime
+    ticker_scope: tuple[str, ...] = ()
+
+    @field_validator("ticker_scope")
+    @classmethod
+    def _ticker_scope(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(ticker.strip().upper() for ticker in value)
+        if any(not ticker for ticker in normalized) or len(set(normalized)) != len(normalized):
+            raise ValueError("ticker scope must contain unique nonempty tickers")
+        return tuple(sorted(normalized))
 
     @field_validator("recorded_at")
     @classmethod
@@ -726,6 +735,11 @@ def bootstrap_issuer_reporting_registry(
 
     entries = parse_sec_company_tickers(raw_body)
     tracked, excluded_index_member_count = _tracked_reporting_scope(conn)
+    if request.ticker_scope:
+        selected = set(request.ticker_scope)
+        if selected - {item.ticker for item in tracked}:
+            raise ValueError("ticker_scope_not_in_reporting_universe")
+        tracked = tuple(item for item in tracked if item.ticker in selected)
     candidates: dict[str, list[SecCompanyTickerEntry]] = defaultdict(list)
     for entry in entries:
         candidates[entry.ticker].append(entry)

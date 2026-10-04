@@ -38,12 +38,13 @@ route is not authority to run it on production.
 | Company research / initiating coverage / memo | Existing `output/research/<TICKER>/`; `src/report/builder.py`; `src/report/sections/` | `execution/build_artifacts.py --db-path <explicit> --ticker <TICKER>`; `src/report/renderers/workspace_html.py` |
 | Pre-earnings preview | Current roster eligibility, event date, exact fiscal identity and current brief | `execution/generate_pre_earnings_briefs.py --db-path <explicit> --ticker <TICKER> --as-of <date>`; implementation `src/earnings_brief.py` |
 | Post-earnings readout | Selected transcript's fiscal period and complete package | `execution/generate_post_earnings_readouts.py --db-path <explicit> --ticker <TICKER>`; `src/earnings_readout.py`; evaluation names: `POST /api/earnings-readout/generate` |
-| Thesis monitoring / threshold check | Holdings JSON; `src/compute/thesis_evaluator.py`; `src/report/sections/thesis.py` | Read-only evaluation: `execution/run_thesis_evaluator.py --db <explicit> --ticker <TICKER> --dry-run`; omit `--dry-run` only for authorized persistence |
-| Counter-case / prove-or-kill research | Approved thesis and annual filings, risk factors and transcripts | `execution/pressure_test_thesis.py`; verify its current runtime configuration before execution |
+| Thesis monitoring / threshold check | Holdings JSON; `src/compute/thesis_evaluator.py`; `src/report/sections/thesis.py` | The evaluator CLI writes run accounting even with `--dry-run`; use only when that write is authorized. For observation-only assessment, use the no-write evaluator function with an explicit read-only connection and canonical holdings directory |
+| Counter-case / prove-or-kill research | Approved thesis and annual filings, risk factors and transcripts | Source-backed analyst counter-case through admitted readers. Legacy `execution/pressure_test_thesis.py` is unavailable for this skill: it forces a checkout-local DB, reads legacy facts and writes diligence |
+| Thesis revision from notes / analysis / article | Approved narrative and rule versions; supplied claims; [revision path](analysis-paths.md#thesis-revision-from-notes-or-an-article) | Prepare a cited before/after proposal. Governed Ask diff and decision: `src/research/proposal_approval.py`; ledger drafts: `src/research/thesis_artifact.py`; explicit amendment approval remains required |
 | Valuation / comps / scenarios / model update | `execution/valuation_preflight.py --db-path <explicit> --ticker <TICKER>`; `src/dcf/readiness.py`; current `dcf/` workbook | `execution/refresh_dcf.py`; `execution/dcf_sheets.py`; preserve owner assumptions and applicable business-model route |
 | Investment decision card | `src/research/investment_decision_card.py`; current artifact and input hash | `execution/build_investment_decision_card.py --db-path <explicit> --ticker <TICKER>`; `POST /api/research/card/<ticker>/refresh`; disposition is a separate owner action |
 | ETF diligence / exposures | Existing ETF workup; `src/etf_sources/`; ETF-specific source coverage | `execution/build_etf_workup.py --db-path <explicit> --ticker <TICKER>`; `execution/fetch_etf_data.py`; `execution/fetch_etf_published_data.py` |
-| Portfolio risk / concentration / overlap | `execution/get_portfolio_risk_matrix.py`; `src/allocation/book_risk.py`; `src/allocation/what_if.py`; snapshot as-of and coverage | `execution/refresh_portfolio_risk_snapshot.py` for authorized snapshot refresh |
+| Portfolio risk / concentration / overlap | `execution/get_portfolio_risk_matrix.py`; `src/allocation/book_risk.py`; `src/allocation/what_if.py`; snapshot as-of and coverage; full holdings/account readers in the allocation skill | `execution/refresh_portfolio_risk_snapshot.py` for authorized snapshot refresh |
 | Next-dollar allocation / taxes / sizing | `src/advisor/skills/next-dollar-allocation/SKILL.md`; its `references/interfaces.md` | Follow that skill; use full holdings/accounts, owner context and recorded intent; no trade execution |
 | Research conversation / meeting preparation | Existing artifact, sources and typed context | `POST /api/ask/stream`; `execution/comments_server_research_routes.py`; can invoke LLM and retain conversation |
 | Acquisition gaps / issuer releases, slides, filings | `execution/capture_issuer_document_inventory.py`; current source receipts | `execution/manage_issuer_document_sources.py` prepare → validate → publish; `execution/fetch_ir_documents.py`; `execution/intake_documents.py` |
@@ -86,6 +87,11 @@ route is not authority to run it on production.
 - Do not replace fact lineage with ad hoc SQL or normalized figures in a memo.
   Preserve exact raw documents in `ir_documents/`, typed receipts and rejected or
   conflicting observations. Source capture and extraction are different receipts.
+- The risk-matrix CLI selects research tickers and can fall back to DCF runs.
+  It does not establish full holdings or all-account coverage. Reconcile the full
+  book before making portfolio-wide concentration or overlap claims.
+- `--dry-run` on the thesis evaluator skips verdict persistence but still commits
+  operational run logs. Do not describe it as read-only.
 - Some entrypoints retain legacy defaults or helper database lookups. Inspect
   runtime configuration and explicit path propagation before live execution.
 
@@ -133,3 +139,6 @@ skill instructions, and validate them before recording a new review baseline.
 Use `--record-review --review-note` and explicit `--reviewed-source` arguments.
 A renamed owner also requires `--replace-reviewed-source OLD=NEW` and corrected
 route references. Do not accept a hash merely to remove a warning.
+
+Behavioral assessment follows [assessment](assessment.md). It checks task selection,
+analysis plans, source coverage and write boundaries as well as source drift.

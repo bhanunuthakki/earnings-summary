@@ -206,14 +206,19 @@ def _expand_base_argv(spec: StageSpec, args: argparse.Namespace) -> list[str]:
 def _dynamic_argv(spec: StageSpec, args: argparse.Namespace) -> list[str]:
     if args.db_path is None or spec.argument_profile is ArgumentProfile.NONE:
         return []
+    artifact_root = vars(args).get("repo_root", PROJECT_ROOT)
+    if not isinstance(artifact_root, Path):
+        raise TypeError("pipeline artifact root must be an explicit path")
+    if spec.argument_profile is ArgumentProfile.DB_PATH_AND_REPO_ROOT:
+        return ["--db-path", str(args.db_path), "--repo-root", str(artifact_root)]
     if spec.argument_profile is ArgumentProfile.DB_PATH:
         return ["--db-path", str(args.db_path)]
     if spec.argument_profile is ArgumentProfile.DB:
         return ["--db", str(args.db_path)]
     if spec.argument_profile is ArgumentProfile.DB_AND_STATE_ROOT:
-        return ["--db", str(args.db_path), "--repo-root", str(args.db_path.parent.parent)]
+        return ["--db", str(args.db_path), "--repo-root", str(artifact_root)]
     if spec.argument_profile is ArgumentProfile.REPO_ROOT_FROM_DB:
-        return ["--repo-root", str(args.db_path.parent.parent)]
+        return ["--repo-root", str(artifact_root)]
     raise AssertionError(f"unsupported argument profile: {spec.argument_profile}")
 
 
@@ -478,11 +483,17 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         f"{DEFAULT_USER_ID!r}. Passed through to every stage.",
     )
     parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=PROJECT_ROOT,
+        help="Artifact root, independent of the database location",
+    )
+    parser.add_argument(
         "--db-path",
         type=Path,
         default=None,
         help="Override the portfolio DB path for every stage. When unset, each "
-        "script applies its own default (data/portfolio.db under the repo root).",
+        "script uses the configured database authority.",
     )
     parser.add_argument(
         "--skip-triggers",
@@ -601,6 +612,7 @@ def _checkpoint_scope(
     return json.dumps(
         {
             "db_path": str(db_path.resolve()),
+            "artifact_root": str(args.repo_root.resolve()),
             "manifest_digest": manifest_digest(STAGE_MANIFEST),
             "max_cost_usd": args.max_cost_usd,
             "news_source": args.news_source,
@@ -622,6 +634,7 @@ def main(argv: list[str] | None = None) -> int:
     configured_path = configured_db_path(PROJECT_ROOT)
     db_path = args.db_path.expanduser().resolve() if args.db_path is not None else configured_path
     args.db_path = db_path
+    args.repo_root = args.repo_root.expanduser().resolve()
     return _run_pipeline(args, db_path=db_path, t0=t0)
 
 
@@ -637,6 +650,7 @@ def _run_pipeline(args: argparse.Namespace, *, db_path: Path, t0: float) -> int:
                 db_path,
                 start=True,
                 invocation_inputs={
+                    "artifact_root": str(args.repo_root),
                     "max_cost_usd": args.max_cost_usd,
                     "news_source": args.news_source,
                     "only": args.only or "",

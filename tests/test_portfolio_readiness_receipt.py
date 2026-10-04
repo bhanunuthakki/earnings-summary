@@ -4,12 +4,15 @@ import hashlib
 import json
 import os
 import sqlite3
+from collections.abc import Callable
+from contextlib import closing
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypedDict
 
 import pytest
 
+import sqlite_snapshot
 from execution import backup_restore_readiness_receipt as backup_receipt
 from execution import portfolio_readiness_receipt as readiness
 from sqlite_runtime import SQLiteConnectionRole
@@ -110,6 +113,261 @@ def test_backup_restore_receipt_binds_source_snapshot_and_verifier(tmp_path: Pat
     assert backup_receipt.evidence_id_is_valid(receipt)
     assert receipt.authorizes_downstream_write is False
     assert receipt.downstream_locked_revalidation_required is True
+
+
+@pytest.mark.parametrize("hard_link", [False, True])
+def test_backup_collector_rejects_alias_before_reading_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hard_link: bool
+) -> None:
+    source = _versioned_db(tmp_path / "source.db", revision=readiness.ACTIVE_HEAD)
+    snapshot = tmp_path / "alias.db" if hard_link else source
+    if hard_link:
+        os.link(source, snapshot)
+
+    def forbidden_read(_path: Path) -> str:
+        pytest.fail("an aliased database must not be read or hashed")
+
+    monkeypatch.setattr(backup_receipt, "_sha256", forbidden_read)
+    monkeypatch.setattr(backup_receipt, "_revision_and_verification", forbidden_read)
+    monkeypatch.setattr(backup_receipt, "_revision", forbidden_read, raising=False)
+    receipt = backup_receipt.collect_backup_restore_receipt(
+        source_db=source, snapshot_db=snapshot, manifest_path=tmp_path / "missing.json"
+    )
+    assert receipt.verified is False
+    assert receipt.blocking_reasons == ("backup_restore_snapshot_source_alias",)
+    assert receipt.source_db_file_token is None
+    assert backup_receipt.evidence_id_is_valid(receipt)
+
+
+@pytest.mark.parametrize("corruption", ["integrity", "foreign_key"])
+def test_backup_collector_fresh_candidate_still_rejects_source_corruption(
+    tmp_path: Path, corruption: str
+) -> None:
+    source = _versioned_db(tmp_path / "source.db", revision=readiness.ACTIVE_HEAD)
+    with closing(sqlite3.connect(source)) as writer:
+        writer.execute("CREATE TABLE parent (id INTEGER PRIMARY KEY)")
+        writer.execute("CREATE TABLE child (parent_id INTEGER REFERENCES parent(id))")
+        writer.execute("CREATE TABLE payload (value TEXT)")
+        writer.execute("INSERT INTO payload VALUES (?)", ("x" * 10000,))
+        writer.commit()
+        root_page = writer.execute(
+            "SELECT rootpage FROM sqlite_master WHERE name = 'payload'"
+        ).fetchone()[0]
+        page_size = writer.execute("PRAGMA page_size").fetchone()[0]
+    snapshot = tmp_path / "snapshot.db"
+    create_snapshot(SnapshotRequest(source_path=source, destination_path=snapshot))
+    original_stat = source.stat()
+    if corruption == "integrity":
+        with source.open("r+b") as stream:
+            stream.seek((root_page - 1) * page_size)
+            stream.write(b"\xff")
+    else:
+        with closing(sqlite3.connect(source)) as writer:
+            writer.execute("INSERT INTO child VALUES (999)")
+            writer.commit()
+    os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    # The singular revision remains readable. Metadata cannot establish the
+    # source's integrity or foreign-key validity; the fresh candidate must.
+    with closing(sqlite3.connect(source)) as reader:
+        assert reader.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            readiness.ACTIVE_HEAD,
+        )
+    receipt = backup_receipt.collect_backup_restore_receipt(source_db=source, snapshot_db=snapshot)
+    assert receipt.verified is False
+    assert "source_identity_changed_since_snapshot" in receipt.blocking_reasons
+    assert receipt.integrity_check == ("ok",)
+    assert receipt.foreign_key_violation_count == 0
+
+
+def test_backup_collector_requires_exact_text_source_revision(tmp_path: Path) -> None:
+    source = _versioned_db(tmp_path / "source.db", revision=readiness.ACTIVE_HEAD)
+    snapshot = tmp_path / "snapshot.db"
+    create_snapshot(SnapshotRequest(source_path=source, destination_path=snapshot))
+    with closing(sqlite3.connect(source)) as writer:
+        writer.execute("UPDATE alembic_version SET version_num = ?", (b"not-text",))
+        writer.commit()
+    receipt = backup_receipt.collect_backup_restore_receipt(source_db=source, snapshot_db=snapshot)
+    assert receipt.verified is False
+    assert receipt.source_db_revision is None
+    assert "source_database_unreadable" in receipt.blocking_reasons
+
+
+def test_backup_collector_rejects_artifact_changed_after_fresh_comparison(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _versioned_db(tmp_path / "source.db", revision=readiness.ACTIVE_HEAD)
+    snapshot = tmp_path / "snapshot.db"
+    create_snapshot(SnapshotRequest(source_path=source, destination_path=snapshot))
+    verify = backup_receipt.verify_snapshot_matches_source
+
+    def verify_then_change(
+        request: SnapshotRequest, *, manifest_path: Path | None = None
+    ) -> sqlite_snapshot.SnapshotResult:
+        result = verify(request, manifest_path=manifest_path)
+        with snapshot.open("ab") as stream:
+            stream.write(b"changed after fresh comparison")
+        return result
+
+    monkeypatch.setattr(backup_receipt, "verify_snapshot_matches_source", verify_then_change)
+    receipt = backup_receipt.collect_backup_restore_receipt(source_db=source, snapshot_db=snapshot)
+    assert receipt.verified is False
+    assert "backup_restore_snapshot_identity_mismatch" in receipt.blocking_reasons
+    assert backup_receipt.evidence_id_is_valid(receipt)
+
+
+def test_backup_collector_rejects_invalid_commitment_before_static_artifact_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _versioned_db(tmp_path / "source.db", revision=readiness.ACTIVE_HEAD)
+    snapshot = tmp_path / "snapshot.db"
+    create_snapshot(SnapshotRequest(source_path=source, destination_path=snapshot))
+    commitment: Callable[[backup_receipt.BackupRestoreReadinessReceipt], str] = getattr(
+        backup_receipt, "_evidence_id"
+    )
+    calls = 0
+
+    def broken_first_seal(receipt: backup_receipt.BackupRestoreReadinessReceipt) -> str:
+        nonlocal calls
+        calls += 1
+        return "0" * 64 if calls == 1 else commitment(receipt)
+
+    monkeypatch.setattr(backup_receipt, "_evidence_id", broken_first_seal)
+    receipt = backup_receipt.collect_backup_restore_receipt(source_db=source, snapshot_db=snapshot)
+    assert receipt.verified is False
+    assert "backup_restore_evidence_id_invalid" in receipt.blocking_reasons
+    assert backup_receipt.evidence_id_is_valid(receipt)
+
+
+def test_backup_collector_performs_one_fresh_proof_without_source_full_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _versioned_db(tmp_path / "source.db", revision=readiness.ACTIVE_HEAD)
+    snapshot = tmp_path / "snapshot.db"
+    checked: list[Path] = []
+    verified: list[Path] = []
+    backed_up: list[Path] = []
+    collector_checks: Callable[[Path], tuple[str, tuple[str, ...], int]] = getattr(
+        backup_receipt, "_revision_and_verification"
+    )
+    snapshot_checks: Callable[[Path], sqlite_snapshot.SnapshotVerification] = getattr(
+        sqlite_snapshot, "_verify"
+    )
+    backup: Callable[[sqlite3.Connection, Path, sqlite_snapshot.SnapshotLogger | None], None] = (
+        getattr(sqlite_snapshot, "_backup")
+    )
+
+    def collect_checks(path: Path) -> tuple[str, tuple[str, ...], int]:
+        checked.append(path)
+        return collector_checks(path)
+
+    def full_checks(path: Path) -> sqlite_snapshot.SnapshotVerification:
+        verified.append(path)
+        return snapshot_checks(path)
+
+    def backup_copy(
+        connection: sqlite3.Connection, path: Path, logger: sqlite_snapshot.SnapshotLogger | None
+    ) -> None:
+        backed_up.append(path)
+        backup(connection, path, logger)
+
+    monkeypatch.setattr(backup_receipt, "_revision_and_verification", collect_checks)
+    monkeypatch.setattr(sqlite_snapshot, "_verify", full_checks)
+    monkeypatch.setattr(sqlite_snapshot, "_backup", backup_copy)
+    create_snapshot(SnapshotRequest(source_path=source, destination_path=snapshot))
+    receipt = backup_receipt.collect_backup_restore_receipt(source_db=source, snapshot_db=snapshot)
+    assert receipt.verified is True
+    assert checked == [snapshot.resolve()]
+    # Creation verifies once. Fresh replay verifies both the artifact and its
+    # new source-derived candidate. The collector also verifies the artifact.
+    assert len(verified) == 3
+    assert len(checked) + len(verified) == 4
+    assert len(backed_up) == 2
+
+
+def test_backup_collector_applies_static_receipt_guard_before_returning_verified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _versioned_db(tmp_path / "source.db", revision=readiness.ACTIVE_HEAD)
+    snapshot = tmp_path / "snapshot.db"
+    create_snapshot(SnapshotRequest(source_path=source, destination_path=snapshot))
+
+    def static_guard(
+        receipt: backup_receipt.BackupRestoreReadinessReceipt,
+        *,
+        source_db: Path,
+        source_revision: str | None,
+        require_current_identity: bool = True,
+    ) -> tuple[str, ...]:
+        assert backup_receipt.evidence_id_is_valid(receipt)
+        assert source_db == source.resolve()
+        assert source_revision == readiness.ACTIVE_HEAD
+        assert require_current_identity is False
+        return ("backup_restore_snapshot_identity_mismatch",)
+
+    monkeypatch.setattr(backup_receipt, "validate_receipt_for_source", static_guard)
+    receipt = backup_receipt.collect_backup_restore_receipt(source_db=source, snapshot_db=snapshot)
+    assert receipt.verified is False
+    assert receipt.blocking_reasons == ("backup_restore_snapshot_identity_mismatch",)
+    assert backup_receipt.evidence_id_is_valid(receipt)
+
+
+def test_backup_collector_rejects_verifier_change_during_collection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _versioned_db(tmp_path / "source.db", revision=readiness.ACTIVE_HEAD)
+    snapshot = tmp_path / "snapshot.db"
+    create_snapshot(SnapshotRequest(source_path=source, destination_path=snapshot))
+    hashes = iter(("a" * 64, "b" * 64))
+    monkeypatch.setattr(backup_receipt, "verifier_code_sha256", lambda: next(hashes))
+    receipt = backup_receipt.collect_backup_restore_receipt(source_db=source, snapshot_db=snapshot)
+    assert receipt.verified is False
+    assert "backup_restore_verifier_code_changed" in receipt.blocking_reasons
+    assert backup_receipt.evidence_id_is_valid(receipt)
+
+
+def test_backup_collector_fences_wal_commit_during_static_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _versioned_db(tmp_path / "source.db", revision=readiness.ACTIVE_HEAD)
+    writer = sqlite3.connect(source)
+    try:
+        writer.execute("PRAGMA journal_mode = WAL")
+        writer.execute("PRAGMA wal_autocheckpoint = 0")
+        writer.execute("CREATE TABLE facts (value TEXT NOT NULL)")
+        writer.execute("INSERT INTO facts VALUES ('old')")
+        writer.commit()
+        snapshot = tmp_path / "snapshot.db"
+        create_snapshot(SnapshotRequest(source_path=source, destination_path=snapshot))
+        validate = backup_receipt.validate_receipt_for_source
+        main_identity = (source.stat().st_size, source.stat().st_mtime_ns)
+
+        def static_guard(
+            receipt: backup_receipt.BackupRestoreReadinessReceipt,
+            *,
+            source_db: Path,
+            source_revision: str | None,
+            require_current_identity: bool = True,
+        ) -> tuple[str, ...]:
+            reasons = validate(
+                receipt,
+                source_db=source_db,
+                source_revision=source_revision,
+                require_current_identity=require_current_identity,
+            )
+            writer.execute("UPDATE facts SET value = 'new'")
+            writer.commit()
+            assert (source.stat().st_size, source.stat().st_mtime_ns) == main_identity
+            return reasons
+
+        monkeypatch.setattr(backup_receipt, "validate_receipt_for_source", static_guard)
+        receipt = backup_receipt.collect_backup_restore_receipt(
+            source_db=source, snapshot_db=snapshot
+        )
+        assert receipt.verified is False
+        assert "source_identity_changed_during_verification" in receipt.blocking_reasons
+        assert backup_receipt.evidence_id_is_valid(receipt)
+    finally:
+        writer.close()
 
 
 def test_backup_restore_receipt_rejects_a_later_wal_only_commit(tmp_path: Path) -> None:

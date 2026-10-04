@@ -1467,6 +1467,109 @@ def _install_versioned_pdf_reader(monkeypatch: pytest.MonkeyPatch, version: str)
     monkeypatch.setattr(pypdf, "PdfReader", Reader)
 
 
+def _encrypted_pdf(user_password: str) -> bytes:
+    from pypdf import PdfWriter
+    from pypdf.constants import UserAccessPermissions
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=300, height=200)
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
+    page[NameObject("/Resources")] = DictionaryObject(
+        {
+            NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+        }
+    )
+    content = DecodedStreamObject()
+    content.set_data(b"BT /F1 12 Tf 20 100 Td (Reported revenue 123.) Tj ET")
+    page[NameObject("/Contents")] = content
+    writer.encrypt(
+        user_password,
+        owner_password="dummy-owner-only",  # pragma: allowlist secret -- synthetic PDF fixture
+        permissions_flag=UserAccessPermissions.PRINT,
+    )
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize("password", ["", "required-to-open"])
+def test_pdf_restrictions_do_not_replace_password_access_control(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, password: str
+) -> None:
+    import pypdf
+
+    # Exercise real PDF bytes under a controlled identity. The pinned-runtime
+    # integration gate separately proves the promoted parser installation.
+    monkeypatch.setattr(pypdf, "__version__", PDF_FULLTEXT_PYPDF_VERSION)
+    raw = _encrypted_pdf(password)
+    original_hash = hashlib.sha256(raw).hexdigest()
+    conn, repo_root = _connection(tmp_path, suffix=".pdf", content=raw)
+    try:
+        result = backfill_fulltext_evidence(conn, _request(repo_root, apply=True))
+        rows = conn.execute(
+            "SELECT text,locator_json FROM evidence_nodes WHERE node_kind='pdf_page'"
+        ).fetchall()
+        if password:
+            assert result.finding_counts == {"encrypted_pdf": 1}
+            assert result.documents_extracted == 0
+            assert not rows
+        else:
+            assert result.documents_extracted == 1
+            assert len(rows) == 1
+            assert rows[0]["text"].strip() == "Reported revenue 123."
+            locator = json.loads(rows[0]["locator_json"])
+            assert locator["page_number"] == 1
+            assert locator["source_ref"] == "data/ACME.pdf"
+        assert (
+            hashlib.sha256((repo_root / "data" / "ACME.pdf").read_bytes()).hexdigest()
+            == original_hash
+        )
+    finally:
+        conn.close()
+    assert hashlib.sha256(raw).hexdigest() == original_hash
+
+
+@pytest.mark.parametrize("permissions_valid", [False, None])
+def test_pdf_invalid_permissions_are_quarantined_before_page_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    permissions_valid: bool | None,
+) -> None:
+    import pypdf
+
+    class Reader:
+        is_encrypted = True
+        are_permissions_valid = permissions_valid
+
+        def __init__(self, _stream: object) -> None:
+            pass
+
+        def decrypt(self, password: str) -> int:
+            assert password == ""
+            return 1
+
+        @property
+        def pages(self) -> list[object]:
+            pytest.fail("Invalid PDF permissions must block page access")
+
+    monkeypatch.setattr(pypdf, "__version__", PDF_FULLTEXT_PYPDF_VERSION)
+    monkeypatch.setattr(pypdf, "PdfReader", Reader)
+    conn, repo_root = _connection(tmp_path, suffix=".pdf", content=b"retained-source")
+    try:
+        result = backfill_fulltext_evidence(conn, _request(repo_root, apply=True))
+        assert result.documents_extracted == 0
+        assert result.finding_counts == {"invalid_pdf_permissions": 1}
+    finally:
+        conn.close()
+
+
 @pytest.mark.parametrize("version", ["6.15.0", "6.16.1", "6.17.0", "unknown", None])
 def test_pdf_unapproved_runtime_is_quarantined_before_parse(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: str | None
