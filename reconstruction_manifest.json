@@ -21,14 +21,18 @@
       "entrypoints": [
         "alembic/versions/0001_initial_schema.py",
         "src/sqlite_runtime.py",
-        "src/db.py"
+        "src/db.py",
+        "src/pipeline/kpi_legacy_disposition_capture.py",
+        "src/pipeline/kpi_semantics.py",
+        "src/provenance/financial_derivations.py"
       ],
       "dependencies": [
         "requirements.lock",
         "alembic.ini"
       ],
       "test_commands": [
-        "pytest tests/test_sqlite_runtime.py -q"
+        "pytest tests/test_sqlite_runtime.py -q",
+        "pytest tests/test_kpi_legacy_dispositions.py tests/test_kpi_source_precision.py tests/test_financial_source_repairs.py tests/test_reviewed_kpi_native_population.py -q"
       ],
       "documentation": [
         "AGENTS.md",
@@ -102,7 +106,9 @@
         "src/sources/earnings_calendar.py",
         "src/sources/canonical_financial_series.py",
         "src/sources/registry.py",
-        "src/pipeline/source_policy.py"
+        "src/pipeline/source_policy.py",
+        "src/pipeline/managed_ir_sources.py",
+        "src/provenance/fulltext_extractor_identity.py"
       ],
       "dependencies": [
         "core_data_layer"
@@ -138,7 +144,9 @@
         "src/compute/metrics_engine/engine.py",
         "src/compute/metrics_engine/io.py",
         "src/compute/kpi_extract_summaries.py",
-        "src/dcf/valuation.py"
+        "src/dcf/valuation.py",
+        "src/compute/thesis_metric_series.py",
+        "src/evals/kpi_repair_judge.py"
       ],
       "dependencies": [
         "core_data_layer"

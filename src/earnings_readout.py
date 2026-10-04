@@ -10,6 +10,7 @@ reported quarter while retaining superseded history.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 import time
@@ -17,8 +18,10 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from compute.thesis_evaluator import KpiInputReference
 from db_paths import db_path_context
 from earnings_brief import (
+    KpiText,
     kpi_text,
     tone_text,
     valuation_text,
@@ -100,12 +103,22 @@ class ContextSource:
     source_kind: str
     identity_status: str
     source_doc_id: int | None = None
+    selected_inputs: tuple[KpiInputReference, ...] = ()
 
-    def as_dict(self) -> dict[str, str | int | None]:
+    def as_dict(self) -> dict[str, object]:
         return {
             "source_kind": self.source_kind,
             "identity_status": self.identity_status,
             "source_doc_id": self.source_doc_id,
+            **(
+                {
+                    "selected_inputs": [
+                        point.model_dump(mode="json") for point in self.selected_inputs
+                    ]
+                }
+                if self.selected_inputs
+                else {}
+            ),
         }
 
 
@@ -369,12 +382,15 @@ def _context_blocks(
     except sqlite3.Error:
         conn = None
     try:
+        if conn is not None:
+            conn.execute("BEGIN")
         transcript = _transcript_text(conn, quarter) if conn is not None else ""
         surprise = _surprise_text(conn, quarter) if conn is not None else ""
         kpis = kpi_text(conn, quarter.ticker, today) if conn is not None else ""
         valuation = valuation_text(conn, quarter.ticker) if conn is not None else ""
     finally:
         if conn is not None:
+            conn.rollback()
             conn.close()
     anchors = compose_anchor_block(
         load_thesis_anchor(repo_root, quarter.ticker),
@@ -401,7 +417,11 @@ def _context_blocks(
             "tracked_kpi_moves",
             "Tracked KPI moves",
             kpis,
-            ContextSource("kpi_facts", "missing"),
+            ContextSource(
+                "kpi_facts",
+                "partial" if isinstance(kpis, KpiText) and kpis.selected_inputs else "missing",
+                selected_inputs=kpis.selected_inputs if isinstance(kpis, KpiText) else (),
+            ),
         ),
         ContextBlock(
             "thesis_break_rules_prior_context",
@@ -459,6 +479,9 @@ def _context_manifest(blocks: list[ContextBlock]) -> tuple[dict[str, object], li
         source_doc_id = block.source.source_doc_id
         if source_doc_id is not None and source_doc_id not in source_doc_ids:
             source_doc_ids.append(source_doc_id)
+        for point in block.source.selected_inputs:
+            if point.source_doc_id is not None and point.source_doc_id not in source_doc_ids:
+                source_doc_ids.append(point.source_doc_id)
     missing = [
         block.kind
         for block in blocks
@@ -522,6 +545,7 @@ def _generate_quarter(
         quarter.period_end,
         quarter.fiscal_period_type,
         *sections,
+        json.dumps(context_manifest, sort_keys=True, separators=(",", ":")),
     ]
     input_sha = compute_input_sha256(prompt_version=prompt_version, cache_inputs=cache_inputs)
     current = read_current(

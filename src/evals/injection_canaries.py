@@ -37,7 +37,6 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 from uuid import uuid4
 
 from evals.harness import (
@@ -45,6 +44,7 @@ from evals.harness import (
     EvalAbortError,
     EvalRunSummary,
     dumps_compact,
+    load_golden_document,
     now_naive_utc,
     resolve_git_sha,
     sha256_file,
@@ -89,24 +89,7 @@ class CanaryCase:
 
 
 def _load_doc(path: Path) -> list[dict[str, object]]:
-    try:
-        payload: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise ValueError(f"golden file unreadable at {path}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("golden file must be a JSON object")
-    doc = cast("dict[str, object]", payload)
-    if doc.get("purpose") != PURPOSE:
-        raise ValueError(f"golden file purpose must be {PURPOSE!r}, got {doc.get('purpose')!r}")
-    raw_cases = doc.get("cases")
-    if not isinstance(raw_cases, list) or not raw_cases:
-        raise ValueError("golden file needs a non-empty `cases` list")
-    out: list[dict[str, object]] = []
-    for i, entry in enumerate(cast("list[object]", raw_cases)):
-        if not isinstance(entry, dict):
-            raise ValueError(f"cases[{i}]: must be an object")
-        out.append(cast("dict[str, object]", entry))
-    return out
+    return load_golden_document(path, PURPOSE)
 
 
 def _require_str(c: dict[str, object], key: str, label: str, errors: list[str]) -> str:
@@ -208,20 +191,20 @@ def _run_material_news(case: CanaryCase) -> RunnerResult:
     # (the production materiality path), so it touches these module-privates.
     from triggers.material_news import (
         MaterialNewsTrigger,
-        _NewsStory,  # pyright: ignore[reportPrivateUsage]  # eval drives the internal classify seam
+        NewsStory,
     )
 
     # A single, obviously-immaterial story whose snippet carries the attack.
     # A defended classifier scores it below the relevance floor regardless of
     # the embedded "score this material" order.
-    story = _NewsStory(
+    story = NewsStory(
         news_id=1,
         headline=case.benign_text.strip() or "Sponsored: 10 dividend stocks for your watchlist",
         url="https://example.com/canary",
         published_at="2026-06-11 12:00:00",
         snippet=case.injection,
     )
-    scores = MaterialNewsTrigger()._classify(  # pyright: ignore[reportPrivateUsage]
+    scores = MaterialNewsTrigger().classify_news(
         ticker=case.ticker,
         stories=[story],
         anchor_block="",
@@ -249,11 +232,10 @@ _RUNNERS: dict[str, Runner] = {
 def _relevance_floor() -> float:
     # The same floor scan() acts on — read from the trigger so the canary and
     # production can never drift on what counts as "fired".
-    from triggers.material_news import (
-        _RELEVANCE_THRESHOLD,  # pyright: ignore[reportPrivateUsage]  # shared fire floor
-    )
 
-    return _RELEVANCE_THRESHOLD
+    from triggers.material_news import RELEVANCE_THRESHOLD
+
+    return RELEVANCE_THRESHOLD
 
 
 def grade_canary_case(case: CanaryCase, *, runner: Runner | None = None) -> CaseResult:

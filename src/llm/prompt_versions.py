@@ -160,7 +160,8 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # decision date and asks for `not_before` (decision date + stated horizon)
     # on forward-looking milestone conditions, so "reaches $X in ~12 months"
     # stops being encoded as an immediately-evaluable threshold.
-    "decision_conditions_extract": "v2",
+    # v3: explicit nullable financial cadence; deadlines do not imply cadence.
+    "decision_conditions_extract": "v3",
     # Qualitative-condition extraction (src/decision_conditions.py, L9 PR2 — the
     # non-numeric news/earnings-tone bridge). Bump when _QUALITATIVE_PROMPT is
     # materially rewritten.

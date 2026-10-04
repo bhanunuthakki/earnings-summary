@@ -803,7 +803,8 @@ def test_all_apply_preflights_snapshot_blockers_before_any_write(
     assert writes == []
 
 
-def test_existing_binding_requires_exact_immutable_replay() -> None:
+@pytest.mark.parametrize("mismatch", ("payload", "effective_at", "knowledge_at", "recorded_at"))
+def test_existing_binding_requires_exact_immutable_replay(mismatch: str) -> None:
     cutoff = datetime(2026, 7, 29, tzinfo=UTC)
     conn = sqlite3.connect(":memory:")
     conn.executescript(
@@ -853,32 +854,40 @@ def test_existing_binding_requires_exact_immutable_replay() -> None:
             cutoff.isoformat(),
         ),
     )
-    stale_payload = json.dumps(
+    obligation_id = "obligation-stale" if mismatch == "payload" else "obligation-current"
+    family = "continuous_disclosure" if mismatch == "payload" else "operating_company_periodic"
+    payload = json.dumps(
         {
-            "document_family": "continuous_disclosure",
+            "document_family": family,
             "expected_document_id": "expected",
             "issuer_id": "issuer",
             "reporting_entity_id": "reporting",
-            "source_obligation_revision_id": "obligation-stale",
+            "source_obligation_revision_id": obligation_id,
         },
         sort_keys=True,
         separators=(",", ":"),
     )
+    binding_id = (
+        "expected-obligation-binding:"
+        + population.hashlib.sha256(f"expected\0{obligation_id}".encode()).hexdigest()
+    )
+    clocks = tuple(
+        (cutoff + timedelta(seconds=1) if mismatch == name else cutoff).isoformat()
+        for name in ("effective_at", "knowledge_at", "recorded_at")
+    )
     conn.execute(
         "INSERT INTO expected_document_obligation_bindings VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (
-            "binding-stale",
-            "binding-stale",
+            binding_id,
+            binding_id,
             "expected",
-            "obligation-stale",
+            obligation_id,
             "issuer",
             "reporting",
-            "continuous_disclosure",
-            stale_payload,
-            population.hashlib.sha256(stale_payload.encode()).hexdigest(),
-            cutoff.isoformat(),
-            cutoff.isoformat(),
-            cutoff.isoformat(),
+            family,
+            payload,
+            population.hashlib.sha256(payload.encode()).hexdigest(),
+            *clocks,
         ),
     )
     decision = ReportingDocumentDecision(
@@ -892,7 +901,12 @@ def test_existing_binding_requires_exact_immutable_replay() -> None:
         reporting_entity_id="reporting",
     )
     try:
-        with pytest.raises(ValueError, match="binding replay changed immutable values"):
+        reason = (
+            "binding replay changed immutable values"
+            if mismatch == "payload"
+            else "binding is not visible at requested cutoff"
+        )
+        with pytest.raises(ValueError, match=reason):
             getattr(population, "_ensure_expected_document_binding")(
                 conn,
                 decision,

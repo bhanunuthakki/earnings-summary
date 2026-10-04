@@ -725,7 +725,7 @@ def test_current_processing_and_fact_coordinates_select_latest_complete_as_of_o(
         );
         CREATE TABLE canonical_fact_resolution_snapshot_seals (
             resolution_snapshot_id TEXT PRIMARY KEY,
-            sealed_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL
         );
         CREATE TABLE canonical_fact_resolution_snapshot_scope_members (
             resolution_snapshot_id TEXT NOT NULL,
@@ -1006,7 +1006,7 @@ def test_stale_generation_coordinates_are_not_admitted() -> None:
         );
         CREATE TABLE canonical_fact_resolution_snapshot_seals (
             resolution_snapshot_id TEXT PRIMARY KEY,
-            sealed_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL
         );
         CREATE TABLE canonical_fact_resolution_snapshot_scope_members (
             resolution_snapshot_id TEXT NOT NULL,

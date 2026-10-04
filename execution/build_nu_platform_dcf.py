@@ -45,40 +45,49 @@ from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+
+from db_paths import require_db_path, resolve_db_path
+from dcf import reverse_valuation as reverse_valuation_mod
+from dcf.artifact_promotion import (
+    ArtifactPromotion,
+    live_path_from_env,
+    promotion_from_env,
+    run_dcf_entrypoint,
+)
+from dcf.provenance import build_file_provenance, schema_supports_provenance
+from dcf.specialized_price import (
+    SpecializedPriceObservation,
+    price_seed_source_files,
+    resolve_specialized_price,
+)
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
 CODE_ROOT = Path(__file__).resolve().parents[1]
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or CODE_ROOT)
 T = os.environ.get("DCF_TICKER", "NU")
 DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 
-sys.path.insert(0, str(CODE_ROOT / "src"))
-
-
-from dcf import reverse_valuation as reverse_valuation_mod  # noqa: E402
-from dcf.artifact_promotion import (  # noqa: E402
-    ArtifactPromotion,
-    live_path_from_env,
-    promotion_from_env,
-)
-from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
-from dcf.specialized_price import (  # noqa: E402
-    SpecializedPriceObservation,
-    price_seed_source_files,
-    resolve_specialized_price,
-)
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 try:  # persistence is best-effort -- the workbook builds without a DB
-    from dcf import persist as persist_mod
+    from dcf import persist as _persist_mod_module
 except ImportError:  # pragma: no cover
-    persist_mod = None  # type: ignore[assignment]
+    persist_mod = None
+else:
+    persist_mod = _persist_mod_module
 try:  # global macro assumptions -- best-effort; degrades to in-code seed defaults
-    from dcf import global_assumptions as global_dcf
+    from dcf import global_assumptions as _global_dcf_module
 except ImportError:  # pragma: no cover
-    global_dcf = None  # type: ignore[assignment]
+    global_dcf = None
+else:
+    global_dcf = _global_dcf_module
 try:  # scenario emission (Monthly Red Team PR8) -- best-effort like persistence
-    from dcf import redesign as redesign_mod
+    from dcf import redesign as _redesign_mod_module
 except ImportError:  # pragma: no cover
-    redesign_mod = None  # type: ignore[assignment]
+    redesign_mod = None
+else:
+    redesign_mod = _redesign_mod_module
 
 YELLOW = PatternFill("solid", fgColor="FFF2CC")
 BLUE_FONT = Font(color="1F4E79")
@@ -141,7 +150,9 @@ class Assum:
     years: int = 10
     shares: float = 4907.0  # diluted shares (M)
     price: float = 12.29
-    global_assumption_source: dict[str, object] = field(default_factory=dict, repr=False)
+    global_assumption_source: dict[str, object] = field(
+        default_factory=dict[str, object], repr=False
+    )
     price_seed_source: str = field(default="model_seed", repr=False)
     price_seed_path: str | None = field(default=None, repr=False)
 
@@ -171,7 +182,7 @@ class Row:
 
 @dataclass
 class Mirror:
-    rows: list[Row] = field(default_factory=list)
+    rows: list[Row] = field(default_factory=list[Row])
     pv_fcfe: float = 0.0
     pv_tv: float = 0.0
     value_fcfe: float = 0.0
@@ -306,7 +317,7 @@ def load_assumptions(ticker: str) -> Assum:
     # an unpinned platform name tracks the dashboard-set global while a pinned
     # tax still wins (NU pins 0.28 -- a genuinely company-specific Brazilian rate).
     global_loaded = (
-        global_dcf.load_with_provenance(db_path=REPO / "data" / "portfolio.db")
+        global_dcf.load_with_provenance(db_path=resolve_db_path(None, configured_root=REPO))
         if global_dcf is not None
         else None
     )
@@ -345,9 +356,12 @@ def load_assumptions(ticker: str) -> Assum:
         try:
             d: Any = json.loads(prof.read_text(encoding="utf-8"))
             if isinstance(d, list):
-                d = d[0] if d else {}
-            if isinstance(d, dict) and d.get("price"):
-                s.price = float(d["price"])
+                d = cast("list[Any]", d)[0] if d else dict[str, Any]()
+            if isinstance(d, dict):
+                record = cast("dict[str, Any]", d)
+                if not record.get("price"):
+                    raise ValueError("profile price missing")
+                s.price = float(record["price"])
                 s.price_seed_source = "fmp_profile"
                 s.price_seed_path = f"data/historical/fmp/{ticker}_profile.json"
         except (OSError, json.JSONDecodeError, ValueError, KeyError):
@@ -418,6 +432,7 @@ def scenarios_block(s: Assum, m: Mirror, holdings: dict[str, object] | None) -> 
     unchanged. Requires ``redesign_mod`` (caller gates on it)."""
     import dataclasses as _dc
 
+    assert redesign_mod is not None
     bull_d = redesign_mod.BULL_SEED
     bear_d = redesign_mod.thesis_bear_seed(holdings)
     provenance = "thesis" if redesign_mod.parse_thesis_bear_deltas(holdings) is not None else "seed"
@@ -501,6 +516,7 @@ def build(s: Assum, m: Mirror, dest: Path, holdings: dict[str, object] | None = 
     ``scenarios_block``."""
     wb = openpyxl.Workbook()
     dash = wb.active
+    assert isinstance(dash, Worksheet)
     dash.title = "Dashboard"
     mod = wb.create_sheet("Model")
     val = wb.create_sheet("Valuation")
@@ -772,7 +788,7 @@ def persist_dcf_run(
     file edit can never make the sheet and the persisted snapshot disagree —
     a ticker with genuinely no holdings JSON still resolves to ``None`` either
     way, so this collapses "not passed" and "no holdings on file" safely."""
-    db = REPO / "data" / "portfolio.db"
+    db = require_db_path(resolve_db_path(None, configured_root=REPO))
     if persist_mod is None or not db.exists() or not m.vps:
         return False
     if holdings is None:
@@ -863,7 +879,7 @@ def persist_dcf_run(
         return persist_mod.upsert(conn, row, artifact_promotion=artifact_promotion)
 
 
-def main() -> int:
+def _main_owned() -> int:
     s = load_assumptions(T)
     price_observation = resolve_specialized_price(
         REPO,
@@ -912,6 +928,10 @@ def main() -> int:
         f"FCFE ${m.vps:.2f} | RI floor ${m.vps_ri:.2f} | exit-PE ${m.vps_pe:.2f}  (vs ${s.price:.2f})"
     )
     return 0
+
+
+def main() -> int:
+    return run_dcf_entrypoint(REPO, T, _main_owned, owner="build-nu-platform-dcf")
 
 
 if __name__ == "__main__":

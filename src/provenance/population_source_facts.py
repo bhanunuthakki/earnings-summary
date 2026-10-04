@@ -23,7 +23,9 @@ from pydantic import (
     ConfigDict,
     Field,
     JsonValue,
+    SerializerFunctionWrapHandler,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -32,7 +34,12 @@ from provenance.fact_plane_v2 import (
     ExtractionRunCompletenessSealV2,
     FactCellV2,
     FactDimensionV2,
+    FactPlaneV2,
     ReportedFactObservationV2,
+)
+from provenance.financial_fact_resolution import (
+    ReviewedKpiNativeProjection,
+    prepare_reviewed_kpi_native_projection,
 )
 from provenance.population_completeness import (
     PopulationPlaneVerification,
@@ -93,6 +100,13 @@ class SourceFactDocumentScope(_FrozenModel):
 
 
 class SourceFactPopulationRequest(_FrozenModel):
+    schema_version: Literal["source_fact_population.v1", "source_fact_population.v2"] = (
+        "source_fact_population.v1"
+    )
+    observation_ids: tuple[str, ...] = Field(default=(), max_length=100)
+    reviewed_kpi_projections: tuple[ReviewedKpiNativeProjection, ...] = Field(
+        default=(), max_length=100
+    )
     document_scopes: tuple[SourceFactDocumentScope, ...] = Field(default=(), max_length=100)
     data_cutoff_at: datetime
     operation_recorded_at: datetime
@@ -101,6 +115,17 @@ class SourceFactPopulationRequest(_FrozenModel):
     max_runs: int | None = Field(default=None, ge=1)
     input_commitment_sha256: str | None = None
     planned_output_commitment_sha256: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _legacy_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        value = handler(self)
+        if not isinstance(value, dict):
+            raise TypeError("source population request serializer must return an object")
+        payload = cast("dict[str, object]", value)
+        if self.schema_version == "source_fact_population.v1":
+            for key in ("schema_version", "observation_ids", "reviewed_kpi_projections"):
+                payload.pop(key, None)
+        return payload
 
     @field_validator("input_commitment_sha256", "planned_output_commitment_sha256")
     @classmethod
@@ -113,6 +138,23 @@ class SourceFactPopulationRequest(_FrozenModel):
 
     @model_validator(mode="after")
     def _request_contract(self) -> Self:
+        projection_ids = [item.legacy_observation_id for item in self.reviewed_kpi_projections]
+        if self.schema_version == "source_fact_population.v1":
+            if self.observation_ids or self.reviewed_kpi_projections:
+                raise ValueError("exact observation selection requires population request v2")
+        elif (
+            not self.observation_ids
+            or any(not value.strip() for value in self.observation_ids)
+            or not self.document_scopes
+            or len({scope.ticker for scope in self.document_scopes}) != 1
+            or len(self.observation_ids) != len(set(self.observation_ids))
+            or len(projection_ids) != len(set(projection_ids))
+            or not set(projection_ids).issubset(self.observation_ids)
+            or len({item.ticker for item in self.reviewed_kpi_projections}) > 1
+        ):
+            raise ValueError(
+                "population request v2 requires an exact unique bounded observation set"
+            )
         identities = [(scope.ticker, scope.document_sha256) for scope in self.document_scopes]
         if len(identities) != len(set(identities)):
             raise ValueError("population document scopes must be unique")
@@ -120,6 +162,12 @@ class SourceFactPopulationRequest(_FrozenModel):
             self.planned_output_commitment_sha256 is None
         ):
             raise ValueError("population commitments must be supplied together")
+        if (
+            self.apply
+            and self.schema_version == "source_fact_population.v2"
+            and self.input_commitment_sha256 is None
+        ):
+            raise ValueError("exact source population apply requires dry-run manifest commitments")
         if _utc(self.operation_recorded_at) < _utc(self.data_cutoff_at):
             raise ValueError("operation_recorded_at must not precede data_cutoff_at")
         if (
@@ -228,6 +276,86 @@ class _PopulationPlan:
     run_plans: dict[str, _RunPlan]
     input_commitment_sha256: str
     planned_output_commitment_sha256: str
+
+
+def _request_policy_version(request: SourceFactPopulationRequest) -> str:
+    return "6" if request.schema_version == "source_fact_population.v2" else _POLICY_VERSION
+
+
+def native_source_observation_id(legacy_observation_id: str) -> str:
+    """Return the stable bridge identity; no new raw observation is allocated."""
+    return _v2_observation_id(legacy_observation_id)
+
+
+def _assert_native_observation_compatible(
+    conn: sqlite3.Connection, fact: ReportedSourceFact
+) -> None:
+    if (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='fact_observations_v2'"
+        ).fetchone()
+        is None
+    ):
+        return
+    row = conn.execute(
+        "SELECT fact_cell_id FROM fact_observations_v2 WHERE observation_id=?",
+        (fact.observation.observation_id,),
+    ).fetchone()
+    if row is None:
+        return
+    existing = FactPlaneV2(conn).as_reported(str(row[0])).observations
+    if tuple(
+        item for item in existing if item.observation_id == fact.observation.observation_id
+    ) != (fact.observation,):
+        raise ValueError(
+            "immutable native observation conflicts with reviewed projection; a duplicate reported observation is forbidden"
+        )
+
+
+def _projection_for(
+    request: SourceFactPopulationRequest, observation_id: str
+) -> ReviewedKpiNativeProjection | None:
+    return next(
+        (
+            item
+            for item in request.reviewed_kpi_projections
+            if item.legacy_observation_id == observation_id
+        ),
+        None,
+    )
+
+
+def _validate_reviewed_projections(
+    conn: sqlite3.Connection, request: SourceFactPopulationRequest
+) -> None:
+    for expected in request.reviewed_kpi_projections:
+        actual = prepare_reviewed_kpi_native_projection(
+            conn,
+            observation_id=expected.legacy_observation_id,
+            source_evidence_node_id=expected.source_evidence_node_id,
+            knowledge_cutoff=request.data_cutoff_at,
+        )
+        if actual.model_dump(mode="json") != expected.model_dump(mode="json"):
+            raise ValueError("reviewed KPI native projection head or source commitment changed")
+
+
+def _request_exclusion_reason(row: sqlite3.Row, request: SourceFactPopulationRequest) -> str | None:
+    projection = _projection_for(request, str(row["observation_id"]))
+    reason = _exclusion_reason(row, request.data_cutoff_at, reviewed_kpi=projection is not None)
+    if reason is not None:
+        return reason
+    if projection is not None and (
+        projection.context.source_precision is None
+        or projection.context.source_precision.kind != "exact"
+    ):
+        return "reviewed_kpi_source_precision_nonexact"
+    if (
+        request.schema_version == "source_fact_population.v2"
+        and str(row["fact_table"]) == "kpi_facts"
+        and projection is None
+    ):
+        return "kpi_semantic_context_not_admitted"
+    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -458,6 +586,10 @@ def populate_source_fact_plane(
                     # savepoint: releasing an outermost savepoint commits it.
                     if not conn.in_transaction:
                         conn.execute("BEGIN IMMEDIATE")
+                    # Recheck heads and cutoffs under the write lock, then publish one exact set.
+                    if request.schema_version == "source_fact_population.v2":
+                        locked_plan = _population_plan(conn, request)
+                        _verify_caller_commitments(request, locked_plan)
                     receipt = repository.publish(publication)
             except Exception as exc:
                 raise SourceFactPopulationBatchError(
@@ -478,7 +610,7 @@ def populate_source_fact_plane(
     return SourceFactPopulationResult(
         mode="apply" if request.apply else "dry_run",
         policy_name=_POLICY_NAME,
-        policy_version=_POLICY_VERSION,
+        policy_version=_request_policy_version(request),
         policy_config_sha256=plan.policy_config_sha256,
         expected_count=plan.expected_count,
         eligible_count=plan.eligible_count,
@@ -520,9 +652,14 @@ def _population_plan(
 ) -> _PopulationPlan:
     cache = semantic_cell_cache or _SemanticCellCache()
     policy, policy_sha = _policy()
+    if request.schema_version == "source_fact_population.v2":
+        policy["policy_version"] = _request_policy_version(request)
+        policy["canonical_cell_fiscal_period_rule"] = "reviewed_source_quarter_coordinates"
+        policy_sha = _digest(_canonical_json(policy))
     original_row_factory = conn.row_factory
     conn.row_factory = sqlite3.Row
     try:
+        _validate_reviewed_projections(conn, request)
         manifest_header: dict[str, JsonValue] = {
             "commitment_format": "length_delimited_canonical_records.v1",
             "data_cutoff_at": _db_time(request.data_cutoff_at),
@@ -531,6 +668,20 @@ def _population_plan(
             "policy_config_sha256": policy_sha,
             "source_taxonomy_version": _SOURCE_TAXONOMY_VERSION,
         }
+        if request.schema_version == "source_fact_population.v2":
+            manifest_header["request_version"] = request.schema_version
+            manifest_header["observation_ids"] = [
+                value for value in sorted(request.observation_ids)
+            ]
+            manifest_header["reviewed_kpi_projections"] = [
+                item.model_dump(mode="json")
+                for item in sorted(
+                    request.reviewed_kpi_projections, key=lambda item: item.legacy_observation_id
+                )
+            ]
+            # A separate extraction/publication policy key permits exact subsets of a run.
+            policy_sha = _digest(policy_sha, _canonical_json(manifest_header))
+            manifest_header["policy_config_sha256"] = policy_sha
         if request.document_scopes:
             manifest_header["document_scopes"] = [
                 scope.model_dump(mode="json")
@@ -543,9 +694,12 @@ def _population_plan(
         input_fold.add("manifest_header", manifest_header)
         output_fold.add("manifest_header", manifest_header)
         exclusions = {reason: 0 for reason in _EXCLUSION_REASONS}
+        if request.schema_version == "source_fact_population.v2":
+            exclusions["reviewed_kpi_source_precision_nonexact"] = 0
         run_states: dict[str, _MutableRunPlan] = {}
         source_run_ids: set[str] = set()
         expected_count = 0
+        seen_observations: set[str] = set()
         eligible_count = 0
         previous_coordinate: tuple[str, int] | None = None
         previous_eligible_observation_id: str | None = None
@@ -553,6 +707,7 @@ def _population_plan(
         pending_facts: list[_ManifestFactCandidate] = []
         with _RunDependencySpill() as dependencies:
             for row in _source_rows(conn, request):
+                seen_observations.add(str(row["observation_id"]))
                 expected_count += 1
                 run_id = str(row["extraction_run_id"])
                 source_run_ids.add(run_id)
@@ -561,7 +716,7 @@ def _population_plan(
                     previous_coordinate = coordinate
                     previous_eligible_observation_id = None
                     previous_eligible_run_id = None
-                reason = _exclusion_reason(row, request.data_cutoff_at)
+                reason = _request_exclusion_reason(row, request)
                 input_fold.add(
                     "source_row",
                     {
@@ -572,7 +727,9 @@ def _population_plan(
                 if reason is not None:
                     exclusions[reason] += 1
                     continue
-                if request.document_scopes and int(row["fact_revision"]) > 1:
+                if (request.document_scopes or request.observation_ids) and int(
+                    row["fact_revision"]
+                ) > 1:
                     predecessors = conn.execute(
                         "SELECT observation_id FROM fact_observation_revisions WHERE fact_table=? AND fact_row_id=? AND fact_revision<?",
                         (
@@ -613,6 +770,7 @@ def _population_plan(
                     policy_sha=policy_sha,
                     prior_observation_id=previous_eligible_observation_id,
                     operation_recorded_at=request.operation_recorded_at,
+                    projection=_projection_for(request, str(row["observation_id"])),
                 )
                 pending_facts.append(
                     _ManifestFactCandidate(
@@ -629,9 +787,22 @@ def _population_plan(
                 previous_eligible_observation_id = str(row["observation_id"])
                 previous_eligible_run_id = run_id
                 if len(pending_facts) == _SEMANTIC_CELL_BATCH_SIZE:
-                    _fold_manifest_fact_batch(conn, pending_facts, output_fold, cache)
+                    _fold_manifest_fact_batch(
+                        conn,
+                        pending_facts,
+                        output_fold,
+                        cache,
+                        verify_native_compatibility=request.schema_version
+                        == "source_fact_population.v2",
+                    )
                     pending_facts.clear()
-            _fold_manifest_fact_batch(conn, pending_facts, output_fold, cache)
+            _fold_manifest_fact_batch(
+                conn,
+                pending_facts,
+                output_fold,
+                cache,
+                verify_native_compatibility=request.schema_version == "source_fact_population.v2",
+            )
             for node in _node_rows(conn, request.operation_recorded_at):
                 node_run_id = str(node[0])
                 if node_run_id not in source_run_ids:
@@ -641,6 +812,8 @@ def _population_plan(
                 if state is not None:
                     state.expected_node_count += 1
             run_ids = dependencies.topological_run_ids()
+        if request.observation_ids and seen_observations != set(request.observation_ids):
+            raise ValueError("exact observation selection is incomplete at the requested cutoff")
         immutable_run_plans: dict[str, _RunPlan] = {}
         for extraction_run_id in run_ids:
             state = run_states[extraction_run_id]
@@ -652,6 +825,7 @@ def _population_plan(
                 expected_node_count=state.expected_node_count,
                 knowledge_at=state.knowledge_at,
                 operation_recorded_at=request.operation_recorded_at,
+                policy_version=_request_policy_version(request),
             )
             state.output_fold.add("publication_envelope", envelope)
             output_fold.add("publication_envelope", envelope)
@@ -717,6 +891,13 @@ def _source_rows(
 ) -> sqlite3.Cursor:
     filters = ""
     filter_params: list[object] = []
+    if request.observation_ids:
+        filters += (
+            " AND revision.observation_id IN ("
+            + ",".join("?" for _ in request.observation_ids)
+            + ")"
+        )
+        filter_params.extend(request.observation_ids)
     if request.document_scopes:
         selectors: list[str] = []
         for scope in request.document_scopes:
@@ -822,11 +1003,14 @@ def _source_rows(
 def _exclusion_reason(
     row: sqlite3.Row,
     data_cutoff_at: datetime,
+    *,
+    reviewed_kpi: bool = False,
 ) -> str | None:
     if str(row["observation_status"]) == "derived":
         return _EXCLUSION_REASONS[0]
     if (
         str(row["fact_table"]) == "kpi_facts"
+        and not reviewed_kpi
         and _legacy_dimension_value(str(row["dimensions_json"]), "semantic_status") != "admitted"
     ):
         return _EXCLUSION_REASONS[6]
@@ -922,7 +1106,7 @@ def _build_run_publication_rows(
         request,
         extraction_run_id=run_plan.extraction_run_id,
     ):
-        if _exclusion_reason(row, request.data_cutoff_at) is not None:
+        if _request_exclusion_reason(row, request) is not None:
             continue
         prior_observation_id = _nearest_prior_eligible_observation_id(
             conn,
@@ -937,6 +1121,7 @@ def _build_run_publication_rows(
                     policy_sha=policy_sha,
                     prior_observation_id=prior_observation_id,
                     operation_recorded_at=request.operation_recorded_at,
+                    projection=_projection_for(request, str(row["observation_id"])),
                 ),
             )
         )
@@ -952,6 +1137,7 @@ def _build_run_publication_rows(
         expected_node_count=run_plan.expected_node_count,
         knowledge_at=run_plan.knowledge_at,
         operation_recorded_at=request.operation_recorded_at,
+        policy_version=_request_policy_version(request),
     )
     run_fold.add("publication_envelope", envelope)
     publication_id = str(envelope["publication_id"])
@@ -990,14 +1176,7 @@ def _nearest_prior_eligible_observation_id(
             request,
             observation_id=str(candidate[0]),
         ).fetchone()
-        if (
-            prior is not None
-            and _exclusion_reason(
-                prior,
-                request.data_cutoff_at,
-            )
-            is None
-        ):
+        if prior is not None and _request_exclusion_reason(prior, request) is None:
             return str(prior["observation_id"])
     return None
 
@@ -1037,6 +1216,7 @@ def _publication_envelope(
     expected_node_count: int,
     knowledge_at: datetime,
     operation_recorded_at: datetime,
+    policy_version: str = _POLICY_VERSION,
 ) -> tuple[ExtractionRunCompletenessSealV2, dict[str, object]]:
     seal = ExtractionRunCompletenessSealV2(
         extraction_seal_id=_record_id(
@@ -1052,7 +1232,7 @@ def _publication_envelope(
         extraction_run_id=extraction_run_id,
         expected_node_count=expected_node_count,
         completeness_policy_name=_POLICY_NAME,
-        completeness_policy_version=_POLICY_VERSION,
+        completeness_policy_version=policy_version,
         completeness_policy_sha256=policy_sha,
         knowledge_at=knowledge_at,
         recorded_at=operation_recorded_at,
@@ -1089,6 +1269,7 @@ def _source_fact_from_row(
     policy_sha: str,
     prior_observation_id: str | None,
     operation_recorded_at: datetime,
+    projection: ReviewedKpiNativeProjection | None = None,
 ) -> ReportedSourceFact:
     period_start = _parse_datetime(row["period_start"])
     period_end = _parse_datetime(row["period_end"])
@@ -1168,6 +1349,79 @@ def _source_fact_from_row(
         knowledge_at=knowledge_at,
         recorded_at=operation_recorded_at,
     )
+    if projection is not None:
+        context = projection.context
+        definition = projection.definition
+        if (
+            str(row["fact_table"]) != "kpi_facts"
+            or int(row["fact_row_id"]) != projection.fact_id
+            or str(row["reporting_entity_id"]) != definition.reporting_entity_id
+            or (None if row["security_id"] is None else str(row["security_id"]))
+            != definition.scope_security_id
+            or str(row["document_version_id"]) != projection.source_document_version_id
+        ):
+            raise ValueError(
+                "reviewed KPI native projection escaped its selected source coordinates"
+            )
+        if definition.accounting_basis.value not in {"management", "non_gaap"}:
+            raise ValueError(
+                "reviewed KPI native projection requires an explicit native accounting basis"
+            )
+        if definition.consolidation_scope.value not in {"consolidated", "segment", "other"}:
+            raise ValueError("reviewed KPI native projection requires a supported native scope")
+        if context.reported_period_start is None or context.reported_period_end is None:
+            raise ValueError("reviewed KPI native projection is missing duration coordinates")
+        knowledge_at = max(
+            knowledge_at,
+            definition.knowledge_at,
+            definition.recorded_at,
+            projection.review_knowledge_at,
+            projection.source_node_recorded_at,
+        )
+        knowledge_at = max(knowledge_at, _parse_required_datetime(str(row["captured_at"])))
+        # Context head knowledge is committed by the proof and checked against the cutoff.
+        reviewed_period_start = datetime.combine(
+            context.reported_period_start, datetime.min.time(), UTC
+        )
+        reviewed_period_end = datetime.combine(
+            context.reported_period_end, datetime.min.time(), UTC
+        )
+        native_dimensions_json = _canonical_json(
+            [{"key": key, "value": value} for key, value in sorted(context.dimensions.items())]
+        )
+        cell = FactCellV2.model_validate(
+            {
+                **cell.model_dump(mode="json"),
+                "fact_cell_id": "pending",
+                "idempotency_key": "pending",
+                "semantic_key_sha256": None,
+                "concept_name": definition.reported_label,
+                "taxonomy_name": "earnings-summary-reviewed-kpi",
+                "taxonomy_version": definition.kpi_definition_revision_id,
+                "accounting_basis": definition.accounting_basis.value,
+                "consolidation_scope": definition.consolidation_scope.value,
+                "period_kind": "duration",
+                "period_start": reviewed_period_start,
+                "period_end": reviewed_period_end,
+                "fiscal_year": projection.fiscal_year,
+                "fiscal_period": projection.fiscal_period,
+                "currency": None if definition.currency is None else definition.currency.value,
+                "dimensions": [],
+                "knowledge_at": knowledge_at,
+            }
+        )
+        cell_id = _record_id("fact-cell-v2", str(cell.semantic_key_sha256), native_dimensions_json)
+        cell = FactCellV2.model_validate(
+            {
+                **cell.model_dump(mode="json"),
+                "fact_cell_id": cell_id,
+                "idempotency_key": cell_id,
+                "semantic_key_sha256": None,
+                "dimensions": _dimensions(
+                    native_dimensions_json, operation_recorded_at, fact_cell_id=cell_id
+                ),
+            }
+        )
     locator = _locator_payload(row)
     numeric = row["numeric_value"]
     text = row["text_value"]
@@ -1189,6 +1443,9 @@ def _source_fact_from_row(
         "source_document_id": int(row["source_document_id"]),
         "text_value": None if text is None else str(text),
     }
+    if projection is not None:
+        source_payload["reviewed_native_projection"] = projection.model_dump(mode="json")
+        locator = cast(dict[str, JsonValue], json.loads(projection.source_locator_json))
     observation = ReportedFactObservationV2(
         observation_id=observation_id,
         idempotency_key=observation_id,
@@ -1199,7 +1456,11 @@ def _source_fact_from_row(
         text_value=None if value_kind != "text" else str(text),
         is_nil=value_kind == "nil",
         raw_lexical_value=(
-            None if value_kind == "nil" else str(numeric if numeric is not None else text)
+            projection.context.source_value_text
+            if projection is not None
+            else None
+            if value_kind == "nil"
+            else str(numeric if numeric is not None else text)
         ),
         method_name=f"legacy-bridge:{row['method']}",
         method_version=str(row["method_version"]),
@@ -1212,11 +1473,19 @@ def _source_fact_from_row(
         knowledge_at=knowledge_at,
         recorded_at=operation_recorded_at,
         document_version_id=str(row["document_version_id"]),
-        evidence_node_id=str(row["evidence_node_id"]),
+        evidence_node_id=(
+            str(row["evidence_node_id"])
+            if projection is None
+            else projection.source_evidence_node_id
+        ),
         source_locator=CanonicalJSONObject(root=locator),
         source_entry_sha256=_digest(_canonical_json(source_payload)),
         subject_binding_revision_id=str(row["binding_revision_id"]),
-        source_taxonomy_version=_SOURCE_TAXONOMY_VERSION,
+        source_taxonomy_version=(
+            _SOURCE_TAXONOMY_VERSION
+            if projection is None
+            else projection.definition.kpi_definition_revision_id
+        ),
         source_context_id=None,
         source_unit_id=unit_key,
         decimals=None,
@@ -1230,6 +1499,8 @@ def _fold_manifest_fact_batch(
     candidates: list[_ManifestFactCandidate],
     output_fold: _CommitmentFold,
     semantic_cell_cache: _SemanticCellCache,
+    *,
+    verify_native_compatibility: bool = False,
 ) -> None:
     resolved = _reuse_existing_semantic_cells(
         conn,
@@ -1237,6 +1508,8 @@ def _fold_manifest_fact_batch(
         semantic_cell_cache,
     )
     for candidate, fact in zip(candidates, resolved, strict=True):
+        if verify_native_compatibility:
+            _assert_native_observation_compatible(conn, fact)
         fact_payload = _fact_output_payload(
             fact,
             candidate.row,

@@ -14,7 +14,8 @@ the environment. Do not invoke checkout-default legacy entrypoints unchanged.
 
 | Need | Existing owner |
 | --- | --- |
-| Full current positions, per-account values and tax treatment | `integrations.portfolio_tracker_client.fetch_live_portfolio`; prefer the configured typed v1 transport and its coverage envelope |
+| Full positions plus all-account coverage and freshness | `integrations.portfolio_tracker_v1.TrackerV1Client.get_portfolio_snapshot`; preserve `meta.account_coverage`, included/excluded/lagging accounts and security/account joins |
+| Compatibility holdings and per-account value/tax projection | `integrations.portfolio_tracker_client.fetch_live_portfolio`; it does not carry the complete account-coverage envelope, so pair it with the direct typed snapshot |
 | Stable security/account identity and cash flags | `integrations.portfolio_tracker_v1.TrackerV1Client` positions, securities and accounts reads |
 | Reconciled cash/investment projection | `integrations.portfolio_allocation.fetch_portfolio_allocation`; preserve unresolved constituents and reasons |
 | Current affirmed owner context | `owner_profile.store.list_facts(conn, status="affirmed")` with a read-only explicit DB connection |
@@ -52,6 +53,11 @@ holdings, expose the tracker listener, or claim all positions were evaluated.
 - `review_position.py` requires an explicit `--db` argument: its argparse default
   is checkout-local and does not defer to the environment. Pass the configured
   tracker origin through `--api-url` when needed; do not infer a loopback service.
+- Covered-call projection distinguishes gross stock capital, signed option value
+  and net NAV. Preserve per-account covered/uncovered shares, quantity units and
+  incomplete reason codes. Net weights do not establish stock/derivative sensitivity.
+- An analytics response can be available when only one section succeeded. Check
+  each section, its errors, as-of and methodology before claiming coverage.
 - The retained factor library is analytical evidence, not a complete optimized
   trade list. Build the skill's recommendation from current holdings, taxes,
   goals, and research rather than treating a factor score as the decision.

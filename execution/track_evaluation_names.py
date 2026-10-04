@@ -5,25 +5,47 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from onboard_ticker import apply_industry_template
+
+import db
+from entity_store import upsert_entity
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-from onboard_ticker import apply_industry_template  # noqa: E402
-
-import db  # noqa: E402
-from entity_store import upsert_entity  # noqa: E402
 
 
 def main() -> int:
     tickers = [
-        ("IFNNY", "Infineon Technologies AG", "evaluation", "adr", "20-F"),
-        ("PCOR", "PROCORE TECHNOLOGIES, INC.", "evaluation", "equity", "10-K"),
-        ("TOST", "Toast, Inc.", "evaluation", "equity", "10-K"),
+        ("IFNNY", "Infineon Technologies AG", "evaluation", "adr", "20-F", "Semiconductors"),
+        (
+            "PCOR",
+            "PROCORE TECHNOLOGIES, INC.",
+            "evaluation",
+            "equity",
+            "10-K",
+            "Software / Technology",
+        ),
+        ("TOST", "Toast, Inc.", "evaluation", "equity", "10-K", "Software / Technology"),
+        (
+            "TSM",
+            "Taiwan Semiconductor Manufacturing Co Ltd",
+            "evaluation",
+            "adr",
+            "20-F",
+            "Semiconductors",
+        ),
+        ("LITE", "Lumentum Holdings Inc.", "evaluation", "equity", "10-K", "Technology"),
+        ("CPNG", "Coupang, Inc.", "evaluation", "equity", "10-K", "Consumer Discretionary"),
+        (
+            "ONON",
+            "On Holding AG",
+            "evaluation",
+            "foreign_private_issuer",
+            "20-F",
+            "Consumer Discretionary",
+        ),
     ]
 
-    for ticker, name, list_type, inst_type, filing_regime in tickers:
+    for ticker, name, list_type, inst_type, filing_regime, sector in tickers:
         print(f"Tracking {ticker} ({name}) as {list_type}...")
         db.track_company(ticker, name, list_type)
 
@@ -46,8 +68,7 @@ def main() -> int:
             )
 
         # Seed entity
-        sector = "Semiconductors" if ticker == "IFNNY" else "Software / Technology"
-        db_path = PROJECT_ROOT / "data" / "portfolio.db"
+        db_path = Path(db.DB_PATH)
         upsert_entity(
             kind="company",
             canonical_name=name,

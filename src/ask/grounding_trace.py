@@ -19,7 +19,9 @@ from urllib.parse import urlsplit, urlunsplit
 from pydantic import BaseModel, ConfigDict, Field
 
 from ask.grounding import EvidenceItem
+from sources.report_financials import FinancialEvidenceReference
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from ui.source_chip import viewer_href
 from viewspec.engine import ViewResult
 
 GroundingRoute = Literal["data", "narrative"]
@@ -41,6 +43,8 @@ class GroundingTraceItem(_Closed):
     ticker: str | None = None
     metric_ref: str | None = None
     fact_ref: str | None = None
+    canonical_reference: FinancialEvidenceReference | None = None
+    source_manifest: dict[str, object] | None = None
     period: str | None = None
     value: str | None = None
     unit: str | None = None
@@ -67,6 +71,8 @@ def narrative_trace_items(items: list[EvidenceItem]) -> tuple[GroundingTraceItem
             kind=item.kind,
             ticker=item.ticker,
             fact_ref=item.fact_ref,
+            canonical_reference=item.canonical_reference,
+            source_manifest=item.source_manifest,
             period=item.period,
             value=item.value,
             source_doc_id=item.doc_id,
@@ -106,6 +112,11 @@ def view_trace_items(result: ViewResult) -> tuple[GroundingTraceItem, ...]:
                     "fact_id": source.fact_id,
                     "fact_table": source.fact_table,
                     "source_url": _trace_source_url(source.source_url),
+                    **(
+                        {"canonical_reference": source.canonical_reference.model_dump(mode="json")}
+                        if source.canonical_reference
+                        else {}
+                    ),
                 }
                 items.append(
                     GroundingTraceItem(
@@ -119,7 +130,8 @@ def view_trace_items(result: ViewResult) -> tuple[GroundingTraceItem, ...]:
                         source_doc_id=source.doc_id,
                         fact_id=source.fact_id,
                         fact_table=source.fact_table,
-                        href=(f"/source/{source.doc_id}" if source.doc_id is not None else None),
+                        canonical_reference=source.canonical_reference,
+                        href=viewer_href(source),
                         source_url=_trace_source_url(source.source_url),
                         evidence_sha256=_sha_json(payload),
                     )
@@ -145,7 +157,14 @@ def persist_grounding_trace(
     if not normalized_question:
         raise ValueError("grounding trace question must be non-empty")
     scope = tuple(sorted({ticker.strip().upper() for ticker in scope_tickers if ticker.strip()}))
-    item_payload = [item.model_dump(mode="json") for item in items]
+    item_payload: list[dict[str, object]] = []
+    for item in items:
+        exclude: set[str] = set()
+        if item.canonical_reference is None:
+            exclude.add("canonical_reference")
+        if item.source_manifest is None:
+            exclude.add("source_manifest")
+        item_payload.append(item.model_dump(mode="json", exclude=exclude))
     item_set_json = _canonical_json(item_payload)
     item_set_sha256 = _sha_text(item_set_json)
     question_sha256 = _sha_text(normalized_question)

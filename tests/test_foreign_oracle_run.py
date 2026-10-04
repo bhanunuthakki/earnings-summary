@@ -5,11 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import subprocess
+import sys
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from execution.backfill_foreign_oracle import main
 from provenance.fact_read_model import FactReadModel
@@ -22,6 +25,33 @@ from sources.foreign_oracle_run import (
 )
 from tests.test_canary_corpus import seed_canary
 from tests.test_foreign_normalization_run import STAMP, seed_foreign_fixture
+
+
+def test_cli_without_admitted_population_cannot_certify_backfill(tmp_path: Path) -> None:
+    receipt_path = tmp_path / "receipt.json"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "execution/backfill_foreign_oracle.py",
+            "--output-receipt",
+            str(receipt_path),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt["status"] == "HOLD"
+    assert receipt["receipts"] == []
+    assert receipt["total_tickers_evaluated"] == 0
+    assert receipt["total_exact_matches"] == 0
+    assert receipt["reason_codes"] == ["source_bound_input_manifest_and_database_required"]
+
+
+def test_empty_source_population_is_not_a_comparison_manifest() -> None:
+    with pytest.raises(ValidationError, match="sources"):
+        ForeignOracleManifest(cutoff_at=STAMP, sources=(), canary_document_ids=tuple(range(12)))
 
 
 def seed_source_oracle(conn: sqlite3.Connection, root: Path) -> ForeignOracleManifest:
@@ -106,7 +136,7 @@ def test_independent_comparison_never_invents_conversion_or_uses_same_bytes(
     migrated_db: Callable[..., Path],
 ) -> None:
     with sqlite3.connect(migrated_db(tmp_path / "fixture.db")) as conn:
-        seed_source_oracle(conn, tmp_path)
+        manifest = seed_source_oracle(conn, tmp_path)
         observation_id = str(
             conn.execute("SELECT observation_id FROM fact_observations_v2").fetchone()[0]
         )
@@ -124,6 +154,22 @@ def test_independent_comparison_never_invents_conversion_or_uses_same_bytes(
             }
         )
         assert compare_bound_observations(source, oracle)["classification"] == "EXACT_MATCH"
+        zero_source = source.model_copy(
+            update={
+                "observation": source.observation.model_copy(update={"decimal_value": Decimal(0)})
+            }
+        )
+        zero_oracle = oracle.model_copy(
+            update={
+                "observation": oracle.observation.model_copy(update={"decimal_value": Decimal(0)})
+            }
+        )
+        zero_comparison = compare_bound_observations(zero_source, zero_oracle)
+        assert zero_comparison["classification"] == "EXACT_MATCH"
+        assert "status" not in zero_comparison
+        receipt = compare_foreign_sources(conn, manifest, repo_root=tmp_path)
+        assert receipt["status"] == "PARTIAL"
+        assert receipt["decision_grade"] is False
         changed = oracle.model_copy(
             update={
                 "observation": oracle.observation.model_copy(

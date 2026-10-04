@@ -55,12 +55,36 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import openpyxl
 from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.worksheet.worksheet import Worksheet
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+
+from db_paths import require_db_path, resolve_db_path
+from dcf import reverse_valuation as reverse_valuation_mod
+from dcf.artifact_promotion import (
+    ArtifactPromotion,
+    DcfCommittedCleanupError,
+    live_path_from_env,
+    promotion_from_env,
+    run_dcf_entrypoint,
+)
+from dcf.provenance import (
+    build_file_provenance,
+    build_file_source_record,
+    schema_supports_provenance,
+)
+from dcf.specialized_price import (
+    SpecializedPriceObservation,
+    price_seed_source_files,
+    resolve_specialized_price,
+)
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 CODE_ROOT = Path(__file__).resolve().parents[1]
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or CODE_ROOT)
@@ -68,35 +92,19 @@ T = os.environ.get("DCF_TICKER", "BN")
 DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 OWNER_INPUTS_DEST = Path(os.environ.get("DCF_OWNER_INPUTS_DEST") or DEST)
 
-sys.path.insert(0, str(CODE_ROOT / "src"))
-
-
-from dcf import reverse_valuation as reverse_valuation_mod  # noqa: E402
-from dcf.artifact_promotion import (  # noqa: E402
-    ArtifactPromotion,
-    live_path_from_env,
-    promotion_from_env,
-)
-from dcf.provenance import (  # noqa: E402
-    build_file_provenance,
-    build_file_source_record,
-    schema_supports_provenance,
-)
-from dcf.specialized_price import (  # noqa: E402
-    SpecializedPriceObservation,
-    price_seed_source_files,
-    resolve_specialized_price,
-)
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
 
 try:  # persistence is best-effort — the workbook builds without a DB
-    from dcf import persist as persist_mod
+    from dcf import persist as _persist_mod_module
 except ImportError:  # pragma: no cover
-    persist_mod = None  # type: ignore[assignment]
+    persist_mod = None
+else:
+    persist_mod = _persist_mod_module
 try:  # global macro assumptions -- best-effort; recorded for transparency only
-    from dcf import global_assumptions as global_dcf
+    from dcf import global_assumptions as _global_dcf_module
 except ImportError:  # pragma: no cover
-    global_dcf = None  # type: ignore[assignment]
+    global_dcf = None
+else:
+    global_dcf = _global_dcf_module
 
 
 def _global_assumptions_note() -> dict[str, object]:
@@ -107,7 +115,7 @@ def _global_assumptions_note() -> dict[str, object]:
     separate realization rate. The dashboard surfaces this as 'not used'."""
     if global_dcf is None:  # pragma: no cover
         return {"applies_to_valuation": False, "note": "global module unavailable"}
-    g = global_dcf.load(db_path=REPO / "data" / "portfolio.db")
+    g = global_dcf.load(db_path=resolve_db_path(None, configured_root=REPO))
     return {
         "risk_free_rate": g.risk_free_rate,
         "equity_risk_premium": g.equity_risk_premium,
@@ -247,7 +255,7 @@ def persist_dcf_run(
 ) -> bool:
     """Best-effort upsert into dcf_runs so the brief's valuation panel reads the
     SOTP value/share. Shape-agnostic (BN or BRK). No-op without the DB / persist module."""
-    db = REPO / "data" / "portfolio.db"
+    db = require_db_path(resolve_db_path(None, configured_root=REPO))
     if persist_mod is None or not db.exists() or not vps:
         return False
     holdings = REPO / "micro_thesis" / "holdings" / f"{T}.json"
@@ -263,15 +271,15 @@ def persist_dcf_run(
     )
     live_workbook = live_path_from_env(DEST)
     snapshot_payload = {**snapshot, "workbook": str(live_workbook)}
+    raw_marks = snapshot.get("marks", {})
+    marks = cast("dict[str, object]", raw_marks) if isinstance(raw_marks, dict) else {}
     provenance = build_file_provenance(
         ticker=T,
         repo_root=REPO,
         workbook_path=DEST,
         workbook_locator_path=live_workbook,
         engine_version="holdco_sotp_v1",
-        effective_inputs=(
-            snapshot.get("marks", {}) if isinstance(snapshot.get("marks"), dict) else {}
-        ),
+        effective_inputs=marks,
         assumption_snapshot=snapshot_payload,
         live_price=price or None,
         live_price_at=observed_at,
@@ -371,6 +379,10 @@ def _persist_then_sync_bn(
             price_observation,
             artifact_promotion=artifact_promotion,
         )
+    except DcfCommittedCleanupError:
+        # SQL and workbook publication already succeeded. Retain the matching
+        # synced JSON while the old workbook backup awaits recovery.
+        raise
     except Exception:
         _restore_assumptions_file(assumptions_path, assumptions_existed, assumptions_before)
         raise
@@ -624,9 +636,12 @@ def _load(ticker: str) -> tuple[Sotp, dict[str, str]]:
         try:
             d = json.loads(prof.read_text(encoding="utf-8"))
             if isinstance(d, list):
-                d = d[0] if d else {}
-            if isinstance(d, dict) and d.get("price"):
-                s.price = float(d["price"])
+                d = cast("list[Any]", d)[0] if d else dict[str, Any]()
+            if isinstance(d, dict):
+                record = cast("dict[str, Any]", d)
+                if not record.get("price"):
+                    raise ValueError("profile price missing")
+                s.price = float(record["price"])
                 s.price_seed_source = "fmp_profile"
                 s.price_seed_path = f"data/historical/fmp/{ticker}_profile.json"
         except (OSError, json.JSONDecodeError, ValueError, KeyError):
@@ -701,6 +716,7 @@ def build(
     statics rewritten on every refresh (the S6 sensitivity-grid convention)."""
     wb = openpyxl.Workbook()
     dash = wb.active
+    assert isinstance(dash, Worksheet)
     dash.title = "Dashboard"
     sotp = wb.create_sheet("SOTP")
     scen = wb.create_sheet("Scenarios")
@@ -861,12 +877,17 @@ def _brk_load() -> BrkSotp:
     s = BrkSotp()
     fmp = REPO / "data" / "historical" / "fmp"
 
-    def _rows(name):
+    def _rows(name: str) -> list[dict[str, Any]]:
         p = fmp / name
         if not p.exists():
             return []
         raw = json.loads(p.read_text(encoding="utf-8"))
-        return raw.get("historical", [raw]) if isinstance(raw, dict) else raw
+        if isinstance(raw, dict):
+            record = cast("dict[str, Any]", raw)
+            raw = record.get("historical", [record])
+        if not isinstance(raw, list):
+            raise ValueError("FMP statement must contain rows")
+        return cast("list[dict[str, Any]]", raw)
 
     try:
         bal = _rows(f"{T}_balance_sheet_annual.json")
@@ -880,9 +901,12 @@ def _brk_load() -> BrkSotp:
             s.shares_m = float(inc[0].get("weightedAverageShsOutDil") or s.shares_m * 1e6) / 1e6
         prof = json.loads((fmp / f"{T}_profile.json").read_text(encoding="utf-8"))
         if isinstance(prof, list):
-            prof = prof[0] if prof else {}
-        if isinstance(prof, dict) and prof.get("price"):
-            s.price = float(prof["price"])
+            prof = cast("list[Any]", prof)[0] if prof else dict[str, Any]()
+        if isinstance(prof, dict):
+            record = cast("dict[str, Any]", prof)
+            if not record.get("price"):
+                raise ValueError("profile price missing")
+            s.price = float(record["price"])
             s.price_seed_source = "fmp_profile"
             s.price_seed_path = f"data/historical/fmp/{T}_profile.json"
     except (OSError, json.JSONDecodeError, KeyError, ValueError, TypeError):
@@ -906,6 +930,7 @@ _RB = {
 def _brk_build(s: BrkSotp, dest: Path) -> None:
     wb = openpyxl.Workbook()
     dash = wb.active
+    assert isinstance(dash, Worksheet)
     dash.title = "Dashboard"
     sotp = wb.create_sheet("SOTP")
     notes_ws = wb.create_sheet("Method")
@@ -1077,8 +1102,12 @@ def _run_brk() -> int:
 _BRK_TICKERS = {"BRK-B", "BRK-A", "BRK.B", "BRK"}
 
 
-def main() -> int:
+def _main_owned() -> int:
     return _run_brk() if T.upper() in _BRK_TICKERS else _run_bn()
+
+
+def main() -> int:
+    return run_dcf_entrypoint(REPO, T, _main_owned, owner="build-holdco-sotp")
 
 
 if __name__ == "__main__":

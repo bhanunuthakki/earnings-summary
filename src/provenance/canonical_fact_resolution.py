@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Fail-closed, exhaustive resolution of a canonical metric coordinate.
 
 This boundary deliberately has no ``candidates`` or ``relations`` argument.
@@ -17,10 +16,13 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from provenance.fact_read_model import FactAdmissionError, FactReadModel
 from provenance.source_fact_publication import verify_source_fact_publication
 
 Status = Literal["resolved", "unresolved", "retired"]
 MAX_CANDIDATES_PER_CANONICAL_CELL = 500
+MAX_DERIVATION_DEPTH = 32
+MAX_DERIVATION_NODES = 500
 _RESOLUTION_SCOPE_VERSION = "canonical-resolution-snapshot-scope.v1"
 
 
@@ -387,7 +389,118 @@ class CanonicalFactResolutionEngine:
             reason=reason,
         )
 
+    def observation_lineage_current(
+        self, observation_id: str, cutoff_at: datetime, *, observed_through: datetime | None = None
+    ) -> bool:
+        """Verify the entire sealed operand graph against current canonical selections.
+
+        Bound depth and graph size fail closed for cycles or oversized lineage.
+        Stored intermediate selections do not prove their own operands remain valid.
+        """
+        cutoff = _utc(cutoff_at)
+        observed = cutoff if observed_through is None else _utc(observed_through)
+        if observed < cutoff:
+            raise ValueError("observed_through must not precede cutoff_at")
+        reader = FactReadModel(self._conn)
+        visiting: set[str] = set()
+        verified: dict[str, bool] = {}
+        remaining = MAX_DERIVATION_NODES
+
+        def visit(current_id: str, depth: int) -> bool:
+            nonlocal remaining
+            if current_id in visiting or depth > MAX_DERIVATION_DEPTH or remaining <= 0:
+                return False
+            if current_id in verified:
+                return verified[current_id]
+            remaining -= 1
+            visiting.add(current_id)
+            try:
+                bundle = reader.provenance_bundle(current_id, cutoff=observed)
+                if (
+                    _utc(bundle.cell.knowledge_at) > cutoff
+                    or _utc(bundle.observation.knowledge_at) > cutoff
+                ):
+                    return False
+                derivation = bundle.derivation
+                if derivation is None:
+                    result = bundle.observation.observation_kind == "reported"
+                elif derivation.input_basis != "as_known":
+                    result = False
+                else:
+                    result = True
+                    for input_id, resolution_id in zip(
+                        derivation.input_observation_ids,
+                        derivation.input_canonical_resolution_revision_ids,
+                        strict=True,
+                    ):
+                        prior = self._conn.execute(
+                            "SELECT canonical_metric_cell_id FROM canonical_fact_resolution_revisions "
+                            "WHERE canonical_resolution_revision_id=?",
+                            (resolution_id,),
+                        ).fetchone()
+                        current = (
+                            None
+                            if prior is None
+                            else self._stored_as_known(
+                                str(prior[0]), cutoff, observed_through=observed
+                            )
+                        )
+                        binding = self._conn.execute(
+                            "SELECT canonical_metric_cell_id,binding_status FROM fact_cell_canonical_binding_revisions "
+                            "WHERE source_observation_id=? AND knowledge_at<=? AND recorded_at<=? "
+                            "ORDER BY revision DESC LIMIT 1",
+                            (input_id, _time(cutoff), _time(observed)),
+                        ).fetchone()
+                        if (
+                            prior is None
+                            or current is None
+                            or current.status != "resolved"
+                            or current.selected_observation_id != input_id
+                            or binding is None
+                            or binding[1] != "bound"
+                            or binding[0] != prior[0]
+                            or not visit(input_id, depth + 1)
+                        ):
+                            result = False
+                            break
+                verified[current_id] = result
+                return result
+            except (ValueError, FactAdmissionError):
+                verified[current_id] = False
+                return False
+            finally:
+                visiting.remove(current_id)
+
+        return visit(observation_id, 0)
+
     def as_known(
+        self,
+        canonical_metric_cell_id: str,
+        cutoff_at: datetime,
+        *,
+        observed_through: datetime | None = None,
+    ) -> ResolutionReceipt | None:
+        receipt = self._stored_as_known(
+            canonical_metric_cell_id, cutoff_at, observed_through=observed_through
+        )
+        if (
+            receipt is not None
+            and receipt.status == "resolved"
+            and receipt.selected_observation_id is not None
+        ):
+            # Broken selected-source evidence is a provenance failure, not an
+            # absent resolution. Retain the typed failure for every consumer.
+            observed = cutoff_at if observed_through is None else observed_through
+            bundle = FactReadModel(self._conn).provenance_bundle(
+                receipt.selected_observation_id, cutoff=_utc(observed)
+            )
+            if bundle.derivation is not None and not self.observation_lineage_current(
+                receipt.selected_observation_id, cutoff_at, observed_through=observed_through
+            ):
+                return None
+        return receipt
+
+    def _stored_as_known(
         self,
         canonical_metric_cell_id: str,
         cutoff_at: datetime,
@@ -859,11 +972,23 @@ class CanonicalFactResolutionEngine:
                 (observation_id, cutoff_s, observed_s, observed_s),
             ).fetchone()
             observation_kind = str(row[2])
-            if observation_kind != "reported":
-                lane = "derived_terminal_exclusion"
-                eligibility: Literal["eligible", "ineligible"] = "ineligible"
-                reason_code = "derived_observation_not_admitted"
-                publication = None
+            if observation_kind == "derived" and publication is not None:
+                bundle = FactReadModel(self._conn).provenance_bundle(
+                    observation_id,
+                    cutoff=_utc(cutoff if observed_through is None else observed_through),
+                )
+                current_inputs = bundle.derivation is not None and self.observation_lineage_current(
+                    observation_id, cutoff, observed_through=observed_through
+                )
+                if current_inputs:
+                    lane = "derived_source_publication"
+                    eligibility: Literal["eligible", "ineligible"] = "eligible"
+                    reason_code = "sealed_reviewed_derived_publication"
+                else:
+                    lane = "derived_terminal_exclusion"
+                    eligibility = "ineligible"
+                    reason_code = "derived_operand_selection_changed"
+                    publication = None
             elif publication is None:
                 lane = "missing_publication_exclusion"
                 eligibility = "ineligible"

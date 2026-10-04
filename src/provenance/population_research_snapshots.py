@@ -888,7 +888,7 @@ def _resolution_coordinate(
     observed = cutoff if observed_through is None else _utc(observed_through)
     rows = conn.execute(
         "SELECT header.resolution_snapshot_id,header.recorded_at,"
-        "scope_seal.sealed_at,fact_seal.sealed_at "
+        "scope_seal.sealed_at,fact_seal.recorded_at "
         "FROM canonical_fact_resolution_snapshot_scope_headers header "
         "JOIN canonical_fact_resolution_snapshot_scope_seals scope_seal "
         "ON scope_seal.resolution_snapshot_id=header.resolution_snapshot_id "
@@ -897,10 +897,10 @@ def _resolution_coordinate(
         "WHERE header.issuer_id=? AND datetime(header.cutoff_at)=datetime(?) "
         "AND datetime(header.recorded_at)<=datetime(?) "
         "AND datetime(scope_seal.sealed_at)<=datetime(?) "
-        "AND datetime(fact_seal.sealed_at)<=datetime(?) "
+        "AND datetime(fact_seal.recorded_at)<=datetime(?) "
         "ORDER BY datetime(header.recorded_at) DESC,"
         "datetime(scope_seal.sealed_at) DESC,"
-        "datetime(fact_seal.sealed_at) DESC,"
+        "datetime(fact_seal.recorded_at) DESC,"
         "header.resolution_snapshot_id DESC",
         (
             issuer_id,

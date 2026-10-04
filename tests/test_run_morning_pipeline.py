@@ -942,7 +942,9 @@ def test_stage1b_standup_runs_after_triggers_with_user_and_db_path(
     _install_fake(monkeypatch, fake)
     db_path = tmp_path / "alt.db"
 
-    rc = run_morning_pipeline.main(["--db-path", str(db_path), "--user-id", "alice"])
+    rc = run_morning_pipeline.main(
+        ["--db-path", str(db_path), "--repo-root", str(tmp_path), "--user-id", "alice"]
+    )
     assert rc == 0
     assert fake.scripts.index(TRIGGERS_SCRIPT) < fake.scripts.index(STANDUP_SCRIPT)
     assert fake.scripts.index(STANDUP_SCRIPT) < fake.scripts.index(FEED_SCRIPT)
@@ -1063,8 +1065,7 @@ def test_db_path_passed_to_all_stages_when_set(
         if _script_of(argv) == PREFLIGHT_SCRIPT:
             continue  # the env preflight takes no --db-path
         if _script_of(argv) == FACTOR_PROXIES_SCRIPT:
-            continue  # no DB at all — takes --repo-root derived from the db
-            # override instead (asserted in its own stage-0g test)
+            continue  # no DB; artifact root is forwarded separately
         if _script_of(argv) in {DERIVED_METRICS_SCRIPT, DOCUMENT_EVIDENCE_SCRIPT}:
             # Its own flag name is --db (asserted in its stage-0d2 test).
             assert _has_flag(argv, "--db", str(db_path))
@@ -1355,18 +1356,17 @@ def test_stage0g_factor_proxies_runs_between_candidate_fit_and_triggers(
     assert summary["stage_1_triggers"] == "ok"
 
 
-def test_stage0g_factor_proxies_takes_repo_root_from_db_path(
+def test_stage0g_factor_proxies_takes_explicit_artifact_root(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The proxy fetch writes data/factor_proxies/ under the db override's repo
-    root (never the real repo on a --db-path run); it is not user-scoped, runs
-    no LLM, and needs no DB at all. The configured default is forwarded too so
-    parent and child derive their artifact root from the same authority."""
+    """Proxy artifacts use the explicit root, independently from retained state."""
     fake = _RecordingRun()
     _install_fake(monkeypatch, fake)
     db_path = tmp_path / "data" / "alt.db"
 
-    rc = run_morning_pipeline.main(["--db-path", str(db_path), "--user-id", "alice"])
+    rc = run_morning_pipeline.main(
+        ["--db-path", str(db_path), "--repo-root", str(tmp_path), "--user-id", "alice"]
+    )
     assert rc == 0
 
     proxies_argv = next(c for c in fake.calls if _script_of(c) == FACTOR_PROXIES_SCRIPT)
@@ -1480,7 +1480,7 @@ def test_document_evidence_degradation_does_not_block_analysis(
     assert run_morning_pipeline.main(["--db-path", str(database)]) == 1
     argv = next(call for call in fake.calls if _script_of(call) == DOCUMENT_EVIDENCE_SCRIPT)
     assert argv[argv.index("--db") + 1] == str(database)
-    assert argv[argv.index("--repo-root") + 1] == str(database.parent.parent)
+    assert argv[argv.index("--repo-root") + 1] == str(PROJECT_ROOT)
     assert "--apply" in argv and "--resume" in argv
     assert argv[argv.index("--batch-size") + 1] == "100"
     assert fake.scripts.index(DOCUMENT_EVIDENCE_SCRIPT) < fake.scripts.index(TRIGGERS_SCRIPT)
@@ -1499,3 +1499,15 @@ def test_fundamentals_failure_still_attempts_document_evidence(
     summary = _parse_summary(capsys.readouterr().out)
     assert summary["stage_0d1_document_evidence"] == "ok"
     assert DOCUMENT_EVIDENCE_SCRIPT in fake.scripts
+
+
+def test_pipeline_artifact_root_is_independent_from_database_target(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = _RecordingRun()
+    _install_fake(monkeypatch, fake)
+    database = tmp_path / "separate-retained-state" / "facts.db"
+    assert run_morning_pipeline.main(["--db-path", str(database)]) == 0
+    for script in (LIFECYCLE_SCRIPT, DOCUMENT_EVIDENCE_SCRIPT, FACTOR_PROXIES_SCRIPT):
+        argv = next(call for call in fake.calls if _script_of(call) == script)
+        assert _has_flag(argv, "--repo-root", str(PROJECT_ROOT))

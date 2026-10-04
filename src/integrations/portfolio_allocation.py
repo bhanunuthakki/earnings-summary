@@ -82,6 +82,36 @@ class PortfolioAllocationProjection(BaseModel):
     buckets: PortfolioAllocationBuckets
     reconciliation: PortfolioAllocationReconciliation
     reason_codes: tuple[str, ...] = ()
+    covered_calls: tuple[CoveredCallExposure, ...] = ()
+
+
+class CoveredCallLeg(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: int
+    account_name: str
+    contracts: Decimal | None
+    represented_shares: Decimal
+    covered_shares: Decimal
+    uncovered_shares: Decimal
+    strike_price: Decimal
+    expiration_date: date
+    metadata_source: str
+
+
+class CoveredCallExposure(BaseModel):
+    """Separate stock capital and signed option liability on one underlying."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    underlying_ticker: str
+    gross_stock_capital: Decimal
+    option_market_value: Decimal
+    net_market_value: Decimal
+    net_weight_pct: Decimal
+    stock_weight_pct: Decimal
+    option_weight_pct: Decimal
+    legs: tuple[CoveredCallLeg, ...]
 
 
 class PortfolioAllocationReader(Protocol):
@@ -124,6 +154,14 @@ def unavailable_portfolio_allocation(code: str) -> PortfolioAllocationProjection
 
 def _finite_decimal(value: object) -> TypeGuard[Decimal]:
     return isinstance(value, Decimal) and value.is_finite()
+
+
+def _is_option(security: SecurityV1) -> bool:
+    return (
+        security.option_contract is not None
+        or security.asset_type.strip().casefold() == "option"
+        or (security.type or "").strip().casefold() == "option"
+    )
 
 
 def _account_coverage_error(
@@ -196,7 +234,12 @@ def _structural_error(
         return coverage_error
     if not _finite_decimal(positions.total_market_value) or positions.total_market_value <= _ZERO:
         return "portfolio_total_invalid"
-    reconciliation_error = validate_positions_snapshot(positions)
+    option_ids = frozenset(
+        security.security_id for security in securities.securities if _is_option(security)
+    )
+    reconciliation_error = validate_positions_snapshot(
+        positions, allowed_short_security_ids=option_ids
+    )
     if reconciliation_error is not None:
         return reconciliation_error[0]
     position_ids = [position.security_id for position in positions.positions]
@@ -209,15 +252,19 @@ def _structural_error(
     for position in positions.positions:
         if position.security_id not in security_id_set:
             return "security_join_missing"
-        if not _valid_position_measure(position, positions.total_market_value):
+        if not _valid_position_measure(
+            position, positions.total_market_value, allow_signed=position.security_id in option_ids
+        ):
             return "position_percent_reconciliation_failed"
     return None
 
 
-def _valid_position_measure(position: PositionV1, total: Decimal) -> bool:
+def _valid_position_measure(
+    position: PositionV1, total: Decimal, *, allow_signed: bool = False
+) -> bool:
     if (
         not _finite_decimal(position.market_value)
-        or position.market_value < _ZERO
+        or (position.market_value < _ZERO and not allow_signed)
         or not _finite_decimal(position.percent_of_portfolio)
     ):
         return False
@@ -244,6 +291,50 @@ def _bucket_name(security: SecurityV1) -> str:
     return "unclassified"
 
 
+def _covered_call_underlying(
+    position: PositionV1,
+    security: SecurityV1,
+    securities: list[SecurityV1],
+    positions: dict[int, PositionV1],
+) -> tuple[SecurityV1 | None, str | None]:
+    contract = security.option_contract
+    if contract is None or position.option_contract != contract:
+        return None, "option_metadata_incomplete"
+    if (
+        contract.contract_type != "call"
+        or position.quantity >= 0
+        or any(lot.quantity >= 0 for lot in position.accounts)
+    ):
+        return None, "option_strategy_unsupported"
+    if (
+        position.market_value is None
+        or position.market_value > 0
+        or any(lot.market_value is None or lot.market_value > 0 for lot in position.accounts)
+    ):
+        return None, "option_value_sign_incoherent"
+    if (
+        not contract.underlying_ticker.strip()
+        or contract.metadata_source
+        not in {"plaid.option_contract", "snaptrade.option_symbol", "occ_symbol"}
+        or not contract.strike_price.is_finite()
+        or contract.strike_price <= 0
+        or position.quantity_unit != "underlying_units"
+        or any(lot.quantity_unit != "underlying_units" for lot in position.accounts)
+    ):
+        return None, "option_quantity_or_metadata_unproven"
+    matches = [
+        row
+        for row in securities
+        if row.ticker is not None
+        and row.ticker.strip().upper() == contract.underlying_ticker.strip().upper()
+        and row.asset_type.strip().casefold() in {"stock", "etf"}
+        and row.currency == security.currency
+    ]
+    if len(matches) != 1 or matches[0].security_id not in positions:
+        return None, "option_underlying_unmapped"
+    return matches[0], None
+
+
 def project_portfolio_allocation(
     health: HealthV1,
     positions: PositionsV1Result,
@@ -256,12 +347,75 @@ def project_portfolio_allocation(
 
     totals = {name: _ZERO for name in _BUCKET_NAMES}
     by_security_id = {security.security_id: security for security in securities.securities}
-    for position in positions.positions:
+    by_position_id = {position.security_id: position for position in positions.positions}
+    reasons: set[str] = set()
+    option_values: dict[int, Decimal] = {}
+    call_legs: dict[int, list[CoveredCallLeg]] = {}
+    remaining_shares: dict[tuple[int, int], Decimal] = {}
+    for position in sorted(positions.positions, key=lambda row: row.security_id):
         security = by_security_id[position.security_id]
         # _structural_error() has proved this field is a finite Decimal.
         market_value = position.market_value
         assert isinstance(market_value, Decimal)
-        totals[_bucket_name(security)] += market_value
+        bucket_security = security
+        if _is_option(security):
+            underlying, issue = _covered_call_underlying(
+                position, security, securities.securities, by_position_id
+            )
+            if underlying is None:
+                reasons.add(issue or "option_metadata_incomplete")
+            else:
+                bucket_security = underlying
+                contract = security.option_contract
+                assert contract is not None
+                stock = by_position_id[underlying.security_id]
+                option_values[underlying.security_id] = (
+                    option_values.get(underlying.security_id, _ZERO) + market_value
+                )
+                multiplier_valid = (
+                    contract.multiplier is not None
+                    and contract.multiplier.is_finite()
+                    and contract.multiplier > 0
+                    and bool(contract.multiplier_source)
+                )
+                stock_lots = {lot.account_id: lot for lot in stock.accounts}
+                for lot in sorted(position.accounts, key=lambda row: row.account_id):
+                    key = (underlying.security_id, lot.account_id)
+                    stock_lot = stock_lots.get(lot.account_id)
+                    available = remaining_shares.setdefault(
+                        key,
+                        stock_lot.quantity if stock_lot is not None else _ZERO,
+                    )
+                    represented = abs(lot.quantity)
+                    covered = min(available, represented)
+                    remaining_shares[key] = available - covered
+                    if covered < represented:
+                        reasons.add("option_call_not_fully_covered")
+                    contracts = None
+                    if multiplier_valid:
+                        assert contract.multiplier is not None
+                        expected = lot.quantity / contract.multiplier
+                        if (
+                            lot.contract_quantity == expected
+                            and expected == expected.to_integral_value()
+                        ):
+                            contracts = abs(expected)
+                        elif lot.contract_quantity is not None:
+                            reasons.add("option_contract_quantity_incoherent")
+                    call_legs.setdefault(underlying.security_id, []).append(
+                        CoveredCallLeg(
+                            account_id=lot.account_id,
+                            account_name=lot.account_name,
+                            contracts=contracts,
+                            represented_shares=represented,
+                            covered_shares=covered,
+                            uncovered_shares=represented - covered,
+                            strike_price=contract.strike_price,
+                            expiration_date=contract.expiration_date,
+                            metadata_source=contract.metadata_source,
+                        )
+                    )
+        totals[_bucket_name(bucket_security)] += market_value
 
     total = positions.total_market_value
     bucket_total = sum(totals.values(), _ZERO)
@@ -281,7 +435,25 @@ def project_portfolio_allocation(
         cash=bucket("cash"),
         unclassified=bucket("unclassified"),
     )
-    incomplete = totals["unclassified"] != _ZERO
+    if totals["unclassified"] != _ZERO:
+        reasons.add("portfolio_allocation_incomplete")
+    exposures: list[CoveredCallExposure] = []
+    for security_id, value in sorted(option_values.items()):
+        stock_value = by_position_id[security_id].market_value
+        assert isinstance(stock_value, Decimal)
+        exposures.append(
+            CoveredCallExposure(
+                underlying_ticker=by_security_id[security_id].ticker or "",
+                gross_stock_capital=stock_value,
+                option_market_value=value,
+                net_market_value=stock_value + value,
+                net_weight_pct=(stock_value + value) / total * Decimal(100),
+                stock_weight_pct=stock_value / total * Decimal(100),
+                option_weight_pct=value / total * Decimal(100),
+                legs=tuple(call_legs[security_id]),
+            )
+        )
+    incomplete = bool(reasons)
     return PortfolioAllocationProjection(
         state="incomplete" if incomplete else "available",
         source_identity="portfolio_tracker_api_v1",
@@ -294,7 +466,8 @@ def project_portfolio_allocation(
             difference=difference,
             is_reconciled=True,
         ),
-        reason_codes=("portfolio_allocation_incomplete",) if incomplete else (),
+        reason_codes=tuple(sorted(reasons)),
+        covered_calls=tuple(exposures),
     )
 
 
@@ -331,6 +504,8 @@ def fetch_portfolio_allocation(api_url: str | None = None) -> PortfolioAllocatio
 
 
 __all__ = [
+    "CoveredCallExposure",
+    "CoveredCallLeg",
     "PortfolioAllocationBucket",
     "PortfolioAllocationBuckets",
     "PortfolioAllocationProjection",

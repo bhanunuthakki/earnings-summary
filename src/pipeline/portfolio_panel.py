@@ -112,7 +112,7 @@ from portfolio_tail_stress import (
     TailStressRow,
     build_tail_stress,
 )
-from portfolio_weights import read_materialized_weights
+from portfolio_weights import read_materialized_weight_snapshot, read_materialized_weights
 from position_guard import (
     CHECK_ADD,
     CHECK_BEAR,
@@ -1342,7 +1342,11 @@ def _offline_reason(error: str | None) -> str:
 
 
 def render_portfolio_synthesis_panel(
-    db_path: Path, *, api_url: str | None = None, conn: sqlite3.Connection | None = None
+    db_path: Path,
+    *,
+    api_url: str | None = None,
+    conn: sqlite3.Connection | None = None,
+    repo_root: Path | None = None,
 ) -> str:
     """The Portfolio → Synthesis tab fragment. Fetches the live book once (the
     exposure weighting prefers live position weights and falls back to
@@ -1370,7 +1374,7 @@ def render_portfolio_synthesis_panel(
     memo = _synthesis_memo_doorway(dash.portfolio_synthesis_md) or (
         render_panel_fragment(dash, "portfolio") or ""
     )
-    return compose_synthesis_page(db_path, live, memo, conn=conn)
+    return compose_synthesis_page(db_path, live, memo, conn=conn, repo_root=repo_root)
 
 
 def _synthesis_memo_headline(content_md: str, cap: int = 220) -> str:
@@ -1411,6 +1415,7 @@ def compose_synthesis_page(
     synthesis: str,
     *,
     conn: sqlite3.Connection | None = None,
+    repo_root: Path | None = None,
 ) -> str:
     """Page assembly over an already-fetched live book + lens-memo fragment
     (testable without network; the insight panels read the DB themselves):
@@ -1421,7 +1426,7 @@ def compose_synthesis_page(
         p
         for p in (
             _thesis_rollup_panel(db_path, conn=conn),
-            _exposure_panel(db_path, live, conn=conn),
+            _exposure_panel(db_path, live, conn=conn, repo_root=repo_root),
         )
         if p
     )
@@ -1505,7 +1510,11 @@ def _thesis_rollup_panel(db_path: Path, *, conn: sqlite3.Connection | None = Non
 
 
 def _exposure_panel(
-    db_path: Path, live: LivePortfolio, *, conn: sqlite3.Connection | None = None
+    db_path: Path,
+    live: LivePortfolio,
+    *,
+    conn: sqlite3.Connection | None = None,
+    repo_root: Path | None = None,
 ) -> str:
     """Sector exposure across the book: position-weighted when the tracker is
     up, name counts otherwise. Sectors come from the cached FMP profiles."""
@@ -1524,7 +1533,6 @@ def _exposure_panel(
             conn.close()
     if not tickers:
         return ""
-    repo_root = db_path.parent.parent
     weights: dict[str, float] = {}
     if live.available and live.positions:
         total = sum(p.market_value or 0.0 for p in live.positions) or 0.0
@@ -1534,9 +1542,13 @@ def _exposure_panel(
                     weights[p.ticker.upper()] = (p.market_value or 0.0) / total
     by_sector: dict[str, float] = {}
     for t in tickers:
-        profile = repo_root / "data" / "historical" / "fmp" / f"{t}_profile.json"
+        profile = (
+            repo_root / "data" / "historical" / "fmp" / f"{t}_profile.json"
+            if repo_root is not None
+            else None
+        )
         sector = "Unclassified"
-        if profile.exists():
+        if profile is not None and profile.exists():
             try:
                 payload: object = json.loads(profile.read_text(encoding="utf-8"))
                 if isinstance(payload, list):
@@ -1693,6 +1705,7 @@ def render_portfolio_risk_panel(
     api_url: str | None = None,
     db_path: Path | None = None,
     conn: sqlite3.Connection | None = None,
+    repo_root: Path | None = None,
 ) -> str:
     """The Portfolio → Risk tab fragment: book drawdown + factor/style exposure
     (from the live tracker) and the whole-book macro-stress lens (from the local
@@ -1726,16 +1739,16 @@ def render_portfolio_risk_panel(
                 for t, s in rate_estimates.items()
             )
         if db_path is not None:
-            gap = _build_risk_reward_gap(analytics.positioning, db_path)
-    style = _build_style_rollup(analytics.positioning, db_path)
-    correlation = _build_correlation_read(analytics.positioning, db_path)
-    tail_stress = _build_tail_stress(analytics.positioning, db_path)
-    monte_carlo = _build_monte_carlo(analytics.positioning, db_path)
-    joint_latam = _build_joint_latam_stress(analytics.positioning, db_path)
-    bear_lint = _build_bear_lint(db_path)
-    position_guard = _read_position_guard(db_path)
-    collision = _read_thesis_collision(analytics.positioning, db_path)
-    factors = _read_business_factor_vector(db_path)
+            gap = _build_risk_reward_gap(analytics.positioning, db_path, repo_root=repo_root)
+    style = _build_style_rollup(analytics.positioning, db_path, repo_root=repo_root)
+    correlation = _build_correlation_read(analytics.positioning, db_path, repo_root=repo_root)
+    tail_stress = _build_tail_stress(analytics.positioning, db_path, repo_root=repo_root)
+    monte_carlo = _build_monte_carlo(analytics.positioning, db_path, repo_root=repo_root)
+    joint_latam = _build_joint_latam_stress(analytics.positioning, db_path, repo_root=repo_root)
+    bear_lint = _build_bear_lint(db_path, repo_root=repo_root)
+    position_guard = _read_position_guard(db_path, repo_root=repo_root)
+    collision = _read_thesis_collision(analytics.positioning, db_path, repo_root=repo_root)
+    factors = _read_business_factor_vector(db_path, repo_root=repo_root)
     scenarios = _scenario_options()
     digest = _cached_macro_digest_html(db_path, conn=conn) if db_path is not None else ""
     # On a successful read, refresh the last-known snapshot; when the tracker is
@@ -1753,12 +1766,10 @@ def render_portfolio_risk_panel(
     if bets_snapshot is None and db_path is not None:
         bets_snapshot = read_latest_snapshot(db_path=db_path)
     bets_weights = (
-        _local_book_weights(analytics.positioning, db_path.parent.parent)
-        if db_path is not None
-        else {}
+        _local_book_weights(analytics.positioning, repo_root) if db_path is not None else {}
     )
     bets = _implicit_bets_section(bets_snapshot, bets_weights, factors)
-    return compose_risk_page(
+    return _weights_source_note(repo_root) + compose_risk_page(
         analytics,
         drawdown=drawdown,
         factor=factor,
@@ -1779,10 +1790,14 @@ def render_portfolio_risk_panel(
     )
 
 
-def _build_risk_reward_gap(pos: Positioning, db_path: Path) -> RiskRewardGap | None:
+def _build_risk_reward_gap(
+    pos: Positioning, db_path: Path, *, repo_root: Path | None = None
+) -> RiskRewardGap | None:
     """Assemble the risk-parity-gap table from the live book weights (the
     positioning endpoint's per-name weight_pct) — None when there are no
-    weighted names to model. repo_root is the price cache's parent of the DB."""
+    weighted names to model. The artifact root is independent of DB placement."""
+    if repo_root is None:
+        return None
     weights = {
         r.ticker.upper(): (r.weight_pct or 0.0) / 100.0
         for r in pos.correlations
@@ -1790,10 +1805,10 @@ def _build_risk_reward_gap(pos: Positioning, db_path: Path) -> RiskRewardGap | N
     }
     if not weights:
         return None
-    return build_risk_reward_gap(db_path, db_path.parent.parent, weights, weights_source="tracker")
+    return build_risk_reward_gap(db_path, repo_root, weights, weights_source="tracker")
 
 
-def _local_book_weights(pos: Positioning | None, repo_root: Path) -> dict[str, float]:
+def _local_book_weights(pos: Positioning | None, repo_root: Path | None) -> dict[str, float]:
     """Ticker -> fraction-of-book for the local-substrate risk sections.
 
     Prefers the live positioning rows; offline it falls back to the
@@ -1806,18 +1821,19 @@ def _local_book_weights(pos: Positioning | None, repo_root: Path) -> dict[str, f
             for r in pos.correlations
             if r.ticker and r.weight_pct is not None
         }
-    if not weights:
+    if not weights and repo_root is not None:
         weights = read_materialized_weights(repo_root)
     return weights
 
 
-def _build_style_rollup(pos: Positioning | None, db_path: Path | None) -> StyleFactorRollup | None:
+def _build_style_rollup(
+    pos: Positioning | None, db_path: Path | None, *, repo_root: Path | None = None
+) -> StyleFactorRollup | None:
     """The value/size/momentum loadings, computed entirely from local disk
     (FMP price cache + factor_proxies store) — so the section renders with the
     tracker DOWN."""
-    if db_path is None:
+    if db_path is None or repo_root is None:
         return None
-    repo_root = db_path.parent.parent
     weights = _local_book_weights(pos, repo_root)
     if not weights:
         return None
@@ -1825,71 +1841,78 @@ def _build_style_rollup(pos: Positioning | None, db_path: Path | None) -> StyleF
 
 
 def _build_correlation_read(
-    pos: Positioning | None, db_path: Path | None
+    pos: Positioning | None, db_path: Path | None, *, repo_root: Path | None = None
 ) -> CorrelationRead | None:
     """The holdings pairwise correlation matrix + crowding clusters, computed
     entirely from the local price cache — renders with the tracker DOWN (same
     weights degrade as the style section)."""
-    if db_path is None:
+    if db_path is None or repo_root is None:
         return None
-    repo_root = db_path.parent.parent
     weights = _local_book_weights(pos, repo_root)
     if not weights:
         return None
     return build_holdings_correlation_from_disk(repo_root, list(weights), weights)
 
 
-def _build_tail_stress(pos: Positioning | None, db_path: Path | None) -> TailStress | None:
+def _build_tail_stress(
+    pos: Positioning | None, db_path: Path | None, *, repo_root: Path | None = None
+) -> TailStress | None:
     """The all-bears book stress, from local ``dcf_runs`` bear scenarios —
     renders with the tracker DOWN (same weights degrade as the other local
     sections; the DB read itself needs no tracker)."""
-    if db_path is None:
+    if db_path is None or repo_root is None:
         return None
-    weights = _local_book_weights(pos, db_path.parent.parent)
+    weights = _local_book_weights(pos, repo_root)
     if not weights:
         return None
     return build_tail_stress(db_path, weights)
 
 
-def _build_monte_carlo(pos: Positioning | None, db_path: Path | None) -> MonteCarloRead | None:
+def _build_monte_carlo(
+    pos: Positioning | None, db_path: Path | None, *, repo_root: Path | None = None
+) -> MonteCarloRead | None:
     """The fat-tailed book Monte Carlo (PR4) — computed entirely from the
     local price cache, same weights degrade as the other local sections."""
-    if db_path is None:
+    if db_path is None or repo_root is None:
         return None
-    weights = _local_book_weights(pos, db_path.parent.parent)
+    weights = _local_book_weights(pos, repo_root)
     if not weights:
         return None
-    return build_book_monte_carlo(db_path.parent.parent, weights)
+    return build_book_monte_carlo(repo_root, weights)
 
 
 def _build_joint_latam_stress(
-    pos: Positioning | None, db_path: Path | None
+    pos: Positioning | None, db_path: Path | None, *, repo_root: Path | None = None
 ) -> EventStressResult | None:
     """The joint-LatAm event-correlation stress (PR4) — reads local
     ``dcf_runs`` bear scenarios (same substrate as ``_build_tail_stress``);
     renders with the tracker DOWN."""
-    if db_path is None:
+    if db_path is None or repo_root is None:
         return None
-    weights = _local_book_weights(pos, db_path.parent.parent)
+    weights = _local_book_weights(pos, repo_root)
     if not weights:
         return None
     return build_joint_latam_stress(db_path, weights)
 
 
-def _build_bear_lint(db_path: Path | None) -> BearLintReport | None:
+def _build_bear_lint(
+    db_path: Path | None, *, repo_root: Path | None = None
+) -> BearLintReport | None:
     """The bear-realism lint (Monthly Red Team Phase 1 guard 2) — from the
     materialized weights cache, so it renders with the tracker DOWN like the
     other local Risk-tab sections. ``None`` when there is no DB or no weighted
     holdings (the caller renders the empty state)."""
-    if db_path is None:
+    if db_path is None or repo_root is None:
         return None
-    weights = read_materialized_weights(db_path.parent.parent)
+    weights = read_materialized_weights(repo_root)
     if not weights:
         return None
-    return build_bear_lint(db_path, db_path.parent.parent)
+    return build_bear_lint(db_path, repo_root)
 
 
-def _read_position_guard(db_path: Path | None) -> PositionGuardCacheModel | None:
+def _read_position_guard(
+    db_path: Path | None, *, repo_root: Path | None = None
+) -> PositionGuardCacheModel | None:
     """The naked-position gate (Monthly Red Team Phase 1 guard 7) — READS the
     nightly-materialized cache (``data/dashboard/position_guard.json``,
     ``execution/refresh_position_guard.py``, morning-pipeline stage 0h) rather
@@ -1897,12 +1920,14 @@ def _read_position_guard(db_path: Path | None) -> PositionGuardCacheModel | None
     never pays for the DB reads. ``None`` when there is no DB or no cache on
     file yet (the caller renders the empty state, distinct from "zero
     violations")."""
-    if db_path is None:
+    if db_path is None or repo_root is None:
         return None
-    return read_position_guard_cache(db_path.parent.parent)
+    return read_position_guard_cache(repo_root)
 
 
-def _read_thesis_collision(pos: Positioning | None, db_path: Path | None) -> CachedReport | None:
+def _read_thesis_collision(
+    pos: Positioning | None, db_path: Path | None, *, repo_root: Path | None = None
+) -> CachedReport | None:
     """The cached thesis-collision audit, filtered against the CURRENT
     holding set: a cached finding naming a name sold since the audit ran must
     not render as if it's still describing the live book (composition drift
@@ -1910,23 +1935,25 @@ def _read_thesis_collision(pos: Positioning | None, db_path: Path | None) -> Cac
     unfiltered cached read when the current holding set can't be derived
     (still safe: no LLM call, no crash), matching every other local section's
     degrade-gracefully discipline."""
-    if db_path is None:
+    if db_path is None or repo_root is None:
         return None
-    weights = _local_book_weights(pos, db_path.parent.parent)
+    weights = _local_book_weights(pos, repo_root)
     if not weights:
         return read_cached_report(db_path)
     return read_cached_report(db_path, list(weights))
 
 
-def _read_business_factor_vector(db_path: Path | None) -> BookFactorVector | None:
+def _read_business_factor_vector(
+    db_path: Path | None, *, repo_root: Path | None = None
+) -> BookFactorVector | None:
     """The C3 business-factor book vector (weights x persisted ``is_latest``
     loadings) — a pure local DB + materialized-weights-cache read, zero LLM,
     so it renders with the tracker DOWN like the other local Risk-tab
     sections. ``None`` when there is no DB (the caller renders the empty
     state that names the refresh command)."""
-    if db_path is None:
+    if db_path is None or repo_root is None:
         return None
-    return book_factor_vector(db_path, db_path.parent.parent)
+    return book_factor_vector(db_path, repo_root)
 
 
 def _implicit_bets_section(
@@ -2059,8 +2086,34 @@ def _quiet_note(text: str) -> str:
     return f'<section class="panel"><p class="muted">{escape(text)}</p></section>'
 
 
+def _weights_source_note(repo_root: Path | None) -> str:
+    if repo_root is None:
+        return ""
+    snapshot = read_materialized_weight_snapshot(repo_root)
+    if snapshot is None:
+        return ""
+    source = (
+        f"Weights cache source as of {snapshot.source_as_of}"
+        if snapshot.source_as_of
+        else ("Weights cache source age unknown")
+    )
+    flags: list[str] = []
+    if snapshot.source_is_stale:
+        flags.append("source marked stale")
+    if snapshot.source_is_partial:
+        flags.append("source marked partial")
+    flags.extend(snapshot.source_warnings)
+    processing = snapshot.computed_at.isoformat()
+    detail = "; ".join([source, *flags, f"materialized {processing}"])
+    return _quiet_note(detail)
+
+
 def render_health_fragment(
-    db_path: Path, fragment: str, *, conn: sqlite3.Connection | None = None
+    db_path: Path,
+    fragment: str,
+    *,
+    conn: sqlite3.Connection | None = None,
+    repo_root: Path | None = None,
 ) -> str:
     """One Health-console chip pane as a standalone HTML fragment. Each pane
     carries the CSS block its sections need (the same block the standalone
@@ -2082,18 +2135,24 @@ def render_health_fragment(
             if alive
             else LivePortfolio(available=False, api_url=base, error=_PROBE_DOWN_ERROR)
         )
-        exposure = _exposure_panel(db_path, live, conn=conn) or _quiet_note(
+        exposure = _exposure_panel(db_path, live, conn=conn, repo_root=repo_root) or _quiet_note(
             "No holdings to weight yet."
         )
         return _INSIGHTS_CSS + exposure
     if fragment == "collisions":
-        return _RISK_CSS + _thesis_collision_section(_read_thesis_collision(None, db_path))
+        return _RISK_CSS + _thesis_collision_section(
+            _read_thesis_collision(None, db_path, repo_root=repo_root)
+        )
     if fragment == "bets":
         snapshot = read_latest_snapshot(db_path=db_path)
-        weights = _local_book_weights(None, db_path.parent.parent)
-        bets = _implicit_bets_section(snapshot, weights, _read_business_factor_vector(db_path))
-        return _RISK_CSS + (
-            bets or _quiet_note("Not enough on-disk data to state the book's bets yet.")
+        weights = _local_book_weights(None, repo_root)
+        bets = _implicit_bets_section(
+            snapshot, weights, _read_business_factor_vector(db_path, repo_root=repo_root)
+        )
+        return (
+            _RISK_CSS
+            + _weights_source_note(repo_root)
+            + (bets or _quiet_note("Not enough on-disk data to state the book's bets yet."))
         )
     if fragment == "drawdown":
         alive, base = probe_tracker(None)
@@ -2120,12 +2179,15 @@ def render_health_fragment(
             return _RISK_CSS + _cached_risk_section(snap)
         return _RISK_CSS + _risk_offline_note(analytics)
     if fragment in {"correlation", "crowding"}:
-        return _RISK_CSS + _correlation_section(_build_correlation_read(None, db_path))
+        return _RISK_CSS + _correlation_section(
+            _build_correlation_read(None, db_path, repo_root=repo_root)
+        )
     if fragment == "tail":
         return _RISK_CSS + (
-            _tail_stress_section(_build_tail_stress(None, db_path))
+            _tail_stress_section(_build_tail_stress(None, db_path, repo_root=repo_root))
             + _monte_carlo_section(
-                _build_monte_carlo(None, db_path), _build_joint_latam_stress(None, db_path)
+                _build_monte_carlo(None, db_path, repo_root=repo_root),
+                _build_joint_latam_stress(None, db_path, repo_root=repo_root),
             )
         )
     return _quiet_note(f"Unknown Health fragment: {fragment}")
