@@ -78,8 +78,8 @@ def render_company_desk_shell() -> str:
         <button class="k-btn k-btn-primary k-btn-sm" id="workOsFullBriefButton" type="button" disabled>Read full brief →</button>
       </div>
       <div class="company-desk-facts" aria-label="Company snapshot">
-        <div class="k-stat-cell"><div class="stat-heading">Last price</div><div class="stat-number" id="deskLivePrice">—</div></div>
-        <div class="k-stat-cell"><div class="stat-heading">Fair value</div><div class="stat-number" id="deskFairValue">—</div></div>
+        <div class="k-stat-cell"><div class="stat-heading">DCF input price</div><div class="stat-number" id="deskLivePrice">—</div><div class="stat-subtext" id="deskInputPriceSource">No governed input price</div></div>
+        <div class="k-stat-cell"><div class="stat-heading">Fair value</div><div class="stat-number" id="deskFairValue">—</div><div class="stat-subtext" id="deskFairValueSource">No governed fair value</div></div>
         <div class="k-stat-cell"><div class="stat-heading">Upside</div><div class="stat-number" id="deskValuationGap"><span class="k-pill">—</span></div></div>
         <div class="k-stat-cell"><div class="stat-heading">Latest quarter</div><div class="stat-number" id="deskQuarterLabel">Pending</div></div>
       </div>
@@ -142,7 +142,7 @@ def render_company_desk_shell() -> str:
       <div id="deskDecisionBand"></div><span id="deskModelState"></span><span id="deskModelRevision"></span>
       <span id="deskDecisionRelationship"></span><span id="deskDecisionFreshness"></span>
       <span id="deskPositionWeight"></span><span id="deskHeroPositionWeight"></span><span id="deskPositionSource"></span>
-      <span id="deskInputPrice"></span><span id="deskInputPriceSource"></span><span id="deskFairValueSource"></span>
+      <span id="deskInputPrice"></span>
       <span id="deskHeroFairValue"></span><div id="deskFinancialsSummary"></div><div id="deskTranscriptsQA"></div>
       <div id="deskProvenanceLinks"></div><span id="deskBriefDate"></span><span id="deskBriefStatus"></span>
       <button id="deskThesisBriefDoorway" type="button"></button><div id="deskKpiSummary"></div>
