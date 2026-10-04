@@ -187,3 +187,26 @@ assert.equal(closes, 1, 'Pushed reader bypassed the history restoration lifecycl
 assert.equal(restores, 1);
 """
     )
+
+
+def test_existing_namespaced_body_targets_resolve_without_changing_stored_ids() -> None:
+    helper = "  function workOsReaderTarget(" + _runtime_block(
+        "  function workOsReaderTarget(", "\n  async function workOsLoadBriefResearchItems"
+    )
+    _run_node(
+        r"""
+const assert = require('node:assert/strict');
+const target = Object.freeze({id:'reader-abcdef123456-fin-drill-revenue'});
+const nodes = [target];
+const root = {getElementById(id){return nodes.find(node=>node.id===id) || null;},querySelectorAll(){return nodes;}};
+"""
+        + helper
+        + r"""
+assert.equal(workOsReaderTarget(root,'fin-drill-revenue'),target);
+assert.equal(workOsReaderTarget(root,target.id),target);
+assert.equal(workOsReaderTarget(root,'missing'),null);
+nodes.push(Object.freeze({id:'reader-111111111111-fin-drill-revenue'}));
+assert.equal(workOsReaderTarget(root,'fin-drill-revenue'),null,'Ambiguous retained target must fail closed');
+assert.equal(target.id,'reader-abcdef123456-fin-drill-revenue');
+"""
+    )

@@ -460,6 +460,17 @@
     window.history.replaceState(state, '', url.pathname + url.search + url.hash);
   }
 
+  function workOsReaderTarget(root, targetId) {
+    const direct = root.getElementById(targetId);
+    if (direct) return direct;
+    // Existing inert bodies namespace IDs but retain some interaction references.
+    const safeId = String(targetId || '').replace(/[^A-Za-z0-9_-]+/g, '-');
+    const matches = Array.from(root.querySelectorAll('[id]')).filter(function (node) {
+      return node.id.replace(/^reader-[0-9a-f]{12}-/, '') === safeId;
+    });
+    return matches.length === 1 ? matches[0] : null;
+  }
+
   async function workOsLoadBriefResearchItems(ticker) {
     const mount = document.getElementById('workOsBriefResearchItemsMount');
     if (!mount || !ticker) return;
@@ -639,7 +650,7 @@
           if (!groupPane) return;
           activateReaderGroup(groupId, false);
           activateReaderSection(groupPane, sectionId, !anchorId);
-          const anchor = anchorId && root.getElementById(anchorId);
+          const anchor = anchorId && workOsReaderTarget(root, anchorId);
           if (anchor) {
             for (let parent = anchor.parentElement; parent; parent = parent.parentElement) {
               if (parent.tagName === 'DETAILS') parent.open = true;
@@ -758,7 +769,7 @@
         }
         const drill = event.composedPath().find(function (node) { return node && node.dataset && node.dataset.drillTarget; });
         if (drill) {
-          const target = root.getElementById(drill.dataset.drillTarget);
+          const target = workOsReaderTarget(root, drill.dataset.drillTarget);
           if (target) {
             target.hidden = !target.hidden;
             drill.setAttribute('aria-expanded', String(!target.hidden));
