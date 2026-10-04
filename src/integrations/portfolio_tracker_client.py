@@ -69,6 +69,7 @@ from integrations.portfolio_tracker_v1 import (
     TrackerV1Client,
     V1Fetch,
     V1Meta,
+    transaction_snapshot_error,
 )
 
 log = logging.getLogger(__name__)
@@ -3024,9 +3025,9 @@ def _fetch_live_portfolio_v1(
 
     ``/api/v1/portfolio/positions`` is contractually envelope-less, so
     ``as_of`` comes from its ``snapshot_date`` and the staleness flags ride
-    the transactions read's envelope (same book, same observation cycle) —
-    no extra round-trip. Both reads must succeed, matching the legacy
-    all-or-nothing fetch."""
+    the transactions read's envelope only after their observation dates
+    agree. Required metadata must be present. Both reads must succeed,
+    matching the legacy all-or-nothing fetch."""
     client = TrackerV1Client(base_url=base, read_timeout=timeout)
     pos = client.get_positions()
     if not pos.available or pos.data is None:
@@ -3034,6 +3035,22 @@ def _fetch_live_portfolio_v1(
     txns = client.get_transactions_page(limit=max(1, int(transactions_limit)))
     if not txns.available or txns.data is None:
         return LivePortfolio(available=False, api_url=base, error=f"v1 transactions: {txns.error}")
+
+    agreement_error = transaction_snapshot_error(
+        pos.data.snapshot_date,
+        txns.meta,
+        position_account_ids={
+            lot.account_id for position in pos.data.positions for lot in position.accounts
+        },
+    )
+    if agreement_error is not None:
+        return LivePortfolio(
+            available=False,
+            api_url=base,
+            error=f"v1 positions/transactions: {agreement_error}",
+            is_partial=True,
+            envelope_warnings=[agreement_error],
+        )
 
     positions: list[LivePosition] = []
     for p in pos.data.positions:
@@ -3068,11 +3085,7 @@ def _fetch_live_portfolio_v1(
                 lot.market_value or 0.0
             )
     meta = txns.meta
-    as_of = (
-        pos.data.snapshot_date.isoformat()
-        if pos.data.snapshot_date is not None
-        else (meta.as_of.isoformat() if meta is not None and meta.as_of is not None else None)
-    )
+    as_of = pos.data.snapshot_date.isoformat() if pos.data.snapshot_date is not None else None
     return LivePortfolio(
         available=True,
         api_url=base,

@@ -54,12 +54,20 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal
 from enum import StrEnum
 from typing import Any, Literal, NamedTuple, cast
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 from compute.kpi_resolver import resolve_kpi_definition_name, semantic_series_identity_sql
+from compute.thesis_metric_series import (
+    MetricEvaluationCapture,
+    MetricExpression,
+    MetricReplayError,
+    calculate_metric_series,
+    replay_metric_capture,
+)
 from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
@@ -100,6 +108,7 @@ class PredicateType(StrEnum):
     RATIO_BREACH = "ratio_breach"
     COMPOUND = "compound"
     TRAJECTORY = "trajectory"
+    METRIC_THRESHOLD = "metric_threshold"
 
 
 class FactSource(StrEnum):
@@ -268,12 +277,30 @@ class SoftEvaluationCapture(BaseModel):
     reads: tuple[SoftSeriesCapture, ...]
     results: tuple[SoftRuleResult, ...]
     unit_jump_ratio: float
+    metric_reads: tuple[MetricEvaluationCapture, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
 
     def economic_payload(self) -> dict[str, JsonValue]:
         return {
             "rules": [rule.model_dump(mode="json") for rule in self.rules],
             "reads": [read.economic_payload() for read in self.reads],
             "unit_jump_ratio": self.unit_jump_ratio,
+            **(
+                {
+                    "metric_reads": [
+                        {
+                            "expression": capture.expression.model_dump(mode="json"),
+                            "result": capture.result.model_dump(
+                                mode="json", exclude={"source_manifests"}
+                            ),
+                        }
+                        for capture in self.metric_reads
+                    ]
+                }
+                if self.metric_reads
+                else {}
+            ),
         }
 
 
@@ -282,7 +309,13 @@ class _EvaluationContext:
     conn: sqlite3.Connection | None
     ticker: str
     financials: CanonicalFinancialSeriesReader | None
+    cutoff: datetime
     retain_reads: bool = False
+    metric_reads: list[MetricEvaluationCapture] = field(
+        default_factory=lambda: list[MetricEvaluationCapture]()
+    )
+    saved_metric_reads: tuple[MetricEvaluationCapture, ...] | None = None
+    metric_read_index: int = 0
     reads: list[SoftSeriesCapture] = field(default_factory=lambda: list[SoftSeriesCapture]())
     saved_reads: tuple[SoftSeriesCapture, ...] | None = None
     read_index: int = 0
@@ -310,7 +343,12 @@ def _read_financial(context: _EvaluationContext, metric: str) -> CanonicalFinanc
                 return read.financial
         raise CapturedReplayError("financial manifest was not captured")
     if context.financials is None:
-        raise CapturedReplayError("financial reader is unavailable")
+        if context.conn is None:
+            raise CapturedReplayError("financial reader is unavailable")
+        # Initialize inside the actual read so its failure is captured per rule.
+        context.financials = CanonicalFinancialSeriesReader(
+            context.conn, context.ticker, cutoff=context.cutoff
+        )
     return context.financials.read(
         metric, cadence=FinancialCadence.QUARTERLY, continuity=SeriesContinuity.STRICT_CONTIGUOUS
     )
@@ -1116,6 +1154,22 @@ def _eval_compound(context: _EvaluationContext, params: dict[str, Any]) -> _Pred
     child_outcomes = [_evaluate_predicate(context, c) for c in children]
     child_fired = [c.fired for c in child_outcomes]
     fired = _kleene_and(child_fired) if op == "and" else _kleene_or(child_fired)
+    require_same_period = params.get("require_same_period", False)
+    if not isinstance(require_same_period, bool):
+        raise ValueError("require_same_period must be boolean")
+    fired_periods = [
+        child.evidence_keys.get("last_period") for child in child_outcomes if child.fired is True
+    ]
+    mismatched_periods = (
+        require_same_period
+        and bool(fired_periods)
+        and (
+            any(period is None for period in fired_periods)
+            or len(set(str(period) for period in fired_periods)) > 1
+        )
+    )
+    if mismatched_periods:
+        fired = None
     fired_count = sum(1 for f in child_fired if f is True)
     unresolved_count = sum(1 for f in child_fired if f is None)
     if fired is None:
@@ -1128,11 +1182,26 @@ def _eval_compound(context: _EvaluationContext, params: dict[str, Any]) -> _Pred
         fired=fired,
         evidence_keys={
             "op": op,
+            **(
+                {
+                    "last_period": fired_periods[0]
+                    if fired_periods and not mismatched_periods
+                    else None,
+                    "reason": "compound_period_mismatch" if mismatched_periods else None,
+                }
+                if require_same_period
+                else {}
+            ),
             "children": [
                 {
                     "type": c_def.type.value,
                     "fired": c_out.fired,
                     "description": c_out.description,
+                    **(
+                        {"last_period": c_out.evidence_keys.get("last_period")}
+                        if require_same_period
+                        else {}
+                    ),
                     **(
                         {"source_manifest": c_out.evidence_keys["source_manifest"]}
                         if "source_manifest" in c_out.evidence_keys
@@ -1147,6 +1216,85 @@ def _eval_compound(context: _EvaluationContext, params: dict[str, Any]) -> _Pred
             f"{fired_count} fired, {unresolved_count} unresolved, "
             f"{len(children) - fired_count - unresolved_count} clear; {outcome_word}"
         ),
+    )
+
+
+def _eval_metric_threshold(context: _EvaluationContext, params: dict[str, Any]) -> _PredOutcome:
+    """Compare exact calculated values without dropping source or period evidence."""
+    expression = MetricExpression.model_validate(_param(params, "expression"))
+    comparator = str(_param(params, "comparator"))
+    comparator = {"<": "lt", "<=": "le", ">": "gt", ">=": "ge"}.get(comparator, comparator)
+    comparisons: dict[str, Callable[[Decimal, Decimal], bool]] = {
+        "lt": lambda value, threshold: value < threshold,
+        "le": lambda value, threshold: value <= threshold,
+        "gt": lambda value, threshold: value > threshold,
+        "ge": lambda value, threshold: value >= threshold,
+    }
+    if comparator not in comparisons:
+        raise ValueError("metric_threshold comparator must be lt, le, gt or ge")
+    threshold = Decimal(str(_param(params, "threshold")))
+    if not threshold.is_finite():
+        raise ValueError("metric_threshold requires a finite threshold")
+    periods = params.get("periods", 1)
+    if not isinstance(periods, int) or isinstance(periods, bool) or not 1 <= periods <= 12:
+        raise ValueError("metric_threshold periods must be an integer from 1 to 12")
+    require_adjacent = params.get("require_adjacent_quarters", True)
+    if not isinstance(require_adjacent, bool):
+        raise ValueError("require_adjacent_quarters must be boolean")
+    if context.saved_metric_reads is not None:
+        if context.metric_read_index >= len(context.saved_metric_reads):
+            raise CapturedReplayError("saved metric threshold input is missing")
+        saved = context.saved_metric_reads[context.metric_read_index]
+        context.metric_read_index += 1
+        if (
+            saved.expression != expression
+            or saved.ticker != context.ticker
+            or saved.cutoff != context.cutoff
+        ):
+            raise CapturedReplayError("saved metric threshold identity differs")
+        try:
+            result = replay_metric_capture(saved)
+        except MetricReplayError as exc:
+            raise CapturedReplayError(str(exc)) from exc
+    else:
+        if context.conn is None:
+            raise CapturedReplayError("live metric threshold connection is unavailable")
+        result = calculate_metric_series(
+            context.conn,
+            context.ticker,
+            expression,
+            cutoff=context.cutoff,
+            captures=context.metric_reads if context.retain_reads else None,
+        )
+    window = result.points[-periods:]
+    evidence: dict[str, Any] = {
+        "expression": expression.model_dump(mode="json"),
+        "comparator": comparator,
+        "threshold": str(threshold),
+        "periods": periods,
+        "require_adjacent_quarters": require_adjacent,
+        "source_manifest": result.model_dump(mode="json"),
+        "last_period": window[-1].period_end.isoformat() if window else None,
+        "values": [str(point.value) for point in window],
+    }
+    reason = result.reason_code
+    if result.status != "available" or len(window) < periods:
+        reason = reason or "insufficient_metric_periods"
+    elif require_adjacent and any(
+        newer.fiscal_index != older.fiscal_index + 1 for older, newer in itertools.pairwise(window)
+    ):
+        reason = "missing_adjacent_quarter"
+    if reason is not None:
+        return _PredOutcome(
+            fired=None,
+            evidence_keys={**evidence, "reason": reason},
+            description=f"unresolved: {reason} for metric_threshold",
+        )
+    fired = all(comparisons[comparator](point.value, threshold) for point in window)
+    return _PredOutcome(
+        fired=fired,
+        evidence_keys=evidence,
+        description=f"metric {comparator} {threshold} for {periods} quarterly periods: {fired}",
     )
 
 
@@ -1338,6 +1486,7 @@ _PREDICATE_DISPATCH: dict[PredicateType, _PredHandler] = {
     PredicateType.RATIO_BREACH: _eval_ratio_breach,
     PredicateType.COMPOUND: _eval_compound,
     PredicateType.TRAJECTORY: _eval_trajectory,
+    PredicateType.METRIC_THRESHOLD: _eval_metric_threshold,
 }
 
 
@@ -1466,8 +1615,9 @@ def evaluate_soft_rules(
         context = _EvaluationContext(
             conn=conn,
             ticker=ticker,
-            financials=CanonicalFinancialSeriesReader(conn, ticker, cutoff=cutoff),
+            financials=None,
             retain_reads=captures is not None,
+            cutoff=cutoff,
         )
         results = _evaluate_soft_rules_in_snapshot(context, rules, cutoff)
         if captures is not None:
@@ -1479,6 +1629,7 @@ def evaluate_soft_rules(
                     reads=tuple(context.reads),
                     results=tuple(results),
                     unit_jump_ratio=_UNIT_JUMP_RATIO,
+                    metric_reads=tuple(context.metric_reads),
                 )
             )
         return results
@@ -1492,9 +1643,16 @@ def replay_soft_capture(capture: SoftEvaluationCapture) -> list[SoftRuleResult]:
     if capture.unit_jump_ratio != _UNIT_JUMP_RATIO or capture.cutoff.tzinfo is None:
         raise CapturedReplayError("unsupported saved soft evaluator configuration")
     context = _EvaluationContext(
-        conn=None, ticker=capture.ticker, financials=None, saved_reads=capture.reads
+        conn=None,
+        ticker=capture.ticker,
+        financials=None,
+        saved_reads=capture.reads,
+        cutoff=capture.cutoff,
+        saved_metric_reads=capture.metric_reads,
     )
     results = _evaluate_soft_rules_in_snapshot(context, list(capture.rules), capture.cutoff)
+    if context.metric_read_index != len(capture.metric_reads):
+        raise CapturedReplayError("captured metric reads were not consumed")
     if context.read_index != len(capture.reads):
         raise CapturedReplayError("captured soft reads were not consumed")
     if results != list(capture.results):
@@ -1580,7 +1738,17 @@ def soft_result_economic_payload(result: SoftRuleResult) -> dict[str, JsonValue]
             "trip_value",
             "already_violating",
         ),
-        PredicateType.COMPOUND: ("op",),
+        PredicateType.METRIC_THRESHOLD: (
+            "expression",
+            "comparator",
+            "threshold",
+            "periods",
+            "require_adjacent_quarters",
+            "last_period",
+            "values",
+            "reason",
+        ),
+        PredicateType.COMPOUND: ("op", "require_same_period", "reason", "last_period"),
     }
     raw_type = result.details.get("predicate_type")
     if raw_type is None:

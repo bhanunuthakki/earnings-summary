@@ -298,12 +298,10 @@ def test_override_only_fact_pickable_and_rendered(tmp_path: Path) -> None:
         {"tickers": ["TST"], "metrics": ["fin:remaining_performance_obligations"], "periods": 4}
     )
     result = execute_view(spec, db_path=db)
-    (row,) = result.rows
-    cell = row.cells[-1]
-    assert cell.raw == 4200.0
-    assert cell.source is not None
-    assert cell.source.source == "sec_8k"
-    assert cell.source.accession_number == "0001-26-01"
+    assert result.rows == []
+    assert result.warnings == [
+        "TST: fin:remaining_performance_obligations omitted: unreviewed_scalar_override"
+    ]
 
 
 def test_override_for_existing_base_row_not_duplicated(tmp_path: Path) -> None:
@@ -510,13 +508,10 @@ def test_catalog_anchor_work_is_bounded_to_relevant_definitions(
     def unscoped_anchor(
         connection: sqlite3.Connection, *, fact_relation: str | None = None
     ) -> str | None:
-        # Reference the complete historical anchor, keeping the same bind
-        # parameter count. This deliberately includes unrelated issuers.
-        relation = (fact_relation or "kpi_facts").replace(
-            "kpi_definition_id IN (SELECT kpi_definition_id FROM kpi_facts WHERE ticker IN (?))",
-            "? IS NOT NULL",
-        )
-        return anchor(connection, fact_relation=relation)
+        # This pre-cutover reference deliberately anchors all issuers. The
+        # optimized query must preserve its payload without sorting unrelated
+        # definition histories.
+        return anchor(connection, fact_relation="kpi_facts")
 
     monkeypatch.setattr(engine, "semantic_series_identity_anchor_sql", unscoped_anchor)
     reference_rows, reference_steps = measure()
@@ -524,6 +519,147 @@ def test_catalog_anchor_work_is_bounded_to_relevant_definitions(
     assert [row["token"] for row in scoped_rows] == ["kpi:Selected"]
     # Count SQLite instructions instead of relying on machine wall time.
     assert scoped_steps < reference_steps / 2
+
+
+def test_catalog_bounds_canonical_candidate_definition_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "materialized-catalog.db"
+    _seed_kpis(
+        db,
+        [
+            ("TST", "Selected", 12),
+            ("TST", "Rejected", 12),
+            ("ALT", "Selected", 12),
+            ("TST", "Unadmitted", 2000),
+        ]
+        + [(f"OTHER{i}", f"Unrelated {i}", 12) for i in range(150)],
+        with_origin=True,
+        origins={"Selected": "capture"},
+    )
+    conn = _connect(db)
+    unused_metadata_calls = 0
+
+    def unused_metadata() -> str:
+        nonlocal unused_metadata_calls
+        unused_metadata_calls += 1
+        return "unused canonical provenance metadata"
+
+    conn.create_function("catalog_unused_metadata", 0, unused_metadata)
+    # A canonical view with immutable revisions and latest-selection work.
+    # Most captured histories are not admitted, as in the measured live path.
+    # Candidate IDs should use admission before resolving unrelated revisions.
+    conn.executescript(
+        "CREATE TABLE catalog_revisions (id INTEGER PRIMARY KEY, fact_id INTEGER, revision INTEGER);"
+        "CREATE INDEX catalog_revision_key ON catalog_revisions(fact_id, revision);"
+        "INSERT INTO catalog_revisions SELECT id, id, 1 FROM kpi_facts;"
+        "INSERT INTO catalog_revisions SELECT id+100000, id, 2 FROM kpi_facts;"
+        "CREATE TABLE catalog_selections (resolution_id INTEGER PRIMARY KEY, logical_key TEXT, "
+        "revision INTEGER, selected_revision_id INTEGER);"
+        "CREATE INDEX catalog_selected ON catalog_selections(selected_revision_id);"
+        "CREATE INDEX catalog_selection_head ON catalog_selections(logical_key, revision);"
+        "INSERT INTO catalog_selections SELECT id, CAST(fact_id AS TEXT), revision, id "
+        "FROM catalog_revisions;"
+        "CREATE TABLE catalog_outcomes (resolution_id INTEGER PRIMARY KEY, status TEXT);"
+        "CREATE INDEX catalog_outcome_status ON catalog_outcomes(status, resolution_id);"
+        "INSERT INTO catalog_outcomes SELECT revision.id, "
+        "CASE WHEN fact.kpi_definition_id=2 THEN 'unresolved' ELSE 'resolved' END "
+        "FROM catalog_revisions revision JOIN kpi_facts fact ON fact.id=revision.fact_id;"
+        "CREATE VIEW v_kpi_facts_resolved_current AS "
+        "SELECT fact.*, catalog_unused_metadata() AS resolution_metadata "
+        "FROM kpi_facts fact JOIN catalog_revisions revision "
+        "ON revision.fact_id=fact.id AND revision.revision="
+        "(SELECT MAX(latest.revision) FROM catalog_revisions latest WHERE latest.fact_id=fact.id) "
+        "JOIN catalog_selections selection ON selection.selected_revision_id=revision.id "
+        "AND NOT EXISTS (SELECT 1 FROM catalog_selections newer "
+        "WHERE newer.logical_key=selection.logical_key AND newer.revision>selection.revision) "
+        "JOIN catalog_outcomes outcome ON outcome.resolution_id=selection.resolution_id "
+        "AND outcome.status='resolved';"
+        "UPDATE kpi_fact_semantic_contexts SET status='quarantined' "
+        "WHERE kpi_fact_id IN (SELECT id FROM kpi_facts WHERE kpi_definition_id > 3);"
+        "CREATE INDEX context_status ON kpi_fact_semantic_contexts(status, publication_lane);"
+        "CREATE INDEX context_fact ON kpi_fact_semantic_contexts(kpi_fact_id);"
+        "CREATE INDEX context_head ON kpi_fact_semantic_contexts(supersedes_context_id);"
+        "CREATE INDEX fact_ticker ON kpi_facts(ticker);"
+        "CREATE INDEX fact_definition ON kpi_facts(kpi_definition_id);"
+        "ANALYZE;"
+    )
+    conn.commit()
+    steps = 0
+    statements: list[str] = []
+    catalog_active = False
+
+    def progress() -> int:
+        nonlocal steps
+        steps += 1
+        return 0
+
+    connect = engine.connect_sqlite
+
+    def traced_connect(path: Path, *, role: SQLiteConnectionRole) -> sqlite3.Connection:
+        connection = connect(path, role=role)
+        connection.create_function("catalog_unused_metadata", 0, unused_metadata)
+
+        def trace(sql: str) -> None:
+            nonlocal catalog_active
+            statements.append(sql)
+            catalog_active = "SELECT kd.name AS name" in sql
+
+        def catalog_progress() -> int:
+            if catalog_active:
+                return progress()
+            return 0
+
+        connection.set_trace_callback(trace)
+        connection.set_progress_handler(catalog_progress, 100)
+        return connection
+
+    monkeypatch.setattr(engine, "connect_sqlite", traced_connect)
+    entries = metric_catalog(db, ["TST", "ALT"])["kpi"]
+    materialized_steps = steps
+    query = next(sql for sql in statements if "SELECT kd.name AS name" in sql)
+    materialized_rows = [tuple(row) for row in conn.execute(query)]
+    assert entries == [
+        {
+            "token": "kpi:Selected",
+            "label": "Selected",
+            "tickers": 2,
+            "origin": "capture",
+            "title": "Company KPI 'Selected'.",
+        }
+    ]
+
+    # Exact pre-change query, with identical canonical, admission and identity
+    # builders. Compare the aggregate rows, not only the displayed field names.
+    relation = engine.canonical_fact_relation(conn, "kpi_facts").sql
+    anchor = engine.semantic_series_identity_anchor_sql(
+        conn,
+        fact_relation=f"(SELECT * FROM {relation} WHERE kpi_definition_id IN "
+        f"(SELECT kpi_definition_id FROM {relation} WHERE ticker IN (?,?)))",
+    )
+    join, admission = engine.semantic_admission_sql(conn, fail_closed=True)
+    identity = engine.semantic_series_identity_flat_sql(conn)
+    reference_query = f"""
+        SELECT kd.name AS name, kf.ticker AS ticker, COUNT(*) AS obs,
+               kd.definition_origin AS origin
+        FROM {relation} kf JOIN kpi_definitions kd ON kd.id=kf.kpi_definition_id
+        {join}
+        LEFT JOIN ({anchor}) series_identity_anchor
+          ON series_identity_anchor.definition_id=kf.kpi_definition_id
+        WHERE kf.ticker IN (?,?) AND {admission} AND {identity}
+        GROUP BY kd.name,kf.ticker
+    """
+    steps = 0
+    conn.set_progress_handler(progress, 100)
+    reference_rows = [
+        tuple(row) for row in conn.execute(reference_query, ("TST", "ALT", "TST", "ALT"))
+    ]
+    reference_steps = steps
+    conn.set_progress_handler(None, 0)
+    conn.close()
+    assert unused_metadata_calls == 0
+    assert materialized_rows == reference_rows
+    assert materialized_steps < reference_steps / 2
 
 
 def test_catalog_definition_scope_uses_canonical_relation_at_cutover(

@@ -546,7 +546,7 @@ def test_source_freshness_populated_for_every_required_source(tmp_path: Path) ->
     _fully_eligible(db_path, tmp_path, TICKER)
     a = assess_eligibility(db_path, tmp_path, TICKER, list_type="evaluation")
     assert a.checks[CHECK_SOURCE_PROVENANCE].passed
-    for key in ("price", "dcf", "weights", "thesis", "fit"):
+    for key in ("price", "dcf", "thesis", "fit"):
         assert key in a.source_freshness, key
 
 
@@ -596,3 +596,36 @@ def test_assess_universe_covers_portfolio_and_evaluation_lists(tmp_path: Path) -
 def test_assess_universe_missing_db_degrades_to_empty(tmp_path: Path) -> None:
     out = assess_universe(tmp_path / "nope.db", tmp_path)
     assert out == {}
+
+
+def test_newly_materialized_old_source_warns_without_blocking(tmp_path: Path) -> None:
+    from integrations.portfolio_tracker_client import LivePortfolio
+    from portfolio_weights import materialize_weights
+
+    db_path = _make_db(tmp_path)
+    _fully_eligible(db_path, tmp_path, TICKER)
+    materialize_weights(
+        tmp_path,
+        LivePortfolio(
+            available=True,
+            api_url="http://test",
+            as_of="2025-01-01",
+            is_stale=True,
+            is_partial=True,
+            envelope_warnings=["source_partial"],
+        ),
+    )
+    a = assess_eligibility(db_path, tmp_path, TICKER, list_type="evaluation")
+    assert a.eligible
+    assert a.checks[CHECK_PORTFOLIO_CONTEXT].passed
+    assert a.source_freshness["weights"] == "2025-01-01"
+    assert any("stale" in warning and "partial" in warning for warning in a.warning_reasons)
+
+
+def test_legacy_cache_age_is_unknown_not_fresh_source(tmp_path: Path) -> None:
+    db_path = _make_db(tmp_path)
+    _fully_eligible(db_path, tmp_path, TICKER)
+    a = assess_eligibility(db_path, tmp_path, TICKER, list_type="evaluation")
+    assert a.eligible
+    assert "weights" not in a.source_freshness
+    assert any("source age unknown" in warning for warning in a.warning_reasons)

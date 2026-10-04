@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
@@ -28,6 +28,8 @@ from integrations.portfolio_allocation import (
 )
 from integrations.portfolio_offline_snapshot import OfflinePortfolioSnapshot
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
+from sources.financial_growth_evidence import FinancialGrowthReference
+from sources.report_financials import FinancialEvidenceReference
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -203,8 +205,13 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # -2 retired score/fit presentation peeks.
     # +1 read-only degraded earnings draft peek.
     # +1 bounded cached host-runtime evidence endpoint.
+    # +1 exact, read-only canonical financial evidence peek.
+    # +1 read-only calculation peek that opens the original reported inputs.
+    assert rules["peek_canonical_financial"] == "/api/peek/canonical-financial"
+    assert rules["peek_financial_calculation"] == "/api/peek/financial-calculation"
+    # Main 178 endpoints plus the three retained SEC accession routes.
+    assert len(rules) == 181
     # +3 bounded SEC accession plan, status and apply routes.
-    assert len(rules) == 179
     expected_sec_routes = {
         "sec_accession_plan": ("/actions/sec-accession/plan", {"POST", "OPTIONS"}),
         "sec_accession_status": (
@@ -230,6 +237,8 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
             "tracker_read_health",
             "tracker_read_snapshot",
             "operations_host_runtime_api",
+            "peek_canonical_financial",
+            "peek_financial_calculation",
         }:
             assert rule.methods == {"GET", "HEAD", "OPTIONS"}
     assert rules["dcf.dcf_grade_evidence"] == "/api/dcf/evidence/<ticker>"
@@ -340,6 +349,52 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
         "notes_api": "/api/notes",
         "notes_action_api": "/api/notes/<int:note_id>/<action>",
     }
+
+
+def test_financial_calculation_uses_read_only_database_role(
+    client: FlaskClient, app_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    roles: list[comments_server.SQLiteConnectionRole] = []
+    connect = comments_server.connect_sqlite
+
+    def observed_connect(
+        path: str | os.PathLike[str],
+        *,
+        role: comments_server.SQLiteConnectionRole,
+        schema_preflight: bool | None = None,
+    ) -> sqlite3.Connection:
+        roles.append(role)
+        assert role is comments_server.SQLiteConnectionRole.READ_ONLY
+        assert schema_preflight is True
+        # The dashboard fixture has a minimal schema, not an Alembic stamp.
+        return connect(path, role=role, schema_preflight=False)
+
+    monkeypatch.setattr(comments_server, "connect_sqlite", observed_connect)
+    reference = FinancialGrowthReference(
+        formula="qoq",
+        inputs=tuple(
+            FinancialEvidenceReference(
+                ticker="NU",
+                concept="revenue",
+                canonical_metric_cell_id=f"synthetic-cell-{index}",
+                observation_id=f"synthetic-observation-{index}",
+                canonical_resolution_revision_id=f"synthetic-resolution-{index}",
+                metric_definition_revision_id="synthetic-definition",
+                as_of=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+            for index in range(2)
+        ),
+    )
+    database = app_repo / "data/portfolio.db"
+    before = database.read_bytes()
+    response = client.get(
+        "/api/peek/financial-calculation", query_string={"reference": reference.model_dump_json()}
+    )
+    assert response.status_code == 404
+    assert roles == [comments_server.SQLiteConnectionRole.READ_ONLY]
+    assert database.read_bytes() == before
+    assert client.post("/api/peek/financial-calculation").status_code == 405
+    assert roles == [comments_server.SQLiteConnectionRole.READ_ONLY]
 
 
 def test_replaced_compatibility_routes_are_absent(client: FlaskClient) -> None:

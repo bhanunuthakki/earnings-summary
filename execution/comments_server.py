@@ -646,6 +646,16 @@ def create_app(
     # rather than paying the full build merely to discover the ETag is unchanged.
     panel_cache = PanelResponseCache(ttl_seconds=30.0, max_entries=256)
     declared_operations = operations_registry or build_operations_registry(resolved_code_root)
+    # run_python.bat writes scheduler receipts under the deployed checkout.
+    # The semantic-review wrapper alone selects the declared DB's state root.
+    operations_job_receipt_roots: dict[str, Path] = {
+        step.job: (
+            resolved_db_path.parent.parent
+            if step.job == "prepare-kpi-semantic-review"
+            else resolved_code_root
+        )
+        for step in declared_operations.job_steps
+    }
     operations_review_code_identity = review_code_identity(resolved_code_root)
     app.config["CODE_ROOT"] = resolved_code_root
     app.config["OPERATIONS_REGISTRY"] = declared_operations
@@ -1923,6 +1933,7 @@ def create_app(
             observed_at=datetime.now(UTC),
             scheduler_receipt_path=scheduler_receipt_path(repo_root),
             service_receipt_path=service_receipt_path(repo_root),
+            job_receipt_roots=operations_job_receipt_roots,
         )
         semantic_rows = scoped_kpi_definitions(
             operations_conn,
@@ -2029,6 +2040,7 @@ def create_app(
                 observed_at=datetime.now(UTC),
                 scheduler_receipt_path=scheduler_receipt_path(repo_root),
                 service_receipt_path=service_receipt_path(repo_root),
+                job_receipt_roots=operations_job_receipt_roots,
             )
             return Response(
                 render_operations_panel(
@@ -2092,7 +2104,9 @@ def create_app(
                 )
             if fragment:
                 return Response(
-                    render_health_fragment(db_path, fragment, conn=get_read_db()),
+                    render_health_fragment(
+                        db_path, fragment, repo_root=repo_root, conn=get_read_db()
+                    ),
                     mimetype="text/html",
                 )
             return Response(
@@ -2116,7 +2130,7 @@ def create_app(
             from pipeline.portfolio_panel import render_portfolio_synthesis_panel
 
             return Response(
-                render_portfolio_synthesis_panel(db_path, conn=get_read_db()),
+                render_portfolio_synthesis_panel(db_path, repo_root=repo_root, conn=get_read_db()),
                 mimetype="text/html",
             )
 
@@ -2139,7 +2153,9 @@ def create_app(
             from pipeline.portfolio_panel import render_portfolio_risk_panel
 
             return Response(
-                render_portfolio_risk_panel(db_path=db_path, conn=get_read_db()),
+                render_portfolio_risk_panel(
+                    db_path=db_path, repo_root=repo_root, conn=get_read_db()
+                ),
                 mimetype="text/html",
             )
 
@@ -2164,7 +2180,9 @@ def create_app(
             fragment = request.args.get("fragment")
             if fragment:
                 return Response(
-                    render_health_fragment(db_path, fragment, conn=get_read_db()),
+                    render_health_fragment(
+                        db_path, fragment, repo_root=repo_root, conn=get_read_db()
+                    ),
                     mimetype="text/html",
                 )
             user_id = DEFAULT_USER_ID

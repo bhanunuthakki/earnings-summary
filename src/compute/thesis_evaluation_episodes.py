@@ -17,7 +17,15 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
 
 from compute.soft_rule_evaluator import (
     SoftEvaluationCapture,
@@ -25,6 +33,7 @@ from compute.soft_rule_evaluator import (
     SoftRuleResult,
     soft_result_economic_payload,
 )
+from compute.thesis_metric_series import MetricEvaluationCapture
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _POLICY_VERSION = "forward_v1"
@@ -132,6 +141,33 @@ class ForwardSemanticInput(_FrozenModel):
             raise ValueError("ticker cannot be blank")
         return ticker
 
+    @classmethod
+    def from_canonical_json(cls, raw: str) -> ForwardSemanticInput:
+        payload = TypeAdapter(dict[str, JsonValue]).validate_json(raw)
+        rules = payload.get("rules")
+        if payload.get("fingerprint_policy_version") != _POLICY_VERSION or not isinstance(
+            rules, dict
+        ):
+            raise EpisodeStoreError("stored semantic payload is invalid")
+        values = {
+            key: value
+            for key, value in payload.items()
+            if key not in {"rules", "fingerprint_policy_version"}
+        }
+        values.update(rules)
+        semantic = cls.model_validate(values)
+        if semantic.canonical_payload() != payload:
+            raise EpisodeStoreError("stored semantic payload is not canonical")
+        return semantic
+
+    @property
+    def requires_retained_context(self) -> bool:
+        # Main's calculated v2/ruleset v2 predates saved check contexts.
+        return self.evaluator_semantic_version == "thesis-evaluator/v3" or (
+            self.evaluator_semantic_version == "thesis-evaluator/v2"
+            and self.ruleset_version == "holdings-break-rules/v1"
+        )
+
     def _rules_payload(self) -> dict[str, JsonValue]:
         def normalized(rules: tuple[SemanticRuleInput, ...]) -> list[JsonValue]:
             rows = [rule.model_dump(mode="json") for rule in rules]
@@ -166,11 +202,50 @@ class ForwardSemanticInput(_FrozenModel):
         return _sha256(_canonical_json(self.canonical_payload()))
 
 
+class KpiInputReference(BaseModel):
+    """Exact selected current row; stored numeric text is not issuer raw bytes.
+
+    Current KPI facts do not prove immutable canonical observation identities.
+    Retain their real input coordinates and declare this boundary explicitly.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    reader_policy: Literal["current_projection"] = "current_projection"
+    identity_status: Literal["partial"] = "partial"
+    selection_mode: str = Field(min_length=1, max_length=80)
+    ticker: str = Field(min_length=1, max_length=32)
+    fact_id: int = Field(gt=0)
+    definition_id: int = Field(gt=0)
+    definition_name: str = Field(min_length=1, max_length=512)
+    original_value: str = Field(min_length=1, max_length=128)
+    original_unit: str = Field(min_length=1, max_length=80)
+    period_end: str = Field(min_length=1, max_length=80)
+    fiscal_period_type: str | None = Field(default=None, max_length=80)
+    source_doc_id: int | None = Field(default=None, gt=0)
+    locator: str | None = None
+    semantic_context_id: int | None = Field(default=None, gt=0)
+    definition_revision_id: str | None = Field(default=None, min_length=1, max_length=128)
+    source_row_label: str | None = None
+    source_column_header: str | None = None
+    source_value_text: str | None = None
+    missing_source_identities: tuple[str, ...] = (
+        "immutable_observation_version",
+        "canonical_resolution",
+        "canonical_reader_admission",
+    )
+
+
 class CapturedKpiObservation(_FrozenModel):
     period_end: datetime
     value: str
     unit: str
     provenance: dict[str, JsonValue] = Field(default_factory=dict)
+    input_reference: KpiInputReference | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    fiscal_period_type: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    fiscal_year: int | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class HardRuleCapture(_FrozenModel):
@@ -187,6 +262,9 @@ class HardRuleCapture(_FrozenModel):
     selection_details: dict[str, JsonValue]
     observations: tuple[CapturedKpiObservation, ...] | None
     selected_definition_content: dict[str, JsonValue] | None = None
+    metric_input: MetricEvaluationCapture | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class RetainedThesisContext(_FrozenModel):
@@ -359,10 +437,10 @@ def _stable_result(
         "rule_evaluations_json": rule_json,
         "soft_rule_results_json": soft_json,
     }
-    if semantic.evaluator_semantic_version == "thesis-evaluator/v2":
+    if semantic.requires_retained_context:
         context = check.retained_context
         if context is None:
-            raise EpisodeStoreError("v2 check requires retained context")
+            raise EpisodeStoreError("replayable check requires retained context")
         if (
             context.semantic != semantic
             or context.ticker != semantic.ticker
@@ -503,7 +581,7 @@ def record_forward_episode(
         if (
             existing[1] != evidence_as_of
             or (
-                semantic.evaluator_semantic_version != "thesis-evaluator/v2"
+                not semantic.requires_retained_context
                 and (str(existing[2]) != rule_json or existing[3] != soft_json)
             )
             or str(existing[4]) != result_sha256
@@ -622,7 +700,19 @@ def read_check_context(connection: sqlite3.Connection, *, receipt_id: str) -> Ch
         raise EpisodeStoreError("check episode is unavailable")
     raw_context = values.get("context_json")
     if raw_context is None:
-        if str(episode[0]) == "thesis-evaluator/v2" or values.get("context_sha256") is not None:
+        try:
+            semantic = ForwardSemanticInput.from_canonical_json(str(episode[1]))
+        except ValueError as exc:
+            raise EpisodeStoreError("stored semantic payload is unavailable") from exc
+        if (
+            semantic.evaluator_semantic_version != str(episode[0])
+            or semantic.semantic_input_sha256 != str(episode[2])
+            or semantic.ticker != str(episode[4])
+            or semantic.thesis_content_sha256 != str(episode[6])
+            or semantic.ruleset_sha256 != str(episode[7])
+        ):
+            raise EpisodeStoreError("stored semantic payload differs from episode")
+        if semantic.requires_retained_context or values.get("context_sha256") is not None:
             raise EpisodeStoreError("retained check context is missing")
         return CheckContextRead(
             receipt_id=receipt_id, status="legacy_context_unavailable", context=None
@@ -734,6 +824,7 @@ __all__ = [
     "EpisodeWriteResult",
     "ForwardSemanticInput",
     "HardRuleCapture",
+    "KpiInputReference",
     "ProvenanceCompleteness",
     "RetainedThesisContext",
     "SemanticRuleInput",

@@ -1408,6 +1408,10 @@ def _companyfacts_list(value: object) -> list[object]:
 def _load_complete_candidates(
     conn: sqlite3.Connection, logical_key: str, knowledge_cutoff: datetime
 ) -> tuple[_Candidate, ...]:
+    # Keep each indexed successor lookup outside its revision/evidence joins.
+    # A reorderable JOIN can start with all links for a fact table and repeat
+    # that ledger walk for every candidate. CROSS JOIN preserves these filters
+    # and the complete candidate set while fixing the selective outer loop.
     rows = conn.execute(
         "SELECT link.observation_id, link.fact_table, link.fact_row_id, link.fact_revision, "
         "observation.numeric_value, observation.currency, observation.unit, "
@@ -1425,10 +1429,10 @@ def _load_complete_candidates(
         "AND latest.fact_row_id = link.fact_row_id) "
         "AND ((link.fact_table = 'financial_facts' AND NOT EXISTS ("
         "SELECT 1 FROM financial_facts AS successor "
-        "JOIN fact_observation_revisions AS successor_link "
+        "CROSS JOIN fact_observation_revisions AS successor_link "
         "ON successor_link.fact_table = 'financial_facts' "
         "AND successor_link.fact_row_id = successor.id "
-        "JOIN reported_observations AS successor_observation "
+        "CROSS JOIN reported_observations AS successor_observation "
         "ON successor_observation.observation_id = successor_link.observation_id "
         "WHERE successor.supersedes_id = link.fact_row_id "
         "AND successor_link.fact_revision = (SELECT MAX(latest_successor.fact_revision) "
@@ -1439,10 +1443,10 @@ def _load_complete_candidates(
         "<= julianday(:knowledge_cutoff))) OR "
         "(link.fact_table = 'kpi_facts' AND NOT EXISTS ("
         "SELECT 1 FROM kpi_facts AS successor "
-        "JOIN fact_observation_revisions AS successor_link "
+        "CROSS JOIN fact_observation_revisions AS successor_link "
         "ON successor_link.fact_table = 'kpi_facts' "
         "AND successor_link.fact_row_id = successor.id "
-        "JOIN reported_observations AS successor_observation "
+        "CROSS JOIN reported_observations AS successor_observation "
         "ON successor_observation.observation_id = successor_link.observation_id "
         "WHERE successor.supersedes_id = link.fact_row_id "
         "AND successor_link.fact_revision = (SELECT MAX(latest_successor.fact_revision) "

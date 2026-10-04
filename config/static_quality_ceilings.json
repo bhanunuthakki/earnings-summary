@@ -5,10 +5,10 @@
     "alembic": 0,
     "cron": 0,
     "evals": 0,
-    "execution": 318,
+    "execution": 170,
     "instruction_tests": 0,
     "scripts": 0,
-    "src": 307,
+    "src": 302,
     "src/advisor": 0,
     "src/alerts": 0,
     "src/allocation": 0,
@@ -54,14 +54,14 @@
     "src/ui": 0,
     "src/user_state": 0,
     "src/viewspec": 0,
-    "tests": 1870
+    "tests": 1866
   },
   "suppressions": {
     ".github": 0,
     "alembic": 1,
     "cron": 15,
     "evals": 0,
-    "execution": 1073,
+    "execution": 1012,
     "instruction_tests": 0,
     "scripts": 4,
     "src": 14,
@@ -77,7 +77,7 @@
     "src/dcf": 0,
     "src/discovery": 0,
     "src/etf_sources": 0,
-    "src/evals": 3,
+    "src/evals": 0,
     "src/filings": 14,
     "src/integrations": 0,
     "src/ir_pipeline": 0,
@@ -110,6 +110,6 @@
     "src/ui": 0,
     "src/user_state": 1,
     "src/viewspec": 0,
-    "tests": 1023
+    "tests": 998
   }
 }

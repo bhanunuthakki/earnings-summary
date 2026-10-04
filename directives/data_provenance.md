@@ -103,6 +103,27 @@ re-fetching a URL proves the lost observation. Recovery must preserve old identi
 source and knowledge times, conflict history, and explicit unavailable dispositions.
 Only genuinely matching retained bytes can receive a byte-verification stamp.
 
+### Selected financial evidence and calculations
+
+Financials, Explore, Ask and financial decision conditions retain the exact
+selected observation and one aware knowledge cutoff. Table and series references
+name their reader policy. Supported annual and quarterly series preserve native
+currency, units, fiscal coordinates and comparison continuity. Unsupported
+semantics and unadmitted overrides remain unavailable. A newer override or
+restatement cannot change the evidence selected at an earlier cutoff.
+
+Growth evidence retains every input and comparison witness, plus the versioned
+calculation rule. The evidence reader re-admits that complete selection at its
+original cutoff. TTM growth uses four-quarter totals; heatmap level growth uses
+quarter endpoints. These formulas must remain distinct. Missing or incomparable
+inputs cannot receive a complete calculation reference. Reference validation and
+the read-only viewer do not admit a new fact or change raw source bytes.
+
+Financial condition cadence comes only from explicit saved measurement intent.
+A deadline does not establish annual or quarterly cadence. Missing or ambiguous
+cadence remains unresolved. Baseline identities, recency and alert deduplication
+remain owned by the existing condition reader and trigger.
+
 ### 2.1 Issuer KPI definition lineage
 
 An issuer-reported KPI value is decision-grade only when its current

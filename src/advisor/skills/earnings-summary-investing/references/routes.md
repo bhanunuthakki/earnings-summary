@@ -78,8 +78,10 @@ route is not authority to run it on production.
   retains exact dates and does not narrow the issuer archive. A selected brief
   quarter does not prove archive completeness. Missing deployed scope support
   remains unavailable; do not round dates or execute uninstalled source.
-- `execution/track_evaluation_names.py` has a fixed ticker list and checkout-local
-  database assumptions. It is not the general evaluation-list route.
+- `execution/track_evaluation_names.py` is a fixed-list state writer. It uses
+  `db.DB_PATH` from the configured resolver. Require an explicit approved database
+  configuration: the unconfigured resolver still selects a checkout-default path.
+  This script is not the general evaluation-list route.
 - Model preflight is read-only and does not fetch facts or grant write authority.
   Readiness exit codes are 0 ready, 2 blocked and 3 unavailable. Respect bank,
   holding-company, platform and sum-of-parts routes. An ETF has no corporate DCF.

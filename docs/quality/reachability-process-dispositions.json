@@ -12,9 +12,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Argv is the fixed execution/grade_decisions.py path run via managed_python_prefix.",
-      "fingerprint": "f9142a01b8d64c758af76bce674aca14cb5e4d600136d68830bdec17ccc136fb",
-      "line": 46,
+      "evidence": "Argv invokes fixed PROJECT_ROOT/execution/grade_decisions.py through managed_python_prefix. Explicit --db-path and --repo-root carry the selected database and artifact root; the artifact root no longer selects executable code. No new script target.",
+      "fingerprint": "791b308d3812f4ad27eaa588d20753ecd45284694053ace77e7e40c091164a03",
+      "line": 53,
       "path": "execution/backfill_seed_decisions.py",
       "targets": [
         "execution/grade_decisions.py"
@@ -310,8 +310,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_bank runs the fixed _BANK_BUILDER via managed_python_prefix.",
-      "fingerprint": "9c08e7cd7ae19c3810333e4128cb6f3823879cffd856d1218efbc26a2cb2b9ad",
-      "line": 729,
+      "fingerprint": "6a82dcf62576d9a092d40d7392809f92ed50aad5fd178d083ed89ceadfb25ea4",
+      "line": 825,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_bank_dcf.py"
@@ -320,8 +320,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_holdco runs the fixed _HOLDCO_BUILDER via managed_python_prefix.",
-      "fingerprint": "021d703aa04133d3fc4613ae8702710be35bb2d6532215e52b66c8ef4e3d8cb2",
-      "line": 766,
+      "fingerprint": "bd66c140acf166f1d98b6b310430f16feb6158a32954940189dfaa345220db4c",
+      "line": 870,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_holdco_sotp.py"
@@ -330,8 +330,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_fintech_sotp runs the fixed _FINTECH_BUILDER via managed_python_prefix.",
-      "fingerprint": "2944eb76b5e9a9d188cd12267dc0863c837d2be5cbd1115076fb2516fb501a59",
-      "line": 811,
+      "fingerprint": "6182f5a600c3de18cf50c1191d00cf11fad25c58f763627b3ac1f7efe4b1e1bf",
+      "line": 923,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_fintech_sotp.py"
@@ -340,8 +340,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_platform runs the fixed _PLATFORM_BUILDER via managed_python_prefix.",
-      "fingerprint": "5c0cae3712f494bc3420c69601fcb9ac05a67556902c208f7d141e85159504a3",
-      "line": 856,
+      "fingerprint": "3d6e8f4d0e4fc68004deccd97b3221402f8472d27a1816d19644de735778f1c5",
+      "line": 976,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_nu_platform_dcf.py"
@@ -350,8 +350,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_meli_sotp runs the fixed _MELI_SOTP_BUILDER via managed_python_prefix.",
-      "fingerprint": "6182f5a600c3de18cf50c1191d00cf11fad25c58f763627b3ac1f7efe4b1e1bf",
-      "line": 923,
+      "fingerprint": "c35c39f74389c3b4e562890f19295f3ac7446e061ca6e633feda8ccbcebd4849",
+      "line": 1050,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_meli_platform_dcf.py"
@@ -360,8 +360,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_builder runs the fixed _BUILDER_SCRIPT via managed_python_prefix.",
-      "fingerprint": "639d5cd0ff8bce5506eec3140e7b5004f961e6d666a70a4a04dbc82d37ca294a",
-      "line": 972,
+      "fingerprint": "93d5055a0922071f596536d3c261049f0df5ac908c3e1029f2a97f9d885317b7",
+      "line": 1109,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_redesigned_dcf.py"
@@ -457,8 +457,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Add execution/process_document_evidence.py to existing closed STAGE_MANIFEST dispatch. _selected_specs chooses manifest members; _build_stages resolves execution/spec.script via managed_python_argv. New deterministic stage is --apply --resume --batch-size 100, timeout600s; depends on preflight/list identity only and has DB_AND_STATE_ROOT argument profile. The target does no LLM/narrative dispatch and no arbitrary process invocation. This is a reviewed change to target scope, not a line-only refresh.",
-      "fingerprint": "4335a4db0fd590f502744548a1b62dff3f0166e70dd087707b81ec11841a7e47",
-      "line": 372,
+      "fingerprint": "5f569590896c5286a44e020acef85b049f51624b752eae022c95fb5fb48c4c56",
+      "line": 377,
       "path": "execution/run_morning_pipeline.py",
       "targets": [
         "execution/validate_environment.py",
@@ -660,12 +660,12 @@
     },
     {
       "disposition": "external_process",
-      "evidence": "canonical_runtime_git_commit runs the fixed git rev-parse command.",
+      "evidence": "_collect_live_process_census executes the fixed SYSTEMROOT-based Windows PowerShell path with fixed -NoProfile -NonInteractive -Command flags and locally constructed Get-CimInstance Win32_Process census program. No caller-provided executable or Python target; timeout 60s, captured output, fail-closed return-code/JSON validation. This corrects existing git/canonical_runtime_git_commit metadata; the literal Git HEAD probe is a separate call. No runtime call was added.",
       "fingerprint": "bec37b420cb4ea3850b0d2016e3af3b5ae836258d4d1ecd5e8dbde67bdea0800",
       "line": 1824,
       "path": "src/provenance/gc_recovery.py",
       "targets": [
-        "git"
+        "SYSTEMROOT/System32/WindowsPowerShell/v1.0/powershell.exe"
       ]
     },
     {
@@ -851,26 +851,6 @@
       ]
     },
     {
-      "disposition": "operator_supplied_process",
-      "evidence": "_run_managed_child runs the operator-supplied managed command.",
-      "fingerprint": "09343543cf88033bc8eb6cb8f2669015201a36cce99062204327112f15365a6f",
-      "line": 481,
-      "path": "src/runtime/job_runtime.py",
-      "targets": [
-        "operator-supplied command argv"
-      ]
-    },
-    {
-      "disposition": "operator_supplied_process",
-      "evidence": "Popen runs the operator-supplied managed command.",
-      "fingerprint": "6e71cbee3bad7735aa489b1d89d7dc9f4842c5bfac9571b0503e2f3741041e1e",
-      "line": 484,
-      "path": "src/runtime/job_runtime.py",
-      "targets": [
-        "operator-supplied command argv"
-      ]
-    },
-    {
       "disposition": "external_process",
       "evidence": "Activation runs the fixed schtasks.exe scheduler executable.",
       "fingerprint": "d291b10f497c1630dcfded2d6dad9e28d805e921b7dbde9f626cb2f901734b91",
@@ -918,6 +898,26 @@
       "fingerprint": "65f67f50bbc9c1244ddf5dad81b269cb35803c6b892709b8beb25a3b6ac9e097",
       "line": 1020,
       "path": "tests/test_reconcile_quality_baseline.py"
+    },
+    {
+      "disposition": "operator_supplied_process",
+      "evidence": "_run_managed_child runs the operator-supplied managed command.",
+      "fingerprint": "53830ba109edf6e86673de72c7716143eb6c0fbe87cdabca2bc6b855cbb443d4",
+      "line": 530,
+      "path": "src/runtime/job_runtime.py",
+      "targets": [
+        "operator-supplied command argv"
+      ]
+    },
+    {
+      "disposition": "operator_supplied_process",
+      "evidence": "Popen runs the operator-supplied managed command.",
+      "fingerprint": "a60a698213cc933a266bc42aee8128e6e4ff4062cd89541f853d827cebe1cce7",
+      "line": 534,
+      "path": "src/runtime/job_runtime.py",
+      "targets": [
+        "operator-supplied command argv"
+      ]
     }
   ],
   "graph_provenance": {
@@ -925,7 +925,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "814b9d64dc24d97a4839a896d63dee264050c4e25cc58241b7b40544f47fdc23",
+      "source_sha256": "01c71916b76150e7c0b9e3988c87cb84c2c86c443a95c84d9f40f5a6f6be0431",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

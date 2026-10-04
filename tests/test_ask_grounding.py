@@ -301,8 +301,8 @@ def test_fact_channel_matches_kpis_and_line_items(repo: Path) -> None:
     assert kpi.href == "/source/1"
     assert kpi.source_url == "https://fmp.example/f.json"
     fin = next(i for i in facts if i.label == "TST · Revenue")
-    assert "150.0M" in fin.text  # humanized values
-    assert ", USD" in fin.text
+    assert "unavailable (canonical_financial_schema_unavailable)" in fin.text
+    assert fin.value is None and fin.href is None
 
 
 def _insert_kpi(repo: Path, def_id: int, name: str, value: float, unit: str = "percent") -> None:
@@ -448,7 +448,8 @@ def test_fact_items_carry_scored_confidence_when_the_column_exists(repo: Path) -
     assert kpi.confidence == 0.79  # the newest row's score, not the default
     assert kpi.chip_payload()["confidence"] == 0.79
     fin = next(i for i in items if i.label == "TST · Revenue")
-    assert fin.confidence == 1.0
+    assert fin.confidence is None
+    assert fin.canonical_reference is None
 
 
 def test_fact_items_carry_structured_popover_fields(repo: Path) -> None:
@@ -468,7 +469,7 @@ def test_fact_items_carry_structured_popover_fields(repo: Path) -> None:
     assert pay["doc_type"] == "fmp_income_statement"
     # Currency line items get the $ affix.
     fin = next(i for i in items if i.label == "TST · Revenue")
-    assert fin.value == "$150.0M"
+    assert fin.value is None and "unavailable" in fin.text
     # A non-fact channel (transcript) carries no value (it's a passage, not a
     # single number) and no structured ticker header.
     tr_items = _gather(repo, "what did management say about credit quality and NPL formation?")
@@ -556,7 +557,8 @@ def test_fact_ref_fin_resolves_financial_line_item(repo: Path) -> None:
     pinned = [i for i in items if i.fact_ref == "fin:TST:revenue:Q"]
     assert len(pinned) == 1, items
     assert pinned[0].label == "TST · Revenue"
-    assert "150.0M" in pinned[0].text
+    assert "canonical_financial_schema_unavailable" in pinned[0].text
+    assert pinned[0].href is None and pinned[0].value is None
 
 
 def test_fact_ref_unknown_or_mismatched_resolves_nothing(repo: Path) -> None:
@@ -613,12 +615,9 @@ def test_low_confidence_and_disagreement_reach_the_model_text(repo: Path) -> Non
     _enable_confidence_and_issues(repo / "data" / "portfolio.db")
     items = _gather(repo, "TST revenue trend")
     fin = next(i for i in items if i.label == "TST · Revenue")
-    assert "[conf 79%; ⚠ SEC says $150M, 0.67% delta]" in fin.text
-    # The series values still lead the text — enrichment is appended, not a swap.
-    assert "150.0M" in fin.text
-    assert fin.text.index("150.0M") < fin.text.index("[conf 79%")
-    # The chip's structured confidence is unchanged (the % popover still works).
-    assert fin.confidence == 0.79
+    assert "canonical_financial_schema_unavailable" in fin.text
+    assert fin.value is None and fin.confidence is None
+    assert "150.0M" not in fin.text and "conf 79%" not in fin.text
 
 
 def test_clean_high_confidence_fact_carries_no_caution_tag(repo: Path) -> None:
@@ -662,7 +661,8 @@ def test_disagreement_without_displayed_tier_names_both_sides(repo: Path) -> Non
     conn.commit()
     conn.close()
     fin = next(i for i in _gather(repo, "TST revenue trend") if i.label == "TST · Revenue")
-    assert "FMP $149M vs SEC $150M (0.67% delta)" in fin.text
+    assert "canonical_financial_schema_unavailable" in fin.text
+    assert "149M" not in fin.text and fin.href is None
 
 
 def test_ask_scopes_unresolved_issues_to_fact_evidence_tickers(

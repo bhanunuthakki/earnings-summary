@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from evals.harness import load_golden_document
 from quality.compatibility import CompatibilityEvidenceError, capture_compatibility_evidence
 from quality.git_env import clean_local_git_env
 
@@ -214,15 +215,51 @@ def test_tracked_complete_collection_still_holds_for_deferred_verification(
     receipts = receipt.legacy_route_golden
 
     assert len(receipts) == 24
-    assert sum(receipt.cases for receipt in receipts) == 296
-    assert (
-        next(
-            receipt.cases
-            for receipt in receipts
-            if receipt.path == "evals/golden/extract_8k_overrides.json"
-        )
-        == 1
+    assert sum(receipt.cases for receipt in receipts) == 300
+    assert {item.path: item.cases for item in receipts} == {
+        "evals/golden/ask_claim_audit.json": 10,
+        "evals/golden/ask_claim_grounding.json": 18,
+        "evals/golden/ask_evidence_followup.json": 6,
+        "evals/golden/ask_pack_router.json": 26,
+        "evals/golden/capture_intent.json": 20,
+        "evals/golden/capture_triage.json": 15,
+        "evals/golden/decision_conditions_extract.json": 12,
+        "evals/golden/decision_draft_parse.json": 19,
+        "evals/golden/disclosure_item_specificity_triage.json": 25,
+        "evals/golden/extract_8k_overrides.json": 1,
+        "evals/golden/injection_canaries.json": 7,
+        "evals/golden/intake_classifier.json": 6,
+        "evals/golden/key_metrics.json": 6,
+        "evals/golden/ledger_reply_intent.json": 22,
+        "evals/golden/metric_lifecycle_triage.json": 20,
+        "evals/golden/news_structuring.json": 6,
+        "evals/golden/peer_selection.json": 12,
+        "evals/golden/provenance_caution.json": 6,
+        "evals/golden/scenario_prior.json": 6,
+        "evals/golden/sector_benchmark_proposal.json": 8,
+        "evals/golden/segment_10q_period_disambiguate.json": 3,
+        "evals/golden/transcript_metadata.json": 6,
+        "evals/golden/triage_route_suggest.json": 24,
+        "evals/golden/viewspec_compile.json": 16,
+    }
+    # Four cadence cases extend the eight retained decision-condition cases.
+    conditions = load_golden_document(
+        root / "evals/golden/decision_conditions_extract.json", "decision_conditions_extract"
     )
+    assert [case["id"] for case in conditions] == [
+        "dc-001-two-kpi-conditions",
+        "dc-002-growth-decel",
+        "dc-003-financial-line-item-billions",
+        "dc-004-at-or-above-ge",
+        "dc-005-unresolved-metric",
+        "dc-006-qualitative-only-empty",
+        "dc-007-mixed-numeric-and-qualitative",
+        "dc-008-bps-threshold",
+        "dc-cadence-annual",
+        "dc-cadence-missing",
+        "dc-cadence-milestone",
+        "dc-cadence-ambiguous",
+    ]
     assert all(category.collection_status == "COMPLETE" for category in receipt.categories)
     assert receipt.verification_status == "DEFERRED"
     assert receipt.hold is True

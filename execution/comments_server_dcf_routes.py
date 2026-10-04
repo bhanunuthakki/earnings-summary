@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import cast
 
@@ -25,6 +25,24 @@ class DcfRouteContext:
     db_path: Path
     linked_gsheet: Callable[[Path, str], tuple[str | None, str | None]]
     recompute_payload: Callable[[dcf_redesign.RedesignInputs], dict[str, object]]
+
+
+def _driver_inputs(inp: dcf_redesign.RedesignInputs) -> dcf_redesign.RedesignInputs:
+    """Normalize requests to the discount rate that a workbook save retains."""
+    return replace(
+        inp,
+        wacc=dcf_redesign.derive_wacc(
+            risk_free_rate=inp.risk_free_rate,
+            beta=inp.beta,
+            equity_risk_premium=inp.equity_risk_premium,
+            country_risk_premium=inp.country_risk_premium,
+            cost_of_debt=inp.cost_of_debt,
+            tax_rate=inp.tax_rate,
+            current_price=inp.current_price,
+            diluted_shares_m=inp.diluted_shares_m,
+            total_debt_m=inp.total_debt_m,
+        ),
+    )
 
 
 def create_dcf_blueprint(context: DcfRouteContext) -> Blueprint:
@@ -89,11 +107,17 @@ def create_dcf_blueprint(context: DcfRouteContext) -> Blueprint:
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
             return ({"error": "JSON body required"}, 400)
-        raw = cast("dict[str, object]", body).get("inputs")
+        data = cast("dict[str, object]", body)
+        mode = data.get("wacc_mode", "override")
+        if not isinstance(mode, str) or mode not in {"drivers", "override"}:
+            return ({"error": "wacc_mode must be 'drivers' or 'override'"}, 400)
+        raw = data.get("inputs")
         if not isinstance(raw, dict):
             return ({"error": "body.inputs (a DCF assumption object) required"}, 400)
         try:
             inp = dcf_redesign.RedesignInputs.from_dict(cast("dict[str, object]", raw))
+            if mode == "drivers":
+                inp = _driver_inputs(inp)
         except dcf_redesign.RedesignError as exc:
             return ({"error": f"invalid inputs: {exc}"}, 400)
         try:
@@ -117,6 +141,7 @@ def create_dcf_blueprint(context: DcfRouteContext) -> Blueprint:
             return ({"error": "body.inputs (a DCF assumption object) required"}, 400)
         try:
             inp = dcf_redesign.RedesignInputs.from_dict(cast("dict[str, object]", raw))
+            inp = _driver_inputs(inp)
         except dcf_redesign.RedesignError as exc:
             return ({"error": f"invalid inputs: {exc}"}, 400)
         try:
@@ -131,15 +156,26 @@ def create_dcf_blueprint(context: DcfRouteContext) -> Blueprint:
         except ValueError:
             return ({"error": "invalid ticker"}, 400)
         result = refresh_dcf.apply_edits(t, repo_root, db_path, inp)
-        if result.get("status") != "ok":
+        if result.get("status") not in {"ok", "committed_cleanup_failed"}:
             reason = str(result.get("reason", "save failed"))
-            code = 409 if "no redesigned workbook" in reason else 500
+            code = 409 if "no redesigned workbook" in reason or reason == "dcf_writer_busy" else 500
             return ({"error": reason, "result": result}, code)
-        saved_inp = dcf_redesign.read_inputs(repo_root / "dcf" / f"{t}.xlsx")
+        saved_raw = result.get("inputs")
+        saved_inp = (
+            dcf_redesign.RedesignInputs.from_dict(cast("dict[str, object]", saved_raw))
+            if isinstance(saved_raw, dict)
+            else None
+        )
         response_payload = recompute_payload(saved_inp) if saved_inp is not None else {}
         if saved_inp is not None:
             response_payload["inputs"] = saved_inp.to_dict()
-        return {**response_payload, "saved": True, "result": result}
+        return {
+            **response_payload,
+            "saved": True,
+            "result": result,
+            "recovery_required": result.get("recovery_required", False),
+            "cleanup_warning": result.get("cleanup_warning"),
+        }
 
     return blueprint
 

@@ -54,7 +54,17 @@ def current_evidence_revision(conn: sqlite3.Connection) -> tuple[object, ...]:
         "(SELECT MAX(id) FROM tracked_companies),"
         "(SELECT MAX(id) FROM fact_overrides),"
         "(SELECT MAX(id) FROM validation_issues),"
-        "(SELECT MAX(id) FROM kpi_definitions)"
+        "(SELECT MAX(id) FROM kpi_definitions),"
+        "(SELECT MAX(id) FROM kpi_fact_semantic_contexts),"
+        "(SELECT MAX(rowid) FROM fact_observations_v2),"
+        "(SELECT MAX(rowid) FROM source_fact_publication_seals),"
+        "(SELECT MAX(rowid) FROM recorded_subject_binding_revisions),"
+        "(SELECT MAX(rowid) FROM fact_cell_canonical_binding_revisions),"
+        "(SELECT MAX(rowid) FROM canonical_metric_definition_revisions),"
+        "(SELECT MAX(rowid) FROM metric_mapping_revisions),"
+        "(SELECT MAX(rowid) FROM ontology_snapshot_seals),"
+        "(SELECT MAX(rowid) FROM canonical_fact_resolution_revisions),"
+        "(SELECT MAX(rowid) FROM canonical_fact_resolution_snapshot_seals)"
     ).fetchone()
     if row is None:
         raise RuntimeError("current evidence revision query returned no row")
