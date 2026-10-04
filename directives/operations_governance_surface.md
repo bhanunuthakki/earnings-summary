@@ -1057,7 +1057,9 @@ extractor implementation and bounded capture/extraction controls.
 
 Explicit apply requires that plan's SHA-256 commitment. Each invocation records a
 separate started/result receipt and resumes the existing SEC capture checkpoint and
-exact native document/extractor evidence. Completed items do not consume the next
+exact native document/extractor evidence. Retained-byte verification enforces the
+frozen document limit and approved blob root on the opened file. A size check before
+opening the file does not replace that limit. Completed items do not consume the next
 extraction budget. Per-item missing authority, deferred fetch, quarantine and budget
 stops remain partial; exit 0 means only the selected readable-text request succeeded.
 No acquisition/extraction completeness seal, financial admission or model readiness

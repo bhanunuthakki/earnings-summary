@@ -114,6 +114,7 @@ def select_evidence_native_candidates_by_id(
     conn: sqlite3.Connection,
     *,
     document_version_ids: tuple[str, ...],
+    include_legacy: bool = False,
 ) -> list[EvidenceNativeDocumentCandidate]:
     """Resolve an explicit, bounded set of evidence-native document versions."""
 
@@ -140,10 +141,10 @@ def select_evidence_native_candidates_by_id(
         "JOIN evidence_content_blobs AS blob ON blob.sha256 = document.blob_sha256 "
         "JOIN evidence_source_observations AS observation "
         "ON observation.observation_id = document.observation_id "
-        f"WHERE document.legacy_document_id IS NULL "
+        f"WHERE (? OR document.legacy_document_id IS NULL) "
         f"AND document.document_version_id IN ({placeholders}) "
         "ORDER BY document.rowid",
-        document_version_ids,
+        (include_legacy, *document_version_ids),
     ).fetchall()
     candidates = [
         EvidenceNativeDocumentCandidate(
@@ -164,7 +165,9 @@ def select_evidence_native_candidates_by_id(
     return candidates
 
 
-def resolve_local_storage_uri(storage_uri: str, *, allowed_roots: tuple[Path, ...]) -> Path | None:
+def resolve_local_storage_uri(
+    storage_uri: str, *, allowed_roots: tuple[Path, ...], follow_links: bool = True
+) -> Path | None:
     """Resolve a local path only when it stays inside an explicit allowed root."""
 
     if re.match(r"^[A-Za-z]:[\\/]", storage_uri):
@@ -183,13 +186,16 @@ def resolve_local_storage_uri(storage_uri: str, *, allowed_roots: tuple[Path, ..
         else:
             candidate = Path(storage_uri)
 
-    normalized_roots = tuple(root.resolve() for root in allowed_roots)
+    normalized_roots = tuple(
+        root.resolve() if follow_links else Path(os.path.abspath(root)) for root in allowed_roots
+    )
     if not normalized_roots:
         raise ValueError("at least one allowed content root is required")
     if candidate.is_absolute():
-        resolved = candidate.resolve()
+        resolved = candidate.resolve() if follow_links else Path(os.path.abspath(candidate))
     else:
-        resolved = (normalized_roots[0] / candidate).resolve()
+        rooted = normalized_roots[0] / candidate
+        resolved = rooted.resolve() if follow_links else Path(os.path.abspath(rooted))
     for root in normalized_roots:
         try:
             resolved.relative_to(root)

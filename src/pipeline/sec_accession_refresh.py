@@ -329,7 +329,11 @@ def _verify_bytes(conn: sqlite3.Connection, plan: AccessionRefreshPlan, version:
     path = resolve_local_storage_uri(candidate.storage_uri, allowed_roots=(plan.request.blob_root,))
     if path is None or path.stat().st_size > plan.request.max_document_bytes:
         raise RefreshBoundaryError("captured_bytes_unavailable")
-    snapshot, raw = read_stable_artifact(path)
+    snapshot, raw = read_stable_artifact(
+        path,
+        max_bytes=plan.request.max_document_bytes,
+        allowed_root=plan.request.blob_root,
+    )
     if snapshot.file_sha256 != candidate.blob_sha256 or len(raw) != candidate.byte_size:
         raise RefreshBoundaryError("captured_bytes_mismatch")
     return has_substantive_coverage(

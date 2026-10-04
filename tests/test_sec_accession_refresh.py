@@ -3,7 +3,7 @@
 import json
 import os
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import Mock
@@ -432,7 +432,9 @@ def test_grown_capture_is_refused_before_reading_beyond_frozen_budget(
 ) -> None:
     initial = plan_accession_refresh(database, request(tmp_path))
     apply_accession_refresh(
-        database, initial, session=FakeSession([FakeResponse()]),
+        database,
+        initial,
+        session=FakeSession([FakeResponse()]),
         user_agent="research-agent test@example.test",
     )
     file = next(path for path in initial.request.blob_root.rglob("*") if path.is_file())
@@ -459,7 +461,7 @@ def test_grown_capture_is_refused_before_reading_beyond_frozen_budget(
         return data
 
     @contextmanager
-    def audited_fdopen(fd: int, mode: str, *, closefd: bool) -> Iterator[object]:
+    def audited_fdopen(fd: int, mode: str, *, closefd: bool) -> Generator[object]:
         with real_fdopen(fd, mode, closefd=closefd) as handle:
             wrapped = Mock(wraps=handle)
 
