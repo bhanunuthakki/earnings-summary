@@ -55,6 +55,7 @@ import logging
 import re
 import sqlite3
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -457,6 +458,43 @@ class StrictEvidenceConnection:
 
     def close(self) -> None:
         self._connection.close()
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._connection.in_transaction
+
+    @property
+    def total_changes(self) -> int:
+        return self._connection.total_changes
+
+    def rollback(self) -> None:
+        try:
+            self._connection.rollback()
+        except sqlite3.Error as exc:
+            raise GroundingRetrievalError("grounded evidence rollback failed") from exc
+
+    @property
+    def row_factory(self) -> Callable[[sqlite3.Cursor, tuple[object, ...]], object] | None:
+        return self._connection.row_factory
+
+    @row_factory.setter
+    def row_factory(
+        self, factory: Callable[[sqlite3.Cursor, tuple[object, ...]], object] | None
+    ) -> None:
+        self._connection.row_factory = factory
+
+    def create_function(
+        self,
+        name: str,
+        narg: int,
+        func: Callable[..., str | int | float | bytes | None] | None,
+        *,
+        deterministic: bool = False,
+    ) -> None:
+        try:
+            self._connection.create_function(name, narg, func, deterministic=deterministic)
+        except sqlite3.Error as exc:
+            raise GroundingRetrievalError("grounded evidence function registration failed") from exc
 
 
 def _connect(db_path: Path, *, strict: bool = False) -> sqlite3.Connection | None:

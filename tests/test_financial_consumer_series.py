@@ -36,8 +36,9 @@ from viewspec.engine import execute_view
 from viewspec.spec import ViewSpec
 
 
+@pytest.mark.parametrize("strict", [False, True])
 def test_ask_cites_each_canonical_period_document(
-    database: sqlite3.Connection, tmp_path: Path
+    database: sqlite3.Connection, tmp_path: Path, strict: bool
 ) -> None:
     facts_a = seed_table(
         database,
@@ -56,6 +57,7 @@ def test_ask_cites_each_canonical_period_document(
         repo_root=tmp_path,
         db_path=tmp_path / "source-fact-repository.db",
         scope_tickers=["SYNTH"],
+        strict=strict,
     )
     points = [
         item

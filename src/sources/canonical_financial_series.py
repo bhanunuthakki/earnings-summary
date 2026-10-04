@@ -1102,17 +1102,17 @@ def financial_metric_catalog(
     symbols = list(dict.fromkeys(ticker.upper() for ticker in tickers))
     if not symbols:
         return ()
-    marks = ",".join("?" for _ in symbols)
     try:
         rows = conn.execute(
-            f"SELECT source.concept_name,COUNT(DISTINCT upper(document.ticker)) "
+            "SELECT source.concept_name,COUNT(DISTINCT upper(document.ticker)) "
             "FROM fact_cells_v2 source JOIN fact_observations_v2 observation "
             "ON observation.fact_cell_id=source.fact_cell_id "
             "JOIN evidence_document_versions document "
             "ON document.document_version_id=observation.document_version_id "
-            f"WHERE upper(document.ticker) IN ({marks}) AND source.concept_namespace=? "
+            "WHERE upper(document.ticker) IN (SELECT value FROM json_each(?)) "
+            "AND source.concept_namespace=? "
             "GROUP BY source.concept_name ORDER BY source.concept_name LIMIT ?",
-            (*symbols, FINANCIAL_CONCEPT_NAMESPACE, limit),
+            (json.dumps(symbols), FINANCIAL_CONCEPT_NAMESPACE, limit),
         ).fetchall()
     except sqlite3.Error:
         rows = []
@@ -1121,8 +1121,9 @@ def financial_metric_catalog(
         try:
             legacy = conn.execute(
                 "SELECT line_item,COUNT(DISTINCT upper(ticker)) FROM financial_facts "
-                f"WHERE upper(ticker) IN ({marks}) GROUP BY line_item ORDER BY line_item LIMIT ?",
-                (*symbols, limit),
+                "WHERE upper(ticker) IN (SELECT value FROM json_each(?)) "
+                "GROUP BY line_item ORDER BY line_item LIMIT ?",
+                (json.dumps(symbols), limit),
             ).fetchall()
         except sqlite3.Error:
             legacy = []
