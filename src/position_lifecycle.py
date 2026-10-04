@@ -426,6 +426,7 @@ def sync_position_lifecycle(
     user_id: str = DEFAULT_USER_ID,
     portfolio: LivePortfolio | None = None,
     assume_preexisting: bool = False,
+    repo_root: Path | None = None,
 ) -> dict[str, object]:
     """Reconcile position_entries against the current portfolio state.
 
@@ -434,7 +435,8 @@ def sync_position_lifecycle(
     ``assume_preexisting`` (the one-time backfill), newly-opened rows are
     ``source='backfill'`` and ``entry_date`` stays NULL unless a buy
     transaction is actually visible. Idempotent: a second run against the
-    same world changes nothing.
+    same world changes nothing. Artifact reads and cache publication require
+    explicit ``repo_root``; DB placement never supplies an artifact root.
     """
 
     def _unavailable() -> dict[str, object]:
@@ -467,7 +469,6 @@ def sync_position_lifecycle(
                 (user_id,),
             ).fetchall()
         }
-        repo_root = Path(db_path).resolve().parent.parent
 
         now = _now_iso()
         today = _today_iso()
@@ -497,7 +498,7 @@ def sync_position_lifecycle(
                     entry_date,
                     entry_price,
                     _latest_conviction(conn, ticker, user_id),
-                    _thesis_excerpt(repo_root, ticker),
+                    _thesis_excerpt(repo_root, ticker) if repo_root is not None else None,
                     _open_conditions_snapshot(conn, ticker),
                     "backfill" if assume_preexisting else "reconciler",
                     now,
@@ -575,7 +576,8 @@ def sync_position_lifecycle(
         try:
             from portfolio_weights import materialize_weights
 
-            materialize_weights(repo_root, portfolio)
+            if repo_root is not None:
+                materialize_weights(repo_root, portfolio)
         except Exception:  # pragma: no cover - cache write is non-critical
             log.warning({"event": "position_weights_materialize_failed"})
 
@@ -585,6 +587,11 @@ def sync_position_lifecycle(
             "closed": closed,
             "unchanged": len(current & set(open_rows)),
             "tracker_available": portfolio.available,
+            "tracker_as_of": portfolio.as_of,
+            "tracker_is_stale": portfolio.is_stale,
+            "tracker_is_partial": portfolio.is_partial,
+            "tracker_warnings": list(portfolio.envelope_warnings),
+            "artifact_root_available": repo_root is not None,
             "db_unavailable": 0,
         }
     finally:

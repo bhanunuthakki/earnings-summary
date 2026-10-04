@@ -86,6 +86,10 @@ tool/runtime directories such as `.git`, `.venv`, and caches.
 | `scratch/` | Registered compatibility exception for still-referenced one-offs and historical plans. New durable product logic is prohibited here. |
 | `outputs/` | Registered artifact-tool output. It is not the application `output/` destination and must not be read by product code. |
 
+The design artifact inventory in `docs/architecture/design_artifact_lifecycle.md`
+distinguishes the active runtime master, tested references and retained alternatives.
+A `mockups/` path does not imply disposable code.
+
 ## Rules
 
 1. Intermediates and debug artifacts go under `.tmp/`, not a new root.

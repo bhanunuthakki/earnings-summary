@@ -24,12 +24,13 @@ spine.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import math
 import os
 import tempfile
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -53,6 +54,12 @@ _CACHE_REL: tuple[str, ...] = ("data", "portfolio_weights.json")
 class MaterializedWeightSnapshot:
     computed_at: datetime
     weights: dict[str, float]
+    source_as_of: str | None = None
+    source_is_stale: bool | None = None
+    source_is_partial: bool | None = None
+    source_warnings: tuple[str, ...] = ()
+    # Derived projection identity, not a tracker server generation identifier.
+    source_snapshot_id: str | None = None
 
 
 def _cache_path(repo_root: Path) -> Path:
@@ -77,14 +84,36 @@ def materialize_weights(repo_root: Path, portfolio: LivePortfolio) -> int:
 
     No-op returning 0 when the tracker was offline (``available=False``), so the
     last-good cache survives an outage. Otherwise writes
-    ``{"computed_at": iso, "weights": {ticker: fraction}}`` atomically (temp file
+    weights with processing time and the selected source date/state/derived
+    projection identity atomically (temp file
     + ``os.replace``) and returns the number of weighted tickers."""
     if not portfolio.available:
         return 0
     weights = weights_from_portfolio(portfolio)
+    if any(not math.isfinite(weight) or not 0.0 <= weight <= 1.0 for weight in weights.values()):
+        raise ValueError("portfolio weights are not finite fractions of the book")
+    if portfolio.as_of is not None:
+        date.fromisoformat(portfolio.as_of)
+    source = {
+        "as_of": portfolio.as_of,
+        "is_stale": portfolio.is_stale
+        if portfolio.as_of is not None or portfolio.is_stale
+        else None,
+        "is_partial": portfolio.is_partial
+        if portfolio.as_of is not None or portfolio.is_partial
+        else None,
+        "warnings": list(portfolio.envelope_warnings),
+    }
+    projection = json.dumps(
+        {"weights": weights, "source": source}, sort_keys=True, separators=(",", ":")
+    )
+    source["snapshot_id"] = (
+        "weights-projection@1:" + hashlib.sha256(projection.encode("utf-8")).hexdigest()
+    )
     payload = {
         "computed_at": datetime.now(UTC).replace(tzinfo=None).isoformat(),
         "weights": weights,
+        "source": source,
     }
     path = _cache_path(repo_root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -111,6 +140,11 @@ def read_materialized_weight_snapshot(repo_root: Path) -> MaterializedWeightSnap
         payload = json.loads(_cache_path(repo_root).read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
         return None
+    return _decode_weight_snapshot(payload)
+
+
+def _decode_weight_snapshot(payload: object) -> MaterializedWeightSnapshot | None:
+    """Decode one selected cache payload; typed display and decision reads share it."""
     if not isinstance(payload, dict):
         return None
     typed_payload = cast("dict[str, object]", payload)
@@ -140,13 +174,65 @@ def read_materialized_weight_snapshot(repo_root: Path) -> MaterializedWeightSnap
         if not math.isfinite(weight) or not 0.0 <= weight <= 1.0:
             return None
         weights[ticker.upper()] = weight
-    return MaterializedWeightSnapshot(computed_at=computed_at, weights=weights)
+    if "source" not in typed_payload:
+        return MaterializedWeightSnapshot(computed_at=computed_at, weights=weights)
+    source = typed_payload["source"]
+    if not isinstance(source, dict):
+        return None
+    typed_source = cast("dict[str, object]", source)
+    as_of = typed_source.get("as_of")
+    stale = typed_source.get("is_stale")
+    partial = typed_source.get("is_partial")
+    warnings = typed_source.get("warnings")
+    snapshot_id = typed_source.get("snapshot_id")
+    if as_of is not None:
+        if not isinstance(as_of, str):
+            return None
+        try:
+            date.fromisoformat(as_of)
+        except ValueError:
+            return None
+    if stale is not None and not isinstance(stale, bool):
+        return None
+    if partial is not None and not isinstance(partial, bool):
+        return None
+    if not isinstance(warnings, list) or any(
+        not isinstance(item, str) for item in cast("list[object]", warnings)
+    ):
+        return None
+    projection = json.dumps(
+        {
+            "weights": weights,
+            "source": {
+                "as_of": as_of,
+                "is_stale": stale,
+                "is_partial": partial,
+                "warnings": warnings,
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    expected_id = "weights-projection@1:" + hashlib.sha256(projection.encode("utf-8")).hexdigest()
+    if not isinstance(snapshot_id, str) or snapshot_id != expected_id:
+        return None
+    return MaterializedWeightSnapshot(
+        computed_at=computed_at,
+        weights=weights,
+        source_as_of=as_of,
+        source_is_stale=stale,
+        source_is_partial=partial,
+        source_warnings=tuple(cast("list[str]", warnings)),
+        source_snapshot_id=snapshot_id,
+    )
 
 
 def read_materialized_weights(repo_root: Path) -> dict[str, float]:
     """``ticker`` → fraction-of-book from the cache; ``{}`` when the cache is
     absent or unreadable. A pure disk read — never the network. This is the
-    render path's only weight source."""
+    render path's only weight source. New source-bearing caches share the
+    strict snapshot decoder; legacy weight-only caches retain unknown source
+    metadata and their compatible display behavior."""
     path = _cache_path(repo_root)
     try:
         raw = path.read_text(encoding="utf-8")
@@ -158,7 +244,11 @@ def read_materialized_weights(repo_root: Path) -> dict[str, float]:
         return {}
     if not isinstance(payload, dict):
         return {}
-    weights = cast("dict[str, object]", payload).get("weights")
+    typed_payload = cast("dict[str, object]", payload)
+    if "source" in typed_payload:
+        snapshot = _decode_weight_snapshot(typed_payload)
+        return snapshot.weights if snapshot is not None else {}
+    weights = typed_payload.get("weights")
     if not isinstance(weights, dict):
         return {}
     out: dict[str, float] = {}

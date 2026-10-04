@@ -11,6 +11,7 @@ the legacy endpoints. Fully hermetic: no live provider, no network.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -103,7 +104,9 @@ def _route_v1(monkeypatch: pytest.MonkeyPatch, routes: dict[str, object]) -> _V1
 
 def test_switch_off_by_default_keeps_legacy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("PORTFOLIO_TRACKER_V1_READS", raising=False)
-    assert tc._v1_reads_enabled() is False  # pyright: ignore[reportPrivateUsage]
+    switch: object = getattr(tc, "_v1_reads_enabled")
+    assert callable(switch)
+    assert cast("Callable[[], bool]", switch)() is False
 
     # Legacy path fails fast offline and envelope fields stay at defaults.
     def _refuse(url: str, **kwargs: object) -> _FakeResp:
@@ -126,11 +129,15 @@ def test_switch_off_by_default_keeps_legacy_path(monkeypatch: pytest.MonkeyPatch
 def test_live_portfolio_v1_adapts_positions_fixture(
     v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Official fixtures are independent observations. Align only this synthetic
+    # success case; never edit the vendored provider fixtures.
+    transactions = _fixture("transactions")
+    cast("dict[str, object]", transactions["meta"])["as_of"] = "2026-07-22"
     _route_v1(
         monkeypatch,
         {
             "/api/v1/portfolio/positions": _fixture("positions"),
-            "/api/v1/transactions": _fixture("transactions"),
+            "/api/v1/transactions": transactions,
         },
     )
     live = tc.fetch_live_portfolio()
@@ -606,7 +613,7 @@ def test_performance_v1_widens_when_probe_window_may_clip_history(
 
     tc.fetch_portfolio_analytics(only={"performance"})
 
-    assert router.starts == [None, tc._V1_WIDE_HISTORY_START, "2004-03-01"]  # pyright: ignore[reportPrivateUsage]
+    assert router.starts == [None, "2000-01-01", "2004-03-01"]
 
 
 def test_performance_v1_missing_observed_marker_returns_probe(
@@ -630,6 +637,12 @@ def test_performance_v1_missing_observed_marker_returns_probe(
 # ---------------------------------------------------------------------------
 
 
+def _parse_performance_payload(payload: dict[str, object]) -> tc.PerformanceSeries:
+    parser: object = getattr(tc, "_parse_performance")
+    assert callable(parser)
+    return cast("Callable[[dict[str, object]], tc.PerformanceSeries]", parser)(payload)
+
+
 def _rebase_basis(series: tc.PerformanceSeries) -> str:
     """The CORRECT basis discriminator, mirrored from the risk-snapshot stamp:
     a series starting before observation began is partly modeled walk-back."""
@@ -642,7 +655,7 @@ def _rebase_basis(series: tc.PerformanceSeries) -> str:
 def test_earliest_observed_date_parsed_on_legacy_shape() -> None:
     """The legacy payload carries earliest_observed_date at top level; it must
     reach the dataclass or downstream provenance cannot classify the basis."""
-    series = tc._parse_performance(  # pyright: ignore[reportPrivateUsage]
+    series = _parse_performance_payload(
         {
             "start_date": "2026-05-09",
             "end_date": "2026-07-24",
@@ -681,7 +694,7 @@ def test_backfill_flag_cannot_discriminate_walk_back_basis() -> None:
     practice. A stamp derived from it silently records 'observed' for a series
     that is 80% reconstructed. Only start_date vs earliest_observed_date
     separates them; this test fails if anyone swaps the comparison back."""
-    walk_back = tc._parse_performance(  # pyright: ignore[reportPrivateUsage]
+    walk_back = _parse_performance_payload(
         {
             "start_date": "2025-07-24",
             "end_date": "2026-07-24",
@@ -701,7 +714,7 @@ def test_rebase_basis_unknown_when_provider_omits_marker() -> None:
     """No marker means the basis is indeterminate, not observed — the client
     returns the probe window unrebased in that case, so defaulting to
     'observed' would assert a guarantee nobody verified."""
-    unmarked = tc._parse_performance(  # pyright: ignore[reportPrivateUsage]
+    unmarked = _parse_performance_payload(
         {
             "start_date": "2025-07-24",
             "end_date": "2026-07-24",
@@ -727,7 +740,7 @@ def test_unmarked_observation_raises_envelope_warning(
     analytics = tc.fetch_portfolio_analytics(only={"performance"})
 
     assert router.starts == [None]  # probe only; nothing to rebase onto
-    assert tc._UNMARKED_OBSERVATION_CODE in analytics.envelope_warnings  # pyright: ignore[reportPrivateUsage]
+    assert "performance_observation_start_unmarked" in analytics.envelope_warnings
 
 
 def test_marked_observation_adds_no_warning(
@@ -740,7 +753,7 @@ def test_marked_observation_adds_no_warning(
 
     analytics = tc.fetch_portfolio_analytics(only={"performance"})
 
-    assert tc._UNMARKED_OBSERVATION_CODE not in analytics.envelope_warnings  # pyright: ignore[reportPrivateUsage]
+    assert "performance_observation_start_unmarked" not in analytics.envelope_warnings
 
 
 def test_caller_owned_window_never_warns_about_observation(
@@ -755,7 +768,7 @@ def test_caller_owned_window_never_warns_about_observation(
     explicit = tc.fetch_portfolio_analytics(start_date="2025-09-01", only={"performance"})
     backfilled = tc.fetch_portfolio_analytics(include_backfill=True, only={"performance"})
 
-    code = tc._UNMARKED_OBSERVATION_CODE  # pyright: ignore[reportPrivateUsage]
+    code = "performance_observation_start_unmarked"
     assert code not in explicit.envelope_warnings
     assert code not in backfilled.envelope_warnings
 
@@ -770,7 +783,7 @@ def test_unmarked_code_implies_unknown_basis_but_not_conversely(
     forward: code emitted  => basis "unknown"      (must hold)
     reverse: basis "unknown" => code emitted       (must NOT hold)
     """
-    code = tc._UNMARKED_OBSERVATION_CODE  # pyright: ignore[reportPrivateUsage]
+    code = "performance_observation_start_unmarked"
 
     # Forward: no marker on the rebase path -> code emitted AND basis unknown.
     router = _PerfRouter(earliest_observed=None)
@@ -786,3 +799,58 @@ def test_unmarked_code_implies_unknown_basis_but_not_conversely(
     assert code not in explicit.envelope_warnings
     assert explicit.performance is not None
     assert _rebase_basis(explicit.performance) == "unknown"
+
+
+def test_live_portfolio_v1_disagreed_snapshots_fail_closed(
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _route_v1(
+        monkeypatch,
+        {
+            "/api/v1/portfolio/positions": _fixture("positions"),
+            "/api/v1/transactions": _fixture("transactions"),
+        },
+    )
+    live = tc.fetch_live_portfolio()
+    assert not live.available
+    assert live.error is not None and "snapshot_date_mismatch" in live.error
+    assert legacy_guard == []
+
+
+def test_live_portfolio_v1_unknown_position_date_fails_closed(
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    positions = _fixture("positions")
+    positions["snapshot_date"] = None
+    _route_v1(
+        monkeypatch,
+        {
+            "/api/v1/portfolio/positions": positions,
+            "/api/v1/transactions": _fixture("transactions"),
+        },
+    )
+    live = tc.fetch_live_portfolio()
+    assert not live.available
+    assert live.error is not None and "snapshot_date_missing" in live.error
+    assert legacy_guard == []
+
+
+@pytest.mark.parametrize("currency", ["", "   "])
+def test_live_portfolio_v1_missing_currency_fails_closed(
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch, currency: str
+) -> None:
+    transactions = _fixture("transactions")
+    meta = cast("dict[str, object]", transactions["meta"])
+    meta["as_of"] = "2026-07-22"
+    meta["currency"] = currency
+    _route_v1(
+        monkeypatch,
+        {
+            "/api/v1/portfolio/positions": _fixture("positions"),
+            "/api/v1/transactions": transactions,
+        },
+    )
+    live = tc.fetch_live_portfolio()
+    assert not live.available
+    assert live.error is not None and "snapshot_currency_missing" in live.error
+    assert legacy_guard == []

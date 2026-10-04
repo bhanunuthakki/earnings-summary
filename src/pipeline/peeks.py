@@ -68,6 +68,7 @@ from pipeline.source_viewers import (
 from pipeline.source_viewers import SourceDocRow as _SourceDocRow
 from pipeline.you_said import render_you_said_strip
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_reltime
+from sources.canonical_financial_series import FinancialConsumerPoint
 from sources.report_financials import FinancialEvidenceReference, FinancialTableCell
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import pill_tone_class, thesis_status_tone, ticker_label
@@ -1555,7 +1556,7 @@ def _load_fact_row(
 
 
 def render_canonical_financial_peek(
-    cell: FinancialTableCell, reference: FinancialEvidenceReference
+    cell: FinancialTableCell | FinancialConsumerPoint, reference: FinancialEvidenceReference
 ) -> str:
     """Render the admitted selection without re-reading mutable legacy facts."""
     bundle = cell.provenance

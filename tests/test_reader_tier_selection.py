@@ -15,10 +15,13 @@ source-disagreement reconciler end-to-end on the same fixture.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+
+from tests.test_report_canonical_financials import database as database
+from tests.test_report_canonical_financials import seed_table
 
 # (period_end, fiscal_period_type, line_item, value, source_doc_id, source_type,
 #  source_quality_tier)
@@ -212,27 +215,89 @@ def test_financials_annual_uses_tier_winner_and_ignores_q4_dualwrite(repo: Path)
 # ---------------------------------------------------------------------------
 
 
-def test_grounding_fin_item_surfaces_sec_provenance(repo: Path) -> None:
+def test_grounding_fin_item_surfaces_sec_provenance(
+    repo: Path,
+    database: sqlite3.Connection,
+    fact_source_document: Callable[[sqlite3.Connection, str], int],
+) -> None:
     from ask.grounding import gather_evidence
 
-    conn = _conn(repo)
-    try:
-        items = gather_evidence(
-            "fin:TST:revenue:Q1",
-            repo_root=repo,
-            db_path=repo / "data" / "portfolio.db",
-            scope_tickers=["TST"],
-            strict=True,
+    # The selected publication binds this legacy document once. Its preserved
+    # bytes match the exact foundation blob used by seed_table.
+    source_path = repo / "TST-sec-source.txt"
+    source_path.write_bytes(b"filing bytes")
+    selected = database.execute(
+        "INSERT INTO documents(ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,"
+        "raw_bytes_size,source_url,source_quality_tier) "
+        "SELECT 'TST','sec_xbrl','sec_companyfacts',?,blob.sha256,source.retrieved_at,"
+        "'ok',blob.byte_size,source.source_url,'sec_official' FROM evidence_document_versions version "
+        "JOIN evidence_content_blobs blob ON blob.sha256=version.blob_sha256 "
+        "JOIN evidence_source_observations source ON source.observation_id=version.observation_id "
+        "WHERE version.document_version_id='document-1'",
+        (str(source_path),),
+    )
+    assert selected.lastrowid is not None
+    sec_document = selected.lastrowid
+    # This factory supplies distinct real bytes and its own immutable binding.
+    # It remains unadmitted to the selected canonical publication.
+    fmp_document = fact_source_document(database, "TST")
+    assert sec_document < fmp_document
+    database.execute(
+        "UPDATE documents SET source_type='sec_xbrl',source_quality_tier='sec_official' WHERE id=?",
+        (sec_document,),
+    )
+    database.execute(
+        "UPDATE documents SET source_type='fmp',source_quality_tier='fmp_normalized' WHERE id=?",
+        (fmp_document,),
+    )
+    seed_table(
+        database,
+        [
+            ("revenue", "2026-01-01", "2026-03-31", "Q1", str(_SEC_Q_REVENUE), "USD"),
+            ("revenue", "2025-01-01", "2025-12-31", "FY", str(_SEC_FY_REVENUE), "USD"),
+            ("revenue", "2025-10-01", "2025-12-31", "Q4", "111111", "USD"),
+        ],
+        ticker="TST",
+        publication_prefix="ask-tier",
+        legacy_document_id=sec_document,
+    )
+    for period, fiscal, metric, value, original_document, _source, _tier in _SEEDS:
+        database.execute(
+            "INSERT INTO financial_facts(ticker,period_end,fiscal_period_type,line_item,value,currency,unit,source_doc_id) "
+            "VALUES('TST',?,?,?,?, 'USD','actual',?)",
+            (
+                period,
+                fiscal,
+                metric,
+                value,
+                sec_document if original_document == 1 else fmp_document,
+            ),
         )
-        item = next(item for item in items if item.fact_ref == "fin:TST:revenue:Q1")
-        # The winning row's document must be the SEC doc (id 1), not the FMP doc.
-        assert item.doc_id == 1
-        src = conn.execute(
-            "SELECT source_type FROM documents WHERE id = ?", (item.doc_id,)
-        ).fetchone()
-        assert src["source_type"] == "sec_xbrl"
-    finally:
-        conn.close()
+    database.commit()
+    path = Path(str(database.execute("PRAGMA database_list").fetchone()[2]))
+    items = gather_evidence(
+        "fin:TST:revenue:Q1",
+        repo_root=repo,
+        db_path=path,
+        scope_tickers=["TST"],
+        strict=True,
+    )
+    item = next(item for item in items if item.fact_ref == "fin:TST:revenue:Q1")
+    # The admitted canonical point retains its SEC evidence despite competing
+    # higher-ID legacy FMP rows. A tier-winning raw row alone cannot admit it.
+    assert item.doc_id == sec_document
+    assert item.canonical_reference is not None
+    assert item.canonical_reference.ticker == "TST"
+    assert item.canonical_reference.concept == "revenue"
+    assert item.href is not None and item.href.startswith(
+        "/api/peek/canonical-financial?reference="
+    )
+    assert item.value == str(_SEC_Q_REVENUE)
+    assert item.period == "2026-03-31"
+    src = database.execute(
+        "SELECT source_type FROM documents WHERE id = ?", (item.doc_id,)
+    ).fetchone()
+    assert src is not None and src[0] == "sec_xbrl"
 
 
 # ---------------------------------------------------------------------------

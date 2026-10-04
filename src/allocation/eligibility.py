@@ -56,7 +56,7 @@ from dcf.readiness import load_valuation_readiness
 from models.companies import ListType
 from pipeline.queries import tracked_companies_for_user
 from portfolio_risk_snapshot_store import read_latest_snapshot
-from portfolio_weights import read_materialized_weights_as_of
+from portfolio_weights import MaterializedWeightSnapshot, read_materialized_weight_snapshot
 from risk_reward import PRICE_STALE_DAYS
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -432,25 +432,27 @@ def _check_disconfirmers(repo_root: Path, ticker: str) -> tuple[EligibilityCheck
 
 
 def _check_portfolio_context(
-    *, weights_as_of: str | None, now: datetime
+    *, snapshot: MaterializedWeightSnapshot | None, now: datetime
 ) -> tuple[EligibilityCheck, str | None]:
-    if weights_as_of is None:
-        return EligibilityCheck(False, "no materialized weights cache on file"), None
-    dt = _parse_dt(weights_as_of)
+    if snapshot is None:
+        return EligibilityCheck(False, "no readable materialized weights cache on file"), None
+    flags: list[str] = []
+    if snapshot.source_is_stale:
+        flags.append("source marked stale")
+    if snapshot.source_is_partial:
+        flags.append("source marked partial")
+    flags.extend(snapshot.source_warnings)
+    dt = _parse_dt(snapshot.source_as_of)
     if dt is None:
-        return (
-            EligibilityCheck(False, f"weights cache computed_at unparseable ({weights_as_of!r})"),
-            None,
-        )
-    age_hours = (now - dt).total_seconds() / 3600.0
-    if age_hours <= WEIGHTS_CACHE_STALE_HOURS:
-        return (
-            EligibilityCheck(
-                True, f"weights cache {age_hours:.1f}h old (<= {WEIGHTS_CACHE_STALE_HOURS:g}h)"
-            ),
-            None,
-        )
-    warning = f"portfolio weights cache is {age_hours:.1f}h old (> {WEIGHTS_CACHE_STALE_HOURS:g}h)"
+        processing_age = (now - snapshot.computed_at.replace(tzinfo=None)).total_seconds() / 3600
+        flags.insert(0, f"source age unknown; materialized cache {processing_age:.1f}h old")
+    else:
+        age_hours = (now - dt).total_seconds() / 3600.0
+        if age_hours > WEIGHTS_CACHE_STALE_HOURS:
+            flags.insert(0, f"source is {age_hours:.1f}h old (> {WEIGHTS_CACHE_STALE_HOURS:g}h)")
+        elif not flags:
+            return EligibilityCheck(True, f"weights source {age_hours:.1f}h old"), None
+    warning = "portfolio weights cache: " + "; ".join(flags)
     return EligibilityCheck(True, warning), warning
 
 
@@ -460,17 +462,25 @@ def _check_portfolio_context(
 
 
 def _check_source_provenance(
-    source_freshness: dict[str, str], *, list_type: str
+    source_freshness: dict[str, str], *, list_type: str, weights_source_age_unknown: bool = False
 ) -> EligibilityCheck:
     required = _REQUIRED_SOURCES_BY_CLASS.get(list_type, ())
     if not required:
         return EligibilityCheck(True, "no required sources for this name class")
-    missing = [k for k in required if not source_freshness.get(k)]
+    missing = [
+        key
+        for key in required
+        if not source_freshness.get(key) and not (key == "weights" and weights_source_age_unknown)
+    ]
     if missing:
         return EligibilityCheck(
             False, f"missing as-of for required source(s): {', '.join(missing)}"
         )
-    return EligibilityCheck(True, f"source as-of on file for: {', '.join(required)}")
+    dated = [key for key in required if source_freshness.get(key)]
+    detail = f"source as-of on file for: {', '.join(dated)}"
+    if weights_source_age_unknown:
+        detail += "; portfolio weights source age unknown (warning-only cache policy)"
+    return EligibilityCheck(True, detail)
 
 
 # --------------------------------------------------------------------------- #
@@ -596,9 +606,12 @@ def _assess_eligibility(
     elif disc_warning:
         warnings.append(disc_warning)
 
-    weights_as_of = read_materialized_weights_as_of(repo_root)
-    ctx_check, ctx_warning = _check_portfolio_context(weights_as_of=weights_as_of, now=now)
+    weight_snapshot = read_materialized_weight_snapshot(repo_root)
+    weights_as_of = weight_snapshot.source_as_of if weight_snapshot is not None else None
+    ctx_check, ctx_warning = _check_portfolio_context(snapshot=weight_snapshot, now=now)
     checks[CHECK_PORTFOLIO_CONTEXT] = ctx_check
+    if weight_snapshot is not None:
+        source_freshness["weights_materialized"] = weight_snapshot.computed_at.isoformat()
     if weights_as_of:
         source_freshness["weights"] = weights_as_of
     if not ctx_check.passed:
@@ -610,7 +623,11 @@ def _assess_eligibility(
     if snapshot is not None and snapshot.captured_at:
         source_freshness["risk_snapshot"] = snapshot.captured_at
 
-    prov_check = _check_source_provenance(source_freshness, list_type=lt)
+    prov_check = _check_source_provenance(
+        source_freshness,
+        list_type=lt,
+        weights_source_age_unknown=weight_snapshot is not None and weights_as_of is None,
+    )
     checks[CHECK_SOURCE_PROVENANCE] = prov_check
     if not prov_check.passed:
         blocking.append(prov_check.reason)

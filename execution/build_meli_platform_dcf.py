@@ -64,6 +64,7 @@ from dcf.artifact_promotion import (
     ArtifactPromotion,
     live_path_from_env,
     promotion_from_env,
+    run_dcf_entrypoint,
 )
 from dcf.input_evidence import (
     InputEvidenceError,
@@ -867,7 +868,7 @@ def load_verified_assumptions(
     )
 
 
-def main() -> int:
+def _main_owned() -> int:
     draft = os.environ.get("DCF_PERSIST", "1") != "1"
     artifact_promotion = promotion_from_env(DEST)
     if draft:
@@ -967,6 +968,16 @@ def main() -> int:
         f"${m.op_terminal_revenue / 1000:,.0f}B, credit ROE {m.credit_terminal_roe:.0%}"
     )
     return 0
+
+
+def main() -> int:
+    return run_dcf_entrypoint(
+        REPO,
+        T,
+        _main_owned,
+        owner="build-meli-platform-dcf",
+        require_database=os.environ.get("DCF_PERSIST", "1") == "1",
+    )
 
 
 if __name__ == "__main__":
