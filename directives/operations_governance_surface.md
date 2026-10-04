@@ -948,3 +948,62 @@ authority. Internal financial derivation helpers publish source-bound formula an
 operand evidence only through the existing provenance repository. Source capture,
 semantic admission and threshold eligibility remain distinct. The migration graph
 owns the expected schema head; do not hardcode it in the Operations projection.
+
+
+### Reviewed foreign-filer financial packages and ONON valuation
+
+`bootstrap_issuer_reporting_registry.py --ticker ONON` narrows the existing
+tracked reporting universe. It cannot add an untracked security. The default
+remains the full tracked universe. SEC fetching uses the configured contact.
+
+`sync_sec_filing_inventory.py --package-subject-review PATH` consumes a typed
+`sec_package_subject_review.v1` review. It verifies exact source bytes, an
+unambiguous source selector, issuer/accession identity and the reported fiscal
+period. Financial statements, supplements and earnings releases can supply a
+financial period. Investor presentations and investor updates cannot. The source
+remains native SEC evidence. The authoritative package must contain every reviewed
+URL. Dry-run and apply return the same expected-document vector digest and review
+digest. Apply retains the review bytes as a required inventory component in the
+existing evidence ledger. Processing and valuation verify this component and the
+exact captured source hash. A review does not prove archive or extraction coverage.
+
+`publish_reviewed_sec_financial_tables.py --db PATH --request PATH` plans one
+closed reviewed population of native 20-F/6-K cells. Apply also requires
+`--expected-plan-sha256 SHA` and the database writer lock. Exact reported signs,
+units, dates, definitions and source spans survive publication. Split numeric
+cells and narrative numeric spans must replay from the qualified HTML extraction.
+Source publication leaves canonical semantic admission and archive completeness
+explicitly unperformed. Run entrypoints through `execution/sqlite_bootstrap.py`.
+
+`review_onon_input_roles.py --db PATH --request PATH` plans a closed analyst review
+of the exact reported recipe population: 45 interim operands or 23 annual
+operands. Apply requires `--expected-plan-sha256 SHA`,
+the database writer lock and a caller-owned transaction. The review verifies the
+sealed ontology and issuer-scoped resolution, source bytes, immutable observation
+and locator, binding, mapping, period, unit, basis, dimensions and reported signs.
+It appends definition metadata through `MetricOntology`; it does not change source
+facts or metric meaning. The review clock must follow the prior snapshot cutoff.
+New ontology and research snapshots are required before model use. Exact replay
+creates no additional revisions. Analyst review does not grant owner approval.
+
+`refresh_dcf.py --ticker ONON --onon-assumptions-path PATH` selects the explicit
+five-year `onon_economic_fcff` recipe. It uses the reviewed reported operands,
+expensed cash rent and economic stock compensation. The bridge deducts the
+reported other non-lease financial liability aggregate as a conservative allowance;
+it does not assert that this aggregate is borrowing debt. Forecasts, FX and the
+guidance midpoint remain attributed assumptions. The existing artifact owner and
+atomic database/workbook promotion apply. No implicit current seed is permitted.
+An optional exact prior input-receipt sidecar and scenario-review artifact retain
+the review's immutable input and output commitments. The builder environment
+uses `DCF_ONON_MODEL_INPUT_RECEIPT_PATH` and
+`DCF_ONON_SCENARIO_ACCEPTANCE_PATH` for these explicit artifacts.
+An out-of-range reverse DCF records an unavailable solution, its bracket and the
+endpoint values. It does not discard the fair values or the other diagnostics.
+
+Readiness reconstructs the full model and canonical bridge. It also verifies the
+input-bound bear/base/bull review. An absent or changed review remains blocked.
+The stored quote, source and date must agree with the reviewed market inputs.
+A passing analyst review establishes research evidence readiness. It does not
+establish owner approval or trade authority. Existing MELI reviews and generic
+foreign-filer captures keep their prior gates. No schema, provider, schedule,
+listener or Operations UI control is added.

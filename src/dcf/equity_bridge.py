@@ -8,7 +8,11 @@ from decimal import Decimal, InvalidOperation
 from typing import Literal, cast
 
 AggregateBasis = Literal["reported_aggregate", "complete_component_sum"]
-DebtScope = Literal["interest_bearing_debt_only", "debt_and_lease_obligations"]
+DebtScope = Literal[
+    "interest_bearing_debt_only",
+    "debt_and_lease_obligations",
+    "other_nonlease_financial_liabilities",
+]
 ReceiptStatus = Literal["verified", "unverified"]
 
 _MILLION = Decimal("1000000")
@@ -176,6 +180,10 @@ def resolve_debt_scope(
     the debt-and-lease scope.  The exact primary-source lineage is validated by
     the receipt layer; this resolver only performs deterministic arithmetic.
     """
+    if scope == "other_nonlease_financial_liabilities":
+        # The canonical ONON recipe owns this different reported liability set.
+        # A legacy provider borrowing aggregate cannot substitute for it.
+        return None
     debt = resolve_complete_aggregate(
         record,
         aggregate_field="totalDebt",

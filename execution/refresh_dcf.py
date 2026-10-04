@@ -73,6 +73,7 @@ from dcf.artifact_promotion import (
 )
 from dcf.input_evidence import InputEvidenceError, ModelInputRequest
 from dcf.meli_inputs import RECIPE as MELI_INPUT_RECIPE
+from dcf.onon_inputs import RECIPE as ONON_INPUT_RECIPE
 from dcf.provenance import DcfInputProvenance, input_clock_summary
 from runtime.job_runtime import JobAlreadyRunningError
 from runtime.python_process import managed_python_prefix
@@ -90,6 +91,7 @@ _HOLDCO_BUILDER = PROJECT_ROOT / "execution" / "build_holdco_sotp.py"
 _FINTECH_BUILDER = PROJECT_ROOT / "execution" / "build_fintech_sotp.py"
 _PLATFORM_BUILDER = PROJECT_ROOT / "execution" / "build_nu_platform_dcf.py"
 _MELI_SOTP_BUILDER = PROJECT_ROOT / "execution" / "build_meli_platform_dcf.py"
+_ONON_BUILDER = PROJECT_ROOT / "execution" / "build_onon_dcf.py"
 DCF_ENGINE_VERSION = "redesign_fcff_v1"
 
 _DCF_SOURCE_SUFFIXES: tuple[tuple[str, str], ...] = (
@@ -490,6 +492,7 @@ def main() -> int:
             workbook_override=args.workbook,
             valuation_year=args.valuation_year,
             meli_assumptions_path=args.meli_assumptions_path,
+            onon_assumptions_path=args.onon_assumptions_path,
         )
         results.append(result)
     print(json.dumps(results, indent=2, default=str))
@@ -531,6 +534,12 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Explicit reviewed MELI input artifact; no repo/data or DB-directory fallback.",
     )
+    p.add_argument(
+        "--onon-assumptions-path",
+        type=Path,
+        default=None,
+        help="Explicit reviewed ONON cash-rent and SBC input artifact.",
+    )
     return p.parse_args()
 
 
@@ -552,6 +561,14 @@ def dcf_maintained_universe(repo_root: Path) -> list[str]:
 
 
 def _meli_authority(repo_root: Path, path: Path) -> tuple[Path, str]:
+    return _verified_model_authority(
+        repo_root, path, ticker="MELI", recipe=MELI_INPUT_RECIPE, model="meli_platform_sotp"
+    )
+
+
+def _verified_model_authority(
+    repo_root: Path, path: Path, *, ticker: str, recipe: str, model: str
+) -> tuple[Path, str]:
     """Pin routing to one validated package; local explicit conflicts are errors."""
     try:
         path = path.resolve(strict=True)
@@ -563,11 +580,13 @@ def _meli_authority(repo_root: Path, path: Path) -> tuple[Path, str]:
         request = ModelInputRequest.model_validate(payload.get("input_evidence"))
     except (ValueError, AttributeError) as exc:
         raise InputEvidenceError("model_input_request_missing_or_invalid") from exc
-    if request.recipe != MELI_INPUT_RECIPE:
+    if request.ticker != ticker:
+        raise InputEvidenceError("model_input_recipe_ticker_mismatch")
+    if request.recipe != recipe:
         raise InputEvidenceError("model_input_recipe_mismatch")
     for hint_path, nested in (
-        (repo_root / "micro_thesis" / "holdings" / "MELI.json", False),
-        (repo_root / "data" / "dcf_assumptions" / "MELI.json", True),
+        (repo_root / "micro_thesis" / "holdings" / f"{ticker}.json", False),
+        (repo_root / "data" / "dcf_assumptions" / f"{ticker}.json", True),
     ):
         if not hint_path.exists():
             continue
@@ -585,12 +604,12 @@ def _meli_authority(repo_root: Path, path: Path) -> tuple[Path, str]:
                 hint = cast(dict[str, object], raw_nested)
             if "valuation_model" not in hint:
                 continue
-            if hint["valuation_model"] != "meli_platform_sotp":
-                raise InputEvidenceError("meli_assumptions_family_conflict")
+            if hint["valuation_model"] != model:
+                raise InputEvidenceError(f"{ticker.lower()}_assumptions_family_conflict")
         except InputEvidenceError:
             raise
         except (OSError, ValueError) as exc:
-            raise InputEvidenceError("meli_family_hint_missing_or_invalid") from exc
+            raise InputEvidenceError(f"{ticker.lower()}_family_hint_missing_or_invalid") from exc
     return path, hashlib.sha256(source_bytes).hexdigest()
 
 
@@ -602,6 +621,7 @@ def refresh_one(
     workbook_override: Path | None = None,
     valuation_year: int,
     meli_assumptions_path: Path | None = None,
+    onon_assumptions_path: Path | None = None,
     input_workbook: Path | None = None,
 ) -> dict[str, object]:
     """Refresh under one artifact owner; imported inputs never replace live bytes."""
@@ -615,6 +635,7 @@ def refresh_one(
                 workbook_override=workbook_override,
                 valuation_year=valuation_year,
                 meli_assumptions_path=meli_assumptions_path,
+                onon_assumptions_path=onon_assumptions_path,
                 input_workbook=input_workbook,
             )
     except JobAlreadyRunningError:
@@ -636,6 +657,7 @@ def _refresh_one_owned(
     workbook_override: Path | None = None,
     valuation_year: int,
     meli_assumptions_path: Path | None = None,
+    onon_assumptions_path: Path | None = None,
     input_workbook: Path | None = None,
 ) -> dict[str, object]:
     """Refresh one ticker's redesigned DCF. Returns a structured result dict.
@@ -665,7 +687,16 @@ def _refresh_one_owned(
             return _refresh_meli_sotp(
                 ticker, repo_root, db_path=db_path, assumptions_path=explicit_path
             )
+    if ticker.upper() == "ONON":
+        raw_path = os.environ.get("DCF_ONON_ASSUMPTIONS_PATH", "").strip()
+        explicit_path = onon_assumptions_path or (Path(raw_path) if raw_path else None)
+        if explicit_path is not None:
+            return _refresh_onon(ticker, repo_root, db_path=db_path, assumptions_path=explicit_path)
     model, suggestion = _valuation_model(repo_root, ticker)
+    if model == "onon_economic_fcff":
+        return _refresh_onon(
+            ticker, repo_root, db_path=db_path, assumptions_path=onon_assumptions_path
+        )
     if model == "bank_excess_return":
         return _refresh_bank(ticker, repo_root, db_path=db_path)
     if model == "holdco_sotp":
@@ -1075,6 +1106,85 @@ def _refresh_meli_sotp(
         "ticker": t,
         "status": "ok",
         "format": "meli_platform_sotp",
+        "workbook": str(dest),
+        "result": line,
+    }
+
+
+def _refresh_onon(
+    ticker: str, repo_root: Path, *, db_path: Path, assumptions_path: Path | None
+) -> dict[str, object]:
+    """Refresh the verified five-year economic FCFF through the existing owner."""
+    if assumptions_path is None:
+        raw = os.environ.get("DCF_ONON_ASSUMPTIONS_PATH", "").strip()
+        assumptions_path = Path(raw) if raw else None
+    if assumptions_path is None:
+        return {
+            "ticker": ticker.upper(),
+            "status": "error",
+            "reason": "explicit_assumptions_authority_required",
+        }
+    try:
+        if ticker.upper() != "ONON":
+            raise InputEvidenceError("onon_input_recipe_ticker_mismatch")
+        assumptions_path, authority_sha256 = _verified_model_authority(
+            repo_root,
+            assumptions_path,
+            ticker="ONON",
+            recipe=ONON_INPUT_RECIPE,
+            model="onon_economic_fcff",
+        )
+    except InputEvidenceError as exc:
+        return {"ticker": ticker.upper(), "status": "error", "reason": str(exc)}
+    t = ticker.upper()
+    dest = repo_root / DCF_DIR_NAME / f"{t}.xlsx"
+    tmp = unique_staged_path(dest, "rebuild")
+    _unlink(tmp)
+    env = dict(
+        os.environ,
+        DCF_TICKER=t,
+        DCF_REPO_ROOT=str(repo_root),
+        DCF_DEST=str(tmp),
+        DCF_PROMOTE_DEST=str(dest),
+        EARNINGS_SUMMARY_DB_PATH=str(db_path),
+        DCF_ONON_ASSUMPTIONS_PATH=str(assumptions_path),
+        DCF_ONON_ASSUMPTIONS_SHA256=authority_sha256,
+    )
+    env.update(dcf_child_environment(repo_root, ticker))
+    proc = subprocess.run(
+        [*managed_python_prefix(PROJECT_ROOT), str(_ONON_BUILDER)],
+        env=env,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    cleanup_result = _specialized_committed_cleanup_result(
+        proc, ticker=t, model_format="onon_economic_fcff", workbook=dest
+    )
+    if cleanup_result is not None:
+        _unlink(tmp)
+        return cleanup_result
+    line = next((ln for ln in proc.stdout.splitlines() if ln.startswith("RESULT")), None)
+    if (
+        proc.returncode != 0
+        or line is None
+        or not line.startswith(f"RESULT\t{t}\t")
+        or "dcf_runs=ok" not in line
+        or not dest.is_file()
+    ):
+        _unlink(tmp)
+        reason = (
+            (proc.stderr.strip().splitlines() or [""])[-1][:160]
+            if line is None
+            else "builder did not atomically persist and promote the DCF"
+        )
+        return {"ticker": t, "status": "failed", "format": "onon_economic_fcff", "reason": reason}
+    return {
+        "ticker": t,
+        "status": "ok",
+        "format": "onon_economic_fcff",
         "workbook": str(dest),
         "result": line,
     }

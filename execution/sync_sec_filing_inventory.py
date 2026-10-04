@@ -33,6 +33,10 @@ from filings.sec_filing_package_inventory import (
     filing_package_manifest_url,
     parse_sec_filing_package_inventory,
 )
+from filings.sec_financial_classification import (
+    classify_expected_package_subjects,
+    load_package_subject_reviews,
+)
 from filings.sec_submissions_inventory import (
     HistoricalComponent,
     SecFilingInventoryEntry,
@@ -511,6 +515,8 @@ class SyncResult(BaseModel):
     records_created: int = Field(default=0, ge=0)
     scope_manifest_observation_id: str | None = None
     scope_manifest_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    package_subject_review_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    expected_documents_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 def _event(event: str, **fields: object) -> None:
@@ -656,6 +662,8 @@ def capture_scope_manifest(
     blob_root: Path,
     config_sha: str,
     captured_at: datetime,
+    source_kind: str = "sec_inventory_scope_derived",
+    collector_code_version: str = SCOPE_MANIFEST_VERSION,
 ) -> str:
     """Reuse an exact semantic derivation; its first capture clock is not SEC retrieval."""
     rows = conn.execute(
@@ -663,11 +671,11 @@ def capture_scope_manifest(
         "WHERE source_kind=? AND source_url=? AND blob_sha256=? "
         "AND retrieval_config_sha256=? AND collector_code_version=?",
         (
-            "sec_inventory_scope_derived",
+            source_kind,
             url,
             hashlib.sha256(body).hexdigest(),
             config_sha,
-            SCOPE_MANIFEST_VERSION,
+            collector_code_version,
         ),
     ).fetchall()
     if len(rows) > 1:
@@ -683,8 +691,8 @@ def capture_scope_manifest(
         observed_at=observed_at,
         retrieved_at=retrieved_at,
         recorded_at=captured_at,
-        source_kind="sec_inventory_scope_derived",
-        collector_code_version=SCOPE_MANIFEST_VERSION,
+        source_kind=source_kind,
+        collector_code_version=collector_code_version,
     )
     if rows and observation_id != str(rows[0][0]):
         raise ValueError("scope manifest prior identity differs from immutable capture")
@@ -1318,6 +1326,11 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument(
+        "--package-subject-review",
+        type=Path,
+        help="Exact reviewed SEC 6-K exhibit subjects and reported-period witnesses.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -1450,6 +1463,17 @@ def _run_inventory(
     ticker = str(args.ticker).strip().upper()
     cik = str(args.cik).strip().zfill(10)
     root_url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+    review_path = getattr(args, "package_subject_review", None)
+    subject_review = None
+    subject_review_sha = None
+    subject_review_body = None
+    if review_path is not None:
+        subject_review_body = review_path.read_bytes()
+        subject_review, subject_review_sha = load_package_subject_reviews(
+            review_path, cik=cik, ticker=ticker, as_of=datetime.now(UTC)
+        )
+        if hashlib.sha256(subject_review_body).hexdigest() != subject_review_sha:
+            raise ValueError("sec_package_subject_review_changed_during_validation")
     config_sha = hashlib.sha256(
         json.dumps(
             {
@@ -1468,6 +1492,11 @@ def _run_inventory(
                 "package_scope_policy_version": _PACKAGE_SCOPE_POLICY_VERSION,
                 "duty_scope_manifest_version": SCOPE_MANIFEST_VERSION,
                 "retrieval_config_sha256": config_sha,
+                **(
+                    {"package_subject_review_sha256": subject_review_sha}
+                    if subject_review_sha is not None
+                    else {}
+                ),
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -1638,6 +1667,27 @@ def _run_inventory(
     unclassified_form_types = tuple(sorted({item.form_type for item in filing_scope.unclassified}))
     complete = parsed.complete and not package_failures and not filing_scope.unclassified
     attachment_count = sum(len(package.attachments) for package in package_collection.packages)
+    try:
+        expected_documents = build_expected_documents(
+            issuer_id=issuer_id,
+            filings=filing_scope.package_eligible,
+            packages=package_collection.packages,
+        )
+        if subject_review is not None and subject_review_sha is not None:
+            expected_documents = classify_expected_package_subjects(
+                expected_documents, subject_review, manifest_sha256=subject_review_sha
+            )
+    except Exception:
+        if conn is not None:
+            conn.close()
+        raise
+    expected_documents_sha = hashlib.sha256(
+        json.dumps(
+            [document.model_dump(mode="json") for document in expected_documents],
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
     if not args.apply:
         sys.stdout.write(
             SyncResult(
@@ -1656,6 +1706,7 @@ def _run_inventory(
                     + 1  # Required software-derived scope manifest, also present in apply.
                     + bool(parsed.issues)
                     + bool(filing_scope.unclassified)
+                    + bool(subject_review_sha)
                 ),
                 deferred_accession_count=package_collection.deferred_accession_count,
                 package_failure_count=len(package_failures),
@@ -1666,6 +1717,8 @@ def _run_inventory(
                     *package_issue_codes,
                     *(("unclassified_filing_form",) if filing_scope.unclassified else ()),
                 ),
+                package_subject_review_sha256=subject_review_sha,
+                expected_documents_sha256=expected_documents_sha,
             ).model_dump_json()
             + "\n"
         )
@@ -1807,11 +1860,34 @@ def _run_inventory(
                     ordinal=len(components),
                 )
             )
-        expected_documents = build_expected_documents(
-            issuer_id=issuer_id,
-            filings=filing_scope.package_eligible,
-            packages=package_collection.packages,
-        )
+        if subject_review_body is not None and subject_review_sha is not None:
+            subject_review_url = root_url + "#reviewed-package-subjects:" + subject_review_sha
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                review_observation = capture_scope_manifest(
+                    conn,
+                    body=subject_review_body,
+                    url=subject_review_url,
+                    blob_root=args.blob_root,
+                    config_sha=inventory_config_sha,
+                    captured_at=now,
+                    source_kind="sec_package_subject_review",
+                    collector_code_version="sec_package_subject_review.v1",
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            components.append(
+                InventoryComponentImport(
+                    component_key="reviewed-package-subjects",
+                    component_kind="other",
+                    source_url=subject_review_url,
+                    source_observation_id=review_observation,
+                    outcome="succeeded",
+                    ordinal=len(components),
+                )
+            )
         request = SourceCoverageImport(
             inventory_key=f"{issuer_id}:sec-submissions",
             revision=int(args.revision),
@@ -1859,6 +1935,8 @@ def _run_inventory(
         records_created=coverage.records_created,
         scope_manifest_observation_id=scope_observation,
         scope_manifest_sha256=scope_manifest_sha256,
+        package_subject_review_sha256=subject_review_sha,
+        expected_documents_sha256=expected_documents_sha,
     )
     if completed is not None:
         completed(result)

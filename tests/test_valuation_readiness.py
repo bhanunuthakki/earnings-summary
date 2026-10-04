@@ -210,3 +210,199 @@ def test_closed_connection_is_failed_not_missing() -> None:
     conn.close()
     result = load_valuation_readiness(conn, "META", as_of=NOW)
     assert result.status == "failed"
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "status-only-bridge",
+        "full-output",
+        "scenario",
+        "row",
+        "engine",
+        "missing-acceptance",
+        "unverified-debt",
+        "numeric-type-output",
+        "market-provenance",
+        "market-price",
+        "market-date",
+        "valuation-date",
+        "market-source",
+    ],
+)
+def test_onon_readiness_replays_bridge_outputs_and_explicit_review(
+    monkeypatch: pytest.MonkeyPatch,
+    damage: str | None,
+) -> None:
+    # This tests the consumer boundary. Source and recipe verification have
+    # separate canonical receipt tests; they are explicit substitutes here.
+    from types import SimpleNamespace
+
+    from dcf import readiness
+    from dcf.grade_evidence import DcfEvidenceChecks, DcfGradeEvidence
+    from dcf.input_evidence import AssumptionBasis, canonical_digest
+    from tests.test_scenario_acceptance import (
+        INPUTS,
+        OUTPUT,
+        acceptance_payload,
+        input_receipt,
+    )
+    from tests.test_scenario_acceptance import (
+        NOW as REVIEW_NOW,
+    )
+
+    numeric_inputs = {
+        **INPUTS,
+        "price_usd": 35.0,
+        "valuation_date_ordinal": float(REVIEW_NOW.date().toordinal()),
+    }
+    receipt = input_receipt()
+    price_basis = AssumptionBasis(
+        value=35.0,
+        attribution="analyst",
+        rationale="Dated issuer-review market price reference.",
+        source_reference="dated-quote-source",
+        source_as_of=REVIEW_NOW.date(),
+        recorded_at=receipt.verified_at,
+    )
+    receipt = receipt.model_copy(
+        update={
+            "request": receipt.request.model_copy(
+                update={"assumptions": {"price_usd": price_basis}}
+            ),
+            "effective_inputs_sha256": canonical_digest(numeric_inputs),
+        }
+    )
+    output = {**OUTPUT, "equity_value": 350.0, "operating_ev": 300.0}
+    bridge = {
+        "status": "verified",
+        "arithmetic_status": "verified",
+        "cash_lineage": {"source": "exact-canonical-fact"},
+    }
+    snapshot = {
+        "model": "onon_economic_fcff",
+        "effective_model_inputs": numeric_inputs,
+        "value_per_share": 35.0,
+        "equity_value_m": 350.0,
+        "operating_ev_m": 300.0,
+        "model_output": output,
+        "scenarios": OUTPUT["scenarios"],
+    }
+    review = acceptance_payload()
+    review["model_output_sha256"] = canonical_digest(output)
+    review["effective_inputs_sha256"] = receipt.effective_inputs_sha256
+    review["model_input_receipt_sha256"] = canonical_digest(receipt.model_dump(mode="json"))
+    provenance: dict[str, object] = {
+        "model_input_receipt": receipt.model_dump(mode="json"),
+        "equity_bridge_receipt": bridge,
+        "scenario_acceptance": review,
+        "market_price": {
+            "price": 35.0,
+            "observed_at": REVIEW_NOW.isoformat(),
+            "source": "dated-quote-source",
+        },
+    }
+    engine = "onon_economic_fcff_v1"
+    row_vps = 35.0
+    market_price = 35.0
+    market_date = REVIEW_NOW.isoformat()
+    valuation_date = REVIEW_NOW.date().isoformat()
+    if damage == "status-only-bridge":
+        provenance["equity_bridge_receipt"] = {"status": "verified"}
+    elif damage == "full-output":
+        snapshot["model_output"] = {**output, "operating_ev": 999.0}
+    elif damage == "numeric-type-output":
+        snapshot["model_output"] = {**output, "vps": 35}
+    elif damage == "scenario":
+        snapshot["scenarios"] = {"base": {"vps": 35.0}}
+    elif damage == "row":
+        row_vps = 35.000000001
+    elif damage == "engine":
+        engine = "redesign_fcff_v1"
+    elif damage == "missing-acceptance":
+        provenance.pop("scenario_acceptance")
+    elif damage == "unverified-debt":
+        bridge["status"] = "unverified"
+    elif damage == "market-price":
+        market_price = 40.0
+    elif damage == "market-date":
+        market_date = "2026-10-02T20:00:00+00:00"
+    elif damage == "valuation-date":
+        valuation_date = "2026-10-02"
+    elif damage == "market-source":
+        provenance["market_price"] = {
+            "price": market_price,
+            "observed_at": market_date,
+            "source": "different-quote-source",
+        }
+    evidence = DcfGradeEvidence(
+        status="available",
+        ticker="ONON",
+        created_at=REVIEW_NOW.isoformat(),
+        valuation_date=valuation_date,
+        engine_version=engine,
+        npv_per_share=row_vps,
+        npv=350.0,
+        live_price=market_price,
+        live_price_at=market_date,
+        assumption_snapshot=snapshot,
+        provenance=provenance,
+        checks=DcfEvidenceChecks(
+            input_hash_valid=True,
+            workbook_hash_valid=True,
+            snapshot_status="valid",
+            provenance_status="valid",
+            source_count=0,
+            scenario_receipt_present=True,
+            reverse_receipt_present=False,
+            primary_fact_overlay_status="missing",
+            equity_bridge_status="verified",
+            country_risk_authority=None,
+            market_price_consistent=damage != "market-provenance",
+        ),
+    )
+
+    def load(*args: object) -> DcfGradeEvidence:
+        return evidence
+
+    def numeric(*args: object) -> dict[str, float]:
+        return numeric_inputs
+
+    def verify_inputs(*args: object, **kwargs: object) -> readiness.ModelInputReceipt:
+        return receipt
+
+    def model(*args: object) -> dict[str, object]:
+        return output
+
+    def reconstructed_bridge(*args: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(
+            to_dict=lambda: bridge,
+            status=bridge["status"],
+            arithmetic_status="verified",
+            reasons=("onon_financial_debt_scope_analyst_inference",)
+            if damage == "unverified-debt"
+            else (),
+        )
+
+    monkeypatch.setattr(readiness, "load_dcf_grade_evidence", load)
+    monkeypatch.setattr(readiness.onon_inputs, "effective_numeric_inputs", numeric)
+    monkeypatch.setattr(readiness.onon_inputs, "verify_onon_inputs", verify_inputs)
+    monkeypatch.setattr(readiness.onon_inputs, "model_output", model)
+    monkeypatch.setattr(readiness.onon_inputs, "build_onon_equity_bridge", reconstructed_bridge)
+    conn = sqlite3.connect(":memory:")
+    result = load_valuation_readiness(conn, "ONON", as_of=REVIEW_NOW)
+    assert result.ready is (damage is None), result.reason_codes
+    assert result.readiness_scope == "research_evidence"
+    if damage is None:
+        assert result.scenario_review_attribution == "analyst"
+        assert result.scenario_reviewed_at == REVIEW_NOW.isoformat()
+    else:
+        assert result.reason_codes
+    if damage == "market-provenance":
+        assert "market_price_receipt_mismatch" in result.reason_codes
+    elif damage in {"market-price", "market-source"}:
+        assert "reviewed_market_price_mismatch" in result.reason_codes
+    elif damage in {"market-date", "valuation-date"}:
+        assert "reviewed_market_clock_mismatch" in result.reason_codes
+    assert not conn.in_transaction

@@ -17,6 +17,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import TracebackType
 from typing import Literal, Self, cast
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -41,6 +42,7 @@ from provenance.financial_fact_resolution import (
     ReviewedKpiNativeProjection,
     prepare_reviewed_kpi_native_projection,
 )
+from provenance.issuer_registry import IssuerRegistry
 from provenance.population_completeness import (
     PopulationPlaneVerification,
     PopulationTemporalScope,
@@ -50,6 +52,7 @@ from provenance.population_completeness import (
 from provenance.population_completeness import (
     canonical_json as canonical_population_json,
 )
+from provenance.reviewed_sec_financial_tables import assert_sec_source_identity
 from provenance.source_fact_repository import (
     ReportedSourceFact,
     SourceFactPublication,
@@ -279,7 +282,14 @@ class _PopulationPlan:
 
 
 def _request_policy_version(request: SourceFactPopulationRequest) -> str:
-    return "6" if request.schema_version == "source_fact_population.v2" else _POLICY_VERSION
+    if request.schema_version != "source_fact_population.v2":
+        return _POLICY_VERSION
+    if any(
+        '"source_ref":"https://www.sec.gov/Archives/edgar/' in projection.source_locator_json
+        for projection in request.reviewed_kpi_projections
+    ):
+        return "7"
+    return "6"
 
 
 def native_source_observation_id(legacy_observation_id: str) -> str:
@@ -337,6 +347,44 @@ def _validate_reviewed_projections(
         )
         if actual.model_dump(mode="json") != expected.model_dump(mode="json"):
             raise ValueError("reviewed KPI native projection head or source commitment changed")
+        _validate_reviewed_sec_projection_source(conn, actual, request.data_cutoff_at)
+
+
+def _validate_reviewed_sec_projection_source(
+    conn: sqlite3.Connection, projection: ReviewedKpiNativeProjection, cutoff: datetime
+) -> None:
+    row = conn.execute(
+        "SELECT document.source_type,document.doc_type,version.form_type,version.accession_number,version.issuer_id,source.source_url "
+        "FROM documents document JOIN evidence_document_versions version ON version.legacy_document_id=document.id "
+        "JOIN evidence_source_observations source ON source.observation_id=version.observation_id "
+        "WHERE document.id=? AND version.document_version_id=? AND document.sha256=? AND version.blob_sha256=?",
+        (
+            projection.source_document_id,
+            projection.source_document_version_id,
+            projection.source_document_sha256,
+            projection.source_document_sha256,
+        ),
+    ).fetchone()
+    if row is None:
+        raise ValueError("reviewed KPI source document identity changed")
+    if str(row[1]) not in {"sec_20f", "sec_6k"}:
+        return
+    if str(row[0]) != "sec_xbrl" or row[3] is None:
+        raise ValueError("reviewed SEC projection requires its exact native source kind")
+    parts = urlsplit(str(row[5])).path.split("/")
+    if len(parts) < 7 or not parts[4].isdecimal():
+        raise ValueError("reviewed SEC projection has no exact source CIK")
+    cik = parts[4].zfill(10)
+    assert_sec_source_identity(
+        source_kind="sec_20f" if str(row[1]) == "sec_20f" else "sec_6k",
+        form_type=str(row[2]),
+        accession_number=str(row[3]),
+        sec_cik=cik,
+        source_url=str(row[5]),
+    )
+    issuer = IssuerRegistry(conn).resolve_identifier("sec_cik", cik, knowledge_at=cutoff)
+    if issuer.issuer_id != str(row[4]) or issuer.material_dissent:
+        raise ValueError("reviewed SEC projection CIK conflicts with its captured issuer")
 
 
 def _request_exclusion_reason(row: sqlite3.Row, request: SourceFactPopulationRequest) -> str | None:
@@ -1016,7 +1064,13 @@ def _exclusion_reason(
         return _EXCLUSION_REASONS[6]
     if str(row["source_type"]) == "llm_extracted":
         return _EXCLUSION_REASONS[1]
-    if str(row["doc_type"]) not in _ELIGIBLE_DOCUMENT_TYPES:
+    reviewed_sec = (
+        reviewed_kpi
+        and str(row["fact_table"]) == "kpi_facts"
+        and str(row["source_type"]) == "sec_xbrl"
+        and str(row["doc_type"]) in {"sec_20f", "sec_6k"}
+    )
+    if str(row["doc_type"]) not in _ELIGIBLE_DOCUMENT_TYPES and not reviewed_sec:
         return _EXCLUSION_REASONS[2]
     if row["completed_at"] is None or str(row["run_outcome"]) != "succeeded":
         return _EXCLUSION_REASONS[3]

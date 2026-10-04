@@ -28,6 +28,10 @@ from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import FactReadModel
 from provenance.metric_ontology import CanonicalDimension, MetricOntology, canonical_json
 from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
+from provenance.sec_package_subject_witness import (
+    SecPackageSubjectWitnessError,
+    verify_sec_package_subject_witness,
+)
 
 
 class InputEvidenceError(ValueError):
@@ -51,6 +55,9 @@ class AssumptionBasis(FrozenModel):
     value: float
     attribution: Literal["owner", "analyst"]
     rationale: str = Field(min_length=10)
+    source_reference: str | None = Field(default=None, min_length=1)
+    source_as_of: date | None = None
+    recorded_at: AwareDatetime | None = None
 
 
 class DriverReview(FrozenModel):
@@ -77,7 +84,7 @@ class ModelCalculation(FrozenModel):
 
 class ModelInputRequest(FrozenModel):
     recipe: str
-    ticker: Literal["MELI"]
+    ticker: Literal["MELI", "ONON"]
     research_snapshot_id: str
     financial_period_end: date
     # Canonical bindings are REPORTED only. TTM/residuals are model calculations.
@@ -210,6 +217,176 @@ def _time(raw: object) -> datetime:
     return _utc(datetime.fromisoformat(str(raw).replace("Z", "+00:00")))
 
 
+def _financial_filing_date(raw: object, cutoff: datetime) -> date:
+    if raw is None:
+        raise InputEvidenceError("financial_reporting_filing_date_missing")
+    try:
+        filed = _time(raw).date()
+    except ValueError as exc:
+        raise InputEvidenceError("financial_reporting_filing_date_invalid") from exc
+    if filed > cutoff.date():
+        raise InputEvidenceError("financial_reporting_filing_after_cutoff")
+    return filed
+
+
+def _foreign_interim_periods(
+    conn: sqlite3.Connection,
+    inventory_ids: tuple[str, ...],
+    snapshot: ResearchSnapshotRequest,
+    ticker: str,
+    cutoff: datetime,
+    proven_period_end: date | None,
+) -> tuple[date, ...]:
+    """Select explicitly classified 6-K packages, never every current report.
+
+    The expected-document owner supplies the classification. A financial IR
+    exhibit can qualify its same-accession SEC cover. Only after verifying all
+    classified financial periods do we exclude unknown native SEC packages filed
+    on or before the proven maximum period end from latest-period discovery:
+    reported period end <= filing date <= proven period end. This does not remove
+    any document from source closure or readership. A requested anchor is not proof.
+    """
+    try:
+        rows: list[sqlite3.Row | tuple[object, ...]] = []
+        for inventory_id in inventory_ids:
+            count = conn.execute(
+                "SELECT count(*) FROM expected_documents WHERE snapshot_id=? "
+                "AND form_type IN ('6-K','6-K/A') AND datetime(recorded_at)<=datetime(?)",
+                (inventory_id, cutoff.isoformat()),
+            ).fetchone()
+            if count is not None and int(count[0]):
+                rows.extend(
+                    conn.execute(
+                        "SELECT expected_document_id,period_end,document_type,issuer_id,ticker,"
+                        "expectation_basis,accession_number,source_kind,source_url,filing_at FROM expected_documents "
+                        "WHERE snapshot_id=? AND form_type IN ('6-K','6-K/A') "
+                        "AND datetime(recorded_at)<=datetime(?)",
+                        (inventory_id, cutoff.isoformat()),
+                    ).fetchall()
+                )
+        periods: list[date] = []
+        classified: set[str] = set()
+        unknown: list[tuple[str | None, date | None, str]] = []
+        financial_kinds = {
+            "financial_statement": "issuer_financial_statements",
+            "supplement": "issuer_financial_statements",
+            "earnings_release": "issuer_earnings_materials",
+            "earnings_material": "issuer_earnings_materials",
+        }
+        presentation_kinds = {"investor_presentation", "presentation", "investor_update"}
+        for row in rows:
+            (
+                identity,
+                period,
+                kind,
+                issuer,
+                symbol,
+                basis,
+                accession,
+                source_kind,
+                source_url,
+                filing_at,
+            ) = tuple(row)
+            if (
+                str(issuer) != snapshot.research_universe.issuer_id
+                or str(symbol).upper() != ticker
+                or str(basis) != "authoritative"
+                or str(source_kind) not in {"sec_filing", "ir_document"}
+            ):
+                raise InputEvidenceError("financial_reporting_package_authority_invalid")
+            kind = str(kind)
+            filed = (
+                _financial_filing_date(filing_at, cutoff)
+                if str(source_kind) == "sec_filing" or kind in financial_kinds
+                else None
+            )
+            accession_id = str(accession) if accession is not None else None
+            if kind not in financial_kinds and kind not in presentation_kinds:
+                unknown.append((accession_id, filed, str(source_kind)))
+                continue
+            expected_family = (
+                "continuous_disclosure"
+                if str(source_kind) == "sec_filing"
+                else financial_kinds.get(kind, "issuer_presentations")
+            )
+            binding = conn.execute(
+                "SELECT source_obligation_revision_id,issuer_id,reporting_entity_id,"
+                "document_family,canonical_binding_json,binding_sha256,knowledge_at,recorded_at "
+                "FROM expected_document_obligation_bindings WHERE expected_document_id=?",
+                (identity,),
+            ).fetchone()
+            if binding is None:
+                raise InputEvidenceError("financial_reporting_package_unbound")
+            obligation, bound_issuer, entity, family, encoded, digest, known, recorded = tuple(
+                binding
+            )
+            expected_binding = {
+                "document_family": expected_family,
+                "expected_document_id": str(identity),
+                "issuer_id": snapshot.research_universe.issuer_id,
+                "reporting_entity_id": str(entity),
+                "source_obligation_revision_id": str(obligation),
+            }
+            if (
+                str(issuer) != snapshot.research_universe.issuer_id
+                or str(symbol).upper() != ticker
+                or str(basis) != "authoritative"
+                or str(bound_issuer) != snapshot.research_universe.issuer_id
+                or str(entity) not in snapshot.research_universe.reporting_entity_ids
+                or str(obligation) not in snapshot.research_universe.source_obligation_revision_ids
+                or str(family) != expected_family
+                or json.loads(str(encoded)) != expected_binding
+                or hashlib.sha256(str(encoded).encode()).hexdigest() != str(digest)
+                or _time(known) > cutoff
+                or _time(recorded) > cutoff
+            ):
+                raise InputEvidenceError("financial_reporting_package_authority_invalid")
+            if str(source_kind) == "sec_filing":
+                try:
+                    verify_sec_package_subject_witness(
+                        conn,
+                        issuer_id=snapshot.research_universe.issuer_id,
+                        document_version_ids=snapshot.research_universe.document_version_ids,
+                        identity=str(identity),
+                        kind=kind,
+                        period=period,
+                        accession=accession_id,
+                        source_url=source_url,
+                        cutoff=cutoff,
+                    )
+                except SecPackageSubjectWitnessError as exc:
+                    raise InputEvidenceError(str(exc)) from exc
+            if accession_id is not None:
+                classified.add(accession_id)
+            if kind in financial_kinds:
+                if period is None:
+                    raise InputEvidenceError("financial_reporting_period_missing")
+                end = _time(period).date()
+                if end > cutoff.date():
+                    raise InputEvidenceError("financial_reporting_period_after_cutoff")
+                if filed is None or end > filed:
+                    raise InputEvidenceError("financial_reporting_period_after_filing")
+                periods.append(end)
+        bounds = periods + ([] if proven_period_end is None else [proven_period_end])
+        bound = max(bounds, default=None)
+        for accession, filed, source_kind in unknown:
+            if accession is not None and accession in classified:
+                continue
+            if (
+                source_kind == "sec_filing"
+                and bound is not None
+                and filed is not None
+                and filed <= bound
+            ):
+                continue
+            raise InputEvidenceError("financial_reporting_classification_unavailable")
+        return tuple(periods)
+    except (sqlite3.Error, ValueError) as exc:
+        if isinstance(exc, InputEvidenceError):
+            raise
+        raise InputEvidenceError("financial_reporting_package_authority_unavailable") from exc
+
+
 def verify_source_coverage(
     conn: sqlite3.Connection, request: ModelInputRequest, cutoff: datetime
 ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
@@ -268,13 +445,22 @@ def verify_source_coverage(
     latest_period: date | None = None
     for inventory_id in inventories:
         for row in conn.execute(
-            """SELECT period_end FROM expected_documents
-                WHERE snapshot_id=? AND form_type IN ('10-K','10-K/A','10-Q','10-Q/A')
+            """SELECT period_end,filing_at FROM expected_documents
+                WHERE snapshot_id=? AND form_type IN (
+                    '10-K','10-K/A','10-Q','10-Q/A','20-F','20-F/A','40-F','40-F/A')
                 AND period_end IS NOT NULL AND datetime(recorded_at)<=datetime(?)""",
             (inventory_id, cutoff.isoformat()),
         ):
             end = _time(row[0]).date()
+            if end > cutoff.date():
+                raise InputEvidenceError("financial_reporting_period_after_cutoff")
+            if end > _financial_filing_date(row[1], cutoff):
+                raise InputEvidenceError("financial_reporting_period_after_filing")
             latest_period = max(latest_period, end) if latest_period is not None else end
+    for end in _foreign_interim_periods(
+        conn, tuple(inventories), snapshot, request.ticker, cutoff, latest_period
+    ):
+        latest_period = max(latest_period, end) if latest_period is not None else end
     if latest_period != request.financial_period_end:
         raise InputEvidenceError("financial_anchor_not_latest_published_period")
     return snapshot, admission.member_set_sha256, tuple(sorted(inventories))

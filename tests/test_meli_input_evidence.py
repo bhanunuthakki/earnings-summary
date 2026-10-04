@@ -1130,6 +1130,22 @@ def test_real_authorities_reject_tainted_population(
         meli_inputs.prepare_meli_inputs(conn, request, effective_inputs=_inputs(), as_of=NOW)
 
 
+def test_meli_recipe_rejects_an_onon_request_before_reading_sources() -> None:
+    request = evidence.ModelInputRequest(
+        recipe=meli_inputs.RECIPE,
+        ticker="ONON",
+        research_snapshot_id="snapshot",
+        financial_period_end=END,
+        facts={},
+        assumptions={},
+    )
+    with (
+        sqlite3.connect(":memory:") as conn,
+        pytest.raises(evidence.InputEvidenceError, match="input_recipe_issuer_mismatch"),
+    ):
+        meli_inputs.prepare_meli_inputs(conn, request, effective_inputs=_inputs(), as_of=NOW)
+
+
 def test_seed_only_model_cannot_persist(tmp_path: Path) -> None:
     assumptions = meli.Assum(derive_capm=0)
     with pytest.raises(evidence.InputEvidenceError, match="model_input_receipt_required"):
@@ -1147,7 +1163,7 @@ def _coverage_fixture(monkeypatch: pytest.MonkeyPatch) -> sqlite3.Connection:
         CREATE TABLE source_inventory_snapshots (snapshot_id TEXT, inventory_key TEXT, revision INTEGER,
             issuer_id TEXT, ticker TEXT, source_kind TEXT, outcome TEXT, authoritative INTEGER,
             completed_at TEXT, recorded_at TEXT);
-        CREATE TABLE expected_documents (snapshot_id TEXT, period_end TEXT, form_type TEXT, recorded_at TEXT);
+        CREATE TABLE expected_documents (snapshot_id TEXT, period_end TEXT, form_type TEXT, recorded_at TEXT, filing_at TEXT);
     """)
     conn.execute(
         "INSERT INTO research_snapshot_headers VALUES (?,?)",
@@ -1159,8 +1175,8 @@ def _coverage_fixture(monkeypatch: pytest.MonkeyPatch) -> sqlite3.Connection:
         (NOW.isoformat(), NOW.isoformat()),
     )
     conn.execute(
-        "INSERT INTO expected_documents VALUES ('inventory','2026-06-30','10-Q',?)",
-        (NOW.isoformat(),),
+        "INSERT INTO expected_documents VALUES ('inventory','2026-06-30','10-Q',?,?)",
+        (NOW.isoformat(), NOW.isoformat()),
     )
 
     def verify(_conn: sqlite3.Connection, _snapshot_id: str) -> SimpleNamespace:

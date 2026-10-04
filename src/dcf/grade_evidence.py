@@ -224,6 +224,7 @@ def _project_provenance(provenance: dict[str, object]) -> dict[str, object]:
         "inputs_as_of_status",
         "input_clocks",
         "model_input_receipt",
+        "scenario_acceptance",
         "market_price",
         "country_risk_context",
     ):

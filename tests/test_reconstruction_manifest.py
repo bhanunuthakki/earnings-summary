@@ -22,7 +22,7 @@ def test_canonical_manifest_exists_and_passes_deterministic_inventory() -> None:
     receipt = verify_manifest(manifest_path, PROJECT_ROOT)
 
     assert isinstance(receipt, ManifestVerificationReceipt)
-    assert receipt.manifest_version == "2026-08-28.1"
+    assert receipt.manifest_version == "2026-10-04.1"
     assert receipt.workspace_name == "earnings-summary"
     assert receipt.subsystem_count == 11
     assert receipt.all_subsystems_pass is True
@@ -302,7 +302,7 @@ def test_manifest_receipt_generation_to_file(tmp_path: Path) -> None:
 
     assert receipt_file.exists()
     payload = json.loads(receipt_file.read_text(encoding="utf-8"))
-    assert payload["manifest_version"] == "2026-08-28.1"
+    assert payload["manifest_version"] == "2026-10-04.1"
     assert payload["all_subsystems_pass"] is True
     assert payload["dependency_graph_acyclic"] is True
 

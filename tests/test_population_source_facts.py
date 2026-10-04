@@ -1175,3 +1175,19 @@ def test_document_scope_cannot_silently_drop_revision_lineage(conn: sqlite3.Conn
     )
     with pytest.raises(ValueError, match="lineage"):
         populate_source_fact_plane(conn, request)
+
+
+@pytest.mark.parametrize("document_type", ["sec_20f", "sec_6k"])
+def test_sec_bridge_eligibility_requires_an_exact_reviewed_projection(
+    conn: sqlite3.Connection, document_type: str
+) -> None:
+    conn.execute("UPDATE documents SET source_type='sec_xbrl',doc_type=?", (document_type,))
+    conn.execute("UPDATE fact_observation_revisions SET fact_table='kpi_facts'")
+    conn.execute(
+        "UPDATE reported_observations SET dimensions_json=?",
+        ('[{"key":"semantic_status","value":"admitted"}]',),
+    )
+    conn.commit()
+    dry = populate_source_fact_plane(conn, _request())
+    assert dry.expected_count == 1 and dry.eligible_count == 0
+    assert dry.exclusion_counts["unapproved_document_type"] == 1

@@ -540,3 +540,58 @@ def test_sec_authority_fetch_is_exactly_one_request() -> None:
         == b"{}"
     )
     assert session.calls == 1
+
+
+def test_selected_ticker_scope_does_not_bootstrap_other_active_issuers(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = _database(tmp_path, migrated_db)
+    conn = sqlite3.connect(db_path)
+    conn.executemany(
+        "INSERT INTO tracked_companies VALUES (?, 'bhanu', ?, ?, ?, NULL)",
+        ((1, "ONON", "On", "watchlist"), (2, "OTHER", "Other", "portfolio")),
+    )
+    conn.commit()
+    raw = _body(
+        {"cik_str": 1858985, "ticker": "ONON", "title": "On Holding AG"},
+        {"cik_str": 999, "ticker": "OTHER", "title": "Other Corp"},
+    )
+    request = BootstrapRequest(
+        source_url=SOURCE_URL,
+        blob_root=tmp_path / "blobs",
+        apply=True,
+        recorded_at=STAMP,
+        ticker_scope=(" onon ",),
+    )
+    result = bootstrap_issuer_reporting_registry(conn, raw_body=raw, request=request)
+    assert result.selected_tickers == ("ONON",)
+    assert len(result.results) == 1
+    assert result.results[0].normalized_cik == "0001858985"
+    assert conn.execute("SELECT legal_name FROM issuer_profile_revisions").fetchall() == [
+        ("On Holding AG",)
+    ]
+    replay = bootstrap_issuer_reporting_registry(conn, raw_body=raw, request=request)
+    assert replay.records_created == 0
+    conn.close()
+
+
+def test_selected_ticker_scope_cannot_add_an_untracked_security(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    db_path = _database(tmp_path, migrated_db)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    request = BootstrapRequest(
+        source_url=SOURCE_URL,
+        blob_root=tmp_path / "blobs",
+        apply=False,
+        recorded_at=STAMP,
+        ticker_scope=("ONON",),
+    )
+    with pytest.raises(ValueError, match="ticker_scope_not_in_reporting_universe"):
+        bootstrap_issuer_reporting_registry(
+            conn,
+            raw_body=_body({"cik_str": 1858985, "ticker": "ONON", "title": "On Holding AG"}),
+            request=request,
+        )
+    assert conn.execute("SELECT COUNT(*) FROM issuer_entities").fetchone()[0] == 0
+    conn.close()

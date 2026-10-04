@@ -1,8 +1,8 @@
 {
   "ticker": "ONON",
   "name": "On Holding",
-  "last_updated": "2026-10-03",
-  "thesis": "Premium Swiss performance sportswear compounder executing on the 'On Premium Playbook': (1) Structural channel mix shift toward Direct-to-Consumer (DTC sales +34.3% constant currency in Q2'26, expanding DTC share to 45.7% of net sales) driving gross margin to 65.4% (up 390 bps YoY); management raised full-year FY26 gross margin guidance to at least 65.0% and targeted >=65% through 2029 at the September 2026 Investor Day; (2) Strict full-price discipline—zero promotional discounting even during heavily promotional competitor environments; (3) Hyper-growth in Asia-Pacific (+54.7% constant currency in Q2'26, reaching CHF 170.5M) complemented by steady EMEA (+20.5% CC) and Americas (+13.0% CC) expansion; (4) Assortment expansion beyond running shoes: Apparel (+56.2% CC) and Accessories (+102.2% CC) compounding rapidly, with upcoming category entries into Football and Golf; (5) Proprietary manufacturing and performance innovation (LightSpray robotic automation, CloudTec Phase, Helion superfoams) validated by elite athlete partnerships (Zendaya, Roger Federer, Olympic champions); (6) High-quality cash generation: 19.8% Adjusted EBITDA margin in Q2'26 (targeting 22% by 2029) and an inaugural $1B share repurchase program authorized through 2029. Compelling risk/reward at ~13x forward EBITDA.",
+  "last_updated": "2026-10-04",
+  "thesis": "Evaluation thesis: On can compound premium sportswear sales while direct-to-consumer growth, international expansion and product breadth improve operating returns. Q2 2026 reported sales grew 13.5% in CHF and 21.6% at constant currency; DTC reached 45.7% of sales and gross margin reached 65.4%. Management targets at least CHF5.6 billion sales, 65% gross margin and 22% adjusted EBITDA margin in 2029. Those targets require evidence of repeat demand, disciplined distribution and cash returns after store costs, working capital, capital spending and stock compensation. Full-price positioning is a management strategy; zero discounting is not established. APAC and apparel growth support the opportunity, but customer retention, country-level returns and LightSpray unit economics remain unquantified. The $1 billion repurchase is an authorization, not an executed reduction in shares. A position decision remains conditional on a verified source population, attributed forecast assumptions and an adequate margin of safety. Use the explicit five-year cash-rent/SBC model; do not treat adjusted EBITDA as owner cash flow. The saved 9.5% discount rate and 16x terminal default are legacy inputs; the dated reviewed scenario artifact states its own effective rates and terminal assumptions.",
   "verdict": "Evaluation",
   "verdict_color": "green",
   "key_driver": "DTC channel mix expansion, full-price gross margin preservation (>=65%), and APAC/Apparel category scaling",
@@ -19,7 +19,7 @@
     {
       "name": "Constant Currency Net Sales YoY",
       "current": "+21.6% (Q2'26, CHF 850.3M net sales; +13.5% reported CHF)",
-      "prior": "+26.6% (Q1'26)",
+      "prior": "+26.4% (Q1 2026, constant currency; reported Q1 MD&A)",
       "yoy": "+21.6%",
       "status": "Green",
       "break_condition": "<15% constant currency for 2 consecutive quarters",
@@ -46,7 +46,7 @@
     {
       "name": "Asia-Pacific (APAC) Net Sales YoY (CC)",
       "current": "+54.7% (Q2'26, CHF 170.5M; +43.1% reported CHF)",
-      "prior": "+61.5% (Q1'26)",
+      "prior": "+61.4% (Q1 2026, constant currency; reported Q1 MD&A)",
       "yoy": "+54.7%",
       "status": "Green",
       "break_condition": "<25% constant currency for 2 consecutive quarters",
@@ -84,9 +84,9 @@
   ],
   "tier_3_kpis": [
     {
-      "name": "Net Working Capital YoY Growth",
-      "current": "CHF 635.9M as of June 30, 2026 (+11.5% YoY vs +13.5% reported net sales growth)",
-      "source": "6-K Exhibit 99.3 Press Release"
+      "name": "Net Working Capital Growth Since Prior Year End",
+      "current": "CHF635.9M as of June 30, 2026; +11.5% versus CHF570.3M at December 31, 2025. This is not year-over-year growth.",
+      "source": "6-K Exhibit 99.2 MD&A, Net Working Capital; June 30, 2026 versus December 31, 2025"
     }
   ],
   "competitive_watchlist": [
@@ -110,7 +110,7 @@
       "threshold": 60.0,
       "unit": "percent",
       "consecutive_periods": 2,
-      "narrative": "Gross margin falling below 60% indicates promotional discounting and pricing power loss."
+      "narrative": "Gross margin below 60% for two consecutive quarters triggers review of pricing, discounting, channel mix, currency, freight and tariffs. The threshold alone does not establish pricing-power loss."
     },
     {
       "rule_id": "constant_currency_growth_stall",
@@ -129,8 +129,17 @@
     "forecast_years": 5,
     "terminal_multiple": 16.0
   },
-  "flags": ["high_dtc_growth", "premium_pricing_discipline", "founder_led"],
-  "segments": ["Shoes", "Apparel", "Accessories"],
+  "flags": [
+    "high_dtc_growth",
+    "premium_pricing_discipline",
+    "founder_led"
+  ],
+  "segments": [
+    "Shoes",
+    "Apparel",
+    "Accessories"
+  ],
   "operational_kpis": [],
-  "break_rules_soft": []
+  "break_rules_soft": [],
+  "valuation_model": "onon_economic_fcff"
 }
