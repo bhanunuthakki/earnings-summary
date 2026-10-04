@@ -1436,3 +1436,90 @@ def test_disposition_files_excluded_from_population(tmp_path: Path) -> None:
     assert any(
         e.path == "docs/quality/reachability-getattr-dispositions.json" for e in graph.exclusions
     )
+
+
+@pytest.mark.parametrize(
+    ("source", "command"),
+    [
+        ("Makefile", "python3 -m pytest tests/test_first.py tests/test_second.py"),
+        ("Makefile", "pytest tests/test_first.py tests/test_second.py"),
+        (
+            ".github/review.md",
+            "Retain tests/test_first.py tests/test_second.py as separate fixtures.",
+        ),
+        (
+            ".github/review.md",
+            "The copy tests/test_second.py is a fixture, not an executable command.",
+        ),
+    ],
+)
+def test_filename_and_prose_do_not_create_a_launcher_edge(
+    tmp_path: Path, source: str, command: str
+) -> None:
+    root = _repo(tmp_path)
+    _write(root, source, command + "\n")
+    _write(root, "tests/test_first.py", "VALUE = 1\n")
+    _write(root, "tests/test_second.py", "VALUE = 2\n")
+    _track(root, source, "tests")
+    graph = build_graph(root)
+    assert graph.collection_status == "COMPLETE"
+    assert not any(edge.target.startswith("tests/") for edge in graph.edges)
+    assert not {"tests/test_first.py", "tests/test_second.py"} & production_reachable_nodes(graph)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "py tests/test_second.py",
+        "python tests/test_second.py",
+        "python3 -u tests/test_second.py",
+        "/usr/bin/python3 tests/test_second.py",
+        r"C:\Runtime\python.exe -u tests/test_second.py",
+        "/usr/bin/py tests/test_second.py",
+        r"C:\Runtime\py.exe -u tests/test_second.py",
+        "python3 -m tests.test_second",
+    ],
+)
+def test_direct_python_launcher_still_reaches_a_test(tmp_path: Path, command: str) -> None:
+    root = _repo(tmp_path)
+    _write(root, "scripts/check.sh", command + "\n")
+    _write(root, "tests/__init__.py", "")
+    _write(root, "tests/test_second.py", "VALUE = 2\n")
+    _track(root, "scripts", "tests")
+    graph = build_graph(root)
+    assert any(
+        edge.source == "scripts/check.sh"
+        and edge.target == "tests/test_second.py"
+        and edge.kind == "wrapper"
+        for edge in graph.edges
+    )
+    assert "tests/test_second.py" in production_reachable_nodes(graph)
+
+
+def test_real_production_import_and_launch_of_test_remain_reachable(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _write(root, "tests/__init__.py", "")
+    _write(root, "tests/test_first.py", "VALUE = 1\n")
+    _write(root, "tests/test_second.py", "VALUE = 2\n")
+    _write(
+        root,
+        "execution/main.py",
+        "import tests.test_first\n"
+        "import subprocess\n"
+        "subprocess.run('python -u tests/test_second.py')\n",
+    )
+    _track(root, "execution", "tests")
+    graph = build_graph(root)
+    assert any(
+        edge.source == "execution/main.py"
+        and edge.target == "tests/test_first.py"
+        and edge.kind == "import"
+        for edge in graph.edges
+    )
+    assert any(
+        edge.source == "execution/main.py"
+        and edge.target == "tests/test_second.py"
+        and edge.kind == "python_entrypoint"
+        for edge in graph.edges
+    )
+    assert {"tests/test_first.py", "tests/test_second.py"} <= production_reachable_nodes(graph)
