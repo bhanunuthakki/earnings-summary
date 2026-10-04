@@ -19,12 +19,13 @@ Env-driven so a driver can fan out over tickers:
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import sys
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import closing
+from contextlib import ExitStack, closing
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
@@ -60,12 +61,28 @@ from dcf import (
 )
 from dcf import global_assumptions as global_dcf
 from dcf import redesign as redesign_mod
+from dcf.artifact_promotion import DcfRecoveryError, hold_dcf_artifacts
 from dcf.fiscal_periods import detect_fy_periods
+from runtime.job_runtime import JobAlreadyRunningError
 from sources.dcf_statements import read_dcf_statements
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
 FMP = REPO / "data" / "historical" / "fmp"
+ticker = os.environ.get("DCF_TICKER", "AMZN")
+# This file is a process entrypoint. ExitStack releases ownership on normal
+# completion, SystemExit and uncaught exceptions; a killed process is recovered
+# by the shared lock owner's process-start checks.
+_ARTIFACT_SCOPE = ExitStack()
+atexit.register(_ARTIFACT_SCOPE.close)
+try:
+    _ARTIFACT_SCOPE.enter_context(hold_dcf_artifacts(REPO, ticker, owner="dcf-builder", wait_s=0))
+except JobAlreadyRunningError:
+    print(f"BLOCKED\t{ticker}\tdcf_writer_busy", file=sys.stderr)
+    raise SystemExit(75) from None
+except DcfRecoveryError:
+    print(f"BLOCKED\t{ticker}\tdcf_recovery_required", file=sys.stderr)
+    raise SystemExit(2) from None
 DATABASE_PATH = require_db_path()
 
 # Global macro DCF assumptions — the editable single default for the inputs that
@@ -323,7 +340,9 @@ if SINGLE_SEG and _cov.reason and _cov.reason.startswith("coverage"):
 # builder defines those segments, splits base-year (income-statement) revenue by
 # base_pct, and drives per-segment growth from the block. An invalid/absent block
 # falls back to the FMP set, logging the reason loudly (never silently half-applied).
-_cache_for_seg = REPO / "data" / "dcf_assumptions" / f"{ticker}.json"
+_cache_for_seg = Path(
+    os.environ.get("DCF_ASSUMPTIONS_PATH") or REPO / "data" / "dcf_assumptions" / f"{ticker}.json"
+)
 _assumptions = (
     _OBJECT.validate_json(_cache_for_seg.read_text(encoding="utf-8"))
     if _cache_for_seg.exists()
@@ -544,7 +563,7 @@ cda0 = CAPEX_2026_M / _da_2026
 capex_da = fade(cda0, 1.05)
 nwc_pct = [0.005] * N_FC
 
-cache = REPO / "data" / "dcf_assumptions" / f"{ticker}.json"
+cache = _cache_for_seg
 narr = _text(_assumptions.get("narrative", ""))
 try:
     con = connect_sqlite(str(DATABASE_PATH), role=SQLiteConnectionRole.READ_ONLY)
@@ -772,7 +791,6 @@ beta = BETA
 ke = RF + beta * ERP + CRP
 mktcap = price * shares_now
 we = mktcap / (mktcap + debt_now) if (mktcap + debt_now) else 1.0
-wacc0 = we * ke + (1 - we) * KD * (1 - TAX)
 
 
 # Dashboard control defaults: per-segment growth collapses to 2 points (near-term
@@ -969,67 +987,61 @@ WEIGHTS = _weights(
 )
 
 
-def _seg_g(s: str, j: int) -> float:  # convex near->terminal fade (curvature = consensus-fit CURV)
-    frac = ((N_FC - 1 - j) / (N_FC - 1)) ** CURV
-    return gT_def[s] + (g1_def[s] - gT_def[s]) * frac
-
-
-def _oim(j: int) -> float:  # ramp to terminal by the end of the consensus window, then hold
-    return margin_near_def + (margin_term_def - margin_near_def) * min(1.0, j / (ncons - 1))
-
-
-def _sbc_pct(j: int) -> float:  # linear near->terminal fade of the SBC % of revenue
-    return SBC_NEAR + (SBC_TERM - SBC_NEAR) * j / (N_FC - 1)
-
-
-def _project() -> tuple[list[float], list[float], list[float], list[float]]:
-    seg = {s: seg_ann[ly][s] for s in PROD}
-    prev = sum(seg.values())
-    rev: list[float] = []
-    oi: list[float] = []
-    da: list[float] = []
-    vf: list[float] = []
-    for j in range(N_FC):
-        for s in PROD:
-            seg[s] *= 1 + _seg_g(s, j)
-        rr = sum(seg.values())
-        ebit = rr * _oim(j)
-        nop = ebit * (1 - TAX)
-        d, cx, nw = rr * da_pct[j], rr * da_pct[j] * capex_da[j], (rr - prev) * nwc_pct[j]
-        # Explicit after-tax SBC charge (op margin is NON-GAAP / SBC-excluded).
-        sbc_at = _sbc_pct(j) * rr * (1 - TAX)
-        rev.append(rr)
-        oi.append(ebit)
-        da.append(d)
-        vf.append(nop + d - cx - nw - sbc_at)
-        prev = rr
-    return rev, oi, da, vf
-
-
-rev_p, oi_p, da_p, vf_p = _project()
-# mirror the workbook's SELECTED terminal (Opus may pick perpetuity), then FX -> USD
-# EV/EBITDA is BURDENED by terminal-year SBC so the exit multiple applies to real
-# (SBC-charged) EBITDA — consistent with charging SBC as an operating expense.
-_sbc_term_M = _sbc_pct(N_FC - 1) * rev_p[-1]
-_tmetric = {
-    "EV/EBITDA": oi_p[-1] - _sbc_term_M + da_p[-1],
-    "EV/Sales": rev_p[-1],
-    "EV/EBIT": oi_p[-1],
-    "EV/FCF": vf_p[-1],
-}.get(OPUS_BASIS, oi_p[-1] + da_p[-1])
-_tv_exit = _tmetric * EXIT_MULT
-_tv_perp = vf_p[-1] * (1 + TG) / (wacc0 - TG) if wacc0 > TG else _tv_exit
-_tv = _tv_exit  # New workbooks default to exit multiple; perpetuity is a cross-check.
-full_value = (
-    (
-        sum(vf_p[t] / (1 + wacc0) ** (t + 1) for t in range(N_FC))
-        + _tv / (1 + wacc0) ** N_FC
-        + cash_now
-        - debt_now
-    )
-    / shares_now
-    * FX
+CYEARS = [y for y in FC_YEARS if y in est_by_year][:6]
+_inp = redesign_mod.RedesignInputs(
+    segments=tuple(PROD),
+    base_revenue_by_segment={s: seg_ann[ly][s] for s in PROD},
+    near_growth_by_segment=dict(g1_def),
+    terminal_growth_by_segment=dict(gT_def),
+    near_op_margin=margin_near_def,
+    terminal_op_margin=margin_term_def,
+    tax_rate=TAX,
+    capex_2026_m=CAPEX_2026_M,
+    terminal_capex_da=capex_da[-1],
+    da_ratio=ratios_ly["da"],
+    # The reader derives this from the Consensus sheet's year headers (≤6
+    # columns), so mirror that here — keeps these static cells byte-identical
+    # to what the first refresh would rewrite.
+    consensus_years=max(2, min(N_FC, len(CYEARS))),
+    wacc=redesign_mod.derive_wacc(
+        risk_free_rate=RF,
+        beta=BETA,
+        equity_risk_premium=ERP,
+        country_risk_premium=CRP,
+        cost_of_debt=KD,
+        tax_rate=TAX,
+        current_price=price,
+        diluted_shares_m=shares_now,
+        total_debt_m=debt_now,
+    ),
+    beta=BETA,
+    risk_free_rate=RF,
+    equity_risk_premium=ERP,
+    cost_of_debt=KD,
+    country_risk_premium=CRP,
+    growth_fade_curvature=CURV,
+    near_sbc_pct=SBC_NEAR,
+    terminal_sbc_pct=SBC_TERM,
+    terminal_method=OPUS_METHOD,
+    terminal_basis=OPUS_BASIS,
+    exit_multiple=EXIT_MULT,
+    terminal_growth_g=TG,
+    current_price=price,
+    cash_m=cash_now,
+    total_debt_m=debt_now,
+    diluted_shares_m=shares_now,
+    fx_to_usd=FX,
+    bull_deltas=BULL_D,
+    bear_deltas=BEAR_D,
 )
+_streams = redesign_mod.project(_inp)
+_value = redesign_mod.value(_inp)
+rev_p, oi_p, da_p, vf_p = _streams.revenue, _streams.ebit, _streams.da, _streams.valuation_fcf
+full_value = _value.value_per_share_usd
+wacc0 = _inp.wacc
+# The reduced Monte Carlo model is an approximation calibrated to this accepted
+# base value. Its capex start uses the same first model-year D&A as the workbook.
+cda0 = CAPEX_2026_M / (da_p[0] or 1.0)
 
 ann_rev = [fy_sum_raw(income_by_period, "revenue", y) for y in full_fys]
 ann_g = [ann_rev[i] / ann_rev[i - 1] - 1 for i in range(1, len(ann_rev)) if ann_rev[i - 1]]
@@ -1689,7 +1701,6 @@ for e in analyst_estimates:
         est_by_year[int(str(e.get("date"))[:4])] = e
     except (TypeError, ValueError):
         pass
-CYEARS = [y for y in FC_YEARS if y in est_by_year][:6]
 put(cs, 1, 1, "Full consensus check — model vs Street (FMP estimates, $M)", bold=True).font = TITLE
 put(cs, 2, 1, "Fiscal year", bold=True)
 for j, y in enumerate(CYEARS):
@@ -2382,44 +2393,8 @@ cv.merge_cells("A27:B43")
 # ===== Scenarios + Sensitivity (Python-computed static cells) =====
 # One engine (src/dcf/redesign.py) serves both the builder and the refresher, so
 # the fresh-build cells and the post-edit refresh rewrites can never drift. The
-# WACC here mirrors the reader's derivation exactly (CAPM + market-value weights
-# with the FINAL tax rate — wacc0 above predates a possible Opus tax override).
-_inp = redesign_mod.RedesignInputs(
-    segments=tuple(PROD),
-    base_revenue_by_segment={s: seg_ann[ly][s] for s in PROD},
-    near_growth_by_segment=dict(g1_def),
-    terminal_growth_by_segment=dict(gT_def),
-    near_op_margin=margin_near_def,
-    terminal_op_margin=margin_term_def,
-    tax_rate=TAX,
-    capex_2026_m=CAPEX_2026_M,
-    terminal_capex_da=capex_da[-1],
-    da_ratio=ratios_ly["da"],
-    # The reader derives this from the Consensus sheet's year headers (≤6
-    # columns), so mirror that here — keeps these static cells byte-identical
-    # to what the first refresh would rewrite.
-    consensus_years=max(2, min(N_FC, len(CYEARS))),
-    wacc=we * ke + (1 - we) * KD * (1 - TAX),
-    beta=BETA,
-    risk_free_rate=RF,
-    equity_risk_premium=ERP,
-    cost_of_debt=KD,
-    country_risk_premium=CRP,
-    growth_fade_curvature=CURV,
-    near_sbc_pct=SBC_NEAR,
-    terminal_sbc_pct=SBC_TERM,
-    terminal_method=OPUS_METHOD,
-    terminal_basis=OPUS_BASIS,
-    exit_multiple=EXIT_MULT,
-    terminal_growth_g=TG,
-    current_price=price,
-    cash_m=cash_now,
-    total_debt_m=debt_now,
-    diluted_shares_m=shares_now,
-    fx_to_usd=FX,
-    bull_deltas=BULL_D,
-    bear_deltas=BEAR_D,
-)
+# Final typed inputs already own headline, projection, scenarios and sensitivity.
+
 _sv = redesign_mod.scenario_values(_inp)
 redesign_mod.write_scenario_fair_values(wb, _sv)
 redesign_mod.write_sensitivity_sheet(wb, redesign_mod.sensitivity_grid(_inp))

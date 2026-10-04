@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict
 
 from compute.thesis_evaluator import KpiObservation, evaluate_rule, fetch_kpi_observations
 from decision_conditions import DecisionCondition as StoredDecisionCondition
-from decision_conditions import conditions_from_json, fetch_financial_history
+from decision_conditions import conditions_from_json, read_financial_condition
 from models.kpis import BreachStatus
 from triggers.decision_condition import condition_to_rule
 
@@ -73,6 +73,7 @@ class DecisionCondition(BaseModel):
     evidence_ref: str
     status_detail: str | None = None
     origin: Literal["owner", "model"] = "model"
+    financial_source_manifest: dict[str, object] | None = None
 
 
 class _DecisionConditionFields(TypedDict):
@@ -214,19 +215,35 @@ def project_decision_condition(
             evidence_ref=f"condition:invalid:{condition.metric}",
             status_detail="Condition parameters are invalid; it cannot be evaluated.",
         )
+    financial_manifest: dict[str, object] | None = None
+    financial_reason: str | None = None
+    history = None
     try:
-        observations = (
-            fetch_kpi_observations(conn, ticker, condition.metric, condition.for_periods)
-            if condition.metric_source == "kpi"
-            else fetch_financial_history(conn, ticker, condition.metric, condition.for_periods)
-        )
-    except sqlite3.Error:
+        if condition.metric_source == "kpi":
+            observations = fetch_kpi_observations(
+                conn, ticker, condition.metric, condition.for_periods
+            )
+        else:
+            history = read_financial_condition(conn, ticker, condition, cutoff=as_of)
+            observations = history.observations
+            financial_manifest = history.manifest()
+            financial_reason = history.reason
+    except (sqlite3.Error, ValueError):
         observations = None
+        financial_reason = (
+            "financial_history_unavailable" if condition.metric_source == "financial" else None
+        )
     evaluation = evaluate_rule(rule, observations)
     latest = evaluation.observations[0] if evaluation.observations else None
     evidence_ref = _latest_evidence_ref(
         condition.metric_source, condition.metric, evaluation.observations
     )
+    if condition.metric_source == "financial":
+        evidence_ref = (
+            "canonical-financial:" + history.sources.points[-1].observation.observation_id
+            if observations and history is not None and history.sources and history.sources.points
+            else f"condition:unavailable:{condition.metric}"
+        )
     (
         prior_value,
         prior_observation_period,
@@ -235,7 +252,7 @@ def project_decision_condition(
         observation_comparison,
     ) = _observation_comparison(evaluation.observations)
     status: Literal["OK", "WATCH", "BREACH", "PENDING DATA"]
-    detail = evaluation.detail
+    detail = financial_reason or evaluation.detail
     not_before = condition.not_before[:10] if condition.not_before else "an invalid date"
     if _is_future_not_before(condition.not_before, as_of):
         status = "PENDING DATA"
@@ -270,6 +287,7 @@ def project_decision_condition(
         observation_comparison=observation_comparison,
         evidence_ref=evidence_ref,
         status_detail=detail,
+        financial_source_manifest=financial_manifest,
     )
 
 

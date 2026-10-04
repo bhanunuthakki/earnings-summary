@@ -277,7 +277,7 @@ def test_report_canonical_cell_links_exact_evidence_without_legacy_document(
     assert reference == _evidence_reference(cell)
     evidence = read_financial_evidence(database, reference)
     assert evidence == cell
-    assert evidence is not None
+    assert isinstance(evidence, FinancialTableCell)
     assert evidence.provenance is not None and evidence.provenance.evidence is not None
     assert evidence.display_value == 100
     assert evidence.provenance.observation.unit_key == "USD"
@@ -684,7 +684,11 @@ def test_restatement_changes_selected_observation_only_after_knowledge_cutoff(
     from tests.test_canonical_financial_peek import content_client
 
     original = seed_table(
-        database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100000000", "USD")]
+        database,
+        [
+            ("revenue", "2025-01-01", "2025-03-31", "Q1", "100000000", "USD"),
+            ("revenue", "2025-04-01", "2025-06-30", "Q2", "150000000", "USD"),
+        ],
     )[0]
     revised_at = STAMP + timedelta(days=1)
     locator = CanonicalJSONObject.model_validate({"path": "/restated/revenue"})
@@ -745,13 +749,21 @@ def test_restatement_changes_selected_observation_only_after_knowledge_cutoff(
     database.commit()
     before = financials.build("SYNTH", tmp_path, conn=database, as_of=STAMP)
     after = financials.build("SYNTH", tmp_path, conn=database, as_of=revised_at)
-    assert before.line_items[0].values == [100.0]
-    assert after.line_items[0].values == [110.0]
+    assert before.line_items[0].values == [100.0, 150.0]
+    assert after.line_items[0].values == [110.0, 150.0]
     assert (
         before.canonical_financial_table is not None and after.canonical_financial_table is not None
     )
-    prior = before.canonical_financial_table.cells[0]
-    latest = after.canonical_financial_table.cells[0]
+    prior = next(
+        cell
+        for cell in before.canonical_financial_table.cells
+        if cell.display_coordinate == "2025 Q1"
+    )
+    latest = next(
+        cell
+        for cell in after.canonical_financial_table.cells
+        if cell.display_coordinate == "2025 Q1"
+    )
     assert prior.provenance is not None and latest.provenance is not None
     assert prior.provenance.observation.observation_id == original.observation.observation_id
     assert latest.provenance.observation.observation_id == observation.observation_id
@@ -785,6 +797,22 @@ def test_restatement_changes_selected_observation_only_after_knowledge_cutoff(
     )
     assert unavailable.status_code == 404 and "100000000" not in unavailable.text
     assert len(reads) == 3
+    prior_growth = before.line_items[0].growth_evidence["qoq"]
+    latest_growth = after.line_items[0].growth_evidence["qoq"]
+    old_result = financials.read_growth_evidence(database, prior_growth)
+    new_result = financials.read_growth_evidence(database, latest_growth)
+    assert old_result is not None and old_result[0] == pytest.approx(0.5)
+    assert new_result is not None and new_result[0] == pytest.approx(150 / 110 - 1)
+    assert prior_growth.inputs[0].observation_id == original.observation.observation_id
+    assert latest_growth.inputs[0].observation_id == observation.observation_id
+    changed_growth_cutoff = prior_growth.model_copy(
+        update={
+            "inputs": tuple(
+                point.model_copy(update={"as_of": revised_at}) for point in prior_growth.inputs
+            )
+        }
+    )
+    assert financials.read_growth_evidence(database, changed_growth_cutoff) is None
 
 
 def test_per_metric_uses_same_selected_evidence_and_capex_key(
@@ -837,7 +865,7 @@ def test_definition_change_invalidates_current_use_but_preserves_as_known(
     source = prior.line_items[0].sources_full[0]
     assert source is not None and source.canonical_reference is not None
     evidence = read_financial_evidence(database, source.canonical_reference)
-    assert evidence is not None and evidence.display_value == 100
+    assert isinstance(evidence, FinancialTableCell) and evidence.display_value == 100
     assert (
         read_financial_evidence(
             database, source.canonical_reference.model_copy(update={"as_of": later})

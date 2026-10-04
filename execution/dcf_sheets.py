@@ -33,25 +33,30 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import sys
 from datetime import date
 from pathlib import Path
 from typing import cast
 
+import refresh_dcf
+
+from db_paths import configured_db_path, require_db_path
+from dcf.artifact_promotion import DcfRecoveryError, hold_dcf_artifacts, unique_staged_path
+from integrations import gsheets
+from runtime.job_runtime import JobAlreadyRunningError
+from ticker_validation import safe_ticker
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling execution/ modules
-
-import refresh_dcf  # noqa: E402
-
-from integrations import gsheets  # noqa: E402
-
 DCF_DIR_NAME = "dcf"
 STAGING_DIR = Path("data") / "dcf_sheets"
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    if args.command in {"import", "export"}:
+        try:
+            args.ticker = safe_ticker(args.ticker)
+        except ValueError:
+            return _emit({"status": "error", "reason": "invalid ticker"}, code=2)
     if args.command == "export":
         return _run_export(args)
     if args.command == "import":
@@ -66,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
 # --------------------------------------------------------------------------- #
 def _run_export(args: argparse.Namespace) -> int:
     repo_root = args.repo_root.resolve()
-    ticker = args.ticker.upper()
+    ticker = safe_ticker(args.ticker)
     xlsx = repo_root / DCF_DIR_NAME / f"{ticker}.xlsx"
     if not xlsx.exists():
         return _emit(
@@ -96,16 +101,33 @@ def _run_export(args: argparse.Namespace) -> int:
             code=2,
         )
 
+    snapshot = unique_staged_path(xlsx, "export")
     try:
+        with hold_dcf_artifacts(repo_root, ticker, owner="dcf-export-snapshot", wait_s=0):
+            shutil.copyfile(xlsx, snapshot)
         result = gsheets.export_workbook(
-            xlsx,
+            snapshot,
             title=f"DCF — {ticker}",
             sheet_id=existing_id,
             share_with=args.share_with,
             repo_root=repo_root,
         )
-    except gsheets.GSheetsError as e:
+    except (gsheets.GSheetsError, OSError) as e:
         return _emit({"ticker": ticker, "status": "error", "reason": str(e)}, code=3)
+    except DcfRecoveryError as e:
+        return _emit(
+            {
+                "ticker": ticker,
+                "status": "blocked",
+                "reason": "dcf_recovery_required",
+                "detail": str(e),
+            },
+            code=2,
+        )
+    except JobAlreadyRunningError:
+        return _emit({"ticker": ticker, "status": "blocked", "reason": "dcf_writer_busy"}, code=75)
+    finally:
+        snapshot.unlink(missing_ok=True)
 
     holdings_updated = _set_gsheet_id(holdings_path, result.sheet_id)
     payload: dict[str, object] = {
@@ -128,39 +150,53 @@ def _run_export(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 def _run_import(args: argparse.Namespace) -> int:
     repo_root = args.repo_root.resolve()
-    ticker = args.ticker.upper()
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
-        return _emit({"ticker": ticker, "status": "error", "reason": f"no DB at {db_path}"}, code=2)
-
+    ticker = safe_ticker(args.ticker)
+    try:
+        db_path = require_db_path(configured_db_path(repo_root))
+    except (RuntimeError, FileNotFoundError) as exc:
+        return _emit({"ticker": ticker, "status": "error", "reason": str(exc)}, code=2)
     dest = repo_root / DCF_DIR_NAME / f"{ticker}.xlsx"
     source, sheet_id, err = _resolve_source_xlsx(args, repo_root, ticker)
     if err is not None:
         return _emit({"ticker": ticker, "status": "error", "reason": err}, code=3)
     assert source is not None
-
-    # Place the pulled workbook at the canonical path so the served /dcf/<T> route
-    # and the next refresh both see the user's edits. Skip the copy if --file
-    # already points at the canonical workbook.
-    if source.resolve() != dest.resolve():
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, dest)
-
-    # Recompute in-process: refresh_one reads the edited Forecast INPUTS, recomputes
-    # the Valuation, and upserts dcf_runs (the same chain `refresh_dcf` runs).
-    refresh = refresh_dcf.refresh_one(
-        ticker, repo_root, db_path, valuation_year=args.valuation_year
-    )
+    try:
+        with hold_dcf_artifacts(repo_root, ticker, owner="dcf-import", wait_s=0):
+            candidate = unique_staged_path(dest, "import")
+            shutil.copyfile(source, candidate)
+            refresh = refresh_dcf.refresh_one(
+                ticker,
+                repo_root,
+                db_path,
+                valuation_year=args.valuation_year,
+                input_workbook=candidate,
+            )
+    except JobAlreadyRunningError:
+        refresh = {"status": "blocked", "reason": "dcf_writer_busy"}
+    except DcfRecoveryError as exc:
+        refresh = {"status": "blocked", "reason": "dcf_recovery_required", "detail": str(exc)}
+    except OSError as exc:
+        refresh = {"status": "failed", "reason": "dcf_import_stage_failed", "detail": str(exc)}
+    finally:
+        if args.file is None:
+            source.unlink(missing_ok=True)
     status = str(refresh.get("status"))
     payload: dict[str, object] = {
         "ticker": ticker,
-        "status": "ok" if status == "ok" else "failed",
+        "status": "ok"
+        if status == "ok"
+        else "committed_cleanup_failed"
+        if status == "committed_cleanup_failed"
+        else "failed",
         "source": str(source),
         "sheet_id": sheet_id,
         "workbook": str(dest),
         "refresh": refresh,
     }
-    return _emit(payload, code=0 if status == "ok" else 1)
+    return _emit(
+        payload,
+        code=0 if status == "ok" else 75 if refresh.get("reason") == "dcf_writer_busy" else 1,
+    )
 
 
 def _resolve_source_xlsx(
@@ -189,10 +225,11 @@ def _resolve_source_xlsx(
             "no Sheet id — pass --sheet-id/--file, or `export` first to link one in holdings",
         )
 
-    staging = repo_root / STAGING_DIR / f"{ticker}_from_sheet.xlsx"
+    staging = unique_staged_path(repo_root / STAGING_DIR / f"{ticker}.xlsx", "download")
     try:
         gsheets.download_sheet_xlsx(sheet_id, staging, repo_root=repo_root)
-    except gsheets.GSheetsError as e:
+    except (gsheets.GSheetsError, OSError) as e:
+        staging.unlink(missing_ok=True)
         return None, sheet_id, str(e)
     return staging, sheet_id, None
 

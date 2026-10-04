@@ -27,6 +27,8 @@ from typing import cast
 
 from models.facts import FactLocator, LocatorKind
 from report.models import CellSource
+from sources.canonical_financial_series import FinancialConsumerPoint, FinancialConsumerSeries
+from sources.report_financials import financial_series_reference
 
 SOURCE_CHIP_ABBREV: dict[str, str] = {
     "sec_official": "SEC",
@@ -133,6 +135,9 @@ def viewer_href(src: CellSource) -> str | None:
     deep link (Phase B). None when the cell carries neither a
     fact_id-bearing peek target nor a document id.
     """
+    if src.calculation_reference is not None:
+        query = urllib.parse.urlencode({"reference": src.calculation_reference.model_dump_json()})
+        return f"/api/peek/financial-calculation?{query}"
     if src.canonical_reference is not None:
         query = urllib.parse.urlencode({"reference": src.canonical_reference.model_dump_json()})
         return f"/api/peek/canonical-financial?{query}"
@@ -244,7 +249,11 @@ def source_chip_html(src: CellSource, *, link_only: bool = False) -> str:
     in-app /source viewer (P4.3) plus the original document URL.
     """
     abbrev = SOURCE_CHIP_ABBREV.get(src.source, src.source[:3].upper() or "?")
-    hint = _locator_hint(src, _parse_locator(src.locator))
+    hint = (
+        f"{len(src.calculation_reference.inputs)} inputs"
+        if src.calculation_reference is not None
+        else _locator_hint(src, _parse_locator(src.locator))
+    )
     chip_label = f"{abbrev} · {hint}" if hint else abbrev
     tier_slug = src.source.replace("_", "-")
     pct = confidence_pct(src)
@@ -297,7 +306,9 @@ def source_chip_html(src: CellSource, *, link_only: bool = False) -> str:
         )
     low_cls = " src-lowconf" if low_conf else ""
     peek_viewer = (
-        viewer + "&fragment=1" if src.canonical_reference is not None and viewer else viewer
+        viewer + "&fragment=1"
+        if (src.canonical_reference is not None or src.calculation_reference is not None) and viewer
+        else viewer
     )
     peek_attrs = (
         f' data-peek-url="{_esc(peek_viewer)}" data-peek-title="{_esc(source_hover_title(src))}"'
@@ -377,10 +388,13 @@ SOURCE_CHIP_JS = r"""
       }
     } catch (e) {}
     document.querySelectorAll('a[href^="/api/peek/canonical-financial?"], '
-      + '[data-peek-url^="/api/peek/canonical-financial?"]').forEach(function (el) {
+      + '[data-peek-url^="/api/peek/canonical-financial?"], '
+      + 'a[href^="/api/peek/financial-calculation?"], '
+      + '[data-peek-url^="/api/peek/financial-calculation?"]').forEach(function (el) {
       ['href', 'data-peek-url'].forEach(function (attr) {
         var path = el.getAttribute(attr);
-        if (!path || path.indexOf('/api/peek/canonical-financial?') !== 0) return;
+        if (!path || (path.indexOf('/api/peek/canonical-financial?') !== 0
+          && path.indexOf('/api/peek/financial-calculation?') !== 0)) return;
         if (origin) el.setAttribute(attr, origin + path);
         else {
           el.removeAttribute(attr);
@@ -401,3 +415,26 @@ SOURCE_CHIP_JS = r"""
   });
 })();
 """
+
+
+def financial_consumer_source(
+    point: FinancialConsumerPoint, result: FinancialConsumerSeries
+) -> CellSource:
+    """Use the admitted series identity for both display and click-through."""
+    item, series = point.observation, result.series
+    reference = financial_series_reference(
+        point,
+        ticker=series.ticker,
+        cutoff=series.cutoff,
+        cadence=series.cadence,
+        continuity=series.continuity,
+    )
+    return CellSource(
+        source=point.source_kind or "canonical_reported",
+        source_url=point.source_url,
+        doc_id=point.legacy_document_id,
+        locator=json.dumps(item.source_locator),
+        fetched_at=point.source_retrieved_at.isoformat() if point.source_retrieved_at else None,
+        canonical_reference=reference,
+        issues=list(point.qualifications),
+    )

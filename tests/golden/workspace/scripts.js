@@ -768,10 +768,13 @@ ${r?'Expression: "'+r+`"
       }
     } catch (e) {}
     document.querySelectorAll('a[href^="/api/peek/canonical-financial?"], '
-      + '[data-peek-url^="/api/peek/canonical-financial?"]').forEach(function (el) {
+      + '[data-peek-url^="/api/peek/canonical-financial?"], '
+      + 'a[href^="/api/peek/financial-calculation?"], '
+      + '[data-peek-url^="/api/peek/financial-calculation?"]').forEach(function (el) {
       ['href', 'data-peek-url'].forEach(function (attr) {
         var path = el.getAttribute(attr);
-        if (!path || path.indexOf('/api/peek/canonical-financial?') !== 0) return;
+        if (!path || (path.indexOf('/api/peek/canonical-financial?') !== 0
+          && path.indexOf('/api/peek/financial-calculation?') !== 0)) return;
         if (origin) el.setAttribute(attr, origin + path);
         else {
           el.removeAttribute(attr);
@@ -2289,10 +2292,13 @@ ${r?'Expression: "'+r+`"
             buildControls();
           }
           if (res.body.sensitivity) { renderScenarios(res.body); renderHeatmap(res.body.sensitivity); }
-          setStatus('Saved to model.', 'ok');
+          setStatus(res.body.recovery_required
+            ? 'Saved to model. Backup cleanup failed; further saves require recovery.'
+            : 'Saved to model.', res.body.recovery_required ? 'warn' : 'ok');
         } else {
           dirty = true;
-          setStatus('Earlier inputs saved. Current edits are unsaved.' + previewNote(), 'warn');
+          setStatus('Earlier inputs saved. Current edits are unsaved.' + previewNote()
+            + (res.body.recovery_required ? ' Backup cleanup failed; further saves require recovery.' : ''), 'warn');
         }
       }
       CCAction.receipt(elSave, '✓ Saved');

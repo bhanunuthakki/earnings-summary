@@ -1,5 +1,5 @@
 {
-  "review_note": "Independent GPT-6.1 Sol advisory semantic source review 2026-10-03 findings SHA256 3157796841bf89bc7f05a1705e97d1b9a6cdd33ee5e3caa3d41efcc1b6ee494c: exact main calculated-thesis and governed KPI contract; canonical LLM train/test/promotion rules remain delegated; scheduler receipt roots preserve host authority; long filename fallback requires coordinated sole-writer rollout without mixed versions. Five exact source hashes reviewed. No installation, native or model-readiness claim.",
+  "review_note": "Independent GPT-6.1 Sol advisory semantic review of main5f financial consumers/artifact ownership and configured evaluation writer; findings SHA256 97053643bb0240aaed5c64ee885a7c25f202437d58065fae1b41ed3536e27653. Corrected fixed-list writer warning retains required explicit approved DB configuration and resolver fallback warning. Exact13 owner identities reviewed. Selected-row current_projection/partial is not canonical admission; independent DB/artifact roots and recovery-required DCF writes remain explicit. Source review only; no native, installation, financial/model acceptance.",
   "schema_version": 1,
   "sources": [
     {
@@ -20,11 +20,11 @@
     },
     {
       "path": "directives/data_pipeline_dag.md",
-      "sha256": "4b6e75808bd3ae6b891489558aa570488f2ad3f4657e039f5f7442c509f19b42"
+      "sha256": "cef764c3b26951ba529f1ea2b0ebb47c63a995d206e377c25a54611d9e8cc69d"
     },
     {
       "path": "directives/data_provenance.md",
-      "sha256": "c95c24b2ad5f0601a7d7f50dbb912e6a2554ac0089b1a6c73073d3064fe85241"
+      "sha256": "0a4698ba005a3d22d688df36e5b633c652c412f1bf9e65210a15392b668428b9"
     },
     {
       "path": "directives/dcf_gsheets_setup.md",
@@ -40,7 +40,7 @@
     },
     {
       "path": "directives/folder_structure.md",
-      "sha256": "a836fbe51b30aea858b08d5b2b5ae34c0f087ca8266bb0408c896faecb9aa9ea"
+      "sha256": "f14a474be797afe4d4a4027105c42b018fd2878cf4eaaa1dc33f259d02916ccd"
     },
     {
       "path": "directives/holdings_json_schema.md",
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "974d033678b84a78659795129972b899b1344e51b7b799b0a98e84951ee6838e"
+      "sha256": "d3ef4f9e7f812954a93e25bf27a97a05f743a76ffd1a60c40d27ae26f5c44e5e"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -128,7 +128,7 @@
     },
     {
       "path": "execution/comments_server.py",
-      "sha256": "8eb0b61739d4d460e116f6f33fb11b2eeac3b5a5c6158d96732271c0cffa3e22"
+      "sha256": "9d0d6c278983624242a9711cdba2c0529e7558fc2d2251c802b2df088debbae3"
     },
     {
       "path": "execution/comments_server_research_routes.py",
@@ -136,7 +136,7 @@
     },
     {
       "path": "execution/dcf_sheets.py",
-      "sha256": "822d6b58d3a020cd1a2304fcb8ec10e37c05fa0c0be3af600ce7649a328ace34"
+      "sha256": "c8bab3d1f35489f19e819ecc2fd7d589b201d8fd64acb9633c81dad5a52c021f"
     },
     {
       "path": "execution/fetch_etf_data.py",
@@ -204,7 +204,7 @@
     },
     {
       "path": "execution/refresh_dcf.py",
-      "sha256": "2710b176e17a24f26c8f47028c786199f1790e7987a5dd55af836c5689898edd"
+      "sha256": "54f41032754c5a7da3aa1569c37f090e3710ff3ca1ee7aa0557314cafdf70075"
     },
     {
       "path": "execution/refresh_portfolio_risk_snapshot.py",
@@ -232,7 +232,7 @@
     },
     {
       "path": "execution/track_evaluation_names.py",
-      "sha256": "b887195a009dbd3b07d5597c9c8b9982a38a06edf378dde43ae8a70d20767326"
+      "sha256": "e8c153ddf82d9becf9f9bd431d7a686b56cad44f5630e8a969ef5add81a557bb"
     },
     {
       "path": "execution/valuation_preflight.py",
@@ -280,7 +280,7 @@
     },
     {
       "path": "src/compute/thesis_evaluator.py",
-      "sha256": "483853a6393fc4352948247ac0619f4706611b512db2ccf3ec22f9e6d6a15f16"
+      "sha256": "21a9efeacb30c5fe75f0408caf411c5751bd1d02c6b73bb7be105b6da78c6b29"
     },
     {
       "path": "src/dcf/grade_evidence.py",
@@ -292,11 +292,11 @@
     },
     {
       "path": "src/earnings_brief.py",
-      "sha256": "35da7107897e23d559345f2e316d81e4ebd06a5cf1020e307f395161d44451f1"
+      "sha256": "2329dcb3e67d6461c73f51ef91ef42ca05bceec33689e865a34e67a57b1c4dec"
     },
     {
       "path": "src/earnings_readout.py",
-      "sha256": "50d9d6884e72a1a76fd6a543e83a0a1274e7ee45649adf2aef10f361c0712402"
+      "sha256": "6afea330b4093dcde0f5391739b507e242b150e46b601cc968d5843ac647df21"
     },
     {
       "path": "src/evals/coverage.py",
@@ -308,11 +308,11 @@
     },
     {
       "path": "src/integrations/portfolio_tracker_client.py",
-      "sha256": "5ea9c0fdc38c9634c334eb6fd8b06aaf8f7aa0d219d5654c13bffbafa1fc1a62"
+      "sha256": "f46e9dd651fa845148184a85a85f30d0c7bb3c578afa1aa0c761bd930902bd50"
     },
     {
       "path": "src/integrations/portfolio_tracker_v1.py",
-      "sha256": "87716d99214585550b73653a6ef4359a20423a63b8f7a3c5a67d5c72bbe43635"
+      "sha256": "04b84d26157474ea8549fb1d9de784f779167adb64f60ff7bb4c8458201b3308"
     },
     {
       "path": "src/llm/calibration.py",

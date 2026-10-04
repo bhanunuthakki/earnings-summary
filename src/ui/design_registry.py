@@ -627,6 +627,7 @@ _BHA_89_TO_92_ADDITIONAL_EMITTERS = (
     "dashboard/evidence_drawer.py",
     "dashboard/feed.py",
     "execution/comments_server.py",
+    "execution/comments_server_financial_evidence_routes.py",
     "pipeline/annual_letter_panel.py",
     "pipeline/analysis_styles.py",
     "pipeline/calibration_receipt.py",
@@ -1098,7 +1099,8 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/work_os_shell.py": "7449e57db7d43c7cf29d0c76f132667ff189f1170be72fe73aa2a350c56c346e",  # pragma: allowlist secret
         "pipeline/work_os_runtime.js": "9f130216532bb0e7da89aec20d6a804eacb74799e5d74b4f2ce01ed03216ba83",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "dc8c2615add4455efea1095cb501f00b0fcbdcc29e0171a8abda4ea234c6a14a",  # pragma: allowlist secret
-        "report/renderers/charts_v2.py": "38895e26b31e240446d2cd93ebf38869df6a86bdcd3ad4ea8be9d040f4102f29",  # pragma: allowlist secret
+        # Growth suffixes compose the existing source chip; no new style writer.
+        "report/renderers/charts_v2.py": "dec718f5adcc84935ef99ad0e7e80041241840f09457b3b0a75176e949715a1a",  # pragma: allowlist secret
         # Offline projections embed only the canonical report stylesheet.
         "report/renderers/offline_document.py": "0ebbf3dcf61600b5327907412bff05b81628a4bd5b439e2fd683ee2736376a47",  # pragma: allowlist secret
         "report/renderers/workspace_html.py": "867b089ceac45baa3dd1f72d35e74feba80f1af19ae6b8c4f4bdeeb2a5d60c05",  # pragma: allowlist secret

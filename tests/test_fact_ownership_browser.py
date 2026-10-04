@@ -89,7 +89,7 @@ def test_financial_value_opens_its_exact_retained_evidence(
         url = urlsplit(route.request.url)
         if url.path == "/fixture" or url.scheme == "file":
             route.fulfill(content_type="text/html", body=document)
-        elif url.path == "/api/peek/canonical-financial":
+        elif url.path in {"/api/peek/canonical-financial", "/api/peek/financial-calculation"}:
             response = api.get(url.path + "?" + url.query)
             route.fulfill(
                 status=response.status_code,
@@ -110,7 +110,7 @@ def test_financial_value_opens_its_exact_retained_evidence(
             page.goto(fixture.as_uri())
         else:
             page.goto("https://synthetic.invalid/fixture")
-        chips = page.locator("td.num a.src-chip")
+        chips = page.locator('td.num a.src-chip[href*="/api/peek/canonical-financial"]')
         assert chips.count() == 2
         expect(page.locator("td.num").first).to_contain_text("100.0")
         chips.first.focus()
@@ -139,6 +139,38 @@ def test_financial_value_opens_its_exact_retained_evidence(
         expect(evidence.locator("body")).to_contain_text("Evidence unavailable for this selection")
         expect(evidence.locator("body")).not_to_contain_text("100000000")
         _capture(evidence, f"evidence-unavailable-{width}.png")
+        growth = page.locator('a.src-chip[href*="/api/peek/financial-calculation"]')
+        assert growth.count() == 1
+        growth.focus()
+        with page.expect_popup() as calculated:
+            page.keyboard.press("Enter")
+        calculation = calculated.value
+        expect(calculation.locator("body")).to_contain_text("20.0%")
+        expect(calculation.locator("body")).to_contain_text("canonical-growth/v1")
+        expect(calculation.locator("body")).to_contain_text("100000000")
+        expect(calculation.locator("body")).to_contain_text("120000000")
+        reference = report.line_items[0].growth_evidence["qoq"]
+        for point in reference.inputs:
+            expect(calculation.locator("body")).to_contain_text(point.observation_id)
+        if entrypoint == "file":
+            assert calculation.url.startswith("https://configured.synthetic.invalid/")
+        assert calculation.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+        _capture(calculation, f"growth-evidence-{entrypoint}-{width}.png")
+        missing_growth = reference.model_copy(
+            update={
+                "inputs": (
+                    reference.inputs[0].model_copy(update={"observation_id": "missing"}),
+                    reference.inputs[1],
+                )
+            }
+        )
+        calculation.goto(
+            "https://synthetic.invalid/api/peek/financial-calculation?"
+            + urlencode({"reference": missing_growth.model_dump_json()})
+        )
+        expect(calculation.locator("body")).to_contain_text("Calculation evidence unavailable")
+        expect(calculation.locator("body")).not_to_contain_text("100000000")
+        _capture(calculation, f"growth-unavailable-{width}.png")
         assert not errors
     finally:
         context.close()

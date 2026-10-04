@@ -3,8 +3,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only fields declared in the checked-in _SOTP_SPEC dashboard spec.",
-      "fingerprint": "a82d23aa835fd2ad8052288c1cb2938ea93769dacb997e8feb209325a1ef4987",
-      "line": 428,
+      "fingerprint": "976c68270d1fb29d2e7a9316d8a635f57a60c0151e4073f3765fceae4f92c71c",
+      "line": 440,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -13,8 +13,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Sync writes only _SOTP_SPEC fields via getattr on the Sotp dataclass.",
-      "fingerprint": "eb91d94b5439a7d0dc6519c350fed257c4ef9433806034129f6d8919b9fdc9a1",
-      "line": 591,
+      "fingerprint": "88ace674023ecbcb2ae2abe133e2d801b0740e27356cefd503aa1d5808ab1a58",
+      "line": 603,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -23,8 +23,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Sync reads only _SOTP_SPEC fields via getattr on the Sotp dataclass.",
-      "fingerprint": "ba5ae6ccd19b909e2e804b1ba4cd169562927e6772122e3f1674fc2a44fa9ee4",
-      "line": 593,
+      "fingerprint": "90d2a97cc87f30460bda7df77d525657cd099c95ef84d02af9fbe12b13a0459f",
+      "line": 605,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -33,8 +33,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Dashboard build reads only _SOTP_SPEC fields via getattr.",
-      "fingerprint": "439013111792c73827bd00d06031ea25da182a270e8d1e77b95b85a4ae412c2a",
-      "line": 717,
+      "fingerprint": "79549e887e686fd7d47dffb234c7f268222597ef744d08073d0890974a5b3b5f",
+      "line": 733,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -43,8 +43,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-growth scenario attribute tuple.",
-      "fingerprint": "79bd1cf7d3f4f553e98c50f05ed23fb27d9edf82f5412d7b135c7126a37eac68",
-      "line": 299,
+      "fingerprint": "578c87501b26ab365ab9e62598a2ae2fafa85d0e9594a0330c94ac01d9f0d42e",
+      "line": 300,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_near",
@@ -55,8 +55,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-growth scenario attribute tuple.",
-      "fingerprint": "f3ad888b8348eebdcf911fb470361342a7fe799eafd51a8734706295ce3db547",
-      "line": 301,
+      "fingerprint": "82f58f898cd79bf4bb398226749732e5fbc40e3f5e9944fb87b8462b495c3f27",
+      "line": 302,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_term",
@@ -67,8 +67,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-margin scenario attribute tuple.",
-      "fingerprint": "eb1a16ea0bf0c4f4bdffbcf1cffc032a95e767b0666895661ef9be207c2c189f",
-      "line": 303,
+      "fingerprint": "b8fefab87249d283a496c7242115a5374d00f81f4d24c638605c88315682a9c1",
+      "line": 304,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_near",
@@ -79,8 +79,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-margin scenario attribute tuple.",
-      "fingerprint": "48f5f648c1c8d5f31d7afeb1b395acd5a70660c6242963400719ab377e4eb8cb",
-      "line": 305,
+      "fingerprint": "c8b51e5422ce6ac4908c0d2774021482b8b0f9713580a93a1d58eb66854388c4",
+      "line": 306,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_term",
@@ -225,8 +225,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "_verified_metric_expression iterates only the literal numerator, denominator, input, left, right field tuple on the frozen, extra-forbid MetricExpression schema. Each child is recursively rebound through its source-file-bound KPI reference. No source data controls the attribute name.",
-      "fingerprint": "ab69bc326b05608896ef6fa8b0bb577810ac3c89746d3f6306e47bc9a686e627",
-      "line": 1002,
+      "fingerprint": "4965cdbe728c8ed000c17c44a93e37fd387c88a0489b7a589f48c8af9247cd75",
+      "line": 1164,
       "path": "src/compute/thesis_evaluator.py",
       "targets": [
         "numerator",
@@ -248,24 +248,22 @@
     },
     {
       "disposition": "closed_literal_set",
-      "evidence": "Scenario row reads only the declared scenario delta attributes.",
+      "evidence": "build_assumption_rows accesses only growth_near, growth_term, margin_near, margin_term, exit_multiple and terminal_g from the checked-in _SCEN_LEVER_LABELS tuple. Bull/Bear input and seed objects are selected by the adjacent literal scenario tuple. No data-selected attribute or executable target. This clarifies object labels versus the actual closed attribute registry.",
       "fingerprint": "54759f35844d9097c973e11719833241b75d5614032c5693eec069ccbc5984d8",
       "line": 532,
       "path": "src/dcf/assumptions_doc.py",
       "targets": [
-        "bull_deltas",
-        "bear_deltas"
+        "_SCEN_LEVER_LABELS"
       ]
     },
     {
       "disposition": "closed_literal_set",
-      "evidence": "Scenario seed reads only the declared scenario delta attributes.",
+      "evidence": "build_assumption_rows accesses only growth_near, growth_term, margin_near, margin_term, exit_multiple and terminal_g from the checked-in _SCEN_LEVER_LABELS tuple. Bull/Bear input and seed objects are selected by the adjacent literal scenario tuple. No data-selected attribute or executable target. This clarifies object labels versus the actual closed attribute registry.",
       "fingerprint": "c41c220b8f97127c5bcdbc32adc5f1d4a5cc38b255d2848cae745193ea93f195",
       "line": 533,
       "path": "src/dcf/assumptions_doc.py",
       "targets": [
-        "bull_deltas",
-        "bear_deltas"
+        "_SCEN_LEVER_LABELS"
       ]
     },
     {
@@ -468,8 +466,8 @@
     {
       "disposition": "schema_field",
       "evidence": "getattr reads only _COMPARE_METRIC_ROWS TickerMetrics fields.",
-      "fingerprint": "8a0dfeeb3a3f85dfecd666cea37b2d2b835273ae950a56e9b5bbe241399e4ec4",
-      "line": 2004,
+      "fingerprint": "e5ec682a7e3bd2b59d5d40013de8200dca58759eb7aa6d15e3ed70017b8b1b31",
+      "line": 2005,
       "path": "src/pipeline/peeks.py",
       "targets": [
         "_COMPARE_METRIC_ROWS"
@@ -690,7 +688,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "21d381024cb3a3c37c65bc95b7ce7f69605787bc3d2c4e7d1ef8e249f7faa28a",
+      "source_sha256": "ea59a46b278364e54b04960336682c02b44aa5fdd252b6e10235423fa1709af8",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
