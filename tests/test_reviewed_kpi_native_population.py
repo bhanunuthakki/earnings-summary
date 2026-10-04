@@ -58,6 +58,18 @@ def reviewed(
     migrated_db: Callable[..., Path], tmp_path: Path
 ) -> Generator[tuple[sqlite3.Connection, str, int, KpiSemanticContext], None, None]:
     conn = open_db(migrated_db(tmp_path / "native.db"))
+    # Freeze the SQL capture clock at the same instant as the fixture evidence.
+    # Production capture triggers and all cutoff predicates remain unchanged.
+    clock = sqlite3.connect(":memory:")
+
+    def frozen_strftime(*values: str) -> str | None:
+        clock_values = tuple(STAMP.isoformat() if value == "now" else value for value in values)
+        row = clock.execute(
+            "SELECT strftime(" + ",".join("?" for _ in clock_values) + ")", clock_values
+        ).fetchone()
+        return str(row[0]) if row[0] is not None else None
+
+    conn.create_function("strftime", -1, frozen_strftime)
     seed_resolved_kpi_fact(conn)
     conn.execute("UPDATE documents SET doc_type='ir_press_release' WHERE id=10")
     conn.execute(
@@ -182,6 +194,7 @@ def reviewed(
         yield conn, legacy, result.fact_id, context
     finally:
         conn.close()
+        clock.close()
 
 
 def request(conn: sqlite3.Connection, legacy: str) -> SourceFactPopulationRequest:
@@ -218,6 +231,10 @@ def test_reviewed_projection_preserves_v1_and_publishes_exactly_one_native_obser
     reviewed: tuple[sqlite3.Connection, str, int, KpiSemanticContext],
 ) -> None:
     conn, legacy, _, _ = reviewed
+    captured = conn.execute(
+        "SELECT captured_at FROM fact_observation_revisions WHERE observation_id=?", (legacy,)
+    ).fetchone()[0]
+    assert datetime.fromisoformat(str(captured)).replace(tzinfo=UTC) == STAMP
     old = tuple(
         conn.execute(
             "SELECT * FROM reported_observations WHERE observation_id=?", (legacy,)
