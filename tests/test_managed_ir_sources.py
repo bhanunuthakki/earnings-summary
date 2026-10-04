@@ -394,7 +394,11 @@ def test_completed_publication_replays_after_attempt_tmp_is_deleted(
     assert result.receipt_path.startswith("data/managed_ir_publications/")
     assert result.inventory_receipt_path.startswith("data/managed_ir_publications/")
 
-    shutil.rmtree(root / ".tmp" / "managed_ir_staging" / request.attempt_id)
+    staging = root / ".tmp" / "managed_ir_staging" / request.attempt_id
+    # Only this disposable staging receipt needs write permission for Windows cleanup.
+    (staging / "publication_intent.json").chmod(0o600)
+    shutil.rmtree(staging)
+    assert not staging.exists()
     assert publish_prepared_issuer_documents(request, state_root=root, db_path=db_path) == result
 
 
