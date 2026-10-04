@@ -14,6 +14,18 @@
 
 ## Outcome
 
+### Scheduler job receipt authority
+
+The Operations panel and review bundle read each job receipt from its declared
+writer root. `cron/run_python.bat` defaults to the deployed code checkout.
+`prepare-kpi-semantic-review` is the explicit exception: its wrapper derives
+the product-state root from the configured database path and passes that root
+to the job runtime. The dashboard uses the same resolved database declaration
+for this exception. Dashboard scratch artifacts do not replace either writer
+root. Missing, stale and invalid receipts remain explicit; another root never
+supplies fallback evidence. This changes receipt observation only. It adds no
+scheduler operation, job execution or financial-state write.
+
 ### Cached host-owner monitoring endpoint
 
 Disposition: **linked governed view**. `GET /api/operations/host-runtime`
@@ -970,3 +982,42 @@ eligibility or completeness. Migration 0050 adds only a nonunique KPI
 supersedes lookup index. There is no new operator action or external effect.
 Regression and native child-tree checks establish the correction; a genuine
 subsequent scheduled run remains required for recurrence verification.
+
+### Approved thesis KPI registrations and calculated review rules
+
+Persisted thesis evaluations through the existing deterministic and quarterly
+refresh actions consume
+optional `kpi_registry_candidates` from the approved holdings configuration.
+It checks exact governed report references and eight admitted, comparable
+quarterly observations before inserting a missing user registry row. Existing
+owner settings remain unchanged. New rows have no scalar threshold and are not
+marked thesis breakers. The thesis evaluator owns numerical thresholds,
+adjacent-quarter persistence, TTM calculations and compound review warnings.
+Missing definitions, approximate source bands, incomparable populations and
+unavailable discrete-quarter inputs remain unresolved. A pending candidate does
+not become a zero-valued fact or a passing check. The approved holdings tiers
+retain disclosure and actual-source-cadence research watches.
+
+`metric_expression` hard rules and `metric_threshold` soft predicates use the
+same admitted calculated-series reader. Stored evaluation evidence retains
+source manifests and calculation definitions. Distinct company/market entities
+require explicitly matching source populations. TTM monetary sums require typed
+standalone-quarter durations; YTD labels cannot substitute for those inputs.
+No new scheduler, listener, provider request or external message action is added.
+The existing evaluation and attention lifecycle remains the delivery owner.
+
+
+Calculated thesis checks now retain the exact ordered source reads before
+arithmetic. Offline replay repeats the same expressions, unit checks and rule
+comparisons without opening current files or databases. It refuses missing,
+extra, reordered or changed source reads and changed calculated outputs.
+Evaluator `thesis-evaluator/v3` distinguishes these replayable calculations
+from main's earlier calculated-rule v2 records. Retained scalar v2 contexts and
+legacy v1 projections remain readable. Earlier calculated v2 records without
+retained inputs remain explicitly unavailable for replay. Missing optional
+capture fields do not change the bytes or hashes of older saved contexts.
+The existing thesis check receipt owns this evidence. Additive migration
+`0052_thesis_metric_check_context_guard` extends the existing insert guard to
+calculated v3 checks. It preserves migrations 0050 and 0051 and all older rows.
+Downgrade restores the v2 guard without deleting records or context. No new
+fact store, operator action, provider request or financial admission is added.

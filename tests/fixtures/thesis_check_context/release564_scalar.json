@@ -1,0 +1,155 @@
+{
+  "format_version": "thesis-check-context/v1",
+  "ticker": "SYNTH",
+  "holdings_payload": {
+    "ticker": "SYNTH",
+    "thesis": "Original synthetic scalar thesis",
+    "business_model_rules": [
+      {
+        "rule_id": "old_scalar",
+        "kpi_name": "Missing synthetic percentage",
+        "comparator": "lt",
+        "threshold": "10",
+        "unit": "percent",
+        "consecutive_periods": 1,
+        "narrative": "Keep the old rule"
+      }
+    ]
+  },
+  "belief_payload": {
+    "thesis": "Original synthetic scalar thesis",
+    "key_driver": "",
+    "nuance": {},
+    "thesis_breakers_qualitative": [],
+    "tier_1_kpis": []
+  },
+  "original_spec": {
+    "ticker": "SYNTH",
+    "thesis": "Original synthetic scalar thesis",
+    "break_rules": [],
+    "business_model_rules": [
+      {
+        "rule_id": "old_scalar",
+        "kpi_name": "Missing synthetic percentage",
+        "comparator": "lt",
+        "threshold": "10",
+        "unit": "percent",
+        "consecutive_periods": 1,
+        "narrative": "Keep the old rule",
+        "tier": "business_model"
+      }
+    ],
+    "soft_rules": []
+  },
+  "hard_inputs": [
+    {
+      "rule": {
+        "rule_id": "old_scalar",
+        "kpi_name": "Missing synthetic percentage",
+        "comparator": "lt",
+        "threshold": "10",
+        "unit": "percent",
+        "consecutive_periods": 1,
+        "narrative": "Keep the old rule",
+        "tier": "business_model"
+      },
+      "json_pointer": "/business_model_rules/0/kpi_name",
+      "selected_definition": null,
+      "disposition": "definition_unresolved",
+      "selection_details": {
+        "selected_definition": null,
+        "disposition": "definition_unresolved"
+      },
+      "observations": null,
+      "selected_definition_content": null
+    }
+  ],
+  "soft_inputs": [
+    {
+      "ticker": "SYNTH",
+      "cutoff": "2026-10-03T23:43:14.235558Z",
+      "rules": [],
+      "reads": [],
+      "results": [],
+      "unit_jump_ratio": 1000.0
+    }
+  ],
+  "effective_soft_rules": [],
+  "soft_result_order": [],
+  "blocked_soft_results": [],
+  "reference_selections": [
+    {
+      "json_pointer": "/business_model_rules/0/kpi_name",
+      "selection": {
+        "selected_definition": null,
+        "disposition": "definition_unresolved"
+      }
+    }
+  ],
+  "evaluated_at": "2026-10-03T23:43:14.235731Z",
+  "semantic": {
+    "ticker": "SYNTH",
+    "thesis_content_sha256": "e5b6d4f18bb5895e02d95e343d4985400a5161d13bbfddb181f329b2ae89a43d",
+    "ruleset_version": "holdings-break-rules/v1",
+    "evaluator_semantic_version": "thesis-evaluator/v2",
+    "hard_rules": [
+      {
+        "rule_id": "old_scalar",
+        "definition": {
+          "tier": "business_model",
+          "kpi_name": "Missing synthetic percentage",
+          "comparator": "lt",
+          "threshold": "10",
+          "unit": "percent",
+          "consecutive_periods": 1,
+          "narrative": "Keep the old rule"
+        }
+      }
+    ],
+    "soft_rules": [],
+    "accepted_observations": [
+      {
+        "metric_identity": "hard-input:0",
+        "period_end": "captured-input",
+        "observed_value": "54be0db3f7818e018abb35c2e43f46b86f9a6d560698da63bcfcdcd9cdd2a2d1",
+        "accepted_value": "54be0db3f7818e018abb35c2e43f46b86f9a6d560698da63bcfcdcd9cdd2a2d1",
+        "unit": "input-sha256",
+        "currency": null,
+        "material_source_semantics": [
+          "partial-captured-selection"
+        ],
+        "restatement_semantics": "unknown"
+      },
+      {
+        "metric_identity": "soft-input:0",
+        "period_end": "captured-input",
+        "observed_value": "b021af7d8c5c7fa125e4e65d47b4e1e3562957df2a8dd1c24e565b8bc03e59a5",
+        "accepted_value": "b021af7d8c5c7fa125e4e65d47b4e1e3562957df2a8dd1c24e565b8bc03e59a5",
+        "unit": "input-sha256",
+        "currency": null,
+        "material_source_semantics": [
+          "captured-effective-series"
+        ],
+        "restatement_semantics": "partial"
+      }
+    ]
+  },
+  "severity": "ok",
+  "evidence_as_of": null,
+  "rule_outputs": [
+    {
+      "rule_id": "old_scalar",
+      "kpi_name": "Missing synthetic percentage",
+      "comparator": "lt",
+      "threshold": "10",
+      "consecutive_periods": 1,
+      "tier": "business_model",
+      "status": "unresolved",
+      "detail": "unresolved: rule KPI has no matching kpi_facts definition — needs a derived or extracted series for this metric",
+      "narrative": "Keep the old rule",
+      "observations": []
+    }
+  ],
+  "soft_outputs": null,
+  "stable_soft_outputs": []
+}

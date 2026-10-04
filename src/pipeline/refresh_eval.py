@@ -76,7 +76,7 @@ def refresh_for_tickers(
             )
             continue
 
-        persist_verdict(conn, verdict, run_id=run_id)
+        persist_verdict(conn, verdict, run_id=run_id, holdings_dir=holdings_dir)
         results.append(
             TickerRefreshResult(
                 ticker=ticker.upper(),

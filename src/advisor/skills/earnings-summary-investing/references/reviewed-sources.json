@@ -1,5 +1,5 @@
 {
-  "review_note": "Independent GPT-6.1 Sol main-030 source integration review 96b16e6d216815f6f4aac70c19380fbce5602c6caddb5b3f7f35bd5188a941ae: source-only PASS. Held-out evidence refuses before rewrite; bounded copying detection runs after generation before judged/backtest spend. Native and recurrence qualification remain pending.",
+  "review_note": "Independent GPT-6.1 Sol advisory source review 2026-10-03, findings SHA256 32b9d7f1809aff728187e43d124623a6fa3e6fef29479e594921dfec9b5032a3: main KPI registry and holdings schema, operations deployed-code-root contract, comments-server request routes, reconstruction coverage and retained scalar-v2/calculated-v3 thesis replay. Offline replay does not prove freshness. Source review only; no installation/native/live/model acceptance.",
   "schema_version": 1,
   "sources": [
     {
@@ -44,7 +44,7 @@
     },
     {
       "path": "directives/holdings_json_schema.md",
-      "sha256": "b2a8304c1c25ea27fd0b7da3d217c89e8506621996c5d498160b9ff8b9433a4b"
+      "sha256": "e5541a7f71a1a659a2d2eb5dc3a4ebde8f4e82db66b1f8e7dff74446c20c18f8"
     },
     {
       "path": "directives/ir_events_ingestion.md",
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "cc2621e87338d8b3a7d7f7bfb30b7436c891d55b06ac4ad80ae5406a3928ac92"
+      "sha256": "a391b7568e5002b30e282eee8fd95c5102798b7c1c3925ee93edbdaa6c640021"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -132,7 +132,7 @@
     },
     {
       "path": "execution/comments_server.py",
-      "sha256": "b085bb4f24fdebef7b9d8e84f7a97ac1ba365c629862bda1ea2c571104ef3858"
+      "sha256": "7614b70537478e927d3e344abdf59efdba0459c60b7759d1a2f0b92c5d3a94f6"
     },
     {
       "path": "execution/comments_server_research_routes.py",
@@ -256,7 +256,7 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "8f18d15d4f6b84a9f9ca56423a114d4522cb9cebef52af9f34c6e8422dcad525"
+      "sha256": "ec5580fc5b26d70a57cc5bb3deb1208aa975eb4942f37e05fd46fdb3e7bc4a52"
     },
     {
       "path": "scripts/check_investing_skill.py",
@@ -292,7 +292,7 @@
     },
     {
       "path": "src/compute/thesis_evaluator.py",
-      "sha256": "0a4f2602f5bc3a9a6ad322eb1ed05713600010e16b0ab305a5945d9a3bc6745d"
+      "sha256": "b7f25570cbd1482f395a153e27d02d17afc9b8a3bc0df0f65611de3a71c20167"
     },
     {
       "path": "src/dcf/grade_evidence.py",

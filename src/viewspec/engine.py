@@ -1280,19 +1280,25 @@ def _grouped_kpi_catalog(
     try:
         fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
         semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
-        # Flat identity: the per-definition anchor as one joined relation
-        # (~19x faster than the correlated predicate on aggregate queries,
-        # identical rows). Legacy schemas without the identity columns keep
-        # the correlated predicate, which degrades to 1=1 there anyway.
-        # Keep the complete anchor history for each relevant definition, but
-        # do not sort the history of every unrelated issuer. Candidate IDs
-        # and complete anchor history both use the canonical resolver relation.
+        # Only definitions with an admitted requested row can contribute to
+        # this catalog. Build that small set with the same canonical relation
+        # and admission predicate as the outer aggregate, so the optimizer can
+        # start from the admitted-context index instead of scanning the ledger.
+        catalog_cte = (
+            "WITH candidate_definition AS MATERIALIZED ("
+            f"SELECT DISTINCT kf.kpi_definition_id FROM {fact_relation} kf "
+            f"{semantic_join} WHERE kf.ticker IN ({marks}) AND {semantic_where})"
+        )
+        # Keep complete canonical history across all tickers for these
+        # definitions. Leave it flattenable so admission can drive the anchor
+        # lookup too; materializing facts first scans unrelated ledger rows.
         anchor_relation = (
             f"(SELECT * FROM {fact_relation} WHERE kpi_definition_id IN "
-            f"(SELECT kpi_definition_id FROM {fact_relation} WHERE ticker IN ({marks})))"
+            "(SELECT kpi_definition_id FROM candidate_definition))"
         )
         anchor_sql = semantic_series_identity_anchor_sql(conn, fact_relation=anchor_relation)
         if anchor_sql is None:
+            catalog_cte = ""
             identity_join = ""
             semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
         else:
@@ -1303,6 +1309,7 @@ def _grouped_kpi_catalog(
             semantic_identity = semantic_series_identity_flat_sql(conn)
         rows = conn.execute(
             f"""
+            {catalog_cte}
             SELECT kd.name AS name, kf.ticker AS ticker, COUNT(*) AS obs{origin_select}
             FROM {fact_relation} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
             {semantic_join}

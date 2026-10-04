@@ -6,14 +6,9 @@ consecutive periods." This module joins those rules against the most-recent
 N kpi_facts rows per KPI, classifies each rule (OK / WATCH / BREACH), and
 returns the holding-level verdict (worst-rule wins).
 
-Trend rules and derived metrics on the HARD (`break_rules` /
-`business_model_rules`) path remain out of scope — those stay
-"KPI X comparator threshold for N consecutive periods" against level series.
-Trend/slope signals ("the curve is bending toward a floor") and derived
-metrics ("net adds = delta(Total customers)") are handled on the SOFT
-(`break_rules_soft`) path instead, via the `trajectory` predicate type and
-the `derived: "delta"` metric-spec opt-in — see
-`compute.soft_rule_evaluator` and `directives/holdings_json_schema.md`.
+Hard rules can opt into source-bound quarterly metric expressions. Legacy
+rules retain their level-series behavior. Trend/slope signals remain soft
+warnings; see `compute.soft_rule_evaluator` and the holdings schema.
 """
 
 from __future__ import annotations
@@ -28,6 +23,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
+from itertools import pairwise
 from pathlib import Path
 from typing import cast
 
@@ -63,6 +59,15 @@ from compute.thesis_evaluation_episodes import (
     SemanticRuleInput,
     forward_episode_id,
     record_forward_episode,
+)
+from compute.thesis_kpi_registration import refresh_thesis_kpi_registration
+from compute.thesis_metric_series import (
+    MetricEvaluationCapture,
+    MetricExpression,
+    MetricReplayError,
+    MetricSeriesResult,
+    calculate_metric_series,
+    replay_metric_capture,
 )
 from identity import DEFAULT_USER_ID
 from models.facts import Unit
@@ -137,6 +142,10 @@ class BreakRule(BaseModel):
     # narrative) runs past the original 500 and shouldn't fail rule loading.
     narrative: str = Field(min_length=1, max_length=1000)
     tier: RuleTier = RuleTier.BUSINESS_MODEL
+    metric_expression: MetricExpression | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    require_adjacent_quarters: bool = Field(default=False, exclude_if=lambda value: not value)
 
 
 class HoldingsSpec(BaseModel):
@@ -170,6 +179,8 @@ class KpiObservation:
     provenance: dict[str, JsonValue] = field(
         default_factory=lambda: dict[str, JsonValue](), compare=False
     )
+    fiscal_period_type: str | None = None
+    fiscal_year: int | None = None
 
 
 @dataclass(frozen=True)
@@ -180,6 +191,7 @@ class RuleEvaluation:
     status: BreachStatus
     observations: tuple[KpiObservation, ...]
     detail: str
+    source_manifest: dict[str, JsonValue] | None = None
 
 
 @dataclass(frozen=True)
@@ -201,8 +213,11 @@ class ThesisVerdict:
     retained_context: RetainedThesisContext | None = None
 
 
+_LEGACY_EVALUATOR_SEMANTIC_VERSION = "thesis-evaluator/v1"
 _THESIS_EVALUATOR_SEMANTIC_VERSION = "thesis-evaluator/v2"
 _RULESET_VERSION = "holdings-break-rules/v1"
+_METRIC_EVALUATOR_SEMANTIC_VERSION = "thesis-evaluator/v3"
+_METRIC_RULESET_VERSION = "holdings-break-rules/v2"
 _HOLDINGS_PAYLOAD_ADAPTER = TypeAdapter(dict[str, JsonValue])
 _RULE_PROJECTION_ADAPTER = TypeAdapter(list[dict[str, JsonValue]])
 
@@ -219,6 +234,19 @@ def _canonical_json(value: JsonValue) -> str:
 
 def _sha256_json(value: JsonValue) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _semantic_evidence(value: JsonValue) -> JsonValue:
+    """Retain selected source identity, excluding clocks of the evaluator read."""
+    if isinstance(value, dict):
+        return {
+            key: _semantic_evidence(item)
+            for key, item in value.items()
+            if key not in {"cutoff", "knowledge_cutoff", "known_at", "effective_at"}
+        }
+    if isinstance(value, list):
+        return [_semantic_evidence(item) for item in value]
+    return value
 
 
 def _read_holdings_payload(path: Path) -> dict[str, JsonValue]:
@@ -265,6 +293,40 @@ def _thesis_content_payload(payload: dict[str, JsonValue]) -> dict[str, JsonValu
     return projected
 
 
+def _new_hard_semantics(rule: BreakRule) -> bool:
+    return rule.metric_expression is not None or rule.require_adjacent_quarters
+
+
+def _new_soft_semantics(value: JsonValue) -> bool:
+    if isinstance(value, dict):
+        params = value.get("params")
+        if value.get("type") == "metric_threshold" or (
+            value.get("type") == "compound"
+            and isinstance(params, dict)
+            and params.get("require_same_period") is True
+        ):
+            return True
+        return any(_new_soft_semantics(child) for child in value.values())
+    return isinstance(value, list) and any(_new_soft_semantics(child) for child in value)
+
+
+def _new_spec_semantics(spec: HoldingsSpec) -> bool:
+    return any(
+        _new_hard_semantics(rule) for rule in (*spec.break_rules, *spec.business_model_rules)
+    ) or any(
+        _new_soft_semantics(_HOLDINGS_PAYLOAD_ADAPTER.validate_python(rule.model_dump(mode="json")))
+        for rule in spec.soft_rules
+    )
+
+
+def _new_verdict_semantics(verdict: ThesisVerdict) -> bool:
+    if verdict.semantic_input is not None:
+        return (
+            verdict.semantic_input.evaluator_semantic_version == _METRIC_EVALUATOR_SEMANTIC_VERSION
+        )
+    return any(_new_hard_semantics(item.rule) for item in verdict.rule_evaluations)
+
+
 def _semantic_rule(rule: BreakRule) -> SemanticRuleInput:
     return SemanticRuleInput(
         rule_id=rule.rule_id,
@@ -276,6 +338,20 @@ def _semantic_rule(rule: BreakRule) -> SemanticRuleInput:
             "unit": rule.unit.value,
             "consecutive_periods": rule.consecutive_periods,
             "narrative": rule.narrative,
+            **(
+                {
+                    "metric_expression": (
+                        _HOLDINGS_PAYLOAD_ADAPTER.validate_python(
+                            rule.metric_expression.model_dump(mode="json")
+                        )
+                        if rule.metric_expression is not None
+                        else None
+                    ),
+                    "require_adjacent_quarters": rule.require_adjacent_quarters,
+                }
+                if _new_hard_semantics(rule)
+                else {}
+            ),
         },
     )
 
@@ -336,9 +412,29 @@ def _build_semantic_input(
     hard_inputs: tuple[HardRuleCapture, ...] = (),
     soft_inputs: tuple[SoftEvaluationCapture, ...] = (),
     effective_soft_rules: list[SoftRule] | None = None,
+    retain_context: bool = False,
 ) -> ForwardSemanticInput:
+    new_semantics = _new_spec_semantics(spec)
     observations: list[AcceptedObservationInput] = []
     for evaluation in evaluations:
+        manifest_hash = (
+            _sha256_json(_semantic_evidence(evaluation.source_manifest))
+            if evaluation.source_manifest is not None
+            else None
+        )
+        if manifest_hash is not None and not evaluation.observations:
+            observations.append(
+                AcceptedObservationInput(
+                    metric_identity=f"hard:{evaluation.rule.rule_id}:source-manifest",
+                    period_end="unresolved-period",
+                    observed_value=manifest_hash,
+                    accepted_value=manifest_hash,
+                    unit="source-manifest-sha256",
+                    currency=None,
+                    material_source_semantics=("calculated-metric",),
+                    restatement_semantics="source-manifest-retained",
+                )
+            )
         for observation in evaluation.observations:
             observations.append(
                 AcceptedObservationInput(
@@ -348,8 +444,16 @@ def _build_semantic_input(
                     accepted_value=str(observation.value),
                     unit=observation.unit.value,
                     currency=None,
-                    material_source_semantics=("current-evaluator-selection",),
-                    restatement_semantics="source-provenance-not-retained",
+                    material_source_semantics=(
+                        ("calculated-metric", manifest_hash)
+                        if manifest_hash is not None
+                        else ("current-evaluator-selection",)
+                    ),
+                    restatement_semantics=(
+                        "source-manifest-retained"
+                        if manifest_hash is not None
+                        else "source-provenance-not-retained"
+                    ),
                 )
             )
     for index, capture in enumerate(hard_inputs):
@@ -392,11 +496,39 @@ def _build_semantic_input(
                     restatement_semantics="partial",
                 )
             )
+    if not retain_context:
+        for result in soft_results:
+            details = _HOLDINGS_PAYLOAD_ADAPTER.validate_python(result.details)
+            details_json = _canonical_json(
+                _semantic_evidence(details) if new_semantics else details
+            )
+            details_sha = hashlib.sha256(details_json.encode("utf-8")).hexdigest()
+            last_period = result.details.get("last_period")
+            observations.append(
+                AcceptedObservationInput(
+                    metric_identity=f"soft:{result.rule_name}",
+                    period_end=str(last_period) if last_period else "unresolved-period",
+                    observed_value=details_sha,
+                    accepted_value=details_sha,
+                    unit="soft-evidence-sha256",
+                    currency=None,
+                    material_source_semantics=("soft-evaluator-projection",),
+                    restatement_semantics="source-provenance-not-retained",
+                )
+            )
     return ForwardSemanticInput(
         ticker=spec.ticker,
         thesis_content_sha256=_sha256_json(_thesis_content_payload(payload)),
-        ruleset_version=_RULESET_VERSION,
-        evaluator_semantic_version=_THESIS_EVALUATOR_SEMANTIC_VERSION,
+        ruleset_version=_METRIC_RULESET_VERSION if new_semantics else _RULESET_VERSION,
+        evaluator_semantic_version=(
+            _METRIC_EVALUATOR_SEMANTIC_VERSION
+            if new_semantics
+            else (
+                _THESIS_EVALUATOR_SEMANTIC_VERSION
+                if retain_context
+                else _LEGACY_EVALUATOR_SEMANTIC_VERSION
+            )
+        ),
         hard_rules=tuple(
             _semantic_rule(rule) for rule in (*spec.break_rules, *spec.business_model_rules)
         ),
@@ -546,6 +678,7 @@ def _fetch_kpi_history_for_resolved_definition(
     n_periods: int,
     *,
     trace: dict[str, JsonValue] | None = None,
+    require_adjacent_quarters: bool = False,
 ) -> list[KpiObservation] | None:
     """Read one definition name returned by the governed report-reference resolver."""
 
@@ -553,7 +686,9 @@ def _fetch_kpi_history_for_resolved_definition(
     # consecutive-periods window is annual, never a mix of year-end + interim.
     period_filter = ""
     params: list[object] = [ticker.upper(), resolved_name]
-    if reporting_cadence_for(conn, ticker, resolved_name) == "annual":
+    if require_adjacent_quarters:
+        period_filter = " AND kf.fiscal_period_type IN ('Q1','Q2','Q3','Q4')"
+    elif reporting_cadence_for(conn, ticker, resolved_name) == "annual":
         placeholders = ",".join("?" * len(ANNUAL_FACT_PERIOD_TYPES))
         period_filter = f" AND kf.fiscal_period_type IN ({placeholders})"
         params.extend(ANNUAL_FACT_PERIOD_TYPES)
@@ -644,6 +779,7 @@ def _fetch_kpi_history_for_resolved_definition(
                 value=value,
                 unit=unit,
                 provenance=_HOLDINGS_PAYLOAD_ADAPTER.validate_python(dict(row)),
+                fiscal_period_type=period_type,
             )
         )
     # The definition resolver can find fact-carrying definitions whose rows are
@@ -681,6 +817,36 @@ def _compare(value: Decimal, comparator: Comparator, threshold: Decimal) -> bool
 # have no valid conversion → the rule is surfaced UNRESOLVED, not mis-compared.
 
 
+def _adjacent_rule_quarters(observations: list[KpiObservation]) -> bool:
+    """Accept fiscal quarter labels, or calendar quarters when labels are absent."""
+    quarterly_types = {"Q1", "Q2", "Q3", "Q4"}
+    for observation in observations:
+        if (
+            observation.fiscal_period_type is not None
+            and observation.fiscal_period_type not in quarterly_types
+        ):
+            return False
+    for newer, older in pairwise(observations):
+        if not 60 <= (newer.period_end - older.period_end).days <= 120:
+            return False
+        if newer.fiscal_period_type is not None and older.fiscal_period_type is not None:
+            new_quarter, old_quarter = (
+                int(newer.fiscal_period_type[1]),
+                int(older.fiscal_period_type[1]),
+            )
+            if newer.fiscal_year is not None and older.fiscal_year is not None:
+                if newer.fiscal_year * 4 + new_quarter != older.fiscal_year * 4 + old_quarter + 1:
+                    return False
+            elif new_quarter != old_quarter % 4 + 1:
+                return False
+        else:
+            new_index = newer.period_end.year * 4 + (newer.period_end.month - 1) // 3
+            old_index = older.period_end.year * 4 + (older.period_end.month - 1) // 3
+            if new_index != old_index + 1:
+                return False
+    return True
+
+
 def evaluate_rule(rule: BreakRule, observations: list[KpiObservation] | None) -> RuleEvaluation:
     """Classify one rule given its observations.
 
@@ -706,6 +872,16 @@ def evaluate_rule(rule: BreakRule, observations: list[KpiObservation] | None) ->
                 "unresolved: rule KPI has no matching kpi_facts definition — "
                 "needs a derived or extracted series for this metric"
             ),
+        )
+    if rule.require_adjacent_quarters and (
+        len(observations) < rule.consecutive_periods
+        or not _adjacent_rule_quarters(observations[: rule.consecutive_periods])
+    ):
+        return RuleEvaluation(
+            rule=rule,
+            status=BreachStatus.UNRESOLVED,
+            observations=tuple(observations),
+            detail="unresolved: insufficient adjacent quarterly observations",
         )
     if not observations:
         return RuleEvaluation(
@@ -735,7 +911,14 @@ def evaluate_rule(rule: BreakRule, observations: list[KpiObservation] | None) ->
                 ),
             )
         reconciled.append(
-            KpiObservation(period_end=obs.period_end, value=converted, unit=rule.unit)
+            KpiObservation(
+                period_end=obs.period_end,
+                value=converted,
+                unit=rule.unit,
+                provenance=obs.provenance,
+                fiscal_period_type=obs.fiscal_period_type,
+                fiscal_year=obs.fiscal_year,
+            )
         )
     observations = reconciled
     matches = [_compare(obs.value, rule.comparator, rule.threshold) for obs in observations]
@@ -970,6 +1153,221 @@ def _evaluate_verified_soft_rules(
     return out
 
 
+def _verified_metric_expression(
+    conn: sqlite3.Connection,
+    *,
+    repo_root: Path,
+    ticker: str,
+    expression: MetricExpression,
+    json_pointer: str,
+    selections: list[dict[str, JsonValue]] | None = None,
+) -> MetricExpression | None:
+    """Resolve each KPI leaf through its reviewed, source-file-bound reference."""
+    if expression.operation == "level" and expression.source == "kpi":
+        name = _verified_report_rule_name(
+            conn,
+            repo_root=repo_root,
+            ticker=ticker,
+            json_pointer=f"{json_pointer}/name",
+            selections=selections,
+        )
+        return None if name is None else expression.model_copy(update={"name": name})
+    updates: dict[str, MetricExpression] = {}
+    for key in ("numerator", "denominator", "input", "left", "right"):
+        child = getattr(expression, key)
+        if child is None:
+            continue
+        rebound = _verified_metric_expression(
+            conn,
+            repo_root=repo_root,
+            ticker=ticker,
+            expression=child,
+            json_pointer=f"{json_pointer}/{key}",
+            selections=selections,
+        )
+        if rebound is None:
+            return None
+        updates[key] = rebound
+    return expression.model_copy(update=updates)
+
+
+def _evaluate_metric_rule(rule: BreakRule, result: MetricSeriesResult) -> RuleEvaluation:
+    manifest = _HOLDINGS_PAYLOAD_ADAPTER.validate_python(result.model_dump(mode="json"))
+    if result.status != "available" or len(result.points) < rule.consecutive_periods:
+        return RuleEvaluation(
+            rule=rule,
+            status=BreachStatus.UNRESOLVED,
+            observations=(),
+            detail=f"unresolved: {result.reason_code or 'insufficient_metric_periods'}",
+            source_manifest=manifest,
+        )
+    calculated_history: list[KpiObservation] = []
+    for point in reversed(result.points[-rule.consecutive_periods :]):
+        try:
+            unit = Unit.ACTUAL if point.currency == point.unit else Unit(point.unit)
+        except ValueError:
+            return RuleEvaluation(
+                rule=rule,
+                status=BreachStatus.UNRESOLVED,
+                observations=(),
+                detail=f"unresolved: unsupported calculated unit {point.unit!r}",
+                source_manifest=manifest,
+            )
+        calculated_history.append(
+            KpiObservation(
+                point.period_end,
+                point.value,
+                unit,
+                fiscal_period_type=point.fiscal_period,
+                fiscal_year=point.fiscal_year,
+            )
+        )
+    evaluation = evaluate_rule(rule, calculated_history)
+    return RuleEvaluation(
+        rule=evaluation.rule,
+        status=evaluation.status,
+        observations=evaluation.observations,
+        detail=evaluation.detail,
+        source_manifest=manifest,
+    )
+
+
+def _evaluate_hard_rule(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    rule: BreakRule,
+    repo_root: Path | None,
+    json_pointer: str,
+    cutoff: datetime,
+    captures: list[HardRuleCapture],
+    references: list[dict[str, JsonValue]],
+) -> RuleEvaluation:
+    pointer = f"{json_pointer}/kpi_name"
+    trace: dict[str, JsonValue] = {
+        "selected_definition": None,
+        "disposition": "unverified_report_reference",
+    }
+    metric_input: MetricEvaluationCapture | None = None
+    if rule.metric_expression is not None:
+        expression = rule.metric_expression
+        pointer = f"{json_pointer}/metric_expression"
+        if repo_root is not None:
+            rebound = _verified_metric_expression(
+                conn,
+                repo_root=repo_root,
+                ticker=ticker,
+                expression=expression,
+                json_pointer=pointer,
+                selections=references,
+            )
+            if rebound is None:
+                captures.append(
+                    HardRuleCapture(
+                        rule=_HOLDINGS_PAYLOAD_ADAPTER.validate_python(
+                            rule.model_dump(mode="json")
+                        ),
+                        json_pointer=pointer,
+                        selected_definition=None,
+                        disposition="unverified_report_reference",
+                        selection_details=trace,
+                        observations=None,
+                    )
+                )
+                return RuleEvaluation(
+                    rule=rule,
+                    status=BreachStatus.UNRESOLVED,
+                    observations=(),
+                    detail="unresolved: unverified metric KPI reference",
+                )
+            expression = rebound
+        metric_captures: list[MetricEvaluationCapture] = []
+        result = calculate_metric_series(
+            conn, ticker, expression, cutoff=cutoff, captures=metric_captures
+        )
+        metric_input = metric_captures[0]
+        evaluation = _evaluate_metric_rule(rule, result)
+        history = list(evaluation.observations)
+        trace["disposition"] = "selected" if result.status == "available" else "no_admitted_rows"
+        trace["expression"] = expression.model_dump(mode="json")
+    else:
+        verified_name = (
+            None
+            if repo_root is None
+            else _verified_report_rule_name(
+                conn,
+                repo_root=repo_root,
+                ticker=ticker,
+                json_pointer=pointer,
+                selections=references,
+            )
+        )
+        if repo_root is not None and verified_name is None:
+            history = None
+        elif verified_name is not None or rule.require_adjacent_quarters:
+            resolved_name = verified_name or resolve_kpi_definition_name(
+                conn, ticker, rule.kpi_name
+            )
+            trace["selected_definition"] = resolved_name
+            trace["disposition"] = "definition_unresolved" if resolved_name is None else "selected"
+            history = (
+                None
+                if resolved_name is None
+                else _fetch_kpi_history_for_resolved_definition(
+                    conn,
+                    ticker,
+                    resolved_name,
+                    rule.consecutive_periods,
+                    trace=trace,
+                    require_adjacent_quarters=rule.require_adjacent_quarters,
+                )
+            )
+        else:
+            history = _fetch_kpi_history(
+                conn, ticker, rule.kpi_name, rule.consecutive_periods, trace=trace
+            )
+        evaluation = evaluate_rule(rule, history)
+    selected_name = trace.get("selected_definition")
+    definition_row = (
+        None
+        if not isinstance(selected_name, str)
+        else conn.execute(
+            "SELECT * FROM kpi_definitions WHERE UPPER(ticker)=? AND name=?",
+            (ticker.upper(), selected_name),
+        ).fetchone()
+    )
+    captures.append(
+        HardRuleCapture.model_validate(
+            dict(
+                rule=rule.model_dump(mode="json"),
+                json_pointer=pointer,
+                selected_definition=selected_name if isinstance(selected_name, str) else None,
+                selected_definition_content=None
+                if definition_row is None
+                else _HOLDINGS_PAYLOAD_ADAPTER.validate_python(dict(definition_row)),
+                disposition=trace["disposition"],
+                selection_details=trace,
+                observations=None
+                if history is None
+                else tuple(
+                    CapturedKpiObservation(
+                        period_end=obs.period_end,
+                        value=str(obs.value),
+                        unit=obs.unit.value,
+                        provenance=obs.provenance,
+                        fiscal_period_type=obs.fiscal_period_type,
+                        fiscal_year=obs.fiscal_year,
+                    )
+                    for obs in history
+                ),
+                metric_input=metric_input,
+            )
+        )
+    )
+    references.append({"json_pointer": pointer, "selection": trace})
+    return evaluation
+
+
 def evaluate_ticker_thesis(
     conn: sqlite3.Connection,
     *,
@@ -985,6 +1383,7 @@ def evaluate_ticker_thesis(
     holdings_path = holdings_dir / f"{ticker.upper()}.json"
     payload = _read_holdings_payload(holdings_path)
     spec = _holdings_spec_from_payload(payload, path=holdings_path)
+    cutoff = datetime.now(UTC)
     evaluations: list[RuleEvaluation] = []
     hard_inputs: list[HardRuleCapture] = []
     soft_inputs: list[SoftEvaluationCapture] = []
@@ -999,72 +1398,18 @@ def evaluate_ticker_thesis(
         ("business_model_rules", spec.business_model_rules),
     ):
         for index, rule in enumerate(rules):
-            pointer = f"/{array_name}/{index}/kpi_name"
-            trace: dict[str, JsonValue] = {
-                "selected_definition": None,
-                "disposition": "unverified_report_reference",
-            }
-            verified_name = (
-                None
-                if repo_root is None
-                else _verified_report_rule_name(
+            evaluations.append(
+                _evaluate_hard_rule(
                     conn,
-                    repo_root=repo_root,
                     ticker=ticker,
-                    json_pointer=pointer,
-                    selections=references,
+                    rule=rule,
+                    repo_root=repo_root,
+                    json_pointer=f"/{array_name}/{index}",
+                    cutoff=cutoff,
+                    captures=hard_inputs,
+                    references=references,
                 )
             )
-            if repo_root is not None and verified_name is None:
-                history = None
-            elif verified_name is not None:
-                trace["selected_definition"] = verified_name
-                trace["disposition"] = "selected"
-                history = _fetch_kpi_history_for_resolved_definition(
-                    conn, ticker, verified_name, rule.consecutive_periods, trace=trace
-                )
-            else:
-                history = _fetch_kpi_history(
-                    conn, ticker, rule.kpi_name, rule.consecutive_periods, trace=trace
-                )
-            selected_name = trace.get("selected_definition")
-            definition_row = (
-                None
-                if not isinstance(selected_name, str)
-                else conn.execute(
-                    "SELECT * FROM kpi_definitions WHERE UPPER(ticker)=? AND name=?",
-                    (ticker.upper(), selected_name),
-                ).fetchone()
-            )
-            hard_inputs.append(
-                HardRuleCapture.model_validate(
-                    dict(
-                        rule=rule.model_dump(mode="json"),
-                        json_pointer=pointer,
-                        selected_definition=selected_name
-                        if isinstance(selected_name, str)
-                        else None,
-                        selected_definition_content=None
-                        if definition_row is None
-                        else _HOLDINGS_PAYLOAD_ADAPTER.validate_python(dict(definition_row)),
-                        disposition=trace["disposition"],
-                        selection_details=trace,
-                        observations=None
-                        if history is None
-                        else tuple(
-                            CapturedKpiObservation(
-                                period_end=obs.period_end,
-                                value=str(obs.value),
-                                unit=obs.unit.value,
-                                provenance=obs.provenance,
-                            )
-                            for obs in history
-                        ),
-                    )
-                )
-            )
-            references.append({"json_pointer": pointer, "selection": trace})
-            evaluations.append(evaluate_rule(rule, history))
     if repo_root is None:
         effective_soft_rules = spec.soft_rules
         soft_results = evaluate_soft_rules(
@@ -1090,13 +1435,14 @@ def evaluate_ticker_thesis(
         hard_inputs=tuple(hard_inputs),
         soft_inputs=tuple(soft_inputs),
         effective_soft_rules=effective_soft_rules,
+        retain_context=True,
     )
     verdict = ThesisVerdict(
         ticker=spec.ticker.upper(),
         thesis=spec.thesis,
         overall_status=_rollup_with_soft(evaluations, soft_results),
         rule_evaluations=tuple(evaluations),
-        evaluated_at=datetime.now(UTC),
+        evaluated_at=cutoff,
         soft_rule_results=tuple(soft_results),
         semantic_input=semantic,
     )
@@ -1134,7 +1480,10 @@ def evaluate_ticker_thesis(
 
 def replay_check_context(context: RetainedThesisContext) -> ThesisVerdict:
     """Execute supported saved rules without opening current files or databases."""
-    if context.semantic.evaluator_semantic_version != _THESIS_EVALUATOR_SEMANTIC_VERSION:
+    if context.semantic.evaluator_semantic_version not in {
+        _THESIS_EVALUATOR_SEMANTIC_VERSION,
+        _METRIC_EVALUATOR_SEMANTIC_VERSION,
+    }:
         raise EpisodeStoreError("saved evaluator version cannot be replayed")
     spec = _holdings_spec_from_payload(
         context.holdings_payload, path=Path("retained-holdings.json")
@@ -1149,23 +1498,50 @@ def replay_check_context(context: RetainedThesisContext) -> ThesisVerdict:
     ]
     if original_hard != [capture.rule for capture in context.hard_inputs]:
         raise EpisodeStoreError("saved hard rules differ from original rules")
-    evaluations = [
-        evaluate_rule(
-            BreakRule.model_validate(capture.rule),
-            None
-            if capture.observations is None
-            else [
-                KpiObservation(
-                    period_end=obs.period_end,
-                    value=Decimal(obs.value),
-                    unit=Unit(obs.unit),
-                    provenance=obs.provenance,
+    evaluations: list[RuleEvaluation] = []
+    for capture in context.hard_inputs:
+        rule = BreakRule.model_validate(capture.rule)
+        if rule.metric_expression is not None:
+            if capture.metric_input is None:
+                if capture.disposition != "unverified_report_reference":
+                    raise EpisodeStoreError("saved metric input is missing")
+                evaluation = RuleEvaluation(
+                    rule=rule,
+                    status=BreachStatus.UNRESOLVED,
+                    observations=(),
+                    detail="unresolved: unverified metric KPI reference",
                 )
-                for obs in capture.observations
-            ],
-        )
-        for capture in context.hard_inputs
-    ]
+            else:
+                if (
+                    capture.metric_input.ticker != context.ticker
+                    or capture.metric_input.cutoff != context.evaluated_at
+                ):
+                    raise EpisodeStoreError("saved metric identity differs")
+                try:
+                    result = replay_metric_capture(capture.metric_input)
+                except MetricReplayError as exc:
+                    raise EpisodeStoreError(str(exc)) from exc
+                evaluation = _evaluate_metric_rule(rule, result)
+        else:
+            if capture.metric_input is not None:
+                raise EpisodeStoreError("level rule has unexpected metric input")
+            evaluation = evaluate_rule(
+                rule,
+                None
+                if capture.observations is None
+                else [
+                    KpiObservation(
+                        period_end=obs.period_end,
+                        value=Decimal(obs.value),
+                        unit=Unit(obs.unit),
+                        provenance=obs.provenance,
+                        fiscal_period_type=obs.fiscal_period_type,
+                        fiscal_year=obs.fiscal_year,
+                    )
+                    for obs in capture.observations
+                ],
+            )
+        evaluations.append(evaluation)
     executed = [
         result for capture in context.soft_inputs for result in replay_soft_capture(capture)
     ]
@@ -1191,6 +1567,7 @@ def replay_check_context(context: RetainedThesisContext) -> ThesisVerdict:
         hard_inputs=context.hard_inputs,
         soft_inputs=context.soft_inputs,
         effective_soft_rules=effective_soft_rules,
+        retain_context=True,
     )
     verdict = ThesisVerdict(
         ticker=context.ticker,
@@ -1254,6 +1631,19 @@ def _serialize_rule_evaluations(verdict: ThesisVerdict) -> str:
             "status": e.status.value,
             "detail": e.detail,
             "narrative": e.rule.narrative,
+            **(
+                {
+                    "metric_expression": (
+                        e.rule.metric_expression.model_dump(mode="json")
+                        if e.rule.metric_expression is not None
+                        else None
+                    ),
+                    "require_adjacent_quarters": e.rule.require_adjacent_quarters,
+                    "source_manifest": e.source_manifest,
+                }
+                if _new_hard_semantics(e.rule)
+                else {}
+            ),
             "observations": [
                 {
                     "period_end": obs.period_end.isoformat(),
@@ -1277,7 +1667,11 @@ def _episode_schema_active(conn: sqlite3.Connection) -> bool:
 
 def _episode_rule_projection(verdict: ThesisVerdict) -> tuple[dict[str, JsonValue], ...]:
     parsed = _RULE_PROJECTION_ADAPTER.validate_json(_serialize_rule_evaluations(verdict))
-    return tuple(parsed)
+    if not _new_verdict_semantics(verdict):
+        return tuple(parsed)
+    return tuple(
+        _HOLDINGS_PAYLOAD_ADAPTER.validate_python(_semantic_evidence(row)) for row in parsed
+    )
 
 
 def _episode_soft_projection(
@@ -1290,7 +1684,11 @@ def _episode_soft_projection(
             "rule_name": result.rule_name,
             "status": result.status.value,
             "evidence": result.evidence,
-            "details": cast("dict[str, JsonValue]", result.details),
+            "details": (
+                _semantic_evidence(_HOLDINGS_PAYLOAD_ADAPTER.validate_python(result.details))
+                if _new_verdict_semantics(verdict)
+                else cast("dict[str, JsonValue]", result.details)
+            ),
         }
         for result in verdict.soft_rule_results
     )
@@ -1556,6 +1954,12 @@ def _persist_verdict_legacy(
     if holdings_dir is not None:
         with contextlib.suppress(FileNotFoundError):
             refresh_thesis_mirror(conn, verdict.ticker, holdings_dir)
+            refresh_thesis_kpi_registration(
+                conn,
+                holdings_dir=holdings_dir,
+                ticker=verdict.ticker,
+                apply=True,
+            )
     conn.commit()
 
 
@@ -1575,21 +1979,34 @@ def persist_verdict(
     append-per-call behavior.
     """
 
+    if holdings_dir is not None:
+        with contextlib.suppress(FileNotFoundError):
+            refresh_thesis_kpi_registration(
+                conn,
+                holdings_dir=holdings_dir,
+                ticker=verdict.ticker,
+                apply=False,
+            )
+
     if not _episode_schema_active(conn):
-        _persist_verdict_legacy(
-            conn,
-            verdict,
-            run_id=run_id,
-            holdings_dir=holdings_dir,
-            override=override,
-        )
+        try:
+            _persist_verdict_legacy(
+                conn,
+                verdict,
+                run_id=run_id,
+                holdings_dir=holdings_dir,
+                override=override,
+            )
+        except Exception:
+            conn.rollback()
+            raise
         return
     if run_id is None:
         raise ValueError("run_id is required when semantic thesis episodes are active")
     if verdict.semantic_input is None:
         raise ValueError("semantic_input is required when semantic thesis episodes are active")
 
-    if verdict.semantic_input.evaluator_semantic_version == _THESIS_EVALUATOR_SEMANTIC_VERSION:
+    if verdict.semantic_input.requires_retained_context:
         if verdict.retained_context is None:
             raise EpisodeStoreError("new thesis check requires retained context")
         replayed = replay_check_context(verdict.retained_context)
@@ -1677,6 +2094,12 @@ def persist_verdict(
         if holdings_dir is not None:
             with contextlib.suppress(FileNotFoundError):
                 refresh_thesis_mirror(conn, verdict.ticker, holdings_dir)
+                refresh_thesis_kpi_registration(
+                    conn,
+                    holdings_dir=holdings_dir,
+                    ticker=verdict.ticker,
+                    apply=True,
+                )
         conn.commit()
     except Exception:
         conn.rollback()
