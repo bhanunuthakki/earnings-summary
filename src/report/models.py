@@ -15,7 +15,8 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from sources.discovery_market import DiscoveryMarketContext
-from sources.report_financials import FinancialTableProjection
+from sources.financial_growth_evidence import FinancialGrowthReference
+from sources.report_financials import FinancialEvidenceReference, FinancialTableProjection
 
 
 class SectionStatus(StrEnum):
@@ -544,6 +545,10 @@ class CellSource(BaseModel):
     # (the original P4.3 chip source); KPI-sourced chips set "kpi_facts"
     # (provenance Phase B, where IR-deck pdf_slide locators live).
     fact_table: str = "financial_facts"
+    # Exact admitted report selection. The shared chip prefers this over
+    # mutable legacy fact/document references when it is present.
+    canonical_reference: FinancialEvidenceReference | None = None
+    calculation_reference: FinancialGrowthReference | None = None
 
 
 class QuarterlyLineItem(BaseModel):
@@ -565,6 +570,9 @@ class QuarterlyLineItem(BaseModel):
     # per instance) — Field(default_factory=list) infers list[Unknown] here
     # and trips the pyright strict ratchet.
     sources_full: list[CellSource | None] = []
+    growth_evidence: dict[str, FinancialGrowthReference] = {}
+    yoy_evidence_full: list[FinancialGrowthReference | None] = []
+    level_cagr_evidence: dict[str, FinancialGrowthReference] = {}
     # Edge i admits comparison from i-1 to i. None is legacy/unmigrated;
     # an explicit empty or false mask never grants canonical comparability.
     comparison_eligible_edges: list[bool] | None = None

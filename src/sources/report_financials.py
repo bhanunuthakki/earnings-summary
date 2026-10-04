@@ -14,11 +14,25 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import FactReadModel, ProvenanceBundle
 from provenance.metric_ontology import MetricOntology
+from sources.canonical_financial_series import (
+    FinancialCadence,
+    FinancialConsumerPoint,
+    SeriesContinuity,
+    read_financial_consumer_series,
+)
 
 FinancialReportConcept = Literal[
     "revenue",
@@ -40,6 +54,69 @@ REPORT_CONCEPTS: tuple[FinancialReportConcept, ...] = (
     "free_cash_flow",
     "capital_expenditure",
 )
+
+
+class FinancialEvidenceReference(BaseModel):
+    """Read-only identity for one admitted report cell at its original cutoff.
+
+    This is a selection reference, not a signed report-authentication token.
+    Every identity must still match the complete admitted projection.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
+    ticker: str = Field(min_length=1, max_length=32, pattern=r"^[A-Z][A-Z0-9.-]*$")
+    concept: str = Field(min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
+    reader_kind: Literal["report_table", "series"] = "report_table"
+    cadence: FinancialCadence | None = None
+    continuity: SeriesContinuity | None = None
+    canonical_metric_cell_id: str = Field(min_length=1, max_length=128)
+    observation_id: str = Field(min_length=1, max_length=128)
+    canonical_resolution_revision_id: str = Field(min_length=1, max_length=128)
+    metric_definition_revision_id: str = Field(min_length=1, max_length=128)
+    as_of: AwareDatetime
+
+    @model_validator(mode="after")
+    def _reader_shape(self) -> FinancialEvidenceReference:
+        if self.reader_kind == "report_table":
+            if (
+                self.concept not in REPORT_CONCEPTS
+                or self.cadence is not None
+                or self.continuity is not None
+            ):
+                raise ValueError("invalid report-table reference")
+        elif self.cadence is None or self.continuity is None:
+            raise ValueError("series reference requires cadence and continuity")
+        return self
+
+    @field_validator(
+        "canonical_metric_cell_id",
+        "observation_id",
+        "canonical_resolution_revision_id",
+        "metric_definition_revision_id",
+    )
+    @classmethod
+    def _nonblank_identity(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("evidence identities must be nonblank")
+        return value
+
+    @field_validator("as_of", mode="before")
+    @classmethod
+    def _json_iso_cutoff(cls, value: object, info: ValidationInfo) -> object:
+        if info.mode == "json":
+            if not isinstance(value, str):
+                raise ValueError("financial evidence cutoff must be an ISO datetime string")
+            # Numeric timestamp strings must not acquire an inferred timezone.
+            return datetime.fromisoformat(value)
+        return value
+
+    @field_validator("as_of")
+    @classmethod
+    def _past_utc_cutoff(cls, value: datetime) -> datetime:
+        cutoff = value.astimezone(UTC)
+        if cutoff > datetime.now(UTC):
+            raise ValueError("financial evidence cutoff must not be in the future")
+        return cutoff
 
 
 class FinancialTableCell(BaseModel):
@@ -308,4 +385,72 @@ def read_financial_table(
         as_of=cutoff,
         cells=tuple(cells),
         reason_codes=() if cells else ("no_canonical_financial_cells",),
+    )
+
+
+def read_financial_evidence(
+    conn: sqlite3.Connection, reference: FinancialEvidenceReference
+) -> FinancialTableCell | FinancialConsumerPoint | None:
+    """Re-admit the exact report selection without a current or legacy fallback.
+
+    The complete projection preserves table-wide rejection rules and its
+    existing snapshot ownership. No further database read follows it.
+    """
+    if reference.reader_kind == "series":
+        if reference.cadence is None or reference.continuity is None:
+            return None
+        result = read_financial_consumer_series(
+            conn,
+            reference.ticker,
+            reference.concept,
+            cutoff=reference.as_of,
+            cadence=reference.cadence,
+            continuity=reference.continuity,
+        )
+        for point in result.points:
+            item = point.observation
+            if (
+                item.canonical_metric_cell_id == reference.canonical_metric_cell_id
+                and item.observation_id == reference.observation_id
+                and item.canonical_resolution_revision_id
+                == reference.canonical_resolution_revision_id
+                and item.metric_definition_revision_id == reference.metric_definition_revision_id
+            ):
+                return point
+        return None
+    projection = read_financial_table(conn, reference.ticker, as_of=reference.as_of)
+    for cell in projection.cells:
+        if (
+            cell.available
+            and cell.provenance is not None
+            and cell.concept == reference.concept
+            and cell.canonical_metric_cell_id == reference.canonical_metric_cell_id
+            and cell.provenance.observation.observation_id == reference.observation_id
+            and cell.canonical_resolution_revision_id == reference.canonical_resolution_revision_id
+            and cell.metric_definition_revision_id == reference.metric_definition_revision_id
+        ):
+            return cell
+    return None
+
+
+def financial_series_reference(
+    point: FinancialConsumerPoint,
+    *,
+    ticker: str,
+    cutoff: datetime,
+    cadence: FinancialCadence,
+    continuity: SeriesContinuity,
+) -> FinancialEvidenceReference:
+    item = point.observation
+    return FinancialEvidenceReference(
+        ticker=ticker,
+        concept=item.metric,
+        reader_kind="series",
+        cadence=cadence,
+        continuity=continuity,
+        canonical_metric_cell_id=item.canonical_metric_cell_id,
+        observation_id=item.observation_id,
+        canonical_resolution_revision_id=item.canonical_resolution_revision_id,
+        metric_definition_revision_id=item.metric_definition_revision_id,
+        as_of=cutoff,
     )

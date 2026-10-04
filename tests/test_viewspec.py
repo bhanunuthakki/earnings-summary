@@ -17,6 +17,9 @@ from pathlib import Path
 import pytest
 
 from report.models import CellSource
+from tests.kpi_semantic_support import admit_all_kpi_facts
+from tests.test_report_canonical_financials import database as database
+from tests.test_report_canonical_financials import seed_table
 from timeseries.loaders import (
     load_financial_series_with_provenance,
     load_kpi_series_with_provenance,
@@ -238,6 +241,57 @@ def db(tmp_path: Path) -> Path:
     return path
 
 
+@pytest.fixture
+def canonical_db(database: sqlite3.Connection, tmp_path: Path) -> Path:
+    rows: list[tuple[str, str, str, str, str, str]] = []
+    values = [(str(pe)[:10], fpt, value) for pe, fpt, value in _TST_REVENUE]
+    values.append(("2025-12-31", "Q4", 160))
+    for end, fiscal, value in values:
+        month = {"Q1": "01", "Q2": "04", "Q3": "07", "Q4": "10"}[fiscal]
+        rows.append(("revenue", f"{end[:4]}-{month}-01", end, fiscal, str(value), "USD"))
+    rows.extend(
+        ("revenue", f"{year}-01-01", f"{year}-12-31", "FY", str(value), "USD")
+        for year, value in [(2024, 460), (2025, 562)]
+    )
+    for metric, amounts in [
+        ("net_income", [12, 13.2, 18, 24]),
+        ("operating_income", [200, 210, 220, 230]),
+    ]:
+        for fiscal, month, end, value in zip(
+            ["Q1", "Q2", "Q3", "Q4"],
+            ["01", "04", "07", "10"],
+            ["03-31", "06-30", "09-30", "12-31"],
+            amounts,
+            strict=True,
+        ):
+            rows.append((metric, f"2025-{month}-01", f"2025-{end}", fiscal, str(value), "USD"))
+    database.execute(
+        "INSERT INTO documents(id,ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,raw_bytes_size) VALUES(2,'TST','fmp','fmp_income_statement','synthetic','synthetic','2025-12-31','ok',1)"
+    )
+    seed_table(database, rows, ticker="TST", legacy_document_id=2)
+    definition = database.execute(
+        "INSERT INTO kpi_definitions(ticker,name,unit,primary_source) VALUES('TST','ROE','percent','synthetic')"
+    )
+    assert definition.lastrowid is not None
+    database.executemany(
+        "INSERT INTO kpi_facts(ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,source_doc_id) VALUES('TST',?,?,?,?,'percent',2)",
+        [
+            ("2025-09-30", "Q3", definition.lastrowid, 11),
+            ("2025-12-31", "Q4", definition.lastrowid, 12.5),
+        ],
+    )
+    admit_all_kpi_facts(database)
+    # This renderer fixture covers admitted KPI units beside real canonical
+    # financial points. The production KPI cutover view needs publication
+    # receipts that are outside this formatting fixture (as in cockpit tests).
+    database.execute("DROP VIEW IF EXISTS v_kpi_facts_resolved_current")
+    database.execute(
+        "CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts WHERE ticker='TST'"
+    )
+    database.commit()
+    return tmp_path / "source-fact-repository.db"
+
+
 # ----------------------------------------------------------------------------
 # spec model
 # ----------------------------------------------------------------------------
@@ -384,7 +438,8 @@ def test_viewspec_uses_canonical_financial_relation_over_raw_candidate(db: Path)
 
     result = execute_view(_spec(metrics=["fin:revenue"]), db_path=db)
 
-    assert result.rows[0].cells[-1].raw == 160.0
+    assert result.rows == []
+    assert "canonical_financial_schema_unavailable" in result.warnings[0]
 
 
 def test_viewspec_fails_closed_on_unadmitted_kpi_override(db: Path) -> None:
@@ -438,8 +493,10 @@ def _spec(**overrides: object) -> ViewSpec:
     return ViewSpec.from_dict(base)
 
 
-def test_engine_level_alignment_and_chips(db: Path) -> None:
-    result = execute_view(_spec(tickers=["TST", "ALT"]), db_path=db)
+def test_engine_level_alignment_and_chips(canonical_db: Path) -> None:
+    result = execute_view(
+        _spec(metrics=["fin:revenue", "fin:operating_income"]), db_path=canonical_db
+    )
     assert result.period_labels == [
         "Q1'24",
         "Q2'24",
@@ -450,20 +507,20 @@ def test_engine_level_alignment_and_chips(db: Path) -> None:
         "Q3'25",
         "Q4'25",
     ]
-    assert [r.label for r in result.rows] == ["TST · revenue", "ALT · revenue"]
+    assert [r.label for r in result.rows] == ["TST · revenue", "TST · operating_income"]
     tst, alt = result.rows
     assert [c.value for c in tst.cells] == [100, 110, 120, 130, 120, 132, 150, 160]
     # ALT has no 2024 history: leading buckets are empty, not misaligned.
     assert [c.value for c in alt.cells] == [None, None, None, None, 200, 210, 220, 230]
     last = tst.cells[-1]
     assert last.source is not None
-    assert last.source.source == "sec_official"
-    assert last.source.doc_id == 2
+    assert last.source.canonical_reference is not None
+    assert last.source.fact_id is None and last.source.doc_id == 2
     assert result.warnings == []
 
 
-def test_engine_yoy_and_periods_window(db: Path) -> None:
-    result = execute_view(_spec(transform="yoy", periods=4), db_path=db)
+def test_engine_yoy_and_periods_window(canonical_db: Path) -> None:
+    result = execute_view(_spec(transform="yoy", periods=4), db_path=canonical_db)
     (row,) = result.rows
     assert result.period_labels == ["Q1'25", "Q2'25", "Q3'25", "Q4'25"]
     values = [c.value for c in row.cells]
@@ -472,30 +529,32 @@ def test_engine_yoy_and_periods_window(db: Path) -> None:
     assert values[2] == pytest.approx(25.0)  # 150 vs 120
     assert values[3] == pytest.approx((160 / 130 - 1) * 100)
     assert row.cells[0].raw == 120  # the underlying level rides along
-    assert {source.fact_id for source in row.cells[0].sources} == {1, 5}
+    assert len(row.cells[0].financial_inputs) == 2
+    assert {point.value for point in row.cells[0].financial_inputs} == {100, 120}
 
 
-def test_engine_cagr(db: Path) -> None:
-    result = execute_view(_spec(transform="cagr", cagr_years=1, periods=4), db_path=db)
+def test_engine_cagr(canonical_db: Path) -> None:
+    result = execute_view(_spec(transform="cagr", cagr_years=1, periods=4), db_path=canonical_db)
     (row,) = result.rows
     # 1y CAGR == YoY by construction.
     assert row.cells[0].value == pytest.approx(20.0)
     assert row.cells[3].value == pytest.approx((160 / 130 - 1) * 100)
 
 
-def test_engine_margin(db: Path) -> None:
+def test_engine_margin(canonical_db: Path) -> None:
     result = execute_view(
-        _spec(metrics=["fin:net_income"], transform="margin", periods=4), db_path=db
+        _spec(metrics=["fin:net_income"], transform="margin", periods=4), db_path=canonical_db
     )
     (row,) = result.rows
     values = [c.value for c in row.cells]
     assert values[0] == pytest.approx(10.0)  # 12 / 120
     assert values[3] == pytest.approx(15.0)  # 24 / 160 (SEC-picked divisor)
-    assert {source.fact_id for source in row.cells[3].sources} == {9, 15}
+    assert len(row.cells[3].financial_inputs) == 2
+    assert {point.value for point in row.cells[3].financial_inputs} == {24, 160}
 
 
-def test_engine_annual_cadence(db: Path) -> None:
-    result = execute_view(_spec(cadence="annual", transform="yoy"), db_path=db)
+def test_engine_annual_cadence(canonical_db: Path) -> None:
+    result = execute_view(_spec(cadence="annual", transform="yoy"), db_path=canonical_db)
     (row,) = result.rows
     assert result.period_labels == ["FY2024", "FY2025"]
     assert row.cells[0].value is None
@@ -536,8 +595,8 @@ def test_engine_suppresses_legacy_rows_without_a_canonical_forecast_coordinate(d
 
     result = execute_view(_spec(cadence="annual", periods=2), db_path=db)
 
-    assert result.period_labels == ["FY2024", "FY2025"]
-    assert [cell.value for cell in result.rows[0].cells] == [460.0, 562.0]
+    assert result.rows == [] and result.period_labels == []
+    assert "canonical_financial_schema_unavailable" in result.warnings[0]
     assert result.forecast_rows == []
     html_out = render_view_fragment(result)
     assert "DCF forecast" not in html_out
@@ -646,9 +705,8 @@ def test_engine_auto_overlays_a_provenance_bound_canonical_coordinate(db: Path) 
     conn.close()
     result = execute_view(_spec(cadence="annual", periods=2), db_path=db)
 
-    assert result.period_labels == ["FY2024", "FY2025", "FY2026", "FY2027"]
-    assert len(result.forecast_rows) == 1
-    assert result.forecast_rows[0].values == [None, None, 650.0, 700.0]
+    assert result.rows == [] and result.forecast_rows == []
+    assert result.warnings
 
 
 def test_canonical_coordinate_bridge_runs_against_migrated_schema(
@@ -688,7 +746,7 @@ def test_engine_segments_and_warnings(db: Path) -> None:
 def test_engine_missing_db(tmp_path: Path) -> None:
     result = execute_view(_spec(), db_path=tmp_path / "absent.db")
     assert result.rows == []
-    assert result.warnings == ["TST: no data for fin:revenue"]
+    assert result.warnings == ["TST: fin:revenue omitted: canonical_financial_database_unavailable"]
 
 
 # ----------------------------------------------------------------------------
@@ -696,12 +754,12 @@ def test_engine_missing_db(tmp_path: Path) -> None:
 # ----------------------------------------------------------------------------
 
 
-def test_render_fragment_matrix_chips_chart(db: Path) -> None:
-    result = execute_view(_spec(metrics=["fin:revenue", "kpi:ROE"]), db_path=db)
+def test_render_fragment_matrix_chips_chart(canonical_db: Path) -> None:
+    result = execute_view(_spec(metrics=["fin:revenue", "kpi:ROE"]), db_path=canonical_db)
     html_out = render_view_fragment(result)
     assert 'class="vx-matrix"' in html_out
     assert "Q1&#x27;24" in html_out  # escaped period header
-    assert 'class="src-chip src-sec-official"' in html_out  # chips rendered
+    assert "/api/peek/canonical-financial?reference=" in html_out  # chips rendered
     assert "open in viewer" in html_out  # doc_id deep link present
     assert "<svg" in html_out  # chart included by default
     assert "12.5%" in html_out  # percent-unit KPI level formatting
@@ -709,8 +767,8 @@ def test_render_fragment_matrix_chips_chart(db: Path) -> None:
     assert "<svg" not in no_chart
 
 
-def test_render_yoy_heat_shading(db: Path) -> None:
-    result = execute_view(_spec(transform="yoy", periods=4), db_path=db)
+def test_render_yoy_heat_shading(canonical_db: Path) -> None:
+    result = execute_view(_spec(transform="yoy", periods=4), db_path=canonical_db)
     html_out = render_view_fragment(result, include_chart=False)
     # Positive growth shades green — tinted through the --ok status token
     # (color-mix), not a hardcoded rgba.

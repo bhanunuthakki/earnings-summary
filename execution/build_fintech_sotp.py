@@ -47,34 +47,41 @@ from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
-T = os.environ.get("DCF_TICKER", "SOFI")
-DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
-
-sys.path.insert(0, str(REPO / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
-from dcf.artifact_promotion import (  # noqa: E402
+from db_paths import require_db_path, resolve_db_path
+from dcf.artifact_promotion import (
     ArtifactPromotion,
     live_path_from_env,
     promotion_from_env,
+    run_dcf_entrypoint,
 )
-from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
-from dcf.specialized_price import (  # noqa: E402
+from dcf.provenance import build_file_provenance, schema_supports_provenance
+from dcf.specialized_price import (
     SpecializedPriceObservation,
     price_seed_source_files,
     resolve_specialized_price,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
+T = os.environ.get("DCF_TICKER", "SOFI")
+DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
+
 
 try:  # persistence is best-effort -- the workbook builds without a DB
-    from dcf import persist as persist_mod
+    from dcf import persist as _persist_mod_module
 except ImportError:  # pragma: no cover
-    persist_mod = None  # type: ignore[assignment]
+    persist_mod = None
+else:
+    persist_mod = _persist_mod_module
 try:  # global macro assumptions -- best-effort; degrades to in-code seed defaults
-    from dcf import global_assumptions as global_dcf
+    from dcf import global_assumptions as _global_dcf_module
 except ImportError:  # pragma: no cover
-    global_dcf = None  # type: ignore[assignment]
+    global_dcf = None
+else:
+    global_dcf = _global_dcf_module
 
 YELLOW = PatternFill("solid", fgColor="FFF2CC")
 BLUE_FONT = Font(color="1F4E79")
@@ -131,7 +138,9 @@ class Sotp:
     price: float = 15.71
     price_seed_source: str = field(default="model_seed", repr=False)
     price_seed_path: str | None = field(default=None, repr=False)
-    global_assumption_source: dict[str, object] = field(default_factory=dict, repr=False)
+    global_assumption_source: dict[str, object] = field(
+        default_factory=dict[str, object], repr=False
+    )
 
 
 def seg_vals(s: Sotp) -> tuple[float, float, float]:
@@ -169,9 +178,12 @@ def _load(ticker: str) -> Sotp:
         try:
             d: Any = json.loads(prof.read_text(encoding="utf-8"))
             if isinstance(d, list):
-                d = d[0] if d else {}
-            if isinstance(d, dict) and d.get("price"):
-                s.price = float(d["price"])
+                d = cast("list[Any]", d)[0] if d else dict[str, Any]()
+            if isinstance(d, dict):
+                record = cast("dict[str, Any]", d)
+                if not record.get("price"):
+                    raise ValueError("profile price missing")
+                s.price = float(record["price"])
                 s.price_seed_source = "fmp_profile"
                 s.price_seed_path = f"data/historical/fmp/{ticker}_profile.json"
         except (OSError, json.JSONDecodeError, ValueError, KeyError):
@@ -192,7 +204,7 @@ def _load(ticker: str) -> Sotp:
     # Opt-in: derive ke from the global risk-free/ERP when the name asks for it
     # (after JSON overrides so beta / the flag can be tuned per name).
     global_loaded = (
-        global_dcf.load_with_provenance(db_path=REPO / "data" / "portfolio.db")
+        global_dcf.load_with_provenance(db_path=resolve_db_path(None, configured_root=REPO))
         if global_dcf is not None
         else None
     )
@@ -261,6 +273,7 @@ R = {
 def build(s: Sotp, dest: Path) -> None:
     wb = openpyxl.Workbook()
     dash = wb.active
+    assert isinstance(dash, Worksheet)
     dash.title = "Dashboard"
     seg = wb.create_sheet("Segments")
     corp = wb.create_sheet("Corporate")
@@ -497,7 +510,7 @@ def persist_dcf_run(
 ) -> bool:
     """Best-effort upsert into dcf_runs so the brief's valuation panel reads the
     SOTP value/share. No-op without the DB / persist module."""
-    db = REPO / "data" / "portfolio.db"
+    db = require_db_path(resolve_db_path(None, configured_root=REPO))
     if persist_mod is None or not db.exists() or not vps:
         return False
     holdings = REPO / "micro_thesis" / "holdings" / f"{T}.json"
@@ -582,7 +595,7 @@ def persist_dcf_run(
         return persist_mod.upsert(conn, row, artifact_promotion=artifact_promotion)
 
 
-def main() -> int:
+def _main_owned() -> int:
     s = _load(T)
     price_observation = resolve_specialized_price(
         REPO,
@@ -625,6 +638,10 @@ def main() -> int:
     print(f"  (5) - Net corp debt                     = ${-s.net_corp_debt / 1000:6.1f}B")
     print(f"  = SOTP equity ${eq / 1000:.1f}B  -> ${vps:.2f}/sh  (vs ${s.price:.2f}, {up:+.0%})")
     return 0
+
+
+def main() -> int:
+    return run_dcf_entrypoint(REPO, T, _main_owned, owner="build-fintech-sotp")
 
 
 if __name__ == "__main__":

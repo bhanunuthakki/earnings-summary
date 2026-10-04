@@ -990,6 +990,63 @@ def populate_document_processing(
         conn.row_factory = original_row_factory
 
 
+def _scoped_document_rows(
+    conn: sqlite3.Connection,
+    scope: AnalysisEvidenceScope,
+    cutoff: datetime,
+    observed_through: datetime,
+) -> list[sqlite3.Row]:
+    """Retain resolved coverage and select lifecycle at exact normalized clocks."""
+    require_analysis_documents(conn, scope, cutoff, observed_through)
+    coverage = {
+        item.expected_document_id: item
+        for item in resolve_analysis_coverage(conn, scope, cutoff, observed_through)
+        if item.role == "research_document"
+    }
+    rows: list[sqlite3.Row] = []
+    for entry in sorted(
+        (entry for entry in scope.entries if entry.role == "research_document"),
+        key=lambda entry: (entry.expected_document.issuer_id, entry.expected_document_key),
+    ):
+        lifecycle_rows = conn.execute(
+            "SELECT status,expected_document_id,knowledge_at,recorded_at "
+            "FROM expected_document_lifecycle_revisions "
+            "WHERE inventory_key=? AND expected_document_key=? ORDER BY revision DESC",
+            (scope.inventory.inventory_key, entry.expected_document_key),
+        ).fetchall()
+        lifecycle = next(
+            (
+                row
+                for row in lifecycle_rows
+                if _parse_time(row[2]) <= _utc(cutoff)
+                and _parse_time(row[3]) <= _utc(observed_through)
+            ),
+            None,
+        )
+        selected = coverage[entry.expected_document_id]
+        row = conn.execute(
+            "SELECT expected.expected_document_id,expected.issuer_id,"
+            "expected.source_kind,expected.document_type,expected.form_type,"
+            "? AS document_version_id,? AS coverage_status,"
+            "canonical.reporting_entity_id,? AS status,? AS lifecycle_expected_document_id "
+            "FROM expected_documents expected "
+            "LEFT JOIN v_evidence_document_versions_canonical canonical "
+            "ON canonical.document_version_id=? WHERE expected.expected_document_id=?",
+            (
+                selected.document_version_id,
+                selected.coverage_status,
+                None if lifecycle is None else lifecycle[0],
+                None if lifecycle is None else lifecycle[1],
+                selected.document_version_id,
+                entry.expected_document_id,
+            ),
+        ).fetchone()
+        if row is None:
+            raise ValueError("analysis expected document is missing")
+        rows.append(row)
+    return rows
+
+
 def _document_scope(
     conn: sqlite3.Connection,
     cutoff: datetime,
@@ -1001,65 +1058,58 @@ def _document_scope(
     dict[str, tuple[str, ...]],
     int,
 ]:
-    selected_ids: set[str] | None = None
     if analysis_scope is not None:
-        require_analysis_documents(conn, analysis_scope, cutoff, observed_through)
-        selected_ids = {
-            entry.expected_document_id
-            for entry in resolve_analysis_coverage(conn, analysis_scope, cutoff, observed_through)
-            if entry.role == "research_document"
-        }
-    rows = conn.execute(
-        "SELECT expected.expected_document_id,expected.issuer_id,"
-        "expected.source_kind,expected.document_type,expected.form_type,"
-        "coverage.document_version_id,"
-        "COALESCE(coverage.coverage_status,'unassessed'),"
-        "canonical.reporting_entity_id,lifecycle.status,"
-        "lifecycle.expected_document_id "
-        "FROM expected_documents expected "
-        "JOIN source_inventory_snapshots inventory "
-        "ON inventory.snapshot_id=expected.snapshot_id "
-        "LEFT JOIN expected_document_lifecycle_revisions lifecycle "
-        "ON lifecycle.inventory_key=inventory.inventory_key "
-        "AND lifecycle.expected_document_key=expected.expected_document_key "
-        "AND datetime(lifecycle.knowledge_at)<=datetime(?) "
-        "AND datetime(lifecycle.recorded_at)<=datetime(?) "
-        "AND NOT EXISTS (SELECT 1 FROM expected_document_lifecycle_revisions newer_lifecycle "
-        "WHERE newer_lifecycle.inventory_key=lifecycle.inventory_key "
-        "AND newer_lifecycle.expected_document_key=lifecycle.expected_document_key "
-        "AND newer_lifecycle.revision>lifecycle.revision "
-        "AND datetime(newer_lifecycle.knowledge_at)<=datetime(?) "
-        "AND datetime(newer_lifecycle.recorded_at)<=datetime(?)) "
-        "LEFT JOIN source_coverage_assessments coverage "
-        "ON coverage.expected_document_id=expected.expected_document_id "
-        "AND datetime(coverage.knowledge_at)<=datetime(?) "
-        "AND datetime(coverage.recorded_at)<=datetime(?) "
-        "AND NOT EXISTS (SELECT 1 FROM source_coverage_assessments newer "
-        "WHERE newer.expected_document_id=coverage.expected_document_id "
-        "AND newer.revision>coverage.revision "
-        "AND datetime(newer.knowledge_at)<=datetime(?) "
-        "AND datetime(newer.recorded_at)<=datetime(?)) "
-        "LEFT JOIN v_evidence_document_versions_canonical canonical "
-        "ON canonical.document_version_id=coverage.document_version_id "
-        "WHERE datetime(expected.recorded_at)<=datetime(?) "
-        "ORDER BY expected.issuer_id,expected.expected_document_key",
-        (
-            _db_time(cutoff),
-            _db_time(observed_through),
-            _db_time(cutoff),
-            _db_time(observed_through),
-            _db_time(cutoff),
-            _db_time(observed_through),
-            _db_time(cutoff),
-            _db_time(observed_through),
-            _db_time(observed_through),
-        ),
-    ).fetchall()
+        rows = _scoped_document_rows(conn, analysis_scope, cutoff, observed_through)
+    else:
+        rows = conn.execute(
+            "SELECT expected.expected_document_id,expected.issuer_id,"
+            "expected.source_kind,expected.document_type,expected.form_type,"
+            "coverage.document_version_id,"
+            "COALESCE(coverage.coverage_status,'unassessed'),"
+            "canonical.reporting_entity_id,lifecycle.status,"
+            "lifecycle.expected_document_id "
+            "FROM expected_documents expected "
+            "JOIN source_inventory_snapshots inventory "
+            "ON inventory.snapshot_id=expected.snapshot_id "
+            "LEFT JOIN expected_document_lifecycle_revisions lifecycle "
+            "ON lifecycle.inventory_key=inventory.inventory_key "
+            "AND lifecycle.expected_document_key=expected.expected_document_key "
+            "AND datetime(lifecycle.knowledge_at)<=datetime(?) "
+            "AND datetime(lifecycle.recorded_at)<=datetime(?) "
+            "AND NOT EXISTS (SELECT 1 FROM expected_document_lifecycle_revisions newer_lifecycle "
+            "WHERE newer_lifecycle.inventory_key=lifecycle.inventory_key "
+            "AND newer_lifecycle.expected_document_key=lifecycle.expected_document_key "
+            "AND newer_lifecycle.revision>lifecycle.revision "
+            "AND datetime(newer_lifecycle.knowledge_at)<=datetime(?) "
+            "AND datetime(newer_lifecycle.recorded_at)<=datetime(?)) "
+            "LEFT JOIN source_coverage_assessments coverage "
+            "ON coverage.expected_document_id=expected.expected_document_id "
+            "AND datetime(coverage.knowledge_at)<=datetime(?) "
+            "AND datetime(coverage.recorded_at)<=datetime(?) "
+            "AND NOT EXISTS (SELECT 1 FROM source_coverage_assessments newer "
+            "WHERE newer.expected_document_id=coverage.expected_document_id "
+            "AND newer.revision>coverage.revision "
+            "AND datetime(newer.knowledge_at)<=datetime(?) "
+            "AND datetime(newer.recorded_at)<=datetime(?)) "
+            "LEFT JOIN v_evidence_document_versions_canonical canonical "
+            "ON canonical.document_version_id=coverage.document_version_id "
+            "WHERE datetime(expected.recorded_at)<=datetime(?) "
+            "ORDER BY expected.issuer_id,expected.expected_document_key",
+            (
+                _db_time(cutoff),
+                _db_time(observed_through),
+                _db_time(cutoff),
+                _db_time(observed_through),
+                _db_time(cutoff),
+                _db_time(observed_through),
+                _db_time(cutoff),
+                _db_time(observed_through),
+                _db_time(observed_through),
+            ),
+        ).fetchall()
     grouped: dict[str, list[str]] = {}
     decisions: list[ReportingDocumentDecision] = []
     for row in rows:
-        if selected_ids is not None and str(row[0]) not in selected_ids:
-            continue
         lifecycle_status = None if row[8] is None else str(row[8])
         lifecycle_expected_id = None if row[9] is None else str(row[9])
         if lifecycle_status is None:

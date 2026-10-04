@@ -23,11 +23,13 @@ Transforms (the spec's vocabulary):
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 from urllib.parse import unquote
@@ -47,13 +49,19 @@ from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import FactOverride, get_active_overrides, override_provenance
 from report.models import CellSource
+from sources.canonical_financial_series import (
+    CanonicalFinancialObservation,
+    FinancialCadence,
+    financial_metric_catalog,
+    read_financial_consumer_series,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from timeseries.loaders import (
     SourcedObservation,
-    load_financial_series_with_provenance,
     load_kpi_series_with_provenance,
     load_segment_junction_series_with_provenance,
 )
+from ui.source_chip import financial_consumer_source
 from viewspec.spec import MetricRef, ViewSpec
 
 log = logging.getLogger(__name__)
@@ -105,6 +113,8 @@ class ViewCell:
     source: CellSource | None
     sources: tuple[CellSource, ...] = ()
     forecast_coordinate: ForecastSemanticCoordinate | None = None
+    financial_observation: CanonicalFinancialObservation | None = None
+    financial_inputs: tuple[CanonicalFinancialObservation, ...] = ()
 
 
 def _cell_sources(cell: ViewCell | None) -> tuple[CellSource, ...]:
@@ -359,6 +369,7 @@ def _load_row_data(
     overrides: _ScalarOverrideMap,
     kpi_resolution: _KpiResolution,
     conn: sqlite3.Connection | None = None,
+    cutoff: datetime | None = None,
 ) -> tuple[dict[_Bucket, ViewCell], str | None]:
     """One (ticker, metric) series as {bucket: level cell} + the unit hint.
 
@@ -369,19 +380,50 @@ def _load_row_data(
     period_types = _ANNUAL_PERIOD_TYPES if cadence == "annual" else _QUARTERLY_PERIOD_TYPES
     cells: dict[_Bucket, ViewCell] = {}
     unit: str | None = None
-    if metric.domain in ("fin", "kpi"):
-        sourced: list[SourcedObservation]
-        if metric.domain == "fin":
-            load_key = metric.key
-            sourced = load_financial_series_with_provenance(
-                ticker,
-                load_key,
-                repo_root,
-                db_path=db_path,
-                period_types=period_types,
-                conn=conn,
+    if metric.domain == "fin":
+        if conn is None:
+            raise _IncompatibleDetailSeriesError("canonical_financial_database_unavailable")
+        result = read_financial_consumer_series(
+            conn,
+            ticker,
+            metric.key,
+            cutoff=cutoff or datetime.now(UTC),
+            cadence=FinancialCadence.ANNUAL if cadence == "annual" else FinancialCadence.QUARTERLY,
+        )
+        if result.series.status != "available":
+            raise _IncompatibleDetailSeriesError(
+                result.series.reason_code or "canonical_financial_series_unavailable"
             )
-        else:
+        for point in result.points:
+            item = point.observation
+            bucket = _to_bucket(item.period_end.year, item.period_end.month, cadence)
+            if bucket in cells:
+                raise _IncompatibleDetailSeriesError("ambiguous_financial_display_bucket")
+            source = financial_consumer_source(point, result)
+            coordinate = ForecastSemanticCoordinate(
+                canonical_metric_definition_revision_id=item.metric_definition_revision_id,
+                period_kind="duration",
+                unit_family="currency",
+                value_scale="ones",
+                currency=item.currency,
+                accounting_basis=item.accounting_basis,
+                consolidation_scope=item.consolidation_scope,
+                dimensions_sha256=point.provenance.cell.dimensions_sha256,
+            )
+            cells[bucket] = ViewCell(
+                value=None,
+                raw=float(item.value),
+                source=source,
+                sources=(source,),
+                forecast_coordinate=coordinate,
+                financial_observation=item,
+                financial_inputs=(item,),
+            )
+        return cells, result.points[0].observation.unit
+    if metric.domain == "kpi":
+        sourced: list[SourcedObservation] = []
+        # The KPI reader retains its separately governed admission boundary.
+        if metric.domain == "kpi":
             # The kpi token is a de-fragmented representative — resolve it to
             # THIS ticker's own variant (richest series) before loading, so a
             # grouped token pulls each ticker's data even when their surface
@@ -404,21 +446,6 @@ def _load_row_data(
             cells[b] = ViewCell(value=None, raw=ob.value, source=source, sources=(source,))
             if ob.unit:
                 unit = ob.unit
-        # Financial override-only facts (a company-doc figure FMP never carried)
-        # remain pickable — metric_catalog unions fact_overrides — so picking one
-        # must not come back empty. KPI overrides are intentionally excluded: an
-        # active scalar override is not authoritative without independent semantic
-        # admission. Localized to the ViewsSpec read path.
-        if metric.domain == "fin":
-            _inject_override_only(
-                cells,
-                ticker=ticker,
-                fact_kind="financial_fact",
-                fact_key=load_key,
-                cadence=cadence,
-                period_types=period_types,
-                overrides=overrides,
-            )
         return cells, unit
     if metric.domain == "detail":
         return _load_detail_row_data(
@@ -814,6 +841,44 @@ def _view_connection(
         conn.close()
 
 
+def _financial_operands_comparable(
+    left: ViewCell | None, right: ViewCell | None, *, same_period: bool
+) -> bool:
+    a = left.financial_observation if left else None
+    b = right.financial_observation if right else None
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+
+    def context(item: CanonicalFinancialObservation) -> tuple[object, ...]:
+        return (
+            item.reporting_entity_id,
+            item.scope_security_id,
+            item.currency,
+            item.unit,
+            item.accounting_basis,
+            item.consolidation_scope,
+            json.dumps(
+                [dimension.canonical_member for dimension in item.dimensions], sort_keys=True
+            ),
+        )
+
+    if context(a) != context(b):
+        return False
+    if same_period:
+        return (a.period_start, a.period_end, a.fiscal_year, a.fiscal_period) == (
+            b.period_start,
+            b.period_end,
+            b.fiscal_year,
+            b.fiscal_period,
+        )
+    return (
+        a.fiscal_period == b.fiscal_period
+        and abs((a.period_end - b.period_end).days - 365 * (a.fiscal_year - b.fiscal_year)) <= 20
+    )
+
+
 def execute_view(
     spec: ViewSpec,
     *,
@@ -823,6 +888,7 @@ def execute_view(
     """Run the spec. Best-effort like the loaders underneath: rows with no
     data become warnings, never exceptions; an unreachable DB yields an
     empty result."""
+    cutoff = datetime.now(UTC)
     warnings: list[str] = []
     raw_rows: list[tuple[str, MetricRef, dict[_Bucket, ViewCell], str | None]] = []
     # Read the per-view lookups ONCE (in-memory per cell, not a per-cell DB
@@ -834,6 +900,8 @@ def execute_view(
     # schema on a connection's first statement, so a per-series connection would
     # pay that once per ticker/metric pair instead of once per view.
     with _view_connection(db_path, repo_root) as series_conn:
+        if series_conn is not None:
+            series_conn.execute("BEGIN")
         # Metric-major ordering: the same metric's tickers sit adjacent, which is
         # the comparison the pivot exists for.
         for metric in spec.metrics:
@@ -848,6 +916,7 @@ def execute_view(
                         overrides=overrides,
                         kpi_resolution=kpi_resolution,
                         conn=series_conn,
+                        cutoff=cutoff,
                     )
                 except _IncompatibleDetailSeriesError as exc:
                     warnings.append(f"{ticker}: {metric.token()} omitted: {exc}")
@@ -868,71 +937,64 @@ def execute_view(
                         )
                 raw_rows.append((ticker, metric, cells, unit))
 
-    forecast_overlays: list[tuple[str, MetricRef, ForecastOverlay, str | None]] = []
-    display_buckets = set(
-        sorted({bucket for _, _, cells, _ in raw_rows for bucket in cells})[-spec.periods :]
-    )
-    resolved_db = db_path
-    if resolved_db is None and repo_root is not None:
-        resolved_db = repo_root / "data" / "portfolio.db"
-    if spec.cadence == "annual" and spec.transform == "level" and resolved_db is not None:
-        try:
-            overlay_conn = connect_sqlite(resolved_db, role=SQLiteConnectionRole.READ_ONLY)
-        except sqlite3.Error:
-            overlay_conn = None
-        if overlay_conn is not None:
-            try:
-                for ticker, metric, cells, unit in raw_rows:
-                    displayed_cells = {
-                        bucket: cell for bucket, cell in cells.items() if bucket in display_buckets
-                    }
-                    coordinate = canonical_coordinate_from_historical_cells(
-                        overlay_conn, displayed_cells, unit=unit
-                    )
-                    if coordinate is None:
-                        continue
-                    loaded = load_forecast_overlay_for_metric(
-                        overlay_conn,
-                        ticker=ticker,
-                        viewspec_metric_token=metric.token(),
-                        coordinate=coordinate,
-                        actual_unit=unit,
-                    )
-                    if loaded.overlay is not None:
-                        forecast_overlays.append((ticker, metric, loaded.overlay, unit))
-            finally:
-                overlay_conn.close()
-
-    # Margin divisor: fin:revenue per ticker, loaded once.
-    revenue_by_ticker: dict[str, dict[_Bucket, ViewCell]] = {}
-    if spec.transform == "margin":
-        period_types = _ANNUAL_PERIOD_TYPES if spec.cadence == "annual" else _QUARTERLY_PERIOD_TYPES
-        for ticker in spec.tickers:
-            rev = load_financial_series_with_provenance(
-                ticker, "revenue", repo_root, db_path=db_path, period_types=period_types
-            )
-            revenue_cells: dict[_Bucket, ViewCell] = {}
-            for observation in rev:
-                source = _cell_source(observation.provenance)
-                revenue_cells[
-                    _to_bucket(
-                        observation.period_end.year,
-                        observation.period_end.month,
-                        spec.cadence,
-                    )
-                ] = ViewCell(
-                    value=None,
-                    raw=observation.value,
-                    source=source,
-                    sources=(source,),
+        forecast_overlays: list[tuple[str, MetricRef, ForecastOverlay, str | None]] = []
+        display_buckets = set(
+            sorted({bucket for _, _, cells, _ in raw_rows for bucket in cells})[-spec.periods :]
+        )
+        resolved_db = db_path
+        if resolved_db is None and repo_root is not None:
+            resolved_db = repo_root / "data" / "portfolio.db"
+        if (
+            spec.cadence == "annual"
+            and spec.transform == "level"
+            and resolved_db is not None
+            and series_conn is not None
+        ):
+            for ticker, metric, cells, unit in raw_rows:
+                displayed_cells = {
+                    bucket: cell for bucket, cell in cells.items() if bucket in display_buckets
+                }
+                coordinate = canonical_coordinate_from_historical_cells(
+                    series_conn, displayed_cells, unit=unit
                 )
-            revenue_by_ticker[ticker] = revenue_cells
-            if not revenue_by_ticker[ticker]:
-                warnings.append(f"{ticker}: no fin:revenue series — margin cells empty")
+                if coordinate is None:
+                    continue
+                loaded = load_forecast_overlay_for_metric(
+                    series_conn,
+                    ticker=ticker,
+                    viewspec_metric_token=metric.token(),
+                    coordinate=coordinate,
+                    actual_unit=unit,
+                )
+                if loaded.overlay is not None:
+                    forecast_overlays.append((ticker, metric, loaded.overlay, unit))
 
-    all_buckets: set[_Bucket] = set()
-    for _t, _m, cells, _u in raw_rows:
-        all_buckets.update(cells)
+        # Margin divisor: fin:revenue per ticker, loaded once.
+        revenue_by_ticker: dict[str, dict[_Bucket, ViewCell]] = {}
+        if spec.transform == "margin":
+            for ticker in spec.tickers:
+                try:
+                    revenue_cells, _revenue_unit = _load_row_data(
+                        ticker,
+                        MetricRef(domain="fin", key="revenue"),
+                        spec.cadence,
+                        db_path=db_path,
+                        repo_root=repo_root,
+                        overrides=overrides,
+                        kpi_resolution=kpi_resolution,
+                        conn=series_conn,
+                        cutoff=cutoff,
+                    )
+                except _IncompatibleDetailSeriesError as exc:
+                    warnings.append(f"{ticker}: margin denominator unavailable: {exc}")
+                    revenue_cells = {}
+                revenue_by_ticker[ticker] = revenue_cells
+                if not revenue_by_ticker[ticker]:
+                    warnings.append(f"{ticker}: no fin:revenue series — margin cells empty")
+
+        all_buckets: set[_Bucket] = set()
+        for _t, _m, cells, _u in raw_rows:
+            all_buckets.update(cells)
     actual_buckets = sorted(all_buckets)[-spec.periods :]
     forecast_bucket_set = {
         _to_bucket(point.period_end.year, point.period_end.month, "annual")
@@ -949,6 +1011,7 @@ def execute_view(
             raw = cell.raw if cell is not None else None
             src = cell.source if cell is not None else None
             sources = _cell_sources(cell)
+            inputs = cell.financial_inputs if cell else ()
             value: float | None = None
             if raw is not None:
                 if spec.transform == "level":
@@ -956,22 +1019,47 @@ def execute_view(
                 elif spec.transform == "yoy":
                     prior_cell = cells.get(_lookback(b, 1))
                     prior = prior_cell.raw if prior_cell is not None else None
-                    if prior is not None and prior != 0:
+                    if (
+                        prior is not None
+                        and prior != 0
+                        and _financial_operands_comparable(cell, prior_cell, same_period=False)
+                    ):
                         value = (raw / prior - 1) * 100
                         sources = _dedupe_sources(sources, _cell_sources(prior_cell))
+                        inputs += prior_cell.financial_inputs if prior_cell else ()
                 elif spec.transform == "cagr":
                     base_cell = cells.get(_lookback(b, spec.cagr_years))
                     base = base_cell.raw if base_cell is not None else None
-                    if base is not None and base > 0 and raw > 0:
+                    if (
+                        base is not None
+                        and base > 0
+                        and raw > 0
+                        and _financial_operands_comparable(cell, base_cell, same_period=False)
+                    ):
                         value = ((raw / base) ** (1 / spec.cagr_years) - 1) * 100
                         sources = _dedupe_sources(sources, _cell_sources(base_cell))
+                        inputs += base_cell.financial_inputs if base_cell else ()
                 elif spec.transform == "margin":
                     revenue_cell = revenue_by_ticker.get(ticker, {}).get(b)
                     rev = revenue_cell.raw if revenue_cell is not None else None
-                    if rev is not None and rev != 0:
+                    if (
+                        rev is not None
+                        and rev != 0
+                        and _financial_operands_comparable(cell, revenue_cell, same_period=True)
+                    ):
                         value = raw / rev * 100
                         sources = _dedupe_sources(sources, _cell_sources(revenue_cell))
-            out_cells.append(ViewCell(value=value, raw=raw, source=src, sources=sources))
+                        inputs += revenue_cell.financial_inputs if revenue_cell else ()
+            out_cells.append(
+                ViewCell(
+                    value=value,
+                    raw=raw,
+                    source=src,
+                    sources=sources,
+                    financial_observation=cell.financial_observation if cell else None,
+                    financial_inputs=inputs,
+                )
+            )
         rows.append(
             ViewRow(
                 ticker=ticker,
@@ -1070,6 +1158,13 @@ def metric_catalog(
                     "tickers": int(r["n"]),
                 },
             )
+            canonical_entries: list[dict[str, object]] = [
+                {"token": MetricRef(domain="fin", key=key).token(), "label": key, "tickers": count}
+                for key, count in financial_metric_catalog(conn, symbols, limit=limit_per_domain)
+            ]
+            out["fin"] = list(
+                {str(item["token"]): item for item in [*out["fin"], *canonical_entries]}.values()
+            )[:limit_per_domain]
             out["kpi"] = _grouped_kpi_catalog(conn, marks, symbols, limit_per_domain)
             out["seg"] = _catalog_query(
                 conn,
@@ -1280,19 +1375,25 @@ def _grouped_kpi_catalog(
     try:
         fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
         semantic_join, semantic_where = semantic_admission_sql(conn, fail_closed=True)
-        # Flat identity: the per-definition anchor as one joined relation
-        # (~19x faster than the correlated predicate on aggregate queries,
-        # identical rows). Legacy schemas without the identity columns keep
-        # the correlated predicate, which degrades to 1=1 there anyway.
-        # Keep the complete anchor history for each relevant definition, but
-        # do not sort the history of every unrelated issuer. Candidate IDs
-        # and complete anchor history both use the canonical resolver relation.
+        # Only definitions with an admitted requested row can contribute to
+        # this catalog. Build that small set with the same canonical relation
+        # and admission predicate as the outer aggregate, so the optimizer can
+        # start from the admitted-context index instead of scanning the ledger.
+        catalog_cte = (
+            "WITH candidate_definition AS MATERIALIZED ("
+            f"SELECT DISTINCT kf.kpi_definition_id FROM {fact_relation} kf "
+            f"{semantic_join} WHERE kf.ticker IN ({marks}) AND {semantic_where})"
+        )
+        # Keep complete canonical history across all tickers for these
+        # definitions. Leave it flattenable so admission can drive the anchor
+        # lookup too; materializing facts first scans unrelated ledger rows.
         anchor_relation = (
             f"(SELECT * FROM {fact_relation} WHERE kpi_definition_id IN "
-            f"(SELECT kpi_definition_id FROM {fact_relation} WHERE ticker IN ({marks})))"
+            "(SELECT kpi_definition_id FROM candidate_definition))"
         )
         anchor_sql = semantic_series_identity_anchor_sql(conn, fact_relation=anchor_relation)
         if anchor_sql is None:
+            catalog_cte = ""
             identity_join = ""
             semantic_identity = semantic_series_identity_sql(conn, fact_relation=fact_relation)
         else:
@@ -1303,6 +1404,7 @@ def _grouped_kpi_catalog(
             semantic_identity = semantic_series_identity_flat_sql(conn)
         rows = conn.execute(
             f"""
+            {catalog_cte}
             SELECT kd.name AS name, kf.ticker AS ticker, COUNT(*) AS obs{origin_select}
             FROM {fact_relation} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
             {semantic_join}

@@ -20,7 +20,9 @@ import os
 import sqlite3
 import sys
 import tempfile
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -55,10 +57,6 @@ from provenance.sec_companyfacts_capture import CompanyFactsPayload, parse_compa
 _Mode = Literal["dry_run", "apply"]
 _FactTable = Literal["financial_facts", "kpi_facts"]
 _Outcome = Literal["accepted", "retryable", "terminal"]
-_BlobCache = dict[
-    tuple[str, str],
-    tuple[CompanyFactsPayload, dict[str, bytes]],
-]
 _MATCHER_NAME = "deterministic-companyfacts-relocator"
 _MATCHER_VERSION = "2"
 _MATCHER_CONFIG: dict[str, JsonValue] = {
@@ -264,6 +262,61 @@ class _RawCandidate(BaseModel):
     pick_key: tuple[str, int, str, str, str]
 
 
+@dataclass(slots=True)
+class _VerifiedCompanyFacts:
+    payload: CompanyFactsPayload
+    scopes: dict[str, bytes]
+    fye_month: int | None = None
+    claimed: dict[LineItemLadder, dict[tuple[str, str], int]] = field(
+        default_factory=dict[LineItemLadder, dict[tuple[str, str], int]]
+    )
+    modal_currencies: dict[LineItemLadder, dict[int, str | None]] = field(
+        default_factory=dict[LineItemLadder, dict[int, str | None]]
+    )
+    candidates: OrderedDict[tuple[str, LineItemLadder], tuple[_RawCandidate, ...]] = field(
+        default_factory=OrderedDict[tuple[str, LineItemLadder], tuple[_RawCandidate, ...]]
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class CompanyFactsMatchContext:
+    """One ticker/batch's bounded derived work over immutable source bytes.
+
+    At most one blob/issuer is retained. Candidate reuse is capped at sixteen
+    accession/ladder pairs and 512 entries per pair. Current bindings, path and
+    source SHA-256 are checked on every fact, including reuse hits.
+    """
+
+    blob_root: Path
+    _verified: dict[tuple[str, str], _VerifiedCompanyFacts] = field(
+        default_factory=dict[tuple[str, str], _VerifiedCompanyFacts], init=False, repr=False
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "blob_root", self.blob_root.resolve())
+
+    def verify_source(
+        self,
+        target: _Target,
+        *,
+        blob_root: Path,
+        expected_cik: str,
+    ) -> _VerifiedCompanyFacts:
+        # Every hit verifies current source bytes and path. Only derived work
+        # is reused; source corruption is never hidden by an earlier read.
+        raw_body = _verified_blob(target, blob_root)
+        if self.blob_root != blob_root.resolve():
+            raise CompanyFactsFactMatcherError("matcher context belongs to another blob root")
+        key = (target.blob_sha256, expected_cik)
+        if key in self._verified:
+            return self._verified[key]
+        payload = parse_companyfacts_body(raw_body, expected_cik=expected_cik)
+        result = _VerifiedCompanyFacts(payload=payload, scopes=_accession_scopes(payload))
+        self._verified.clear()
+        self._verified[key] = result
+        return result
+
+
 def emit_structured_event(event: str, **fields: object) -> None:
     """Emit one machine-readable event to stderr."""
 
@@ -287,7 +340,7 @@ def match_legacy_companyfacts_evidence(
         targets, has_more = _load_targets(conn, request)
         results: list[CompanyFactsFactMatchItem] = []
         ledger = LegacyFactEvidenceMatchLedger(conn) if request.apply else None
-        blob_cache: _BlobCache = {}
+        blob_cache = CompanyFactsMatchContext(request.blob_root)
         for target in targets:
             record = _match_target(
                 target,
@@ -349,6 +402,7 @@ def match_companyfacts_fact_row(
     *,
     fact_row_id: int,
     blob_root: Path,
+    context: CompanyFactsMatchContext | None = None,
 ) -> CompanyFactsFactMatchItem:
     """Append the exact evidence match for one newly admitted financial fact.
 
@@ -378,7 +432,7 @@ def match_companyfacts_fact_row(
             f"financial_facts.id {fact_row_id} has no current CompanyFacts evidence target"
         )
     target = _select_blob_location(targets, request.blob_root)
-    record = _match_target(target, request.blob_root, blob_cache={})
+    record = _match_target(target, request.blob_root, blob_cache=context)
     if record.outcome != "accepted":
         raise CompanyFactsFactMatcherError(
             f"financial_facts.id {fact_row_id} CompanyFacts match rejected: {record.reason_code}"
@@ -753,7 +807,7 @@ def _match_target(
     target: _Target,
     blob_root: Path,
     *,
-    blob_cache: _BlobCache | None = None,
+    blob_cache: CompanyFactsMatchContext | None = None,
 ) -> LegacyFactEvidenceMatchRevision:
     revision = target.prior_revision + 1
     identity = _stable_digest(
@@ -789,13 +843,14 @@ def _match_target(
         accession, legacy_accession_scope = _fact_accession(target)
         if target.canonical_cik_count != 1 or target.normalized_cik is None:
             raise CompanyFactsFactMatcherError("issuer lacks one canonical SEC CIK")
-        payload, scopes = _verified_payload_and_scopes(
+        context = blob_cache if blob_cache is not None else CompanyFactsMatchContext(blob_root)
+        verified = context.verify_source(
             target,
-            blob_root,
+            blob_root=blob_root,
             expected_cik=target.normalized_cik,
-            cache=blob_cache,
         )
-        scope_bytes = scopes.get(accession)
+        payload = verified.payload
+        scope_bytes = verified.scopes.get(accession)
         if scope_bytes is None:
             raise CompanyFactsFactMatcherError(
                 "binding accession is absent from canonical CompanyFacts scope"
@@ -853,6 +908,7 @@ def _match_target(
         accession=accession,
         fact=target.fact_payload,
         ladder=ladder,
+        verified=verified,
     )
     matches = [evaluation for evaluation in evaluations if evaluation.matches]
     checks = _aggregate_checks(evaluations)
@@ -956,24 +1012,6 @@ def _verified_blob(target: _Target, blob_root: Path) -> bytes:
     return raw_body
 
 
-def _verified_payload_and_scopes(
-    target: _Target,
-    blob_root: Path,
-    *,
-    expected_cik: str,
-    cache: _BlobCache | None,
-) -> tuple[CompanyFactsPayload, dict[str, bytes]]:
-    key = (target.blob_sha256, expected_cik)
-    if cache is not None and key in cache:
-        return cache[key]
-    raw_body = _verified_blob(target, blob_root)
-    payload = parse_companyfacts_body(raw_body, expected_cik=expected_cik)
-    result = (payload, _accession_scopes(payload))
-    if cache is not None:
-        cache[key] = result
-    return result
-
-
 def _select_blob_location(
     candidates: list[_Target],
     blob_root: Path,
@@ -999,32 +1037,20 @@ def _is_content_addressed_location(target: _Target, blob_root: Path) -> bool:
     return actual == expected.resolve()
 
 
-def _evaluate_candidates(
+def _raw_candidates(
     payload: CompanyFactsPayload,
     *,
     accession: str,
-    fact: FinancialFactPayloadV1,
     ladder: LineItemLadder,
-) -> tuple[list[_CandidateEvaluation], CompanyFactsCandidateManifestV1]:
-    payload_dict = cast(
-        "dict[str, object]",
-        payload.model_dump(mode="json", by_alias=True),
-    )
-    fye_month = _infer_fye_month(payload_dict)
-    claimed = _claimed_rungs(payload, ladder=ladder, fye_month=fye_month)
+    fye_month: int,
+    modal_currencies: dict[int, str | None],
+) -> tuple[_RawCandidate, ...]:
     raw_candidates: list[_RawCandidate] = []
     for rung_index, (namespace, concept_name) in enumerate(ladder.rungs):
         concept = payload.facts.get(namespace, {}).get(concept_name)
         if concept is None:
             continue
-        units_raw = cast(
-            "dict[str, object]",
-            {
-                unit: [entry.model_dump(mode="json", exclude_none=False) for entry in entries]
-                for unit, entries in concept.units.items()
-            },
-        )
-        modal_currency = _modal_currency(units_raw, ladder.kind)
+        modal_currency = modal_currencies[rung_index]
         for unit_code, entries in concept.units.items():
             for entry_index, typed_entry in enumerate(entries):
                 if typed_entry.accn != accession:
@@ -1077,6 +1103,48 @@ def _evaluate_candidates(
                         pick_key=_same_doc_pick_key(entry, signed_value),
                     )
                 )
+    return tuple(raw_candidates)
+
+
+def _evaluate_candidates(
+    payload: CompanyFactsPayload,
+    *,
+    accession: str,
+    fact: FinancialFactPayloadV1,
+    ladder: LineItemLadder,
+    verified: _VerifiedCompanyFacts | None = None,
+) -> tuple[list[_CandidateEvaluation], CompanyFactsCandidateManifestV1]:
+    if verified is None:
+        verified = _VerifiedCompanyFacts(payload=payload, scopes={})
+    if verified.fye_month is None:
+        payload_dict = cast("dict[str, object]", payload.model_dump(mode="json", by_alias=True))
+        verified.fye_month = _infer_fye_month(payload_dict)
+    if ladder not in verified.claimed:
+        modal_currencies: dict[int, str | None] = {}
+        verified.claimed[ladder] = _claimed_rungs(
+            payload,
+            ladder=ladder,
+            fye_month=verified.fye_month,
+            modal_currencies=modal_currencies,
+        )
+        verified.modal_currencies[ladder] = modal_currencies
+    claimed = verified.claimed[ladder]
+    key = (accession, ladder)
+    raw_candidates = verified.candidates.get(key)
+    if raw_candidates is None:
+        raw_candidates = _raw_candidates(
+            payload,
+            accession=accession,
+            ladder=ladder,
+            fye_month=verified.fye_month,
+            modal_currencies=verified.modal_currencies[ladder],
+        )
+        if len(raw_candidates) <= 512:
+            verified.candidates[key] = raw_candidates
+            if len(verified.candidates) > 16:
+                verified.candidates.popitem(last=False)
+    else:
+        verified.candidates.move_to_end(key)
     fact_value = _decimal(fact.value)
     eligible = [
         raw
@@ -1133,6 +1201,7 @@ def _claimed_rungs(
     *,
     ladder: LineItemLadder,
     fye_month: int,
+    modal_currencies: dict[int, str | None] | None = None,
 ) -> dict[tuple[str, str], int]:
     """Replay the extractor's global first-rung claim for every logical period."""
 
@@ -1149,6 +1218,8 @@ def _claimed_rungs(
             },
         )
         modal_currency = _modal_currency(units_raw, ladder.kind)
+        if modal_currencies is not None:
+            modal_currencies[rung_index] = modal_currency
         if modal_currency is None:
             continue
         for unit_code, entries in concept.units.items():

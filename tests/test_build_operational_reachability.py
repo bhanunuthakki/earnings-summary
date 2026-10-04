@@ -189,7 +189,37 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    assert len(graph.unknown_edges) == 124
+    assert len(graph.unknown_edges) == 138
+    # A checked private-helper lookup removes the scheduled test's broad type
+    # suppression. Its dynamic name remains visible as one test-only seam.
+    assert (
+        GraphEdge(
+            source="tests/test_scheduled_singleflight.py",
+            target="<dynamic attribute>",
+            kind="getattr",
+            evidence="dynamic getattr expression",
+            confidence="low",
+            line=27,
+            unknown=True,
+        )
+        in graph.unknown_edges
+    )
+    # Six new synthetic children test artifact ownership and database refusal.
+    # Their executable choices remain test-only and visible in this inventory.
+    remedy_children = {
+        ("tests/test_dcf_artifact_ownership.py", 232),
+        ("tests/test_dcf_artifact_ownership.py", 242),
+        ("tests/test_dcf_artifact_ownership.py", 252),
+        ("tests/test_dcf_artifact_ownership.py", 312),
+        ("tests/test_retained_tool_database_authority.py", 35),
+        ("tests/test_retained_tool_database_authority.py", 182),
+    }
+    assert {
+        (edge.source, edge.line)
+        for edge in graph.unknown_edges
+        if edge.source in {source for source, _line in remedy_children}
+        and edge.target == "<dynamic process entrypoint>"
+    } == remedy_children
     # Exact-period CLI and skill-maintenance checks add two test-owned calls.
     # Keep their computed entrypoints explicit without admitting production gaps.
     assert (
@@ -211,12 +241,12 @@ def test_actual_head_is_supported() -> None:
             kind="unknown",
             evidence="subprocess/runpy expression",
             confidence="low",
-            line=160,
+            line=163,
             unknown=True,
         )
         in graph.unknown_edges
     )
-    # Ten bounded Node children exercise synthetic browser request lifecycles.
+    # Eleven bounded Node children exercise synthetic browser request lifecycles.
     # Keep their exact test-only inventory visible without admitting production edges.
     lifecycle_children = {
         ("tests/test_company_desk_read_lifecycle.py", 97),
@@ -229,6 +259,7 @@ def test_actual_head_is_supported() -> None:
         ("tests/test_work_os_read_lifecycle.py", 63),
         ("tests/test_work_os_read_lifecycle.py", 98),
         ("tests/test_workspace_dcf_read_lifecycle.py", 63),
+        ("tests/test_workspace_dcf_read_lifecycle.py", 220),
     }
     assert {
         (edge.source, edge.line)
@@ -254,6 +285,13 @@ def test_actual_head_is_supported() -> None:
         and edge.target == "<dynamic process entrypoint>"
         for edge in graph.unknown_edges
     )
+    # The reviewed-source addition CLI regression retains all six computed calls.
+    assert {
+        edge.line
+        for edge in graph.unknown_edges
+        if edge.source == "instruction_tests/test_investing_skill_maintenance.py"
+        and edge.target == "<dynamic process entrypoint>"
+    } == {163, 192, 198, 202, 205, 213, 216}
     assert residual_source_edges == []
 
 

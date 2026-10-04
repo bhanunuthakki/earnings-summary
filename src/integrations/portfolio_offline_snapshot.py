@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from integrations.portfolio_position import (
     ImmutableTrackerSnapshot,
     supported_schema_major,
+    typed_short_call_security_ids,
     validate_equity_evidence,
     validate_positions_snapshot,
     validate_snapshot_account_coverage,
@@ -111,7 +112,12 @@ def _validated_snapshot(
         by_tax_treatment=portfolio_snapshot.by_tax_treatment,
         notes=[],
     )
-    if validate_positions_snapshot(positions) is not None:
+    if (
+        validate_positions_snapshot(
+            positions, allowed_short_security_ids=typed_short_call_security_ids(positions.positions)
+        )
+        is not None
+    ):
         return None
     tickers = [
         position.ticker.strip().upper() for position in positions.positions if position.ticker

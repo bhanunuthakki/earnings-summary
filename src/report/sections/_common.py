@@ -87,9 +87,18 @@ def _ttm_cagr(
         # Sign-stable negative series (capex): CAGR of the magnitude. A sign
         # flip between the windows still returns None below.
         end_window, base_window = -end_window, -base_window
-    if base_window <= 0 or end_window <= 0:
+    return level_cagr(end_window, base_window, years)
+
+
+def level_cagr(curr: float | None, prior: float | None, years: float) -> float | None:
+    """Shared level CAGR; negative stable series use magnitudes."""
+    if curr is None or prior is None or years <= 0:
         return None
-    return (end_window / base_window) ** (1 / years) - 1.0
+    if curr < 0 and prior < 0:
+        curr, prior = -curr, -prior
+    if prior <= 0 or curr <= 0:
+        return None
+    return (curr / prior) ** (1 / years) - 1.0
 
 
 def _ttm(values: list[float | None], offset: int) -> float | None:

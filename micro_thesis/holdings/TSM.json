@@ -1,0 +1,177 @@
+{
+  "ticker": "TSM",
+  "name": "Taiwan Semiconductor",
+  "last_updated": "2026-10-03",
+  "thesis": "Leading-edge logic foundry monopoly (3nm/2nm) with an unassailable pricing moat and structural AI accelerator / HPC capex tailwind. Revenue and operating margins are expanding (Q1'26 revenue NT$1,134.1B, +35.1% YoY; gross margin 66.2%; operating margin 58.0%). Evaluated as a premier capital-preservation / earnings-growth alternative to cyclical Korean index exposure (Samsung/SK Hynix memory plays): TSMC delivers fortress cash generation (NT$3.38T cash vs NT$1.02T debt = ~$74B net cash), node-lock customer stickiness (Apple, Nvidia, AMD, Broadcom), and advanced packaging (CoWoS) pricing power without memory commodity price collapse risk. Geopolitical risk in Taiwan Strait remains the primary macro overhang, buffered by overseas fab diversification (Kumamoto, Arizona, Dresden). DCF fair value is $366.47 base (bull $480.40 / bear $276.47) vs current market price ~$414-$472 (+13% to +29% premium). MoS bar 20%.",
+  "verdict": "Evaluation",
+  "verdict_color": "green",
+  "key_driver": "3nm + 5nm wafer volumes × ASP × utilization; CoWoS capacity expansion and HPC node monopoly",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Free cash flow",
+    "Capex",
+    "Capex / Revenue (GAAP)"
+  ],
+  "_status": "evaluation",
+  "tier_1_kpis": [
+    {
+      "name": "Revenue YoY growth (USD)",
+      "current": "+35.1% YoY (Q1'26, NT$1,134.1B / ~$35.2B USD)",
+      "prior": "+38.8% (Q4'25, NT$1,056.0B)",
+      "yoy": "+35.1%",
+      "status": "On track",
+      "break_condition": "<15% YoY for 2 consecutive Qs in non-trough environment",
+      "source": "earnings release"
+    },
+    {
+      "name": "Gross margin",
+      "current": "66.2% (Q1'26, up from 58.0% Q1'25; 66.0% Q4'25)",
+      "prior": "66.0% (Q4'25)",
+      "yoy": "+820 bps YoY",
+      "status": "On track",
+      "break_condition": "Compresses below 53% for 2 consecutive Qs",
+      "source": "earnings release"
+    },
+    {
+      "name": "Advanced Node Mix (<=7nm)",
+      "current": "77% of wafer revenue (3nm ~25%, 5nm ~38%, 7nm ~14%)",
+      "prior": "74% (Q3'25)",
+      "yoy": "+300 bps",
+      "status": "On track",
+      "break_condition": "Mix flattens or contracts QoQ for 2 consecutive Qs",
+      "source": "earnings release commentary"
+    },
+    {
+      "name": "Capex / Revenue (GAAP)",
+      "current": "31.2% (Q1'26, NT$354.4B capex on NT$1,134.1B revenue; FY25 NT$1,285.6B)",
+      "prior": "33.5% (Q4'25)",
+      "yoy": "-230 bps",
+      "status": "On track",
+      "break_condition": "Cuts disclosed mid-year by >15% (demand-signal weakening)",
+      "source": "financial_facts / earnings release"
+    },
+    {
+      "name": "Customer / HPC concentration",
+      "current": "HPC segment 55% of revenue in Q1'26; smartphone 34%; zero leading-edge customer defection",
+      "prior": "HPC 53% (Q4'25)",
+      "yoy": "+200 bps mix",
+      "status": "On track",
+      "break_condition": "Apple or NVIDIA materially reduces 3nm/2nm allocation share to Samsung/Intel",
+      "source": "transcript"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "HPC revenue mix",
+      "source": "earnings release"
+    },
+    {
+      "name": "Smartphone segment trajectory",
+      "source": "earnings release"
+    },
+    {
+      "name": "Arizona / Japan fab progress",
+      "source": "earnings release"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Capital return pace (dividend + buyback)",
+      "source": "10-K / 10-Q"
+    },
+    {
+      "name": "Mature node (28nm+) revenue",
+      "source": "10-K / 10-Q"
+    }
+  ],
+  "competitive_watchlist": [
+    "Samsung Foundry",
+    "Intel Foundry Services",
+    "GlobalFoundries"
+  ],
+  "thesis_breakers_qualitative": [
+    "Geopolitical event in Taiwan Strait",
+    "Apple/NVIDIA customer loss to Samsung at leading edge",
+    "AI capex pause"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "universal_revenue_decline",
+      "kpi_name": "Revenue YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Revenue declining YoY for 2 consecutive quarters — outright top-line contraction."
+    },
+    {
+      "rule_id": "universal_operating_loss",
+      "kpi_name": "Operating Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP operating margin negative for 2 consecutive quarters — operating loss."
+    },
+    {
+      "rule_id": "universal_gross_margin_collapse",
+      "kpi_name": "Gross Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 20,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin below 20% for 2 consecutive quarters — severe pricing/cost issue."
+    },
+    {
+      "rule_id": "universal_net_loss",
+      "kpi_name": "Net Income Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "GAAP net income negative for 2 consecutive quarters — bottom-line loss."
+    },
+    {
+      "rule_id": "capex_intensity_too_high",
+      "kpi_name": "Capex / Revenue (GAAP)",
+      "comparator": "gt",
+      "threshold": 25,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Capex/Revenue above 25% for 2 consecutive Qs — capex bloat without proportional revenue."
+    },
+    {
+      "rule_id": "fcf_margin_collapse",
+      "kpi_name": "FCF Margin (GAAP)",
+      "comparator": "lt",
+      "threshold": 5,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "FCF margin below 5% for 2 consecutive Qs — cash conversion broken."
+    },
+    {
+      "rule_id": "ocf_decline_yoy",
+      "kpi_name": "Operating Cash Flow YoY Growth (USD)",
+      "comparator": "lt",
+      "threshold": -10,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Operating cash flow declining >10% YoY for 2 consecutive Qs."
+    }
+  ],
+  "schema_version": 2,
+  "wacc": null,
+  "mos_bar": null,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": null,
+    "gsheet_id": "1osISBzVrhAIp2lxoeKR0hXgi0xgYZskHWGg0FDVHaTM"
+  },
+  "flags": [
+    "DCF_PARAMS_PENDING"
+  ],
+  "segments": [],
+  "operational_kpis": [],
+  "break_rules_soft": []
+}

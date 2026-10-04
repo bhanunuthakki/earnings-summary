@@ -8,6 +8,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+from scripts import check_investing_skill as checker
 from scripts.check_investing_skill import BASELINE, SKILL, main
 
 
@@ -168,3 +171,166 @@ def test_json_report_has_distinct_status_and_no_source_contents(tmp_path: Path) 
     assert payload["status"] == "clean"
     assert payload["changed_sources"] == []
     assert "ROUTE" not in result.stdout
+
+
+def test_cli_addition_requires_explicit_review_and_preserves_existing_sources(
+    tmp_path: Path,
+) -> None:
+    baseline = _fixture(tmp_path)
+    before = baseline.read_bytes()
+    source_paths = ("src/extra.py", "execution/plan.py")
+    for relative in source_paths:
+        source = tmp_path / relative
+        source.parent.mkdir(exist_ok=True)
+        source.write_text("NEW_ROUTE = True\n", encoding="utf-8")
+    (tmp_path / "src/route.py").write_text("ROUTE = 'all_accounts'\n", encoding="utf-8")
+    (tmp_path / SKILL / "references/routes.md").write_text(
+        "Use `src/extra.py` and `execution/plan.py`.\n", encoding="utf-8"
+    )
+    script = Path(__file__).resolve().parents[1] / "scripts/check_investing_skill.py"
+    cli = [sys.executable, str(script), "--repo-root", str(tmp_path)]
+    assert subprocess.run(cli, capture_output=True, check=False).returncode == 2
+    assert baseline.read_bytes() == before
+    args = [*cli, "--record-review", "--review-note", "Reviewed new routes and old change."]
+    for relative in source_paths:
+        args.extend(("--add-reviewed-source", relative))
+    # New and previously changed paths each require the reviewer's exact name.
+    assert subprocess.run(args, capture_output=True, check=False).returncode == 2
+    assert baseline.read_bytes() == before
+    for relative in source_paths:
+        args.extend(("--reviewed-source", relative))
+    assert subprocess.run(args, capture_output=True, check=False).returncode == 2
+    assert baseline.read_bytes() == before
+    args.extend(("--reviewed-source", "src/route.py"))
+    result = subprocess.run(args, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result.stdout)["status"] == "clean"
+    recorded = json.loads(baseline.read_text())
+    assert {entry["path"]: entry["sha256"] for entry in recorded["sources"]} == {
+        relative: hashlib.sha256((tmp_path / relative).read_bytes()).hexdigest()
+        for relative in (*source_paths, "src/route.py")
+    }
+    assert subprocess.run(cli, capture_output=True, check=False).returncode == 0
+    unchanged = baseline.read_bytes()
+    # Already listed sources cannot be added again or silently reclassified.
+    assert subprocess.run(args, capture_output=True, check=False).returncode == 2
+    assert baseline.read_bytes() == unchanged
+
+
+@pytest.mark.parametrize(
+    "additions",
+    [
+        ("src/extra.py", "src/extra.py"),
+        ("src/route.py",),
+        ("src/missing.py",),
+        (".tmp/private.py",),
+        ("micro_thesis/owner.json",),
+        ("src/extra.txt",),
+        ("../outside.py",),
+    ],
+)
+def test_addition_rejects_duplicate_missing_private_and_unsafe_sources(
+    tmp_path: Path, additions: tuple[str, ...]
+) -> None:
+    baseline = _fixture(tmp_path)
+    for relative in ("src/extra.py", ".tmp/private.py", "micro_thesis/owner.json", "src/extra.txt"):
+        source = tmp_path / relative
+        source.parent.mkdir(exist_ok=True)
+        source.write_text("synthetic source\n", encoding="utf-8")
+    before = baseline.read_bytes()
+    args = ["--repo-root", str(tmp_path), "--record-review", "--review-note", "Reviewed."]
+    for relative in additions:
+        args.extend(("--add-reviewed-source", relative, "--reviewed-source", relative))
+    assert main(args) == 2
+    assert baseline.read_bytes() == before
+
+
+def test_addition_is_record_only_and_does_not_require_a_direct_prose_reference(
+    tmp_path: Path,
+) -> None:
+    baseline = _fixture(tmp_path)
+    (tmp_path / "src/extra.py").write_text("dependency = True\n", encoding="utf-8")
+    before = baseline.read_bytes()
+    args = ["--repo-root", str(tmp_path), "--add-reviewed-source", "src/extra.py"]
+    assert main(args) == 2
+    assert baseline.read_bytes() == before
+    assert (
+        main(
+            [
+                *args,
+                "--record-review",
+                "--review-note",
+                "Reviewed dependency.",
+                "--reviewed-source",
+                "src/extra.py",
+            ]
+        )
+        == 0
+    )
+
+
+def test_added_source_does_not_waive_a_missing_original_source(tmp_path: Path) -> None:
+    baseline = _fixture(tmp_path)
+    (tmp_path / "src/route.py").unlink()
+    (tmp_path / "src/extra.py").write_text("dependency = True\n", encoding="utf-8")
+    before = baseline.read_bytes()
+    assert (
+        main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--record-review",
+                "--review-note",
+                "Reviewed addition.",
+                "--add-reviewed-source",
+                "src/extra.py",
+                "--reviewed-source",
+                "src/extra.py",
+            ]
+        )
+        == 2
+    )
+    assert baseline.read_bytes() == before
+
+
+def test_added_source_change_during_recording_refuses_baseline_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    baseline = _fixture(tmp_path)
+    source = tmp_path / "src/extra.py"
+    source.write_text("dependency = True\n", encoding="utf-8")
+    before = baseline.read_bytes()
+    real_check = checker.check
+    mutated = False
+
+    def concurrent_change(
+        root: Path,
+        baseline_relative: str = BASELINE,
+        replacement_sources: dict[str, str] | None = None,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        nonlocal mutated
+        result = real_check(root, baseline_relative, replacement_sources)
+        if replacement_sources is not None and not mutated:
+            source.write_text("dependency = 'changed during review'\n", encoding="utf-8")
+            mutated = True
+        return result
+
+    monkeypatch.setattr(checker, "check", concurrent_change)
+    assert (
+        main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--record-review",
+                "--review-note",
+                "Reviewed.",
+                "--add-reviewed-source",
+                "src/extra.py",
+                "--reviewed-source",
+                "src/extra.py",
+            ]
+        )
+        == 2
+    )
+    assert mutated
+    assert baseline.read_bytes() == before

@@ -14,6 +14,63 @@
 
 ## Outcome
 
+### Shared truth remedies — 2026-10-03
+
+Disposition: **no Operations surface change**. Explore, Ask, saved financial
+conditions and Financials evidence use the existing provenance-aware readers.
+`GET /api/peek/canonical-financial` supports the exact table or series reference.
+`GET /api/peek/financial-calculation` reconstructs growth from its original
+inputs and calculation version. Both are read-only product evidence views.
+They add no operator action, source acquisition or financial write. Invalid
+references fail before database access. Missing admission remains unavailable.
+
+The existing DCF save, rebuild and Sheet import operations retain their action
+boundaries. One per-ticker artifact owner now covers their writes. All durable
+builders use the selected configured database. A committed result with failed
+backup cleanup remains saved, names the recovery requirement and blocks another
+write. It must not be displayed as a rejected candidate. Sheet export transfers
+captured accepted bytes; import validates an editable candidate before promotion.
+This repair does not create a new action or authorize a live Sheet transfer.
+
+Retained extractor, repair and seed commands, and source telemetry, use the
+existing database resolver. Artifact roots are explicit and independent of
+database placement. Portfolio cache displays and decision reads share validation,
+source date and degraded state. Tracker v1 rejects incompatible position and
+transaction snapshots. No transport switch or scheduled operation is activated.
+The removed foreign arithmetic helper had no operator surface. Its retained CLI
+still refuses unsupported financial writes. Shared evaluation-file parsing keeps
+the same purpose validation and grading contracts.
+
+Evidence: retained-tool authority tests; DCF artifact ownership and real import
+rejection tests; financial consumer and growth evidence tests; portfolio cache,
+tracker adoption and morning pipeline tests. The release audit records exact
+test and rendered results. Those checks establish code behavior, not live health.
+
+### Scheduler job receipt authority
+
+The Operations panel and review bundle read each job receipt from its declared
+writer root. `cron/run_python.bat` defaults to the deployed code checkout.
+`prepare-kpi-semantic-review` is the explicit exception: its wrapper derives
+the product-state root from the configured database path and passes that root
+to the job runtime. The dashboard uses the same resolved database declaration
+for this exception. Dashboard scratch artifacts do not replace either writer
+root. Missing, stale and invalid receipts remain explicit; another root never
+supplies fallback evidence. This changes receipt observation only. It adds no
+scheduler operation, job execution or financial-state write.
+
+### Cached host-owner monitoring endpoint
+
+Disposition: **linked governed view**. `GET /api/operations/host-runtime`
+restores the existing private fleet monitor's read-only transport for the
+`HostRuntimeBundle` owned by `src/operations/host_runtime.py`. It reads only
+the bounded cached host receipt from the configured product-state root.
+Missing, stale, invalid and current evidence remain explicit. The response
+uses the same configured private HTTPS origin and code identity as the
+operations review bundle; request headers cannot supply either identity.
+It returns a content digest, `ETag` and `Cache-Control: no-store`. It adds no
+host probe, database read, recovery action, financial payload or scheduler owner.
+`tests/test_comments_server_host_runtime.py` verifies those boundaries.
+
 The Operations & Governance workspace remains a truthful operator-facing map as functionality is added, removed, renamed, or changes ownership. It is not an inventory of every module or CLI. It shows supported operations, their declared ownership, current evidence, freshness, failure state, and guarded actions at the level needed to understand or operate the product safely.
 
 ## Trigger matrix
@@ -887,3 +944,43 @@ Its bounded review does not run the application, acquire financial data, change
 owner policy, or mutate canonical Windows state. The deterministic checker has
 no network or database access. Readout, brief and maintenance regression tests
 establish local behavior; they do not establish deployment or a future job run.
+
+### SEC ingestion deadline and bounded provenance work
+
+The registered SEC task, schedule, provider and write lane remain unchanged.
+The managed supervisor now enforces the checked task XML's finite elapsed-time
+limit for scheduled SEC children. A deadline returns 124 and records failed,
+incomplete health and operation-journal evidence. It does not replay ingestion.
+After child-tree exit, canonical run accounting fails only the exact attributed
+SEC attempt under its retained lane and bounded database lock. Unavailable or
+ambiguous attribution stays explicit; no broad attempt sweep is permitted.
+
+Ticker-scoped immutable-source reuse and successor-first resolution queries
+reduce repeated work without changing fact admission, manifests, temporal
+eligibility or completeness. Migration 0050 adds only a nonunique KPI
+supersedes lookup index. There is no new operator action or external effect.
+Regression and native child-tree checks establish the correction; a genuine
+subsequent scheduled run remains required for recurrence verification.
+
+### Approved thesis KPI registrations and calculated review rules
+
+Persisted thesis evaluations through the existing deterministic and quarterly
+refresh actions consume
+optional `kpi_registry_candidates` from the approved holdings configuration.
+It checks exact governed report references and eight admitted, comparable
+quarterly observations before inserting a missing user registry row. Existing
+owner settings remain unchanged. New rows have no scalar threshold and are not
+marked thesis breakers. The thesis evaluator owns numerical thresholds,
+adjacent-quarter persistence, TTM calculations and compound review warnings.
+Missing definitions, approximate source bands, incomparable populations and
+unavailable discrete-quarter inputs remain unresolved. A pending candidate does
+not become a zero-valued fact or a passing check. The approved holdings tiers
+retain disclosure and actual-source-cadence research watches.
+
+`metric_expression` hard rules and `metric_threshold` soft predicates use the
+same admitted calculated-series reader. Stored evaluation evidence retains
+source manifests and calculation definitions. Distinct company/market entities
+require explicitly matching source populations. TTM monetary sums require typed
+standalone-quarter durations; YTD labels cannot substitute for those inputs.
+No new scheduler, listener, provider request or external message action is added.
+The existing evaluation and attention lifecycle remains the delivery owner.

@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
 from typing import cast
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -33,6 +34,7 @@ from provenance.source_fact_repository import (
     SourceFactRepository,
 )
 from report.models import (
+    CellSource,
     FinancialsSection,
     QuarterlyLineItem,
     SectionStatus,
@@ -42,14 +44,37 @@ from report.models import (
 from report.renderers.charts_v2 import MatrixRow, yoy_heatmap_table
 from report.renderers.workspace_sections import financials as financial_renderer
 from report.sections import financials
-from sources.report_financials import read_financial_table
+from sources.report_financials import (
+    FinancialEvidenceReference,
+    FinancialTableCell,
+    read_financial_evidence,
+    read_financial_table,
+)
 from tests import test_source_fact_repository as foundation
+from ui.source_chip import viewer_href
 
 STAMP = foundation.STAMP
 
 
 def _sha(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _evidence_reference(
+    cell: FinancialTableCell, *, as_of: datetime = STAMP
+) -> FinancialEvidenceReference:
+    assert cell.provenance is not None
+    assert cell.canonical_resolution_revision_id is not None
+    assert cell.metric_definition_revision_id is not None
+    return FinancialEvidenceReference(
+        ticker="SYNTH",
+        concept=cell.concept,
+        canonical_metric_cell_id=cell.canonical_metric_cell_id,
+        observation_id=cell.provenance.observation.observation_id,
+        canonical_resolution_revision_id=cell.canonical_resolution_revision_id,
+        metric_definition_revision_id=cell.metric_definition_revision_id,
+        as_of=as_of,
+    )
 
 
 @pytest.fixture
@@ -230,6 +255,144 @@ OFFCAL = [
 ]
 
 
+def test_report_canonical_cell_links_exact_evidence_without_legacy_document(
+    database: sqlite3.Connection, tmp_path: Path
+) -> None:
+    facts = seed_table(
+        database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100000000", "USD")]
+    )
+    result = financials.build("SYNTH", tmp_path, conn=database, as_of=STAMP)
+    assert result.line_items[0].values == [100.0]
+    source = result.line_items[0].sources_full[0]
+    assert source is not None and source.doc_id is None
+    href = viewer_href(source)
+    assert href is not None and href.startswith("/api/peek/canonical-financial?reference=")
+    encoded = parse_qs(urlsplit(href).query)["reference"][0]
+    reference = FinancialEvidenceReference.model_validate_json(encoded)
+    assert source.canonical_reference == reference
+    assert reference.observation_id == facts[0].observation.observation_id
+    assert reference.as_of == STAMP
+    assert result.canonical_financial_table is not None
+    cell = result.canonical_financial_table.cells[0]
+    assert reference == _evidence_reference(cell)
+    evidence = read_financial_evidence(database, reference)
+    assert evidence == cell
+    assert isinstance(evidence, FinancialTableCell)
+    assert evidence.provenance is not None and evidence.provenance.evidence is not None
+    assert evidence.display_value == 100
+    assert evidence.provenance.observation.unit_key == "USD"
+    assert evidence.provenance.evidence.source_locator.root == {"path": "/facts/0/value"}
+    assert CellSource.model_validate_json(source.model_dump_json()) == source
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("ticker", "OTHER"),
+        ("concept", "net_income"),
+        ("canonical_metric_cell_id", "another-cell"),
+        ("observation_id", "another-observation"),
+        ("canonical_resolution_revision_id", "another-resolution"),
+        ("metric_definition_revision_id", "another-definition"),
+        ("as_of", STAMP - timedelta(seconds=1)),
+    ],
+)
+def test_financial_evidence_rejects_selection_substitution(
+    database: sqlite3.Connection, field: str, replacement: object
+) -> None:
+    seed_table(database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100000000", "USD")])
+    cell = read_financial_table(database, "SYNTH", as_of=STAMP).cells[0]
+    payload = {**_evidence_reference(cell).model_dump(), field: replacement}
+    reference = FinancialEvidenceReference.model_validate(payload)
+    assert read_financial_evidence(database, reference) is None
+
+
+def test_financial_evidence_preserves_caller_snapshot_and_connection(
+    database: sqlite3.Connection,
+) -> None:
+    seed_table(database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100000000", "USD")])
+    cell = read_financial_table(database, "SYNTH", as_of=STAMP).cells[0]
+    reference = _evidence_reference(cell)
+    original_factory = database.row_factory
+    assert not database.in_transaction
+    assert read_financial_evidence(database, reference) == cell
+    assert not database.in_transaction and database.row_factory is original_factory
+    database.execute("BEGIN")
+    try:
+        assert read_financial_evidence(database, reference) == cell
+        assert database.in_transaction and database.row_factory is original_factory
+        assert database.execute("SELECT 1").fetchone()[0] == 1
+    finally:
+        database.rollback()
+
+
+@pytest.mark.parametrize("rejection", ["mixed_currency", "ambiguous_coordinate", "unit_history"])
+def test_financial_evidence_preserves_tablewide_rejections(
+    database: sqlite3.Connection, rejection: str, tmp_path: Path
+) -> None:
+    # The route-test module imports this module's fixture; defer this import.
+    from tests.test_canonical_financial_peek import content_client
+
+    rows = [("revenue", "2025-01-01", "2025-03-31", "Q1", "100000000", "USD")]
+    currencies: dict[int, str] = {}
+    if rejection == "mixed_currency":
+        rows.append(("net_income", "2025-01-01", "2025-03-31", "Q1", "12000000", "EUR"))
+        currencies[1] = "EUR"
+    elif rejection == "ambiguous_coordinate":
+        rows.append(("revenue", "2025-01-01", "2025-03-30", "Q1", "101000000", "USD"))
+    else:
+        rows.append(("revenue", "2025-04-01", "2025-06-30", "Q2", "110000000", "EUR"))
+        currencies[1] = "EUR"
+    seed_table(database, rows, currencies=currencies)
+    cells = read_financial_table(database, "SYNTH", as_of=STAMP).cells
+    assert cells and all(not cell.available for cell in cells)
+    expected_reason = {
+        "mixed_currency": "mixed_currency_table",
+        "ambiguous_coordinate": "ambiguous_table_coordinate",
+        "unit_history": "incomparable_currency_or_unit_history",
+    }[rejection]
+    assert any(expected_reason in cell.reason_codes for cell in cells)
+    assert all(
+        read_financial_evidence(database, _evidence_reference(cell)) is None for cell in cells
+    )
+    client, reads = content_client(database, tmp_path)
+    for cell in cells:
+        response = client.get(
+            "/api/peek/canonical-financial",
+            query_string={"reference": _evidence_reference(cell).model_dump_json()},
+        )
+        assert response.status_code == 404
+        assert "Evidence unavailable" in response.text
+        assert "100000000" not in response.text and "/facts/" not in response.text
+    assert len(reads) == len(cells)
+
+
+def test_financial_evidence_missing_schema_does_not_use_legacy_rows(
+    database: sqlite3.Connection,
+) -> None:
+    seed_table(database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100000000", "USD")])
+    reference = _evidence_reference(read_financial_table(database, "SYNTH", as_of=STAMP).cells[0])
+    with sqlite3.connect(":memory:") as unavailable:
+        unavailable.execute("CREATE TABLE financial_facts (id INTEGER PRIMARY KEY, value TEXT)")
+        unavailable.execute("INSERT INTO financial_facts VALUES (1,'100000000')")
+        unavailable.commit()
+        assert read_financial_evidence(unavailable, reference) is None
+
+
+def test_financial_evidence_rejects_tampered_observation_commitment(
+    database: sqlite3.Connection,
+) -> None:
+    seed_table(database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100000000", "USD")])
+    reference = _evidence_reference(read_financial_table(database, "SYNTH", as_of=STAMP).cells[0])
+    database.execute("DROP TRIGGER trg_fact_observation_payload_commitments_v2_append_only")
+    database.execute(
+        "UPDATE fact_observation_payload_commitments_v2 "
+        "SET observation_payload_sha256 = ? WHERE observation_id = ?",
+        (_sha("tampered-record"), reference.observation_id),
+    )
+    assert read_financial_evidence(database, reference) is None
+
+
 def test_actual_report_build_keeps_offcalendar_coordinates_and_reconciliation(
     database: sqlite3.Connection, tmp_path: Path
 ) -> None:
@@ -294,8 +457,8 @@ def test_native_currency_and_per_share_source_units(
     levels_panel(output, result, SegmentsSection(status=SectionStatus.MISSING_DATA))
     assert (
         "EUR/share" in output.getvalue()
-        and ">2.50</td>" in output.getvalue()
-        and ">250.0</td>" in output.getvalue()
+        and '<td class="num">2.50<a class="src-chip ' in output.getvalue()
+        and '<td class="num">250.0<a class="src-chip ' in output.getvalue()
     )
 
 
@@ -518,8 +681,14 @@ def test_tie_out_cannot_compare_zero_or_different_currency(
 def test_restatement_changes_selected_observation_only_after_knowledge_cutoff(
     database: sqlite3.Connection, tmp_path: Path
 ) -> None:
+    from tests.test_canonical_financial_peek import content_client
+
     original = seed_table(
-        database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100000000", "USD")]
+        database,
+        [
+            ("revenue", "2025-01-01", "2025-03-31", "Q1", "100000000", "USD"),
+            ("revenue", "2025-04-01", "2025-06-30", "Q2", "150000000", "USD"),
+        ],
     )[0]
     revised_at = STAMP + timedelta(days=1)
     locator = CanonicalJSONObject.model_validate({"path": "/restated/revenue"})
@@ -580,19 +749,70 @@ def test_restatement_changes_selected_observation_only_after_knowledge_cutoff(
     database.commit()
     before = financials.build("SYNTH", tmp_path, conn=database, as_of=STAMP)
     after = financials.build("SYNTH", tmp_path, conn=database, as_of=revised_at)
-    assert before.line_items[0].values == [100.0]
-    assert after.line_items[0].values == [110.0]
+    assert before.line_items[0].values == [100.0, 150.0]
+    assert after.line_items[0].values == [110.0, 150.0]
     assert (
         before.canonical_financial_table is not None and after.canonical_financial_table is not None
     )
-    prior = before.canonical_financial_table.cells[0]
-    latest = after.canonical_financial_table.cells[0]
+    prior = next(
+        cell
+        for cell in before.canonical_financial_table.cells
+        if cell.display_coordinate == "2025 Q1"
+    )
+    latest = next(
+        cell
+        for cell in after.canonical_financial_table.cells
+        if cell.display_coordinate == "2025 Q1"
+    )
     assert prior.provenance is not None and latest.provenance is not None
     assert prior.provenance.observation.observation_id == original.observation.observation_id
     assert latest.provenance.observation.observation_id == observation.observation_id
     assert prior.canonical_resolution_revision_id != latest.canonical_resolution_revision_id
     assert after.line_items[0].sources_full[0] is not None
     assert after.line_items[0].sources_full[0].locator == locator_json
+    client, reads = content_client(database, tmp_path)
+    for report, selected in ((before, prior), (after, latest)):
+        source = report.line_items[0].sources_full[0]
+        assert source is not None and source.canonical_reference is not None
+        assert read_financial_evidence(database, source.canonical_reference) == selected
+        href = viewer_href(source)
+        assert href is not None and selected.provenance is not None
+        response = client.get(href)
+        assert response.status_code == 200
+        assert (
+            '<span class="sv-sec-key">Value</span> '
+            f'<span class="sv-sec-val">{selected.provenance.observation.decimal_value}</span>'
+            in response.text
+        )
+        assert selected.provenance.observation.observation_id in response.text
+        assert source.canonical_reference.canonical_resolution_revision_id in response.text
+        assert source.canonical_reference.metric_definition_revision_id in response.text
+        assert source.canonical_reference.as_of.isoformat() in response.text
+    old_reference = _evidence_reference(prior)
+    changed_cutoff = old_reference.model_copy(update={"as_of": revised_at})
+    assert read_financial_evidence(database, changed_cutoff) is None
+    unavailable = client.get(
+        "/api/peek/canonical-financial",
+        query_string={"reference": changed_cutoff.model_dump_json()},
+    )
+    assert unavailable.status_code == 404 and "100000000" not in unavailable.text
+    assert len(reads) == 3
+    prior_growth = before.line_items[0].growth_evidence["qoq"]
+    latest_growth = after.line_items[0].growth_evidence["qoq"]
+    old_result = financials.read_growth_evidence(database, prior_growth)
+    new_result = financials.read_growth_evidence(database, latest_growth)
+    assert old_result is not None and old_result[0] == pytest.approx(0.5)
+    assert new_result is not None and new_result[0] == pytest.approx(150 / 110 - 1)
+    assert prior_growth.inputs[0].observation_id == original.observation.observation_id
+    assert latest_growth.inputs[0].observation_id == observation.observation_id
+    changed_growth_cutoff = prior_growth.model_copy(
+        update={
+            "inputs": tuple(
+                point.model_copy(update={"as_of": revised_at}) for point in prior_growth.inputs
+            )
+        }
+    )
+    assert financials.read_growth_evidence(database, changed_growth_cutoff) is None
 
 
 def test_per_metric_uses_same_selected_evidence_and_capex_key(
@@ -611,6 +831,8 @@ def test_per_metric_uses_same_selected_evidence_and_capex_key(
 def test_definition_change_invalidates_current_use_but_preserves_as_known(
     database: sqlite3.Connection, tmp_path: Path
 ) -> None:
+    from tests.test_canonical_financial_peek import content_client
+
     seed_table(database, [("revenue", "2025-01-01", "2025-03-31", "Q1", "100000000", "USD")])
     before = read_financial_table(database, "SYNTH", as_of=STAMP)
     ontology = MetricOntology(database)
@@ -640,6 +862,35 @@ def test_definition_change_invalidates_current_use_but_preserves_as_known(
         "active_metric_definition_or_binding_unavailable"
         in current.canonical_financial_table.cells[0].reason_codes
     )
+    source = prior.line_items[0].sources_full[0]
+    assert source is not None and source.canonical_reference is not None
+    evidence = read_financial_evidence(database, source.canonical_reference)
+    assert isinstance(evidence, FinancialTableCell) and evidence.display_value == 100
+    assert (
+        read_financial_evidence(
+            database, source.canonical_reference.model_copy(update={"as_of": later})
+        )
+        is None
+    )
+    href = viewer_href(source)
+    assert href is not None
+    client, reads = content_client(database, tmp_path)
+    original = client.get(href)
+    assert original.status_code == 200
+    assert (
+        '<span class="sv-sec-key">Value</span> <span class="sv-sec-val">100000000</span>'
+        in original.text
+    )
+    assert source.canonical_reference.observation_id in original.text
+    assert source.canonical_reference.metric_definition_revision_id in original.text
+    assert source.canonical_reference.as_of.isoformat() in original.text
+    current_reference = source.canonical_reference.model_copy(update={"as_of": later})
+    unavailable = client.get(
+        "/api/peek/canonical-financial",
+        query_string={"reference": current_reference.model_dump_json()},
+    )
+    assert unavailable.status_code == 404 and "100000000" not in unavailable.text
+    assert len(reads) == 2
 
 
 def test_comparability_edges_stop_at_fiscal_break_then_recover(
@@ -746,12 +997,15 @@ def test_actual_report_rejects_nonannual_source_span_without_hiding_qoq(
     assert "+40.0%" not in output.getvalue()
     levels = StringIO()
     levels_panel(levels, result, SegmentsSection(status=SectionStatus.MISSING_DATA))
-    assert ">140.0</td>" in levels.getvalue()
+    assert '<td class="num">140.0<a class="src-chip ' in levels.getvalue()
 
 
+@pytest.mark.parametrize("reader", ["report", "http"])
 def test_actual_report_uses_one_snapshot_during_concurrent_definition_append(
-    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reader: str
 ) -> None:
+    from tests.test_canonical_financial_peek import content_client
+
     seed_table(
         database,
         [
@@ -765,6 +1019,8 @@ def test_actual_report_uses_one_snapshot_during_concurrent_definition_append(
     calls = 0
     appended = False
     later = STAMP + timedelta(hours=1)
+    initial_cell = read_financial_table(database, "SYNTH", as_of=later).cells[0]
+    reference = _evidence_reference(initial_cell, as_of=later)
 
     def observe(
         self: MetricOntology, metric_id: str, cutoff: datetime
@@ -798,12 +1054,40 @@ def test_actual_report_uses_one_snapshot_during_concurrent_definition_append(
 
     monkeypatch.setattr(MetricOntology, "metric_definition_as_known", observe)
     initial_factory = database.row_factory
-    result = financials.build("SYNTH", tmp_path, conn=database, as_of=later)
+    client = None
+    if reader == "report":
+        result = financials.build("SYNTH", tmp_path, conn=database, as_of=later)
+        assert result.line_items[0].values == [100.0, 110.0]
+    else:
+        client, reads = content_client(database, tmp_path)
+        response = client.get(
+            "/api/peek/canonical-financial",
+            query_string={"reference": reference.model_dump_json()},
+        )
+        assert response.status_code == 200
+        assert initial_cell.provenance is not None
+        assert (
+            '<span class="sv-sec-key">Value</span> '
+            f'<span class="sv-sec-val">{initial_cell.provenance.observation.decimal_value}</span>'
+            in response.text
+        )
+        assert reference.observation_id in response.text
+        assert reference.metric_definition_revision_id in response.text
+        assert "concurrent-definition" not in response.text
+        assert len(reads) == 1
     assert appended
-    assert result.line_items[0].values == [100.0, 110.0]
     assert not database.in_transaction and database.row_factory is initial_factory
     subsequent = financials.build("SYNTH", tmp_path, conn=database, as_of=later)
     assert not subsequent.line_items
+    if reader == "http":
+        assert client is not None
+        assert (
+            client.get(
+                "/api/peek/canonical-financial",
+                query_string={"reference": reference.model_dump_json()},
+            ).status_code
+            == 404
+        )
 
 
 @pytest.mark.parametrize("final_days", [91, 98])

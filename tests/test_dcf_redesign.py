@@ -8,7 +8,7 @@ Three layers:
     No workbook, no subprocess.
   * Reader — run the real builder as a subprocess (the way the driver/refresher
     do), then read it back: format detection, value-of-record parity with the
-    builder's own ``_project`` mirror, FX for a non-USD reporter.
+    builder's shared numerical owner, FX for a non-USD reporter.
   * Refresh integration — drive ``refresh_dcf.refresh_one`` end-to-end: it rebuilds
     every sheet from FMP, PRESERVES the user's Dashboard inputs, recomputes the
     value, and upserts ``dcf_runs``. Plus the ``dcf_applicable=false`` skip and the
@@ -672,14 +672,183 @@ def test_is_redesign_format_false_for_legacy_three_sheet(tmp_path: Path) -> None
 
 
 def test_read_and_value_matches_builder_mirror(built_usd: tuple[Path, float]) -> None:
-    """The reader recomputes the value-of-record from the workbook's inputs; it
-    must track the builder's own _project mirror closely (they differ only by the
-    capex/D&A base nuance — the reader matches the in-sheet formula exactly)."""
+    """Builder RESULT and workbook reader use one calculation (RESULT is rounded)."""
     dest, builder_value = built_usd
     rv = redesign.read_and_value(dest)
     assert rv is not None
-    assert rv.value_per_share_usd == pytest.approx(builder_value, rel=0.03)
+    assert rv.value_per_share_usd == pytest.approx(builder_value, abs=0.0051)
     assert rv.fx_to_usd == 1.0
+
+
+def test_builder_headline_uses_final_tax_and_model_capex_base(refresh_repo: Path) -> None:
+    assumptions = refresh_repo / "data" / "dcf_assumptions" / "TESTCO.json"
+    assumptions.parent.mkdir(parents=True)
+    assumptions.write_text(
+        json.dumps(
+            {
+                "redesign": {
+                    "segments": {
+                        "Cloud": {"near_term_growth": 0.22, "terminal_growth": 0.03},
+                        "Devices": {"near_term_growth": 0.04, "terminal_growth": 0.02},
+                    },
+                    "tax_rate": 0.37,
+                    "country_risk_premium": 0.027,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    dest = refresh_repo / "dcf" / "TESTCO.xlsx"
+    headline = _build(refresh_repo, "TESTCO", dest)
+    inp = redesign.read_inputs(dest)
+    assert inp is not None
+    assert inp.tax_rate == pytest.approx(0.37)
+    assert inp.total_debt_m > 0
+    assert inp.country_risk_premium == pytest.approx(0.027)
+    expected = redesign.value(inp).value_per_share_usd
+    assert headline == pytest.approx(expected, abs=0.0051)
+    assert _dashboard_cell(dest, redesign.SCEN_FV_ROW) == pytest.approx(expected)
+
+
+def test_failed_builder_keeps_unbaselined_assumptions_bytes(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assumptions = refresh_repo / "data" / "dcf_assumptions" / "TESTCO.json"
+    assumptions.parent.mkdir(parents=True)
+    before = b'{"narrative":"owner wording","redesign":{"beta":1.4}}\n'
+    assumptions.write_bytes(before)
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    original_builder = getattr(refresh_dcf, "_run_builder")
+
+    def rejected_builder(
+        ticker: str,
+        repo_root: Path,
+        dest: Path,
+        *,
+        db_path: Path,
+        country_risk_override: float | None = None,
+        assumptions_path: Path | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        proc = original_builder(
+            ticker,
+            repo_root,
+            dest,
+            db_path=db_path,
+            country_risk_override=country_risk_override,
+            assumptions_path=assumptions_path,
+        )
+        assert proc.returncode == 0, proc.stderr
+        return subprocess.CompletedProcess(proc.args, 1, proc.stdout, "synthetic rejection")
+
+    monkeypatch.setattr(refresh_dcf, "_run_builder", rejected_builder)
+    result = refresh_dcf.refresh_one(
+        "TESTCO", refresh_repo, refresh_repo / "data" / "portfolio.db", valuation_year=2026
+    )
+    assert result["status"] == "failed"
+    assert assumptions.read_bytes() == before
+    assert not (refresh_repo / "dcf" / "TESTCO.xlsx").exists()
+    assert not list((refresh_repo / "dcf").glob("*.rebuild.*"))
+    assert not list(assumptions.parent.glob("*.assumptions.*"))
+
+
+def test_rejected_import_preserves_accepted_bundle(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db))
+    result = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert result["status"] == "ok", result
+    workbook = refresh_repo / "dcf" / "TESTCO.xlsx"
+    assumptions = refresh_repo / "data" / "dcf_assumptions" / "TESTCO.json"
+    prior_workbook, prior_assumptions = workbook.read_bytes(), assumptions.read_bytes()
+    with sqlite3.connect(db) as conn:
+        prior_rows = conn.execute("SELECT * FROM dcf_runs ORDER BY id").fetchall()
+    rejected = refresh_repo / "rejected.xlsx"
+    rejected.write_bytes(b"unsupported imported workbook")
+
+    def blocked_refresh(*_args: object, **_kwargs: object) -> dict[str, object]:
+        return {"status": "blocked", "reason": "synthetic rejection"}
+
+    monkeypatch.setattr(refresh_dcf, "refresh_one", blocked_refresh)
+    rc = dcf_sheets.main(
+        ["import", "--ticker", "TESTCO", "--file", str(rejected), "--repo-root", str(refresh_repo)]
+    )
+    assert rc != 0
+    assert workbook.read_bytes() == prior_workbook
+    assert assumptions.read_bytes() == prior_assumptions
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT * FROM dcf_runs ORDER BY id").fetchall() == prior_rows
+
+
+def test_import_uses_configured_db_separate_from_artifacts(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = refresh_repo.parent / "configured-state" / "portfolio.sqlite"
+    db.parent.mkdir()
+    checkout_db = refresh_repo / "data" / "portfolio.db"
+    shutil.move(checkout_db, db)
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db))
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    result = refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)
+    assert result["status"] == "ok", result
+    accepted = refresh_repo / "dcf" / "TESTCO.xlsx"
+    candidate = refresh_repo / "downloaded.xlsx"
+    shutil.copyfile(accepted, candidate)
+    wb = openpyxl.load_workbook(candidate)
+    wb["Dashboard"].cell(30, 2, 0.28)
+    wb.save(candidate)
+    wb.close()
+    rc = dcf_sheets.main(
+        ["import", "--ticker", "TESTCO", "--file", str(candidate), "--repo-root", str(refresh_repo)]
+    )
+    assert rc == 0
+    assert not checkout_db.exists()
+    inp = redesign.read_inputs(accepted)
+    assert inp is not None and inp.terminal_op_margin == pytest.approx(0.28)
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute("SELECT id, is_latest FROM dcf_runs ORDER BY id").fetchall()
+        assert len(rows) == 2
+        assert [row[1] for row in rows] == [0, 1]
+        current = conn.execute("SELECT npv_per_share FROM dcf_runs WHERE is_latest=1").fetchone()
+    assert current is not None
+    assert current[0] == pytest.approx(redesign.value(inp).value_per_share_usd)
+    assert not list(accepted.parent.glob("*.import.*"))
+    assert not list(accepted.parent.glob("*.rebuild.*"))
+
+
+@pytest.mark.parametrize("invalid_tax", [None, "not a tax rate"])
+def test_invalid_import_required_input_preserves_real_accepted_bundle(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch, invalid_tax: str | None
+) -> None:
+    db = refresh_repo / "data" / "portfolio.db"
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db))
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    assert (
+        refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)["status"] == "ok"
+    )
+    accepted = refresh_repo / "dcf" / "TESTCO.xlsx"
+    assumptions = refresh_repo / "data" / "dcf_assumptions" / "TESTCO.json"
+    original_workbook, original_json = accepted.read_bytes(), assumptions.read_bytes()
+    with sqlite3.connect(db) as conn:
+        original_rows = conn.execute("SELECT * FROM dcf_runs ORDER BY id").fetchall()
+    imported = refresh_repo / "invalid-tax.xlsx"
+    shutil.copyfile(accepted, imported)
+    wb = openpyxl.load_workbook(imported)
+    cell = wb["Dashboard"].cell(31, 2)
+    assert isinstance(cell, Cell)
+    cell.value = invalid_tax
+    wb.save(imported)
+    wb.close()
+    rc = dcf_sheets.main(
+        ["import", "--ticker", "TESTCO", "--file", str(imported), "--repo-root", str(refresh_repo)]
+    )
+    assert rc != 0
+    assert accepted.read_bytes() == original_workbook
+    assert assumptions.read_bytes() == original_json
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT * FROM dcf_runs ORDER BY id").fetchall() == original_rows
+    assert not list(accepted.parent.glob("*.import.*"))
 
 
 def test_builder_seeds_scenario_weights_and_reader_reads_them(
@@ -720,7 +889,7 @@ def test_semiannual_reader_round_trips_and_matches_builder(
     rv = redesign.read_and_value(dest)
     assert rv is not None
     assert builder_value > 0 and rv.value_per_share_usd > 0
-    assert rv.value_per_share_usd == pytest.approx(builder_value, rel=0.04)
+    assert rv.value_per_share_usd == pytest.approx(builder_value, abs=0.0051)
 
 
 def test_semiannual_reader_aggregates_two_halves_into_fy(
@@ -1150,7 +1319,9 @@ def test_refresh_stages_missing_assumptions_without_live_path(tmp_path: Path) ->
     assumptions = tmp_path / "data" / "dcf_assumptions" / "MISSING.json"
     staged = refresh_dcf.stage_assumptions(assumptions)
     assert staged != assumptions
-    assert staged.name == "MISSING.rebuild.json"
+    assert staged.name.startswith("MISSING.assumptions.")
+    assert staged.suffix == ".json"
+    assert refresh_dcf.stage_assumptions(assumptions) != staged
     assert not assumptions.exists()
     assert not staged.exists()
 
@@ -1896,6 +2067,43 @@ def _seed_kpi_fact(db: Path, ticker: str, name: str, value: float, unit: str) ->
     conn.close()
 
 
+def test_save_cleanup_failure_preserves_committed_truth_and_blocks_next_write(
+    refresh_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(refresh_dcf.live_price_mod, "read_live_price", _fake_read)
+    db = refresh_repo / "data" / "portfolio.db"
+    accepted = refresh_repo / "dcf" / "TESTCO.xlsx"
+    assert (
+        refresh_dcf.refresh_one("TESTCO", refresh_repo, db, valuation_year=2026)["status"] == "ok"
+    )
+    old_bytes = accepted.read_bytes()
+    inp = redesign.read_inputs(accepted)
+    assert inp is not None
+    edited = dataclasses.replace(inp, beta=inp.beta + 0.3)
+    original_unlink = Path.unlink
+
+    def fail_backup_unlink(path: Path, missing_ok: bool = False) -> None:
+        if ".rollback." in path.name:
+            raise OSError("synthetic cleanup failure")
+        original_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", fail_backup_unlink)
+    result = refresh_dcf.apply_edits("TESTCO", refresh_repo, db, edited)
+    assert result["status"] == "committed_cleanup_failed" and result["recovery_required"] is True
+    committed = redesign.read_inputs(accepted)
+    assert committed is not None and result["inputs"] == committed.to_dict()
+    assert accepted.read_bytes() != old_bytes
+    backups = list(accepted.parent.glob("TESTCO.rollback.*.xlsx"))
+    assert len(backups) == 1 and backups[0].read_bytes() == old_bytes
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute("SELECT is_latest FROM dcf_runs ORDER BY id").fetchall()
+    assert rows == [(0,), (1,)]
+    blocked = refresh_dcf.apply_edits("TESTCO", refresh_repo, db, edited)
+    assert blocked["reason"] == "dcf_recovery_required"
+    after_block = redesign.read_inputs(accepted)
+    assert after_block is not None and result["inputs"] == after_block.to_dict()
+
+
 def test_apply_edits_no_workbook_fails_soft(refresh_repo: Path) -> None:
     """No redesigned workbook to edit → a soft failure, not a crash (the route
     maps this to 409)."""
@@ -1988,7 +2196,11 @@ def test_holdco_refresh_threads_live_owner_inputs_and_atomic_promotion(
     assert result["status"] == "ok"
     assert captured_env["DCF_OWNER_INPUTS_DEST"] == str(live)
     assert captured_env["DCF_PROMOTE_DEST"] == str(live)
-    assert captured_env["DCF_DEST"].endswith("BN.rebuild.xlsx")
+    staged = Path(captured_env["DCF_DEST"])
+    assert staged.parent == live.parent
+    assert staged.name.startswith("BN.rebuild.")
+    assert staged.suffix == ".xlsx"
+    assert staged != live
     assert live.read_bytes() == b"promoted workbook"
 
 

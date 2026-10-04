@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false, reportUnknownArgumentType=false, reportUnknownLambdaType=false
 """Focused CLI-boundary coverage for scheduled pipeline single-flight.
 
 These tests deliberately exercise private fingerprint seams and dynamically
@@ -12,13 +11,34 @@ import json
 import os
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
+from types import ModuleType
+from typing import cast
 
 import pytest
 
 from models.runs import StageStatus
 from pipeline.run_accounting import PipelineRunSuppressedError
+
+
+def _private_callable(module: ModuleType, name: str) -> Callable[..., object]:
+    value: object = getattr(module, name)
+    assert callable(value)
+    return value
+
+
+def _open_connection(_db: object) -> _Conn:
+    return _Conn()
+
+
+def _empty_snapshot(*_args: object) -> list[object]:
+    return []
+
+
+def _resolve_tickers(*_args: object) -> list[str]:
+    return ["NU"]
 
 
 class _Conn:
@@ -69,18 +89,27 @@ def test_scheduled_cli_suppression_is_a_successful_terminal_noop(
     module = importlib.import_module(module_name)
     conn = _Conn()
 
-    monkeypatch.setattr(module, "open_db", lambda _db: conn)
+    def _open_db(_db: object) -> _Conn:
+        return conn
+
+    monkeypatch.setattr(module, "open_db", _open_db)
     if hasattr(module, "_resolve_tickers"):
-        monkeypatch.setattr(module, "_resolve_tickers", lambda *_args: ["NU"])
+        monkeypatch.setattr(module, "_resolve_tickers", _resolve_tickers)
     if module_name == "execution.check_comp_set_drift":
-        monkeypatch.setattr(module, "load_fmp_pe_snapshot", lambda *_args: [])
-        monkeypatch.setattr(module, "_drift_input_fingerprint", lambda *_args, **_kwargs: "fp")
+        monkeypatch.setattr(module, "load_fmp_pe_snapshot", _empty_snapshot)
+
+        def _drift_fingerprint(*_args: object, **_kwargs: object) -> str:
+            return "fp"
+
+        monkeypatch.setattr(module, "_drift_input_fingerprint", _drift_fingerprint)
     if module_name == "execution.track_comp_metrics":
-        monkeypatch.setattr(
-            module,
-            "_metric_input_fingerprint",
-            lambda *_args, **_kwargs: ({"NU": None}, {}, "selection", "sources", 0),
-        )
+
+        def _metric_fingerprint(
+            *_args: object, **_kwargs: object
+        ) -> tuple[dict[str, None], dict[str, object], str, str, int]:
+            return {"NU": None}, {}, "selection", "sources", 0
+
+        monkeypatch.setattr(module, "_metric_input_fingerprint", _metric_fingerprint)
     if module_name == "execution.quarterly_refresh":
         monkeypatch.setattr(
             module,
@@ -114,19 +143,18 @@ def test_track_comp_metrics_fingerprints_material_inputs(
     captured: dict[str, object] = {}
     repo_root = tmp_path / "repo"
 
-    monkeypatch.setattr(module, "open_db", lambda _db: conn)
-    monkeypatch.setattr(module, "_resolve_tickers", lambda *_args: ["NU"])
-    monkeypatch.setattr(
-        module,
-        "_metric_input_fingerprint",
-        lambda *_args, **_kwargs: (
-            {"NU": None},
-            {},
-            "selection_sha",
-            "source_sha",
-            12,
-        ),
-    )
+    def _open_db(_db: object) -> _Conn:
+        return conn
+
+    monkeypatch.setattr(module, "open_db", _open_db)
+    monkeypatch.setattr(module, "_resolve_tickers", _resolve_tickers)
+
+    def _metric_fingerprint(
+        *_args: object, **_kwargs: object
+    ) -> tuple[dict[str, None], dict[str, object], str, str, int]:
+        return {"NU": None}, {}, "selection_sha", "source_sha", 12
+
+    monkeypatch.setattr(module, "_metric_input_fingerprint", _metric_fingerprint)
 
     def _capture(*_args: object, **kwargs: object) -> str:
         captured.update(kwargs)
@@ -170,8 +198,12 @@ def test_source_file_budget_covers_pool_wide_slice_scope() -> None:
     from execution import track_comp_metrics as module
 
     us_listed_pool_ceiling = 2_000
-    required = us_listed_pool_ceiling * len(module._MEMBER_SOURCE_SUFFIXES)
-    assert required <= module._MAX_FINGERPRINT_FILES
+    suffixes: object = getattr(module, "_MEMBER_SOURCE_SUFFIXES")
+    limit: object = getattr(module, "_MAX_FINGERPRINT_FILES")
+    assert isinstance(suffixes, tuple)
+    assert isinstance(limit, int)
+    required = us_listed_pool_ceiling * len(cast("tuple[str, ...]", suffixes))
+    assert required <= limit
 
 
 def test_source_file_budget_breach_reports_the_counts(
@@ -183,7 +215,7 @@ def test_source_file_budget_breach_reports_the_counts(
 
     monkeypatch.setattr(module, "_MAX_FINGERPRINT_FILES", 4)
     with pytest.raises(ValueError) as excinfo:
-        module._source_files_fingerprint(tmp_path, {"NU", "MELI"})
+        _private_callable(module, "_source_files_fingerprint")(tmp_path, {"NU", "MELI"})
 
     message = str(excinfo.value)
     assert "8 files from 2 tickers > 4" in message
@@ -218,13 +250,13 @@ def test_drift_fingerprint_changes_with_selected_rows() -> None:
         ]
     }
 
-    original = module._drift_input_fingerprint(
+    original = _private_callable(module, "_drift_input_fingerprint")(
         conn,
         scopes=["industry"],
         as_of=date(2026, 7, 28),
         entries_by_scope=entries,
     )
-    changed_snapshot = module._drift_input_fingerprint(
+    changed_snapshot = _private_callable(module, "_drift_input_fingerprint")(
         conn,
         scopes=["industry"],
         as_of=date(2026, 7, 28),
@@ -241,7 +273,7 @@ def test_drift_fingerprint_changes_with_selected_rows() -> None:
         },
     )
     conn.execute("UPDATE comp_set_metrics_daily SET n_valid = 6 WHERE scope_type = 'industry'")
-    changed_bottoms_up = module._drift_input_fingerprint(
+    changed_bottoms_up = _private_callable(module, "_drift_input_fingerprint")(
         conn,
         scopes=["industry"],
         as_of=date(2026, 7, 28),
@@ -260,13 +292,13 @@ def test_drift_cli_deduplicates_only_with_complete_fingerprint(
     from execution import check_comp_set_drift as module
 
     captured: dict[str, object] = {}
-    monkeypatch.setattr(module, "open_db", lambda _db: _Conn())
-    monkeypatch.setattr(module, "load_fmp_pe_snapshot", lambda *_args: [])
-    monkeypatch.setattr(
-        module,
-        "_drift_input_fingerprint",
-        lambda *_args, **_kwargs: "drift_sha",
-    )
+    monkeypatch.setattr(module, "open_db", _open_connection)
+    monkeypatch.setattr(module, "load_fmp_pe_snapshot", _empty_snapshot)
+
+    def _drift_fingerprint(*_args: object, **_kwargs: object) -> str:
+        return "drift_sha"
+
+    monkeypatch.setattr(module, "_drift_input_fingerprint", _drift_fingerprint)
 
     def _capture(*_args: object, **kwargs: object) -> str:
         captured.update(kwargs)
@@ -328,11 +360,15 @@ def test_metric_fingerprint_tracks_memberships_and_source_files(
     def _fingerprint() -> tuple[
         dict[str, module.FrozenSet | None], module.ScopeSlices, str, str, int
     ]:
-        return module._metric_input_fingerprint(
+        value = _private_callable(module, "_metric_input_fingerprint")(
             conn,
             tickers=["NU"],
             repo_root=tmp_path,
             include_pool_scopes=False,
+        )
+        assert isinstance(value, tuple)
+        return cast(
+            "tuple[dict[str, module.FrozenSet | None], module.ScopeSlices, str, str, int]", value
         )
 
     # Source files are identified by (st_mtime_ns, st_size), so pin mtime
@@ -364,7 +400,9 @@ def test_metric_fingerprint_tracks_memberships_and_source_files(
 
     assert frozen["NU"] == ("operating", [("SOFI", "industry", False)])
     assert slices == {}
-    assert file_count == len(module._MEMBER_SOURCE_SUFFIXES)
+    suffixes: object = getattr(module, "_MEMBER_SOURCE_SUFFIXES")
+    assert isinstance(suffixes, tuple)
+    assert file_count == len(cast("tuple[str, ...]", suffixes))
     assert selection_a == selection_b
     assert sources_a == sources_repeat
     assert sources_a != sources_mtime
@@ -379,7 +417,7 @@ def test_validation_gate_is_part_of_the_invocation_fingerprint(
     from execution import run_validation_engine as module
 
     captured: dict[str, object] = {}
-    monkeypatch.setattr(module, "open_db", lambda _db: _Conn())
+    monkeypatch.setattr(module, "open_db", _open_connection)
 
     def _capture(*_args: object, **kwargs: object) -> str:
         captured.update(kwargs)
@@ -407,8 +445,10 @@ def test_morning_suppression_stops_stages_and_force_reaches_accounting(
     db_path = tmp_path / "portfolio.db"
     db_path.touch()
     captured: dict[str, object] = {}
+    artifact_root = tmp_path / "artifacts"
 
     def _suppress(_db_path: Path, **kwargs: object) -> str:
+        assert _db_path == db_path
         captured.update(kwargs)
         raise PipelineRunSuppressedError("morning_key", "morning_attempt", StageStatus.IN_PROGRESS)
 
@@ -420,6 +460,8 @@ def test_morning_suppression_stops_stages_and_force_reaches_accounting(
             [
                 "--db-path",
                 str(db_path),
+                "--repo-root",
+                str(artifact_root),
                 "--force",
                 "--max-cost-usd",
                 "7.5",
@@ -438,6 +480,7 @@ def test_morning_suppression_stops_stages_and_force_reaches_accounting(
     assert captured == {
         "start": True,
         "invocation_inputs": {
+            "artifact_root": str(artifact_root.resolve()),
             "max_cost_usd": 7.5,
             "news_source": "websearch",
             "only": "",
@@ -505,7 +548,10 @@ def test_restore_accounting_fingerprints_paths_before_work(
     conn = _Conn()
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(module, "open_db", lambda _db: conn)
+    def _open_db(_db: object) -> _Conn:
+        return conn
+
+    monkeypatch.setattr(module, "open_db", _open_db)
 
     def _capture(*_args: object, **kwargs: object) -> str:
         captured.update(kwargs)
@@ -513,7 +559,7 @@ def test_restore_accounting_fingerprints_paths_before_work(
 
     monkeypatch.setattr(module, "start_run", _capture)
 
-    accounting = module._start_accounting(
+    accounting = _private_callable(module, "_start_accounting")(
         live_db,
         backup_dir=backup_dir,
         keep=True,
@@ -545,7 +591,10 @@ def test_morning_accounting_deduplicates_completed_same_day_runs(
     conn = _Conn()
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(module, "connect_sqlite", lambda *_args, **_kwargs: conn)
+    def _connect_sqlite(*_args: object, **_kwargs: object) -> _Conn:
+        return conn
+
+    monkeypatch.setattr(module, "connect_sqlite", _connect_sqlite)
 
     def _capture(*_args: object, **kwargs: object) -> str:
         captured.update(kwargs)
@@ -554,7 +603,7 @@ def test_morning_accounting_deduplicates_completed_same_day_runs(
     monkeypatch.setattr(run_accounting, "start_run", _capture)
 
     assert (
-        module._record_run(
+        _private_callable(module, "_record_run")(
             tmp_path / "portfolio.db",
             start=True,
             invocation_inputs={"run_date": "2026-07-28"},
@@ -614,6 +663,6 @@ def test_restore_main_hashes_and_reuses_the_selected_snapshot(
     accounting = observed["accounting"]
     assert isinstance(accounting, dict)
     assert accounting["snapshot_name"] == snapshot.name
-    assert accounting["snapshot_sha256"] == module._snapshot_sha256(snapshot)
+    assert accounting["snapshot_sha256"] == _private_callable(module, "_snapshot_sha256")(snapshot)
     assert accounting["live_schema"] is None
     assert observed["drill"] == {"keep": False, "snapshot": snapshot}
