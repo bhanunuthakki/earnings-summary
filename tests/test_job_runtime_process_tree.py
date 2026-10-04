@@ -20,6 +20,8 @@ from runtime.job_runtime import JobLock, main
 
 
 class WindowsJobForTest(Protocol):
+    def __init__(self, handle: int) -> None: ...
+
     @staticmethod
     def create_for_process(pid: int) -> WindowsJobForTest: ...
 
@@ -128,7 +130,7 @@ def test_windows_job_close_failure_retains_handle_and_native_error(
     )
     monkeypatch.setattr(ctypes, "get_last_error", last_error, raising=False)
     monkeypatch.setattr(ctypes, "WinError", win_error, raising=False)
-    job = _WindowsKillOnCloseJob(handle)
+    job = runtime_test_api.windows_job(handle)
 
     with pytest.raises(OSError) as raised:
         job.close()
@@ -151,7 +153,7 @@ def test_windows_job_close_success_is_idempotent(monkeypatch: pytest.MonkeyPatch
         "_load_process_query_kernel32",
         lambda: SimpleNamespace(CloseHandle=close_handle),
     )
-    job = _WindowsKillOnCloseJob(12345)
+    job = runtime_test_api.windows_job(12345)
     job.close()
     job.close()
 
@@ -168,7 +170,7 @@ def test_windows_job_close_loader_failure_retains_ownership(
         raise OSError("controlled loader failure")
 
     monkeypatch.setattr(job_runtime, "_load_process_query_kernel32", unavailable)
-    job = _WindowsKillOnCloseJob(12345)
+    job = runtime_test_api.windows_job(12345)
     with pytest.raises(OSError, match="controlled loader failure"):
         job.close()
     assert getattr(job, "_handle") == 12345
