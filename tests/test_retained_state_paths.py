@@ -54,11 +54,14 @@ def test_report_backfill_without_explicit_or_configured_root_fails_closed(
         report_cli.main()
 
 
+@pytest.mark.parametrize("explicit_source", [False, True])
 def test_dcf_refresh_binds_work_and_source_ledger_to_configured_database(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    explicit_source: bool,
 ) -> None:
     root = tmp_path / "code"
+    sources = tmp_path / "source-state"
     database = tmp_path / "state" / "portfolio.db"
     database.parent.mkdir()
     database.touch()
@@ -76,17 +79,20 @@ def test_dcf_refresh_binds_work_and_source_ledger_to_configured_database(
         valuation_year: int,
         meli_assumptions_path: Path | None,
         onon_assumptions_path: Path | None,
+        source_state_root: Path | None,
     ) -> dict[str, object]:
         assert ticker == "TEST"
         assert repo_root == root.resolve()
         assert meli_assumptions_path is None
         assert onon_assumptions_path is None
+        assert source_state_root == (sources if explicit_source else None)
         refresh_paths.append(db_path)
         return {"ticker": ticker, "status": "synthetic"}
 
     monkeypatch.setattr(refresh_dcf, "refresh_one", capture)
-    monkeypatch.setattr(
-        sys, "argv", ["refresh_dcf.py", "--ticker", "TEST", "--repo-root", str(root)]
-    )
+    argv = ["refresh_dcf.py", "--ticker", "TEST", "--repo-root", str(root)]
+    if explicit_source:
+        argv.extend(("--state-root", str(sources)))
+    monkeypatch.setattr(sys, "argv", argv)
     assert refresh_dcf.main() == 0
     assert refresh_paths == ledger_paths == [database.resolve()]
