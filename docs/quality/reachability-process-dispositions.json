@@ -53,9 +53,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "The paint-cycle runner starts only this checked-in harness in its fixed child-sample mode to isolate cold request sequences.",
-      "fingerprint": "b8a467d84824a5545f7a2b2da157cdc8351010bf34607dbe55283dbb6debe80a",
-      "line": 570,
+      "evidence": "The paint-cycle runner launches only this checked-in harness in its fixed child-sample mode through the managed Python bootstrap to isolate cold request sequences.",
+      "fingerprint": "e64c57305fbc6cc887aba13cc8575b3fcc27902b02d791f7a04a209ce23c434f",
+      "line": 571,
       "path": "execution/bench_flows.py",
       "targets": [
         "execution/bench_flows.py"
@@ -945,7 +945,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "47fcc8149dc34a12b125d023d130a67c3e24d6941fe2b313906285898f9a8bfd",
+      "source_sha256": "3dfb52a7036e94cb33f7c00731dcec7e861da2ed175f4ff078f4d5789416d03e",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

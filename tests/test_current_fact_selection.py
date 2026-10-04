@@ -697,7 +697,7 @@ def test_0049_upgrade_downgrade_reupgrade_round_trip(
     finally:
         conn.close()
 
-    command.upgrade(config, "head")
+    migrated_db(path, target="head", upgrade_existing=True)
     conn = _connect(path)
     try:
         assert (

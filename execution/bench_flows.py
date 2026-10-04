@@ -105,6 +105,7 @@ if sqlite_bootstrap.preload_sqlite() == sqlite_bootstrap.EXPECTED_SQLITE_VERSION
     from pipeline.tier_runner import tier_coverage_summary
     from pipeline.work_os_overview import render_overview_panel
     from report.sections.financials import build as build_financials_section
+    from runtime.python_process import managed_python_argv
     from schema_compat import SchemaRevisionMismatch, expected_head
     from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 else:
@@ -568,7 +569,9 @@ def _spawn_paint_cycle_child(db_path: Path, *, trace: bool) -> dict[str, Any]:
     """
     payload = json.dumps({"db_path": str(db_path), "trace": trace})
     completed = subprocess.run(
-        [sys.executable, "execution/bench_flows.py", "--paint-cycle-sample", payload],
+        managed_python_argv(
+            PROJECT_ROOT, "execution/bench_flows.py", "--paint-cycle-sample", payload
+        ),
         cwd=str(PROJECT_ROOT),
         capture_output=True,
         text=True,
