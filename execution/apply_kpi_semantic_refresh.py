@@ -1149,13 +1149,21 @@ def _require_canonical_result_heads(
             raise RepairBlockedError("result_fact_not_canonically_resolved")
 
 
+@dataclass(frozen=True)
+class _AppliedEntryPostcondition:
+    """A validated head used only within its owning read transaction."""
+
+    fact_row: sqlite3.Row
+    source_issuer: str
+
+
 def _validate_applied_entry_postcondition(
     conn: sqlite3.Connection,
     *,
     manifest: RefreshManifest,
     entry: RefreshEntry,
     head_id: int,
-) -> None:
+) -> _AppliedEntryPostcondition:
     """Prove one exact committed result for marker replay or crash recovery."""
     row = conn.execute(
         "SELECT fact.*,document.sha256 AS source_sha256 "
@@ -1206,7 +1214,7 @@ def _validate_applied_entry_postcondition(
     if not exact_fact:
         raise RepairBlockedError("replay_fact_postcondition_mismatch")
     try:
-        _validate_source_binding(conn, entry)
+        _, source_issuer = _validate_source_binding(conn, entry)
     except RepairBlockedError as exc:
         raise RepairBlockedError("replay_source_postcondition_mismatch") from exc
     canonical = canonical_fact_relation(conn, "kpi_facts")
@@ -1263,7 +1271,7 @@ def _validate_applied_entry_postcondition(
             ):
                 raise RepairBlockedError("replay_comparability_revision_changed")
     if entry.predecessor_resolution_state != "quarantined_legacy":
-        return
+        return _AppliedEntryPostcondition(row, source_issuer)
     predecessor_context = current_kpi_semantic_context(conn, kpi_fact_id=entry.old_fact_id)
     if (
         None if predecessor_context is None else predecessor_context.id,
@@ -1294,6 +1302,8 @@ def _validate_applied_entry_postcondition(
     ):
         raise RepairBlockedError("replay_quarantined_predecessor_changed")
 
+    return _AppliedEntryPostcondition(row, source_issuer)
+
 
 def _verify_replay(
     conn: sqlite3.Connection,
@@ -1302,7 +1312,7 @@ def _verify_replay(
     result_heads: tuple[int, ...],
     result_definition_revision_ids: tuple[str | None, ...],
     result_definition_commitment_sha256s: tuple[str | None, ...],
-) -> None:
+) -> tuple[_AppliedEntryPostcondition, ...]:
     if len(result_heads) != len(manifest.entries):
         raise RepairBlockedError("idempotency_marker_result_shape_mismatch")
     expected_definition_ids = tuple(
@@ -1320,22 +1330,27 @@ def _verify_replay(
         or result_definition_commitment_sha256s != expected_definition_commitments
     ):
         raise RepairBlockedError("idempotency_marker_definition_binding_mismatch")
+    postconditions: list[_AppliedEntryPostcondition] = []
     for entry, head_id in zip(manifest.entries, result_heads, strict=True):
         if entry.action == "bind_existing" and head_id != entry.old_fact_id:
             raise RepairBlockedError("idempotency_marker_result_head_mismatch")
-        _validate_applied_entry_postcondition(
-            conn,
-            manifest=manifest,
-            entry=entry,
-            head_id=head_id,
+        postconditions.append(
+            _validate_applied_entry_postcondition(
+                conn,
+                manifest=manifest,
+                entry=entry,
+                head_id=head_id,
+            )
         )
+
+    return tuple(postconditions)
 
 
 def _detect_applied_postcondition(
     conn: sqlite3.Connection, *, manifest: RefreshManifest
-) -> tuple[int, ...] | None:
+) -> tuple[_AppliedEntryPostcondition, ...] | None:
     """Recognize an exact commit after a crash before marker publication."""
-    heads: list[int] = []
+    postconditions: list[_AppliedEntryPostcondition] = []
     for entry in manifest.entries:
         if entry.action == "bind_existing":
             head_id = entry.old_fact_id
@@ -1349,7 +1364,7 @@ def _detect_applied_postcondition(
                 return None
             head_id = int(row["id"])
         try:
-            _validate_applied_entry_postcondition(
+            postcondition = _validate_applied_entry_postcondition(
                 conn,
                 manifest=manifest,
                 entry=entry,
@@ -1357,8 +1372,8 @@ def _detect_applied_postcondition(
             )
         except RepairBlockedError:
             return None
-        heads.append(head_id)
-    return tuple(heads)
+        postconditions.append(postcondition)
+    return tuple(postconditions)
 
 
 def _validate_v2_idempotency_marker(
@@ -1501,7 +1516,7 @@ def _recover_committed_replay(
                 )
             else:
                 raise RepairBlockedError("idempotency_marker_schema_unknown")
-            _verify_replay(
+            postconditions = _verify_replay(
                 conn,
                 manifest=manifest,
                 result_heads=heads,
@@ -1513,7 +1528,8 @@ def _recover_committed_replay(
             recovered = _detect_applied_postcondition(conn, manifest=manifest)
             if recovered is None:
                 return None
-            heads = recovered
+            postconditions = recovered
+            heads = tuple(int(postcondition.fact_row["id"]) for postcondition in recovered)
             definition_ids = tuple(
                 None
                 if e.definition_revision is None
@@ -1533,19 +1549,16 @@ def _recover_committed_replay(
             if row.kpi_definition_id is not None
         }
         owner_tickers = frozenset(portfolio_tickers(conn, user_id=manifest.user_id))
-        for entry, head_id in zip(manifest.entries, heads, strict=True):
-            row = conn.execute(
-                "SELECT ticker,kpi_definition_id FROM kpi_facts WHERE id=?", (head_id,)
-            ).fetchone()
-            if row is None:
-                raise RepairBlockedError("replay_fact_postcondition_mismatch")
+        # Both identity and scope refer to the same already-proven head in
+        # this continuous read-only transaction. Never retain it across reads.
+        for entry, postcondition in zip(manifest.entries, postconditions, strict=True):
+            row = postcondition.fact_row
             if (
                 entry.definition_revision is not None
                 and int(row["kpi_definition_id"]) != entry.definition_revision.kpi_definition_id
             ):
                 raise RepairBlockedError("replay_definition_root_changed")
-            _, source_issuer = _validate_source_binding(conn, entry)
-            if str(row["ticker"]).upper() != source_issuer.upper():
+            if str(row["ticker"]).upper() != postcondition.source_issuer.upper():
                 raise RepairBlockedError("replay_source_issuer_mismatch")
             if entry.predecessor_resolution_state == "canonical_current":
                 if int(row["kpi_definition_id"]) not in allowed:

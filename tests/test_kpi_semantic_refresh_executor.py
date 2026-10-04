@@ -83,6 +83,11 @@ class EntryEffectView(Protocol):
     definition_commitment_sha256: str | None
 
 
+class AppliedEntryPostconditionView(Protocol):
+    fact_row: sqlite3.Row
+    source_issuer: str
+
+
 # Explicit internal test seams; production callers retain the public authority APIs.
 apply_entry = getattr(refresh, "_apply_entry")
 context_for_entry = getattr(refresh, "_context_for_entry")
@@ -95,6 +100,7 @@ validate_v2_idempotency_marker = getattr(refresh, "_validate_v2_idempotency_mark
 verify_replay = getattr(refresh, "_verify_replay")
 write_content_addressed = getattr(refresh, "_write_content_addressed")
 EntryEffect = getattr(refresh, "_EntryEffect")
+AppliedEntryPostcondition = getattr(refresh, "_AppliedEntryPostcondition")
 
 NOW = datetime(2026, 8, 27, 20, tzinfo=UTC)
 SOURCE_EVIDENCE_LOCATOR = EvidenceLocator(
@@ -1104,12 +1110,17 @@ def test_missing_marker_recovers_exact_committed_postcondition(
         manifest: refresh.RefreshManifest,
         entry: refresh.RefreshEntry,
         head_id: int,
-    ) -> None:
+    ) -> AppliedEntryPostconditionView:
         del manifest, entry
         checked.append(head_id)
+        row = _conn.execute("SELECT id FROM kpi_facts WHERE id=?", (head_id,)).fetchone()
+        assert row is not None
+        return AppliedEntryPostcondition(row, "NU")
 
     monkeypatch.setattr(refresh, "_validate_applied_entry_postcondition", _exact_postcondition)
-    assert detect_applied_postcondition(conn, manifest=manifest) == (10,)
+    recovered = detect_applied_postcondition(conn, manifest=manifest)
+    assert recovered is not None
+    assert tuple(postcondition.fact_row["id"] for postcondition in recovered) == (10,)
     assert checked == [10]
     conn.close()
 
@@ -1510,6 +1521,23 @@ def test_repair_command_binds_owner_scope_and_enforces_current_authority(
     )
 
     replay_started = [False]
+    replay_head_reads: list[str] = []
+    original_readonly_connect = refresh.connect_sqlite
+
+    def observe_readonly_connect(
+        path: Path, *, role: refresh.SQLiteConnectionRole
+    ) -> sqlite3.Connection:
+        connection = original_readonly_connect(path, role=role)
+
+        def record_read(sql: str) -> None:
+            normalized = " ".join(sql.lower().split())
+            if replay_started[0] and "from kpi_facts" in normalized and "where id=11" in normalized:
+                replay_head_reads.append(sql)
+
+        connection.set_trace_callback(record_read)
+        return connection
+
+    monkeypatch.setattr(refresh, "connect_sqlite", observe_readonly_connect)
     artifact_checks: list[bool] = []
     evidence_db_paths: list[Path] = []
     lock_owned = [False]
@@ -1663,10 +1691,10 @@ def test_repair_command_binds_owner_scope_and_enforces_current_authority(
 
         def no_committed_postcondition(
             _conn: sqlite3.Connection, *, manifest: refresh.RefreshManifest
-        ) -> tuple[int, ...] | None:
-            del manifest
+        ) -> tuple[AppliedEntryPostconditionView, ...] | None:
             if replay_test and _conn.execute("SELECT COUNT(*) FROM dry_run_probe").fetchone()[0]:
-                return (11,)
+                validator = getattr(refresh, "_validate_applied_entry_postcondition")
+                return (validator(_conn, manifest=manifest, entry=manifest.entries[0], head_id=11),)
             return None
 
         monkeypatch.setattr(refresh, "repair_executor_code_sha256", code_sha)
@@ -1734,13 +1762,16 @@ def test_repair_command_binds_owner_scope_and_enforces_current_authority(
         ]
     if replay_test:
 
-        def committed_postcondition(connection: sqlite3.Connection, **kwargs: object) -> None:
+        def committed_postcondition(
+            connection: sqlite3.Connection, **kwargs: object
+        ) -> AppliedEntryPostconditionView:
             assert lock_owned[0]
             row = connection.execute(
-                "SELECT value FROM kpi_facts WHERE id=?", (kwargs["head_id"],)
+                "SELECT * FROM kpi_facts WHERE id=?", (kwargs["head_id"],)
             ).fetchone()
-            if row is None or row[0] != "114":
+            if row is None or row["value"] != "114":
                 raise refresh.RepairBlockedError("replay_fact_postcondition_mismatch")
+            return AppliedEntryPostcondition(row, "NU")
 
         monkeypatch.setattr(
             refresh, "_validate_applied_entry_postcondition", committed_postcondition
@@ -1894,6 +1925,9 @@ def test_repair_command_binds_owner_scope_and_enforces_current_authority(
         if expected_blocker is None:
             assert replay_receipt.result_fact_head_ids == (11,)
             assert artifact_checks == [False]
+            assert len(replay_head_reads) == 1, (
+                "scope must reuse the head proven in this read transaction"
+            )
             if expiry_stage != "replay_missing_marker":
                 assert marker_path.read_bytes() == original_marker
 
