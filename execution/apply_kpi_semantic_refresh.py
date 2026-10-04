@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from time import perf_counter
 from typing import Literal, Protocol, cast
 from uuid import uuid4
 
@@ -36,39 +37,36 @@ from pydantic import (
     model_validator,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CANONICAL_WINDOWS_STATE_ROOT = Path(
-    os.environ.get("EARNINGS_SUMMARY_STATE_ROOT")
-    or Path.home() / ".gemini" / "antigravity" / "scratch" / "earnings-summary"
-)
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "execution"))
 
-from backup_restore_readiness_receipt import (  # noqa: E402
+from backup_restore_readiness_receipt import (
     BackupRestoreReadinessReceipt,
     validate_receipt_for_source,
 )
-from fetch_windows_review_bundle import (  # noqa: E402
+from fetch_windows_review_bundle import (
     WindowsReviewPins,
     identity_sha256,
     validate_pinned_identity,
 )
 
-from models.documents import SourceType  # noqa: E402
-from models.facts import Currency, FactLocator, Unit  # noqa: E402
-from operations.kpi_repair_receipts import (  # noqa: E402
+from models.documents import SourceType
+from models.facts import Currency, FactLocator, Unit
+from operations.kpi_repair_receipts import (
     KpiRepairAttemptReceipt,
     KpiRepairJudgeReceipt,
     canonical_sha256,
+    judge_qualification_is_current,
     repair_executor_code_sha256,
     seal_attempt,
 )
-from operations.review_bundle import (  # noqa: E402
+from operations.review_bundle import (
     OperationsReviewBundle,
     database_lineage_identity,
     review_code_identity,
 )
-from pipeline.kpi_definition_revisions import (  # noqa: E402
+from operations.snapshot import RUNTIME_RECEIPT_TTL
+from pipeline.kpi_definition_revisions import (
     IssuerKpiDefinitionRevision,
     KpiDefinitionComparabilityRevision,
     current_kpi_definition_comparability_revision,
@@ -77,12 +75,13 @@ from pipeline.kpi_definition_revisions import (  # noqa: E402
     validate_kpi_definition_comparability_candidate,
     validate_kpi_definition_revision_candidate,
 )
-from pipeline.kpi_semantic_review import (  # noqa: E402
+from pipeline.kpi_legacy_disposition_capture import captured_legacy_quarantine_matches
+from pipeline.kpi_semantic_review import (
     KpiEvidenceLocatorCoordinates,
     fact_locator_from_evidence_coordinates,
 )
-from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definitions  # noqa: E402
-from pipeline.kpi_semantics import (  # noqa: E402
+from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definitions
+from pipeline.kpi_semantics import (
     KpiAccountingBasis,
     KpiConsolidationScope,
     KpiSemanticContext,
@@ -93,18 +92,25 @@ from pipeline.kpi_semantics import (  # noqa: E402
     persist_kpi_semantic_context,
     validate_admitted_unit_scale,
 )
-from pipeline.kpi_source_review import (  # noqa: E402
+from pipeline.kpi_source_review import (
     bind_source_reviewed_kpi_definition,
     insert_source_reviewed_kpi_supersession,
     require_canonical_kpi_resolution,
 )
-from pipeline.queries import open_db  # noqa: E402
-from provenance.evidence_ledger import EvidenceLocator  # noqa: E402
-from provenance.financial_fact_resolution import canonical_fact_relation  # noqa: E402
-from provenance.fulltext_extractor_identity import (  # noqa: E402
+from pipeline.queries import open_db
+from provenance.evidence_ledger import EvidenceLocator
+from provenance.financial_fact_resolution import canonical_fact_relation
+from provenance.fulltext_extractor_identity import (
     resolve_fulltext_extractor_identity,
 )
-from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
+from runtime.job_runtime import JobAlreadyRunningError, JobLock
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CANONICAL_WINDOWS_STATE_ROOT = Path(
+    os.environ.get("EARNINGS_SUMMARY_STATE_ROOT")
+    or Path.home() / ".gemini" / "antigravity" / "scratch" / "earnings-summary"
+)
 
 _SHA256 = r"^[0-9a-f]{64}$"
 # Five minutes matches the repository's trusted-evidence clock-skew allowance while
@@ -522,6 +528,92 @@ def _schema_revision(conn: sqlite3.Connection) -> str:
     return str(rows[0][0])
 
 
+def validate_repair_review_preconditions(
+    *,
+    manifest: KpiAuthorityManifest,
+    review_bundle: OperationsReviewBundle,
+    trusted_pins: WindowsReviewPins,
+    backup: BackupRestoreReadinessReceipt,
+    now: datetime,
+    max_review_age: timedelta,
+    not_before: datetime | None = None,
+) -> None:
+    """Check review authority without reading any receipt-controlled artifact path."""
+    if not_before is not None and now < not_before:
+        raise RepairBlockedError("repair_clock_moved_backwards")
+    try:
+        validate_pinned_identity(bundle=review_bundle, pins=trusted_pins, now=now)
+    except ValueError:
+        raise RepairBlockedError("trusted_review_pin_mismatch") from None
+    if review_bundle.content_sha256 != manifest.review_bundle_sha256:
+        raise RepairBlockedError("review_bundle_hash_mismatch")
+    if review_bundle.observed_at > now + timedelta(minutes=5):
+        raise RepairBlockedError("review_bundle_from_future")
+    if now - review_bundle.observed_at > min(max_review_age, timedelta(minutes=20)):
+        raise RepairBlockedError("review_bundle_stale")
+    scheduler_recorded_at = review_bundle.scheduler.observation.evidence_recorded_at
+    if review_bundle.scheduler.observation.state != "current":
+        raise RepairBlockedError("scheduler_runtime_evidence_unhealthy")
+    if scheduler_recorded_at is not None and scheduler_recorded_at > now + timedelta(minutes=5):
+        raise RepairBlockedError("scheduler_runtime_evidence_from_future")
+    if scheduler_recorded_at is None or now - scheduler_recorded_at > min(
+        RUNTIME_RECEIPT_TTL, max_review_age
+    ):
+        raise RepairBlockedError("scheduler_runtime_evidence_stale")
+    if review_bundle.schema_revision.matches is not True:
+        raise RepairBlockedError("review_bundle_schema_unhealthy")
+    if review_bundle.schema_revision.actual_heads != (manifest.expected_schema_revision,):
+        raise RepairBlockedError("review_bundle_schema_revision_mismatch")
+    if backup.evidence_id != manifest.backup_restore_evidence_id:
+        raise RepairBlockedError("backup_restore_evidence_id_mismatch")
+
+
+def emit_repair_phase_diagnostics(
+    *,
+    phase: str,
+    started_monotonic: float,
+    review_bundle: OperationsReviewBundle,
+    max_review_age: timedelta,
+    now: datetime,
+) -> None:
+    """Record elapsed work and remaining authority budgets without data or paths."""
+    recorded_at = (
+        review_bundle.scheduler.observation.evidence_recorded_at
+        if "scheduler" in review_bundle.model_fields_set
+        else None
+    )
+    observed_at = (
+        review_bundle.observed_at if "observed_at" in review_bundle.model_fields_set else None
+    )
+    pending_failure = sys.exception()
+    try:
+        sys.stderr.write(
+            json.dumps(
+                {
+                    "event": "kpi_repair_phase_completed",
+                    "phase": phase,
+                    "duration_seconds": round(max(0.0, perf_counter() - started_monotonic), 6),
+                    "review_remaining_seconds": None
+                    if observed_at is None
+                    else (
+                        min(max_review_age, timedelta(minutes=20)) - (now - observed_at)
+                    ).total_seconds(),
+                    "scheduler_remaining_seconds": None
+                    if recorded_at is None
+                    else (
+                        min(max_review_age, RUNTIME_RECEIPT_TTL) - (now - recorded_at)
+                    ).total_seconds(),
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        )
+    except OSError:
+        if pending_failure is None:
+            raise
+        # A failed diagnostic stream must not replace the precise repair blocker.
+
+
 def _validate_external_evidence(
     *,
     manifest: KpiAuthorityManifest,
@@ -531,38 +623,48 @@ def _validate_external_evidence(
     backup: BackupRestoreReadinessReceipt,
     now: datetime,
     max_review_age: timedelta,
-) -> None:
-    try:
-        validate_pinned_identity(bundle=review_bundle, pins=trusted_pins, now=now)
-    except ValueError:
-        raise RepairBlockedError("trusted_review_pin_mismatch") from None
-    if review_bundle.content_sha256 != manifest.review_bundle_sha256:
-        raise RepairBlockedError("review_bundle_hash_mismatch")
-    if review_bundle.observed_at > now + timedelta(minutes=5):
-        raise RepairBlockedError("review_bundle_from_future")
-    if now - review_bundle.observed_at > max_review_age:
-        raise RepairBlockedError("review_bundle_stale")
-    scheduler_recorded_at = review_bundle.scheduler.observation.evidence_recorded_at
-    if review_bundle.scheduler.observation.state != "current":
-        raise RepairBlockedError("scheduler_runtime_evidence_unhealthy")
-    if scheduler_recorded_at is not None and scheduler_recorded_at > now + timedelta(minutes=5):
-        raise RepairBlockedError("scheduler_runtime_evidence_from_future")
-    if scheduler_recorded_at is None or now - scheduler_recorded_at > max_review_age:
-        raise RepairBlockedError("scheduler_runtime_evidence_stale")
-    if review_bundle.schema_revision.matches is not True:
-        raise RepairBlockedError("review_bundle_schema_unhealthy")
-    if review_bundle.schema_revision.actual_heads != (manifest.expected_schema_revision,):
-        raise RepairBlockedError("review_bundle_schema_revision_mismatch")
-    if backup.evidence_id != manifest.backup_restore_evidence_id:
-        raise RepairBlockedError("backup_restore_evidence_id_mismatch")
-    reasons = validate_receipt_for_source(
-        backup,
-        source_db=db_path,
-        source_revision=manifest.expected_schema_revision,
-        require_current_identity=True,
+    not_before: datetime | None = None,
+) -> datetime:
+    validate_repair_review_preconditions(
+        manifest=manifest,
+        review_bundle=review_bundle,
+        trusted_pins=trusted_pins,
+        backup=backup,
+        now=now,
+        max_review_age=max_review_age,
+        not_before=not_before,
     )
+    proof_started = perf_counter()
+    try:
+        reasons = validate_receipt_for_source(
+            backup,
+            source_db=db_path,
+            source_revision=manifest.expected_schema_revision,
+            require_current_identity=True,
+        )
+    finally:
+        emit_repair_phase_diagnostics(
+            phase="full_source_proof",
+            started_monotonic=proof_started,
+            review_bundle=review_bundle,
+            max_review_age=max_review_age,
+            now=datetime.now(UTC),
+        )
     if reasons:
         raise RepairBlockedError(reasons[0])
+    # A full source proof can consume the remaining review window. Its success
+    # does not extend either the review or the producer's Scheduler deadline.
+    checked_at = datetime.now(UTC)
+    validate_repair_review_preconditions(
+        manifest=manifest,
+        review_bundle=review_bundle,
+        trusted_pins=trusted_pins,
+        backup=backup,
+        now=checked_at,
+        max_review_age=max_review_age,
+        not_before=now,
+    )
+    return checked_at
 
 
 def _validate_apply_authority(
@@ -733,6 +835,7 @@ def _validate_entry(
     allowed: set[int],
     *,
     owner_tickers: frozenset[str] = frozenset(),
+    owner_user_id: str | None = None,
 ) -> tuple[sqlite3.Row, SourceType]:
     row = conn.execute(
         "SELECT fact.*,definition.name,definition.ticker AS definition_ticker,"
@@ -782,7 +885,16 @@ def _validate_entry(
         or actual_context_revision != entry.expected_context_revision
     ):
         raise RepairBlockedError("semantic_context_head_changed")
-    if entry.predecessor_resolution_state == "quarantined_legacy" and current is not None:
+    if (
+        entry.predecessor_resolution_state == "quarantined_legacy"
+        and current is not None
+        and (
+            owner_user_id is None
+            or not captured_legacy_quarantine_matches(
+                conn, fact_id=entry.old_fact_id, user_id=owner_user_id
+            )
+        )
+    ):
         raise RepairBlockedError("quarantined_predecessor_has_semantic_context")
     if current is not None and current.context == entry.context:
         raise RepairBlockedError("semantic_context_already_current")
@@ -1037,13 +1149,21 @@ def _require_canonical_result_heads(
             raise RepairBlockedError("result_fact_not_canonically_resolved")
 
 
+@dataclass(frozen=True)
+class _AppliedEntryPostcondition:
+    """A validated head used only within its owning read transaction."""
+
+    fact_row: sqlite3.Row
+    source_issuer: str
+
+
 def _validate_applied_entry_postcondition(
     conn: sqlite3.Connection,
     *,
     manifest: RefreshManifest,
     entry: RefreshEntry,
     head_id: int,
-) -> None:
+) -> _AppliedEntryPostcondition:
     """Prove one exact committed result for marker replay or crash recovery."""
     row = conn.execute(
         "SELECT fact.*,document.sha256 AS source_sha256 "
@@ -1094,7 +1214,7 @@ def _validate_applied_entry_postcondition(
     if not exact_fact:
         raise RepairBlockedError("replay_fact_postcondition_mismatch")
     try:
-        _validate_source_binding(conn, entry)
+        _, source_issuer = _validate_source_binding(conn, entry)
     except RepairBlockedError as exc:
         raise RepairBlockedError("replay_source_postcondition_mismatch") from exc
     canonical = canonical_fact_relation(conn, "kpi_facts")
@@ -1151,7 +1271,13 @@ def _validate_applied_entry_postcondition(
             ):
                 raise RepairBlockedError("replay_comparability_revision_changed")
     if entry.predecessor_resolution_state != "quarantined_legacy":
-        return
+        return _AppliedEntryPostcondition(row, source_issuer)
+    predecessor_context = current_kpi_semantic_context(conn, kpi_fact_id=entry.old_fact_id)
+    if (
+        None if predecessor_context is None else predecessor_context.id,
+        0 if predecessor_context is None else predecessor_context.revision,
+    ) != (entry.expected_context_head_id, entry.expected_context_revision):
+        raise RepairBlockedError("replay_quarantined_predecessor_context_changed")
     predecessor = conn.execute(
         "SELECT fact.source_doc_id,document.sha256 AS source_sha256 "
         "FROM kpi_facts fact JOIN documents document ON document.id=fact.source_doc_id "
@@ -1167,9 +1293,16 @@ def _validate_applied_entry_postcondition(
             (entry.old_fact_id,),
         ).fetchone()
         is not None
-        or current_kpi_semantic_context(conn, kpi_fact_id=entry.old_fact_id) is not None
+        or (
+            predecessor_context is not None
+            and not captured_legacy_quarantine_matches(
+                conn, fact_id=entry.old_fact_id, user_id=manifest.user_id, require_head=False
+            )
+        )
     ):
         raise RepairBlockedError("replay_quarantined_predecessor_changed")
+
+    return _AppliedEntryPostcondition(row, source_issuer)
 
 
 def _verify_replay(
@@ -1179,7 +1312,7 @@ def _verify_replay(
     result_heads: tuple[int, ...],
     result_definition_revision_ids: tuple[str | None, ...],
     result_definition_commitment_sha256s: tuple[str | None, ...],
-) -> None:
+) -> tuple[_AppliedEntryPostcondition, ...]:
     if len(result_heads) != len(manifest.entries):
         raise RepairBlockedError("idempotency_marker_result_shape_mismatch")
     expected_definition_ids = tuple(
@@ -1197,22 +1330,27 @@ def _verify_replay(
         or result_definition_commitment_sha256s != expected_definition_commitments
     ):
         raise RepairBlockedError("idempotency_marker_definition_binding_mismatch")
+    postconditions: list[_AppliedEntryPostcondition] = []
     for entry, head_id in zip(manifest.entries, result_heads, strict=True):
         if entry.action == "bind_existing" and head_id != entry.old_fact_id:
             raise RepairBlockedError("idempotency_marker_result_head_mismatch")
-        _validate_applied_entry_postcondition(
-            conn,
-            manifest=manifest,
-            entry=entry,
-            head_id=head_id,
+        postconditions.append(
+            _validate_applied_entry_postcondition(
+                conn,
+                manifest=manifest,
+                entry=entry,
+                head_id=head_id,
+            )
         )
+
+    return tuple(postconditions)
 
 
 def _detect_applied_postcondition(
     conn: sqlite3.Connection, *, manifest: RefreshManifest
-) -> tuple[int, ...] | None:
+) -> tuple[_AppliedEntryPostcondition, ...] | None:
     """Recognize an exact commit after a crash before marker publication."""
-    heads: list[int] = []
+    postconditions: list[_AppliedEntryPostcondition] = []
     for entry in manifest.entries:
         if entry.action == "bind_existing":
             head_id = entry.old_fact_id
@@ -1226,7 +1364,7 @@ def _detect_applied_postcondition(
                 return None
             head_id = int(row["id"])
         try:
-            _validate_applied_entry_postcondition(
+            postcondition = _validate_applied_entry_postcondition(
                 conn,
                 manifest=manifest,
                 entry=entry,
@@ -1234,8 +1372,8 @@ def _detect_applied_postcondition(
             )
         except RepairBlockedError:
             return None
-        heads.append(head_id)
-    return tuple(heads)
+        postconditions.append(postcondition)
+    return tuple(postconditions)
 
 
 def _validate_v2_idempotency_marker(
@@ -1244,6 +1382,9 @@ def _validate_v2_idempotency_marker(
     receipt_root: Path,
     logical_key_sha256: str,
     manifest_sha256: str,
+    review_bundle_sha256: str,
+    backup_restore_evidence_id: str,
+    executor_code_sha256: str,
 ) -> tuple[tuple[int, ...], tuple[str | None, ...], tuple[str | None, ...]]:
     """Bind marker claims to one exact sealed apply/recovery attempt receipt."""
 
@@ -1293,6 +1434,9 @@ def _validate_v2_idempotency_marker(
         or apply_receipt.state not in {"applied", "replayed"}
         or apply_receipt.logical_idempotency_key_sha256 != logical_key_sha256
         or apply_receipt.manifest_sha256 != manifest_sha256
+        or apply_receipt.review_bundle_sha256 != review_bundle_sha256
+        or apply_receipt.backup_restore_evidence_id != backup_restore_evidence_id
+        or apply_receipt.executor_code_sha256 != executor_code_sha256
         or apply_receipt.result_fact_head_ids != result_heads
         or apply_receipt.result_definition_revision_ids != result_definition_ids
         or apply_receipt.result_definition_commitment_sha256s != result_definition_commitments
@@ -1301,6 +1445,138 @@ def _validate_v2_idempotency_marker(
     ):
         raise RepairBlockedError("idempotency_marker_apply_receipt_mismatch")
     return result_heads, result_definition_ids, result_definition_commitments
+
+
+@dataclass(frozen=True)
+class _CommittedReplay:
+    heads: tuple[int, ...]
+    definition_ids: tuple[str | None, ...]
+    definition_commitments: tuple[str | None, ...]
+    publish_marker: bool
+
+
+def _recover_committed_replay(
+    *,
+    db_path: Path,
+    manifest: RefreshManifest,
+    review_bundle: OperationsReviewBundle,
+    backup: BackupRestoreReadinessReceipt,
+    marker: Path,
+    receipt_root: Path,
+    manifest_sha256: str,
+    logical_key_sha256: str,
+    executor_code_sha256: str,
+) -> _CommittedReplay | None:
+    """Read exact committed postconditions under the caller's portfolio writer lock.
+
+    A completed repair changes the live source. Recovery authenticates the
+    immutable rollback artifact and current committed result rather than
+    requiring the source to retain its pre-repair contents.
+    """
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("BEGIN")
+        if _schema_revision(conn) != manifest.expected_schema_revision:
+            raise RepairBlockedError("database_schema_revision_changed")
+        database_identity = hashlib.sha256(database_lineage_identity(conn).encode()).hexdigest()
+        if review_bundle.identity.database_instance_sha256 != database_identity:
+            raise RepairBlockedError("review_bundle_database_identity_mismatch")
+        if marker.exists():
+            prior = json.loads(marker.read_text(encoding="utf-8"))
+            if not isinstance(prior, dict):
+                raise RepairBlockedError("idempotency_marker_result_shape_mismatch")
+            prior = cast(dict[str, object], prior)
+            if (
+                prior.get("manifest_sha256") != manifest_sha256
+                or prior.get("logical_idempotency_key_sha256") != logical_key_sha256
+            ):
+                raise RepairBlockedError("logical_idempotency_key_conflict")
+            marker_schema = prior.get("schema_version")
+            if marker_schema == "kpi_repair_idempotency.v1":
+                if manifest.schema_version == "kpi_semantic_refresh.v7":
+                    raise RepairBlockedError("idempotency_marker_definition_binding_missing")
+                try:
+                    heads = tuple(
+                        TypeAdapter(list[int]).validate_python(prior.get("result_fact_head_ids"))
+                    )
+                except ValueError:
+                    raise RepairBlockedError("idempotency_marker_result_shape_mismatch") from None
+                definition_ids = tuple(None for _ in manifest.entries)
+                definition_commitments = tuple(None for _ in manifest.entries)
+            elif marker_schema == "kpi_repair_idempotency.v2":
+                heads, definition_ids, definition_commitments = _validate_v2_idempotency_marker(
+                    prior,
+                    receipt_root=receipt_root,
+                    logical_key_sha256=logical_key_sha256,
+                    manifest_sha256=manifest_sha256,
+                    review_bundle_sha256=manifest.review_bundle_sha256,
+                    backup_restore_evidence_id=manifest.backup_restore_evidence_id,
+                    executor_code_sha256=executor_code_sha256,
+                )
+            else:
+                raise RepairBlockedError("idempotency_marker_schema_unknown")
+            postconditions = _verify_replay(
+                conn,
+                manifest=manifest,
+                result_heads=heads,
+                result_definition_revision_ids=definition_ids,
+                result_definition_commitment_sha256s=definition_commitments,
+            )
+            publish_marker = False
+        else:
+            recovered = _detect_applied_postcondition(conn, manifest=manifest)
+            if recovered is None:
+                return None
+            postconditions = recovered
+            heads = tuple(int(postcondition.fact_row["id"]) for postcondition in recovered)
+            definition_ids = tuple(
+                None
+                if e.definition_revision is None
+                else e.definition_revision.kpi_definition_revision_id
+                for e in manifest.entries
+            )
+            definition_commitments = tuple(
+                None if e.definition_revision is None else e.definition_revision.commitment_sha256
+                for e in manifest.entries
+            )
+            publish_marker = True
+        allowed = {
+            row.kpi_definition_id
+            for row in scoped_kpi_definitions(
+                conn, repo_root=PROJECT_ROOT, user_id=manifest.user_id
+            )
+            if row.kpi_definition_id is not None
+        }
+        owner_tickers = frozenset(portfolio_tickers(conn, user_id=manifest.user_id))
+        # Both identity and scope refer to the same already-proven head in
+        # this continuous read-only transaction. Never retain it across reads.
+        for entry, postcondition in zip(manifest.entries, postconditions, strict=True):
+            row = postcondition.fact_row
+            if (
+                entry.definition_revision is not None
+                and int(row["kpi_definition_id"]) != entry.definition_revision.kpi_definition_id
+            ):
+                raise RepairBlockedError("replay_definition_root_changed")
+            if str(row["ticker"]).upper() != postcondition.source_issuer.upper():
+                raise RepairBlockedError("replay_source_issuer_mismatch")
+            if entry.predecessor_resolution_state == "canonical_current":
+                if int(row["kpi_definition_id"]) not in allowed:
+                    raise RepairBlockedError("fact_outside_owner_visible_scope")
+            elif str(row["ticker"]).upper() not in owner_tickers:
+                raise RepairBlockedError("quarantined_predecessor_outside_owner_portfolio")
+        reasons = validate_receipt_for_source(
+            backup,
+            source_db=db_path,
+            source_revision=manifest.expected_schema_revision,
+            require_current_identity=False,
+        )
+        if reasons:
+            raise RepairBlockedError(reasons[0])
+        return _CommittedReplay(heads, definition_ids, definition_commitments, publish_marker)
+    finally:
+        conn.rollback()
+        conn.close()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1398,21 +1674,43 @@ def main(argv: list[str] | None = None) -> int:
     state: Literal["passed", "applied", "replayed", "blocked", "failed"] = "failed"
     publish_marker = False
     marker = receipt_root / "by_logical_key" / f"{logical_key_sha}.json"
+    judge: KpiRepairJudgeReceipt | None = None
+    authority_checked_at = started
+
+    def validate_current_authority() -> None:
+        nonlocal authority_checked_at
+        now = datetime.now(UTC)
+        validate_manifest_knowledge_time(manifest, now=now)
+        validate_repair_review_preconditions(
+            manifest=manifest,
+            review_bundle=review_bundle,
+            trusted_pins=trusted_pins,
+            backup=backup,
+            now=now,
+            max_review_age=timedelta(seconds=args.max_review_age_seconds),
+            not_before=authority_checked_at,
+        )
+        if args.apply and (judge is None or not judge_qualification_is_current(judge, now=now)):
+            raise RepairBlockedError("judge_receipt_not_authorizing")
+        authority_checked_at = now
+
     try:
         if args.user_id != manifest.user_id:
             raise RepairBlockedError("manifest_user_identity_mismatch")
         if args.max_review_age_seconds <= 0:
             raise RepairBlockedError("invalid_review_age")
         validate_manifest_knowledge_time(manifest, now=started)
-        _validate_external_evidence(
+        preflight_at = datetime.now(UTC)
+        validate_repair_review_preconditions(
             manifest=manifest,
-            db_path=args.db,
             review_bundle=review_bundle,
             trusted_pins=trusted_pins,
             backup=backup,
-            now=datetime.now(UTC),
+            now=preflight_at,
             max_review_age=timedelta(seconds=args.max_review_age_seconds),
+            not_before=authority_checked_at,
         )
+        authority_checked_at = preflight_at
         if args.apply:
             _validate_apply_authority(
                 db_path=args.db,
@@ -1443,37 +1741,46 @@ def main(argv: list[str] | None = None) -> int:
                 or judge.review_bundle_sha256 != manifest.review_bundle_sha256
                 or judge.executor_code_sha256 != executor_code_sha
                 or judge.purpose != "kpi_source_repair"
+                or judge.evidence_tier != "J3"
                 or (
                     manifest.schema_version == "kpi_semantic_refresh.v7"
                     and judge.rubric_version != "kpi-semantic-refresh-v7"
                 )
             ):
                 raise RepairBlockedError("judge_receipt_not_authorizing")
+            validate_current_authority()
         with JobLock(
             _repair_lock_root(args.db),
             "kpi-semantic-refresh",
             ["portfolio-db"],
             wait_s=0,
         ):
-            resources = ExitStack()
-            try:
-                repair_db = resources.enter_context(
-                    _repair_database(live_db=args.db, backup=backup, apply=args.apply)
+            replay = (
+                _recover_committed_replay(
+                    db_path=args.db,
+                    manifest=manifest,
+                    review_bundle=review_bundle,
+                    backup=backup,
+                    marker=marker,
+                    receipt_root=receipt_root,
+                    manifest_sha256=manifest_sha,
+                    logical_key_sha256=logical_key_sha,
+                    executor_code_sha256=executor_code_sha,
                 )
-                conn = open_db(repair_db)
-            except Exception:
-                resources.close()
-                raise
-            try:
-                actual_revision = _schema_revision(conn)
-                if actual_revision != manifest.expected_schema_revision:
-                    raise RepairBlockedError("database_schema_revision_changed")
-                database_identity_sha256 = hashlib.sha256(
-                    database_lineage_identity(conn).encode("utf-8")
-                ).hexdigest()
-                if review_bundle.identity.database_instance_sha256 != database_identity_sha256:
-                    raise RepairBlockedError("review_bundle_database_identity_mismatch")
-                _validate_external_evidence(
+                if args.apply
+                else None
+            )
+            if replay is not None:
+                validate_current_authority()
+                result_heads = replay.heads
+                result_definition_ids = replay.definition_ids
+                result_definition_commitments = replay.definition_commitments
+                publish_marker = replay.publish_marker
+                state = "replayed"
+            else:
+                # Authenticate the snapshot path and prove current source content
+                # before a dry-run clone can read any receipt-controlled bytes.
+                authority_checked_at = _validate_external_evidence(
                     manifest=manifest,
                     db_path=args.db,
                     review_bundle=review_bundle,
@@ -1481,145 +1788,128 @@ def main(argv: list[str] | None = None) -> int:
                     backup=backup,
                     now=datetime.now(UTC),
                     max_review_age=timedelta(seconds=args.max_review_age_seconds),
+                    not_before=authority_checked_at,
                 )
-                conn.execute("BEGIN IMMEDIATE")
-                if args.apply and marker.exists():
-                    prior = json.loads(marker.read_text(encoding="utf-8"))
-                    if (
-                        prior.get("manifest_sha256") != manifest_sha
-                        or prior.get("logical_idempotency_key_sha256") != logical_key_sha
+                validate_current_authority()
+                resources = ExitStack()
+                try:
+                    clone_started = perf_counter()
+                    try:
+                        repair_db = resources.enter_context(
+                            _repair_database(live_db=args.db, backup=backup, apply=args.apply)
+                        )
+                    finally:
+                        emit_repair_phase_diagnostics(
+                            phase="clone_hash",
+                            started_monotonic=clone_started,
+                            review_bundle=review_bundle,
+                            max_review_age=timedelta(seconds=args.max_review_age_seconds),
+                            now=datetime.now(UTC),
+                        )
+                    conn = open_db(repair_db)
+                except Exception:
+                    resources.close()
+                    raise
+                transaction_started = perf_counter()
+                try:
+                    actual_revision = _schema_revision(conn)
+                    if actual_revision != manifest.expected_schema_revision:
+                        raise RepairBlockedError("database_schema_revision_changed")
+                    database_identity_sha256 = hashlib.sha256(
+                        database_lineage_identity(conn).encode("utf-8")
+                    ).hexdigest()
+                    if review_bundle.identity.database_instance_sha256 != database_identity_sha256:
+                        raise RepairBlockedError("review_bundle_database_identity_mismatch")
+                    validate_current_authority()
+                    conn.execute("BEGIN IMMEDIATE")
+                    allowed = {
+                        row.kpi_definition_id
+                        for row in scoped_kpi_definitions(
+                            conn,
+                            repo_root=PROJECT_ROOT,
+                            user_id=manifest.user_id,
+                        )
+                        if row.kpi_definition_id is not None
+                    }
+                    owner_ticker_set = frozenset(portfolio_tickers(conn, user_id=manifest.user_id))
+                    validated = [
+                        _validate_entry(
+                            conn,
+                            entry,
+                            allowed,
+                            owner_tickers=owner_ticker_set,
+                            owner_user_id=manifest.user_id,
+                        )
+                        for entry in manifest.entries
+                    ]
+                    heads: list[int] = []
+                    definition_ids: list[str | None] = []
+                    definition_commitments: list[str | None] = []
+                    for entry, (row, source_type) in zip(manifest.entries, validated, strict=True):
+                        effect = _apply_entry(
+                            conn,
+                            manifest=manifest,
+                            entry=entry,
+                            row=row,
+                            source_type=source_type,
+                        )
+                        fact_rows += effect.inserted_fact_rows
+                        context_rows += effect.inserted_context_rows
+                        definition_rows += effect.inserted_definition_rows
+                        comparability_rows += effect.inserted_comparability_rows
+                        heads.append(effect.fact_head_id)
+                        definition_ids.append(effect.definition_revision_id)
+                        definition_commitments.append(effect.definition_commitment_sha256)
+                    if fact_rows != sum(e.expected_inserted_fact_rows for e in manifest.entries):
+                        raise RepairBlockedError("fact_row_effect_total_mismatch")
+                    if context_rows != sum(
+                        e.expected_inserted_context_rows for e in manifest.entries
                     ):
-                        raise RepairBlockedError("logical_idempotency_key_conflict")
-                    marker_schema = prior.get("schema_version")
-                    if marker_schema == "kpi_repair_idempotency.v1":
-                        if manifest.schema_version == "kpi_semantic_refresh.v7":
-                            raise RepairBlockedError(
-                                "idempotency_marker_definition_binding_missing"
-                            )
-                        try:
-                            result_heads = tuple(
-                                TypeAdapter(list[int]).validate_python(
-                                    prior.get("result_fact_head_ids")
-                                )
-                            )
-                        except ValueError:
-                            raise RepairBlockedError(
-                                "idempotency_marker_result_shape_mismatch"
-                            ) from None
-                        result_definition_ids = tuple(None for _ in manifest.entries)
-                        result_definition_commitments = tuple(None for _ in manifest.entries)
-                    elif marker_schema == "kpi_repair_idempotency.v2":
-                        (
-                            result_heads,
-                            result_definition_ids,
-                            result_definition_commitments,
-                        ) = _validate_v2_idempotency_marker(
-                            prior,
-                            receipt_root=receipt_root,
-                            logical_key_sha256=logical_key_sha,
-                            manifest_sha256=manifest_sha,
-                        )
-                    else:
-                        raise RepairBlockedError("idempotency_marker_schema_unknown")
-                    _verify_replay(
-                        conn,
-                        manifest=manifest,
-                        result_heads=result_heads,
-                        result_definition_revision_ids=result_definition_ids,
-                        result_definition_commitment_sha256s=result_definition_commitments,
-                    )
-                    state = "replayed"
-                    conn.rollback()
-                else:
-                    recovered_heads = (
-                        _detect_applied_postcondition(conn, manifest=manifest)
-                        if args.apply
-                        else None
-                    )
-                    if recovered_heads is not None:
-                        result_heads = recovered_heads
-                        result_definition_ids = tuple(
-                            None
-                            if entry.definition_revision is None
-                            else entry.definition_revision.kpi_definition_revision_id
-                            for entry in manifest.entries
-                        )
-                        result_definition_commitments = tuple(
-                            None
-                            if entry.definition_revision is None
-                            else entry.definition_revision.commitment_sha256
-                            for entry in manifest.entries
-                        )
-                        state = "replayed"
-                        publish_marker = True
-                        conn.rollback()
-                    else:
-                        allowed = {
-                            row.kpi_definition_id
-                            for row in scoped_kpi_definitions(
-                                conn,
-                                repo_root=PROJECT_ROOT,
-                                user_id=manifest.user_id,
-                            )
-                            if row.kpi_definition_id is not None
-                        }
-                        owner_ticker_set = frozenset(
-                            portfolio_tickers(conn, user_id=manifest.user_id)
-                        )
-                        validated = [
-                            _validate_entry(
-                                conn,
-                                entry,
-                                allowed,
-                                owner_tickers=owner_ticker_set,
-                            )
-                            for entry in manifest.entries
-                        ]
-                        heads: list[int] = []
-                        definition_ids: list[str | None] = []
-                        definition_commitments: list[str | None] = []
-                        for entry, (row, source_type) in zip(
-                            manifest.entries, validated, strict=True
-                        ):
-                            effect = _apply_entry(
-                                conn,
-                                manifest=manifest,
-                                entry=entry,
-                                row=row,
-                                source_type=source_type,
-                            )
-                            fact_rows += effect.inserted_fact_rows
-                            context_rows += effect.inserted_context_rows
-                            definition_rows += effect.inserted_definition_rows
-                            comparability_rows += effect.inserted_comparability_rows
-                            heads.append(effect.fact_head_id)
-                            definition_ids.append(effect.definition_revision_id)
-                            definition_commitments.append(effect.definition_commitment_sha256)
-                        if fact_rows != sum(
-                            e.expected_inserted_fact_rows for e in manifest.entries
-                        ):
-                            raise RepairBlockedError("fact_row_effect_total_mismatch")
-                        if context_rows != sum(
-                            e.expected_inserted_context_rows for e in manifest.entries
-                        ):
-                            raise RepairBlockedError("context_row_effect_total_mismatch")
-                        result_heads = tuple(heads)
-                        result_definition_ids = tuple(definition_ids)
-                        result_definition_commitments = tuple(definition_commitments)
+                        raise RepairBlockedError("context_row_effect_total_mismatch")
+                    result_heads = tuple(heads)
+                    result_definition_ids = tuple(definition_ids)
+                    result_definition_commitments = tuple(definition_commitments)
+                    checks_started = perf_counter()
+                    try:
                         _require_canonical_result_heads(conn, result_heads=result_heads)
-                        if args.apply:
-                            conn.commit()
-                            state = "applied"
-                            publish_marker = True
-                        else:
-                            conn.rollback()
-                            state = "passed"
-            except Exception:
-                conn.rollback()
-                raise
-            finally:
-                conn.close()
-                resources.close()
+                        validate_current_authority()
+                    finally:
+                        emit_repair_phase_diagnostics(
+                            phase="post_write_checks",
+                            started_monotonic=checks_started,
+                            review_bundle=review_bundle,
+                            max_review_age=timedelta(seconds=args.max_review_age_seconds),
+                            now=datetime.now(UTC),
+                        )
+                    validate_current_authority()
+                    if args.apply:
+                        conn.commit()
+                        state = "applied"
+                        publish_marker = True
+                    else:
+                        conn.rollback()
+                        state = "passed"
+                except Exception:
+                    transaction_was_open = conn.in_transaction
+                    conn.rollback()
+                    if transaction_was_open:
+                        # These effects were rolled back. Successful dry runs
+                        # retain their separate prospective effect counts.
+                        fact_rows = context_rows = definition_rows = comparability_rows = 0
+                        result_heads = ()
+                        result_definition_ids = ()
+                        result_definition_commitments = ()
+                    raise
+                finally:
+                    conn.close()
+                    resources.close()
+                    emit_repair_phase_diagnostics(
+                        phase="transaction_validation",
+                        started_monotonic=transaction_started,
+                        review_bundle=review_bundle,
+                        max_review_age=timedelta(seconds=args.max_review_age_seconds),
+                        now=datetime.now(UTC),
+                    )
     except JobAlreadyRunningError:
         blocker_codes = ("portfolio_db_lock_contended",)
         state = "blocked"
@@ -1653,6 +1943,7 @@ def main(argv: list[str] | None = None) -> int:
         result_definition_revision_ids=result_definition_ids,
         result_definition_commitment_sha256s=result_definition_commitments,
     )
+    publication_started = perf_counter()
     receipt_path = receipt_root / "attempts" / f"{attempt_id}.json"
     _write_content_addressed(receipt_path, receipt.model_dump_json(indent=2))
     _write_latest(receipt_root / "latest.json", receipt.model_dump_json(indent=2))
@@ -1676,6 +1967,13 @@ def main(argv: list[str] | None = None) -> int:
                 indent=2,
             ),
         )
+    emit_repair_phase_diagnostics(
+        phase="receipt_publication",
+        started_monotonic=publication_started,
+        review_bundle=review_bundle,
+        max_review_age=timedelta(seconds=args.max_review_age_seconds),
+        now=datetime.now(UTC),
+    )
     summary = KpiRepairSummary(
         attempt_id=attempt_id,
         state=state,

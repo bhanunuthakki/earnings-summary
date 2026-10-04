@@ -1,5 +1,5 @@
 {
-  "review_note": "Analysis-scope integration: 17 hash-exact named prior semantic owner reviews; separately reviewed current DAG, operations, reconstruction, two new scope owners, and explicit source-addition CLI. Review details retained in retail-research-execution-20261003. Addition CLI before regression fails; current 21 tests pass. Source-reference maintenance only, without installation/native/model freshness approval.",
+  "review_note": "Independent advisory SOURCE b0ba1986 verifies exact five current-main scope owners, source-clock selection and financial-lineage policy. Existing scope source and reconstruction entries retained; other records preserved. Source review does not approve financial completeness, scenarios, live writes or installation.",
   "schema_version": 1,
   "sources": [
     {
@@ -24,7 +24,7 @@
     },
     {
       "path": "directives/data_provenance.md",
-      "sha256": "caa695ed16b51577c1a0a82b8987f0e7aa49d07879102f7a3d5d453661d27271"
+      "sha256": "7fd8d12bb5fd7a16908551078f3290e909bf4ed996352bb3428b17bf511f1d3b"
     },
     {
       "path": "directives/dcf_gsheets_setup.md",
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "331ebc599f1a038a21977cf21dba0c8f3daf2d9d87d3b54c9816a95dae304167"
+      "sha256": "2989edc33973593655109d251ed729ac831611fed738eaa13fcd2f8afb28adb7"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -148,7 +148,7 @@
     },
     {
       "path": "execution/fetch_ir_documents.py",
-      "sha256": "62f59b902037434e3e97c933311aebca95221c29cf8584c96a9e9ed1e73fc265"
+      "sha256": "b400a712dd0b67516f043bb0d598d1fd20703a1f0fb117ac5d2d354ca3939954"
     },
     {
       "path": "execution/fetch_sec_xbrl.py",
@@ -248,7 +248,7 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "2cb24f960fda2ca3bffc9881b276ea25497b69c4018a95286109e9a48608d096"
+      "sha256": "b753ab3363396b9a681b2e700346083f936e0347986f660ac3cc5f2c8751f631"
     },
     {
       "path": "scripts/check_investing_skill.py",
@@ -312,7 +312,7 @@
     },
     {
       "path": "src/integrations/portfolio_tracker_client.py",
-      "sha256": "f46e9dd651fa845148184a85a85f30d0c7bb3c578afa1aa0c761bd930902bd50"
+      "sha256": "6184c8768d17182b4575898e89388ed8056df0175dcc5fdbfe50b26fc00d2a68"
     },
     {
       "path": "src/integrations/portfolio_tracker_v1.py",

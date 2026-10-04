@@ -3023,25 +3023,46 @@ def _fetch_live_portfolio_v1(
 ) -> LivePortfolio:
     """v1 transport for :func:`fetch_live_portfolio`.
 
-    ``/api/v1/portfolio/positions`` is contractually envelope-less, so
-    ``as_of`` comes from its ``snapshot_date`` and the staleness flags ride
-    the transactions read's envelope only after their observation dates
-    agree. Required metadata must be present. Both reads must succeed,
-    matching the legacy all-or-nothing fetch."""
+    The bulk portfolio snapshot carries producer-owned holdings freshness.
+    Transaction ``meta.as_of`` is the query window end, so request that window
+    through the selected snapshot date. Require matching date, currency and
+    account coverage before combining both reads. Preserve stale and partial
+    flags from either envelope; transaction freshness cannot refresh holdings.
+    Both reads must succeed, matching the legacy all-or-nothing fetch."""
     client = TrackerV1Client(base_url=base, read_timeout=timeout)
-    pos = client.get_positions()
+    pos = client.get_portfolio_snapshot()
     if not pos.available or pos.data is None:
         return LivePortfolio(available=False, api_url=base, error=f"v1 positions: {pos.error}")
-    txns = client.get_transactions_page(limit=max(1, int(transactions_limit)))
+    snapshot_meta = pos.data.meta
+    position_account_ids = {
+        lot.account_id for position in pos.data.positions for lot in position.accounts
+    }
+    snapshot_error = transaction_snapshot_error(
+        snapshot_meta.as_of,
+        snapshot_meta,
+        position_account_ids=position_account_ids,
+    )
+    if snapshot_error is not None:
+        return LivePortfolio(
+            available=False,
+            api_url=base,
+            error=f"v1 positions: {snapshot_error}",
+            is_partial=True,
+            envelope_warnings=[snapshot_error],
+        )
+    txns = client.get_transactions_page(
+        limit=max(1, int(transactions_limit)),
+        end_date=snapshot_meta.as_of.isoformat() if snapshot_meta.as_of is not None else None,
+    )
     if not txns.available or txns.data is None:
         return LivePortfolio(available=False, api_url=base, error=f"v1 transactions: {txns.error}")
 
     agreement_error = transaction_snapshot_error(
-        pos.data.snapshot_date,
+        snapshot_meta.as_of,
         txns.meta,
-        position_account_ids={
-            lot.account_id for position in pos.data.positions for lot in position.accounts
-        },
+        currency=snapshot_meta.currency,
+        included_account_ids=set(snapshot_meta.account_coverage.included_account_ids),
+        position_account_ids=position_account_ids,
     )
     if agreement_error is not None:
         return LivePortfolio(
@@ -3085,7 +3106,7 @@ def _fetch_live_portfolio_v1(
                 lot.market_value or 0.0
             )
     meta = txns.meta
-    as_of = pos.data.snapshot_date.isoformat() if pos.data.snapshot_date is not None else None
+    as_of = snapshot_meta.as_of.isoformat() if snapshot_meta.as_of is not None else None
     return LivePortfolio(
         available=True,
         api_url=base,
@@ -3094,9 +3115,11 @@ def _fetch_live_portfolio_v1(
         transactions=_live_transactions_from_v1(txns.data.transactions),
         by_tax_treatment=by_tax,
         as_of=as_of,
-        is_stale=meta.is_stale if meta is not None else False,
-        is_partial=meta.is_partial if meta is not None else False,
-        envelope_warnings=_envelope_codes(meta),
+        is_stale=snapshot_meta.is_stale or (meta.is_stale if meta is not None else False),
+        is_partial=snapshot_meta.is_partial or (meta.is_partial if meta is not None else False),
+        envelope_warnings=list(
+            dict.fromkeys(_envelope_codes(snapshot_meta) + _envelope_codes(meta))
+        ),
     )
 
 

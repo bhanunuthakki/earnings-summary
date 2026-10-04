@@ -1372,7 +1372,12 @@ def _extract_pdf_pages(raw_bytes: bytes, source_ref: str) -> list[_NodeText]:
     try:
         reader = pypdf.PdfReader(io.BytesIO(raw_bytes))
         if reader.is_encrypted:
-            raise _ExtractionError("encrypted_pdf")
+            # Public PDFs can have owner restrictions with an empty opening
+            # password. Parse the retained bytes; never rewrite an unlocked copy.
+            if not reader.decrypt(""):
+                raise _ExtractionError("encrypted_pdf")
+            if reader.are_permissions_valid is not True:
+                raise _ExtractionError("invalid_pdf_permissions")
         nodes = [
             _NodeText(
                 local_key=f"page:{index}",
