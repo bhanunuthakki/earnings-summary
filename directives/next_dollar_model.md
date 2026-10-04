@@ -37,27 +37,48 @@ recommendation. It is one analytical input available to the broader workflow.
 Every factor is per-holding, visible in the panel's waterfall, and z-scored
 cross-sectionally before blending. Nothing is a black-box composite.
 
-### 1. `ret` — absolute expected return (blend weight 0.50)
+### 1. `ret` — present fair-value upside (blend weight 0.50)
 
-DCF fair-value upside on price from the latest `dcf_runs` row per ticker:
+`src/allocation/model.py::_dcf_upside` uses `dcf.scenario_reward` on the
+latest top-level, current-version DCF row. When stored tail scenarios exist,
+the input is a probability-weighted present fair-value gap:
+
+```
+upside = Σ_s p_s × (fair_value_s / live_price − 1)
+```
+
+The helper uses a valid per-name prior from the saved snapshot when available.
+Otherwise it uses the documented global bull/base/bear prior of 25/50/25,
+renormalized over the available scenarios. That fallback is a modeling assumption,
+not empirical probability evidence or scenario acceptance.
+
+When no tail scenarios exist and the prior gives the available base leg positive
+weight, the calculation reduces to the base gap:
 
 ```
 upside = npv_per_share / live_price − 1
 ```
 
-- Recomputed from the row's own two fields — **never** read from `over_under_pct`
+This is a present fair-value gap, not an annual holding-period return. Return
+comparisons require a separate horizon, distribution assumptions, scenarios and
+accepted probabilities. A new quote does not refresh the model inputs, assumptions
+or source evidence. Scenario and prior acceptance remain separate gates.
+
+- The base gap is recomputed from the row's own two fields — **never** read from `over_under_pct`
   (the bank/holdco builders stored that column in a different convention). Same rule
-  as `research_cockpit.latest_dcf_runs`, so the cockpit and this panel can't disagree.
-- `live_price` is the price snapshotted at valuation time (typically ≤ a week old) —
-  self-consistent with the fair value it's compared against.
+  as `research_cockpit.latest_dcf_runs`; the weighted scenario input can differ
+  from that base gap.
+- `live_price` is the price saved at valuation time. Retain its date; do not
+  assume that it or the model is current.
 - **Winsorized at ±100 %** before z-scoring (`RET_CLAMP`): a 4× mispricing signal is
   treated as no stronger than 2× (MELI-style DCF outliers would otherwise own the
   whole cross-section). The raw, unclamped upside stays visible in the waterfall.
 
 ### 2. `div` — diversification / marginal risk (blend weight 0.30)
 
-The risk leg of marginal Sharpe: how much portfolio volatility the next dollar of the
-name adds, at current weights.
+The volatility sensitivity of the modeled book to a position weight, at current
+weights. This factor computes no return or Sharpe ratio. Historical Sharpe ratios
+and accepted forward return comparisons require their own inputs and methods.
 
 ```
 div_raw_i = −(∂σ_p/∂w_i) · √252 = −(Σw)_i / σ_p · √252
@@ -96,8 +117,9 @@ momentum(s) = ln(latest / level ~90 calendar days earlier)
 - Betas from `macro_sensitivities` (alembic 0045; OLS of weekly ticker log-returns on
   weekly series log-returns; the 252-day-lookback rows preferred when present).
 - Momentum is the **cumulative version of the same weekly-log-return space the betas
-  were fit in**, so β × momentum is an expected ticker-return contribution and the
-  per-series products sum meaningfully (units: ~90-day log return).
+  were fit in**, so β × momentum projects the fitted historical association onto
+  recent macro changes (units: ~90-day log return). It is not a calibrated expected
+  return. Correlated series can contribute the same shared effect more than once.
 - A series whose latest point is > 45 days old (`MACRO_STALE_DAYS`) is skipped — no
   tilting on dead data. No r²-weighting for now (kept literal/inspectable); the two
   largest |contributions| are named in the waterfall.
@@ -150,6 +172,12 @@ a 252×11 covariance ≈ well under half a second, dwarfed by the tracker fetche
 page already awaits. No cache table; revisit only if the holdings list grows ~5×.
 
 ## Known limitations (accepted 2026-06-11)
+
+- A saved prior can assign zero total probability to the available legs. The
+  current helper returns a zero weighted gap in this case. That is an unsupported
+  estimate, not evidence of zero return. Scenario acceptance must reject this
+  condition before any allocation-eligible use. The legacy helper behavior remains
+  a separate correction; this description does not change calculations.
 
 - DCF `live_price` is at-valuation, not at-render — gaps drift a few days of price.
 - Historical covariance ⇒ regime-blind; shrinkage helps conditioning, not stationarity.

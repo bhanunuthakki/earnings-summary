@@ -1,5 +1,5 @@
 {
-  "review_note": "Independent GPT-6.1 Sol advisory semantic review of main5f financial consumers/artifact ownership and configured evaluation writer; findings SHA256 97053643bb0240aaed5c64ee885a7c25f202437d58065fae1b41ed3536e27653. Corrected fixed-list writer warning retains required explicit approved DB configuration and resolver fallback warning. Exact13 owner identities reviewed. Selected-row current_projection/partial is not canonical admission; independent DB/artifact roots and recovery-required DCF writes remain explicit. Source review only; no native, installation, financial/model acceptance.",
+  "review_note": "Independent GPT-6.1 Sol advisory canonical terminology review 7532aec9be915d9a15f0157d64fa3ae4a308dfb92f9fb56f131016d6d8360589. Present weighted fair-value gaps, volatility sensitivity and historical macro association; calculations and financial acceptance unchanged. Zero-available-mass executable issue remains explicit and pending.",
   "schema_version": 1,
   "sources": [
     {
@@ -76,7 +76,7 @@
     },
     {
       "path": "directives/next_dollar_model.md",
-      "sha256": "ee91917bde8a179a35417a25b6285b0af2888fd2e0f716db337f0440f3118788"
+      "sha256": "e3cfa8900ffaf6a436cdfdf371ea1e0cf089421aeccba8be09b6a56535cbdbd9"
     },
     {
       "path": "directives/operations_governance_surface.md",
