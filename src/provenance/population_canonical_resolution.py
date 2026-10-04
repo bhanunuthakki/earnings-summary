@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Populate exact, issuer-scoped canonical resolutions and projections.
 
 The operator treats ``cutoff_at`` as the knowledge clock and ``recorded_at`` as
@@ -49,9 +48,10 @@ from search.canonical_fact_projection import (
 
 _POLICY = ResolutionPolicy(
     name="complete_sealed_assertion_resolution",
-    version="1",
+    version="2",
     config={
         "candidate_admission": "sealed_source_publication_and_active_exact_binding",
+        "derived_admission": "reviewed_formula_and_current_canonical_operand_selections",
         "conflict_policy": "resolve_only_when_all_eligible_values_agree",
         "source_tier_preference": False,
     },

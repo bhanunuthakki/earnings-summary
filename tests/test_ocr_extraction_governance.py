@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime
@@ -92,6 +93,60 @@ def _config(db_path: Path) -> Config:
     config.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
     return config
+
+
+@pytest.mark.parametrize("password", ["", "required-to-open"])
+def test_pdf_preflight_distinguishes_restrictions_from_opening_password(password: str) -> None:
+    from pypdf import PdfWriter
+    from pypdf.constants import UserAccessPermissions
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=300, height=200)
+    writer.encrypt(
+        password, owner_password="dummy-owner-only", permissions_flag=UserAccessPermissions.PRINT
+    )
+    output = io.BytesIO()
+    writer.write(output)
+    raw = output.getvalue()
+    digest = hashlib.sha256(raw).hexdigest()
+    result = PypdfPDFInspector().inspect(raw, minimum_native_characters=10)
+    if password:
+        assert result.outcome == "encrypted"
+        assert result.reason_code == "encrypted_pdf"
+        assert result.page_count == 0
+    else:
+        assert result.outcome == "ocr_required"
+        assert result.reason_code is None
+        assert result.page_count == 1
+        assert result.pages[0].requires_ocr is True
+    assert hashlib.sha256(raw).hexdigest() == digest
+
+
+@pytest.mark.parametrize("permissions_valid", [False, None])
+def test_pdf_preflight_rejects_invalid_permissions(
+    monkeypatch: pytest.MonkeyPatch, permissions_valid: bool | None
+) -> None:
+    import pypdf
+
+    class Reader:
+        is_encrypted = True
+        are_permissions_valid = permissions_valid
+
+        def __init__(self, _stream: object) -> None:
+            pass
+
+        def decrypt(self, password: str) -> int:
+            assert password == ""
+            return 1
+
+        @property
+        def pages(self) -> list[object]:
+            pytest.fail("Invalid PDF permissions must block page access")
+
+    monkeypatch.setattr(pypdf, "PdfReader", Reader)
+    result = PypdfPDFInspector().inspect(b"retained-source", minimum_native_characters=10)
+    assert result.outcome == "unreadable"
+    assert result.reason_code == "invalid_pdf_permissions"
 
 
 def _connection(

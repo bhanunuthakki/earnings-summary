@@ -57,6 +57,7 @@ from pipeline.kpi_semantics import semantic_admission_sql
 from pipeline.queries import open_db
 from provenance.financial_fact_resolution import resolve_fact_row
 from schema_compat import expected_head
+from tests.fixtures.kpi_judge_setup import qualification_fixture
 
 NOW = datetime(2026, 8, 30, 12, tzinfo=UTC)
 
@@ -174,6 +175,10 @@ def test_sol_disposition_judgment_is_bound_to_exact_dry_run_and_code(
     response_path = tmp_path / "response.json"
     output_path = tmp_path / "judge.json"
     dry_path.write_text(dry_run.model_dump_json(), encoding="utf-8")
+    qualification_path = tmp_path / "qualification.json"
+    qualification_path.write_text(
+        qualification_fixture("kpi_semantic_disposition", NOW).model_dump_json()
+    )
     prompt_path.write_text("Judge exact KPI disposition evidence.", encoding="utf-8")
     response_path.write_text(
         '{"purpose":"kpi_semantic_disposition","rubric_version":"j3-v1",'
@@ -189,6 +194,10 @@ def test_sol_disposition_judgment_is_bound_to_exact_dry_run_and_code(
                 str(dry_path),
                 "--judge-run-id",
                 "sol:test-run",
+                "--judge-model",
+                "synthetic-judge",
+                "--qualification",
+                str(qualification_path),
                 "--prompt-file",
                 str(prompt_path),
                 "--response-file",

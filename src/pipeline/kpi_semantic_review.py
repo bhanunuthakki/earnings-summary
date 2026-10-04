@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from models.documents import SourceType
 from models.facts import FactLocator, LocatorKind, SpreadsheetCellRef
+from pipeline.kpi_legacy_disposition_capture import captured_legacy_quarantine_matches
 from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definitions
 from provenance.evidence_ledger import EvidenceLocator, OfficeObjectKind
 from provenance.financial_fact_resolution import canonical_fact_relation
@@ -965,7 +966,9 @@ def build_quarantined_kpi_correction_review(
     ticker = str(row["ticker"]).upper()
     if ticker not in owner_tickers:
         raise ValueError("quarantined predecessor is outside the owner portfolio")
-    if row["context_status"] is not None:
+    if row["context_status"] is not None and not captured_legacy_quarantine_matches(
+        conn, fact_id=fact_id, user_id=user_id
+    ):
         raise ValueError("quarantined predecessor already has a semantic context")
     successor = conn.execute(
         "SELECT id FROM kpi_facts WHERE supersedes_id=? ORDER BY id DESC LIMIT 1",
@@ -1015,7 +1018,7 @@ def build_quarantined_kpi_correction_review(
         fiscal_period_type=str(row["fiscal_period_type"]),
         value=str(row["value"]),
         unit=str(row["unit"]),
-        context_status=None,
+        context_status=row["context_status"],
         legacy_source_doc_id=None if legacy is None else int(legacy["id"]),
         source_doc_id=None if source is None else int(source["id"]),
         source_type=None if source is None else _optional_text(source["source_type"]),

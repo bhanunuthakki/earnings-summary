@@ -36,39 +36,35 @@ from pydantic import (
     model_validator,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CANONICAL_WINDOWS_STATE_ROOT = Path(
-    os.environ.get("EARNINGS_SUMMARY_STATE_ROOT")
-    or Path.home() / ".gemini" / "antigravity" / "scratch" / "earnings-summary"
-)
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "execution"))
 
-from backup_restore_readiness_receipt import (  # noqa: E402
+from backup_restore_readiness_receipt import (
     BackupRestoreReadinessReceipt,
     validate_receipt_for_source,
 )
-from fetch_windows_review_bundle import (  # noqa: E402
+from fetch_windows_review_bundle import (
     WindowsReviewPins,
     identity_sha256,
     validate_pinned_identity,
 )
 
-from models.documents import SourceType  # noqa: E402
-from models.facts import Currency, FactLocator, Unit  # noqa: E402
-from operations.kpi_repair_receipts import (  # noqa: E402
+from models.documents import SourceType
+from models.facts import Currency, FactLocator, Unit
+from operations.kpi_repair_receipts import (
     KpiRepairAttemptReceipt,
     KpiRepairJudgeReceipt,
     canonical_sha256,
+    judge_qualification_is_current,
     repair_executor_code_sha256,
     seal_attempt,
 )
-from operations.review_bundle import (  # noqa: E402
+from operations.review_bundle import (
     OperationsReviewBundle,
     database_lineage_identity,
     review_code_identity,
 )
-from pipeline.kpi_definition_revisions import (  # noqa: E402
+from pipeline.kpi_definition_revisions import (
     IssuerKpiDefinitionRevision,
     KpiDefinitionComparabilityRevision,
     current_kpi_definition_comparability_revision,
@@ -77,12 +73,13 @@ from pipeline.kpi_definition_revisions import (  # noqa: E402
     validate_kpi_definition_comparability_candidate,
     validate_kpi_definition_revision_candidate,
 )
-from pipeline.kpi_semantic_review import (  # noqa: E402
+from pipeline.kpi_legacy_disposition_capture import captured_legacy_quarantine_matches
+from pipeline.kpi_semantic_review import (
     KpiEvidenceLocatorCoordinates,
     fact_locator_from_evidence_coordinates,
 )
-from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definitions  # noqa: E402
-from pipeline.kpi_semantics import (  # noqa: E402
+from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definitions
+from pipeline.kpi_semantics import (
     KpiAccountingBasis,
     KpiConsolidationScope,
     KpiSemanticContext,
@@ -93,18 +90,24 @@ from pipeline.kpi_semantics import (  # noqa: E402
     persist_kpi_semantic_context,
     validate_admitted_unit_scale,
 )
-from pipeline.kpi_source_review import (  # noqa: E402
+from pipeline.kpi_source_review import (
     bind_source_reviewed_kpi_definition,
     insert_source_reviewed_kpi_supersession,
     require_canonical_kpi_resolution,
 )
-from pipeline.queries import open_db  # noqa: E402
-from provenance.evidence_ledger import EvidenceLocator  # noqa: E402
-from provenance.financial_fact_resolution import canonical_fact_relation  # noqa: E402
-from provenance.fulltext_extractor_identity import (  # noqa: E402
+from pipeline.queries import open_db
+from provenance.evidence_ledger import EvidenceLocator
+from provenance.financial_fact_resolution import canonical_fact_relation
+from provenance.fulltext_extractor_identity import (
     resolve_fulltext_extractor_identity,
 )
-from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
+from runtime.job_runtime import JobAlreadyRunningError, JobLock
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CANONICAL_WINDOWS_STATE_ROOT = Path(
+    os.environ.get("EARNINGS_SUMMARY_STATE_ROOT")
+    or Path.home() / ".gemini" / "antigravity" / "scratch" / "earnings-summary"
+)
 
 _SHA256 = r"^[0-9a-f]{64}$"
 # Five minutes matches the repository's trusted-evidence clock-skew allowance while
@@ -733,6 +736,7 @@ def _validate_entry(
     allowed: set[int],
     *,
     owner_tickers: frozenset[str] = frozenset(),
+    owner_user_id: str | None = None,
 ) -> tuple[sqlite3.Row, SourceType]:
     row = conn.execute(
         "SELECT fact.*,definition.name,definition.ticker AS definition_ticker,"
@@ -782,7 +786,16 @@ def _validate_entry(
         or actual_context_revision != entry.expected_context_revision
     ):
         raise RepairBlockedError("semantic_context_head_changed")
-    if entry.predecessor_resolution_state == "quarantined_legacy" and current is not None:
+    if (
+        entry.predecessor_resolution_state == "quarantined_legacy"
+        and current is not None
+        and (
+            owner_user_id is None
+            or not captured_legacy_quarantine_matches(
+                conn, fact_id=entry.old_fact_id, user_id=owner_user_id
+            )
+        )
+    ):
         raise RepairBlockedError("quarantined_predecessor_has_semantic_context")
     if current is not None and current.context == entry.context:
         raise RepairBlockedError("semantic_context_already_current")
@@ -1152,6 +1165,12 @@ def _validate_applied_entry_postcondition(
                 raise RepairBlockedError("replay_comparability_revision_changed")
     if entry.predecessor_resolution_state != "quarantined_legacy":
         return
+    predecessor_context = current_kpi_semantic_context(conn, kpi_fact_id=entry.old_fact_id)
+    if (
+        None if predecessor_context is None else predecessor_context.id,
+        0 if predecessor_context is None else predecessor_context.revision,
+    ) != (entry.expected_context_head_id, entry.expected_context_revision):
+        raise RepairBlockedError("replay_quarantined_predecessor_context_changed")
     predecessor = conn.execute(
         "SELECT fact.source_doc_id,document.sha256 AS source_sha256 "
         "FROM kpi_facts fact JOIN documents document ON document.id=fact.source_doc_id "
@@ -1167,7 +1186,12 @@ def _validate_applied_entry_postcondition(
             (entry.old_fact_id,),
         ).fetchone()
         is not None
-        or current_kpi_semantic_context(conn, kpi_fact_id=entry.old_fact_id) is not None
+        or (
+            predecessor_context is not None
+            and not captured_legacy_quarantine_matches(
+                conn, fact_id=entry.old_fact_id, user_id=manifest.user_id, require_head=False
+            )
+        )
     ):
         raise RepairBlockedError("replay_quarantined_predecessor_changed")
 
@@ -1443,6 +1467,8 @@ def main(argv: list[str] | None = None) -> int:
                 or judge.review_bundle_sha256 != manifest.review_bundle_sha256
                 or judge.executor_code_sha256 != executor_code_sha
                 or judge.purpose != "kpi_source_repair"
+                or judge.evidence_tier != "J3"
+                or not judge_qualification_is_current(judge, now=datetime.now(UTC))
                 or (
                     manifest.schema_version == "kpi_semantic_refresh.v7"
                     and judge.rubric_version != "kpi-semantic-refresh-v7"
@@ -1572,6 +1598,7 @@ def main(argv: list[str] | None = None) -> int:
                                 entry,
                                 allowed,
                                 owner_tickers=owner_ticker_set,
+                                owner_user_id=manifest.user_id,
                             )
                             for entry in manifest.entries
                         ]

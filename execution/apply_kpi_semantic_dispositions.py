@@ -1,7 +1,5 @@
 """Dry-run or apply an independently authorized KPI disposition manifest."""
 
-# ruff: noqa: E402
-
 from __future__ import annotations
 
 import argparse
@@ -17,13 +15,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CANONICAL_WINDOWS_STATE_ROOT = Path(
-    os.environ.get("EARNINGS_SUMMARY_STATE_ROOT")
-    or Path.home() / ".gemini" / "antigravity" / "scratch" / "earnings-summary"
-)
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "execution"))
 
 from apply_kpi_semantic_refresh import (
     RepairBlockedError as DispositionBlockedError,
@@ -49,6 +42,7 @@ from fetch_windows_review_bundle import (
 from operations.kpi_repair_receipts import (
     KpiDispositionAttemptReceipt,
     KpiDispositionJudgeReceipt,
+    judge_qualification_is_current,
     repair_executor_code_sha256,
     seal_disposition_attempt,
 )
@@ -61,10 +55,17 @@ from pipeline.kpi_semantic_dispositions import (
     KpiSemanticDispositionManifest,
     KpiSemanticDispositionResult,
     apply_kpi_semantic_disposition_manifest,
+    validate_legacy_disposition_replay,
 )
 from pipeline.queries import open_db
 from runtime.job_runtime import JobAlreadyRunningError, JobLock
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+CANONICAL_WINDOWS_STATE_ROOT = Path(
+    os.environ.get("EARNINGS_SUMMARY_STATE_ROOT")
+    or Path.home() / ".gemini" / "antigravity" / "scratch" / "earnings-summary"
+)
 
 OPERATIONS_GOVERNANCE_DISPOSITION = "no_surface_change_internal_append_only_kpi_dispositions"
 OPERATIONS_GOVERNANCE_PRESERVED_CONTRACT = (
@@ -236,6 +237,7 @@ def judge_authorizes(
         and judge.review_bundle_sha256 == manifest.review_bundle_sha256
         and judge.executor_code_sha256 == executor_code_sha
         and judge.purpose == "kpi_semantic_disposition"
+        and judge_qualification_is_current(judge, now=datetime.now(UTC))
     )
 
 
@@ -274,6 +276,11 @@ def recover_committed_disposition(
             "FROM kpi_semantic_disposition_commits WHERE manifest_sha256=?",
             (manifest_sha,),
         ).fetchone()
+        if row is not None and manifest.schema_version == "kpi_semantic_dispositions.v2":
+            try:
+                validate_legacy_disposition_replay(conn, manifest=manifest)
+            except ValueError as exc:
+                raise DispositionBlockedError("committed_legacy_disposition_head_changed") from exc
     finally:
         conn.close()
     if row is None:

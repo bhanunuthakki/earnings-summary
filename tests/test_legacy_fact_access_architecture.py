@@ -127,7 +127,7 @@ AUDITED_LEGACY_FACT_READS = {
     "src/decision_conditions.py": 2,
     "src/pipeline/confidence.py": 2,
     "src/pipeline/key_metrics.py": 1,
-    "src/pipeline/kpi_persistence.py": 4,
+    "src/pipeline/kpi_persistence.py": 5,  # reviewed scale guard excludes superseded neighbors
     # Exact predecessor/head reads guard the one governed append-only repair
     # write. They are not product analytics and retire with that write seam.
     "src/pipeline/kpi_source_review.py": 2,
@@ -270,6 +270,17 @@ _TRANSITIONAL_READ_EXEMPTIONS = {
             ),
         ),
     ),
+    "src/pipeline/kpi_legacy_disposition_capture.py": (
+        _TransitionalReadExemption(
+            function_name="read_legacy_kpi_disposition_capture",
+            read_count=2,
+            retirement_criterion=(
+                "Retire after all unresolved noncanonical legacy heads have immutable "
+                "disposition captures or governed source corrections. This seam seals "
+                "raw repair evidence and never supplies an admitted financial reader."
+            ),
+        ),
+    ),
     "src/pipeline/issuer_fact_manifest.py": (
         _TransitionalReadExemption(
             function_name="_assert_kpi_replays_compatible",
@@ -291,6 +302,15 @@ _TRANSITIONAL_READ_EXEMPTIONS = {
                 "financial_facts rows without fact_observation_revisions."
             ),
             sql_constant_name="DOCUMENT_FACT_REHYDRATION_SQL",
+        ),
+        _TransitionalReadExemption(
+            function_name="prepare_reviewed_kpi_native_projection",
+            read_count=2,
+            retirement_criterion=(
+                "Retire after reviewed KPI capture writes native currency, duration, and "
+                "business dimensions directly and existing source-bound captures have "
+                "verified native projections."
+            ),
         ),
     ),
 }
@@ -442,14 +462,21 @@ def test_transitional_legacy_reader_exemptions_are_narrow_and_retirable() -> Non
         assert (ROOT / relative).is_file()
         if relative == "src/compute/kpi_revision_shadow_census.py":
             assert len(exemptions) == 3
+        elif relative == "src/provenance/financial_fact_resolution.py":
+            assert len(exemptions) == 2
         else:
             assert len(exemptions) == 1
         for exemption in exemptions:
             if relative == "src/pipeline/kpi_source_review.py":
                 assert exemption.function_name == "bind_source_reviewed_kpi_definition"
                 assert exemption.read_count == 2
+            elif relative == "src/pipeline/kpi_legacy_disposition_capture.py":
+                assert exemption.function_name == "read_legacy_kpi_disposition_capture"
+                assert exemption.read_count == 2
             elif relative == "src/timeseries/kpi_revision_shadow.py":
                 assert exemption.function_name == "read_revision_kpi_points"
+                assert exemption.read_count == 2
+            elif exemption.function_name == "prepare_reviewed_kpi_native_projection":
                 assert exemption.read_count == 2
             elif relative != "src/compute/kpi_revision_shadow_census.py":
                 assert exemption.read_count == 1

@@ -7,19 +7,22 @@ import json
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "execution"))
 
-from backup_restore_readiness_receipt import BackupRestoreReadinessReceipt  # noqa: E402
+from backup_restore_readiness_receipt import BackupRestoreReadinessReceipt
 
-from operations.review_bundle import OperationsReviewBundle  # noqa: E402
-from pipeline.kpi_semantic_dispositions import (  # noqa: E402
+from operations.review_bundle import OperationsReviewBundle
+from pipeline.kpi_semantic_dispositions import (
+    LegacyKpiQuarantineRequest,
     prepare_kpi_semantic_disposition_manifest,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 OPERATIONS_GOVERNANCE_DISPOSITION = "no_surface_change_internal_kpi_disposition_preparation"
 OPERATIONS_GOVERNANCE_PRESERVED_CONTRACT = (
@@ -39,6 +42,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--review-bundle", type=Path, required=True)
     parser.add_argument("--backup-restore-receipt", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--legacy-fact-requests",
+        type=Path,
+        help="JSON array of 1-25 explicit noncanonical fact_id/reason_code requests for one ticker",
+    )
     return parser
 
 
@@ -62,6 +70,15 @@ def main(argv: list[str] | None = None) -> int:
     expected_revision = review_bundle.schema_revision.actual_heads[0]
     if backup.source_db_revision != expected_revision:
         raise ValueError("backup and review bundle schema revisions do not match")
+    legacy_requests = None
+    if args.legacy_fact_requests is not None:
+        request_payload = json.loads(args.legacy_fact_requests.read_text(encoding="utf-8"))
+        if not isinstance(request_payload, list):
+            raise ValueError("legacy fact requests must be a JSON array")
+        typed_requests = cast("list[object]", request_payload)
+        legacy_requests = tuple(
+            LegacyKpiQuarantineRequest.model_validate(item) for item in typed_requests
+        )
     conn = connect_sqlite(args.db, role=SQLiteConnectionRole.READ_ONLY)
     try:
         manifest = prepare_kpi_semantic_disposition_manifest(
@@ -74,6 +91,7 @@ def main(argv: list[str] | None = None) -> int:
             review_bundle_sha256=review_bundle.content_sha256,
             backup_restore_evidence_id=backup.evidence_id,
             knowledge_at=datetime.now(UTC),
+            legacy_fact_requests=legacy_requests,
         )
     finally:
         conn.close()

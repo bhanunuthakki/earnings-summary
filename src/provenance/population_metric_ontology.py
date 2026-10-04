@@ -12,6 +12,8 @@ from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine, ResolutionPolicy
+from provenance.fact_read_model import FactAdmissionError, FactReadModel
 from provenance.immutable_artifact import canonical_text_artifact_sha256
 from provenance.metric_ontology import (
     BindingRevision,
@@ -122,6 +124,215 @@ class MetricOntologyPopulationRequest(_FrozenModel):
         if _utc(self.operation_recorded_at) < _utc(self.knowledge_cutoff):
             raise ValueError("operation_recorded_at must not precede knowledge_cutoff")
         return self
+
+
+class ExactSourceObservationReview(_FrozenModel):
+    observation_id: str = Field(min_length=1)
+    document_version_id: str = Field(min_length=1)
+    subject_binding_revision_id: str = Field(min_length=1)
+    observation_payload_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_locator_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fact_cell_semantic_key_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_prior_binding_revision_id: str | None = None
+
+
+class ExactSourceAdmissionRequest(_FrozenModel):
+    schema_version: Literal["exact-source-taxonomy-admission/v1"] = (
+        "exact-source-taxonomy-admission/v1"
+    )
+    observations: tuple[ExactSourceObservationReview, ...] = Field(min_length=1, max_length=100)
+    reviewer_identity: str = Field(min_length=1)
+    review_evidence: dict[str, object] = Field(min_length=1)
+    knowledge_cutoff: datetime
+    operation_recorded_at: datetime
+
+    @model_validator(mode="after")
+    def _contract(self) -> Self:
+        MetricOntologyPopulationRequest(
+            knowledge_cutoff=self.knowledge_cutoff,
+            operation_recorded_at=self.operation_recorded_at,
+        )
+        ids = [entry.observation_id for entry in self.observations]
+        if len(ids) != len(set(ids)):
+            raise ValueError("exact source admission requires unique observation IDs")
+        return self
+
+
+class ExactSourceAdmissionReceipt(_FrozenModel):
+    schema_version: Literal["exact-source-taxonomy-admission-receipt/v1"] = (
+        "exact-source-taxonomy-admission-receipt/v1"
+    )
+    request_sha256: str
+    observation_ids: tuple[str, ...]
+    canonical_metric_cell_ids: tuple[str, ...]
+    canonical_resolution_revision_ids: tuple[str, ...]
+    coverage: Literal["exact_reviewed_observations_only"] = "exact_reviewed_observations_only"
+
+
+def admit_exact_source_observations(
+    conn: sqlite3.Connection, request: ExactSourceAdmissionRequest
+) -> ExactSourceAdmissionReceipt:
+    """Admit an exact reviewed set; preserve source names and make no global coverage claim.
+
+    This creates source-concept selections for later sealed monetary transforms.
+    It does not assign financial aliases, infer scales, or commit the caller's transaction.
+    """
+    original_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        return _admit_exact_source_observations(conn, request)
+    finally:
+        conn.row_factory = original_factory
+
+
+def _admit_exact_source_observations(
+    conn: sqlite3.Connection, request: ExactSourceAdmissionRequest
+) -> ExactSourceAdmissionReceipt:
+    cutoff = request.knowledge_cutoff
+    request_sha = _model_sha(request)
+    repository = MetricOntology(conn)
+    selected: list[dict[str, object]] = []
+    # Validate the complete bounded set before any write.
+    for review in request.observations:
+        bundle = FactReadModel(conn).provenance_bundle(review.observation_id, cutoff=cutoff)
+        evidence = bundle.evidence
+        if bundle.observation.observation_kind != "reported" or evidence is None:
+            raise ValueError("exact source admission requires sealed reported evidence")
+        row = conn.execute(
+            "SELECT cell.*,seal.semantic_key_sha256,anchor.source_taxonomy_version,"
+            "entity.created_at AS reporting_entity_created_at,observation.value_kind,"
+            "observation.observation_id,observation.recorded_at AS observation_recorded_at,"
+            "cell.recorded_at AS cell_recorded_at,anchor.extraction_run_id,"
+            "anchor.anchor_payload_sha256,anchor.extraction_output_sha256,anchor.raw_entry_sha256,"
+            "payload.observation_payload_sha256,completeness.observation_set_sha256 "
+            "FROM fact_observations_v2 observation "
+            "JOIN fact_cells_v2 cell ON cell.fact_cell_id=observation.fact_cell_id "
+            "JOIN reporting_entities entity ON entity.reporting_entity_id=cell.reporting_entity_id "
+            "JOIN fact_cell_identity_seals_v2 seal ON seal.fact_cell_id=cell.fact_cell_id "
+            "JOIN fact_reported_observation_anchors_v2 anchor ON anchor.observation_id=observation.observation_id "
+            "JOIN fact_observation_payload_commitments_v2 payload ON payload.observation_id=observation.observation_id "
+            "JOIN fact_extraction_run_completeness_seals_v2 completeness ON completeness.extraction_run_id=anchor.extraction_run_id "
+            "WHERE observation.observation_id=?",
+            (review.observation_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("exact source admission requires extraction completeness seals")
+        if (
+            evidence.document_version_id != review.document_version_id
+            or evidence.subject_binding_revision_id != review.subject_binding_revision_id
+            or evidence.source_locator_sha256 != review.source_locator_sha256
+            or bundle.observation_payload_sha256 != review.observation_payload_sha256
+            or str(row["semantic_key_sha256"]) != review.fact_cell_semantic_key_sha256
+        ):
+            raise ValueError("exact source review commitment changed")
+        if bundle.cell.dimensions or bundle.observation.value_kind != "numeric":
+            raise ValueError("exact source admission currently requires unsegmented numeric facts")
+        head = repository.binding_as_known(review.observation_id, cutoff)
+        expected = review.expected_prior_binding_revision_id
+        generated = _binding_id(review.observation_id)
+        if head is not None and head.binding_revision_id == generated and expected is None:
+            if (
+                head.binding_status != "bound"
+                or head.canonical_metric_cell_id != _canonical_cell_id(row)
+            ):
+                raise ValueError("exact source replay binding changed")
+        elif (None if head is None else head.binding_revision_id) != expected:
+            raise ValueError("exact source expected binding head changed")
+        if head is not None and head.binding_revision_id != generated:
+            raise ValueError(
+                "existing reviewed binding requires its explicit owning revision route"
+            )
+        selected.append(dict(row))
+    targets: list[str] = []
+    resolutions: list[str] = []
+    with _atomic_population(conn):
+        for row in selected:
+            registry_row = _exact_registry_row(conn, row, cutoff)
+            _persist_metric_stack(
+                repository,
+                registry_row,
+                metric_clock=_cell_clock(registry_row),
+                component_clock=_component_clock(registry_row),
+                policy_sha=_policy_sha(),
+            )
+            repository.persist_canonical_metric_cell(
+                _canonical_cell(conn, row, operation_recorded_at=request.operation_recorded_at)
+            )
+            assertion_row = dict(row)
+            assertion_row["recorded_at"] = row["observation_recorded_at"]
+            repository.persist_observation_taxonomy_assertion(_taxonomy_assertion(assertion_row))
+            repository.persist_binding(_binding(row))
+            target_id = _canonical_cell_id(row)
+            receipt = CanonicalFactResolutionEngine(conn).resolve(
+                target_id,
+                cutoff,
+                ResolutionPolicy(
+                    name="exact_reviewed_source_taxonomy_admission",
+                    version="1",
+                    config={
+                        "request_sha256": request_sha,
+                        "reviewer_identity": request.reviewer_identity,
+                        "coverage": "exact_reviewed_observations_only",
+                    },
+                ),
+                recorded_at=request.operation_recorded_at,
+            )
+            if (
+                receipt.status != "resolved"
+                or receipt.selected_observation_id != row["observation_id"]
+            ):
+                raise ValueError("reviewed source observation is not the exact canonical selection")
+            targets.append(target_id)
+            resolutions.append(receipt.canonical_resolution_revision_id)
+    return ExactSourceAdmissionReceipt(
+        request_sha256=request_sha,
+        observation_ids=tuple(entry.observation_id for entry in request.observations),
+        canonical_metric_cell_ids=tuple(targets),
+        canonical_resolution_revision_ids=tuple(resolutions),
+    )
+
+
+def _exact_registry_row(
+    conn: sqlite3.Connection, row: Mapping[str, object], cutoff: datetime
+) -> dict[str, object]:
+    # Use the same earliest source-definition clock as the global inventory.
+    # The query is confined to the reviewed issuer and exact definition coordinate.
+    candidates = conn.execute(
+        "SELECT cell.*,seal.semantic_key_sha256,anchor.source_taxonomy_version,"
+        "entity.created_at AS reporting_entity_created_at,observation.value_kind "
+        "FROM fact_cells_v2 cell "
+        "JOIN reporting_entities entity ON entity.reporting_entity_id=cell.reporting_entity_id "
+        "JOIN fact_cell_identity_seals_v2 seal ON seal.fact_cell_id=cell.fact_cell_id "
+        "JOIN fact_observations_v2 observation ON observation.fact_cell_id=cell.fact_cell_id "
+        "JOIN fact_reported_observation_anchors_v2 anchor ON anchor.observation_id=observation.observation_id "
+        "WHERE cell.reporting_entity_id=? AND cell.concept_namespace=? AND cell.concept_name=? "
+        "AND cell.taxonomy_name=? AND anchor.source_taxonomy_version=? "
+        "AND cell.accounting_basis=? AND cell.consolidation_scope=? AND cell.period_kind=? "
+        "AND observation.observation_kind='reported' AND observation.value_kind=? "
+        "AND datetime(cell.knowledge_at)<=datetime(?) AND datetime(cell.recorded_at)<=datetime(?) "
+        "AND datetime(observation.knowledge_at)<=datetime(?) AND datetime(observation.recorded_at)<=datetime(?) "
+        "AND datetime(anchor.recorded_at)<=datetime(?) "
+        "ORDER BY datetime(cell.recorded_at),datetime(cell.knowledge_at),datetime(cell.effective_at),cell.fact_cell_id",
+        tuple(
+            row[key]
+            for key in (
+                "reporting_entity_id",
+                "concept_namespace",
+                "concept_name",
+                "taxonomy_name",
+                "source_taxonomy_version",
+                "accounting_basis",
+                "consolidation_scope",
+                "period_kind",
+                "value_kind",
+            )
+        )
+        + (_utc(cutoff).isoformat(),) * 5,
+    )
+    for candidate in candidates:
+        if _metric_id(candidate) == _metric_id(row):
+            return dict(candidate)
+    raise ValueError("reviewed source definition registry is unavailable")
 
 
 class MetricOntologyPopulationResult(_FrozenModel):
@@ -1092,7 +1303,33 @@ def _source_cell_reason_codes(
             reasons.add("mixed_numeric_text_fact_cell_unresolved")
         elif str(row["substantive_value_kind"]) not in {"numeric", "text"}:
             reasons.add("unsupported_substantive_value_kind")
-    if summary_count != _count_source_cells_at_scope(conn, knowledge_cutoff, observed_through):
+    derived_rows = conn.execute(
+        "SELECT DISTINCT cell.fact_cell_id,observation.observation_id "
+        "FROM fact_cells_v2 cell JOIN fact_observations_v2 observation ON observation.fact_cell_id=cell.fact_cell_id "
+        "JOIN fact_cell_canonical_binding_revisions binding ON binding.source_observation_id=observation.observation_id "
+        "WHERE observation.observation_kind='derived' AND binding.binding_status='bound' "
+        "AND datetime(cell.knowledge_at)<=datetime(?) AND datetime(cell.recorded_at)<=datetime(?) "
+        "AND datetime(observation.knowledge_at)<=datetime(?) AND datetime(observation.recorded_at)<=datetime(?) "
+        "AND datetime(binding.knowledge_at)<=datetime(?) AND datetime(binding.recorded_at)<=datetime(?) "
+        "AND NOT EXISTS (SELECT 1 FROM fact_observations_v2 reported WHERE reported.fact_cell_id=cell.fact_cell_id AND reported.observation_kind='reported') "
+        "AND NOT EXISTS (SELECT 1 FROM fact_cell_canonical_binding_revisions newer WHERE newer.source_observation_id=binding.source_observation_id "
+        "AND newer.revision>binding.revision AND datetime(newer.knowledge_at)<=datetime(?) AND datetime(newer.recorded_at)<=datetime(?))",
+        (knowledge, observed, knowledge, observed, knowledge, observed, knowledge, observed),
+    ).fetchall()
+    derived_cells: set[str] = set()
+    for cell_id, observation_id in derived_rows:
+        try:
+            bundle = FactReadModel(conn).provenance_bundle(
+                str(observation_id), cutoff=observed_through
+            )
+            if bundle.derivation is None:
+                raise ValueError("derived source lacks its sealed graph")
+            derived_cells.add(str(cell_id))
+        except (ValueError, FactAdmissionError):
+            reasons.add("derived_source_graph_unavailable")
+    if summary_count + len(derived_cells) != _count_source_cells_at_scope(
+        conn, knowledge_cutoff, observed_through
+    ):
         reasons.add("fact_cell_missing_reported_observation")
     if int(
         conn.execute(
@@ -2251,7 +2488,10 @@ def _verify_snapshot_population_closure(
             WITH expected AS (
                 SELECT observation_id
                 FROM fact_observations_v2
-                WHERE observation_kind='reported'
+                WHERE (observation_kind='reported' OR (observation_kind='derived' AND EXISTS (
+                    SELECT 1 FROM fact_cell_canonical_binding_revisions binding
+                    WHERE binding.source_observation_id=fact_observations_v2.observation_id
+                      AND binding.binding_status='bound')))
                   AND datetime(knowledge_at)<=datetime(?)
                   AND datetime(recorded_at)<=datetime(?)
             ),

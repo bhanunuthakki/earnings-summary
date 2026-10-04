@@ -14,7 +14,14 @@ from datetime import UTC, date, datetime
 from pathlib import Path, PurePath
 from typing import Literal, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
 from db_paths import configured_db_path
 from ir_uploads import CategorizationFailure, classify_ir_file
@@ -81,19 +88,62 @@ class _Closed(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class HistoricalIssuerDocumentWindow(_Closed):
+    """Exact periods selected in a reviewed historical acquisition request."""
+
+    period_ends: tuple[date, ...] = Field(min_length=1, max_length=12)
+    reviewed_by: str = Field(min_length=1, max_length=128)
+    review_reference_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _closed_periods(self) -> Self:
+        if tuple(sorted(set(self.period_ends))) != self.period_ends:
+            raise ValueError("historical period ends must be sorted and unique")
+        if any(
+            p.month not in {3, 6, 9, 12} or p.day != (31 if p.month in {3, 12} else 30)
+            for p in self.period_ends
+        ):
+            raise ValueError("historical periods must be calendar quarter ends")
+        if (self.period_ends[-1].year - self.period_ends[0].year) * 4 + (
+            self.period_ends[-1].month - self.period_ends[0].month
+        ) // 3 > 11:
+            raise ValueError("historical period window exceeds twelve quarters")
+        return self
+
+
 class IssuerDocumentStagingRequest(_Closed):
-    schema_version: Literal["issuer_document_staging_request.v1"] = (
-        "issuer_document_staging_request.v1"
-    )
+    schema_version: Literal[
+        "issuer_document_staging_request.v1", "issuer_document_staging_request.v2"
+    ] = "issuer_document_staging_request.v1"
     attempt_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$")
     inventory_request: IssuerDocumentInventoryRequest
     inventory_request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    historical_window: HistoricalIssuerDocumentWindow | None = None
 
     @model_validator(mode="after")
     def bind(self) -> Self:
         if self.inventory_request_sha256 != self.inventory_request.request_sha256:
             raise ValueError("inventory_request_sha256 mismatch")
+        if (self.schema_version == "issuer_document_staging_request.v2") != (
+            self.historical_window is not None
+        ):
+            raise ValueError("historical window requires a version two staging request")
+        if (
+            self.historical_window is not None
+            and self.inventory_request.period_end not in self.historical_window.period_ends
+        ):
+            raise ValueError("request period is outside reviewed historical window")
         return self
+
+    @model_serializer(mode="wrap")
+    def _legacy_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        payload = handler(self)
+        if not isinstance(payload, dict):
+            raise TypeError("staging request serializer must return an object")
+        result = cast("dict[str, object]", payload)
+        if self.historical_window is None:
+            result.pop("historical_window", None)
+        return result
 
 
 class StagedIssuerDocument(_Closed):
@@ -508,13 +558,31 @@ def _policy(request: IssuerDocumentStagingRequest, db_path: Path) -> None:
     )
     if not auth.allowed:
         raise PreparedIssuerDocumentPublisherError("source_policy_denied")
-    if auth.fiscal_year_end_month is None or not reported_quarter_is_in_window(
-        fiscal_year=inv.fiscal_year,
-        fiscal_quarter=inv.fiscal_quarter,
-        fiscal_year_end_month=auth.fiscal_year_end_month,
-        as_of=date.today(),
+    if not issuer_request_period_is_allowed(
+        request, fiscal_year_end_month=auth.fiscal_year_end_month, as_of=date.today()
     ):
         raise PreparedIssuerDocumentPublisherError("reported_quarter_window_denied")
+
+
+def issuer_request_period_is_allowed(
+    request: IssuerDocumentStagingRequest, *, fiscal_year_end_month: int | None, as_of: date
+) -> bool:
+    """Use the default window unless an exact historical request is present.
+
+    This changes period eligibility only. Collection authorization, exact URL
+    population, source hashes, classification and publication gates still apply.
+    """
+    inv = request.inventory_request
+    if request.historical_window is not None:
+        return fiscal_year_end_month == 12 and all(
+            p <= as_of for p in request.historical_window.period_ends
+        )
+    return fiscal_year_end_month is not None and reported_quarter_is_in_window(
+        fiscal_year=inv.fiscal_year,
+        fiscal_quarter=inv.fiscal_quarter,
+        fiscal_year_end_month=fiscal_year_end_month,
+        as_of=as_of,
+    )
 
 
 def _read_receipt(
