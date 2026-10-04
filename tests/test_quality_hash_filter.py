@@ -309,6 +309,58 @@ INVESTING_REVIEW_BASELINE = (
     "src/advisor/skills/earnings-summary-investing/references/reviewed-sources.json"
 )
 
+THESIS_RELEASE_FIXTURE = "tests/fixtures/thesis_check_context/release564_scalar.json"
+
+
+def test_release_thesis_fixture_filters_only_verified_public_digest_pairs(
+    tmp_path: Path,
+) -> None:
+    original = (ROOT / THESIS_RELEASE_FIXTURE).read_text(encoding="utf-8")
+    payload = json.loads(original)
+    semantic = payload["semantic"]
+    pairs = [("thesis_content_sha256", semantic["thesis_content_sha256"])]
+    for observation in semantic["accepted_observations"]:
+        pairs.extend((key, observation[key]) for key in ("observed_value", "accepted_value"))
+    for key, value in pairs:
+        for delimiter in (":", "="):
+            member = f'  "{key}" {delimiter} "{value}",'
+            assert FILTER.is_quality_evidence_hash(THESIS_RELEASE_FIXTURE, member)
+            assert not FILTER.is_quality_evidence_hash("other/" + THESIS_RELEASE_FIXTURE, member)
+        assert not FILTER.is_quality_evidence_hash(THESIS_RELEASE_FIXTURE, f'"{key}": "{"a" * 64}"')
+        assert not FILTER.is_quality_evidence_hash(
+            THESIS_RELEASE_FIXTURE, f'"provider_token": "{value}"'
+        )
+        for rejected_key, rejected_value in (
+            (key, value.upper()),
+            (key, value[:-1]),
+        ):
+            assert not FILTER.is_quality_evidence_hash(
+                THESIS_RELEASE_FIXTURE, f'"{rejected_key}": "{rejected_value}"'
+            )
+        assert not FILTER.is_quality_evidence_hash(
+            THESIS_RELEASE_FIXTURE, f'"{key}": "{value}", "token": "other"'
+        )
+        assert not FILTER.is_quality_evidence_hash(
+            THESIS_RELEASE_FIXTURE, f'"{key}": "{value}" // comment'
+        )
+    assert not FILTER.is_quality_evidence_hash(
+        THESIS_RELEASE_FIXTURE,
+        f'"accepted_value": "{semantic["thesis_content_sha256"]}"',
+    )
+    fixture = tmp_path / THESIS_RELEASE_FIXTURE
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(original, encoding="utf-8")
+    assert _run_detect_secrets(tmp_path, THESIS_RELEASE_FIXTURE, filtered=False).returncode == 1
+    assert _run_detect_secrets(tmp_path, THESIS_RELEASE_FIXTURE, filtered=True).returncode == 0
+    for key, value in (
+        (SCANNER_FIELD_NAME, "ghp_" + "a" * 36),
+        ("observed_value", hashlib.sha256(b"unrecognized synthetic value").hexdigest()),
+    ):
+        hostile = json.loads(original)
+        hostile[key] = value
+        fixture.write_text(json.dumps(hostile, indent=2) + "\n", encoding="utf-8")
+        assert _run_detect_secrets(tmp_path, THESIS_RELEASE_FIXTURE, filtered=True).returncode == 1
+
 
 @pytest.mark.parametrize("delimiter", (":", "="))
 def test_investing_review_accepts_only_complete_lowercase_sha256_members(delimiter: str) -> None:

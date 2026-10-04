@@ -95,12 +95,32 @@ _INVESTING_REVIEW_BASELINE = (
 _INVESTING_REVIEW_DIGEST_MEMBER = re.compile(
     r'[ \t]*"sha256"[ \t]*(?::|=)[ \t]*"[0-9a-f]{64}"[ \t]*,?[ \t]*(?:\r?\n)?\Z'
 )
+_THESIS_RELEASE_FIXTURE = "tests/fixtures/thesis_check_context/release564_scalar.json"
+# Audited canonical JSON SHA-256 values of this immutable synthetic release fixture.
+# Generic observed/accepted values and unknown digests remain scanned.
+_THESIS_RELEASE_DIGEST_MEMBERS = (
+    re.compile(
+        r'[ \t]*"thesis_content_sha256"[ \t]*(?::|=)[ \t]*'
+        r'"e5b6d4f18bb5895e02d95e343d4985400a5161d13bbfddb181f329b2ae89a43d"'  # pragma: allowlist secret
+        r"[ \t]*,?[ \t]*(?:\r?\n)?\Z"
+    ),
+    re.compile(
+        r'[ \t]*"(?:observed_value|accepted_value)"[ \t]*(?::|=)[ \t]*'
+        r'"(?:54be0db3f7818e018abb35c2e43f46b86f9a6d560698da63bcfcdcd9cdd2a2d1|'  # pragma: allowlist secret
+        r'b021af7d8c5c7fa125e4e65d47b4e1e3562957df2a8dd1c24e565b8bc03e59a5)"'  # pragma: allowlist secret
+        r"[ \t]*,?[ \t]*(?:\r?\n)?\Z"
+    ),
+)
 
 
 def is_quality_evidence_hash(filename: str, line: str) -> bool:
     """Return whether one exact allowed JSON member is generated digest metadata."""
 
     canonical_path = filename.replace(os.sep, "/")
+    if canonical_path == _THESIS_RELEASE_FIXTURE:
+        return any(
+            pattern.fullmatch(line) is not None for pattern in _THESIS_RELEASE_DIGEST_MEMBERS
+        )
     if canonical_path == _MELI_SOURCE_FIXTURE:
         return _MELI_SOURCE_DIGEST_MEMBER.fullmatch(line) is not None
     if canonical_path == _INVESTING_REVIEW_BASELINE:
