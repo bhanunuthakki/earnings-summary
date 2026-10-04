@@ -6,7 +6,7 @@ This record covers the initial code-size, product-map, manual-tool, mockup, adap
 
 ## Initial size and product responsibilities
 
-A fresh census of the frozen remedies candidate, based on `e05c3457`, measured **880,747 code lines**: **531,220 non-test lines** and **349,527 test lines**. Application and operations trees contain **477,730 lines**. The count uses the same lexical method and excludes vendor code and test artifacts. It includes changes on main since the initial census and the new remedy proofs; it is not a cleanup-only size comparison. The final candidate census and per-file hashes are retained locally in `.tmp/ownership-review/current-code-census/`.
+A fresh census of the combined remedies candidate at `10104361` plus its refreshed quality records measured **881,178 code lines**: **531,303 non-test lines** and **349,875 test lines**. Application and operations trees contain **477,813 lines**. The count uses the same lexical method and excludes vendor code and test artifacts. It includes PR1632, the complete-suite recovery and the new remedy proofs; it is not a cleanup-only size comparison. The final candidate census and per-file hashes are retained locally in `.tmp/ownership-review/current-code-census/`.
 
 The initial lexical census measured HEAD `d442b5a4d141643f04f0bd4d7936348216febf53` plus the then-current uncommitted code. It found **873,167 code lines**: **527,991 non-test lines** and **345,176 test lines**. Application and operations trees accounted for **474,813 lines**. These are historical census figures, not a fresh count of this branch. Code excludes blanks, comments and Python docstrings; embedded SQL, HTML and JavaScript remain code. Vendor code, fixtures and golden snapshots are separate.
 
