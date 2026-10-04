@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -233,14 +233,21 @@ def synthetic_current_population(
     *,
     contextual_recorded_at: datetime | None = None,
     snapshot_cutoff: datetime | None = None,
+    numeric_values: Mapping[str, Decimal] | None = None,
 ) -> tuple[sqlite3.Connection, RoleAdmissionRequest]:
     """Synthetic 28-input closure through actual public owners; no verifier doubles."""
     requirements = requirements_for(PERIOD)
+    if numeric_values is not None:
+        assert set(numeric_values) == {item.key for item in requirements}
     entries = tuple(
         NormalizedFilingXbrlFact.model_validate(
             {
                 **filing_xbrl_entry(
-                    i, concept_name=item.role, numeric_value=Decimal(i + 100)
+                    i,
+                    concept_name=item.role,
+                    numeric_value=Decimal(i + 100)
+                    if numeric_values is None
+                    else numeric_values[item.key],
                 ).model_dump(),
                 "period_kind": item.period_kind,
                 "period_start": None

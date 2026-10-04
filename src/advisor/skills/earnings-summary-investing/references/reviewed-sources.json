@@ -1,5 +1,5 @@
 {
-  "review_note": "Separately briefed GPT-6.1 Sol advisory semantic review of the three exact current role/snapshot source owners in c9b53f3059eca7bc3ea1539b0da0cec92fb08bda4c2f94573c7f5f2df4bc4c8e, confirmed unchanged by clock-repair review 13c4e9488cb5b0e2beef2e923c6708401c2e306f79127226f6dc352b1d7350a5. Roles append reviewed definition metadata only; publication clocks require actual seals and a new snapshot. They do not accept financial populations, forecasts, scenarios or model readiness. Actual clock regressions and owning tests pass; final source and release checks remain separate.",
+  "review_note": "Separately briefed GPT-6.1 Sol advisory SOURCE review b7433ae397e3edb980a6cec84f0703469a790b6065de51153b78573008b36576 reviewed exact three readiness-gated producer/consumer owners and three changed documentation/registration owners. Source-only; no native, economic or operational acceptance.",
   "schema_version": 1,
   "sources": [
     {
@@ -76,11 +76,11 @@
     },
     {
       "path": "directives/next_dollar_model.md",
-      "sha256": "ee91917bde8a179a35417a25b6285b0af2888fd2e0f716db337f0440f3118788"
+      "sha256": "395a7f82c751502c4e3d753cf60a6b5c6ace0478bff1194720044f38d433b447"
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "dc602c0a311fbca64f5b45074e94052aefa3475b6e1045a8e5841115a1403fa6"
+      "sha256": "d5da7fc44a313c4bc044bb91a9a01b714b549f34f929539de0814c993b90894b"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -248,7 +248,7 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "1fb6b499fd60cbb17c2b7c9548d59b5f0c5dffb5503a13db25f1760a8bf95760"
+      "sha256": "187696131f319611e4fd56c86ef9186618a4749eab82af33a98a2f3ab8843a78"
     },
     {
       "path": "scripts/check_investing_skill.py",
@@ -269,6 +269,10 @@
     {
       "path": "src/allocation/book_risk.py",
       "sha256": "d76f56786ad2e5ddd21a5016b599a4414a48c10abe29e0d496ccdf14a4c860ed"
+    },
+    {
+      "path": "src/allocation/model.py",
+      "sha256": "85617c065aa45e1c7295eef7fe5d848423b7d4894e0a290bc95c33d3fe5c262d"
     },
     {
       "path": "src/allocation/what_if.py",
@@ -293,6 +297,10 @@
     {
       "path": "src/dcf/readiness.py",
       "sha256": "734c32a18c29d15ff6f3600deb081ed2cd3231e95556dd2b7e773bb524e749a4"
+    },
+    {
+      "path": "src/dcf/scenario_reward.py",
+      "sha256": "1238f81e7a0c290f1fa9652ce39c93f8ad674822f25015b9e65677d83260d5b0"
     },
     {
       "path": "src/earnings_brief.py",
@@ -373,6 +381,10 @@
     {
       "path": "src/research/thesis_artifact.py",
       "sha256": "b827ed1fd24569fbde97dc464796c0c7859469843d460935c4b0efe24a567093"
+    },
+    {
+      "path": "src/risk_reward.py",
+      "sha256": "0cfb71efe8b8298400f500c969d3822e5902cf85764b736ac76dd6f0b24e55f1"
     },
     {
       "path": "src/sqlite_runtime.py",

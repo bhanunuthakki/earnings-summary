@@ -87,7 +87,9 @@ def test_over_risked_name_is_flagged_and_ranked_first() -> None:
     assert nu.risk_share_pct == pytest.approx(50.0)
     assert nu.gap_pct == pytest.approx(50.0 - 0.015 / 0.135 * 100.0, abs=0.1)
     assert nu.mismatch_score > 0
-    assert any("of book risk vs" in c and "of expected reward" in c for c in nu.mismatch_reasons)
+    assert any(
+        "of book risk vs" in c and "of modeled valuation upside" in c for c in nu.mismatch_reasons
+    )
     # The over-risked name ranks first; the well-rewarded META is "aligned".
     assert rows[0].ticker == "NU"
     assert by["META"].mismatch_score == 0.0
@@ -106,12 +108,12 @@ def test_low_conviction_high_risk_flags_even_without_dcf() -> None:
 
 def test_conviction_outruns_the_dcf() -> None:
     book = _book(risk_share={"FOO": 0.20, "BAR": 0.80}, weights={"FOO": 0.5, "BAR": 0.5})
-    # FOO rated 5/5 but the DCF expects only +2% → conviction-vs-DCF flag.
+    # FOO rated 5/5 but DCF valuation upside is only +2% → conviction-vs-DCF flag.
     rows, _ = build_gap_rows(
         book, rewards={"FOO": _reward(0.02), "BAR": _reward(0.30)}, convictions={"FOO": 5.0}
     )
     foo = next(r for r in rows if r.ticker == "FOO")
-    assert any("rated 5/5 but the DCF expects only" in c for c in foo.mismatch_reasons)
+    assert any("rated 5/5 but DCF valuation upside is only" in c for c in foo.mismatch_reasons)
 
 
 def test_low_confidence_reward_is_not_confidently_scored() -> None:
@@ -124,7 +126,7 @@ def test_low_confidence_reward_is_not_confidently_scored() -> None:
     stale = next(r for r in rows if r.ticker == "STALE")
     # A big parity gap exists, but the stale reward leg must NOT score it.
     assert stale.gap_pct is not None and stale.gap_pct > 5.0
-    assert not any("of expected reward" in c for c in stale.mismatch_reasons)
+    assert not any("of modeled valuation upside" in c for c in stale.mismatch_reasons)
     assert any("low-confidence" in c and "not scored" in c for c in stale.mismatch_reasons)
     assert stale.mismatch_score == 0.0
 
@@ -136,7 +138,7 @@ def test_no_positive_reward_leaves_shares_undefined() -> None:
     for r in rows:
         assert r.reward_share_pct is None
         assert r.gap_pct is None
-        assert not any("of expected reward" in c for c in r.mismatch_reasons)
+        assert not any("of modeled valuation upside" in c for c in r.mismatch_reasons)
 
 
 # --------------------------------------------------------------------------- #
@@ -176,7 +178,7 @@ def _snap(bull: float, bear: float) -> str:
     )
 
 
-def test_reward_legs_freshness_and_asymmetry(tmp_path: Path) -> None:
+def test_scalar_legacy_rows_cannot_gain_readiness_from_freshness(tmp_path: Path) -> None:
     db = _dcf_db(tmp_path)
     today = date(2026, 6, 14)
     fresh = today.isoformat()
@@ -201,19 +203,20 @@ def test_reward_legs_freshness_and_asymmetry(tmp_path: Path) -> None:
         conn.close()
     legs = _dcf_reward_legs(db, ["FRESH", "OLDVAL", "OLDPX", "MISSING"], today)
 
-    assert "MISSING" not in legs  # no row → caller treats as no DCF on file
+    assert "dcf_schema_unavailable" in (legs["MISSING"].confidence_reason or "")
     fresh_leg = legs["FRESH"]
-    assert fresh_leg.low_confidence is False
-    assert fresh_leg.has_scenarios is True
-    # downside skew: 0.25*0.30 + 0.5*0.10 + 0.25*(-0.60) = -0.025.
-    assert fresh_leg.expected_return == pytest.approx(-0.025)
-    assert legs["OLDVAL"].low_confidence is True
-    assert "fair value" in (legs["OLDVAL"].confidence_reason or "")
-    assert legs["OLDPX"].low_confidence is True
-    assert "price" in (legs["OLDPX"].confidence_reason or "")
+    # These legacy scalar rows lack the current evidence schema. Quote and
+    # valuation freshness must not substitute for source/model readiness.
+    assert fresh_leg.low_confidence is True
+    assert fresh_leg.expected_return is None
+    for ticker in ("FRESH", "OLDVAL", "OLDPX"):
+        assert legs[ticker].low_confidence is True
+        assert "dcf_schema_unavailable" in (legs[ticker].confidence_reason or "")
 
 
-def test_reward_legs_ignore_segment_row_even_when_newer(tmp_path: Path) -> None:
+def test_reward_legs_ignore_segment_row_even_when_newer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """PART A: a segment row landed AFTER the consolidated row must not win
     the reward leg — the shared dcf.latest reader fix. Previously
     ``_dcf_reward_legs`` had NO is_latest/segment_name predicate at all."""
@@ -236,9 +239,24 @@ def test_reward_legs_ignore_segment_row_even_when_newer(tmp_path: Path) -> None:
         conn.commit()
     finally:
         conn.close()
+    from datetime import datetime
+
+    from dcf.latest import latest_dcf_row
+    from dcf.readiness import ValuationReadiness, load_valuation_readiness
+
+    observed: list[int] = []
+
+    def read(conn: sqlite3.Connection, ticker: str, *, as_of: datetime) -> ValuationReadiness:
+        assert conn.in_transaction
+        row = latest_dcf_row(conn, ticker)
+        assert row is not None
+        observed.append(row.id)
+        return load_valuation_readiness(conn, ticker, as_of=as_of)
+
+    monkeypatch.setattr("risk_reward.load_valuation_readiness", read)
     legs = _dcf_reward_legs(db, ["SEG"], today)
-    # Base-point estimate from the consolidated row's 110/100, not the segment's 900/100.
-    assert legs["SEG"].expected_return == pytest.approx(0.10)
+    assert observed == [1]  # Consolidated row, despite the newer segment.
+    assert legs["SEG"].expected_return is None  # Legacy scalar schema is unqualified.
 
 
 def test_reward_legs_skip_fair_value_leg_on_sanity_flag(tmp_path: Path) -> None:
@@ -322,7 +340,9 @@ def test_gap_section_renders_with_control_kit() -> None:
     assert "Risk vs reward vs conviction" in html
     assert 'class="p-table rrg-table"' in html  # S1 control kit table
     assert "k-pill" in html and "k-chip" in html  # kit pill + chips, no raw hex
-    assert "of book risk vs" in html and "of expected reward" in html  # the parity-gap chip
+    assert (
+        "of book risk vs" in html and "of modeled valuation upside" in html
+    )  # the parity-gap chip
     assert "NU" in html
     assert "OF REWARD UNMODELED" not in html  # 3/3 valued -> full coverage, no warning
 
@@ -419,13 +439,14 @@ def test_build_risk_reward_gap_end_to_end(tmp_path: Path) -> None:
     gap = build_risk_reward_gap(db, repo_root, weights, weights_source="tracker", today=today)
     assert gap.hidden_reason is None
     assert {r.ticker for r in gap.rows} == {"AAA", "BBB", "CCC"}
-    assert gap.valued_names == 3
+    assert gap.valued_names == 0  # Scalar legacy rows do not establish model readiness.
     assert gap.weights_source == "tracker"
     aaa = next(r for r in gap.rows if r.ticker == "AAA")
     assert aaa.conviction == 2.0
-    assert aaa.expected_return_pct == pytest.approx(-10.0)  # 90/100 - 1
-    # AAA: negative expected reward + low conviction at the book's biggest weight
-    # → it carries the mismatch and ranks first.
+    assert aaa.expected_return_pct is None
+    assert "dcf_schema_unavailable" in (aaa.confidence_reason or "")
+    assert aaa.reward_share_pct is None
+    # Independent low conviction at the largest book risk still ranks first.
     assert aaa.mismatch_score > 0
     assert gap.rows[0].ticker == "AAA"
 
@@ -496,3 +517,23 @@ def test_entry_conviction_fallback_fills_names_without_intents(tmp_path: Path) -
     assert by_ticker["BBB"].conviction == 3.0  # medium → 3, from the entry record
     assert by_ticker["CCC"].conviction is None  # closed entry ignored
     assert any("conviction from entry record" in n and "BBB" in n for n in gap.notes)
+
+
+@pytest.mark.parametrize("valuation_gap", [0.1, 2.0])
+def test_signed_upside_contributions_preserve_positive_gross_denominator(
+    valuation_gap: float,
+) -> None:
+    """Pure arithmetic; this fixture grants no model or scenario admission."""
+    book = _book(risk_share={"GAIN": 0.5, "LOSS": 0.5}, weights={"GAIN": 0.5, "LOSS": 0.5})
+    rows, valued = build_gap_rows(
+        book,
+        rewards={"GAIN": _reward(valuation_gap), "LOSS": _reward(-valuation_gap)},
+        convictions={},
+    )
+    by = {row.ticker: row for row in rows}
+    assert valued == 2
+    assert by["GAIN"].reward_share_pct == pytest.approx(100)
+    assert by["LOSS"].reward_share_pct == pytest.approx(-100)
+    assert sum(row.reward_share_pct or 0 for row in rows) == pytest.approx(0)
+    assert by["GAIN"].expected_return_pct == pytest.approx(valuation_gap * 100)
+    assert by["LOSS"].expected_return_pct == pytest.approx(-valuation_gap * 100)

@@ -142,13 +142,17 @@
         "src/compute/metrics_engine/io.py",
         "src/compute/kpi_extract_summaries.py",
         "src/dcf/valuation.py",
+        "src/dcf/scenario_reward.py",
+        "src/allocation/model.py",
+        "src/risk_reward.py",
         "execution/preview_meli_inputs.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
-        "pytest tests/test_metrics_engine.py -q"
+        "pytest tests/test_metrics_engine.py -q",
+        "pytest tests/test_allocation_return_readiness.py tests/test_risk_reward_readiness.py -q"
       ],
       "documentation": [
         "directives/data_provenance.md"

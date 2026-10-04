@@ -604,6 +604,13 @@ existing execution contracts without adding a task, schedule or write lane.
 Focused preflight, dispatcher and artifact regression tests establish this
 no-surface-change disposition.
 
+Existing allocation factors and risk-versus-reward analysis now require shared
+readiness for the exact persisted valuation run. Their read-only snapshot uses
+an aware cutoff and retains unavailable reasons. Independent conviction-versus-
+risk evidence remains available when valuation upside is unavailable. This
+source gate adds no operator control, job, acquisition, write, deployment or
+scenario/prior acceptance action.
+
 ### FMP owner admission
 
 The shared FMP adapter and shared HTTP FMP lane read the nonsecret policy named by
