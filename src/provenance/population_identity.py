@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Self, cast
 
@@ -30,7 +31,7 @@ from provenance.reporting_entity_registry import (
 )
 
 _POLICY_NAME = "recorded_document_subject_identity_closure"
-_POLICY_VERSION = "2"
+_POLICY_VERSION = "3"
 
 
 class _FrozenModel(BaseModel):
@@ -102,13 +103,17 @@ def populate_recorded_subject_bindings(
         _db_time(request.operation_recorded_at),
     )
     recorded_ids = _recorded_issuer_ids(conn, request)
+    witnesses = {
+        recorded_id: _issuer_witness(conn, recorded_id, request) for recorded_id in recorded_ids
+    }
     input_commitment = _digest(
-        "population-identity-input.v1",
+        "population-identity-input.v2",
         _canonical_json(recorded_ids),
+        _canonical_json([witness.commitment for witness in witnesses.values()]),
     )
     if request.document_version_ids is not None:
         input_commitment = _digest(
-            "population-identity-input.scoped.v1",
+            "population-identity-input.scoped.v2",
             input_commitment,
             _canonical_json(sorted(request.document_version_ids)),
         )
@@ -118,8 +123,10 @@ def populate_recorded_subject_bindings(
             "legacy_issuer_binding_revisions@K/O",
         ),
         "recorded_scope_source": "evidence_document_versions@K/O",
-        "reporting_entity_kind": "legal_registrant",
-        "selection_rule": "exactly_one",
+        "new_subject_reporting_entity_kind": "legal_registrant",
+        "new_subject_selection_rule": "exactly_one",
+        "material_dissent": "conflict_without_append",
+        "current_subject_preservation_rule": "issuer_entity_and_optional_security_agree",
         "temporal_scope": {"knowledge_cutoff": knowledge, "observed_through": observed},
         "version": _POLICY_VERSION,
     }
@@ -131,19 +138,44 @@ def populate_recorded_subject_bindings(
     created_count = 0
     for recorded_id in recorded_ids:
         current = _binding_as_of(conn, recorded_id, request)
-        selected_current = _validated_selected_current(conn, current, request)
-        if selected_current is not None:
-            issuer_id, reporting_entity_id = selected_current
-            item = PopulationIdentityItem(
-                recorded_issuer_id=recorded_id,
-                outcome="selected",
-                issuer_id=issuer_id,
-                reporting_entity_id=reporting_entity_id,
-                reason_code="current_authoritative_subject_preserved",
+        witness = witnesses[recorded_id]
+        if (
+            witness.material_dissent
+            or (current is not None and bool(current[6]))
+            or (witness.issuer_id is not None and not witness.target_present)
+        ):
+            items.append(
+                PopulationIdentityItem(
+                    recorded_issuer_id=recorded_id,
+                    outcome="conflict",
+                    reason_code="issuer_witness_material_dissent"
+                    if witness.material_dissent
+                    else "current_subject_material_dissent"
+                    if current is not None and bool(current[6])
+                    else "issuer_witness_target_missing",
+                )
             )
+            continue
+        if current is not None and str(current[5]) == "selected":
+            selected_current = _validated_selected_current(conn, current, request, witness)
+            if selected_current is None:
+                item = PopulationIdentityItem(
+                    recorded_issuer_id=recorded_id,
+                    outcome="conflict",
+                    reason_code="current_subject_binding_conflicts",
+                )
+            else:
+                issuer_id, reporting_entity_id = selected_current
+                item = PopulationIdentityItem(
+                    recorded_issuer_id=recorded_id,
+                    outcome="selected",
+                    issuer_id=issuer_id,
+                    reporting_entity_id=reporting_entity_id,
+                    reason_code="current_authoritative_subject_preserved",
+                )
             items.append(item)
             continue
-        target = _resolve_target(conn, recorded_id, request)
+        target = _resolve_target(conn, witness, request)
         if target is None:
             item = _unresolved_item(
                 conn,
@@ -152,6 +184,7 @@ def populate_recorded_subject_bindings(
                 current=current,
                 request=request,
                 policy_sha=policy_sha,
+                issuer_witness=witness,
             )
         else:
             issuer_id, reporting_entity_id = target
@@ -230,87 +263,132 @@ def _recorded_issuer_ids(
     conn: sqlite3.Connection,
     request: PopulationIdentityRequest,
 ) -> tuple[str, ...]:
-    parameters: list[str] = [
-        _db_time(request.knowledge_cutoff),
-        _db_time(request.operation_recorded_at),
-        _db_time(request.operation_recorded_at),
-    ]
+    query = (
+        "SELECT version.document_version_id,version.issuer_id,observation.observed_at,"
+        "observation.retrieved_at,version.recorded_at "
+        "FROM evidence_document_versions version "
+        "JOIN evidence_source_observations observation "
+        "ON observation.observation_id=version.observation_id "
+    )
+    parameters: list[str] = []
     if request.document_version_ids is not None:
-        query = (
-            "SELECT version.document_version_id,version.issuer_id "
-            "FROM evidence_document_versions version "
-            "JOIN evidence_source_observations observation "
-            "ON observation.observation_id=version.observation_id "
-            "WHERE datetime(observation.observed_at)<=datetime(?) "
-            "AND datetime(observation.retrieved_at)<=datetime(?) "
-            "AND datetime(version.recorded_at)<=datetime(?) "
-            "AND version.document_version_id IN (SELECT value FROM json_each(?)) "
-            "ORDER BY version.issuer_id,version.document_version_id"
-        )
+        query += "WHERE version.document_version_id IN (SELECT value FROM json_each(?)) "
         parameters.append(json.dumps(request.document_version_ids))
-    else:
-        query = (
-            "SELECT version.document_version_id,version.issuer_id "
-            "FROM evidence_document_versions version "
-            "JOIN evidence_source_observations observation "
-            "ON observation.observation_id=version.observation_id "
-            "WHERE datetime(observation.observed_at)<=datetime(?) "
-            "AND datetime(observation.retrieved_at)<=datetime(?) "
-            "AND datetime(version.recorded_at)<=datetime(?) "
-            "ORDER BY version.issuer_id,version.document_version_id"
-        )
-    rows = conn.execute(
-        query,
-        parameters,
-    ).fetchall()
-    if request.document_version_ids is not None and {str(row[0]) for row in rows} != set(
+    query += "ORDER BY version.issuer_id,version.document_version_id"
+    issuer_ids: set[str] = set()
+    document_ids: set[str] = set()
+    knowledge, observed = _utc(request.knowledge_cutoff), _utc(request.operation_recorded_at)
+    for row in conn.execute(query, parameters):
+        observed_at, retrieved_at, recorded_at = tuple(_parse_time(value) for value in row[2:5])
+        if observed_at <= knowledge and retrieved_at <= observed and recorded_at <= observed:
+            issuer_ids.add(str(row[1]))
+            if request.document_version_ids is not None:
+                document_ids.add(str(row[0]))
+    if request.document_version_ids is not None and document_ids != set(
         request.document_version_ids
     ):
         raise ValueError("selected document unavailable within identity cutoff")
-    return tuple(sorted({str(row[1]) for row in rows}))
+    return tuple(sorted(issuer_ids))
+
+
+@dataclass(frozen=True)
+class _IssuerWitness:
+    issuer_id: str | None
+    material_dissent: bool
+    target_present: bool
+    commitment: dict[str, JsonValue]
+
+
+def _issuer_witness(
+    conn: sqlite3.Connection,
+    recorded_id: str,
+    request: PopulationIdentityRequest,
+) -> _IssuerWitness:
+    canonical = conn.execute(
+        "SELECT issuer_id,created_at FROM issuer_entities WHERE issuer_id=?",
+        (recorded_id,),
+    ).fetchone()
+    if canonical is not None and _parse_time(canonical[1]) <= _utc(request.knowledge_cutoff):
+        return _IssuerWitness(
+            str(canonical[0]),
+            False,
+            True,
+            {
+                "recorded_issuer_id": recorded_id,
+                "source": "issuer_entities",
+                "issuer_id": str(canonical[0]),
+                "created_at": str(canonical[1]),
+                "material_dissent": False,
+            },
+        )
+    binding = None
+    for candidate in conn.execute(
+        "SELECT binding_revision_id,revision,issuer_id,outcome,material_dissent,knowledge_at,recorded_at "
+        "FROM legacy_issuer_binding_revisions binding "
+        "WHERE recorded_issuer_id=? ORDER BY revision DESC,binding_revision_id DESC",
+        (recorded_id,),
+    ):
+        knowledge_at, recorded_at = _parse_time(candidate[5]), _parse_time(candidate[6])
+        if knowledge_at <= _utc(request.knowledge_cutoff) and recorded_at <= _utc(
+            request.operation_recorded_at
+        ):
+            binding = candidate
+            break
+    if binding is None:
+        return _IssuerWitness(
+            None,
+            False,
+            False,
+            {
+                "recorded_issuer_id": recorded_id,
+                "source": "legacy_issuer_binding_revisions",
+                "binding_revision_id": None,
+            },
+        )
+    issuer_id = None if binding[2] is None or str(binding[3]) != "selected" else str(binding[2])
+    target = (
+        None
+        if issuer_id is None
+        else conn.execute(
+            "SELECT created_at FROM issuer_entities WHERE issuer_id=?",
+            (issuer_id,),
+        ).fetchone()
+    )
+    dissent = bool(binding[4])
+    return _IssuerWitness(
+        issuer_id,
+        dissent,
+        target is not None and _parse_time(target[0]) <= _utc(request.knowledge_cutoff),
+        {
+            "recorded_issuer_id": recorded_id,
+            "source": "legacy_issuer_binding_revisions",
+            "binding_revision_id": str(binding[0]),
+            "revision": int(binding[1]),
+            "issuer_id": None if binding[2] is None else str(binding[2]),
+            "outcome": str(binding[3]),
+            "material_dissent": dissent,
+            "knowledge_at": str(binding[5]),
+            "recorded_at": str(binding[6]),
+            "issuer_created_at": None if target is None else str(target[0]),
+        },
+    )
 
 
 def _resolve_target(
     conn: sqlite3.Connection,
-    recorded_id: str,
+    witness: _IssuerWitness,
     request: PopulationIdentityRequest,
 ) -> tuple[str, str] | None:
-    issuer = conn.execute(
-        "SELECT issuer_id FROM issuer_entities "
-        "WHERE issuer_id=? AND datetime(created_at)<=datetime(?)",
-        (recorded_id, _db_time(request.knowledge_cutoff)),
-    ).fetchone()
-    if issuer is None:
-        issuer = conn.execute(
-            "SELECT issuer_id FROM legacy_issuer_binding_revisions binding "
-            "WHERE recorded_issuer_id=? AND outcome='selected' "
-            "AND datetime(knowledge_at)<=datetime(?) "
-            "AND datetime(recorded_at)<=datetime(?) "
-            "AND NOT EXISTS ("
-            " SELECT 1 FROM legacy_issuer_binding_revisions newer "
-            " WHERE newer.recorded_issuer_id=binding.recorded_issuer_id "
-            " AND newer.revision>binding.revision "
-            " AND datetime(newer.knowledge_at)<=datetime(?) "
-            " AND datetime(newer.recorded_at)<=datetime(?)"
-            ") ORDER BY revision DESC,binding_revision_id DESC LIMIT 1",
-            (
-                recorded_id,
-                _db_time(request.knowledge_cutoff),
-                _db_time(request.operation_recorded_at),
-                _db_time(request.knowledge_cutoff),
-                _db_time(request.operation_recorded_at),
-            ),
-        ).fetchone()
-    if issuer is None:
+    if witness.issuer_id is None or witness.material_dissent or not witness.target_present:
         return None
-    issuer_id = str(issuer[0])
-    entities = conn.execute(
-        "SELECT reporting_entity_id FROM reporting_entities "
+    issuer_id = witness.issuer_id
+    entity_rows = conn.execute(
+        "SELECT reporting_entity_id,created_at FROM reporting_entities "
         "WHERE issuer_id=? AND reporting_entity_kind='legal_registrant' "
-        "AND datetime(created_at)<=datetime(?) "
         "ORDER BY reporting_entity_id",
-        (issuer_id, _db_time(request.knowledge_cutoff)),
-    ).fetchall()
+        (issuer_id,),
+    )
+    entities = [row for row in entity_rows if _parse_time(row[1]) <= _utc(request.knowledge_cutoff)]
     if len(entities) != 1:
         return None
     return issuer_id, str(entities[0][0])
@@ -321,47 +399,53 @@ def _binding_as_of(
     recorded_id: str,
     request: PopulationIdentityRequest,
 ) -> tuple[object, ...] | None:
-    row = conn.execute(
+    for row in conn.execute(
         "SELECT binding_revision_id,revision,issuer_id,reporting_entity_id,"
-        "security_id,outcome FROM recorded_subject_binding_revisions binding "
-        "WHERE recorded_issuer_id=? "
-        "AND datetime(knowledge_at)<=datetime(?) "
-        "AND datetime(recorded_at)<=datetime(?) "
-        "AND NOT EXISTS ("
-        " SELECT 1 FROM recorded_subject_binding_revisions newer "
-        " WHERE newer.recorded_issuer_id=binding.recorded_issuer_id "
-        " AND newer.revision>binding.revision "
-        " AND datetime(newer.knowledge_at)<=datetime(?) "
-        " AND datetime(newer.recorded_at)<=datetime(?)"
-        ") ORDER BY revision DESC,binding_revision_id DESC LIMIT 1",
-        (
-            recorded_id,
-            _db_time(request.knowledge_cutoff),
-            _db_time(request.operation_recorded_at),
-            _db_time(request.knowledge_cutoff),
-            _db_time(request.operation_recorded_at),
-        ),
-    ).fetchone()
-    return None if row is None else tuple(row)
+        "security_id,outcome,material_dissent,knowledge_at,recorded_at "
+        "FROM recorded_subject_binding_revisions "
+        "WHERE recorded_issuer_id=? ORDER BY revision DESC,binding_revision_id DESC",
+        (recorded_id,),
+    ):
+        knowledge_at, recorded_at = _parse_time(row[7]), _parse_time(row[8])
+        if knowledge_at <= _utc(request.knowledge_cutoff) and recorded_at <= _utc(
+            request.operation_recorded_at
+        ):
+            return tuple(row[:7])
+    return None
 
 
 def _validated_selected_current(
     conn: sqlite3.Connection,
     current: tuple[object, ...] | None,
     request: PopulationIdentityRequest,
+    witness: _IssuerWitness,
 ) -> tuple[str, str] | None:
-    if current is None or str(current[5]) != "selected" or current[2] is None or current[3] is None:
+    if (
+        current is None
+        or str(current[5]) != "selected"
+        or current[2] is None
+        or current[3] is None
+        or bool(current[6])
+        or witness.material_dissent
+        or not witness.target_present
+        or str(current[2]) != witness.issuer_id
+    ):
         return None
     issuer_id = str(current[2])
     reporting_entity_id = str(current[3])
     row = conn.execute(
-        "SELECT 1 FROM reporting_entities "
-        "WHERE reporting_entity_id=? AND issuer_id=? "
-        "AND datetime(created_at)<=datetime(?)",
-        (reporting_entity_id, issuer_id, _db_time(request.knowledge_cutoff)),
+        "SELECT created_at FROM reporting_entities WHERE reporting_entity_id=? AND issuer_id=?",
+        (reporting_entity_id, issuer_id),
     ).fetchone()
-    if row is None:
+    if row is None or _parse_time(row[0]) > _utc(request.knowledge_cutoff):
         return None
+    if current[4] is not None:
+        security = conn.execute(
+            "SELECT created_at FROM securities WHERE security_id=? AND issuer_id=?",
+            (str(current[4]), issuer_id),
+        ).fetchone()
+        if security is None or _parse_time(security[0]) > _utc(request.knowledge_cutoff):
+            return None
     return issuer_id, reporting_entity_id
 
 
@@ -373,30 +457,11 @@ def _unresolved_item(
     current: tuple[object, ...] | None,
     request: PopulationIdentityRequest,
     policy_sha: str,
+    issuer_witness: _IssuerWitness,
 ) -> PopulationIdentityItem:
-    issuer = conn.execute(
-        "SELECT COALESCE(entity.issuer_id,binding.issuer_id) "
-        "FROM (SELECT ? AS recorded_issuer_id) recorded "
-        "LEFT JOIN issuer_entities entity "
-        "ON entity.issuer_id=recorded.recorded_issuer_id "
-        "LEFT JOIN legacy_issuer_binding_revisions binding "
-        "ON binding.binding_revision_id=("
-        " SELECT candidate.binding_revision_id "
-        " FROM legacy_issuer_binding_revisions candidate "
-        " WHERE candidate.recorded_issuer_id=recorded.recorded_issuer_id "
-        " AND datetime(candidate.knowledge_at)<=datetime(?) "
-        " AND datetime(candidate.recorded_at)<=datetime(?) "
-        " ORDER BY candidate.revision DESC,candidate.binding_revision_id DESC LIMIT 1"
-        ") AND binding.outcome='selected'",
-        (
-            recorded_issuer_id,
-            _db_time(request.knowledge_cutoff),
-            _db_time(request.operation_recorded_at),
-        ),
-    ).fetchone()
     reason_code = (
         "canonical_issuer_missing"
-        if issuer is None or issuer[0] is None
+        if issuer_witness.issuer_id is None
         else "unique_legal_registrant_missing"
     )
     current_outcome = None if current is None else str(current[5])
@@ -536,10 +601,16 @@ def verify_identity_scope(
     if not recorded_ids:
         raise ValueError("identity scope is empty")
     selected: list[tuple[str, str, str]] = []
+    selected_artifact_ids: list[str] = []
     failures: list[str] = []
+    witnesses: list[JsonValue] = []
     for recorded_id in recorded_ids:
         current = _binding_as_of(conn, recorded_id, request)
-        validated = _validated_selected_current(conn, current, request)
+        if current is not None and str(current[5]) == "selected":
+            selected_artifact_ids.append(str(current[0]))
+        witness = _issuer_witness(conn, recorded_id, request)
+        witnesses.append(witness.commitment)
+        validated = _validated_selected_current(conn, current, request, witness)
         if current is None or validated is None:
             failures.append(recorded_id)
             continue
@@ -559,29 +630,11 @@ def verify_identity_scope(
         conn,
         table="recorded_subject_binding_revisions",
         query="""
-            WITH scoped(recorded_issuer_id) AS (
-                SELECT DISTINCT version.issuer_id
-                FROM evidence_document_versions version
-                JOIN evidence_source_observations observation
-                  ON observation.observation_id=version.observation_id
-                WHERE datetime(observation.observed_at)<=datetime(?)
-                  AND datetime(observation.retrieved_at)<=datetime(?)
-                  AND datetime(version.recorded_at)<=datetime(?)
-            ),
-            ranked AS (
-                SELECT binding.*,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY binding.recorded_issuer_id
-                           ORDER BY binding.revision DESC,binding.binding_revision_id DESC
-                       ) AS scope_rank
-                FROM recorded_subject_binding_revisions binding
-                JOIN scoped ON scoped.recorded_issuer_id=binding.recorded_issuer_id
-                WHERE datetime(binding.knowledge_at)<=datetime(?)
-                  AND datetime(binding.recorded_at)<=datetime(?)
-            )
             SELECT binding_revision_id AS artifact_id,
                    fact_sha256(json_object(
                        'issuer_id',issuer_id,
+                       'material_dissent',material_dissent,
+                       'security_id',security_id,
                        'outcome',outcome,
                        'recorded_issuer_id',recorded_issuer_id,
                        'reporting_entity_id',reporting_entity_id,
@@ -595,23 +648,18 @@ def verify_identity_scope(
                    )) AS seal_sha256,
                    knowledge_at,
                    recorded_at
-            FROM ranked
-            WHERE scope_rank=1 AND outcome='selected'
+            FROM recorded_subject_binding_revisions
+            WHERE binding_revision_id IN (SELECT value FROM json_each(?))
             ORDER BY binding_revision_id
         """,
-        params=(
-            _db_time(scope.knowledge_cutoff),
-            _db_time(scope.observed_through),
-            _db_time(scope.observed_through),
-            _db_time(scope.knowledge_cutoff),
-            _db_time(scope.observed_through),
-        ),
-        selection_policy_id="identity-scope-as-of-k-o.v2",
+        params=(json.dumps(sorted(selected_artifact_ids)),),
+        selection_policy_id="identity-scope-as-of-k-o.v3",
     )
     input_material: dict[str, JsonValue] = {
         "knowledge_cutoff": _db_time(scope.knowledge_cutoff),
         "observed_through": _db_time(scope.observed_through),
         "recorded_issuer_ids": cast(JsonValue, list(recorded_ids)),
+        "issuer_witnesses": witnesses,
     }
     details: dict[str, JsonValue] = {
         "failed_recorded_issuer_ids": cast(JsonValue, failures),
