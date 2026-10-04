@@ -17,6 +17,11 @@ from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from provenance.analysis_scope import (
+    AnalysisEvidenceScope,
+    require_analysis_documents,
+    resolve_analysis_coverage,
+)
 from provenance.fulltext_extractor_identity import (
     BASE_FULLTEXT_EXTRACTOR,
     FULLTEXT_EXTRACTOR_IDENTITY_POLICY_VERSION,
@@ -110,10 +115,15 @@ class CorpusBuildRequest(_ClosedModel):
     knowledge_cutoff: datetime | None = None
     persist_batch_size: int = Field(default=250, ge=1, le=5_000)
     apply: bool = False
+    analysis_scope: AnalysisEvidenceScope | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def _validate_inventory(self) -> Self:
         ExpectedDocumentInventory(expected_documents=self.expected_documents)
+        if self.analysis_scope is None and self.corpus_key.startswith("analysis-scope:"):
+            raise ValueError("analysis-scope corpus namespace requires its verified scope receipt")
         if any(not name.strip() for name in self.required_extractor_names):
             raise ValueError("required extractor names must be non-empty")
         if len(self.required_extractor_names) != len(set(self.required_extractor_names)):
@@ -213,10 +223,69 @@ def load_coverage_expected_document_inventory(
     return (ExpectedDocumentInventory(expected_documents=tuple(expected)), tuple(snapshot_ids))
 
 
+def load_analysis_expected_document_inventory(
+    conn: sqlite3.Connection,
+    scope: AnalysisEvidenceScope,
+    *,
+    cutoff_at: datetime,
+    observed_through: datetime,
+) -> tuple[ExpectedDocumentInventory, tuple[str, ...]]:
+    """Require the selected package; index its primary research documents only."""
+
+    document_ids = require_analysis_documents(conn, scope, cutoff_at, observed_through)
+    coverage = resolve_analysis_coverage(conn, scope, cutoff_at, observed_through)
+    expected = tuple(
+        ExpectedDocument(
+            expected_document_key=item.expected_document_key,
+            document_version_id=item.document_version_id,
+            membership_status="included",
+            reason=f"analysis:{scope.scope_id}:coverage:{item.coverage_status}",
+        )
+        for item in sorted(coverage, key=lambda item: item.expected_document_key)
+        if item.role == "research_document"
+    )
+    if (
+        tuple(sorted(item.document_version_id for item in expected if item.document_version_id))
+        != document_ids
+    ):
+        raise ValueError("analysis primary coverage identities differ")
+    return ExpectedDocumentInventory(expected_documents=expected), (scope.inventory.snapshot_id,)
+
+
+def _validate_analysis_inventory(conn: sqlite3.Connection, request: CorpusBuildRequest) -> None:
+    scope = request.analysis_scope
+    if scope is None:
+        if request.corpus_key.startswith("analysis-scope:"):
+            raise ValueError("analysis-scope corpus namespace requires its verified scope receipt")
+        return
+    if request.corpus_key != scope.scope_id:
+        raise ValueError("scoped corpus key must equal the analysis scope identity")
+    inventory, snapshot_ids = load_analysis_expected_document_inventory(
+        conn,
+        scope,
+        cutoff_at=request.knowledge_cutoff or request.recorded_at,
+        observed_through=request.recorded_at,
+    )
+    if request.source_inventory_snapshot_ids != snapshot_ids:
+        raise ValueError("scoped corpus must link exactly its analysis source inventory")
+    actual = sorted(
+        (item.expected_document_key, item.document_version_id, item.membership_status)
+        for item in request.expected_documents
+    )
+    required = sorted(
+        (item.expected_document_key, item.document_version_id, item.membership_status)
+        for item in inventory.expected_documents
+    )
+    if actual != required:
+        raise ValueError("scoped corpus expected documents differ from its analysis scope")
+
+
 def build_grounded_search_corpus(
     conn: sqlite3.Connection,
     request: CorpusBuildRequest,
     on_chunk_batch_complete: Callable[[int], None] | None = None,
+    *,
+    before_publish: Callable[[], None] | None = None,
 ) -> CorpusBuildResult:
     """Plan or incrementally stage and atomically publish a lexical corpus.
 
@@ -226,6 +295,9 @@ def build_grounded_search_corpus(
     queryable only after a second deterministic pass proves that every expected
     chunk is present exactly and no extra chunk exists; the short publication
     transaction then inserts the seal and lexical run together.
+
+    ``before_publish`` checks immutable caller inputs inside that transaction,
+    before publication records are inserted and again immediately before commit.
     """
 
     store = GroundedSearchStore(conn)
@@ -294,6 +366,9 @@ def build_grounded_search_corpus(
     )
     try:
         conn.execute("BEGIN IMMEDIATE")
+        if before_publish is not None:
+            before_publish()
+        _validate_analysis_inventory(conn, request)
         # Rows are append-only.  Rechecking the count under the write lock is
         # sufficient to prove the previously verified digest cannot have
         # changed between verification and publication.
@@ -323,6 +398,8 @@ def build_grounded_search_corpus(
             )
             records_created += int(projection_created)
             records_replayed += int(not projection_created)
+        if before_publish is not None:
+            before_publish()
         conn.commit()
     except Exception:
         conn.rollback()
@@ -399,18 +476,20 @@ def _plan(conn: sqlite3.Connection, request: CorpusBuildRequest) -> _CorpusPlan:
 
 
 def _metadata_plan(conn: sqlite3.Connection, request: CorpusBuildRequest) -> _CorpusMetadata:
+    _validate_analysis_inventory(conn, request)
     inventory = sorted(request.expected_documents, key=lambda item: item.expected_document_key)
-    config_sha = _sha256_json(
-        {
-            "corpus_key": request.corpus_key,
-            "revision": request.revision,
-            "expected_documents": [document.model_dump(mode="json") for document in inventory],
-            "required_extractor_names": sorted(request.required_extractor_names),
-            "knowledge_cutoff": request.knowledge_cutoff,
-            "source_inventory_snapshot_ids": sorted(request.source_inventory_snapshot_ids),
-            "node_selection_policy": _node_selection_policy_config(),
-        }
-    )
+    config: dict[str, object] = {
+        "corpus_key": request.corpus_key,
+        "revision": request.revision,
+        "expected_documents": [document.model_dump(mode="json") for document in inventory],
+        "required_extractor_names": sorted(request.required_extractor_names),
+        "knowledge_cutoff": request.knowledge_cutoff,
+        "source_inventory_snapshot_ids": sorted(request.source_inventory_snapshot_ids),
+        "node_selection_policy": _node_selection_policy_config(),
+    }
+    if request.analysis_scope is not None:
+        config["analysis_scope"] = request.analysis_scope.model_dump(mode="json")
+    config_sha = _sha256_json(config)
     chunker_sha = _sha256_json(
         {
             "chunker": request.chunker.model_dump(mode="json"),

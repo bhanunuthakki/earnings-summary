@@ -52,6 +52,7 @@ route is not authority to run it on production.
 | Transcript gaps / provenance | `transcripts/`; `execution/audit_transcript_evidence.py` | `execution/backfill_transcripts.py`; `execution/scan_ir_transcripts.py`; `execution/ingest_transcripts.py`; do not collect audio/webcasts |
 | Reviewed KPI and segment population | `src/compute/kpi_resolver.py`; `src/pipeline/kpi_report_reference_resolver.py` | `execution/produce_issuer_fact_manifest.py` creates inert reviewed input; `execution/apply_issuer_fact_manifest.py` admits KPI and segment facts only |
 | Sealed financial-statement facts | `src/provenance/fact_read_model.py`; declared issuer/document scope and governed extraction receipts | `execution/populate_source_fact_plane.py` plans publication from governed extraction runs; inspect its scope and commitments before authorized `--apply` |
+| Exact reporting-period evidence selection | `src/provenance/analysis_scope.py`; typed request, sealed SEC inventory and exact issuer dates | `execution/plan_analysis_evidence_scope.py --db <explicit> --request <JSON> --scope-receipt <new path>` reads the DB but writes a locked, immutable selection receipt; it does not fetch or admit facts |
 | Research snapshot / completeness | `src/provenance/research_snapshot.py`; `src/provenance/population_research_snapshots.py` | `execution/populate_research_snapshots.py --db <explicit>`; inspect receipt before authorized `--apply` |
 
 ## Route limits and traps
@@ -71,13 +72,21 @@ route is not authority to run it on production.
   `--as-of` changes the run date. Never relabel a body or change live transcript
   selection to fit a requested period.
 - `capture_issuer_document_inventory.py` v1 validates calendar quarter ends. It
-  cannot represent every off-calendar fiscal period. The released workflow has
-  no exact-date analysis-scope planner. Retain the precise issuer dates and mark
-  this capability unavailable; do not round dates or route through unmerged code.
-  The released research-snapshot path uses full-population scope. A selected
-  brief quarter does not narrow that scope or prove archive completeness.
-- `execution/track_evaluation_names.py` has a fixed ticker list and checkout-local
-  database assumptions. It is not the general evaluation-list route.
+  cannot represent every off-calendar fiscal period. Preserve precise issuer
+  dates. The analysis-scope planner selects exact dates from sealed SEC inventory
+  with a typed request and explicit cutoff and observation clocks. Verify this
+  capability in the deployed version before live use. If unavailable, report
+  that gap; do not round dates or invoke unmerged code on production.
+  Pass the verified receipt through the supported `--analysis-scope` option in
+  document processing, corpus construction and research-snapshot generation.
+  The unscoped path still uses full-population scope. A selected brief quarter
+  does not narrow that scope. Selection never proves archive completeness,
+  semantic admission or model readiness; retain gaps outside the analysis scope.
+- `execution/track_evaluation_names.py` writes a fixed ticker list using
+  `db.DB_PATH`, which follows the configured database resolver. Require explicit
+  approved DB configuration: its unconfigured checkout-default fallback is not
+  production authority and is forbidden on Mac. It is not the general
+  evaluation-list route.
 - Model preflight is read-only and does not fetch facts or grant write authority.
   Readiness exit codes are 0 ready, 2 blocked and 3 unavailable. Respect bank,
   holding-company, platform and sum-of-parts routes. An ETF has no corporate DCF.

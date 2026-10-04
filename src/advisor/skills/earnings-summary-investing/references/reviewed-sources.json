@@ -1,5 +1,5 @@
 {
-  "review_note": "Separately briefed GPT-6.1 Sol advisory preview review: fourteen exact hash carryovers from prior source review and two freshly reviewed canonical owners. Fixed period-dependent reported-input preview preserves current main operations/reconstruction; no financial readiness or native qualification. See meli-preview-source-pr-preparation/independent-source-review/findings.json.",
+  "review_note": "Prerequisite assembly retains exact named scope and preview source reviews. Separately briefed current merged Operations and reconstruction review ea467eacce51cbcbaa94586734627c60d271fa40f06159820b80f871e9c5423e; two current owner hashes verified. Selection and preview remain non-admitted, non-model-ready source contracts. No installed/native/financial approval.",
   "schema_version": 1,
   "sources": [
     {
@@ -8,7 +8,7 @@
     },
     {
       "path": "DEFINITIONS.md",
-      "sha256": "0f464ce207a0892122f588b1466c10cd40b093adab4f5a8553eadf8f1ce433df"
+      "sha256": "0ccad9e61635cdeac4c398adcd1e8c40c3f0e7493a73d564cef93e2c56583ca3"
     },
     {
       "path": "directives/agent_host_operations.md",
@@ -20,11 +20,11 @@
     },
     {
       "path": "directives/data_pipeline_dag.md",
-      "sha256": "cef764c3b26951ba529f1ea2b0ebb47c63a995d206e377c25a54611d9e8cc69d"
+      "sha256": "1eb328aa875762bf246a87503feb33e0c3f5905391d0d08080bc7352547512a6"
     },
     {
       "path": "directives/data_provenance.md",
-      "sha256": "0a4698ba005a3d22d688df36e5b633c652c412f1bf9e65210a15392b668428b9"
+      "sha256": "caa695ed16b51577c1a0a82b8987f0e7aa49d07879102f7a3d5d453661d27271"
     },
     {
       "path": "directives/dcf_gsheets_setup.md",
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "5c254aa09e9e644478eb201fb57d0482a9f59d1b9358421aeb484e806d567ae7"
+      "sha256": "64e8a8bb136799d16b3d1e7b7dee3c03d6af727c79a8358ec6b4801ccc72c533"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -187,8 +187,12 @@
       "sha256": "bd75394b2faef6b115ddd008c5e4489e94b6dc377b8d8e8f5a77627e397ca3cd"
     },
     {
+      "path": "execution/plan_analysis_evidence_scope.py",
+      "sha256": "6716fa0ed4eeb48e53eb65e3ad56251da71525e14c3029de729be8241466223e"
+    },
+    {
       "path": "execution/populate_research_snapshots.py",
-      "sha256": "6414cdbe20454a672fbf3cff614e7dfc3af9c5d9063a7ed003f1661280975e5d"
+      "sha256": "3361b0b4e4aab69e6f71085f5cf4304c90316e9abe4e606dd9ba5ee7b38f4040"
     },
     {
       "path": "execution/populate_source_fact_plane.py",
@@ -244,11 +248,11 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "d4d99dae393589e53ca219109b2cc988104c44d233ee07924658376dd355d753"
+      "sha256": "d2af0a81be532b1351f0426cb60617f464feec2e1b2c55c66d05591b4ee782e6"
     },
     {
       "path": "scripts/check_investing_skill.py",
-      "sha256": "0f69b7073e156beb665e68d40ef0470a14483e69549902244354fb3d18f436f0"
+      "sha256": "04a9c9854dffcd4f0a68c9ae5f7e639875be83f4019e20da820100e733847e43"
     },
     {
       "path": "src/advisor/skills/next-dollar-allocation/SKILL.md",
@@ -331,16 +335,20 @@
       "sha256": "24162dd772425bd2719a6f307da3f4d025716d28d379f181b7789cb5e6680bd7"
     },
     {
+      "path": "src/provenance/analysis_scope.py",
+      "sha256": "ee16d76313cdaf608ed1cbf67afb77e1863d537613cc8c2aa1f590e593dbd175"
+    },
+    {
       "path": "src/provenance/fact_read_model.py",
       "sha256": "c6e3d1d4215898c970a093c65d9c59c07fd9770da835c15a081d266087e9eaa3"
     },
     {
       "path": "src/provenance/population_research_snapshots.py",
-      "sha256": "55a1aea8c240d46215114ecb867043dbfa4325fd7af425962e7ee17a98420a20"
+      "sha256": "4b881ba6b944b51857952a07736f76d6859cc3bbff2a2d53a398b46cee116ada"
     },
     {
       "path": "src/provenance/research_snapshot.py",
-      "sha256": "e645061b4c810d9221fab58911e20d52c7ffd6584cc6f25bd140324a9f73a3af"
+      "sha256": "7ab75eeaf59954880a115d28da2c692fde835e9386db2447c935693801d57a6c"
     },
     {
       "path": "src/report/builder.py",
