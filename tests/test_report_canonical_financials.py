@@ -98,6 +98,7 @@ def seed_table(
     legacy_document_id: int | None = None,
     source_observation_id: str | None = None,
     legacy_scope_node: bool = False,
+    concept_namespace: str = "urn:earnings-summary:legacy:financial",
 ) -> tuple[ReportedSourceFact, ...]:
     """concept/start/end/fiscal-period/value/unit; one sealed synthetic document."""
     document_id = f"{publication_prefix}-document"
@@ -183,7 +184,7 @@ def seed_table(
                 **foundation.make_cell(suffix).model_dump(),
                 "reporting_entity_id": reporting_entity_id,
                 "semantic_key_sha256": None,
-                "concept_namespace": "urn:earnings-summary:legacy:financial",
+                "concept_namespace": concept_namespace,
                 "concept_name": concept,
                 "taxonomy_name": "earnings-summary-legacy",
                 "taxonomy_version": "2026",

@@ -24,7 +24,12 @@ from compute.kpi_resolver import (
 )
 from models.facts import Unit
 from models.unit_convert import convert_unit
-from pipeline.kpi_semantics import semantic_admission_sql
+from pipeline.kpi_semantics import (
+    current_kpi_semantic_context,
+    normalize_source_numeric,
+    parse_source_numeric,
+    semantic_admission_sql,
+)
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI, active_scalar_override_map
 from sources.canonical_financial_series import (
@@ -39,7 +44,9 @@ class MetricExpression(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    operation: Literal["level", "ttm_ratio", "yoy_pp", "difference", "ttm_fcf_margin"]
+    operation: Literal[
+        "level", "ttm_ratio", "yoy_pp", "yoy_growth", "difference", "ttm_fcf_margin", "fcf_margin"
+    ]
     name: str | None = None
     source: Literal["financial", "kpi"] = "financial"
     numerator: MetricExpression | None = None
@@ -62,8 +69,8 @@ class MetricExpression(BaseModel):
             raise ValueError("level requires a metric name")
         if self.operation == "ttm_ratio" and (self.numerator is None or self.denominator is None):
             raise ValueError("ttm_ratio requires numerator and denominator")
-        if self.operation == "yoy_pp" and self.input is None:
-            raise ValueError("yoy_pp requires input")
+        if self.operation in ("yoy_pp", "yoy_growth") and self.input is None:
+            raise ValueError(f"{self.operation} requires input")
         if self.operation == "difference" and (self.left is None or self.right is None):
             raise ValueError("difference requires left and right")
         if self.allow_distinct_entities:
@@ -164,7 +171,8 @@ def _read_financial(reader: CanonicalFinancialSeriesReader, name: str) -> Metric
 
 
 _EXACT_SOURCE_NUMBER = re.compile(
-    r"^[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*(?:%|bps|USD|EUR|GBP|million(?:s)?|billion(?:s)?)?$",
+    r"^(?P<value>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*"
+    r"(?:%|bps|USD|EUR|GBP|million(?:s)?|billion(?:s)?)?$",
     re.IGNORECASE,
 )
 
@@ -231,10 +239,33 @@ def _read_kpi(
         text = str(row[8] or "").strip()
         if not text:
             return _unavailable("kpi_source_precision_unavailable", manifests)
-        if not _EXACT_SOURCE_NUMBER.fullmatch(text):
+        source_number = _EXACT_SOURCE_NUMBER.fullmatch(text)
+        if source_number is None:
+            return _unavailable("approximate_kpi_source_value", manifests)
+        context = current_kpi_semantic_context(conn, kpi_fact_id=int(row[0]))
+        if context is None or context.knowledge_at > cutoff:
+            return _unavailable("kpi_semantic_context_not_known_at_cutoff", manifests)
+        precision = context.context.source_precision
+        if precision is None or precision.kind == "unknown":
+            return _unavailable("kpi_source_precision_unavailable", manifests)
+        observation_manifests.append(
+            {"kpi_fact_id": int(row[0]), "source_precision": precision.model_dump(mode="json")}
+        )
+        if precision.kind != "exact":
+            manifests["source_precision"] = observation_manifests
             return _unavailable("approximate_kpi_source_value", manifests)
         source_unit = Unit(str(row[4]))
         value = Decimal(str(row[3]))
+        try:
+            source_value = normalize_source_numeric(
+                parse_source_numeric(source_number.group("value")),
+                unit=source_unit,
+                unit_scale=context.context.unit_scale,
+            )
+        except ValueError:
+            return _unavailable("kpi_source_numeric_mismatch", manifests)
+        if source_value != value:
+            return _unavailable("kpi_source_numeric_mismatch", manifests)
         currency = str(row[5]) if row[5] is not None else None
         if source_unit in (Unit.RATIO, Unit.PERCENT, Unit.BPS):
             converted = convert_unit(value, source_unit, Unit.PERCENT)
@@ -258,6 +289,13 @@ def _read_kpi(
         points.append(
             MetricSeriesPoint(
                 period_end=period,
+                period_start=(
+                    datetime.combine(
+                        context.context.reported_period_start, datetime.min.time(), tzinfo=UTC
+                    )
+                    if context.context.reported_period_start is not None
+                    else None
+                ),
                 value=value,
                 fiscal_year=fiscal_year,
                 fiscal_period=str(row[2]),
@@ -277,6 +315,10 @@ def _read_kpi(
                 "source_document_id": int(row[6]),
                 "locator": str(row[7]),
                 "source_value_text": text,
+                "source_precision": precision.model_dump(mode="json"),
+                "reported_period_start": context.context.reported_period_start.isoformat()
+                if context.context.reported_period_start
+                else None,
                 "stored_unit": str(row[4]),
                 "stored_value": str(row[3]),
                 "currency": currency,
@@ -369,7 +411,7 @@ def _calculate(
                         "required_source_population_unavailable", result.source_manifests
                     )
         return result
-    if expression.operation == "yoy_pp":
+    if expression.operation in ("yoy_pp", "yoy_growth"):
         assert expression.input is not None
         source = _calculate(conn, ticker, expression.input, reader, cutoff)
         if source.status != "available":
@@ -380,13 +422,25 @@ def _calculate(
             prior = by_quarter.get(point.fiscal_index - 4)
             if prior is None:
                 continue
-            if point.unit != "percent" or prior.unit != "percent":
+            if expression.operation == "yoy_pp" and (
+                point.unit != "percent" or prior.unit != "percent"
+            ):
                 return _unavailable("yoy_pp_requires_percentage_input", source.source_manifests)
             if (point.period_end - prior.period_end).days not in range(350, 381):
                 return _unavailable("yoy_exact_year_mismatch", source.source_manifests)
-            points.append(point.model_copy(update={"value": point.value - prior.value}))
+            if expression.operation == "yoy_growth":
+                if prior.value <= 0:
+                    return _unavailable(
+                        "yoy_growth_requires_positive_prior", source.source_manifests
+                    )
+                value = Decimal(100) * (point.value - prior.value) / prior.value
+            else:
+                value = point.value - prior.value
+            points.append(
+                point.model_copy(update={"value": value, "unit": "percent", "currency": None})
+            )
         return _available(points, source.source_manifests)
-    if expression.operation == "ttm_fcf_margin":
+    if expression.operation in ("ttm_fcf_margin", "fcf_margin"):
         operating = _read_financial(reader, "operating_cash_flow")
         capex = _read_financial(reader, "capital_expenditure")
         revenue = _read_financial(reader, "revenue")
@@ -407,6 +461,27 @@ def _calculate(
             ],
             manifests,
         )
+        if expression.operation == "fcf_margin":
+            matched, reason = _matched(fcf, revenue)
+            if reason:
+                return _unavailable(reason, manifests)
+            if any(a.period_start is None or b.period_start is None for a, b in matched):
+                return _unavailable("quarter_input_duration_unavailable", manifests)
+            if any(b.value <= 0 for _, b in matched):
+                return _unavailable("nonpositive_quarter_denominator", manifests)
+            return _available(
+                [
+                    a.model_copy(
+                        update={
+                            "value": Decimal(100) * a.value / b.value,
+                            "unit": "percent",
+                            "currency": None,
+                        }
+                    )
+                    for a, b in matched
+                ],
+                manifests,
+            )
         return _rolling_ratio(fcf, revenue, allow_mixed_basis=False)
     if expression.operation == "ttm_ratio":
         assert expression.numerator is not None and expression.denominator is not None

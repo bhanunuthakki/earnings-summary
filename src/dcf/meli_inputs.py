@@ -430,6 +430,8 @@ def prepare_meli_inputs(
     effective_inputs: Mapping[str, float],
     as_of: datetime,
 ) -> tuple[dict[str, float], ModelInputReceipt]:
+    if request.ticker != "MELI":
+        raise InputEvidenceError("input_recipe_issuer_mismatch")
     proposed = {key: value for key, value in effective_inputs.items() if key in ASSUMPTION_KEYS}
     proof = verify_model_inputs(
         conn,

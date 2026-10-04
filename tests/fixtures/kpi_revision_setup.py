@@ -141,6 +141,8 @@ def revision_database(path: Path | None = None) -> sqlite3.Connection:
             accounting_basis TEXT NOT NULL,consolidation_scope TEXT NOT NULL,
             dimensions_json TEXT NOT NULL,unit_scale TEXT NOT NULL,
             source_row_label TEXT,source_column_header TEXT,source_value_text TEXT,
+            source_precision_json TEXT,
+            reported_period_start TEXT,
             status TEXT NOT NULL,reason_code TEXT,reviewed_by TEXT NOT NULL,
             knowledge_at TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT '2026-09-06T18:00:00Z',

@@ -46,6 +46,10 @@ from provenance.research_snapshot import (
     seal_disposition,
     seal_processing_snapshot,
 )
+from provenance.sec_package_subject_witness import (
+    SecPackageSubjectWitnessError,
+    verify_sec_package_subject_witness,
+)
 
 _POLICY = DocumentProcessingPolicy(
     policy_name="complete_reporting_document_processing",
@@ -979,7 +983,7 @@ def _document_scope(
         "coverage.document_version_id,"
         "COALESCE(coverage.coverage_status,'unassessed'),"
         "canonical.reporting_entity_id,lifecycle.status,"
-        "lifecycle.expected_document_id "
+        "lifecycle.expected_document_id,expected.period_end,expected.accession_number,expected.source_url "
         "FROM expected_documents expected "
         "JOIN source_inventory_snapshots inventory "
         "ON inventory.snapshot_id=expected.snapshot_id "
@@ -1040,6 +1044,26 @@ def _document_scope(
                 document_type=str(row["document_type"]),
                 form_type=None if row["form_type"] is None else str(row["form_type"]),
             )
+        if reason == "reviewed_sec_package_subject":
+            try:
+                verify_sec_package_subject_witness(
+                    conn,
+                    identity=str(row[0]),
+                    issuer_id=str(row[1]),
+                    kind=str(row["document_type"]),
+                    period=row[10],
+                    accession=None if row[11] is None else str(row[11]),
+                    source_url=row[12],
+                    cutoff=cutoff,
+                    observed_through=observed_through,
+                )
+            except (SecPackageSubjectWitnessError, ValueError, sqlite3.Error) as exc:
+                outcome, family = "unresolved", None
+                reason = (
+                    str(exc)
+                    if isinstance(exc, SecPackageSubjectWitnessError)
+                    else "financial_reporting_subject_witness_invalid"
+                )
         coverage_status = str(row[6])
         document_version_id = None if row[5] is None else str(row[5])
         reporting_entity_id = None if row[7] is None else str(row[7])
@@ -1417,6 +1441,20 @@ def classify_reporting_document(
     document = document_type.strip().lower()
     form = (form_type or "").strip().upper()
     if source == "sec_filing":
+        if document in {
+            "financial_statement",
+            "supplement",
+            "earnings_release",
+            "investor_presentation",
+            "investor_update",
+        }:
+            if form in {"6-K", "6-K/A"}:
+                return (
+                    "governed_reporting",
+                    "continuous_disclosure",
+                    "reviewed_sec_package_subject",
+                )
+            return "unresolved", None, "reviewed_sec_subject_form_mismatch"
         if document == "sec_financial_report":
             return "excluded_supporting", None, "sec_xbrl_report_attachment"
         if document != "filing":
