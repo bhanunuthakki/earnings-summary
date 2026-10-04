@@ -36,9 +36,9 @@ class SegmentSeed:
     """
 
     canonical_name: str
-    aliases: list[str] = field(default_factory=list)
+    aliases: list[str] = field(default_factory=list[str])
     # Optional product names that sit under this segment (e.g. AWS → EC2, S3)
-    products: list[str] = field(default_factory=list)
+    products: list[str] = field(default_factory=list[str])
 
 
 @dataclass(slots=True)
@@ -48,12 +48,12 @@ class CompanySeed:
     ticker: str
     canonical_name: str  # "Amazon.com, Inc." — used as the entity row's canonical_name
     display_name: str  # "Amazon" — UI-friendly
-    aliases: list[str] = field(default_factory=list)
+    aliases: list[str] = field(default_factory=list[str])
     sector: str | None = None
-    segments: list[SegmentSeed] = field(default_factory=list)
+    segments: list[SegmentSeed] = field(default_factory=list[SegmentSeed])
     # Named competitors (rendered as separate competitor-kind entities with
     # `competes_with` relationships — useful for the entity-mention extractor)
-    competitors: list[str] = field(default_factory=list)
+    competitors: list[str] = field(default_factory=list[str])
 
 
 # ---------------------------------------------------------------------------
@@ -362,6 +362,11 @@ WATCHLIST_BIZ_MODELS: dict[str, dict[str, str]] = {
     "CFLT": {"name": "Confluent, Inc.", "display": "Confluent", "sector": "Technology"},
     "CIEN": {"name": "Ciena Corporation", "display": "Ciena", "sector": "Technology"},
     "COHR": {"name": "Coherent Corp.", "display": "Coherent", "sector": "Technology"},
+    "CPNG": {
+        "name": "Coupang, Inc.",
+        "display": "Coupang",
+        "sector": "Consumer Discretionary",
+    },
     "COST": {
         "name": "Costco Wholesale Corporation",
         "display": "Costco",
@@ -410,6 +415,11 @@ WATCHLIST_BIZ_MODELS: dict[str, dict[str, str]] = {
     "NET": {"name": "Cloudflare, Inc.", "display": "Cloudflare", "sector": "Technology"},
     "NVDA": {"name": "NVIDIA Corporation", "display": "NVIDIA", "sector": "Technology"},
     "NVS": {"name": "Novartis AG", "display": "Novartis", "sector": "Health Care"},
+    "ONON": {
+        "name": "On Holding AG",
+        "display": "On",
+        "sector": "Consumer Discretionary",
+    },
     "OKTA": {"name": "Okta, Inc.", "display": "Okta", "sector": "Technology"},
     "PANW": {
         "name": "Palo Alto Networks, Inc.",
