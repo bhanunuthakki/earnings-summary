@@ -11,10 +11,10 @@ import stat
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
-from typing import Literal, Self
+from typing import Literal, Self, TypeAlias, cast, overload
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from provenance.verifier_identity import verifier_source_artifact_sha256
 
@@ -232,7 +232,7 @@ class IssuerDocumentInventoryReceipt(_ClosedModel):
         return _canonical_json(self.model_dump(mode="json"))
 
 
-def build_issuer_document_inventory(
+def _build_v1_inventory(
     conn: sqlite3.Connection,
     *,
     database_path: Path,
@@ -308,14 +308,32 @@ def _load_expected_document(
         raise IssuerDocumentInventoryError("missing_document")
     if len(rows) != 1:
         raise IssuerDocumentInventoryError("duplicate_document_url")
-    row = rows[0]
-    if str(row["ticker"]) != request.ticker:
+    return _registered_record(
+        rows[0],
+        root=root,
+        ticker=request.ticker,
+        period_end=request.period_end,
+        document_type=expected.document_type,
+        source_url=expected.source_url,
+    )
+
+
+def _registered_record(
+    row: sqlite3.Row,
+    *,
+    root: Path,
+    ticker: str,
+    period_end: date,
+    document_type: str,
+    source_url: str,
+) -> IssuerDocumentInventoryRecord:
+    if str(row["ticker"]) != ticker:
         raise IssuerDocumentInventoryError("noncanonical_ticker")
     if str(row["source_type"]) != "ir_doc":
         raise IssuerDocumentInventoryError("wrong_source_type")
-    if str(row["doc_type"]) != expected.document_type:
+    if str(row["doc_type"]) != document_type:
         raise IssuerDocumentInventoryError("wrong_document_type")
-    if _document_period(row["period_end"]) != request.period_end:
+    if _document_period(row["period_end"]) != period_end:
         raise IssuerDocumentInventoryError("ambiguous_period")
     if str(row["fetch_status"]) != "ok":
         raise IssuerDocumentInventoryError("invalid_fetch_status")
@@ -342,14 +360,461 @@ def _load_expected_document(
         raise IssuerDocumentInventoryError("document_hash_mismatch")
     return IssuerDocumentInventoryRecord(
         document_id=document_id,
-        ticker=request.ticker,
-        period_end=request.period_end,
-        document_type=expected.document_type,
-        source_url=expected.source_url,
+        ticker=ticker,
+        period_end=period_end,
+        document_type=document_type,
+        source_url=source_url,
         local_path=path.relative_to(root).as_posix(),
         sha256=raw_sha,
         byte_size=byte_size,
         fetched_at=fetched_at,
+    )
+
+
+class IssuerDocumentAliasBinding(_ClosedModel):
+    """Reviewed exact native lineage, separate from the immutable legacy URL."""
+
+    document_id: int = Field(gt=0)
+    document_version_id: str = Field(min_length=1, max_length=128)
+    blob_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_observation_id: str = Field(min_length=1, max_length=128)
+    document_link_id: str = Field(min_length=1, max_length=128)
+    recorded_issuer_id: str = Field(min_length=1, max_length=128)
+    issuer_id: str = Field(min_length=1, max_length=128)
+    reporting_entity_id: str = Field(min_length=1, max_length=128)
+    subject_binding_revision_id: str = Field(min_length=1, max_length=128)
+    registered_source_url: str = Field(min_length=1, max_length=4096)
+    lineage_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ExpectedIssuerDocumentAlias(ExpectedIssuerDocument):
+    alias: IssuerDocumentAliasBinding
+
+
+class IssuerDocumentAliasInventoryRequest(_ClosedModel):
+    schema_version: Literal["issuer_document_inventory_request.v2_alias"] = (
+        "issuer_document_inventory_request.v2_alias"
+    )
+    ticker: str = Field(pattern=r"^[A-Z0-9][A-Z0-9.-]{0,15}$")
+    fiscal_year: int = Field(ge=1900, le=2200)
+    fiscal_quarter: int = Field(ge=1, le=4)
+    period_end: date
+    expected_documents: tuple[ExpectedIssuerDocumentAlias, ...] = Field(
+        min_length=1, max_length=500
+    )
+    knowledge_cutoff: datetime
+    observed_through: datetime
+
+    @model_validator(mode="after")
+    def _closed_alias_set(self) -> Self:
+        # The new route retains v1's period, URL and closed-set rules.
+        IssuerDocumentInventoryRequest(
+            ticker=self.ticker,
+            fiscal_year=self.fiscal_year,
+            fiscal_quarter=self.fiscal_quarter,
+            period_end=self.period_end,
+            expected_documents=tuple(
+                ExpectedIssuerDocument(source_url=item.source_url, document_type=item.document_type)
+                for item in self.expected_documents
+            ),
+        )
+        if any(clock.tzinfo is None for clock in (self.knowledge_cutoff, self.observed_through)):
+            raise ValueError("alias cutoffs require explicit timezones")
+        if self.observed_through < self.knowledge_cutoff:
+            raise ValueError("observed_through must not precede knowledge_cutoff")
+        ids = [item.alias.document_id for item in self.expected_documents]
+        versions = [item.alias.document_version_id for item in self.expected_documents]
+        if len(set(ids)) != len(ids) or len(set(versions)) != len(versions):
+            raise ValueError("aliases require unique document IDs and versions")
+        return self
+
+    @property
+    def canonical_json(self) -> str:
+        return _canonical_json(self.model_dump(mode="json"))
+
+    @property
+    def request_sha256(self) -> str:
+        return _sha256_text(self.canonical_json)
+
+
+class IssuerDocumentAliasInventoryRecord(IssuerDocumentInventoryRecord):
+    registered_source_url: str = Field(min_length=1, max_length=4096)
+    alias: IssuerDocumentAliasBinding
+    lineage: dict[str, JsonValue]
+
+    @model_validator(mode="after")
+    def _exact_alias_record(self) -> Self:
+        if (self.document_id, self.sha256, self.registered_source_url) != (
+            self.alias.document_id,
+            self.alias.blob_sha256,
+            self.alias.registered_source_url,
+        ):
+            raise ValueError("record must preserve exact registered identity")
+        if _sha256_text(_canonical_json(self.lineage)) != self.alias.lineage_sha256:
+            raise ValueError("alias must bind exact persisted lineage")
+        return self
+
+
+class IssuerDocumentAliasInventoryReceipt(_ClosedModel):
+    schema_version: Literal["issuer_document_inventory_receipt.v2_alias"] = (
+        "issuer_document_inventory_receipt.v2_alias"
+    )
+    request: IssuerDocumentAliasInventoryRequest
+    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    database: DatabaseBinding
+    verifier_code_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    records: tuple[IssuerDocumentAliasInventoryRecord, ...] = Field(min_length=1)
+    document_set_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _sealed_alias_binding(self) -> Self:
+        if self.request_sha256 != self.request.request_sha256:
+            raise ValueError("request_sha256 must bind the canonical request")
+        expected = [
+            (item.source_url, item.document_type, item.alias)
+            for item in self.request.expected_documents
+        ]
+        actual = [(item.source_url, item.document_type, item.alias) for item in self.records]
+        if actual != expected:
+            raise ValueError("records must exactly bind ordered requested aliases")
+        if any(
+            r.ticker != self.request.ticker or r.period_end != self.request.period_end
+            for r in self.records
+        ):
+            raise ValueError("record identity must match the request")
+        if self.document_set_sha256 != _sha256_text(
+            _canonical_json([r.model_dump(mode="json") for r in self.records])
+        ):
+            raise ValueError("document_set_sha256 must bind exact canonical records")
+        if self.receipt_sha256 != _sha256_text(
+            _canonical_json(self.model_dump(mode="json", exclude={"receipt_sha256"}))
+        ):
+            raise ValueError("receipt_sha256 must bind the complete unsigned receipt")
+        return self
+
+    @property
+    def canonical_json(self) -> str:
+        return _canonical_json(self.model_dump(mode="json"))
+
+
+IssuerDocumentInventoryRequestAny: TypeAlias = (
+    IssuerDocumentInventoryRequest | IssuerDocumentAliasInventoryRequest
+)
+IssuerDocumentInventoryReceiptAny: TypeAlias = (
+    IssuerDocumentInventoryReceipt | IssuerDocumentAliasInventoryReceipt
+)
+
+
+def load_issuer_document_inventory_request(raw: str | bytes) -> IssuerDocumentInventoryRequestAny:
+    """Explicit version dispatcher; v1 remains strict and has no alias fallback."""
+    envelope = json.loads(raw)
+    if not isinstance(envelope, dict):
+        raise ValueError("inventory request must be an object")
+    envelope = cast(dict[str, object], envelope)
+    if envelope.get("schema_version") == "issuer_document_inventory_request.v2_alias":
+        return IssuerDocumentAliasInventoryRequest.model_validate_json(raw)
+    return IssuerDocumentInventoryRequest.model_validate_json(raw)
+
+
+def load_issuer_document_inventory_receipt(raw: str | bytes) -> IssuerDocumentInventoryReceiptAny:
+    envelope = json.loads(raw)
+    if not isinstance(envelope, dict):
+        raise ValueError("inventory receipt must be an object")
+    envelope = cast(dict[str, object], envelope)
+    if envelope.get("schema_version") == "issuer_document_inventory_receipt.v2_alias":
+        return IssuerDocumentAliasInventoryReceipt.model_validate_json(raw)
+    return IssuerDocumentInventoryReceipt.model_validate_json(raw)
+
+
+def _alias_row(
+    conn: sqlite3.Connection, table: str, identity: str, value: str
+) -> dict[str, JsonValue]:
+    # Tables/columns are internal constants; reviewed values remain bound.
+    cursor = conn.execute(f"SELECT * FROM {table} WHERE {identity}=?", (value,))  # nosec B608
+    rows = cursor.fetchall()
+    if len(rows) != 1:
+        raise IssuerDocumentInventoryError("alias_lineage_missing_or_ambiguous")
+    keys = [str(column[0]) for column in cursor.description or ()]
+    return dict(zip(keys, tuple(rows[0]), strict=True))
+
+
+def _alias_clock(value: JsonValue, limit: datetime) -> None:
+    if not isinstance(value, str):
+        raise IssuerDocumentInventoryError("alias_clock_invalid")
+    try:
+        clock = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise IssuerDocumentInventoryError("alias_clock_invalid") from exc
+    if (clock.replace(tzinfo=UTC) if clock.tzinfo is None else clock) > limit:
+        raise IssuerDocumentInventoryError("alias_lineage_after_cutoff")
+
+
+def _alias_visible(value: JsonValue, limit: datetime) -> bool:
+    try:
+        _alias_clock(value, limit)
+    except IssuerDocumentInventoryError as exc:
+        if exc.reason_code == "alias_lineage_after_cutoff":
+            return False
+        raise
+    return True
+
+
+def inspect_issuer_document_alias(
+    conn: sqlite3.Connection,
+    *,
+    expected: ExpectedIssuerDocumentAlias,
+    request: IssuerDocumentAliasInventoryRequest,
+) -> dict[str, JsonValue]:
+    """Read actual lineage for review; this does not seal or grant an alias."""
+    alias = expected.alias
+    version = _alias_row(
+        conn, "evidence_document_versions", "document_version_id", alias.document_version_id
+    )
+    observation = _alias_row(
+        conn, "evidence_source_observations", "observation_id", alias.source_observation_id
+    )
+    original = _alias_row(
+        conn, "evidence_source_observations", "observation_id", str(version["observation_id"])
+    )
+    link = _alias_row(
+        conn, "evidence_document_observation_links", "link_id", alias.document_link_id
+    )
+    blob = _alias_row(conn, "evidence_content_blobs", "sha256", alias.blob_sha256)
+    subject = _alias_row(
+        conn,
+        "recorded_subject_binding_revisions",
+        "binding_revision_id",
+        alias.subject_binding_revision_id,
+    )
+    entity = _alias_row(
+        conn, "reporting_entities", "reporting_entity_id", alias.reporting_entity_id
+    )
+    issuer = _alias_row(conn, "issuer_entities", "issuer_id", alias.issuer_id)
+    knowledge, observed = request.knowledge_cutoff, request.observed_through
+    for item in (observation, original):
+        _alias_clock(item["observed_at"], knowledge)
+        _alias_clock(item["retrieved_at"], observed)
+    for item, key, cutoff in (
+        (version, "recorded_at", observed),
+        (link, "linked_at", observed),
+        (blob, "recorded_at", observed),
+        (subject, "knowledge_at", knowledge),
+        (subject, "effective_at", knowledge),
+        (subject, "recorded_at", observed),
+        (issuer, "created_at", knowledge),
+        (entity, "created_at", knowledge),
+    ):
+        _alias_clock(item[key], cutoff)
+    if (
+        version["legacy_document_id"],
+        version["blob_sha256"],
+        version["issuer_id"],
+        version["ticker"],
+        version["document_type"],
+    ) != (
+        alias.document_id,
+        alias.blob_sha256,
+        alias.recorded_issuer_id,
+        request.ticker,
+        expected.document_type,
+    ) or _document_period(version["period_end"]) != request.period_end:
+        raise IssuerDocumentInventoryError("alias_document_scope_mismatch")
+    if (observation["source_url"], observation["blob_sha256"]) != (
+        expected.source_url,
+        alias.blob_sha256,
+    ) or (original["source_url"], original["blob_sha256"]) != (
+        alias.registered_source_url,
+        alias.blob_sha256,
+    ):
+        raise IssuerDocumentInventoryError("alias_source_mismatch")
+    if (link["document_version_id"], link["observation_id"]) != (
+        alias.document_version_id,
+        alias.source_observation_id,
+    ) or link["link_kind"] not in {"retrieval", "mirror", "primary"}:
+        raise IssuerDocumentInventoryError("alias_link_mismatch")
+    if (
+        (
+            subject["recorded_issuer_id"],
+            subject["issuer_id"],
+            subject["reporting_entity_id"],
+            subject["outcome"],
+            subject["material_dissent"],
+            subject["security_id"],
+        )
+        != (
+            alias.recorded_issuer_id,
+            alias.issuer_id,
+            alias.reporting_entity_id,
+            "selected",
+            0,
+            None,
+        )
+        or entity["issuer_id"] != alias.issuer_id
+        or entity["reporting_entity_kind"] != "legal_registrant"
+    ):
+        raise IssuerDocumentInventoryError("alias_subject_mismatch")
+    current_subject = conn.execute(
+        "SELECT binding_revision_id,knowledge_at,recorded_at FROM recorded_subject_binding_revisions WHERE recorded_issuer_id=? ORDER BY revision DESC",
+        (alias.recorded_issuer_id,),
+    ).fetchall()
+    visible_subject = [
+        row
+        for row in current_subject
+        if _alias_visible(row[1], knowledge) and _alias_visible(row[2], observed)
+    ]
+    if not visible_subject or str(visible_subject[0][0]) != alias.subject_binding_revision_id:
+        raise IssuerDocumentInventoryError("alias_subject_not_current")
+    current_versions = conn.execute(
+        "SELECT document_version_id,recorded_at FROM evidence_document_versions WHERE document_key=? ORDER BY version_sequence DESC",
+        (version["document_key"],),
+    ).fetchall()
+    visible_versions = [row for row in current_versions if _alias_visible(row[1], observed)]
+    if not visible_versions or str(visible_versions[0][0]) != alias.document_version_id:
+        raise IssuerDocumentInventoryError("alias_document_not_current")
+    matches = conn.execute(
+        "SELECT DISTINCT version.document_version_id,version.recorded_at,link.linked_at,observation.observed_at,observation.retrieved_at FROM evidence_document_versions version JOIN evidence_document_observation_links link ON link.document_version_id=version.document_version_id JOIN evidence_source_observations observation ON observation.observation_id=link.observation_id WHERE observation.source_url=? AND version.legacy_document_id IS NOT NULL",
+        (expected.source_url,),
+    ).fetchall()
+    if {
+        str(row[0])
+        for row in matches
+        if all(
+            _alias_visible(value, limit)
+            for value, limit in zip(row[1:], (observed, observed, knowledge, observed), strict=True)
+        )
+    } != {alias.document_version_id}:
+        raise IssuerDocumentInventoryError("alias_source_ambiguous")
+    return {
+        "document_version": version,
+        "source_observation": observation,
+        "original_observation": original,
+        "document_link": link,
+        "content_blob": blob,
+        "subject_binding": subject,
+        "reporting_entity": entity,
+        "issuer": issuer,
+    }
+
+
+def _build_alias_inventory(
+    conn: sqlite3.Connection,
+    *,
+    database_path: Path,
+    repo_root: Path,
+    request: IssuerDocumentAliasInventoryRequest,
+    transaction_open: bool,
+) -> IssuerDocumentAliasInventoryReceipt:
+    request = IssuerDocumentAliasInventoryRequest.model_validate(request.model_dump())
+    db_path, root = database_path.resolve(strict=True), repo_root.resolve(strict=True)
+    before = _database_bundle(db_path)
+    try:
+        if transaction_open:
+            if not conn.in_transaction:
+                raise IssuerDocumentInventoryError("snapshot_not_open")
+        else:
+            conn.execute("BEGIN")
+        conn.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
+        binding = _database_binding(conn, before)
+        records: list[IssuerDocumentAliasInventoryRecord] = []
+        for expected in request.expected_documents:
+            proof = inspect_issuer_document_alias(conn, expected=expected, request=request)
+            if _sha256_text(_canonical_json(proof)) != expected.alias.lineage_sha256:
+                raise IssuerDocumentInventoryError("alias_lineage_commitment_mismatch")
+            row = conn.execute(
+                "SELECT id,ticker,source_type,doc_type,period_end,file_path,sha256,fetched_at,fetch_status,raw_bytes_size,source_url FROM documents WHERE id=?",
+                (expected.alias.document_id,),
+            ).fetchone()
+            if row is None or str(row["source_url"]) != expected.alias.registered_source_url:
+                raise IssuerDocumentInventoryError("alias_registered_identity_mismatch")
+            record = _registered_record(
+                row,
+                root=root,
+                ticker=request.ticker,
+                period_end=request.period_end,
+                document_type=expected.document_type,
+                source_url=expected.alias.registered_source_url,
+            )
+            if (
+                record.document_id != expected.alias.document_id
+                or record.sha256 != expected.alias.blob_sha256
+            ):
+                raise IssuerDocumentInventoryError("alias_registered_identity_mismatch")
+            blob = proof["content_blob"]
+            if not isinstance(blob, dict) or blob.get("byte_size") != record.byte_size:
+                raise IssuerDocumentInventoryError("alias_blob_size_mismatch")
+            records.append(
+                IssuerDocumentAliasInventoryRecord(
+                    **record.model_dump(exclude={"source_url"}),
+                    source_url=expected.source_url,
+                    registered_source_url=record.source_url,
+                    alias=expected.alias,
+                    lineage=proof,
+                )
+            )
+    except sqlite3.Error as exc:
+        raise IssuerDocumentInventoryError("schema_drift") from exc
+    finally:
+        if not transaction_open and conn.in_transaction:
+            conn.rollback()
+    if before != _database_bundle(db_path):
+        raise IssuerDocumentInventoryError("database_changed")
+    unsigned = {
+        "schema_version": "issuer_document_inventory_receipt.v2_alias",
+        "request": request.model_dump(mode="json"),
+        "request_sha256": request.request_sha256,
+        "database": binding.model_dump(mode="json"),
+        "verifier_code_sha256": _verifier_code_sha256(),
+        "records": [r.model_dump(mode="json") for r in records],
+        "document_set_sha256": _sha256_text(
+            _canonical_json([r.model_dump(mode="json") for r in records])
+        ),
+    }
+    return IssuerDocumentAliasInventoryReceipt.model_validate(
+        {**unsigned, "receipt_sha256": _sha256_text(_canonical_json(unsigned))}
+    )
+
+
+@overload
+def build_issuer_document_inventory(
+    conn: sqlite3.Connection,
+    *,
+    database_path: Path,
+    repo_root: Path,
+    request: IssuerDocumentInventoryRequest,
+    transaction_open: bool = False,
+) -> IssuerDocumentInventoryReceipt: ...
+@overload
+def build_issuer_document_inventory(
+    conn: sqlite3.Connection,
+    *,
+    database_path: Path,
+    repo_root: Path,
+    request: IssuerDocumentAliasInventoryRequest,
+    transaction_open: bool = False,
+) -> IssuerDocumentAliasInventoryReceipt: ...
+def build_issuer_document_inventory(
+    conn: sqlite3.Connection,
+    *,
+    database_path: Path,
+    repo_root: Path,
+    request: IssuerDocumentInventoryRequestAny,
+    transaction_open: bool = False,
+) -> IssuerDocumentInventoryReceiptAny:
+    if isinstance(request, IssuerDocumentAliasInventoryRequest):
+        return _build_alias_inventory(
+            conn,
+            database_path=database_path,
+            repo_root=repo_root,
+            request=request,
+            transaction_open=transaction_open,
+        )
+    return _build_v1_inventory(
+        conn,
+        database_path=database_path,
+        repo_root=repo_root,
+        request=request,
+        transaction_open=transaction_open,
     )
 
 
@@ -534,9 +999,19 @@ def _sha256_text(value: str) -> str:
 
 __all__ = [
     "ExpectedIssuerDocument",
+    "ExpectedIssuerDocumentAlias",
+    "IssuerDocumentAliasBinding",
+    "IssuerDocumentAliasInventoryReceipt",
+    "IssuerDocumentAliasInventoryRecord",
+    "IssuerDocumentAliasInventoryRequest",
     "IssuerDocumentInventoryError",
     "IssuerDocumentInventoryReceipt",
+    "IssuerDocumentInventoryReceiptAny",
     "IssuerDocumentInventoryRecord",
     "IssuerDocumentInventoryRequest",
+    "IssuerDocumentInventoryRequestAny",
     "build_issuer_document_inventory",
+    "inspect_issuer_document_alias",
+    "load_issuer_document_inventory_receipt",
+    "load_issuer_document_inventory_request",
 ]

@@ -12,6 +12,8 @@ from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from provenance.fact_read_model import FactAdmissionError, FactReadModel
+
 Disposition = Literal[
     "exact",
     "equivalent",
@@ -1124,7 +1126,10 @@ class MetricOntology:
 
     def persist_binding(self, binding: BindingRevision) -> None:
         if binding.binding_status == "bound":
-            self._prove_binding_compatibility(binding)
+            if self._prove_observation_coordinate(binding) == "derived":
+                self._prove_derived_binding_compatibility(binding)
+            else:
+                self._prove_binding_compatibility(binding)
         elif binding.binding_status == "quarantined":
             self._prove_derived_quarantine(binding)
         else:
@@ -1200,6 +1205,96 @@ class MetricOntology:
     def _prove_derived_quarantine(self, binding: BindingRevision) -> None:
         if self._prove_observation_coordinate(binding) != "derived":
             raise ValueError("only derived observations use terminal ontology quarantine")
+
+    def _prove_derived_binding_compatibility(self, binding: BindingRevision) -> None:
+        try:
+            bundle = FactReadModel(self._conn).provenance_bundle(
+                binding.source_observation_id, cutoff=binding.recorded_at
+            )
+        except (sqlite3.Error, ValueError, FactAdmissionError) as exc:
+            raise ValueError(
+                "derived binding requires committed source publication and operand graph"
+            ) from exc
+        derivation = bundle.derivation
+        cell = bundle.cell
+        if derivation is None or derivation.input_basis != "as_known":
+            raise ValueError("derived binding requires sealed as-known operand lineage")
+        if any(item is None for item in derivation.input_canonical_resolution_revision_ids):
+            raise ValueError("derived binding requires canonical operand selections")
+        if binding.source_component_id is None or binding.mapping_revision_id is None:
+            raise ValueError("derived binding requires reviewed source component and mapping")
+        mapping = self.mapping_as_known(binding.source_component_id, binding.recorded_at)
+        formula = {
+            "formula_id": derivation.formula_id,
+            "formula_version": derivation.formula_version,
+            "formula_definition_sha256": derivation.formula_definition_sha256,
+        }
+        if (
+            mapping is None
+            or mapping.mapping_revision_id != binding.mapping_revision_id
+            or mapping.disposition != "derived"
+            or not mapping.reviewer_identity
+            or mapping.constraints.get("derived_formula") != formula
+            or _utc(mapping.effective_at) > _utc(binding.effective_at)
+            or _utc(mapping.knowledge_at) > _utc(binding.knowledge_at)
+        ):
+            raise ValueError(
+                "derived binding requires the exact independently reviewed formula mapping"
+            )
+        if mapping.policy_name == "reviewed_financial_metric":
+            definition = (
+                None
+                if mapping.metric_id is None
+                else self.metric_definition_as_known(mapping.metric_id, binding.recorded_at)
+            )
+            if (
+                cell.currency is None
+                or definition is None
+                or definition.scope_constraints.get("currency") != cell.currency
+                or mapping.constraints.get("source_currency") != cell.currency
+            ):
+                raise ValueError("reviewed financial currency definition or mapping changed")
+        row = self._conn.execute(
+            "SELECT source.taxonomy_namespace,source.local_name,source.taxonomy_name,"
+            "source.taxonomy_version,source.reporting_entity_scope_key,"
+            "target.metric_id,target.reporting_entity_id,target.scope_security_id,"
+            "target.period_kind,target.period_start,target.period_end,target.unit_family,"
+            "target.accounting_basis,target.consolidation_scope,target.dimension_count,"
+            "source.effective_at,source.knowledge_at,source.recorded_at,"
+            "target.effective_at,target.knowledge_at,target.recorded_at,seal.sealed_at "
+            "FROM source_taxonomy_components source JOIN canonical_metric_cells target "
+            "ON target.canonical_metric_cell_id=? JOIN canonical_metric_cell_seals seal "
+            "ON seal.canonical_metric_cell_id=target.canonical_metric_cell_id "
+            "WHERE source.component_id=? AND source.component_kind='concept'",
+            (binding.canonical_metric_cell_id, binding.source_component_id),
+        ).fetchone()
+        expected = (
+            cell.concept_namespace,
+            cell.concept_name,
+            cell.taxonomy_name,
+            cell.taxonomy_version,
+            cell.reporting_entity_id,
+            mapping.metric_id,
+            cell.reporting_entity_id,
+            cell.scope_security_id,
+            cell.period_kind,
+            cell.period_start,
+            cell.period_end,
+            "currency" if cell.currency else cell.unit_key,
+            cell.accounting_basis,
+            cell.consolidation_scope,
+            0,
+        )
+        if row is None or cell.dimensions:
+            raise ValueError("derived financial bindings require exact unsegmented coordinates")
+        actual = tuple(row[:15])
+        for index in (9, 10):
+            if not _same_instant(actual[index], expected[index]):
+                raise ValueError("derived binding period coordinate mismatch")
+        if any(actual[index] != expected[index] for index in range(15) if index not in (9, 10)):
+            raise ValueError("derived binding source and canonical coordinates differ")
+        if any(_parse_db_time(row[index]) > _utc(binding.recorded_at) for index in range(15, 22)):
+            raise ValueError("derived binding cannot precede its committed records")
 
     def _prove_binding_compatibility(self, binding: BindingRevision) -> None:
         source_component_id = binding.source_component_id
