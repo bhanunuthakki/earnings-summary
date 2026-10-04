@@ -26,7 +26,12 @@ from pydantic import (
 
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import FactReadModel
-from provenance.metric_ontology import CanonicalDimension, MetricOntology, canonical_json
+from provenance.metric_ontology import (
+    CanonicalDimension,
+    MetricOntology,
+    canonical_json,
+    sha256_json,
+)
 from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
 
 
@@ -378,6 +383,21 @@ def verify_model_inputs(
             or bundle.cell.scope_security_id is not None
         ):
             raise InputEvidenceError(f"input_semantic_admission_failed:{requirement.key}")
+        definition_member = conn.execute(
+            "SELECT member_sha256 FROM ontology_snapshot_members "
+            "WHERE ontology_snapshot_id=? AND member_kind='metric_definition' AND member_id=?",
+            (snapshot.ontology_snapshot_id, definition.metric_definition_revision_id),
+        ).fetchone()
+        if (
+            definition_member is None
+            or str(definition_member[0]) != sha256_json(definition.commitment_payload)
+            or _utc(definition.effective_at) > _utc(snapshot.cutoff_at)
+            or _utc(definition.knowledge_at) > _utc(snapshot.cutoff_at)
+            or _utc(definition.recorded_at) > _utc(snapshot.recorded_at)
+        ):
+            raise InputEvidenceError(
+                f"input_definition_outside_ontology_snapshot:{requirement.key}"
+            )
         if (
             bundle.cell.reporting_entity_id not in snapshot.research_universe.reporting_entity_ids
             or fact.decimal_value is None
@@ -435,6 +455,7 @@ def verify_model_inputs(
                 else None,
             )
         )
+    ontology.verify_snapshot(snapshot.ontology_snapshot_id)
     return ModelInputReceipt(
         recipe=recipe,
         request=request,

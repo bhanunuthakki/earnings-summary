@@ -51,6 +51,7 @@ from provenance.metric_ontology import (
     CanonicalMetricDefinitionRevision,
     MappingRevision,
     MetricOntology,
+    OntologySnapshot,
     SourceDimensionMappingRevision,
     SourceObservationTaxonomyAssertion,
     SourceTaxonomyComponent,
@@ -703,6 +704,14 @@ def _seed_real_inputs(
         NOW,
         NOW,
         ResolutionSnapshotScope(issuer_id="issuer-1", reporting_entity_ids=("reporting-1",)),
+    )
+    ontology.seal_snapshot(
+        OntologySnapshot(
+            ontology_snapshot_id="ontology",
+            idempotency_key="ontology",
+            cutoff_at=NOW,
+            recorded_at=NOW,
+        )
     )
     conn.commit()
     return refs

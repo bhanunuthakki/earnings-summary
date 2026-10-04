@@ -302,6 +302,9 @@ class ResearchSnapshotAdmission(_Frozen):
     member_count: int = Field(gt=0)
     member_set_sha256: str
     requested_lanes: tuple[str, ...]
+    legacy_source_publication_clock_lanes: tuple[str, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
 
     _sha = field_validator("member_set_sha256")(_validate_sha)
 
@@ -1534,6 +1537,30 @@ def _required_source_fact_publications(
     return tuple(str(row[0]) for row in rows)
 
 
+def verify_source_publication_research_reference(
+    conn: sqlite3.Connection,
+    request: ResearchSnapshotRequest,
+    publication_id: str,
+) -> VerifiedResearchReference:
+    """Bind a verified publication seal to its original source clocks."""
+    from provenance.source_fact_publication import verify_source_fact_publication
+
+    verified = verify_source_fact_publication(
+        conn,
+        publication_id=publication_id,
+        cutoff=request.cutoff_at,
+        observed_through=request.recorded_at,
+    )
+    return VerifiedResearchReference(
+        requested_lane="source_fact_publication:" + publication_id,
+        reference_table="source_fact_publication_seals",
+        reference_id=verified.publication_seal_id,
+        commitment_sha256=verified.member_set_sha256,
+        knowledge_at=verified.created_at,
+        recorded_at=max(verified.recorded_at, verified.sealed_at),
+    )
+
+
 class _DefaultResearchReferenceVerifier:
     def verify(
         self,
@@ -1598,24 +1625,7 @@ class _DefaultResearchReferenceVerifier:
                 request.recorded_at,
             )
         if requested_lane.startswith("source_fact_publication:"):
-            from provenance.source_fact_publication import (
-                verify_source_fact_publication,
-            )
-
-            verified = verify_source_fact_publication(
-                conn,
-                publication_id=reference_id,
-                cutoff=request.cutoff_at,
-                observed_through=request.recorded_at,
-            )
-            return VerifiedResearchReference(
-                requested_lane=requested_lane,
-                reference_table="source_fact_publication_seals",
-                reference_id=verified.publication_seal_id,
-                commitment_sha256=verified.member_set_sha256,
-                knowledge_at=request.cutoff_at,
-                recorded_at=max(verified.recorded_at, verified.sealed_at),
-            )
+            return verify_source_publication_research_reference(conn, request, reference_id)
         if requested_lane == "ontology_snapshot":
             from provenance.metric_ontology import MetricOntology
 
@@ -2474,6 +2484,7 @@ def _verify_research_snapshot_with_verifier(
     actual_lanes = [str(row["requested_lane"]) for row in rows]
     if expected_lanes != actual_lanes:
         raise ValueError("Research Snapshot has omitted, extra, or reordered lanes")
+    legacy_source_clock_lanes: list[str] = []
     for row, reference in zip(rows, references, strict=True):
         expected = (
             reference.reference_table,
@@ -2489,6 +2500,19 @@ def _verify_research_snapshot_with_verifier(
             _parse_time(row["reference_knowledge_at"]),
             _parse_time(row["reference_recorded_at"]),
         )
+        if (
+            isinstance(verifier, _DefaultResearchReferenceVerifier)
+            and reference.requested_lane.startswith("source_fact_publication:")
+            and reference.reference_table == "source_fact_publication_seals"
+            and expected[3] < _utc(request.cutoff_at) <= expected[4]
+            and actual == (*expected[:3], _utc(request.cutoff_at), expected[4])
+        ):
+            # The old mapper stored the request cutoff as publication knowledge.
+            # Interpret only that exact historical shape after real verification.
+            # New builds always use the original source clock above.
+            reference = reference.model_copy(update={"knowledge_at": request.cutoff_at})
+            expected = actual
+            legacy_source_clock_lanes.append(reference.requested_lane)
         if actual != expected:
             raise ValueError("Research Snapshot reference commitment mismatch")
         member = {
@@ -2516,6 +2540,7 @@ def _verify_research_snapshot_with_verifier(
         member_count=len(rows),
         member_set_sha256=digest,
         requested_lanes=tuple(expected_lanes),
+        legacy_source_publication_clock_lanes=tuple(legacy_source_clock_lanes),
     )
 
 

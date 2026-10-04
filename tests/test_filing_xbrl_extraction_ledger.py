@@ -159,7 +159,9 @@ def _database(
     *,
     document_ticker: str | None = None,
     document_period_end: datetime = PERIOD_END,
+    document_period_start: datetime | None = None,
     document_type: str = "regulatory_filing",
+    document_form_type: str = "10-K",
     blob_path: Path | None = None,
 ) -> sqlite3.Connection:
     path = tmp_path / "filing-xbrl-ledger.db"
@@ -232,10 +234,10 @@ def _database(
             "issuer-1",
             document_ticker,
             document_type,
-            "10-K",
+            document_form_type,
             "0000000001-26-000001",
             None,
-            document_period_end - timedelta(days=365),
+            document_period_start or document_period_end - timedelta(days=365),
             document_period_end,
             document_period_end,
             "en",

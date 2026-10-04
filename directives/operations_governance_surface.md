@@ -995,3 +995,25 @@ require explicitly matching source populations. TTM monetary sums require typed
 standalone-quarter durations; YTD labels cannot substitute for those inputs.
 No new scheduler, listener, provider request or external message action is added.
 The existing evaluation and attention lifecycle remains the delivery owner.
+
+### Reviewed MELI input roles
+
+`execution/admit_meli_input_roles.py` is a manual, dry-run-first operation. It
+accepts an explicit database and immutable artifact. Planning checks the complete
+28-input interim or 14-input annual recipe against existing admitted source facts,
+current definition and binding heads, and a verified research snapshot. Planning
+writes only a new candidate artifact. Missing or stale evidence remains blocked.
+
+Apply requires an exact approved candidate, named reviewer and review timestamp.
+It rechecks the whole population in one caller-owned transaction and appends only
+metric-definition revisions. Source wording, values, accounting coordinates and
+non-role metadata remain unchanged. Role interpretations are labeled as reviewed
+analyst interpretations. Apply refuses changed evidence or heads. Its exact own
+successor can be replayed without another revision. New role knowledge starts at
+apply time. It cannot backdate acceptance into the original snapshot.
+
+The immutable receipt and CLI status are this operation's supported surface. A
+successful role receipt is not model readiness. The existing downstream owners
+must produce new ontology, resolution, projection and research snapshots at a new
+cutoff before the existing input preview can verify the roles. No dashboard action,
+scheduler task, service, provider request, source capture or model run is added.

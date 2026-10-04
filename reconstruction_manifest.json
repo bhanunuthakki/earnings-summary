@@ -60,13 +60,16 @@
         "execution/refresh_expected_earnings.py",
         "execution/refresh_cache.py",
         "execution/plan_analysis_evidence_scope.py",
-        "src/provenance/analysis_scope.py"
+        "src/provenance/analysis_scope.py",
+        "execution/admit_meli_input_roles.py",
+        "src/provenance/meli_role_admission.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
         "pytest tests/test_pipeline*.py -q",
+        "pytest tests/test_meli_role_admission.py -q",
         "pytest tests/test_analysis_scope.py tests/test_analysis_scope_processing.py tests/test_analysis_scope_corpus.py tests/test_analysis_scope_cli.py tests/test_analysis_scope_isolation.py -q"
       ],
       "documentation": [

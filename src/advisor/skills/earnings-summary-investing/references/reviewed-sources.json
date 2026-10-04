@@ -1,5 +1,5 @@
 {
-  "review_note": "Prerequisite assembly retains exact named scope and preview source reviews. Separately briefed current merged Operations and reconstruction review ea467eacce51cbcbaa94586734627c60d271fa40f06159820b80f871e9c5423e; two current owner hashes verified. Selection and preview remain non-admitted, non-model-ready source contracts. No installed/native/financial approval.",
+  "review_note": "Separately briefed GPT-6.1 Sol advisory semantic review of the three exact current role/snapshot source owners in c9b53f3059eca7bc3ea1539b0da0cec92fb08bda4c2f94573c7f5f2df4bc4c8e, confirmed unchanged by clock-repair review 13c4e9488cb5b0e2beef2e923c6708401c2e306f79127226f6dc352b1d7350a5. Roles append reviewed definition metadata only; publication clocks require actual seals and a new snapshot. They do not accept financial populations, forecasts, scenarios or model readiness. Actual clock regressions and owning tests pass; final source and release checks remain separate.",
   "schema_version": 1,
   "sources": [
     {
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "64e8a8bb136799d16b3d1e7b7dee3c03d6af727c79a8358ec6b4801ccc72c533"
+      "sha256": "dc602c0a311fbca64f5b45074e94052aefa3475b6e1045a8e5841115a1403fa6"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -248,7 +248,7 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "d2af0a81be532b1351f0426cb60617f464feec2e1b2c55c66d05591b4ee782e6"
+      "sha256": "1fb6b499fd60cbb17c2b7c9548d59b5f0c5dffb5503a13db25f1760a8bf95760"
     },
     {
       "path": "scripts/check_investing_skill.py",
@@ -348,7 +348,7 @@
     },
     {
       "path": "src/provenance/research_snapshot.py",
-      "sha256": "7ab75eeaf59954880a115d28da2c692fde835e9386db2447c935693801d57a6c"
+      "sha256": "3b5e02390e273bbc84bfe21bdf680b0f6e771ffd3c1629cb9571f233dbc79822"
     },
     {
       "path": "src/report/builder.py",
