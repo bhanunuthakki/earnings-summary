@@ -58,6 +58,15 @@ Run this review when a change affects any of the following:
 
 Pure implementation refactors, test-only changes, prose-only changes, and internal CLIs that are not supported operator workflows may use `no surface change`, but the reason must name the preserved contract. Do not scan every Flask route or `execution/*.py` file and treat it as a product capability.
 
+The bounded lock-filename repair has **no surface change**. Logical write-set keys,
+ownership proofs, mutex rights and cleanup remain under the existing runtime owner.
+Lock and transition-guard filenames of at most 255 filesystem-encoded bytes stay
+exact. Longer components use the whole original filename's SHA-256 and retain
+`.lock` or `.guard`. This can change a long Unicode name that a local filesystem
+previously accepted. Deployment must use the existing coordinated sole-writer
+boundary; mixed old and new lock-name versions do not prove mutual exclusion.
+No alias lock, new operator action or deployment authorization is added.
+
 ## Projection and display contract
 
 1. **Project from owners.** Extend canonical owners and adapters first. `src/operations/registry.py` compiles Scheduler tasks/wrappers, services, LLM/eval definitions, source policy, queue states, and the expected Alembic head. Do not copy current task names, purpose names, providers, routes, or schema heads into this directive or the renderer.

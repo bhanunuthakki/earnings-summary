@@ -639,7 +639,7 @@ def _lock_transition_guard(path: Path) -> Generator[None, None, None]:
 
     import fcntl
 
-    guard_path = path.with_name(f"{path.name}.guard")
+    guard_path = path.with_name(_bounded_lock_filename(f"{path.name}.guard"))
     fd = os.open(guard_path, os.O_CREAT | os.O_RDWR, 0o600)
     with os.fdopen(fd, "r+b") as guard:
         fcntl.flock(guard.fileno(), fcntl.LOCK_EX)
@@ -651,6 +651,15 @@ def _lock_transition_guard(path: Path) -> Generator[None, None, None]:
 
 def _safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-") or "job"
+
+
+def _bounded_lock_filename(filename: str) -> str:
+    """Keep portable names exact; hash the whole overlong name and retain its suffix."""
+    encoded = os.fsencode(filename)
+    if len(encoded) <= 255:
+        return filename
+    digest = hashlib.sha256(encoded).hexdigest()
+    return f"sha256={digest}{Path(filename).suffix}"
 
 
 def _windows_mutex_name(path: Path) -> str:
@@ -847,8 +856,12 @@ def _write_set_lock_path(repo_root: Path, write_set: str) -> Path:
         # database. Key approved long-runner lanes next to that database too,
         # or each checkout would admit its own simultaneous "single" flight.
         db_path = portfolio_db_path(repo_root)
-        return db_path.with_name(f"{db_path.name}.{_safe_name(write_set)}.lock")
-    return repo_root / ".tmp" / "job_locks" / f"{_safe_name(write_set)}.lock"
+        return db_path.with_name(
+            _bounded_lock_filename(f"{db_path.name}.{_safe_name(write_set)}.lock")
+        )
+    return (
+        repo_root / ".tmp" / "job_locks" / _bounded_lock_filename(f"{_safe_name(write_set)}.lock")
+    )
 
 
 def inherited_lock_is_valid(repo_root: Path, write_set: str) -> bool:
