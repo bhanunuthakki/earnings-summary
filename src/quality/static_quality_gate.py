@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -320,6 +321,37 @@ def _run_pyright(
     }, aliases
 
 
+def _emit_diagnostic_keys(
+    root: Path,
+    payload: object,
+    aliases: Mapping[str, str],
+    failing_buckets: set[str],
+) -> None:
+    """Identify failed diagnostics without printing source literals or messages."""
+    if not isinstance(payload, dict):
+        raise StaticQualityGateError("malformed Pyright JSON")
+    payload_map = cast(dict[str, object], payload)
+    diagnostics = payload_map.get("generalDiagnostics")
+    if not isinstance(diagnostics, list):
+        raise StaticQualityGateError("malformed Pyright diagnostics")
+    rows = cast(list[object], diagnostics)
+    for raw in rows:
+        if not isinstance(raw, dict):
+            raise StaticQualityGateError("malformed Pyright diagnostic")
+        row = cast(dict[str, object], raw)
+        relative = _relative_diagnostic_path(root, row.get("file"))
+        relative = aliases.get(relative, relative)
+        if subsystem(relative) not in failing_buckets:
+            continue
+        normalized = {**row, "file": relative}
+        digest = hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+        print(
+            "quality-diagnostic: "
+            + json.dumps({"path": relative, "diagnostic_sha256": digest}, sort_keys=True),
+            file=sys.stderr,
+        )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
@@ -367,6 +399,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     if violations:
         for violation in violations:
             print(violation, file=sys.stderr)
+        failing_pyright = {
+            key
+            for key in set(expected_pyright) | set(actual_pyright)
+            if expected_pyright.get(key, 0) != actual_pyright.get(key, 0)
+        }
+        _emit_diagnostic_keys(root, payload, aliases, failing_pyright)
         return 1
     print(
         "static-quality ceilings exact: "

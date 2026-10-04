@@ -183,3 +183,86 @@ def test_base_limits_fail_closed_without_a_valid_comparison(tmp_path: Path) -> N
         static_quality_gate.load_base_ceilings(tmp_path, tmp_path / "config.json", "--help")
     with pytest.raises(StaticQualityGateError, match="comparison base"):
         static_quality_gate.load_base_ceilings(tmp_path, tmp_path / "config.json", "missing")
+
+
+def test_failed_gate_identifies_diagnostics_without_printing_their_messages(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    source = tmp_path / "src" / "db.py"
+    source.parent.mkdir()
+    source.write_text("value = 1\n", encoding="utf-8")
+    config = tmp_path / "ceilings.json"
+    config.write_text(
+        json.dumps(
+            {
+                "schema_version": "bha-105.v1",
+                "pyright_diagnostics": {"src": 0},
+                "suppressions": {"src": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    receipt = tmp_path / "pyright.json"
+    receipt.write_text(
+        json.dumps(
+            {
+                "summary": {"filesAnalyzed": 1},
+                "generalDiagnostics": [
+                    {
+                        "file": str(source),
+                        "message": "PRIVATE_DIAGNOSTIC_MARKER",
+                        "rule": "reportArgumentType",
+                        "severity": "error",
+                        "range": {
+                            "start": {"line": 0, "character": 0},
+                            "end": {"line": 0, "character": 5},
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = static_quality_gate.main(
+        [
+            "--repo-root",
+            str(tmp_path),
+            "--config",
+            str(config),
+            "--base",
+            "HEAD",
+            "--pyright-json",
+            str(receipt),
+        ]
+    )
+    assert result == 1
+    error = capsys.readouterr().err
+    assert "increased from 0 to 1" in error
+    assert "PRIVATE_DIAGNOSTIC_MARKER" not in error
+    keys = [
+        json.loads(line.removeprefix("quality-diagnostic: "))
+        for line in error.splitlines()
+        if line.startswith("quality-diagnostic: ")
+    ]
+    assert len(keys) == 1
+    assert keys[0]["path"] == "src/db.py"
+    assert len(keys[0]["diagnostic_sha256"]) == 64
+    int(keys[0]["diagnostic_sha256"], 16)
