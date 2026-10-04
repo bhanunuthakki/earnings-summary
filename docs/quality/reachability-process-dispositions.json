@@ -134,8 +134,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_categorize invokes the fixed _CATEGORIZER script via managed_python_prefix.",
-      "fingerprint": "8dcc3d17deb950d7c832a6e236539822825acda4ba8a0bb095d99a42bc543440",
-      "line": 576,
+      "fingerprint": "31c1d250e92b6f908a4fab20feb9db246df66886afe34f8ca1b2f3749f8bcf7b",
+      "line": 577,
       "path": "execution/fetch_ir_documents.py",
       "targets": [
         "execution/categorize_ir_uploads.py"
@@ -690,9 +690,9 @@
     },
     {
       "disposition": "external_process",
-      "evidence": "Provider renders pages with the pinned pdftoppm executable.",
-      "fingerprint": "7e5d730cb7d836e4b5b60938e9e55aabbdafbe1679540446a095f3db2b874ab4",
-      "line": 374,
+      "evidence": "Provider renders pages with its configured, resolved pdftoppm executable. The descriptor records the executable version and SHA256; this disposition classifies the external process and does not approve an executable pin.",
+      "fingerprint": "8e02f0411cbd09f9f77d712dd6cf41bdf4560b603e32c83610bb1aac6ddc5522",
+      "line": 377,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "pdftoppm"
@@ -700,9 +700,9 @@
     },
     {
       "disposition": "external_process",
-      "evidence": "Provider extracts text with the pinned tesseract executable.",
-      "fingerprint": "e4ea5da31fe0ea10c9618104903c5ab66a57ca05f8f7a0a49efb919a7688c057",
-      "line": 397,
+      "evidence": "Provider extracts text with its configured, resolved tesseract executable. The descriptor records the executable version and SHA256; this disposition classifies the external process and does not approve an executable pin.",
+      "fingerprint": "d383bb389bafc600bd36fa6f487070de6bb0a8297096d783d55a9850f33fb63b",
+      "line": 400,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "tesseract"
@@ -710,9 +710,9 @@
     },
     {
       "disposition": "external_process",
-      "evidence": "_binary_version probes the pinned OCR executable version.",
-      "fingerprint": "5bad08a1e0a170572405e829ba7ee482c941ffcdf87ee3ed33c7a169b937583e",
-      "line": 1411,
+      "evidence": "_binary_version probes the configured, resolved OCR executable with the constructor's fixed version arguments. This is an external process identity probe, not an executable approval.",
+      "fingerprint": "627b9a2fb9a7cffd5550b858bc1e6bbbe87a8ea54bf05ff6e3fc8a2f3d6f4388",
+      "line": 1414,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "ocr executable"
@@ -925,7 +925,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "ac420d16d1826712209f021396febd56f207c1dae7268da9666d808fc4d0c005",
+      "source_sha256": "c36945a6a009e07541c2f4bd8756897c8ebb4258c7a87f25cd45138ce7279af0",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

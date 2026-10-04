@@ -59,7 +59,7 @@ def test_temp_repo_and_scanner_ignore_outer_git_repository_env(
     receipt = capture_compatibility_evidence(requested, baseline)
 
     assert receipt.current_revision == baseline
-    assert _git(requested, "rev-parse", "--show-toplevel") == str(requested)
+    assert Path(_git(requested, "rev-parse", "--show-toplevel")).resolve() == requested.resolve()
     assert sentinel_config.read_bytes() == before
 
 
@@ -214,8 +214,8 @@ def test_tracked_complete_collection_still_holds_for_deferred_verification(
     receipt = capture_compatibility_evidence(root, baseline)
     receipts = receipt.legacy_route_golden
 
-    assert len(receipts) == 24
-    assert sum(receipt.cases for receipt in receipts) == 300
+    assert len(receipts) == 25
+    assert sum(receipt.cases for receipt in receipts) == 324
     assert {item.path: item.cases for item in receipts} == {
         "evals/golden/ask_claim_audit.json": 10,
         "evals/golden/ask_claim_grounding.json": 18,
@@ -230,6 +230,7 @@ def test_tracked_complete_collection_still_holds_for_deferred_verification(
         "evals/golden/injection_canaries.json": 7,
         "evals/golden/intake_classifier.json": 6,
         "evals/golden/key_metrics.json": 6,
+        "evals/golden/kpi_repair_judge.json": 24,
         "evals/golden/ledger_reply_intent.json": 22,
         "evals/golden/metric_lifecycle_triage.json": 20,
         "evals/golden/news_structuring.json": 6,

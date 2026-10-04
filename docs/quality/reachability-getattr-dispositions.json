@@ -465,6 +465,20 @@
     },
     {
       "disposition": "schema_field",
+      "evidence": "_magnitude_guard_violation compares only this literal tuple of KpiSemanticContext data fields between admitted contexts. The returned attributes are compared for equality; they are not invoked or used to select code.",
+      "fingerprint": "da529716f3925be1878d9ad85db3586b0d08059cd6dda4d5b4acc4e52ab03998",
+      "line": 424,
+      "path": "src/pipeline/kpi_persistence.py",
+      "targets": [
+        "accounting_basis",
+        "consolidation_scope",
+        "dimensions",
+        "period_role",
+        "publication_lane"
+      ]
+    },
+    {
+      "disposition": "schema_field",
       "evidence": "getattr reads only _COMPARE_METRIC_ROWS TickerMetrics fields.",
       "fingerprint": "e5ec682a7e3bd2b59d5d40013de8200dca58759eb7aa6d15e3ed70017b8b1b31",
       "line": 2005,
@@ -511,6 +525,29 @@
       "path": "src/provenance/filing_xbrl_extraction_ledger.py",
       "targets": [
         "_SEAL_COLUMNS"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "publish_discrete_quarter compares only the local literal fields tuple on the selected operands' FactCellV2 source coordinates. The returned attributes are compared for equality; they are not invoked or used to select code.",
+      "fingerprint": "bada77fb2be45ecf78627350ff7b84dae19079a7ba05ced2fda8b5bdeb793ec4",
+      "line": 139,
+      "path": "src/provenance/financial_derivations.py",
+      "targets": [
+        "reporting_entity_id",
+        "scope_security_id",
+        "concept_namespace",
+        "concept_name",
+        "taxonomy_name",
+        "taxonomy_version",
+        "accounting_basis",
+        "consolidation_scope",
+        "period_kind",
+        "period_start",
+        "fiscal_year",
+        "dimensions",
+        "unit_key",
+        "currency"
       ]
     },
     {
@@ -688,7 +725,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "ac420d16d1826712209f021396febd56f207c1dae7268da9666d808fc4d0c005",
+      "source_sha256": "c36945a6a009e07541c2f4bd8756897c8ebb4258c7a87f25cd45138ce7279af0",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

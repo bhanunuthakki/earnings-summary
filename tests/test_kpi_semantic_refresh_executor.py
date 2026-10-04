@@ -45,6 +45,11 @@ from pipeline.kpi_definition_revisions import (
     KpiStockFlowBehavior,
     KpiUnitFamily,
 )
+from pipeline.kpi_semantic_dispositions import (
+    LegacyKpiQuarantineRequest,
+    apply_kpi_semantic_disposition_manifest,
+    prepare_kpi_semantic_disposition_manifest,
+)
 from pipeline.kpi_semantic_scope import ScopedKpiDefinition
 from pipeline.kpi_semantics import (
     KpiAccountingBasis,
@@ -63,6 +68,7 @@ from provenance.evidence_ledger import EvidenceLocator
 from provenance.fulltext_extractor_identity import (
     PDF_FULLTEXT_EXTRACTOR,
 )
+from schema_compat import expected_head
 from sqlite_freshness import sqlite_file_token
 
 
@@ -1464,9 +1470,11 @@ def test_dry_run_binds_owner_scope_and_rolls_back(
         _allowed: set[int],
         *,
         owner_tickers: frozenset[str],
+        owner_user_id: str | None = None,
     ) -> tuple[sqlite3.Row, refresh.SourceType]:
         assert _allowed == {641}
         assert owner_tickers == frozenset()
+        assert owner_user_id == "bhanu"
         row = connection.execute(
             "SELECT 'NU' AS ticker, '2024-12-31' AS period_end, "
             "'Q4' AS fiscal_period_type, 'Total customers' AS name"
@@ -1577,8 +1585,12 @@ def test_dry_run_rejects_corrupted_snapshot_clone_before_open(
 
 
 @pytest.mark.parametrize("capture_definition", [False, True])
+@pytest.mark.parametrize("capture_quarantine", [False, True])
 def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run(
-    migrated_db: Callable[..., Path], tmp_path: Path, capture_definition: bool
+    migrated_db: Callable[..., Path],
+    tmp_path: Path,
+    capture_definition: bool,
+    capture_quarantine: bool,
 ) -> None:
     db_path = migrated_db(tmp_path / "same-source-kpi-repair.db")
     conn = refresh.open_db(db_path)
@@ -1743,6 +1755,31 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
             "VALUES (42175,'NU','2024-12-31','Q4',641,'95','count',NULL,2,0.9,'legacy')"
         )
         conn.execute(trigger_sql)
+        if capture_quarantine:
+            conn.execute(
+                "INSERT INTO tracked_companies(ticker,name,list_type,user_id) "
+                "VALUES ('NU','Nu Holdings','portfolio','bhanu')"
+            )
+            quarantine_manifest = prepare_kpi_semantic_disposition_manifest(
+                conn,
+                repo_root=tmp_path,
+                user_id="bhanu",
+                reviewer="owner",
+                logical_idempotency_key="nu:legacy-quarantine:v1",
+                expected_schema_revision=expected_head(),
+                review_bundle_sha256="d" * 64,
+                backup_restore_evidence_id="e" * 64,
+                knowledge_at=NOW,
+                legacy_fact_requests=(
+                    LegacyKpiQuarantineRequest(
+                        fact_id=42175, reason_code="wrong_population_legacy_summary"
+                    ),
+                ),
+            )
+            apply_kpi_semantic_disposition_manifest(
+                conn, repo_root=tmp_path, manifest=quarantine_manifest
+            )
+        quarantined_context = current_kpi_semantic_context(conn, kpi_fact_id=42175)
         source_excerpt = "Total customers reached 114.2 million."
         locator = FactLocator(
             kind=LocatorKind.PDF_SLIDE,
@@ -1770,6 +1807,12 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
             )
         entry = _entry(
             predecessor_resolution_state="quarantined_legacy",
+            expected_context_head_id=(
+                None if quarantined_context is None else quarantined_context.id
+            ),
+            expected_context_revision=(
+                0 if quarantined_context is None else quarantined_context.revision
+            ),
             old_fact_id=42175,
             expected_fact_head_id=42175,
             expected_old_source_doc_id=2,
@@ -1809,7 +1852,7 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
             ).fetchone()
         )
         assert old_before == (95.0, "count", 2, None, None)
-        assert current_kpi_semantic_context(conn, kpi_fact_id=42175) is None
+        assert current_kpi_semantic_context(conn, kpi_fact_id=42175) == quarantined_context
         assert (
             conn.execute("SELECT 1 FROM v_kpi_facts_resolved_current WHERE id=42175").fetchone()
             is None
@@ -1821,6 +1864,7 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
             entry,
             set(),
             owner_tickers=frozenset({"NU"}),
+            owner_user_id="bhanu",
         )
         dry_run_effect = apply_entry(
             conn,
@@ -1861,6 +1905,7 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
                 entry,
                 set(),
                 owner_tickers=frozenset({"NU"}),
+                owner_user_id="bhanu",
             )
         conn.rollback()
 
@@ -1883,6 +1928,7 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
                 entry,
                 set(),
                 owner_tickers=frozenset({"NU"}),
+                owner_user_id="bhanu",
             )
         conn.rollback()
 
@@ -1892,6 +1938,7 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
             entry,
             set(),
             owner_tickers=frozenset({"NU"}),
+            owner_user_id="bhanu",
         )
         applied_effect = apply_entry(
             conn,
@@ -1952,11 +1999,35 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
             )
             == old_before
         )
-        assert current_kpi_semantic_context(conn, kpi_fact_id=42175) is None
+        assert current_kpi_semantic_context(conn, kpi_fact_id=42175) == quarantined_context
         assert (
             conn.execute("SELECT 1 FROM v_kpi_facts_resolved_current WHERE id=42175").fetchone()
             is None
         )
+        assert conn.execute("SELECT COUNT(*) FROM kpi_legacy_disposition_captures").fetchone()[
+            0
+        ] == int(capture_quarantine)
+        # Reconstruct the committed correction after the successor exists.
+        validate_applied_entry_postcondition(conn, manifest=manifest, entry=entry, head_id=new_id)
+        prior_context = _context() if quarantined_context is None else quarantined_context.context
+        persist_kpi_semantic_context(
+            conn,
+            kpi_fact_id=42175,
+            context=prior_context.model_copy(
+                update={
+                    "status": KpiSemanticStatus.QUARANTINED,
+                    "reason_code": "later_context_review",
+                }
+            ),
+            reviewed_by="owner",
+            knowledge_at=NOW,
+        )
+        with pytest.raises(
+            refresh.RepairBlockedError, match="replay_quarantined_predecessor_context_changed"
+        ):
+            validate_applied_entry_postcondition(
+                conn, manifest=manifest, entry=entry, head_id=new_id
+            )
     finally:
         conn.close()
 
@@ -2058,6 +2129,8 @@ def test_canonical_windows_db_lock_is_owned_by_state_root(
 
 
 def test_judge_receipt_verdict_comes_only_from_structured_sol_response(tmp_path: Path) -> None:
+    from tests.fixtures.kpi_judge_setup import qualification_fixture
+
     manifest = _manifest()
     dry_run = seal_attempt(
         attempt_id="7" * 32,
@@ -2078,6 +2151,8 @@ def test_judge_receipt_verdict_comes_only_from_structured_sol_response(tmp_path:
     )
     dry_path = tmp_path / "dry.json"
     dry_path.write_text(dry_run.model_dump_json(), encoding="utf-8")
+    qualification_path = tmp_path / "qualification.json"
+    qualification_path.write_text(qualification_fixture("kpi_source_repair", NOW).model_dump_json())
     prompt_path = tmp_path / "prompt.txt"
     prompt_path.write_text("judge this source repair", encoding="utf-8")
     response_path = tmp_path / "response.json"
@@ -2102,6 +2177,10 @@ def test_judge_receipt_verdict_comes_only_from_structured_sol_response(tmp_path:
                 str(dry_path),
                 "--judge-run-id",
                 "sol-test-1",
+                "--judge-model",
+                "synthetic-judge",
+                "--qualification",
+                str(qualification_path),
                 "--prompt-file",
                 str(prompt_path),
                 "--response-file",

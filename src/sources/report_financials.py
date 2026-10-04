@@ -28,6 +28,7 @@ from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import FactReadModel, ProvenanceBundle
 from provenance.metric_ontology import MetricOntology
 from sources.canonical_financial_series import (
+    CanonicalFinancialSeriesReader,
     FinancialCadence,
     FinancialConsumerPoint,
     SeriesContinuity,
@@ -206,6 +207,10 @@ def _admit_cell(
     bundle = reader.provenance_bundle(resolution.selected_observation_id, cutoff=cutoff)
     value, source = bundle.observation, bundle.cell
     reasons: list[str] = []
+    if not CanonicalFinancialSeriesReader(conn, "", cutoff=cutoff).derivation_operands_current(
+        bundle
+    ):
+        reasons.append("derived_operand_selection_changed")
     definition = ontology.metric_definition_as_known(metric_id, cutoff)
     binding = ontology.binding_as_known(value.observation_id, cutoff)
     admitted = (
@@ -231,6 +236,9 @@ def _admit_cell(
         or definition.value_kind != "numeric"
         or definition.period_kind != "duration"
         or definition.unit_family != "currency"
+        or not CanonicalFinancialSeriesReader(conn, "", cutoff=cutoff).reviewed_currency_matches(
+            value.observation_id, source.currency
+        )
         or definition.accounting_basis != source.accounting_basis
         or definition.scope_constraints.get("reporting_entity_id") != source.reporting_entity_id
         or definition.scope_constraints.get("consolidation_scope") != source.consolidation_scope
@@ -238,7 +246,11 @@ def _admit_cell(
         reasons.append("active_metric_definition_or_binding_unavailable")
     if source.dimensions or source.scope_security_id is not None:
         reasons.append("nonconsolidated_financial_coordinate")
-    if bundle.evidence is None or value.decimal_value is None or value.period_start is None:
+    if (
+        (bundle.evidence is None and bundle.derivation is None)
+        or value.decimal_value is None
+        or value.period_start is None
+    ):
         reasons.append("exact_reported_numeric_duration_unavailable")
     if value.period_end > cutoff:
         reasons.append("future_period")
@@ -312,18 +324,30 @@ def read_financial_table(
             conn.execute("BEGIN")
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT DISTINCT binding.canonical_metric_cell_id,source.concept_name,target.metric_id "
+            "SELECT DISTINCT binding.canonical_metric_cell_id,CASE WHEN source.concept_namespace='urn:earnings-summary:legacy:financial' THEN source.concept_name ELSE metric.canonical_name END,target.metric_id "
             "FROM fact_cell_canonical_binding_revisions binding "
             "JOIN fact_cells_v2 source ON source.fact_cell_id=binding.fact_cell_id "
             "JOIN canonical_metric_cells target ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id "
+            "JOIN canonical_metrics metric ON metric.metric_id=target.metric_id "
             "JOIN fact_observations_v2 observation ON observation.observation_id=binding.source_observation_id "
-            "JOIN evidence_document_versions document ON document.document_version_id=observation.document_version_id "
-            "WHERE document.ticker=? AND source.concept_namespace='urn:earnings-summary:legacy:financial' "
-            "AND source.concept_name IN (SELECT value FROM json_each(?)) "
+            "LEFT JOIN evidence_document_versions document ON document.document_version_id=observation.document_version_id "
+            "WHERE (document.ticker=? OR (observation.observation_kind='derived' AND EXISTS ("
+            "SELECT 1 FROM fact_cells_v2 input_cell JOIN fact_observations_v2 input_observation ON input_observation.fact_cell_id=input_cell.fact_cell_id "
+            "JOIN evidence_document_versions input_document ON input_document.document_version_id=input_observation.document_version_id "
+            "WHERE input_cell.reporting_entity_id=source.reporting_entity_id AND input_document.ticker=?))) "
+            "AND ((source.concept_namespace='urn:earnings-summary:legacy:financial' AND source.concept_name IN (SELECT value FROM json_each(?))) "
+            "OR metric.canonical_name IN (SELECT value FROM json_each(?))) "
             "AND binding.binding_status='bound' "
             "AND julianday(binding.recorded_at)<=julianday(?) AND julianday(binding.knowledge_at)<=julianday(?) "
             "ORDER BY source.concept_name,binding.canonical_metric_cell_id",
-            (ticker, json.dumps(REPORT_CONCEPTS), cutoff.isoformat(), cutoff.isoformat()),
+            (
+                ticker,
+                ticker,
+                json.dumps(REPORT_CONCEPTS),
+                json.dumps(REPORT_CONCEPTS),
+                cutoff.isoformat(),
+                cutoff.isoformat(),
+            ),
         ).fetchall()
         resolver, reader, ontology = (
             CanonicalFactResolutionEngine(conn),

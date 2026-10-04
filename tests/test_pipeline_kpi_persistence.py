@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import datetime
 from decimal import Decimal
@@ -82,6 +83,7 @@ def _create_schema(conn: sqlite3.Connection, *, legacy_logical_unique: bool = Fa
             kpi_definition_id INTEGER NOT NULL,
             value NUMERIC(24, 6) NOT NULL,
             unit TEXT NOT NULL,
+            currency TEXT,
             source_doc_id INTEGER NOT NULL,
             confidence FLOAT NOT NULL DEFAULT 1.0,
             extracted_by TEXT,
@@ -465,6 +467,143 @@ def test_persist_manifest_quarantines_unit_jump_without_guess_fix(conn: sqlite3.
     assert "unit discontinuity" in issue["expected"].lower()
     values = [float(row[0]) for row in conn.execute("SELECT value FROM kpi_facts ORDER BY id")]
     assert values == [119.0, 114000000.0]
+
+
+def _money_manifest(
+    *,
+    period_end: datetime,
+    source_doc_id: int,
+    value: Decimal,
+    unit: Unit,
+    currency: Currency = Currency.USD,
+    basis: KpiAccountingBasis = KpiAccountingBasis.NON_GAAP,
+    qualified: bool = True,
+    fiscal_period_type: FiscalPeriodType = FiscalPeriodType.Q2,
+) -> KpiExtractionManifest:
+    context = (
+        KpiSemanticContext(
+            metric_name_as_reported="Adjusted EBITDA",
+            reported_period_end=period_end.date(),
+            period_role=KpiPeriodRole.CURRENT,
+            publication_lane=KpiPublicationLane.CURRENT_ACTUAL,
+            accounting_basis=basis,
+            consolidation_scope=KpiConsolidationScope.CONSOLIDATED,
+            unit_scale=(
+                KpiUnitScale(unit.value)
+                if unit in {Unit.THOUSANDS, Unit.MILLIONS, Unit.BILLIONS}
+                else KpiUnitScale.NONE
+            ),
+            status=KpiSemanticStatus.ADMITTED,
+        )
+        if qualified
+        else None
+    )
+    return KpiExtractionManifest(
+        ticker="BKNG",
+        period_end=period_end,
+        fiscal_period_type=fiscal_period_type,
+        source_doc_id=source_doc_id,
+        values=[
+            KpiValue(
+                name="Adjusted EBITDA",
+                value=value,
+                unit=unit,
+                currency=currency,
+                source_excerpt=f"Adjusted EBITDA {value}",
+                source_value_text=str(value),
+                locator=_NO_LOCATOR,
+                semantic_context=context,
+            )
+        ],
+    )
+
+
+@pytest.mark.parametrize("backfill", [False, True])
+def test_monetary_guard_compares_units_without_rescaling_source_storage(
+    conn: sqlite3.Connection, backfill: bool
+) -> None:
+    first, second = (datetime(2025, 6, 30), datetime(2026, 6, 30))
+    if backfill:
+        first, second = second, first
+    persist_manifest(
+        conn,
+        run_id="money-first",
+        manifest=_money_manifest(
+            period_end=first, source_doc_id=1, value=Decimal("2423000000"), unit=Unit.ACTUAL
+        ),
+    )
+    result = persist_manifest(
+        conn,
+        run_id="money-second",
+        manifest=_money_manifest(
+            period_end=second, source_doc_id=2, value=Decimal("2648"), unit=Unit.MILLIONS
+        ),
+    )
+    assert result.validation_issues == 0
+    assert [
+        (str(row["value"]), row["unit"])
+        for row in conn.execute("SELECT value,unit FROM kpi_facts ORDER BY id")
+    ] == [("2423000000", "actual"), ("2648", "millions")]
+
+
+def test_monetary_guard_still_quarantines_a_true_normalized_jump(conn: sqlite3.Connection) -> None:
+    persist_manifest(
+        conn,
+        run_id="money-first",
+        manifest=_money_manifest(
+            period_end=datetime(2025, 6, 30),
+            source_doc_id=1,
+            value=Decimal("1000000"),
+            unit=Unit.ACTUAL,
+        ),
+    )
+    result = persist_manifest(
+        conn,
+        run_id="money-second",
+        manifest=_money_manifest(
+            period_end=datetime(2026, 6, 30),
+            source_doc_id=2,
+            value=Decimal("2000"),
+            unit=Unit.BILLIONS,
+        ),
+    )
+    assert result.validation_issues == 1
+    assert conn.execute("SELECT rule FROM validation_issues").fetchone()[0] == "magnitude_jump"
+
+
+@pytest.mark.parametrize("difference", ["legacy", "currency", "basis", "period", "unit"])
+def test_reviewed_monetary_guard_reports_incomparable_neighbors(
+    conn: sqlite3.Connection, caplog: pytest.LogCaptureFixture, difference: str
+) -> None:
+    caplog.set_level(logging.INFO, logger="pipeline.kpi_persistence")
+    persist_manifest(
+        conn,
+        run_id="money-first",
+        manifest=_money_manifest(
+            period_end=datetime(2025, 6, 30),
+            source_doc_id=1,
+            value=Decimal("1000000000"),
+            unit=Unit.COUNT if difference == "unit" else Unit.ACTUAL,
+            qualified=difference != "legacy",
+            currency=Currency.EUR if difference == "currency" else Currency.USD,
+            basis=KpiAccountingBasis.GAAP if difference == "basis" else KpiAccountingBasis.NON_GAAP,
+            fiscal_period_type=FiscalPeriodType.FY
+            if difference == "period"
+            else FiscalPeriodType.Q2,
+        ),
+    )
+    result = persist_manifest(
+        conn,
+        run_id="money-second",
+        manifest=_money_manifest(
+            period_end=datetime(2026, 6, 30), source_doc_id=2, value=Decimal("1"), unit=Unit.ACTUAL
+        ),
+    )
+    assert result.validation_issues == 0
+    assert any(
+        getattr(record, "event", None) == "kpi_magnitude_neighbor_incomparable"
+        for record in caplog.records
+    )
 
 
 def test_persist_manifest_backfill_does_not_guess_monotonicity(

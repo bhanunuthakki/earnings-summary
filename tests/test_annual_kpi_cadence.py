@@ -10,9 +10,11 @@ financials annual-series builder, and the cadence-parametrized YoY heatmap.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
@@ -20,11 +22,11 @@ from compute.kpi_resolver import reporting_cadence_for
 from compute.thesis_evaluator import (
     BreakRule,
     Comparator,
-    _fetch_kpi_history,  # pyright: ignore[reportPrivateUsage]  # internal seam
     evaluate_rule,
+    fetch_kpi_observations,
 )
 from models.documents import SourceType
-from models.facts import FiscalPeriodType, LegacyEscapeHatch, Unit
+from models.facts import FactLocator, FiscalPeriodType, Unit
 from models.kpis import BreachStatus, ReportingCadence
 from pipeline.kpi_persistence import (
     KpiExtractionManifest,
@@ -32,12 +34,41 @@ from pipeline.kpi_persistence import (
     find_or_create_kpi_definition,
     persist_manifest,
 )
+from pipeline.queries import open_db
+from report.models import AnnualKpiSeries, CellSource, KpiSeries, QuarterlyLineItem
 from report.renderers.charts_v2 import MatrixRow, yoy_heatmap_table
-from report.sections.financials import (
-    _align_annual_kpis,  # pyright: ignore[reportPrivateUsage]
-    _annual_kpi_raw_for,  # pyright: ignore[reportPrivateUsage]
-    _resolve_priorities,  # pyright: ignore[reportPrivateUsage]
+from report.sections import financials
+
+AnnualRaw = tuple[str, str, dict[int, float], dict[int, CellSource]]
+
+
+class ResolvePriorities(Protocol):
+    def __call__(
+        self,
+        requested: list[str],
+        line_items: list[QuarterlyLineItem],
+        ticker: str,
+        repo_root: Path,
+        quarter_labels: list[str],
+        quarter_labels_full: list[str],
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> tuple[list[str], list[KpiSeries], list[AnnualKpiSeries], list[int]]: ...
+
+
+# These tests retain the exact internal rendering seams through typed lookups.
+# The public history API above delegates to the same cadence-aware history path.
+_align_seam: object = getattr(financials, "_align_annual_kpis")
+assert callable(_align_seam)
+_align_annual_kpis = cast(
+    Callable[[list[AnnualRaw]], tuple[list[AnnualKpiSeries], list[int]]], _align_seam
 )
+_annual_seam: object = getattr(financials, "_annual_kpi_raw_for")
+assert callable(_annual_seam)
+_annual_kpi_raw_for = cast(Callable[[sqlite3.Connection, str, str], AnnualRaw | None], _annual_seam)
+_priorities_seam: object = getattr(financials, "_resolve_priorities")
+assert callable(_priorities_seam)
+_resolve_priorities = cast(ResolvePriorities, _priorities_seam)
 
 _CAR = "Capital adequacy ratio (CET1 / Basel III total)"
 
@@ -190,11 +221,11 @@ def test_reporting_cadence_for_missing_column_defaults_quarterly() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# _fetch_kpi_history — FY-only for annual, unchanged for quarterly
+# fetch_kpi_observations — FY-only for annual, unchanged for quarterly
 # --------------------------------------------------------------------------- #
 def test_fetch_history_annual_reads_fy_only_counts_years(conn: sqlite3.Connection) -> None:
     _seed(conn, "NU", _CAR, "annual", _CAR_FY + _CAR_INTERIM)
-    obs = _fetch_kpi_history(conn, "NU", _CAR, 2)
+    obs = fetch_kpi_observations(conn, "NU", _CAR, 2)
     assert obs is not None
     # 2 consecutive periods == 2 YEARS (latest two FY rows), never an interim print
     assert [str(o.value) for o in obs] == ["16.6", "18.1"]
@@ -210,7 +241,7 @@ def test_fetch_history_quarterly_unchanged_reads_all_types(conn: sqlite3.Connect
         "quarterly",
         [("2025-03-31", "Q1", 30.0), ("2024-12-31", "Q4", 28.0), ("2024-09-30", "Q3", 26.0)],
     )
-    obs = _fetch_kpi_history(conn, "MELI", "GMV growth", 2)
+    obs = fetch_kpi_observations(conn, "MELI", "GMV growth", 2)
     assert obs is not None
     assert [str(o.value) for o in obs] == ["30", "28"]  # latest two, any period type
 
@@ -226,7 +257,7 @@ def test_evaluate_annual_rule_breaches_on_two_years(conn: sqlite3.Connection) ->
         consecutive_periods=2,
         narrative="CAR < 20% for two years",
     )
-    history = _fetch_kpi_history(conn, "NU", rule.kpi_name, rule.consecutive_periods)
+    history = fetch_kpi_observations(conn, "NU", rule.kpi_name, rule.consecutive_periods)
     result = evaluate_rule(rule, history)
     assert result.status is BreachStatus.BREACH
     # the evidence is two ANNUAL prints, not a year-end + interim mix
@@ -244,7 +275,7 @@ def test_evaluate_annual_rule_ok_when_latest_year_passes(conn: sqlite3.Connectio
         consecutive_periods=1,
         narrative="CAR < 13%",
     )
-    history = _fetch_kpi_history(conn, "NU", rule.kpi_name, rule.consecutive_periods)
+    history = fetch_kpi_observations(conn, "NU", rule.kpi_name, rule.consecutive_periods)
     result = evaluate_rule(rule, history)
     assert result.status is BreachStatus.OK
     assert [str(o.value) for o in result.observations] == ["16.6"]  # latest FY
@@ -253,33 +284,48 @@ def test_evaluate_annual_rule_ok_when_latest_year_passes(conn: sqlite3.Connectio
 # --------------------------------------------------------------------------- #
 # persistence — cadence stamp (authoritative), defensive on missing column
 # --------------------------------------------------------------------------- #
-def test_persist_manifest_stamps_annual_cadence(conn: sqlite3.Connection) -> None:
-    manifest = KpiExtractionManifest(
-        ticker="NU",
-        period_end=datetime(2025, 12, 31),  # naive-UTC convention
-        fiscal_period_type=FiscalPeriodType.FY,
-        source_doc_id=42,
-        primary_source=SourceType.IR_DOC,
-        cadences={_CAR: ReportingCadence.ANNUAL},
-        values=[
-            KpiValue(
-                name=_CAR,
-                value=Decimal("16.6"),
-                unit=Unit.PERCENT,
-                locator=LegacyEscapeHatch(
-                    reason="test fixture value -- provenance not under test here"
-                ),
-            )
-        ],
-    )
-    result = persist_manifest(conn, run_id="t", manifest=manifest)
-    assert result.inserted == 1
-    row = conn.execute(
-        "SELECT reporting_cadence FROM kpi_definitions WHERE ticker='NU' AND name=?", (_CAR,)
-    ).fetchone()
-    assert row["reporting_cadence"] == "annual"
-    fact = conn.execute("SELECT fiscal_period_type FROM kpi_facts WHERE ticker='NU'").fetchone()
-    assert fact["fiscal_period_type"] == "FY"
+def test_persist_manifest_stamps_annual_cadence(
+    migrated_db: Callable[..., Path],
+    fact_source_document: Callable[[sqlite3.Connection, str], int],
+    tmp_path: Path,
+) -> None:
+    # Persistence exercises the current chain-head and provenance contract.
+    # Reader-only compatibility fixtures above deliberately omit that schema.
+    conn = open_db(migrated_db(tmp_path / "annual-cadence.db"))
+    try:
+        source_doc_id = fact_source_document(conn, "NU")
+        conn.commit()
+        manifest = KpiExtractionManifest(
+            ticker="NU",
+            period_end=datetime(2025, 12, 31),  # naive-UTC convention
+            fiscal_period_type=FiscalPeriodType.FY,
+            source_doc_id=source_doc_id,
+            primary_source=SourceType.IR_DOC,
+            cadences={_CAR: ReportingCadence.ANNUAL},
+            values=[
+                KpiValue(
+                    name=_CAR,
+                    value=Decimal("16.6"),
+                    unit=Unit.PERCENT,
+                    locator=FactLocator(verbatim_snippet="Synthetic reported figures for NU."),
+                    source_excerpt="Synthetic reported figures for NU.",
+                )
+            ],
+        )
+        result = persist_manifest(conn, run_id="t", manifest=manifest)
+        assert result.inserted == 1
+        row = conn.execute(
+            "SELECT reporting_cadence FROM kpi_definitions WHERE ticker='NU' AND name=?", (_CAR,)
+        ).fetchone()
+        assert row["reporting_cadence"] == "annual"
+        fact = conn.execute(
+            "SELECT fiscal_period_type,source_doc_id,value FROM kpi_facts WHERE ticker='NU'"
+        ).fetchone()
+        assert fact["fiscal_period_type"] == "FY"
+        assert fact["source_doc_id"] == source_doc_id
+        assert Decimal(str(fact["value"])) == Decimal("16.6")
+    finally:
+        conn.close()
 
 
 def test_find_or_create_cadence_defensive_without_column() -> None:

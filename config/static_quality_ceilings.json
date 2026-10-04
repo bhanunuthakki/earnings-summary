@@ -61,7 +61,7 @@
     "alembic": 1,
     "cron": 15,
     "evals": 0,
-    "execution": 1027,
+    "execution": 994,
     "instruction_tests": 0,
     "scripts": 4,
     "src": 15,
@@ -91,7 +91,7 @@
     "src/owner_profile": 0,
     "src/pipeline": 0,
     "src/positioning": 0,
-    "src/provenance": 3,
+    "src/provenance": 1,
     "src/quality": 0,
     "src/redteam": 0,
     "src/report": 14,
@@ -110,6 +110,6 @@
     "src/ui": 0,
     "src/user_state": 1,
     "src/viewspec": 0,
-    "tests": 1016
+    "tests": 1012
   }
 }
