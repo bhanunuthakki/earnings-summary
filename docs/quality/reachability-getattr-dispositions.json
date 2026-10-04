@@ -205,8 +205,8 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "05ed6a70b3d8391d0bef4d2f805590e4cbae4c2b845774e58d2cfb48d4bf372c",
-      "line": 83,
+      "fingerprint": "f0ed194d7f0d4de9095cac088eb289434073edf76c2471d9f8b3bcdea0d976f5",
+      "line": 85,
       "path": "src/compute/evidence_snapshot.py",
       "targets": [
         "kernel32"
@@ -215,8 +215,8 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "46e6f6dd06200caacdcf598d3d745210d1c932813cd7cae8381450604afcab3d",
-      "line": 87,
+      "fingerprint": "c538fde6859a21840128a476bf3ea8b118d3a5f40c9771bec013b0db2649067a",
+      "line": 89,
       "path": "src/compute/evidence_snapshot.py",
       "targets": [
         "kernel32"
@@ -681,6 +681,18 @@
         "_build_quarter_cells",
         "_build_annual_cells"
       ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "POSIX bounded-source preflight reads only os constants O_NOFOLLOW, O_DIRECTORY and O_NONBLOCK from the literal generator tuple. A missing or zero constant refuses opening; this lookup dispatches no callable and has no input-selected attribute name.",
+      "fingerprint": "b94506cefc3145fb3176c77d94476f17ab5450323dc1143e3f124dff49e69df4",
+      "line": 56,
+      "path": "src/provenance/immutable_artifact.py",
+      "targets": [
+        "O_NOFOLLOW",
+        "O_DIRECTORY",
+        "O_NONBLOCK"
+      ]
     }
   ],
   "graph_provenance": {
@@ -688,7 +700,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "ac420d16d1826712209f021396febd56f207c1dae7268da9666d808fc4d0c005",
+      "source_sha256": "b60998742f21187055319c81777c5125476e1eba9422f2f10ae177915a7722b0",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
