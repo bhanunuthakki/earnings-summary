@@ -288,6 +288,10 @@ def _classify_regime_from_forms(forms: list[str]) -> str | None:
     return None
 
 
+# Shared SEC metadata adapters reuse this deterministic form classifier.
+classify_filing_regime_from_sec_forms = _classify_regime_from_forms
+
+
 def _fetch_sec_regime(cik: str) -> str | None:
     """Best-effort: fetch SEC submissions.json for `cik`, return the most
     recent annual-report form's FilingRegime str value. None on ANY failure

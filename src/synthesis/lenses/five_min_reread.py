@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from llm_client import research_method_block
+
 from ._shared import (
     DCF_FLAGGED_NOTE,
     Lens,
@@ -16,7 +18,6 @@ from ._shared import (
     load_predictions,
     load_recent_insider_transactions,
     load_recent_summaries,
-    number_or_zero,
     sha8,
     summarize_insiders,
     summarize_predictions,
@@ -44,25 +45,20 @@ already knows the thesis. They want THREE things in 250-400 words:
 Produce a memo with EXACTLY these three sections:
 
 ## 1. What changed
-List 2-4 specific changes since the analyst last looked. Each must name a
-concrete number, disclosure, or insider event. Sort by analytical
-importance, NOT chronological.
+The prior review is not supplied. Do not claim changes since the last look or no change. State the latest supplied observations with their dates and comparison limits. Sort material observations by analytical importance.
 
 ## 2. Recommended action
-ONE of: ADD <N%> / HOLD / TRIM <N%> / SELL. Pick a percentage size (of
-current position) when ADD or TRIM. Justify the size in one sentence using
-the DCF over/under, the trigger ladder thresholds, and what the recent
-data tells you. Be opinionated — vague "watch for now" is not allowed
-unless genuinely no thesis-relevant data has moved.
+Give a supported research stance: thesis intact, review needed, under pressure, or insufficient evidence. Discuss add/hold/trim/sell only when supplied evidence and accepted owner rules support it. Percentage sizing requires full portfolio, tax, liquidity and risk inputs; these are not supplied here. Do not invent a size or holding commitment. A missing source or unreviewed DCF is a research gap, not an automatic sell.
 
 ## 3. What would change my mind
 2-3 specific data points that, if disclosed in the next 1-2 quarters,
-would flip the recommendation. Concrete and falsifiable: "Cloud revenue
-growth dropping below 25% YoY for 2 consecutive quarters" not "Cloud
-disappointing."
+would flip the recommendation. Use feasible public checks and preserve supplied accepted thresholds. Label new tests as proposed; do not invent a numeric threshold.
 
 Voice: terse, opinion-bearing, decision-oriented. The reader is making a
-capital allocation choice in the next 5 minutes. Help them.
+research review. Give its practical next public check.
+
+## Research method
+{research_method}
 """
 
 
@@ -81,14 +77,18 @@ def _ctx_five_min_reread(ticker: str | None, repo_root: Path) -> LensContext | N
     if dcf and dcf.get("sanity_flag"):
         dcf_summary = DCF_FLAGGED_NOTE
     elif dcf:
-        ou = number_or_zero(dcf.get("over_under_pct")) * 100
-        npv = dcf.get("npv_per_share")
-        live = dcf.get("live_price")
-        mos = dcf.get("mos_bar_used")
+
+        def display(value: object, *, percent: bool = False) -> str:
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                return "unavailable"
+            return f"{value * 100:+.1f}%" if percent else f"${value:.0f}"
+
         dcf_summary = (
-            f"NPV/share: ${number_or_zero(npv):.0f} · Live: ${number_or_zero(live):.0f} · "
-            f"Over/Under: {ou:+.1f}% · MoS bar: {number_or_zero(mos) * 100:.0f}% · "
-            f"As of: {dcf.get('valuation_date')}"
+            f"NPV/share: {display(dcf.get('npv_per_share'))} · "
+            f"Live: {display(dcf.get('live_price'))} · "
+            f"Over/Under: {display(dcf.get('over_under_pct'), percent=True)} · "
+            f"MoS bar: {display(dcf.get('mos_bar_used'), percent=True)} · "
+            f"As of: {dcf.get('valuation_date') or 'unavailable'}"
         )
     latest_summary = summaries[0][1][:4000] if summaries else "(no recent earnings summary)"
 
@@ -96,6 +96,7 @@ def _ctx_five_min_reread(ticker: str | None, repo_root: Path) -> LensContext | N
         ticker=ticker,
         template_kwargs={
             "ticker": ticker,
+            "research_method": research_method_block("thesis"),
             "thesis_block": thesis_block(ticker, repo_root),
             "dcf_summary": dcf_summary,
             "latest_summary": latest_summary,

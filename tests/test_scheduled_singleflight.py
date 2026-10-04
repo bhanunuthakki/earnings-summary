@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false, reportUnknownArgumentType=false, reportUnknownLambdaType=false
 """Focused CLI-boundary coverage for scheduled pipeline single-flight.
 
 These tests deliberately exercise private fingerprint seams and dynamically
@@ -12,13 +11,107 @@ import json
 import os
 import sqlite3
 import sys
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
+from types import ModuleType
+from typing import Literal, Protocol, cast, overload
 
 import pytest
 
+from compute.comp_set_drift import SnapshotEntry
 from models.runs import StageStatus
 from pipeline.run_accounting import PipelineRunSuppressedError
+
+FrozenSet = tuple[str, list[tuple[str, str, bool]]]
+ScopeSlices = dict[tuple[str, str], list[str]]
+MetricFingerprintResult = tuple[dict[str, FrozenSet | None], ScopeSlices, str, str, int]
+SourceFingerprint = Callable[[Path, set[str]], tuple[str, int]]
+SnapshotFingerprint = Callable[[Path], str]
+
+
+class MetricFingerprint(Protocol):
+    def __call__(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        tickers: list[str],
+        repo_root: Path,
+        include_pool_scopes: bool,
+    ) -> MetricFingerprintResult: ...
+
+
+class DriftFingerprint(Protocol):
+    def __call__(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        scopes: list[str],
+        as_of: date,
+        entries_by_scope: dict[str, list[SnapshotEntry]],
+    ) -> str: ...
+
+
+class RestoreAccounting(Protocol):
+    def __call__(
+        self,
+        live_db: Path,
+        *,
+        backup_dir: Path,
+        keep: bool,
+        snapshot_name: str | None,
+        snapshot_sha256: str | None,
+        live_schema: str | None,
+    ) -> tuple[sqlite3.Connection, str] | None: ...
+
+
+class MorningAccounting(Protocol):
+    def __call__(
+        self,
+        db_path: Path,
+        *,
+        start: bool,
+        run_id: str | None = None,
+        failed: bool = False,
+        error_summary: str | None = None,
+        invocation_inputs: dict[str, str | float | bool] | None = None,
+        force: bool = False,
+    ) -> str | None: ...
+
+
+@overload
+def _seam(module: ModuleType, name: Literal["_source_files_fingerprint"]) -> SourceFingerprint: ...
+@overload
+def _seam(module: ModuleType, name: Literal["_metric_input_fingerprint"]) -> MetricFingerprint: ...
+@overload
+def _seam(module: ModuleType, name: Literal["_drift_input_fingerprint"]) -> DriftFingerprint: ...
+@overload
+def _seam(module: ModuleType, name: Literal["_start_accounting"]) -> RestoreAccounting: ...
+@overload
+def _seam(module: ModuleType, name: Literal["_record_run"]) -> MorningAccounting: ...
+@overload
+def _seam(module: ModuleType, name: Literal["_snapshot_sha256"]) -> SnapshotFingerprint: ...
+
+
+def _seam(module: ModuleType, name: str) -> object:
+    """Bind the exact test-only signature of a dynamically loaded CLI seam."""
+    value: object = getattr(module, name)
+    assert callable(value)
+    return value
+
+
+def _member_suffixes(module: ModuleType) -> tuple[str, ...]:
+    value: object = getattr(module, "_MEMBER_SOURCE_SUFFIXES")
+    assert isinstance(value, tuple)
+    entries = cast(tuple[object, ...], value)
+    assert all(isinstance(item, str) for item in entries)
+    return tuple(str(item) for item in entries)
+
+
+def _maximum_files(module: ModuleType) -> int:
+    value: object = getattr(module, "_MAX_FINGERPRINT_FILES")
+    assert isinstance(value, int) and not isinstance(value, bool)
+    return value
 
 
 class _Conn:
@@ -30,6 +123,41 @@ class _Conn:
 
     def commit(self) -> None:
         return None
+
+
+def _open_connection(conn: _Conn) -> Callable[[object], _Conn]:
+    def open_connection(_db: object, *_args: object, **_kwargs: object) -> _Conn:
+        return conn
+
+    return open_connection
+
+
+def _new_connection(*_args: object, **_kwargs: object) -> _Conn:
+    return _Conn()
+
+
+def _selected_tickers(*_args: object) -> list[str]:
+    return ["NU"]
+
+
+def _empty_snapshot(*_args: object) -> list[SnapshotEntry]:
+    return []
+
+
+def _fixed_fingerprint(value: str) -> Callable[..., str]:
+    def fingerprint(*_args: object, **_kwargs: object) -> str:
+        return value
+
+    return fingerprint
+
+
+def _fixed_metric_fingerprint(
+    selection: str, source: str, count: int
+) -> Callable[..., MetricFingerprintResult]:
+    def fingerprint(*_args: object, **_kwargs: object) -> MetricFingerprintResult:
+        return {"NU": None}, {}, selection, source, count
+
+    return fingerprint
 
 
 def _fail_if_called(*_args: object, **_kwargs: object) -> None:
@@ -65,21 +193,23 @@ def test_scheduled_cli_suppression_is_a_successful_terminal_noop(
     output_status: str,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
 ) -> None:
     module = importlib.import_module(module_name)
     conn = _Conn()
 
-    monkeypatch.setattr(module, "open_db", lambda _db: conn)
+    monkeypatch.setattr(module, "open_db", _open_connection(conn))
     if hasattr(module, "_resolve_tickers"):
-        monkeypatch.setattr(module, "_resolve_tickers", lambda *_args: ["NU"])
+        monkeypatch.setattr(module, "_resolve_tickers", _selected_tickers)
     if module_name == "execution.check_comp_set_drift":
-        monkeypatch.setattr(module, "load_fmp_pe_snapshot", lambda *_args: [])
-        monkeypatch.setattr(module, "_drift_input_fingerprint", lambda *_args, **_kwargs: "fp")
+        monkeypatch.setattr(module, "load_fmp_pe_snapshot", _empty_snapshot)
+        monkeypatch.setattr(module, "_drift_input_fingerprint", _fixed_fingerprint("fp"))
     if module_name == "execution.track_comp_metrics":
         monkeypatch.setattr(
             module,
             "_metric_input_fingerprint",
-            lambda *_args, **_kwargs: ({"NU": None}, {}, "selection", "sources", 0),
+            _fixed_metric_fingerprint("selection", "sources", 0),
         )
     if module_name == "execution.quarterly_refresh":
         monkeypatch.setattr(
@@ -93,7 +223,10 @@ def test_scheduled_cli_suppression_is_a_successful_terminal_noop(
         raise PipelineRunSuppressedError("pipeline_key", "attempt_id", run_status)
 
     monkeypatch.setattr(module, "start_run", _suppress)
-    monkeypatch.setattr(sys, "argv", ["scheduled-job"])
+    arguments = ["scheduled-job"]
+    if module_name == "execution.fetch_sec_xbrl":
+        arguments.extend(["--db", str(migrated_db(tmp_path / "scheduled-sec.db"))])
+    monkeypatch.setattr(sys, "argv", arguments)
 
     assert module.main() == 0
     assert conn.closed is True
@@ -114,18 +247,12 @@ def test_track_comp_metrics_fingerprints_material_inputs(
     captured: dict[str, object] = {}
     repo_root = tmp_path / "repo"
 
-    monkeypatch.setattr(module, "open_db", lambda _db: conn)
-    monkeypatch.setattr(module, "_resolve_tickers", lambda *_args: ["NU"])
+    monkeypatch.setattr(module, "open_db", _open_connection(conn))
+    monkeypatch.setattr(module, "_resolve_tickers", _selected_tickers)
     monkeypatch.setattr(
         module,
         "_metric_input_fingerprint",
-        lambda *_args, **_kwargs: (
-            {"NU": None},
-            {},
-            "selection_sha",
-            "source_sha",
-            12,
-        ),
+        _fixed_metric_fingerprint("selection_sha", "source_sha", 12),
     )
 
     def _capture(*_args: object, **kwargs: object) -> str:
@@ -170,8 +297,8 @@ def test_source_file_budget_covers_pool_wide_slice_scope() -> None:
     from execution import track_comp_metrics as module
 
     us_listed_pool_ceiling = 2_000
-    required = us_listed_pool_ceiling * len(module._MEMBER_SOURCE_SUFFIXES)
-    assert required <= module._MAX_FINGERPRINT_FILES
+    required = us_listed_pool_ceiling * len(_member_suffixes(module))
+    assert required <= _maximum_files(module)
 
 
 def test_source_file_budget_breach_reports_the_counts(
@@ -183,7 +310,7 @@ def test_source_file_budget_breach_reports_the_counts(
 
     monkeypatch.setattr(module, "_MAX_FINGERPRINT_FILES", 4)
     with pytest.raises(ValueError) as excinfo:
-        module._source_files_fingerprint(tmp_path, {"NU", "MELI"})
+        _seam(module, "_source_files_fingerprint")(tmp_path, {"NU", "MELI"})
 
     message = str(excinfo.value)
     assert "8 files from 2 tickers > 4" in message
@@ -218,13 +345,13 @@ def test_drift_fingerprint_changes_with_selected_rows() -> None:
         ]
     }
 
-    original = module._drift_input_fingerprint(
+    original = _seam(module, "_drift_input_fingerprint")(
         conn,
         scopes=["industry"],
         as_of=date(2026, 7, 28),
         entries_by_scope=entries,
     )
-    changed_snapshot = module._drift_input_fingerprint(
+    changed_snapshot = _seam(module, "_drift_input_fingerprint")(
         conn,
         scopes=["industry"],
         as_of=date(2026, 7, 28),
@@ -241,7 +368,7 @@ def test_drift_fingerprint_changes_with_selected_rows() -> None:
         },
     )
     conn.execute("UPDATE comp_set_metrics_daily SET n_valid = 6 WHERE scope_type = 'industry'")
-    changed_bottoms_up = module._drift_input_fingerprint(
+    changed_bottoms_up = _seam(module, "_drift_input_fingerprint")(
         conn,
         scopes=["industry"],
         as_of=date(2026, 7, 28),
@@ -260,12 +387,12 @@ def test_drift_cli_deduplicates_only_with_complete_fingerprint(
     from execution import check_comp_set_drift as module
 
     captured: dict[str, object] = {}
-    monkeypatch.setattr(module, "open_db", lambda _db: _Conn())
-    monkeypatch.setattr(module, "load_fmp_pe_snapshot", lambda *_args: [])
+    monkeypatch.setattr(module, "open_db", _new_connection)
+    monkeypatch.setattr(module, "load_fmp_pe_snapshot", _empty_snapshot)
     monkeypatch.setattr(
         module,
         "_drift_input_fingerprint",
-        lambda *_args, **_kwargs: "drift_sha",
+        _fixed_fingerprint("drift_sha"),
     )
 
     def _capture(*_args: object, **kwargs: object) -> str:
@@ -328,7 +455,7 @@ def test_metric_fingerprint_tracks_memberships_and_source_files(
     def _fingerprint() -> tuple[
         dict[str, module.FrozenSet | None], module.ScopeSlices, str, str, int
     ]:
-        return module._metric_input_fingerprint(
+        return _seam(module, "_metric_input_fingerprint")(
             conn,
             tickers=["NU"],
             repo_root=tmp_path,
@@ -364,7 +491,7 @@ def test_metric_fingerprint_tracks_memberships_and_source_files(
 
     assert frozen["NU"] == ("operating", [("SOFI", "industry", False)])
     assert slices == {}
-    assert file_count == len(module._MEMBER_SOURCE_SUFFIXES)
+    assert file_count == len(_member_suffixes(module))
     assert selection_a == selection_b
     assert sources_a == sources_repeat
     assert sources_a != sources_mtime
@@ -379,7 +506,7 @@ def test_validation_gate_is_part_of_the_invocation_fingerprint(
     from execution import run_validation_engine as module
 
     captured: dict[str, object] = {}
-    monkeypatch.setattr(module, "open_db", lambda _db: _Conn())
+    monkeypatch.setattr(module, "open_db", _new_connection)
 
     def _capture(*_args: object, **kwargs: object) -> str:
         captured.update(kwargs)
@@ -505,7 +632,7 @@ def test_restore_accounting_fingerprints_paths_before_work(
     conn = _Conn()
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(module, "open_db", lambda _db: conn)
+    monkeypatch.setattr(module, "open_db", _open_connection(conn))
 
     def _capture(*_args: object, **kwargs: object) -> str:
         captured.update(kwargs)
@@ -513,7 +640,7 @@ def test_restore_accounting_fingerprints_paths_before_work(
 
     monkeypatch.setattr(module, "start_run", _capture)
 
-    accounting = module._start_accounting(
+    accounting = _seam(module, "_start_accounting")(
         live_db,
         backup_dir=backup_dir,
         keep=True,
@@ -545,7 +672,7 @@ def test_morning_accounting_deduplicates_completed_same_day_runs(
     conn = _Conn()
     captured: dict[str, object] = {}
 
-    monkeypatch.setattr(module, "connect_sqlite", lambda *_args, **_kwargs: conn)
+    monkeypatch.setattr(module, "connect_sqlite", _open_connection(conn))
 
     def _capture(*_args: object, **kwargs: object) -> str:
         captured.update(kwargs)
@@ -554,7 +681,7 @@ def test_morning_accounting_deduplicates_completed_same_day_runs(
     monkeypatch.setattr(run_accounting, "start_run", _capture)
 
     assert (
-        module._record_run(
+        _seam(module, "_record_run")(
             tmp_path / "portfolio.db",
             start=True,
             invocation_inputs={"run_date": "2026-07-28"},
@@ -614,6 +741,6 @@ def test_restore_main_hashes_and_reuses_the_selected_snapshot(
     accounting = observed["accounting"]
     assert isinstance(accounting, dict)
     assert accounting["snapshot_name"] == snapshot.name
-    assert accounting["snapshot_sha256"] == module._snapshot_sha256(snapshot)
+    assert accounting["snapshot_sha256"] == _seam(module, "_snapshot_sha256")(snapshot)
     assert accounting["live_schema"] is None
     assert observed["drill"] == {"keep": False, "snapshot": snapshot}

@@ -17,6 +17,16 @@
 - **One content boundary per kind:** stored prose uses the canonical prose renderer; existing
   shared renderers for toolbars, provenance, ticker labels, and other registered primitives remain
   the executable owner.
+- **Collapsible support preserves context:** secondary navigation and supporting panels use
+  a named button with `aria-expanded` and `aria-controls`. Keep the expand control available
+  when closed. Hide closed content from keyboard focus and assistive navigation. Closing or
+  reopening preserves the selected company, section, edition, question, and unsaved content.
+  Keep focus on the toggle after the action. Presentation preferences do not change research
+  identity or persistent report state.
+- **Compact detail stays accessible:** use native `details`/`summary` for inline disclosures,
+  or the registered overlay contract for larger context. Hover may supplement a labeled
+  button, but cannot be the only route to information. Exact section or fact handoffs open
+  containing disclosures before locating the target.
 - **Truthful interaction:** controls disclose their read-only or mutating effect and route to their
   typed behavior/state owner. Comments and Copilot behavior live in
   `directives/report_comments_and_chat.md`; provenance meaning in `directives/data_provenance.md`;

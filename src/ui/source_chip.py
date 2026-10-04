@@ -56,6 +56,8 @@ def source_hover_title(src: CellSource) -> str:
     parts = [src.source]
     if src.fetched_at:
         parts.append(f"fetched {src.fetched_at[:10]}")
+    if src.source_scope_label:
+        parts.append(src.source_scope_label.replace("_", " "))
     pct = confidence_pct(src)
     if pct is not None:
         parts.append(f"conf {pct}%")
@@ -260,6 +262,10 @@ def source_chip_html(src: CellSource, *, link_only: bool = False) -> str:
             f"{_esc(chip_label)}</a>"
         )
     rows: list[str] = [f'<div class="src-pop-row"><b>{_esc(src.source)}</b></div>']
+    if src.source_scope_label:
+        rows.append(
+            f'<div class="src-pop-row">scope: {_esc(src.source_scope_label.replace("_", " "))}</div>'
+        )
     if src.override:
         # Company-doc override (provenance-override P6): the displayed figure comes
         # from this filing, not FMP. Rendered prominently right under the source.

@@ -10,6 +10,21 @@ and the ticker stays at "documents only / no facts / no DCF" forever.
 This directive scans for those orphans every hour and runs the rest of the
 onboard pipeline against them.
 
+## Interactive evaluation coverage handoff
+
+Source onboarding and decision readiness are separate operations. The per-ticker
+chain acquires SEC evidence independently of FMP. FMP disablement, provider failure,
+daily budget and recently-IPO backoff affect FMP only. `--skip-sec` explicitly
+suppresses SEC. An absent owner thesis does not block acquisition or an analyst
+memo. A ticker without retained owner valuation inputs does not re-enter the heavy
+catch-up chain solely because `dcf_runs` is empty.
+
+For an authorized full evaluation request, use the investing skill's
+[new-company flow](../src/advisor/skills/earnings-summary-investing/references/analysis-paths.md#earnings-and-new-company-evaluation)
+and `execution/prepare_decision_brief.py`. That coordinator retains stage-specific
+receipts and exact artifact readiness. Catch-up does not certify a decision-grade
+memo. Schedule definitions are unchanged by these repairs.
+
 ## Tools / Scripts
 
 | Purpose | Path |
@@ -63,9 +78,9 @@ AND ANY of:
 
 | Reason code | Signal | Meaning |
 |---|---|---|
-| `no_instrument_type` | `instrument_type IS NULL` | `onboard_ticker` classifies this from the FMP profile (`set_instrument_type_from_fmp`); NULL means the onboard chain never ran for this ticker |
+| `no_instrument_type` | `instrument_type IS NULL` | `onboard_ticker` classifies from permitted FMP evidence or exact SEC registry/submissions/inline-DEI security evidence; unknown or conflicting identity stays blocked |
 | `no_financial_facts` | 0 `financial_facts` rows | parse stage never ran |
-| `no_dcf_run` | 0 `dcf_runs` rows | analysis stage never ran |
+| `no_dcf_run` | 0 `dcf_runs` rows and retained owner valuation inputs exist | owner-conditioned analysis stage has work |
 | `no_commitments` | has ≥1 *extractable* `transcripts` row but 0 `management_commitments` | LLM extractor still has work to do for this ticker's transcripts |
 
 Reason precedence is the order above — first matching condition wins. Index /
@@ -94,7 +109,8 @@ extractor's own graceful degrade.
 
 ## Per-ticker pipeline
 
-Stage subset depends on `pending_reason`:
+Stage subset depends on `pending_reason` and retained inputs. Owner-thesis and
+owner-valuation stages are conditional; source stages remain independent:
 
 | pending_reason | Stages run |
 |---|---|
@@ -103,7 +119,7 @@ Stage subset depends on `pending_reason`:
 
 ```
 no_instrument_type / no_financial_facts / no_dcf_run:
-  onboard_ticker (FMP fetch + parse)
+  onboard_ticker (independent permitted FMP and SEC acquisition)
     -> run_thesis_evaluator
     -> refresh_dcf  (seeds dcf/<TICKER>.xlsx if absent, then refreshes Historicals + PV)
     -> extract_commitments_from_transcript --auto
@@ -164,20 +180,20 @@ the hourly cron would re-run the full ~60-endpoint onboard for it hourly,
 burning ~720 FMP calls/day against the 750/day cap for a ticker that has no new
 data to fetch.
 
-`apply_ipo_backoff` (in `onboard_pending_tickers.py`) defers such tickers to a
-**daily** cadence instead of skipping them:
+`apply_ipo_backoff` (in `onboard_pending_tickers.py`) defers only the FMP lane to a
+**daily** cadence. The independent SEC lane remains eligible:
 
-- A recently-IPO'd ticker with a heavy-chain reason is deferred only if its most
+- A recently-IPO'd ticker with a heavy-chain reason has FMP deferred only if its most
   recent FMP fetch (`MAX(fmp_endpoint_status.last_pulled)`) was **< 24 h** ago.
 - A ticker that was **never** fetched (no `fmp_endpoint_status` rows) is NOT
   deferred — its first onboard always runs.
-- Once FMP ingests the company's first filings, the next daily re-check onboards
-  it normally. The cadence is lowered, never eliminated.
+- Once FMP ingests the company's first filings, the next daily re-check resumes
+  that lane. SEC acquisition does not wait for this change.
 - Non-IPO tickers and the `no_commitments` reason (cheap, FMP-free) are never
   deferred — the rest of the universe keeps its hourly cadence.
 
-Deferred tickers are surfaced under the report's `deferred` array (also in
-`--dry-run` output) so they're visible, not silently dropped.
+FMP deferrals are surfaced under the report's `deferred` array (also in
+`--dry-run` output). They do not mean that all source acquisition was deferred.
 
 This pairs with the `save_fmp_data` fix that records an accessible-but-empty
 `/stable` endpoint (HTTP 200 + `[]`) as `empty` rather than `forbidden` — the
@@ -231,3 +247,22 @@ migration 0026 flip `brief_dirty=1`, and the daily worker picks the ticker
 up on its next tick (06:30 local time).
 
 The two crons compose cleanly — no shared state beyond `brief_dirty`.
+
+## SEC discovery window and state authority
+
+The `onboarding-sec-acquisition-daily-utc-v1` window permits daily discovery of new
+filings. It is distinct from content identity and Observation Version. Changed CIK
+or source bytes invalidate a completed content checkpoint; unchanged UTC-day
+work reuses the receipt. No fabricated period or empty successful run is ingestion.
+
+Every child receives an explicit configured database and retained-state root. The
+code root selects entrypoints only. Caches, cost accounting, immutable bytes, logs
+and checkpoints use retained state. Unknown issuer metadata is repaired only from
+exact permitted SEC evidence; unsupported securities and conflicts fail closed.
+
+The onboarding and pending entrypoints require `--db` or a nonblank approved
+`EARNINGS_SUMMARY_DB_PATH` after environment loading. A state-root database or a
+previous process binding cannot supply missing authority. `--skip-llm` retains
+transcript and IR source collection, passes transcript `--skip-extract`, and
+suppresses commitment, Say-Do and IR summary model work. Explicit source-skip flags
+retain their separate meaning. An opt-in IR summary child receives the same `--db`.

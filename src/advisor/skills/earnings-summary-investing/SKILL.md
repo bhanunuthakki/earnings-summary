@@ -29,6 +29,11 @@ Select the relevant [analysis path](references/analysis-paths.md) from the reque
 valuation review, thesis revision and portfolio risk need no special tag.
 Combine paths when the request crosses them. A simple definition or grammar edit
 does not require an investing workflow.
+For initiating coverage or upgrading an evaluation memo, use the explicit
+[new-company flow](references/analysis-paths.md#earnings-and-new-company-evaluation).
+Continue through authorized source acquisition and repairable intake failures.
+FMP availability and an approved owner thesis are not prerequisites for SEC
+research or an analyst memo. They remain separate provider and owner decisions.
 Read `directives/directive_manifest.json` before treating a directive as policy:
 canonical files own policy, runbooks supply mechanics, drafts remain proposals.
 
@@ -68,6 +73,11 @@ Call an output decision-grade only when source authority, completeness, semantic
 admission, reader parity and reconstruction checks all pass under project policy.
 
 ## Form the investor judgment
+
+For company reports, earnings preparation/readouts and thesis work, follow the
+[research method](references/research-method.md) and its shared application adapter
+`src/research/method_contract.py`. It supplies the analytical
+steps and placement within existing artifacts; it does not replace their schemas.
 
 For an earnings preview, state the expectation bar, evidence that would confirm
 or weaken the thesis, key questions and the likely decision after each outcome.

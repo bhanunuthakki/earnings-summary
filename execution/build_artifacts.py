@@ -113,6 +113,8 @@ def _run_ticker_specific_extractors(ticker: str, repo_root: Path) -> None:
             str(PROJECT_ROOT / "execution" / script_name),
             "--repo-root",
             str(repo_root),
+            "--db",
+            str(require_db_path()),
             *extra_args,
         ]
         try:
@@ -249,7 +251,7 @@ def _ensure_key_metrics(ticker: str, repo_root: Path) -> None:
 def configure_artifact_runtime(repo_root: Path) -> None:
     """Keep artifact roots separate from the explicitly configured database."""
     database_path = require_db_path()
-    db.set_db_path(database_path)
+    db.set_db_path(database_path, state_root=repo_root)
     db.PROJECT_ROOT = str(repo_root)
     db.DATA_DIR = str(repo_root / "data")
     db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
@@ -585,18 +587,17 @@ def _build_one(
     db.scan_and_sync_artifacts(ticker)
     _emit("synced_quarterly_artifacts", {"ticker": ticker})
 
-    # Refresh segment_definitions cache. sha256-keyed on the latest form_10k JSON
-    # — only fires a Haiku call when the 10-K source changes; otherwise a fast
-    # no-op. Without this step, the segments tab matrix has no tooltips and the
-    # 📖 mark never appears (renderer correctly drops the mark when no
-    # definition is loaded).
-    _ensure_segment_definitions(ticker, repo_root)
+    # This extractor can call an LLM when the source changes. Cached definitions
+    # remain available to acquisition-only builds without an implicit LLM call.
+    if enable_llm:
+        _ensure_segment_definitions(ticker, repo_root)
 
     # Per-ticker enhancement extractors (e.g. extract_nvo_patent_timeline.py).
     # Auto-populates data/ticker_specific/<T>/ so the bear-case prompt's
     # ticker_specific block is fresh. Subprocess-isolated; failures land
     # in stderr but don't abort the build.
-    _run_ticker_specific_extractors(ticker, repo_root)
+    if enable_llm:
+        _run_ticker_specific_extractors(ticker, repo_root)
 
     # LLM business-model peer selection (the §4 peer-comp generator). LLM build
     # only — it makes an LLM call + a free-tier FMP fetch; input-sha-keyed so

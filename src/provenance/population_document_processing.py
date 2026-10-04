@@ -18,6 +18,7 @@ from pydantic import (
     model_validator,
 )
 
+from filings.sec_submissions_inventory import SEC_REGISTRATION_FINANCIAL_FORMS
 from provenance.document_processing_evidence import (
     publish_document_processing_evidence,
     verify_document_processing_evidence,
@@ -49,10 +50,10 @@ from provenance.research_snapshot import (
 
 _POLICY = DocumentProcessingPolicy(
     policy_name="complete_reporting_document_processing",
-    policy_version="1",
+    policy_version="2",
     include_optional_source_obligations=True,
 )
-_DOCUMENT_SELECTION_POLICY = "document-processing-terminal-at-k-observed-through-o.v1"
+_DOCUMENT_SELECTION_POLICY = "document-processing-terminal-at-k-observed-through-o.v2"
 _REPORTING_FAMILIES = (
     "annual_securities_report",
     "continuous_disclosure",
@@ -1159,6 +1160,16 @@ def _close_obligation(
     seal_disposition(conn, disposition_id, sealed_at=recorded_at)
 
 
+def _document_source_authority(
+    decision: ReportingDocumentDecision,
+) -> Literal["sec_edgar", "issuer_publisher"]:
+    if decision.reason_code == "governed_registration_financial_package":
+        return "sec_edgar"
+    if decision.document_family in {"operating_company_periodic", "continuous_disclosure"}:
+        return "sec_edgar"
+    return "issuer_publisher"
+
+
 def _ensure_document_family_obligations(
     conn: sqlite3.Connection,
     decisions: tuple[ReportingDocumentDecision, ...],
@@ -1167,7 +1178,7 @@ def _ensure_document_family_obligations(
 ) -> int:
     registry = ReportingEntityRegistry(conn)
     created = 0
-    scopes: set[tuple[str, str, str]] = set()
+    scopes: set[tuple[str, str, str, Literal["sec_edgar", "issuer_publisher"]]] = set()
     for decision in decisions:
         if decision.outcome != "governed_reporting" or decision.document_family is None:
             continue
@@ -1181,11 +1192,29 @@ def _ensure_document_family_obligations(
             if len(entity_rows) != 1:
                 continue
             entity_id = str(entity_rows[0][0])
-        scopes.add((decision.issuer_id, entity_id, decision.document_family))
-    for issuer_id, reporting_entity_id, family in sorted(scopes):
+        if decision.reason_code == "governed_registration_financial_package":
+            issuer = conn.execute(
+                "SELECT entity_kind FROM issuer_entities WHERE issuer_id=?",
+                (decision.issuer_id,),
+            ).fetchone()
+            if issuer is None or str(issuer[0]) != "operating_company":
+                raise ValueError("registration_financial_duty_requires_operating_company")
+        scopes.add(
+            (
+                decision.issuer_id,
+                entity_id,
+                decision.document_family,
+                _document_source_authority(decision),
+            )
+        )
+    for issuer_id, reporting_entity_id, family, authority_kind in sorted(scopes):
+        registration = authority_kind == "sec_edgar" and family == "issuer_financial_statements"
+        completeness_sql = "AND completeness_rule='regulator_inventory' " if registration else ""
         present = conn.execute(
             "SELECT 1 FROM source_obligation_revisions obligation "
             "WHERE issuer_id=? AND reporting_entity_id=? AND document_family=? "
+            "AND authority_kind=? "
+            f"{completeness_sql}"  # nosec B608 -- fixed optional predicate
             "AND obligation_state IN ('required','optional') "
             "AND datetime(active_from)<=datetime(?) "
             "AND (active_to IS NULL OR datetime(active_to)>datetime(?)) "
@@ -1200,6 +1229,7 @@ def _ensure_document_family_obligations(
                 issuer_id,
                 reporting_entity_id,
                 family,
+                authority_kind,
                 _db_time(cutoff),
                 _db_time(cutoff),
                 _db_time(cutoff),
@@ -1210,11 +1240,6 @@ def _ensure_document_family_obligations(
         ).fetchone()
         if present is not None:
             continue
-        authority_kind = (
-            "sec_edgar"
-            if family in {"operating_company_periodic", "continuous_disclosure"}
-            else "issuer_publisher"
-        )
         completeness_rule = (
             "regulator_inventory"
             if authority_kind == "sec_edgar"
@@ -1249,7 +1274,7 @@ def _ensure_document_family_obligations(
                 reason_details=(
                     (
                         "population_policy",
-                        "complete_reporting_document_processing@1",
+                        "complete_reporting_document_processing@2",
                     ),
                 ),
                 effective_at=cutoff,
@@ -1306,6 +1331,13 @@ def _ensure_expected_document_binding(
     if decision.reporting_entity_id is not None:
         entity_sql = "AND reporting_entity_id=? "
         parameters.append(decision.reporting_entity_id)
+    if decision.document_family == "issuer_financial_statements":
+        entity_sql += "AND authority_kind=? "
+        authority = _document_source_authority(decision)
+        parameters.append(authority)
+        if authority == "sec_edgar":
+            entity_sql += "AND completeness_rule=? "
+            parameters.append("regulator_inventory")
     rows = conn.execute(
         "SELECT obligation_revision_id,reporting_entity_id "
         "FROM source_obligation_revisions obligation "
@@ -1441,6 +1473,12 @@ def classify_reporting_document(
                 "governed_reporting",
                 "continuous_disclosure",
                 "governed_current_report",
+            )
+        if form in SEC_REGISTRATION_FINANCIAL_FORMS:
+            return (
+                "governed_reporting",
+                "issuer_financial_statements",
+                "governed_registration_financial_package",
             )
         return "excluded_supporting", None, "sec_form_outside_reporting_policy"
     if source == "earnings_call":

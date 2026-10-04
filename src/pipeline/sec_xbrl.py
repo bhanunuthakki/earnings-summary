@@ -43,6 +43,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
 import tempfile
 import time
@@ -75,7 +76,8 @@ from pipeline.restatement_detector import (
 from provenance.financial_fact_resolution import (
     capture_fact_row_observation,
 )
-from provenance.issuer_registry import IssuerRegistry
+from provenance.inventory_identity import issuer_registry_available
+from provenance.issuer_registry import IssuerRegistry, UnresolvedIssuerIdentityError
 from provenance.sec_companyfacts_capture import (
     CompanyFactsContractError,
     CompanyFactsPayload,
@@ -1620,6 +1622,83 @@ def _quarantine_contract_failure(
     return path
 
 
+def resolve_companyfacts_cik(
+    conn: sqlite3.Connection,
+    ticker: str,
+    *,
+    knowledge_at: datetime,
+) -> str:
+    """Resolve registered issuers before HTTP; retain historical static pins."""
+    normalized_ticker = ticker.strip().upper()
+    pinned = CIK_MAP.get(normalized_ticker)
+    if not issuer_registry_available(conn):
+        if pinned is None:
+            raise ValueError("SEC CompanyFacts issuer authority is unavailable")
+        log.info(
+            {
+                "event": "sec_companyfacts_identity_compatibility",
+                "ticker": normalized_ticker,
+                "reason": "issuer_registry_unavailable",
+            }
+        )
+        return pinned
+
+    registry = IssuerRegistry(conn)
+    try:
+        subject = registry.canonicalize_recorded_issuer(
+            f"legacy-ticker:{normalized_ticker}", knowledge_at=knowledge_at
+        )
+    except UnresolvedIssuerIdentityError as exc:
+        recorded_binding = conn.execute(
+            "SELECT 1 FROM legacy_issuer_binding_revisions "
+            "WHERE recorded_issuer_id = ? AND knowledge_at <= ? LIMIT 1",
+            (f"legacy-ticker:{normalized_ticker}", knowledge_at),
+        ).fetchone()
+        if pinned is None or recorded_binding is not None:
+            raise ValueError("SEC CompanyFacts ticker identity is unresolved") from exc
+        # Retained pins support historical names with no current ticker binding.
+        try:
+            identity = registry.resolve_identifier("sec_cik", pinned, knowledge_at=knowledge_at)
+        except UnresolvedIssuerIdentityError as identity_exc:
+            raise ValueError("SEC CompanyFacts pinned CIK is unresolved") from identity_exc
+        if identity.material_dissent:
+            raise ValueError("SEC CompanyFacts pinned CIK has material identity dissent") from exc
+        log.info(
+            {
+                "event": "sec_companyfacts_identity_compatibility",
+                "ticker": normalized_ticker,
+                "reason": "retained_historical_cik_pin",
+            }
+        )
+        return pinned
+    if subject.material_dissent:
+        raise ValueError("SEC CompanyFacts ticker has material identity dissent")
+    candidates = {
+        match.group(1)
+        for surface in registry.source_authority(
+            subject.issuer_id, "sec_submissions", knowledge_at=knowledge_at
+        )
+        if (
+            match := re.fullmatch(
+                r"https://data\.sec\.gov/submissions/CIK([0-9]{10})\.json",
+                surface.source_url,
+            )
+        )
+    }
+    if len(candidates) != 1:
+        raise ValueError("SEC CompanyFacts requires one verified SEC issuer authority")
+    cik = next(iter(candidates))
+    try:
+        identity = registry.resolve_identifier("sec_cik", cik, knowledge_at=knowledge_at)
+    except UnresolvedIssuerIdentityError as exc:
+        raise ValueError("SEC CompanyFacts CIK identity is unresolved") from exc
+    if identity.issuer_id != subject.issuer_id or identity.material_dissent:
+        raise ValueError("SEC CompanyFacts CIK conflicts with the canonical ticker identity")
+    if pinned is not None and pinned != cik:
+        raise ValueError("SEC CompanyFacts canonical CIK conflicts with the retained static pin")
+    return cik
+
+
 def ingest_for_ticker(
     conn: sqlite3.Connection,
     *,
@@ -1696,9 +1775,7 @@ def ingest_for_ticker(
             )
 
     try:
-        cik = CIK_MAP.get(normalized_ticker)
-        if cik is None:
-            raise ValueError(f"No CIK registered for {ticker}; add to CIK_MAP")
+        cik = resolve_companyfacts_cik(conn, normalized_ticker, knowledge_at=datetime.now(UTC))
 
         fetch_started_ns = monotonic_ns()
         try:

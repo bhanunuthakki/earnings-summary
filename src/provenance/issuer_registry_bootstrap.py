@@ -274,6 +274,19 @@ class BootstrapRequest(_ClosedModel):
     blob_root: Path
     apply: bool = False
     recorded_at: datetime
+    ticker_scope: tuple[str, ...] | None = None
+
+    @field_validator("ticker_scope")
+    @classmethod
+    def _ticker_scope(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        normalized = tuple(item.strip().upper() for item in value)
+        if not normalized or len(normalized) > 250:
+            raise ValueError("explicit ticker scope must contain 1 to 250 names")
+        if any(not item for item in normalized) or len(normalized) != len(set(normalized)):
+            raise ValueError("explicit ticker scope requires unique non-empty names")
+        return tuple(sorted(normalized))
 
     @field_validator("recorded_at")
     @classmethod
@@ -300,6 +313,36 @@ class BootstrapResult(_ClosedModel):
     excluded_index_member_count: int = Field(ge=0)
     results: tuple[BootstrapTickerResult, ...]
     records_created: int = Field(ge=0)
+
+
+class SecAuthorityCapture(_ClosedModel):
+    source_observation_id: str
+    source_sha256: str
+    recorded_at: datetime
+
+
+def capture_sec_authority_metadata(
+    conn: sqlite3.Connection,
+    *,
+    raw_body: bytes,
+    request: BootstrapRequest,
+    source_kind: Literal["sec_company_tickers", "sec_submissions", "sec_security_cover"],
+) -> SecAuthorityCapture:
+    """Retain exact identity metadata through the existing authority ledger."""
+    digest = hashlib.sha256(raw_body).hexdigest()
+    observation_id, _created, recorded_at = _capture_source(
+        conn,
+        raw_body=raw_body,
+        request=request,
+        source_sha=digest,
+        source_kind=source_kind,
+        collector_version="sec-onboarding-identity@1",
+        media_type="text/html" if source_kind == "sec_security_cover" else "application/json",
+        accept="text/html" if source_kind == "sec_security_cover" else "application/json",
+    )
+    return SecAuthorityCapture(
+        source_observation_id=observation_id, source_sha256=digest, recorded_at=recorded_at
+    )
 
 
 class _HTTPResponse(Protocol):
@@ -725,7 +768,13 @@ def bootstrap_issuer_reporting_registry(
     """Plan or atomically apply a canonical registry bootstrap."""
 
     entries = parse_sec_company_tickers(raw_body)
-    tracked, excluded_index_member_count = _tracked_reporting_scope(conn)
+    all_tracked, excluded_index_member_count = _tracked_reporting_scope(conn)
+    tracked = all_tracked
+    if request.ticker_scope is not None:
+        active_names = {item.ticker for item in all_tracked if item.inclusion_state != "historical"}
+        if not set(request.ticker_scope) <= active_names:
+            raise SecCompanyTickerContractError("explicit bootstrap scope is not active membership")
+        tracked = tuple(item for item in all_tracked if item.ticker in request.ticker_scope)
     candidates: dict[str, list[SecCompanyTickerEntry]] = defaultdict(list)
     for entry in entries:
         candidates[entry.ticker].append(entry)
@@ -757,7 +806,7 @@ def bootstrap_issuer_reporting_registry(
         created = evidence_created
         issuer_scope: dict[str, Literal["core", "monitored"]] = {}
         issuer_scope_types: dict[str, set[str]] = defaultdict(set)
-        for item in tracked:
+        for item in all_tracked:
             if item.inclusion_state == "historical":
                 continue
             ticker_candidates = tuple(candidates.get(item.ticker, ()))
@@ -1766,6 +1815,11 @@ def _persist_reporting_boundary(
             "regulator_inventory",
         ),
         (
+            "sec_edgar",
+            "issuer_financial_statements",
+            "regulator_inventory",
+        ),
+        (
             "issuer_publisher",
             "issuer_financial_statements",
             "publisher_surface_exhaustion",
@@ -2710,12 +2764,19 @@ def _persist_profile(
     effective_at: datetime | None = None,
 ) -> int:
     current = conn.execute(
-        "SELECT profile_revision_id, revision, legal_name, filing_regime, status "
+        "SELECT profile_revision_id, revision, legal_name, filing_regime, status, "
+        "fiscal_year_end, domicile_country "
         "FROM issuer_profile_revisions WHERE issuer_id = ? "
         "ORDER BY revision DESC LIMIT 1",
         (issuer_id,),
     ).fetchone()
-    if current is not None and tuple(str(value) for value in current[2:]) == (
+    # The ticker registry supplies no fiscal metadata. A new ticker binding
+    # must not clear already verified issuer metadata at this shared boundary.
+    fiscal_year_end = None if current is None or current[5] is None else str(current[5])
+    domicile_country = None if current is None or current[6] is None else str(current[6])
+    if filing_regime == "SEC" and current is not None and current[3] in {"10-K", "20-F", "40-F"}:
+        filing_regime = str(current[3])
+    if current is not None and tuple(str(value) for value in current[2:5]) == (
         legal_name,
         filing_regime,
         status,
@@ -2731,9 +2792,9 @@ def _persist_profile(
                 issuer_id=issuer_id,
                 revision=revision,
                 legal_name=legal_name,
-                domicile_country=None,
+                domicile_country=domicile_country,
                 filing_regime=filing_regime,
-                fiscal_year_end=None,
+                fiscal_year_end=fiscal_year_end,
                 status=status,
                 decision_kind="imported",
                 reason_code=reason_code,

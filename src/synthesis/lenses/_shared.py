@@ -27,6 +27,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import cast
 
+from db_paths import db_path_context, require_db_path
+from llm.prompt_versions import prompt_version_for
 from llm.style import compose_brief_prompt, style_block_cache_token
 from llm.untrusted import spotlight
 from llm_artifact_store import (
@@ -39,6 +41,7 @@ from llm_artifact_store import (
     upsert,
 )
 from llm_client import call_llm
+from research.method_contract import validate_research_input
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from synthesis.grounded_numbers import (
     check_numeric_drift,
@@ -130,6 +133,19 @@ def run_lens(
     ticker: str | None,
     repo_root: Path,
     force: bool = False,
+    db_path: Path | None = None,
+) -> Artifact | None:
+    """Use one explicit/configured database for context, calls and cache."""
+    with db_path_context(require_db_path(db_path)):
+        return _run_lens(lens, ticker=ticker, repo_root=repo_root, force=force)
+
+
+def _run_lens(
+    lens: Lens,
+    *,
+    ticker: str | None,
+    repo_root: Path,
+    force: bool = False,
 ) -> Artifact | None:
     """Run one lens. Cached via llm_artifacts; returns the artifact (cached or fresh).
 
@@ -138,7 +154,7 @@ def run_lens(
       - DB unavailable
       - LLM call fails outright (logged; doesn't raise)
     """
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = require_db_path()
     purpose = f"lens:{lens.name}"
 
     try:
@@ -164,10 +180,30 @@ def run_lens(
         )
         return None
 
+    try:
+        safe_kwargs = spotlight_template_kwargs(
+            ctx.template_kwargs,
+            LENS_UNTRUSTED_KWARGS.get(lens.name, frozenset()),
+            lens_name=lens.name,
+        )
+        prompt = compose_brief_prompt(lens.prompt_template.format(**safe_kwargs))
+        validate_research_input(prompt)
+    except KeyError as exc:
+        log.warning(
+            {
+                "event": "lens_template_missing_key",
+                "lens": lens.name,
+                "ticker": ticker,
+                "key": str(exc),
+            }
+        )
+        return None
+
     # Include the style-block hash in cache_inputs so editing the global
     # NUMBER_FORMATTING_BLOCK auto-invalidates every cached lens artifact
     # on the next run — no per-lens prompt_version bump required.
-    effective_cache_inputs = [*ctx.cache_inputs, style_block_cache_token()]
+    effective_cache_inputs = [*ctx.cache_inputs, style_block_cache_token(), prompt]
+    prompt_version = prompt_version_for(purpose)
 
     # Cache hit check — bypass on force=True
     if not force:
@@ -178,7 +214,9 @@ def run_lens(
             db_path=db_path,
         )
         if existing is not None:
-            new_sha = compute_input_sha256(prompt_version="v1", cache_inputs=effective_cache_inputs)
+            new_sha = compute_input_sha256(
+                prompt_version=prompt_version, cache_inputs=effective_cache_inputs
+            )
             if artifact_is_reusable(existing, input_sha256=new_sha):
                 log.info(
                     {
@@ -191,26 +229,8 @@ def run_lens(
                 return existing
 
     try:
-        safe_kwargs = spotlight_template_kwargs(
-            ctx.template_kwargs,
-            LENS_UNTRUSTED_KWARGS.get(lens.name, frozenset()),
-            lens_name=lens.name,
-        )
-        prompt = lens.prompt_template.format(**safe_kwargs)
-    except KeyError as exc:
-        log.warning(
-            {
-                "event": "lens_template_missing_key",
-                "lens": lens.name,
-                "ticker": ticker,
-                "key": str(exc),
-            }
-        )
-        return None
-
-    try:
         content = call_llm(
-            compose_brief_prompt(prompt),
+            prompt,
             purpose=purpose,
             ticker=ctx.ticker,
             scope=lens.scope,
@@ -259,6 +279,27 @@ def run_lens(
             purpose=purpose,
             scope=lens.scope,
             content_md=content,
+            content_json=(
+                {
+                    "schema_version": "five_minute_research_context@1",
+                    "rendered_prompt": prompt,
+                    "prompt_version": prompt_version,
+                    "method_block": ctx.template_kwargs.get("research_method"),
+                    "source_identity_status": "partial",
+                    "source_doc_ids": ctx.source_doc_ids,
+                    "parent_artifact_ids": ctx.parent_artifact_ids,
+                    "limits": {
+                        "prior_review": "not_supplied",
+                        "historical_cutoff": "not_enforced",
+                        "latest_summary_selection": "first_4000_characters_when_present",
+                        "complete_material_qa": "not_established_from_summary",
+                        "portfolio_sizing_context": "not_supplied",
+                    },
+                }
+                if lens.name == "five_min_reread"
+                else None
+            ),
+            prompt_version=prompt_version,
             cache_inputs=effective_cache_inputs,
             model=lens.model,
             source_doc_ids=ctx.source_doc_ids,
@@ -279,7 +320,7 @@ def read_lens_artifact(
         ticker=ticker,
         purpose=f"lens:{lens_name}",
         scope=scope,
-        db_path=repo_root / "data" / "portfolio.db",
+        db_path=require_db_path(),
     )
 
 
@@ -303,7 +344,7 @@ def load_prior_bear_case(ticker: str, repo_root: Path) -> Artifact | None:
     artifact = read_current(
         ticker=ticker.upper(),
         purpose="bear_case",
-        db_path=repo_root / "data" / "portfolio.db",
+        db_path=require_db_path(),
     )
     return artifact if artifact is not None and artifact_is_fresh(artifact) else None
 
@@ -331,7 +372,7 @@ def load_recent_summaries(ticker: str, repo_root: Path, n: int = 4) -> list[tupl
 def load_recent_insider_transactions(
     ticker: str, repo_root: Path, days: int = 180
 ) -> list[dict[str, object]]:
-    db = repo_root / "data" / "portfolio.db"
+    db = require_db_path()
     if not db.exists():
         return []
     conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
@@ -362,7 +403,7 @@ def load_recent_insider_transactions(
 
 
 def load_predictions(ticker: str, repo_root: Path) -> list[dict[str, object]]:
-    db = repo_root / "data" / "portfolio.db"
+    db = require_db_path()
     if not db.exists():
         return []
     conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
@@ -398,7 +439,7 @@ DCF_FLAGGED_NOTE = (
 
 
 def load_dcf(ticker: str, repo_root: Path) -> dict[str, object] | None:
-    db = repo_root / "data" / "portfolio.db"
+    db = require_db_path()
     if not db.exists():
         return None
     conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
@@ -436,7 +477,7 @@ def load_dcf(ticker: str, repo_root: Path) -> dict[str, object] | None:
 def load_latest_financials_snapshot(
     ticker: str, repo_root: Path, n_periods: int = 8
 ) -> list[dict[str, object]]:
-    db = repo_root / "data" / "portfolio.db"
+    db = require_db_path()
     if not db.exists():
         return []
     conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)

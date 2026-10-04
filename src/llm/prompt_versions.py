@@ -31,6 +31,8 @@ graders are now run on a schedule by ``execution/run_calibration_grading.py``.
 
 from __future__ import annotations
 
+# 2026-10-04: public-evidence method, historical baseline and full stored-input
+# guards; affected research purposes below retain their existing model routing.
 # purpose -> current prompt version. Bump when a graded/cached prompt is
 # materially rewritten. Purposes absent here default to "v1".
 #
@@ -62,7 +64,7 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # bear_case v2 (2026-06-12, S9): untrusted-content spotlighting — the IR
     # anchor block is now wrapped in BEGIN/END UNTRUSTED-DATA markers with an
     # instruction-priority notice (src/llm/untrusted.py).
-    "bear_case": "v2",
+    "bear_case": "v3",
     "decision_audit": "v1",
     "management_prediction": "v1",
     # Personal-CIO trigger artifact purposes.
@@ -71,7 +73,7 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # rule), news headlines/snippets (material_news_classification), and the
     # composed anchor block every trigger embeds (compose_anchor_block now
     # wraps). saydo/kpi prompts changed only via the anchor wrap.
-    "earnings_tone_diff": "v2",
+    "earnings_tone_diff": "v3",
     "kpi_inflection_context": "v2",
     # material_news v3 (2026-07-30): event-type taxonomy (primary / results /
     # commentary) + novelty framing — the v2 prompt scored topical relevance,
@@ -122,7 +124,7 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # transcript_summary v2 (2026-06-12, S9): transcript body + anchor block
     # spotlighted as untrusted data. v3 (2026-08-26): long transcript evidence
     # is bounded to a 60k head+tail before spotlighting.
-    "transcript_summary": "v3",
+    "transcript_summary": "v4",
     "advisor_next_dollar": "v1",
     # Investment Decision Card (P1.1, mode-B rubric,
     # personal_investment_partner_prd.md §8.1/§10). Bump when
@@ -201,7 +203,7 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # v3 (2026-08-03): transport-neutral search-first obligation and evidenced
     # no-news branch; model and transport are unchanged.
     "recent_developments": "v3",
-    "company_description": "v2",  # 10-K excerpts + IR blocks spotlighted
+    "company_description": "v3",  # 10-K excerpts + IR blocks spotlighted
     "platform_diagram": "v2",  # 10-K + transcript excerpts spotlighted
     "pairwise_analysis": "v2",  # composed anchor block now spotlighted
     "saydo_filter": "v2",  # composed anchor block now spotlighted
@@ -216,10 +218,10 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # llm_artifacts input hash, so a bump here alone forces regeneration on
     # the next in-window run — bump ONLY when _PROMPT_HEADER / the section
     # assembly is materially rewritten.
-    "pre_earnings_brief": "v1",
+    "pre_earnings_brief": "v2",
     # Persisted post-earnings readout (src/earnings_readout.py). A version bump
     # supersedes within each reported period on its next generation/request.
-    "post_earnings_readout": "v1",
+    "post_earnings_readout": "v2",
     # Rubric-audited prose purposes (Chip 2). Bump when the generating prompt
     # in llm_client.extract_qa_vs_prepared_themes / generate_qa_topics is
     # materially rewritten and re-run `run_llm_evals.py --purpose <p>`.
@@ -407,8 +409,9 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "risk_factor_diff": "v2",
     "saydo_importance": "v1",
     "strategic_analysis": "v1",
-    "thesis_pass_a": "v1",
-    "thesis_pass_b": "v1",
+    "lens:five_min_reread": "v2",  # public-evidence method and exact prompt cache
+    "thesis_pass_a": "v2",
+    "thesis_pass_b": "v2",
     "transcript_qa_judgment": "v1",
     "transcript_topic_triage": "v1",
     "valuation_basis": "v1",

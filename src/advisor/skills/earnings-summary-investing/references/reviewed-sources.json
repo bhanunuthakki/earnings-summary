@@ -1,5 +1,5 @@
 {
-  "review_note": "Reviewed explicit valuation, thesis-revision and full-book-risk modes. Excluded legacy pressure-test execution and corrected evaluator audit writes. Verified governed Ask diff/decision limits including absent scored-miss enforcement, typed tracker account envelope, partial analytics, compatible risk snapshots, and read-only monthly evidence collection. Added source owners for those interfaces and existing evaluation/promotion contracts. Extended the existing monthly fifteen-minute window with bounded synthetic probes, without new production jobs. Reviewed #1616 Operations note: identity-preserving Company Desk loading/retry and lookup index add no writer, operator action or source authority. Reviewed main #1623: cached host-runtime GET adds no live probe or financial write; typed option metadata and signed covered-call projection require preserving gross stock capital, option liability, net NAV, account coverage and incomplete reasons, without assuming sensitivity or contract multipliers.",
+  "review_note": "2026-10-04 bounded successor semantic review: parent and child reject nested MELI evidence ticker before database/child/output access; exact refusal regressions pass. Memo numeric population binds every calculated result and separately admitted operand, rejects extra numbers, duplicates and conflicting percent markers, and accepts ordinary sentence punctuation. Targeted memo/migration92, identity/transcript/cashflow58, and final memo/coordinator70 checks passed; full prior candidate17826pass/67skip/4fail retained. This closes named source review only, not native, sealed-source-to-full-reader integration, installed or decision-grade qualification.",
   "schema_version": 1,
   "sources": [
     {
@@ -44,7 +44,7 @@
     },
     {
       "path": "directives/holdings_json_schema.md",
-      "sha256": "b2a8304c1c25ea27fd0b7da3d217c89e8506621996c5d498160b9ff8b9433a4b"
+      "sha256": "e5541a7f71a1a659a2d2eb5dc3a4ebde8f4e82db66b1f8e7dff74446c20c18f8"
     },
     {
       "path": "directives/ir_events_ingestion.md",
@@ -56,7 +56,7 @@
     },
     {
       "path": "directives/llm_evals.md",
-      "sha256": "e19fe3dc52252f2c0265ee6f6d5f97c83e14f7a2152ecfa007e53ef79b29c47b"
+      "sha256": "4c712bcce01356017e99f4687ce99ff21af25a73727b82e428fa35bcdebb3f99"
     },
     {
       "path": "directives/llm_quota_scheduling.md",
@@ -64,11 +64,11 @@
     },
     {
       "path": "directives/micro_thesis_runbook.md",
-      "sha256": "91439468c55d6f3f54ff3a066cbd456d408499fe3e47fb5ccc2df7301494eba9"
+      "sha256": "f920e38f8a09414562587685cf0ac346c3f567237a34cfb30450d22aee71997c"
     },
     {
       "path": "directives/micro_thesis_skill.md",
-      "sha256": "8ce943f6cb59a2d0feaa4b1ba6428ed4dc8416112f688c5e3b9c83e557bec3e4"
+      "sha256": "86b481de649b2f8559d52e002a2e790e6c758939db830243836964588cc60678"
     },
     {
       "path": "directives/model_eval_loop.md",
@@ -80,11 +80,11 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "ffcd771b28fdf1b6f9c7d2f65e832113e4cab2b45107227856ac50f0e3af746e"
+      "sha256": "31140d0d26d3c49471627c4de6ae1a3d29fd8a20dd36aac10d9180a51a3d535b"
     },
     {
       "path": "directives/post_earnings_readout.md",
-      "sha256": "60a42693ffd4f5c1b94efd3da21c29a621ace9a4bfbdd4badb498283846c7ef7"
+      "sha256": "fa33c9e5de78960699a95721af5121b6d05339a63eb0f15e44d7ae6d04ecb776"
     },
     {
       "path": "directives/quarterly_refresh.md",
@@ -104,11 +104,11 @@
     },
     {
       "path": "execution/backfill_transcripts.py",
-      "sha256": "4c3858913853fa5fc7e7ff8110c3a8db6fd5515f1298620fdff33a345a93f50f"
+      "sha256": "a2390ca391ecc98ac0784a3849a334e5eb63e9b2058a369861021c294246e2b7"
     },
     {
       "path": "execution/build_artifacts.py",
-      "sha256": "66f968e65cff4257a0696be3f793baa9a5f13af911539fdcb56df96aa63afd85"
+      "sha256": "a99fa94de1960ad3eecf9d1c18de7ce3b8ab5cb42467f7a04e9330d7db065237"
     },
     {
       "path": "execution/build_etf_workup.py",
@@ -117,6 +117,10 @@
     {
       "path": "execution/build_investment_decision_card.py",
       "sha256": "0651d288e1193c3a1cfe7c40d6d120397677f0901204c1ec4418c8629c5ae755"
+    },
+    {
+      "path": "execution/build_meli_platform_dcf.py",
+      "sha256": "f65c1b8d6be2451760dd02db65299f01c06b3a1491f410354d52b3a758384d29"
     },
     {
       "path": "execution/capture_expected_sec_documents.py",
@@ -128,15 +132,23 @@
     },
     {
       "path": "execution/comments_server.py",
-      "sha256": "fb9a210257d65697c57960cece6f4045a821e9abfa994e55a9ecb27c9d8af471"
+      "sha256": "5bc3b85c9c4c0586cdef71b260f393e4dc1ace59a7c547b4603f404ce0e3d075"
     },
     {
       "path": "execution/comments_server_research_routes.py",
       "sha256": "1222cd625b85832264af066ee47441e1a731e930bcfe601b5a90aadd273426b1"
     },
     {
+      "path": "execution/continue_companyfacts_statements.py",
+      "sha256": "77ba1ad6a83c6089d1987e52f57e90fff6550c2cd8c8618d4e7e502b8f027938"
+    },
+    {
       "path": "execution/dcf_sheets.py",
       "sha256": "822d6b58d3a020cd1a2304fcb8ec10e37c05fa0c0be3af600ce7649a328ace34"
+    },
+    {
+      "path": "execution/discover_ir_documents_all.py",
+      "sha256": "d0b462f8136ed16dba3da00f160409129449209064282e571631ef53c3dc17e6"
     },
     {
       "path": "execution/fetch_etf_data.py",
@@ -152,7 +164,7 @@
     },
     {
       "path": "execution/fetch_sec_xbrl.py",
-      "sha256": "3b353197d1dee21f0edb252b51937c4a42df45a7a215fce24dbecc30edc655b2"
+      "sha256": "7fc525033bbf105d5e4fbc4fffe429dba8765241d5929e7e8a276512f57c3e4e"
     },
     {
       "path": "execution/generate_post_earnings_readouts.py",
@@ -168,7 +180,7 @@
     },
     {
       "path": "execution/ingest_sec_filing_xbrl.py",
-      "sha256": "1c0c6d8e7e3d2f84a9b1265ca1232645cf8c9611c75a68588bdf8139b82f4d9d"
+      "sha256": "4a0186f262739fdbdf3c87715bfeeae2468fda25f992e1d42198a50d01270bdf"
     },
     {
       "path": "execution/ingest_transcripts.py",
@@ -183,8 +195,12 @@
       "sha256": "d4835228cd92836c4d36440a7c834b61c266d563e71b6b4f74fef008dfd99020"
     },
     {
+      "path": "execution/onboard_pending_tickers.py",
+      "sha256": "d77c4b24ec8df57b936d9c82ed0591dee404945a2faea95851bf75626f1836c7"
+    },
+    {
       "path": "execution/onboard_ticker.py",
-      "sha256": "bd75394b2faef6b115ddd008c5e4489e94b6dc377b8d8e8f5a77627e397ca3cd"
+      "sha256": "287ffbee126d35af201ca350723d57313c0f36f3ccb4c0cbffb343810bfe8fce"
     },
     {
       "path": "execution/populate_research_snapshots.py",
@@ -193,6 +209,14 @@
     {
       "path": "execution/populate_source_fact_plane.py",
       "sha256": "97af39aedaba88a3931088bff356025219ba0acd6ca3ac60728be63643365192"
+    },
+    {
+      "path": "execution/prepare_cashflow_dcf.py",
+      "sha256": "1996320a5567839727807a64923855808bf1856624db42ad500852861bfc5bd8"
+    },
+    {
+      "path": "execution/prepare_decision_brief.py",
+      "sha256": "f4dea5eba4826c00b342db71ed961fa7152a7e474e8495c5c5f77085c06a162e"
     },
     {
       "path": "execution/pressure_test_thesis.py",
@@ -204,7 +228,7 @@
     },
     {
       "path": "execution/refresh_dcf.py",
-      "sha256": "2710b176e17a24f26c8f47028c786199f1790e7987a5dd55af836c5689898edd"
+      "sha256": "2e6698ac5961e0d4d0719044842d276c848e548ced08994f20cec632ba110b76"
     },
     {
       "path": "execution/refresh_portfolio_risk_snapshot.py",
@@ -227,16 +251,24 @@
       "sha256": "1f46b9403c44ab824f1eadbd7b761a84837bab32d86127e8c4cff36caffa7091"
     },
     {
+      "path": "execution/sqlite_bootstrap.py",
+      "sha256": "0c7635b01828e3d4bd611fe28a2f97c8ab6831b2419423507411c85054c4eb66"
+    },
+    {
       "path": "execution/sync_sec_filing_inventory.py",
-      "sha256": "371d7391ec40ecc360949a13ce3285541a20a61e206b4e30fd33ffee066bf6f7"
+      "sha256": "0db0bc3cafa89c6c9540a71bf7ce694400eb875cdc9dc40ef680bf72466c0135"
     },
     {
       "path": "execution/track_evaluation_names.py",
-      "sha256": "b887195a009dbd3b07d5597c9c8b9982a38a06edf378dde43ae8a70d20767326"
+      "sha256": "e8c153ddf82d9becf9f9bd431d7a686b56cad44f5630e8a969ef5add81a557bb"
     },
     {
       "path": "execution/valuation_preflight.py",
       "sha256": "3340bbbdb9b139ecb0df35a08c81db166609faa1fa5476cc25bb53dec661eb32"
+    },
+    {
+      "path": "execution/verify_decision_brief.py",
+      "sha256": "7c004be90512bfd43d95474ddeb6ac8f669ab5684c6a8d0e736ff5826f2edfd4"
     },
     {
       "path": "execution/verify_reconstruction_inventory.py",
@@ -244,11 +276,15 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "0de8ae0057efb79ae645975c047c971343f9f873280173d4b1378263929b2f99"
+      "sha256": "a8a44e5921aa41a98a58f20696bc7cd45dd2cdd13a08257cd2f0fca47bb818b2"
     },
     {
       "path": "scripts/check_investing_skill.py",
-      "sha256": "0f69b7073e156beb665e68d40ef0470a14483e69549902244354fb3d18f436f0"
+      "sha256": "338a379ad65b967d6884cbc925fddd8715fe0fb0bb4186a3af6587e8cce35508"
+    },
+    {
+      "path": "src/advisor/skills/earnings-summary-investing/references/research-method.md",
+      "sha256": "d44af8aa134850959c1ff5eae5efec7ce6ceab9cf646c320cebd0199a46ff5e5"
     },
     {
       "path": "src/advisor/skills/next-dollar-allocation/SKILL.md",
@@ -275,32 +311,64 @@
       "sha256": "9c2e2f226c092856c8eb8e4378dc3d137a1dc865f449df12f452ca78fca4194d"
     },
     {
+      "path": "src/compute/company_description.py",
+      "sha256": "8eb864b73a2e0dbbbe530bc82feef583ce175d54e62af5f8d82e40947348919d"
+    },
+    {
       "path": "src/compute/kpi_resolver.py",
       "sha256": "68110a2766ac9a7f8da1d4270f3dad338ba5f1e33f4ebea0b602e3c4e75f915e"
     },
     {
       "path": "src/compute/thesis_evaluator.py",
-      "sha256": "362209870e5e444899dc5524d1e33ac91c429119a81fac5d4fb991adbe605db0"
+      "sha256": "21a9efeacb30c5fe75f0408caf411c5751bd1d02c6b73bb7be105b6da78c6b29"
+    },
+    {
+      "path": "src/db.py",
+      "sha256": "4daa69e6e627f606382db6547c52b081f53dbf414890dd232718624a420208d2"
+    },
+    {
+      "path": "src/dcf/cashflow_inputs.py",
+      "sha256": "7b587c91a9072102d205328bfd45921a45438b67d72ef6e3d2f984c64d94998b"
+    },
+    {
+      "path": "src/dcf/cashflow_refresh.py",
+      "sha256": "4cd3dd58aad53434598f287004d4ef111a018d35323f031892ed51ebff6e35e1"
+    },
+    {
+      "path": "src/dcf/cashflow_scenarios.py",
+      "sha256": "c49450fde17c95912a0a9f154ff0a162badc6bfefa7fb0485884cf0d97e91f8b"
     },
     {
       "path": "src/dcf/grade_evidence.py",
-      "sha256": "f212cc8ca1a98586ba9cd46028087419877eb606b26f20aa1f333eb3e527ee88"
+      "sha256": "869a112c71dd56343158a6a3cbd7536b52508552f377557810834218d368411f"
+    },
+    {
+      "path": "src/dcf/input_recipes.py",
+      "sha256": "1120e5fe35a6b055751ae8b5a7ac226d53193913a3b79ac745936b1bcc7578de"
     },
     {
       "path": "src/dcf/readiness.py",
-      "sha256": "734c32a18c29d15ff6f3600deb081ed2cd3231e95556dd2b7e773bb524e749a4"
+      "sha256": "2f6015e2f55c00ea78b5abeefb36ff75e5caafd2ea4dc8dfeda68d69bf19ece7"
     },
     {
       "path": "src/earnings_brief.py",
-      "sha256": "35da7107897e23d559345f2e316d81e4ebd06a5cf1020e307f395161d44451f1"
+      "sha256": "24d8816cefeb052909ddc828fe08def91044e74710f6469cd86b72057701cf77"
     },
     {
       "path": "src/earnings_readout.py",
-      "sha256": "50d9d6884e72a1a76fd6a543e83a0a1274e7ee45649adf2aef10f361c0712402"
+      "sha256": "465061e98e160fbe008159dfa2dff43974d5a00fe511817e45d1fef423c09129"
+    },
+    {
+      "path": "src/evals/capture_quality_specs.py",
+      "sha256": "37e7dfa3bc90097125b0f3bab44f95b370bcd50a3a0fef397d843da1bed13d1e"
     },
     {
       "path": "src/evals/coverage.py",
       "sha256": "970d3b1369d7a5dc6eec3e748ffa52f2cd5379c4bb42fb952d4ef7689690b467"
+    },
+    {
+      "path": "src/filings/xbrl_units.py",
+      "sha256": "b9f2fc5fbac15f9d7ac2fdef339b36783479aa8730a1adedf10ec6f5c9a2281c"
     },
     {
       "path": "src/integrations/portfolio_allocation.py",
@@ -319,8 +387,24 @@
       "sha256": "68c4bf0ed73282d77d247f166a4a335adab0b26a0863bc87232228e0867828ef"
     },
     {
+      "path": "src/llm/prompt_versions.py",
+      "sha256": "6d7aeca27d0dc5560b658630d28188a58f1cd2ca0ccd14a4d5cb65fd518dc8f6"
+    },
+    {
+      "path": "src/llm_artifact_store.py",
+      "sha256": "50d4c3ce69aa8cd0c37cbe0e2823dffc74d5e3bd394e29cbf398d35becc687ed"
+    },
+    {
+      "path": "src/llm_client.py",
+      "sha256": "680843db145811d74bb67bdfd4bb7e1e988ad02c531051d252cbf093799dc524"
+    },
+    {
       "path": "src/pipeline/kpi_report_reference_resolver.py",
       "sha256": "b55ce31efe9863201ea456e3f4e5b00014075901a5ca54a42b5b884e11816727"
+    },
+    {
+      "path": "src/pipeline/research_cockpit.py",
+      "sha256": "58862f50850a1d53cc8d327a375c665ab250274812358da1bbdc47ba39c3502a"
     },
     {
       "path": "src/pipeline/work_os_evaluation.py",
@@ -340,7 +424,11 @@
     },
     {
       "path": "src/provenance/research_snapshot.py",
-      "sha256": "e645061b4c810d9221fab58911e20d52c7ffd6584cc6f25bd140324a9f73a3af"
+      "sha256": "e9cf7dd2a385ae970c8b92f1a3c965ffc2b693657c79aa1c9df9f80e16e04b6d"
+    },
+    {
+      "path": "src/quality/static_quality_gate.py",
+      "sha256": "d12eefbde09371ef2f24c39c1f2196f3bd59d07118677f873ef2d5a428c2a1d9"
     },
     {
       "path": "src/report/builder.py",
@@ -351,12 +439,32 @@
       "sha256": "c8853908c7422fa907c66d8418ccd1d2b086d3e5cee146c468f17fbf0251c361"
     },
     {
+      "path": "src/report/sections/bear_case.py",
+      "sha256": "3f5f2247f44cc0659e34dec3b59f8f632767bcc9d7a38ca5f779c1f76278b261"
+    },
+    {
       "path": "src/report/sections/thesis.py",
       "sha256": "af03a01a29463485b166611cfd4e510fb319659f0767d0962d8477c596f055fc"
     },
     {
+      "path": "src/research/decision_brief.py",
+      "sha256": "00f83f8b50b00f5f5ba5a7a5323255daec30c7bdeff927f19940e7f16f5d9505"
+    },
+    {
+      "path": "src/research/decision_brief_workflow.py",
+      "sha256": "56fec6ea7553805a8d672d7a13a3381b292159756289733722c041707d0e72a2"
+    },
+    {
       "path": "src/research/investment_decision_card.py",
       "sha256": "d565b0e100e91571a1bc24908d7ce1c6a2e072175fb402f2776c23725f85f1e9"
+    },
+    {
+      "path": "src/research/memo_claim_support.py",
+      "sha256": "df9c665381ecb2c4a8097db58bacff2acd415a0716ee521b0f2af0a0bf805d21"
+    },
+    {
+      "path": "src/research/method_contract.py",
+      "sha256": "56daac43746a2aaca337f80b8dcc246db4753f512ad971616bf752825f016240"
     },
     {
       "path": "src/research/proposal_approval.py",
@@ -369,6 +477,18 @@
     {
       "path": "src/sqlite_runtime.py",
       "sha256": "98c31ae91fcbccdb698f4d8eab213c305a1b8b372b9aa7d24e8b598a83677687"
+    },
+    {
+      "path": "src/synthesis/lenses/_shared.py",
+      "sha256": "cd6bb47658c4996770932b4acce8fbb0ba085800d3316bd3089643db3e0c8c3b"
+    },
+    {
+      "path": "src/synthesis/lenses/five_min_reread.py",
+      "sha256": "bb2e9074df22c1db9a2cb411af9d4ad9d179d6d556da51aa061100109696f67c"
+    },
+    {
+      "path": "src/triggers/earnings_tone.py",
+      "sha256": "d1222237957fa7b91faae562e761bc77372c162d59f828b9650ae4ede7011ffe"
     }
   ]
 }

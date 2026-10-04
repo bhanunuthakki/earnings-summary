@@ -29,9 +29,11 @@ from typing import TypedDict, cast
 
 from filing_text_fetcher import load_canonical_narrative
 from filings.fmp_sections import locate_annual_filing
+from llm.prompt_versions import prompt_version_for
 from llm_client import (
     DEFAULT_MODEL,
     JSON_FENCE_RE,
+    build_company_description_prompt,
     generate_company_description,
     load_ir_anchor,
 )
@@ -159,26 +161,35 @@ def extract_for_ticker(
     recent_earnings_md = _load_recent_earnings_md(repo_root, ticker, n=2)
     recent_ir_md = _load_recent_ir_docs_md(repo_root, ticker, n=3)
     ir_anchor_md = load_ir_anchor(repo_root, ticker)
-    inputs_sha = hashlib.sha256(
-        (
-            thesis_text
-            + "\x00"
-            + recent_earnings_md
-            + "\x00"
-            + recent_ir_md
-            + "\x00"
-            + ir_anchor_md
+    segment_names = segment_names_from_db(db_conn, ticker, metric="revenue_by_product")
+    geo_names = segment_names_from_db(db_conn, ticker, metric="revenue_by_geography")
+    # Cache the exact prompt, including method identity and displayed names.
+    # A source file alone cannot establish reuse after analytical inputs change.
+    assembled_prompt = build_company_description_prompt(
+        ticker,
+        profile_description,
+        sector,
+        industry,
+        relevant_text,
+        segment_names,
+        geo_names,
+        year,
+        thesis_text,
+        recent_earnings_md,
+        recent_ir_md,
+        ir_anchor_md,
+    )
+    composite_sha = hashlib.sha256(
+        json.dumps(
+            [sha256, prompt_version_for("company_description"), assembled_prompt],
+            ensure_ascii=False,
+            separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-    composite_sha = hashlib.sha256((sha256 + "\x00" + inputs_sha).encode("utf-8")).hexdigest()
-
     if not refresh and cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
         if cached.get("source_sha256") == composite_sha and cached.get("fiscal_year") == year:
             return CompanyDescriptionResult(**cached)
-
-    segment_names = segment_names_from_db(db_conn, ticker, metric="revenue_by_product")
-    geo_names = segment_names_from_db(db_conn, ticker, metric="revenue_by_geography")
 
     start_dt = datetime.now(UTC)
     t0 = time.perf_counter()

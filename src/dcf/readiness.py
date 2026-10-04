@@ -14,9 +14,21 @@ from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict
 
+from dcf.cashflow_inputs import RECIPE as CASHFLOW_RECIPE
+from dcf.cashflow_scenarios import (
+    AnalystCashflowScenarioReview,
+    AnalystCashflowScenarioSource,
+    verify_analyst_cashflow_scenarios,
+    verify_analyst_scenario_source,
+)
 from dcf.grade_evidence import DcfGradeEvidence, load_dcf_grade_evidence
 from dcf.input_evidence import InputEvidenceError, ModelInputReceipt
-from dcf.meli_inputs import effective_numeric_inputs, model_output, verify_meli_inputs
+from dcf.input_recipes import (
+    effective_numeric_inputs,
+    model_engine,
+    model_output,
+    verify_model_input_receipt,
+)
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import (
     FactAdmissionError,
@@ -45,6 +57,7 @@ class ValuationReadiness(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     schema_version: Literal["valuation_readiness.v1"] = "valuation_readiness.v1"
     ticker: str
+    purpose: Literal["allocation", "analyst_memo"] = "allocation"
     evaluated_at: str
     ready: bool = False
     status: Literal["ready", "degraded", "missing", "failed"] = "degraded"
@@ -214,11 +227,17 @@ def _legacy_inputs(
     return inputs
 
 
-def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> ValuationReadiness:
+def _assess(
+    conn: sqlite3.Connection,
+    ticker: str,
+    cutoff: datetime,
+    purpose: Literal["allocation", "analyst_memo"],
+) -> ValuationReadiness:
     evidence = load_dcf_grade_evidence(conn, ticker)
     if evidence.status != "available":
         return ValuationReadiness(
             ticker=ticker,
+            purpose=purpose,
             evaluated_at=cutoff.isoformat(),
             status="missing" if evidence.status == "missing" else "failed",
             reason_codes=(
@@ -264,14 +283,20 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
     assumption_reviewed_at: str | None = None
     inputs: tuple[FinancialInputEvidence, ...] = ()
     raw_receipt = (evidence.provenance or {}).get("model_input_receipt")
-    if ticker == "MELI" and raw_receipt is not None:
+    if raw_receipt is not None:
         try:
             receipt = ModelInputReceipt.model_validate(raw_receipt)
             snapshot = evidence.assumption_snapshot or {}
-            if snapshot.get("model") != "meli_platform_sotp":
+            if receipt.request.ticker != ticker or snapshot.get("model") != model_engine(
+                receipt.recipe
+            ):
                 raise InputEvidenceError("input_recipe_engine_mismatch")
-            effective = effective_numeric_inputs(_mapping(snapshot.get("effective_model_inputs")))
-            verified = verify_meli_inputs(conn, receipt, effective_inputs=effective, as_of=cutoff)
+            effective = effective_numeric_inputs(
+                receipt.recipe, _mapping(snapshot.get("effective_model_inputs"))
+            )
+            verified = verify_model_input_receipt(
+                conn, receipt, effective_inputs=effective, as_of=cutoff
+            )
             if receipt.verified_at > cutoff or (
                 calculated_at and receipt.verified_at > calculated_at
             ):
@@ -294,7 +319,7 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
                 for item in verified.inputs
             )
             verified_population = True
-            replay = model_output(effective)
+            replay = model_output(receipt.recipe, effective)
             for key, stored in (
                 ("vps", evidence.npv_per_share),
                 ("equity_value", evidence.npv),
@@ -304,6 +329,8 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
                 ("credit_equity_value", snapshot.get("credit_equity_value_m")),
             ):
                 expected = replay[key]
+                if expected is None and stored is None:
+                    continue
                 if (
                     not isinstance(expected, (float, int))
                     or not isinstance(stored, (float, int))
@@ -312,7 +339,32 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
                     raise InputEvidenceError("persisted_model_output_replay_mismatch")
             if receipt.request.assumption_review is not None:
                 assumption_reviewed_at = receipt.request.assumption_review.reviewed_at.isoformat()
-            reasons.append("scenario_acceptance_unverified")
+            if purpose == "allocation" or receipt.recipe != CASHFLOW_RECIPE:
+                reasons.append("scenario_acceptance_unverified")
+            else:
+                scenario_raw = (evidence.provenance or {}).get("analyst_scenario_review")
+                source_raw = (evidence.provenance or {}).get("analyst_scenario_source")
+                if scenario_raw is None:
+                    raise InputEvidenceError("analyst_scenario_review_missing")
+                if source_raw is None or calculated_at is None:
+                    raise InputEvidenceError("analyst_scenario_source_missing")
+                scenario = AnalystCashflowScenarioReview.model_validate(scenario_raw)
+                if snapshot.get("analyst_scenario_review") != scenario.model_dump(mode="json"):
+                    raise InputEvidenceError("analyst_scenario_snapshot_mismatch")
+                verify_analyst_cashflow_scenarios(
+                    scenario,
+                    receipt,
+                    base_effective_inputs=effective,
+                    as_of=cutoff,
+                    calculated_at=calculated_at,
+                )
+                verify_analyst_scenario_source(
+                    AnalystCashflowScenarioSource.model_validate(source_raw),
+                    scenario,
+                    receipt,
+                    base_effective_inputs=effective,
+                    calculated_at=calculated_at,
+                )
         except sqlite3.Error:
             reasons.append("model_input_receipt_query_failed")
         except (ValueError, RuntimeError) as exc:
@@ -339,6 +391,7 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
     periods = [item.period_end for item in inputs if item.status == "admitted" and item.period_end]
     return ValuationReadiness(
         ticker=ticker,
+        purpose=purpose,
         evaluated_at=cutoff.isoformat(),
         ready=verified_population and not reasons,
         status=(
@@ -367,7 +420,11 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
 
 
 def load_valuation_readiness(
-    conn: sqlite3.Connection, ticker: str, *, as_of: datetime
+    conn: sqlite3.Connection,
+    ticker: str,
+    *,
+    as_of: datetime,
+    purpose: Literal["allocation", "analyst_memo"] = "allocation",
 ) -> ValuationReadiness:
     """Assess persisted evidence under one read snapshot; no writes/network/fallback.
 
@@ -378,6 +435,8 @@ def load_valuation_readiness(
     """
     if as_of.tzinfo is None or as_of.utcoffset() is None:
         raise ValueError("as_of must have a timezone")
+    if purpose not in {"allocation", "analyst_memo"}:
+        raise ValueError("valuation readiness purpose is unsupported")
     cutoff = as_of.astimezone(UTC)
     ticker = ticker.upper()
     original_factory = conn.row_factory
@@ -386,10 +445,11 @@ def load_valuation_readiness(
         owns_snapshot = not conn.in_transaction
         if owns_snapshot:
             conn.execute("BEGIN")
-        return _assess(conn, ticker, cutoff)
+        return _assess(conn, ticker, cutoff, purpose)
     except sqlite3.Error:
         return ValuationReadiness(
             ticker=ticker,
+            purpose=purpose,
             evaluated_at=cutoff.isoformat(),
             status="failed",
             reason_codes=("valuation_evidence_query_failed",),

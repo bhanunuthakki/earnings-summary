@@ -21,7 +21,8 @@
       "entrypoints": [
         "alembic/versions/0001_initial_schema.py",
         "src/sqlite_runtime.py",
-        "src/db.py"
+        "src/db.py",
+        "alembic/versions/0051_filing_xbrl_unit_protocol.py"
       ],
       "dependencies": [
         "requirements.lock",
@@ -58,17 +59,24 @@
       "entrypoints": [
         "execution/run_morning_pipeline.py",
         "execution/refresh_expected_earnings.py",
-        "execution/refresh_cache.py"
+        "execution/refresh_cache.py",
+        "execution/onboard_ticker.py",
+        "execution/onboard_pending_tickers.py",
+        "execution/prepare_decision_brief.py",
+        "src/pipeline/sec_onboarding_identity.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
-        "pytest tests/test_pipeline*.py -q"
+        "pytest tests/test_pipeline*.py -q",
+        "pytest tests/test_onboard_sec_fallback.py tests/test_sec_onboarding_identity.py tests/test_onboarding_state_authority.py tests/test_runtime_state_authority.py tests/test_decision_brief_workflow.py -q"
       ],
       "documentation": [
         "AGENTS.md",
-        "directives/data_pipeline_dag.md"
+        "directives/data_pipeline_dag.md",
+        "directives/onboard_pending_tickers.md",
+        "docs/quality/new-ticker-decision-grade-review-20261004.md"
       ],
       "version_ownership": "Git commit SHA & execution script CLI parameter specifications",
       "backup_ownership": "Git version control (code) and ephemeral checkpoint state in .tmp/ (excluded from static backup)",
@@ -95,16 +103,24 @@
         "src/sources/earnings_calendar.py",
         "src/sources/canonical_financial_series.py",
         "src/sources/registry.py",
-        "src/pipeline/source_policy.py"
+        "src/pipeline/source_policy.py",
+        "execution/continue_companyfacts_statements.py",
+        "src/provenance/companyfacts_statement_continuation.py",
+        "src/provenance/companyfacts_source_proof.py",
+        "src/provenance/financial_statement_admission.py",
+        "src/filings/processor_installation.py",
+        "src/filings/xbrl_units.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
-        "pytest tests/test_source_policy_contract.py -q"
+        "pytest tests/test_source_policy_contract.py -q",
+        "pytest tests/test_companyfacts_statement_continuation.py tests/test_financial_statement_admission.py tests/test_processor_installation.py tests/test_xbrl_units.py tests/test_filing_xbrl_unit_protocol_migration.py -q"
       ],
       "documentation": [
-        "directives/design_language.md"
+        "directives/design_language.md",
+        "directives/edgar_pipeline.md"
       ],
       "version_ownership": "Issuer Acquisition Policy hash & source policy versioning",
       "backup_ownership": "Git version control (code) and immutable source documents in ir_documents/ and transcripts/",
@@ -131,13 +147,19 @@
         "src/compute/metrics_engine/engine.py",
         "src/compute/metrics_engine/io.py",
         "src/compute/kpi_extract_summaries.py",
-        "src/dcf/valuation.py"
+        "src/dcf/valuation.py",
+        "execution/prepare_cashflow_dcf.py",
+        "src/dcf/cashflow_inputs.py",
+        "src/dcf/cashflow_refresh.py",
+        "src/dcf/cashflow_scenarios.py",
+        "src/dcf/input_recipes.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
-        "pytest tests/test_metrics_engine.py -q"
+        "pytest tests/test_metrics_engine.py -q",
+        "pytest tests/test_cashflow_input_evidence.py tests/test_cashflow_scenarios.py tests/test_valuation_readiness.py -q"
       ],
       "documentation": [
         "directives/data_provenance.md"
@@ -167,17 +189,24 @@
         "src/synthesis/lenses/catalyst_calendar.py",
         "src/macro_store.py",
         "src/research/qualitative_stress.py",
-        "execution/common_drawdown.py"
+        "execution/common_drawdown.py",
+        "execution/verify_decision_brief.py",
+        "src/research/decision_brief_workflow.py",
+        "src/research/decision_brief.py",
+        "src/research/memo_claim_support.py"
       ],
       "dependencies": [
         "financial_compute_engine"
       ],
       "test_commands": [
         "pytest tests/test_advisor_memos.py -q",
-        "pytest tests/test_qualitative_stress.py -q"
+        "pytest tests/test_qualitative_stress.py -q",
+        "pytest tests/test_decision_brief.py tests/test_memo_claim_support.py -q"
       ],
       "documentation": [
-        "HOW_TO_USE_REPORTS.md"
+        "HOW_TO_USE_REPORTS.md",
+        "src/advisor/skills/earnings-summary-investing/references/analysis-paths.md",
+        "docs/quality/new-ticker-decision-grade-review-20261004.md"
       ],
       "version_ownership": "Playbook revision & research lens template versioning",
       "backup_ownership": "Git version control (lens logic, report generators) plus cron/backup_db.py and execution/restore_drill.py for research artifacts",
@@ -203,17 +232,20 @@
       "entrypoints": [
         "src/llm/cli.py",
         "src/llm/model_eval.py",
-        "src/llm/model_ladder.py"
+        "src/llm/model_ladder.py",
+        "src/research/method_contract.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
-        "pytest tests/test_llm_budget.py -q"
+        "pytest tests/test_llm_budget.py -q",
+        "pytest tests/test_research_method_contract.py -q"
       ],
       "documentation": [
         "directives/cheapest_model_routing.md",
         "directives/model_eval_loop.md",
+        "src/advisor/skills/earnings-summary-investing/references/research-method.md",
         "directives/llm_quota_scheduling.md"
       ],
       "version_ownership": "Model ladder configuration version & eval dataset SHA-256 hashes",
@@ -373,13 +405,15 @@
       "language": "python",
       "entrypoints": [
         "Makefile",
-        "pyproject.toml"
+        "pyproject.toml",
+        "src/quality/static_quality_gate.py"
       ],
       "dependencies": [
         "requirements.lock"
       ],
       "test_commands": [
-        "pytest tests/test_calendar_end_to_end.py -q"
+        "pytest tests/test_calendar_end_to_end.py -q",
+        "pytest tests/test_static_quality_gate.py tests/test_inventory_static_quality.py -q"
       ],
       "documentation": [
         "AGENTS.md"

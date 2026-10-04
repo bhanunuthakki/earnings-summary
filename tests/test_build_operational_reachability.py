@@ -189,7 +189,18 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    assert len(graph.unknown_edges) == 125
+    # Ten new acquisition/authority fixture calls preserve synthetic db globals.
+    # Exact AST evidence is retained in followup-test-edge-census.json.
+    assert len(graph.unknown_edges) == 135
+    new_fixture_calls = (
+        {("tests/test_onboard_sec_fallback.py", line) for line in (70, 320, 365, 397, 403)}
+        | {("tests/test_onboarding_state_authority.py", line) for line in (31, 60, 75)}
+        | {
+            ("tests/test_scheduled_singleflight.py", 98),
+            ("tests/test_split_root_legacy_adapters.py", 25),
+        }
+    )
+    assert new_fixture_calls <= {(edge.source, edge.line) for edge in graph.unknown_edges}
     # Exact-period CLI and skill-maintenance checks add two test-owned calls.
     # Keep their computed entrypoints explicit without admitting production gaps.
     assert (
@@ -199,7 +210,7 @@ def test_actual_head_is_supported() -> None:
             kind="unknown",
             evidence="subprocess/runpy expression",
             confidence="low",
-            line=608,
+            line=622,
             unknown=True,
         )
         in graph.unknown_edges
@@ -211,7 +222,7 @@ def test_actual_head_is_supported() -> None:
             kind="unknown",
             evidence="subprocess/runpy expression",
             confidence="low",
-            line=160,
+            line=371,
             unknown=True,
         )
         in graph.unknown_edges

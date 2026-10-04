@@ -18,6 +18,10 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationInfo
 
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import FactReadModel, ProvenanceBundle
+from provenance.financial_statement_admission import (
+    ReviewedFinancialStatementRole,
+    verify_reviewed_financial_role,
+)
 from provenance.metric_ontology import MetricOntology
 
 FinancialReportConcept = Literal[
@@ -106,6 +110,7 @@ class FinancialTableCell(BaseModel):
     source_kind: str | None = None
     legacy_document_id: int | None = None
     source_retrieved_at: datetime | None = None
+    source_scope_label: Literal["consolidated", "combined_carve_out"] | None = None
 
     @property
     def available(self) -> bool:
@@ -208,6 +213,25 @@ def _admit_cell(
         reasons.append("active_metric_definition_or_binding_unavailable")
     if source.dimensions or source.scope_security_id is not None:
         reasons.append("nonconsolidated_financial_coordinate")
+    scope_label = None
+    if definition is not None:
+        reviewed_concept = definition.scope_constraints.get("financial_statement_concept")
+        reviews = definition.scope_constraints.get("financial_statement_reviews")
+        if reviewed_concept is not None:
+            try:
+                if reviewed_concept != concept or not isinstance(reviews, dict):
+                    raise ValueError("financial statement role mismatch")
+                role = ReviewedFinancialStatementRole.model_validate(
+                    reviews.get(value.observation_id)
+                )
+                verify_reviewed_financial_role(conn, role, bundle, cutoff=cutoff)
+                scope_label = role.context.source_scope_label
+            except (ValueError, RuntimeError, sqlite3.Error):
+                reasons.append("reviewed_financial_statement_context_unavailable")
+        elif source.consolidation_scope == "consolidated":
+            scope_label = "consolidated"
+        else:
+            reasons.append("financial_statement_scope_unqualified")
     if bundle.evidence is None or value.decimal_value is None or value.period_start is None:
         reasons.append("exact_reported_numeric_duration_unavailable")
     if value.period_end > cutoff:
@@ -259,6 +283,7 @@ def _admit_cell(
             "source_url": document[1] if document else None,
             "source_kind": document[2] if document else None,
             "source_retrieved_at": document[3] if document else None,
+            "source_scope_label": scope_label,
         }
     )
 
@@ -282,18 +307,34 @@ def read_financial_table(
             conn.execute("BEGIN")
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT DISTINCT binding.canonical_metric_cell_id,source.concept_name,target.metric_id "
+            "SELECT DISTINCT binding.canonical_metric_cell_id,"
+            "CASE WHEN source.concept_namespace='urn:earnings-summary:legacy:financial' "
+            "THEN source.concept_name ELSE json_extract(definition.scope_constraints_json,'$.financial_statement_concept') END,"
+            "target.metric_id "
             "FROM fact_cell_canonical_binding_revisions binding "
             "JOIN fact_cells_v2 source ON source.fact_cell_id=binding.fact_cell_id "
             "JOIN canonical_metric_cells target ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id "
+            "JOIN canonical_metric_definition_revisions definition ON definition.metric_id=target.metric_id "
             "JOIN fact_observations_v2 observation ON observation.observation_id=binding.source_observation_id "
             "JOIN evidence_document_versions document ON document.document_version_id=observation.document_version_id "
-            "WHERE document.ticker=? AND source.concept_namespace='urn:earnings-summary:legacy:financial' "
-            "AND source.concept_name IN (SELECT value FROM json_each(?)) "
+            "WHERE document.ticker=? AND ("
+            "(source.concept_namespace='urn:earnings-summary:legacy:financial' "
+            "AND source.concept_name IN (SELECT value FROM json_each(?))) "
+            "OR json_extract(definition.scope_constraints_json,'$.financial_statement_concept') "
+            "IN (SELECT value FROM json_each(?))) "
             "AND binding.binding_status='bound' "
             "AND julianday(binding.recorded_at)<=julianday(?) AND julianday(binding.knowledge_at)<=julianday(?) "
+            "AND julianday(definition.recorded_at)<=julianday(?) AND julianday(definition.knowledge_at)<=julianday(?) "
             "ORDER BY source.concept_name,binding.canonical_metric_cell_id",
-            (ticker, json.dumps(REPORT_CONCEPTS), cutoff.isoformat(), cutoff.isoformat()),
+            (
+                ticker,
+                json.dumps(REPORT_CONCEPTS),
+                json.dumps(REPORT_CONCEPTS),
+                cutoff.isoformat(),
+                cutoff.isoformat(),
+                cutoff.isoformat(),
+                cutoff.isoformat(),
+            ),
         ).fetchall()
         resolver, reader, ontology = (
             CanonicalFactResolutionEngine(conn),

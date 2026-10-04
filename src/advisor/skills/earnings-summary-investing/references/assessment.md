@@ -26,11 +26,24 @@ second scheduler or rerun production jobs. Read the quota registry before dispat
    skill-routing faults from prompt/model faults, data gaps, product capability
    gaps and missing owner decisions. Put each action at its source owner. Do not
    copy business logic or model-promotion policy into skill prose.
+   For affected research instructions, select a bounded case from
+   [research cases](research-cases.json) and load the actual
+   [method](research-method.md). Give the worker only the case request/evidence,
+   withholding expected outcomes until its response is recorded. Check sources,
+   judgment restraint and public actionability against the retained expectations.
+   Rotate cases within the existing time cap; defer untested cases explicitly.
 5. Fix demonstrated instruction faults in tracked source on an isolated branch.
    Rerun each affected case, a held-out paraphrase and a negative control. Check
    links, source drift and skill validity. Record source reviews explicitly.
    Model/prompt changes use their existing held-out evaluation and promotion gates;
    a successful skill smoke test cannot promote a model or analytical prompt.
+
+Use `scripts/check_investing_skill.py --check` for source and reference closure.
+Keep executable source references in prose outside fenced illustrative examples.
+After semantic review, register a new source with `--record-review`, a review note,
+`--add-reviewed-source` and its matching `--reviewed-source`. Name every changed
+source explicitly. Recording refuses incomplete closure or concurrent changes
+to the source, baseline or inspected skill prose; it does not approve deployment.
 
 ## Existing evidence readers
 

@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "purpose": "Synthetic instruction-planning probes; not issuer facts, live invocations or calibrated financial-quality evaluations.",
+  "worker_fields": ["id", "request", "evidence"],
+  "cases": [
+    {
+      "id": "moat-growth-alternative",
+      "request": "Assess whether SYNBANK's latest growth proves a stronger underwriting moat and give a useful next check for a public retail investor.",
+      "evidence": [
+        "Synthetic issuer release R1, quarter ended 2026-06-30, table 2: revenue grew 30%; interest rates rose; customer/product mix changed.",
+        "Synthetic call C1 segment 18, CFO: Our proprietary underwriting is superior. No vintage-level losses or model comparisons were disclosed.",
+        "R1 table 4 discloses aggregate delinquency and credit-loss expense. Comparative definitions are unchanged. No private customer data is available."
+      ],
+      "expected": [
+        "Separate management claim and growth outcome from proof of underwriting mechanism; consider rates and mix as alternative causes.",
+        "Describe the underwriting advantage as unproven from supplied public evidence, not a failed moat.",
+        "Use the next issuer release's aggregate delinquency/credit-loss disclosures as a limited proxy; identify the limitation and consequence without invented thresholds or private cohort homework."
+      ],
+      "held_out_request": "Can we infer a durable credit-selection edge from this quarter? Tell me what I could actually verify using public disclosures."
+    },
+    {
+      "id": "answer-later-and-open-part",
+      "request": "Report what management answered or left open in this earnings exchange.",
+      "evidence": [
+        "Synthetic call C2 has complete relevant exchange, no omitted response turns. Segment 41, analyst: What drove margin expansion, and did retention improve?",
+        "Segment 42, CFO: Mix helped. Segment 43, CEO: Pricing also helped. Segment 44, analyst: Can you quantify those effects and answer retention?",
+        "Segment 45, CFO: Mix added two percentage points and pricing added one. Segment 46, CEO: We are not disclosing retention figures. No other retention response occurs."
+      ],
+      "expected": [
+        "Recover all response/follow-up turns before classifying components.",
+        "Margin drivers and quantification were answered, including later response; retention figures were explicitly declined, leaving improvement unresolved.",
+        "Cite segment locators and report the material gap neutrally; do not infer deception or poor retention from the refusal."
+      ]
+    },
+    {
+      "id": "missing-late-qa",
+      "request": "Did management avoid the analyst's question about renewal pricing?",
+      "evidence": [
+        "Synthetic call C3 includes segments 1-50 only. Q&A has 80 segments; segments 51-80 were omitted by a context prefix limit.",
+        "Segment 50, analyst: Can you quantify renewal pricing and discounting? No management response is in the supplied prefix."
+      ],
+      "expected": [
+        "Classify insufficient transcript evidence, not not-addressed or avoidance.",
+        "Request the complete relevant response/follow-up turns through the existing transcript route and retain the coverage limit.",
+        "Do not claim full-call review, topic disappearance or management motive."
+      ],
+      "held_out_request": "The available excerpt ends at the pricing question. Is that evidence of a non-answer?"
+    },
+    {
+      "id": "speaker-and-framing-change",
+      "request": "Has the CFO become more pessimistic on demand?",
+      "evidence": [
+        "Synthetic prior call C4, prepared remarks segment 7, former CFO Alex: Demand remains strong.",
+        "Synthetic current call C5, Q&A segment 38, new CFO Sam answering a question about downside risks: We remain cautious about the macro environment.",
+        "No same-speaker/same-topic/context comparison is available. Both calls are text-only."
+      ],
+      "expected": [
+        "Do not infer a personal CFO sentiment change across different speakers and contexts.",
+        "Identify possible management-level wording difference with personnel/question-context limits, or leave the comparison unsupported.",
+        "Do not infer vocal emotion or numeric/calibrated sentiment from text."
+      ]
+    },
+    {
+      "id": "baseline-and-cutoff-gap",
+      "request": "Write the five-section post-earnings readout for the quarter ended 2026-03-31, including whether it beat our pre-call expectations.",
+      "evidence": [
+        "Synthetic issuer release R6 dated 2026-05-01: quarter revenue 110, on the same basis as management guidance of 100-105 dated 2026-02-01 in R5 table 1.",
+        "No saved owner pre-call brief and no consensus source are available.",
+        "Context contains a current July model revision and June KPI observations, both later than the May call. The runtime has not enforced the historical cutoff."
+      ],
+      "expected": [
+        "Preserve the five existing post-earnings sections and exact requested fiscal quarter.",
+        "Compare revenue with dated management guidance only; owner expectation and consensus comparisons are unavailable.",
+        "Separate subsequent model/KPI context from what was known at the call; do not present mixed context as an event-time reconstruction or invent a saved baseline."
+      ]
+    },
+    {
+      "id": "accepted-breach-with-other-gap",
+      "request": "Management sounds confident. Should we call our portfolio thesis intact or change its break threshold?",
+      "evidence": [
+        "Synthetic approved rule version T7-r2 and deterministic evaluation receipt E7: comparable admitted metric A breached its accepted break condition.",
+        "Metric B is unavailable; its binding has not been admitted. Current CEO says long-term prospects are excellent.",
+        "No owner amendment approval or revised model assumptions exist."
+      ],
+      "expected": [
+        "Preserve the confirmed breach and disclose the additional unresolved input; no all-clear result from confidence or incomplete evidence.",
+        "Do not change accepted thresholds or infer an approved amendment.",
+        "Identify review/re-underwriting and the next supported public evidence; do not invent fair value or position size."
+      ]
+    },
+    {
+      "id": "early-evaluation-no-model",
+      "request": "Produce a short investment thesis and recommended position size for SYNSOFT, a company under initial evaluation.",
+      "evidence": [
+        "Synthetic annual filing R8 establishes the product and revenue model. No accepted thesis, supported valuation recipe, current model assumptions or full-account portfolio snapshot is available.",
+        "Only a draft switching-cost hypothesis exists. Retention is not disclosed; risk factors name migration and competitor pricing risks."
+      ],
+      "expected": [
+        "Label the hypothesis preliminary, test public support and the company-specific counter, and state coverage/valuation limits.",
+        "Give the next public proof; do not invent a quantified central bet, non-consensus risks, fair value or readiness.",
+        "Route sizing to allocation with full-book context; do not silently change evaluation level or create an accepted thesis."
+      ]
+    },
+    {
+      "id": "simple-definition-negative-control",
+      "request": "What does operating margin mean? One sentence, please.",
+      "evidence": [],
+      "expected": [
+        "Give a concise definition; do not impose company research, moat tests, transcript collection, a model or a memo."
+      ]
+    }
+  ]
+}

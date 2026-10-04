@@ -545,6 +545,8 @@ def _meli_authority(repo_root: Path, path: Path) -> tuple[Path, str]:
         request = ModelInputRequest.model_validate(payload.get("input_evidence"))
     except (ValueError, AttributeError) as exc:
         raise InputEvidenceError("model_input_request_missing_or_invalid") from exc
+    if request.ticker != "MELI":
+        raise InputEvidenceError("meli_input_recipe_ticker_mismatch")
     if request.recipe != MELI_INPUT_RECIPE:
         raise InputEvidenceError("model_input_recipe_mismatch")
     for hint_path, nested in (

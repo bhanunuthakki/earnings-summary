@@ -35,10 +35,10 @@ route is not authority to run it on production.
 | Task | Read or inspect first | Authorized generation or mutation route |
 | --- | --- | --- |
 | Portfolio/evaluation roster and evaluation level | `GET /api/work-os/portfolio`; `GET /api/work-os/evaluation`; `src/pipeline/work_os_evaluation.py` | Onboarding: `execution/onboard_ticker.py`; use current owner-approved scope |
-| Company research / initiating coverage / memo | Existing `output/research/<TICKER>/`; `src/report/builder.py`; `src/report/sections/` | `execution/build_artifacts.py --db-path <explicit> --ticker <TICKER>`; `src/report/renderers/workspace_html.py` |
+| Company research / initiating coverage / memo | [New-company flow](analysis-paths.md#earnings-and-new-company-evaluation); existing `output/research/<TICKER>/`; `src/report/builder.py`; `src/report/sections/` | Advance source/fact stages and retain preliminary coverage; `execution/build_artifacts.py --db-path <explicit> --ticker <TICKER>`; `src/report/renderers/workspace_html.py` |
 | Pre-earnings preview | Current roster eligibility, event date, exact fiscal identity and current brief | `execution/generate_pre_earnings_briefs.py --db-path <explicit> --ticker <TICKER> --as-of <date>`; implementation `src/earnings_brief.py` |
 | Post-earnings readout | Selected transcript's fiscal period and complete package | `execution/generate_post_earnings_readouts.py --db-path <explicit> --ticker <TICKER>`; `src/earnings_readout.py`; evaluation names: `POST /api/earnings-readout/generate` |
-| Thesis monitoring / threshold check | Holdings JSON; `src/compute/thesis_evaluator.py`; `src/report/sections/thesis.py` | The evaluator CLI writes run accounting even with `--dry-run`; use only when that write is authorized. For observation-only assessment, use the no-write evaluator function with an explicit read-only connection and canonical holdings directory |
+| Thesis monitoring / threshold check | Holdings JSON; `src/compute/thesis_evaluator.py`; `src/report/sections/thesis.py` | The evaluator CLI writes run accounting even with `--dry-run`; use only when that write is authorized. For observation-only assessment, use the no-write evaluator function with an explicit read-only connection and canonical holdings directory; it supports the current cutoff only, not historical replay |
 | Counter-case / prove-or-kill research | Approved thesis and annual filings, risk factors and transcripts | Source-backed analyst counter-case through admitted readers. Legacy `execution/pressure_test_thesis.py` is unavailable for this skill: it forces a checkout-local DB, reads legacy facts and writes diligence |
 | Thesis revision from notes / analysis / article | Approved narrative and rule versions; supplied claims; [revision path](analysis-paths.md#thesis-revision-from-notes-or-an-article) | Prepare a cited before/after proposal. Governed Ask diff and decision: `src/research/proposal_approval.py`; ledger drafts: `src/research/thesis_artifact.py`; explicit amendment approval remains required |
 | Valuation / comps / scenarios / model update | `execution/valuation_preflight.py --db-path <explicit> --ticker <TICKER>`; `src/dcf/readiness.py`; current `dcf/` workbook | `execution/refresh_dcf.py`; `execution/dcf_sheets.py`; preserve owner assumptions and applicable business-model route |
@@ -47,8 +47,8 @@ route is not authority to run it on production.
 | Portfolio risk / concentration / overlap | `execution/get_portfolio_risk_matrix.py`; `src/allocation/book_risk.py`; `src/allocation/what_if.py`; snapshot as-of and coverage; full holdings/account readers in the allocation skill | `execution/refresh_portfolio_risk_snapshot.py` for authorized snapshot refresh |
 | Next-dollar allocation / taxes / sizing | `src/advisor/skills/next-dollar-allocation/SKILL.md`; its `references/interfaces.md` | Follow that skill; use full holdings/accounts, owner context and recorded intent; no trade execution |
 | Research conversation / meeting preparation | Existing artifact, sources and typed context | `POST /api/ask/stream`; `execution/comments_server_research_routes.py`; can invoke LLM and retain conversation |
-| Acquisition gaps / issuer releases, slides, filings | `execution/capture_issuer_document_inventory.py`; current source receipts | `execution/manage_issuer_document_sources.py` prepare → validate → publish; `execution/fetch_ir_documents.py`; `execution/intake_documents.py` |
-| SEC expected coverage and financial facts | Existing issuer/filing identity and coverage receipts | `execution/sync_sec_filing_inventory.py`; `execution/capture_expected_sec_documents.py`; `execution/ingest_sec_filing_xbrl.py`; `execution/fetch_sec_xbrl.py` |
+| Acquisition gaps / issuer releases, slides, filings | Inspect current source receipts first; authorized `execution/capture_issuer_document_inventory.py` reads the DB and writes a local receipt | `execution/manage_issuer_document_sources.py` prepare → validate → publish; `execution/fetch_ir_documents.py`; `execution/intake_documents.py` |
+| SEC expected coverage and financial facts | Existing issuer/filing identity and coverage receipts; [EDGAR mechanics](../../../../../directives/edgar_pipeline.md) | `execution/fetch_sec_xbrl.py` independently captures CompanyFacts and admits supported facts; `execution/sync_sec_filing_inventory.py` → `execution/capture_expected_sec_documents.py` captures native packages; `execution/ingest_sec_filing_xbrl.py` processes supported packages with its approved bundle |
 | Transcript gaps / provenance | `transcripts/`; `execution/audit_transcript_evidence.py` | `execution/backfill_transcripts.py`; `execution/scan_ir_transcripts.py`; `execution/ingest_transcripts.py`; do not collect audio/webcasts |
 | Reviewed KPI and segment population | `src/compute/kpi_resolver.py`; `src/pipeline/kpi_report_reference_resolver.py` | `execution/produce_issuer_fact_manifest.py` creates inert reviewed input; `execution/apply_issuer_fact_manifest.py` admits KPI and segment facts only |
 | Sealed financial-statement facts | `src/provenance/fact_read_model.py`; declared issuer/document scope and governed extraction receipts | `execution/populate_source_fact_plane.py` plans publication from governed extraction runs; inspect its scope and commitments before authorized `--apply` |
@@ -70,14 +70,21 @@ route is not authority to run it on production.
   the latest quarter; the pre-earnings CLI has no exact fiscal selector.
   `--as-of` changes the run date. Never relabel a body or change live transcript
   selection to fit a requested period.
-- `capture_issuer_document_inventory.py` v1 validates calendar quarter ends. It
-  cannot represent every off-calendar fiscal period. The released workflow has
-  no exact-date analysis-scope planner. Retain the precise issuer dates and mark
-  this capability unavailable; do not round dates or route through unmerged code.
-  The released research-snapshot path uses full-population scope. A selected
-  brief quarter does not narrow that scope or prove archive completeness.
-- `execution/track_evaluation_names.py` has a fixed ticker list and checkout-local
-  database assumptions. It is not the general evaluation-list route.
+- This checkout's `capture_issuer_document_inventory.py` accepts the v1 request
+  and validates calendar quarter ends. It reads the configured database and writes
+  a local receipt; it does not acquire bytes, admit facts or certify completeness.
+  The newer main-branch `v2_alias` retained-inventory route is unavailable in this
+  checkout. Do not round off-calendar issuer dates or route through unmerged code.
+  Retain precise dates and mark unsupported requested scope unavailable.
+- `execution/track_evaluation_names.py` uses the configured `db.DB_PATH`, but
+  has a fixed ticker and template roster and writes state. It is not the general evaluation route.
+- This checkout lacks the newer DCF artifact-promotion and
+  `committed_cleanup_failed` recovery route. Inspect the current refresh/Sheet
+  implementation and its per-ticker results before authorized execution. A process
+  exit does not prove atomic publication or cleanup. Do not infer the newer-main
+  recovery guarantees or retry a possibly completed write without inspection.
+  Spreadsheet import/export can change model or external spreadsheet state;
+  authentication and each effect require their exact authorization.
 - Model preflight is read-only and does not fetch facts or grant write authority.
   Readiness exit codes are 0 ready, 2 blocked and 3 unavailable. Respect bank,
   holding-company, platform and sum-of-parts routes. An ETF has no corporate DCF.
@@ -91,7 +98,7 @@ route is not authority to run it on production.
   It does not establish full holdings or all-account coverage. Reconcile the full
   book before making portfolio-wide concentration or overlap claims.
 - `--dry-run` on the thesis evaluator skips verdict persistence but still commits
-  operational run logs. Do not describe it as read-only.
+  operational run logs. Persisted evaluation also registers rule versions. Do not describe either path as read-only. The no-write function uses current cutoff only.
 - Some entrypoints retain legacy defaults or helper database lookups. Inspect
   runtime configuration and explicit path propagation before live execution.
 
