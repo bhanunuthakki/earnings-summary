@@ -171,13 +171,16 @@ Computed at panel render (`/api/panel/portfolio`): ~11 price JSONs (~4.5 MB) par
 a 252×11 covariance ≈ well under half a second, dwarfed by the tracker fetches the
 page already awaits. No cache table; revisit only if the holdings list grows ~5×.
 
-## Known limitations (accepted 2026-06-11)
+## Observed zero-probability case (2026-10-04)
 
-- A saved prior can assign zero total probability to the available legs. The
-  current helper returns a zero weighted gap in this case. That is an unsupported
-  estimate, not evidence of zero return. Scenario acceptance must reject this
-  condition before any allocation-eligible use. The legacy helper behavior remains
-  a separate correction; this description does not change calculations.
+A saved prior can assign zero total probability to the available legs. The
+legacy helper at main `5f233142` raises a missing-key error for this case.
+The reviewed research-release source instead returns unavailable. Neither
+behavior supplies an accepted return estimate. Scenario acceptance must reject
+zero available probability mass before allocation-eligible use. This description
+changes no calculation or approval.
+
+## Known limitations (accepted 2026-06-11)
 
 - DCF `live_price` is at-valuation, not at-render — gaps drift a few days of price.
 - Historical covariance ⇒ regime-blind; shrinkage helps conditioning, not stationarity.

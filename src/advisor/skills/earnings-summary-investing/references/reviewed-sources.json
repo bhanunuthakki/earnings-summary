@@ -1,5 +1,5 @@
 {
-  "review_note": "Independent GPT-6.1 Sol advisory canonical terminology review 7532aec9be915d9a15f0157d64fa3ae4a308dfb92f9fb56f131016d6d8360589. Present weighted fair-value gaps, volatility sensitivity and historical macro association; calculations and financial acceptance unchanged. Zero-available-mass executable issue remains explicit and pending.",
+  "review_note": "Independent GPT-6.1 Sol advisory source review v4 verified exact 2c20dd97 owner hash. Fair-value gap and volatility sensitivity terms match current code. Dated zero-mass observation distinguishes legacy missing-key error from reviewed unavailable behavior. No calculations, financial acceptance or freshness changed. Review receipt: valuation-factor-terminology/independent-source-review-v4/findings.json; v3 verdict remains withdrawn.",
   "schema_version": 1,
   "sources": [
     {
@@ -76,7 +76,7 @@
     },
     {
       "path": "directives/next_dollar_model.md",
-      "sha256": "e3cfa8900ffaf6a436cdfdf371ea1e0cf089421aeccba8be09b6a56535cbdbd9"
+      "sha256": "2c20dd976ac56894716b0e4094ef48958835370bf5fa76553513538829e86b5f"
     },
     {
       "path": "directives/operations_governance_surface.md",
