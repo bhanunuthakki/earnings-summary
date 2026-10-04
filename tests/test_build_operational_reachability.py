@@ -189,7 +189,20 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    assert len(graph.unknown_edges) == 135
+    assert len(graph.unknown_edges) == 136
+    # The hidden-control browser regression retains one external browser import.
+    assert (
+        GraphEdge(
+            source="tests/test_design_computed_canary.py",
+            target="playwright.sync_api",
+            kind="dynamic_import",
+            evidence="dynamic import expression (target unresolved)",
+            confidence="low",
+            line=104,
+            unknown=True,
+        )
+        in graph.unknown_edges
+    )
     # A checked private-helper lookup removes the scheduled test's broad type
     # suppression. Its dynamic name remains visible as one test-only seam.
     assert (
