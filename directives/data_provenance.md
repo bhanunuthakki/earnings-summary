@@ -27,6 +27,39 @@ Every row in `documents` must have `(source_type, doc_type, file_path, sha256, f
 
 LLM-extracted documents must carry `parent_document_id` pointing at the primary document the LLM read from.
 
+### Analysis Evidence Scope and reconstruction (2026-10-02)
+
+An [Analysis Evidence Scope](../DEFINITIONS.md#analysis-evidence-scope) is a derived
+selection receipt. It is not a company-reported fact or proof that selected numbers
+are ready for a model. The immutable CLI artifact, processing scope, and research
+universe retain its full contents. The corpus key and selection configuration digest
+bind the receipt; the corpus manifest does not store its full contents or that
+configuration. No second database store is introduced.
+
+The receipt binds issuer, purpose, declared reporting periods, related accessions
+with reasons, knowledge/observation cutoffs, and the current authoritative SEC
+inventory identity and component digest. Its document population retains immutable
+expected metadata and explicit research/dependency/outside roles. Capture status is
+resolved separately at the consumer's declared cutoffs. Later recording can complete
+coverage when the source observation was already available by the knowledge cutoff.
+A source first retrieved after that cutoff requires a new selection with a later
+knowledge cutoff. The original receipt remains unchanged.
+
+All selected dependencies need positive capture evidence. Captured document issuer,
+accession, form, source URL, reporting period, blob identity, and observation clocks
+must match their expectations. Only primary research documents enter the text
+collection. Outside missing, failed, or unknown coverage stays visible. A scope
+receipt does not waive definition, unit, currency, accounting basis, comparability,
+source-fact publication, canonical resolution, reader parity, or model-input checks.
+
+New operations recompute the selection against the current inventory. Stored
+artifact verification uses the frozen selection observation cutoff and retained
+inventory records. It cannot skip an incomplete newer inventory visible at that
+time. The `require_current_inventory=False` internal read option is only for stored
+artifact verification; no CLI exposes it as a stale-write option. Processing and
+research identities include the scope identity when present. Unscoped identities
+and their retained serialized contents remain unchanged.
+
 ### Progressive proof and legacy repair (2026-09-19)
 
 Capture, extraction, source coverage, semantic admission, and reader parity are

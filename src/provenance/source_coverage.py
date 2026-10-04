@@ -39,6 +39,16 @@ DecisionKind: TypeAlias = Literal["deterministic", "manual", "imported"]
 _SHA_LENGTH = 64
 
 
+def expected_document_obligation_binding_id(
+    expected_document_id: str, obligation_revision_id: str
+) -> str:
+    """Return the immutable identity used by the source coverage ledger."""
+    return (
+        "expected-obligation-binding:"
+        + hashlib.sha256(f"{expected_document_id}\0{obligation_revision_id}".encode()).hexdigest()
+    )
+
+
 def _sha256(value: str) -> str:
     normalized = value.lower()
     if len(normalized) != _SHA_LENGTH or any(char not in "0123456789abcdef" for char in normalized):
@@ -423,11 +433,8 @@ class SourceCoverageLedger:
             ensure_ascii=False,
         )
         digest = hashlib.sha256(canonical.encode()).hexdigest()
-        binding_id = (
-            "expected-obligation-binding:"
-            + hashlib.sha256(
-                f"{record.expected_document_id}\0{obligation_revision_id}".encode()
-            ).hexdigest()
+        binding_id = expected_document_obligation_binding_id(
+            record.expected_document_id, obligation_revision_id
         )
         columns = (
             "binding_id",

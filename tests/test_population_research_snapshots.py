@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import sqlite3
@@ -137,12 +136,19 @@ def test_research_verifier_ignores_snapshot_recorded_after_observation(
             observed.isoformat(),
         ),
     )
+
+    def assembled_request(*_args: object, **_kwargs: object) -> ResearchSnapshotRequest:
+        return request
+
+    def verified_request(*_args: object) -> None:
+        return None
+
     monkeypatch.setattr(
         population,
         "assemble_research_snapshot_request",
-        lambda *_args, **_kwargs: request,
+        assembled_request,
     )
-    monkeypatch.setattr(population, "verify_research_snapshot", lambda *_args: None)
+    monkeypatch.setattr(population, "verify_research_snapshot", verified_request)
 
     before = verify_research_snapshots(
         conn,
@@ -317,10 +323,14 @@ def test_research_verifier_reassembles_terminal_request_at_o2(
             observed_o2.isoformat(),
         ),
     )
+
+    def assembled_request(*_args: object, **_kwargs: object) -> ResearchSnapshotRequest:
+        return current_request
+
     monkeypatch.setattr(
         population,
         "assemble_research_snapshot_request",
-        lambda *_args, **_kwargs: current_request,
+        assembled_request,
     )
 
     with pytest.raises(ValueError, match="assembled K,O request"):
@@ -341,7 +351,8 @@ def test_corpus_coordinate_requires_exact_document_set() -> None:
             manifest_id TEXT PRIMARY KEY,
             revision INTEGER NOT NULL,
             knowledge_cutoff TEXT,
-            recorded_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL,
+            corpus_key TEXT NOT NULL DEFAULT 'whole-archive'
         );
         CREATE TABLE search_corpus_manifest_seals (
             manifest_id TEXT PRIMARY KEY,
@@ -357,7 +368,7 @@ def test_corpus_coordinate_requires_exact_document_set() -> None:
     )
     for manifest_id, revision in (("superset", 2), ("exact", 1)):
         conn.execute(
-            "INSERT INTO search_corpus_manifests VALUES (?,?,?,?)",
+            "INSERT INTO search_corpus_manifests (manifest_id,revision,knowledge_cutoff,recorded_at) VALUES (?,?,?,?)",
             (
                 manifest_id,
                 revision,
@@ -488,7 +499,8 @@ def test_current_corpus_and_retrieval_coordinates_ignore_retained_and_future_his
             manifest_id TEXT PRIMARY KEY,
             revision INTEGER NOT NULL,
             knowledge_cutoff TEXT,
-            recorded_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL,
+            corpus_key TEXT NOT NULL DEFAULT 'whole-archive'
         );
         CREATE TABLE search_corpus_manifest_seals (
             manifest_id TEXT PRIMARY KEY,
@@ -531,7 +543,7 @@ def test_current_corpus_and_retrieval_coordinates_ignore_retained_and_future_his
     )
     for manifest_id, revision, knowledge_at, recorded_at in corpus_rows:
         conn.execute(
-            "INSERT INTO search_corpus_manifests VALUES (?,?,?,?)",
+            "INSERT INTO search_corpus_manifests (manifest_id,revision,knowledge_cutoff,recorded_at) VALUES (?,?,?,?)",
             (manifest_id, revision, knowledge_at.isoformat(), recorded_at.isoformat()),
         )
         conn.execute(
@@ -677,7 +689,8 @@ def test_current_processing_and_fact_coordinates_select_latest_complete_as_of_o(
         CREATE TABLE document_processing_snapshot_headers (
             processing_snapshot_id TEXT PRIMARY KEY,
             cutoff_at TEXT NOT NULL,
-            recorded_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL,
+            scope_json TEXT NOT NULL DEFAULT '{}'
         );
         CREATE TABLE document_processing_snapshot_seals (
             processing_snapshot_id TEXT PRIMARY KEY,
@@ -712,7 +725,7 @@ def test_current_processing_and_fact_coordinates_select_latest_complete_as_of_o(
         );
         CREATE TABLE canonical_fact_resolution_snapshot_seals (
             resolution_snapshot_id TEXT PRIMARY KEY,
-            sealed_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL
         );
         CREATE TABLE canonical_fact_resolution_snapshot_scope_members (
             resolution_snapshot_id TEXT NOT NULL,
@@ -753,7 +766,7 @@ def test_current_processing_and_fact_coordinates_select_latest_complete_as_of_o(
         ontology_id = f"ontology-{suffix}"
         resolution_id = f"resolution-{suffix}"
         conn.execute(
-            "INSERT INTO document_processing_snapshot_headers VALUES (?,?,?)",
+            "INSERT INTO document_processing_snapshot_headers (processing_snapshot_id,cutoff_at,recorded_at) VALUES (?,?,?)",
             (processing_id, _CUTOFF.isoformat(), clock.isoformat()),
         )
         conn.execute(
@@ -813,15 +826,17 @@ def test_current_processing_and_fact_coordinates_select_latest_complete_as_of_o(
             (generation_id, "resolution-current", clock.isoformat()),
         )
 
-    assert population._processing_coordinate(
+    assert getattr(population, "_processing_coordinate")(
         conn,
         "issuer-a",
         _CUTOFF,
         observed,
     ) == ("processing-current", ("document-a",))
-    assert population._ontology_coordinate(conn, _CUTOFF, observed) == "ontology-current"
     assert (
-        population._resolution_coordinate(
+        getattr(population, "_ontology_coordinate")(conn, _CUTOFF, observed) == "ontology-current"
+    )
+    assert (
+        getattr(population, "_resolution_coordinate")(
             conn,
             "issuer-a",
             ("entity-a",),
@@ -831,7 +846,7 @@ def test_current_processing_and_fact_coordinates_select_latest_complete_as_of_o(
         == "resolution-current"
     )
     assert (
-        population._canonical_projection_coordinate(
+        getattr(population, "_canonical_projection_coordinate")(
             conn,
             "resolution-current",
             "ontology-current",
@@ -881,7 +896,7 @@ def test_source_publication_coordinate_uses_knowledge_and_observation_clocks() -
         ("publication", observed.isoformat()),
     )
 
-    assert population._publication_coordinates(
+    assert getattr(population, "_publication_coordinates")(
         conn,
         "resolution",
         _CUTOFF,
@@ -893,7 +908,7 @@ def test_source_publication_coordinate_uses_knowledge_and_observation_clocks() -
         ((_CUTOFF + timedelta(hours=1)).isoformat(),),
     )
     with pytest.raises(ResearchSnapshotPlanError, match="source_fact_publication_seal_missing"):
-        population._publication_coordinates(
+        getattr(population, "_publication_coordinates")(
             conn,
             "resolution",
             _CUTOFF,
@@ -927,7 +942,7 @@ def test_expected_issuer_universe_comes_from_active_reporting_obligations() -> N
         """
     )
 
-    assert population._issuer_ids(conn, _CUTOFF) == ("issuer-without-processing",)
+    assert getattr(population, "_issuer_ids")(conn, _CUTOFF) == ("issuer-without-processing",)
 
 
 def test_stale_generation_coordinates_are_not_admitted() -> None:
@@ -938,7 +953,8 @@ def test_stale_generation_coordinates_are_not_admitted() -> None:
             manifest_id TEXT PRIMARY KEY,
             revision INTEGER NOT NULL,
             knowledge_cutoff TEXT,
-            recorded_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL,
+            corpus_key TEXT NOT NULL DEFAULT 'whole-archive'
         );
         CREATE TABLE search_corpus_manifest_seals (
             manifest_id TEXT PRIMARY KEY,
@@ -950,7 +966,7 @@ def test_stale_generation_coordinates_are_not_admitted() -> None:
             document_version_id TEXT,
             membership_status TEXT NOT NULL
         );
-        INSERT INTO search_corpus_manifests VALUES (
+        INSERT INTO search_corpus_manifests (manifest_id,revision,knowledge_cutoff,recorded_at) VALUES (
             'stale-manifest',1,'2026-07-28T00:00:00+00:00',
             '2026-07-28T00:00:00+00:00'
         );
@@ -990,7 +1006,7 @@ def test_stale_generation_coordinates_are_not_admitted() -> None:
         );
         CREATE TABLE canonical_fact_resolution_snapshot_seals (
             resolution_snapshot_id TEXT PRIMARY KEY,
-            sealed_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL
         );
         CREATE TABLE canonical_fact_resolution_snapshot_scope_members (
             resolution_snapshot_id TEXT NOT NULL,
@@ -1049,17 +1065,17 @@ def test_stale_generation_coordinates_are_not_admitted() -> None:
     with pytest.raises(ResearchSnapshotPlanError, match="exact_search_corpus_missing"):
         select_exact_corpus_coordinate(conn, ("document-a",), _CUTOFF)
     with pytest.raises(ResearchSnapshotPlanError, match="ontology_snapshot_missing"):
-        population._ontology_coordinate(conn, _CUTOFF)
+        getattr(population, "_ontology_coordinate")(conn, _CUTOFF)
     with pytest.raises(
         ResearchSnapshotPlanError,
         match="issuer_scoped_canonical_resolution_missing",
     ):
-        population._resolution_coordinate(conn, "issuer-a", ("entity-a",), _CUTOFF)
+        getattr(population, "_resolution_coordinate")(conn, "issuer-a", ("entity-a",), _CUTOFF)
     with pytest.raises(
         ResearchSnapshotPlanError,
         match="audited_canonical_projection_missing",
     ):
-        population._canonical_projection_coordinate(
+        getattr(population, "_canonical_projection_coordinate")(
             conn,
             "stale-resolution",
             "stale-ontology",
@@ -1083,12 +1099,12 @@ def test_input_commitment_changes_with_any_upstream_digest() -> None:
         }
     ]
 
-    assert population._population_input_commitment(
+    assert getattr(population, "_population_input_commitment")(
         _CUTOFF,
         ("issuer-a",),
         ("issuer-a",),
         baseline,
-    ) != population._population_input_commitment(
+    ) != getattr(population, "_population_input_commitment")(
         _CUTOFF,
         ("issuer-a",),
         ("issuer-a",),

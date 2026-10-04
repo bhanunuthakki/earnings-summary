@@ -57,6 +57,50 @@ Checkpoint scope and invocation inputs bind both paths. A changed root cannot
 reuse a checkpoint from another artifact set. This contract does not start a
 pipeline or change scheduler activation.
 
+## Analysis-specific evidence selection (2026-10-02)
+
+An [Analysis Evidence Scope](../DEFINITIONS.md#analysis-evidence-scope) selects the
+evidence required for one analysis. It does not change source acquisition policy or
+the eight pipeline stages. `src/provenance/analysis_scope.py` owns selection and
+verification. The request declares issuer, purpose, required reporting-period ends,
+knowledge cutoff, observation cutoff, and any additional accession packages with
+reasons. The receipt binds the current complete authoritative SEC inventory and
+its exact expected-document population. Latest reporting-period inclusion is the
+default; missing or ambiguous required periods fail explicitly.
+
+The same immutable receipt is an input to processing, corpus construction, and
+research assembly. Processing and research retain it. The corpus key and selection
+configuration digest bind it without storing the full receipt in the manifest.
+Selected periodic packages include known amendments. Unknown
+amendment periods block when the amendment could concern a declared base filing.
+An amendment filed before every declared base filing remains explicitly outside.
+Related current reports require explicit selection; unavailable original/amendment
+linkage remains a failure, not an inferred relationship.
+
+Capture must cover every selected package member. Primary filings become research
+documents. Generated report pages and other selected children remain required
+capture dependencies; they do not duplicate the primary research text. Applicable
+processing lanes, including XBRL extraction, remain mandatory. Processing, corpus,
+and research must agree on the exact primary document set.
+
+Unrelated archive gaps remain visible. A complete selected analysis does not make
+the archive complete or establish financial-fact admission or model readiness.
+The scoped artifact has its own identity. Full-population verification does not
+count it as full-population completion. Terminal research coordinates are issuer,
+knowledge cutoff, observation cutoff, and Analysis Evidence Scope identity when
+present. The existing unscoped coordinate and retrieval-mode conflict rule remain.
+
+New processing, corpus, and research operations require the current inventory.
+Verification of a stored artifact can explicitly reconstruct the inventory visible
+at the receipt's original observation cutoff. It cannot fall back past an incomplete
+newer inventory already visible at that cutoff. Historical verification is a read
+operation; it does not authorize a new write with a stale inventory.
+
+`execution/plan_analysis_evidence_scope.py` produces a selection-only receipt through
+an explicit read-only database connection. The [Operations contract](operations_governance_surface.md#analysis-evidence-scope-planning-and-use)
+owns its manual interface. This change adds no scheduled work, provider activation,
+financial publication, or production-state change.
+
 ## Stage sequence
 
 ```

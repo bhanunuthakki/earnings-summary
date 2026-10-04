@@ -166,6 +166,7 @@ def _record_review(
     note: str | None,
     reviewed: list[str],
     replacements: list[str],
+    additions: list[str],
 ) -> None:
     if not note or not note.strip():
         raise ValueError("record-review requires a semantic review note")
@@ -173,6 +174,7 @@ def _record_review(
     original_sources = {entry["path"]: entry["sha256"] for entry in entries}
     sources = dict(original_sources)
     renamed: set[str] = set()
+    added: set[str] = set()
     for replacement in replacements:
         old, separator, new = replacement.partition("=")
         if not separator or old not in sources or new in sources or old == new:
@@ -188,6 +190,18 @@ def _record_review(
         sources.pop(old)
         sources[new] = hashlib.sha256(candidate.read_bytes()).hexdigest()
         renamed.update((old, new))
+    for new in additions:
+        if new in original_sources or new in sources:
+            raise ValueError("addition must name one new, unlisted source without duplicates")
+        candidate = _safe_path(root, new)
+        if not candidate.is_file():
+            raise ValueError("addition source must be a safe existing file")
+        if new not in _ROOT_FILES and PurePosixPath(new).parts[0] not in _SOURCE_DIRS:
+            raise ValueError("addition is outside public procedure/code scope")
+        if candidate.suffix not in {".py", ".md", ".json", ".js"}:
+            raise ValueError("unsupported addition source type")
+        sources[new] = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        added.add(new)
     proposed_report, _ = check(root, baseline_relative, sources)
     if proposed_report["status"] == "invalid":
         raise ValueError(
@@ -195,9 +209,9 @@ def _record_review(
         )
     changed = cast(list[dict[str, str]], proposed_report["changed_sources"])
     changed_paths = {entry["path"] for entry in changed}
-    if set(reviewed) != changed_paths | renamed or len(reviewed) != len(set(reviewed)):
+    if set(reviewed) != changed_paths | renamed | added or len(reviewed) != len(set(reviewed)):
         raise ValueError("explicitly name each changed path with --reviewed-source")
-    if not changed and not renamed:
+    if not changed and not renamed and not added:
         return
     actual = {entry["path"]: entry["current_sha256"] for entry in changed}
     updated: dict[str, object] = {
@@ -253,6 +267,12 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="Record-review only: reviewed OLD=NEW source replacement; name both paths with --reviewed-source",
     )
+    parser.add_argument(
+        "--add-reviewed-source",
+        action="append",
+        default=[],
+        help="Record-review only: new reviewed public source; also name it with --reviewed-source",
+    )
     args = parser.parse_args(argv)
     root = Path(args.repo_root).resolve()
     report, payload = check(root, str(args.baseline))
@@ -266,12 +286,16 @@ def main(argv: list[str] | None = None) -> int:
                 args.review_note,
                 args.reviewed_source,
                 args.replace_reviewed_source,
+                args.add_reviewed_source,
             )
             report, _ = check(root, str(args.baseline))
         except (ValueError, OSError) as exc:
             report = {**report, "status": "invalid", "errors": [str(exc)]}
     elif not args.record_review and (
-        args.review_note is not None or args.reviewed_source or args.replace_reviewed_source
+        args.review_note is not None
+        or args.reviewed_source
+        or args.replace_reviewed_source
+        or args.add_reviewed_source
     ):
         report = {
             **report,

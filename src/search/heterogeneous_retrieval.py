@@ -14,7 +14,11 @@ from typing import Literal, Self, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from provenance.population_completeness import PopulationCompletenessLedger
-from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
+from provenance.research_snapshot import (
+    ResearchSnapshotRequest,
+    research_universe_commitment_payload,
+    verify_research_snapshot,
+)
 from provenance.search_index_lineage import load_projection_seal
 from provenance.verifier_identity import verifier_source_artifact_sha256
 from search.canonical_fact_projection import (
@@ -728,7 +732,9 @@ def _verify_research_coordinates(
     snapshot_request = ResearchSnapshotRequest.model_validate_json(
         str(research_header["request_json"])
     )
-    universe_payload = canonical_json(snapshot_request.research_universe.model_dump(mode="json"))
+    universe_payload = canonical_json(
+        research_universe_commitment_payload(snapshot_request.research_universe)
+    )
     if (
         str(universe["issuer_id"]) != snapshot_request.research_universe.issuer_id
         or str(universe["reporting_entity_ids_json"])

@@ -189,7 +189,7 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    assert len(graph.unknown_edges) == 132
+    assert len(graph.unknown_edges) == 138
     # A checked private-helper lookup removes the scheduled test's broad type
     # suppression. Its dynamic name remains visible as one test-only seam.
     assert (
@@ -241,7 +241,7 @@ def test_actual_head_is_supported() -> None:
             kind="unknown",
             evidence="subprocess/runpy expression",
             confidence="low",
-            line=160,
+            line=163,
             unknown=True,
         )
         in graph.unknown_edges
@@ -285,6 +285,13 @@ def test_actual_head_is_supported() -> None:
         and edge.target == "<dynamic process entrypoint>"
         for edge in graph.unknown_edges
     )
+    # The reviewed-source addition CLI regression retains all six computed calls.
+    assert {
+        edge.line
+        for edge in graph.unknown_edges
+        if edge.source == "instruction_tests/test_investing_skill_maintenance.py"
+        and edge.target == "<dynamic process entrypoint>"
+    } == {163, 192, 198, 202, 205, 213, 216}
     assert residual_source_edges == []
 
 
