@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from evals.harness import load_golden_document
+from quality import compatibility
 from quality.compatibility import CompatibilityEvidenceError, capture_compatibility_evidence
 from quality.git_env import clean_local_git_env
 
@@ -346,15 +350,40 @@ def test_undecodable_tracked_artifact_fails_closed(
 
 def test_nul_paths_preserve_whitespace_and_newlines(tmp_path: Path) -> None:
     root = _repo(tmp_path)
-    relative = "src/line\nbreak .py"
-    (root / relative).write_text("VALUE = 2\n", encoding="utf-8")
+    relatives = ["src/ leading [entry].py", "src/trailing .py"]
+    if os.name != "nt":
+        relatives.append("src/line\nbreak .py")
+    for relative in relatives:
+        (root / relative).write_text("VALUE = 2\n", encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-qm", "add unusual entrypoint")
     baseline = _git(root, "rev-parse", "HEAD")
 
     receipt = capture_compatibility_evidence(root, baseline)
 
-    assert relative in {item.path for item in receipt.entrypoint_parity}
+    assert set(relatives) <= {item.path for item in receipt.entrypoint_parity}
+
+
+def test_git_nul_decoding_preserves_newlines_and_spaces_without_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = ["src/ leading.py", "src/line\nbreak .py", "src/trailing .py"]
+    payload = b"\0".join(path.encode("utf-8") for path in paths) + b"\0"
+
+    def git_output(command: list[str], **options: object) -> subprocess.CompletedProcess[bytes]:
+        assert command == ["git", "-C", str(tmp_path), "ls-files", "-z", "--", "src/*.py"]
+        assert options["capture_output"] is True
+        assert options["check"] is True
+        assert "text" not in options
+        return subprocess.CompletedProcess(command, 0, payload, b"")
+
+    monkeypatch.setattr(compatibility.subprocess, "run", git_output)
+    decoder: object = getattr(compatibility, "_tracked_paths")
+    assert callable(decoder)
+    tracked_paths = cast(Callable[[Path, Sequence[str]], set[str]], decoder)
+
+    assert tracked_paths(tmp_path, ("src/*.py",)) == set(paths)
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_cli_receipt_is_json_and_parse_errors_are_nonzero(
