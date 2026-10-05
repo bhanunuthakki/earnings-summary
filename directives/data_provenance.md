@@ -489,3 +489,93 @@ One rehearsal never starts or satisfies that observation window. Removing legacy
 views, modules, migrations, or tables then requires a separate final owner approval,
 an explicit migration, and rollback proof. Historical facts and migration evidence
 remain durable until that separately approved retirement action.
+
+
+### Booking repair mechanisms (2026-10-03)
+
+An unresolved legacy KPI head can receive an immutable non-admitting projection
+through `src/pipeline/kpi_legacy_disposition_capture.py`. The projection seals
+all raw fact, definition and document fields. A version-two disposition manifest
+names at most 25 exact heads for one ticker. Its quarantine context and capture
+commit together. This does not create a reported observation or canonical
+admission. Correction and committed replay recheck the capture, source identity,
+owner, context head and absence of a successor. The raw read is a temporary repair
+seam. Retire it after unresolved heads have immutable captures or governed source
+corrections; financial consumers must not read it.
+
+KPI semantic contexts retain reviewed source precision and an optional reported
+period start. Historical null precision means unreviewed. Migration must not infer
+exactness from numeric storage. Reviewed captures bind each uncertainty qualifier
+to the same substantive source node. Exact-threshold consumers reject approximate,
+bounded, range and unknown precision. No midpoint, inferred interval or new
+uncertainty-aware threshold policy is authorized by this metadata. Period starts
+come from source review; readers do not relabel year-to-date values as quarters.
+
+Monetary magnitude checks compare compatible native scales with exact Decimal
+conversion. They preserve stored source values and units. Source-unqualified,
+quarantined, superseded or semantically incompatible neighbors cannot establish
+magnitude comparability. Excluded neighbors have an explicit diagnostic reason;
+absence of a magnitude anomaly does not admit a series.
+
+A historical managed issuer request names a reviewed exact period set, with at
+most twelve calendar quarters, in request version two. Normal collection retains
+its default window. Historical requests still require roster/source authorization,
+exact URL population, bytes, classification, publisher identity and writer gates.
+A period extension does not certify archive or extraction completeness.
+
+PDF extraction can open a restriction-only public PDF with an empty opening
+password. It preserves the original bytes. A required password or failed permission
+integrity check remains quarantined. Full-text and OCR extractor identities are
+versioned separately; an older failure cannot stand in for a run under new code.
+
+Current repair Judge receipts record the actual model and a sealed, current,
+purpose-specific qualification. Historical receipt versions keep their original
+serialized shape and model identity for reconstruction. They cannot authorize a
+new production apply. The independent synthetic hazard evaluation requires full
+case coverage, including blocked and unavailable evidence. Its result does not
+claim statistical calibration. Exact manifest, dry-run, review, code, J3 and owner
+approval gates remain separate.
+
+Reviewed financial transforms retain the reported native scale and source concept.
+Only the normalized currency output binds to a canonical financial metric. A raw
+USD-million source and its USD derivative must not compete in one canonical cell.
+Discrete cash flows are separate sealed formula observations: H1 minus Q1, nine
+months minus H1, and FY minus nine months. Operand identity, duration, currency,
+basis, scope and fiscal year must match. Canonical admission requires a separate
+reviewed binding. An unbound or unsealed derived fact remains unavailable.
+
+A thesis expression must distinguish quarterly FCF margin from TTM FCF margin.
+`fcf_margin` uses one matched standalone quarter. `ttm_fcf_margin` uses the ratio
+of four-quarter sums. `yoy_growth` compares the same fiscal quarter one year earlier
+and requires a positive prior value; `yoy_pp` subtracts percentage shares. Booking's
+universal two-quarter rules request the quarterly expressions and adjacent-quarter
+cadence explicitly. This does not change their numerical thresholds or other
+holdings' configured cadence. Marketing expense / gross bookings can request an
+explicit mixed GAAP/management basis while preserving each input's source basis.
+
+The reviewed financial definition and mapping also commit the source currency.
+Changing currency requires explicit definition revision review. A changed or
+retired canonical operand invalidates its derived consumer selection.
+`admit_exact_source_observations` accepts 1–100 sealed reported observation IDs
+with exact document, payload, locator, semantic and prior-binding commitments.
+Its receipt covers that bounded set only. It does not establish global ontology
+completeness. Canonical-resolution population policy v2 admits reviewed sealed
+derivatives; retained v1 receipts still reconstruct under their original policy.
+
+Source-fact population request v2 names at most 100 exact immutable observation
+IDs and their document SHA scopes. A reviewed KPI native projection commits the
+current raw head, admitted semantic context, effective definition, source node,
+explicit currency, precision and duration. Its source node must belong to the same
+successful extraction run as the original capture. It preserves the original
+observation and its stable native ID. An incompatible native publication blocks
+apply. Cumulative periods remain cumulative; generic GAAP without its explicit
+accounting standard and unsupported fiscal calendars remain unavailable. Request
+v1 and its historical cell policy keep their original serialized form.
+
+The shared canonical resolver validates every sealed descendant against its
+current canonical selection and binding. It rejects cycles and graphs above 32
+derivation levels or 500 observations. A stale derived selection is unavailable;
+its immutable resolution receipt remains intact. Derived publication and
+financial consumers use this same check. Financial binding replay requires the
+complete committed review, unchanged current mapping and definition, and exact
+reviewed clocks.

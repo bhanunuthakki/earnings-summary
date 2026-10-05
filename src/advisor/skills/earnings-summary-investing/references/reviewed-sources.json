@@ -1,5 +1,5 @@
 {
-  "review_note": "Separately briefed GPT-6.1 Sol advisory semantic review of the three exact current role/snapshot source owners in c9b53f3059eca7bc3ea1539b0da0cec92fb08bda4c2f94573c7f5f2df4bc4c8e, confirmed unchanged by clock-repair review 13c4e9488cb5b0e2beef2e923c6708401c2e306f79127226f6dc352b1d7350a5. Roles append reviewed definition metadata only; publication clocks require actual seals and a new snapshot. They do not accept financial populations, forecasts, scenarios or model readiness. Actual clock regressions and owning tests pass; final source and release checks remain separate.",
+  "review_note": "Bounded independent role source and current-owner review be5ba5edecb45fadfbd4ab62ca065240621d7dd43aaa0646399c6e5590d59875; scope semantics recused; source-only qualification, deterministic integration tests and native/financial readiness separate.",
   "schema_version": 1,
   "sources": [
     {
@@ -24,7 +24,7 @@
     },
     {
       "path": "directives/data_provenance.md",
-      "sha256": "caa695ed16b51577c1a0a82b8987f0e7aa49d07879102f7a3d5d453661d27271"
+      "sha256": "7fd8d12bb5fd7a16908551078f3290e909bf4ed996352bb3428b17bf511f1d3b"
     },
     {
       "path": "directives/dcf_gsheets_setup.md",
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "dc602c0a311fbca64f5b45074e94052aefa3475b6e1045a8e5841115a1403fa6"
+      "sha256": "e1e27f195fd0cf0b00ce31765cf28476637aa544aba43f2bc3a4dc6cd52322ca"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -124,7 +124,7 @@
     },
     {
       "path": "execution/capture_issuer_document_inventory.py",
-      "sha256": "609706ca065c179613e3c270a8b8df4d7e03ec8fb3cb92c17ac590c76296f1ac"
+      "sha256": "bfee5f09d733ad99cccdbf425ff2ad71ca8d89879f4437488ebe83052916d0c0"
     },
     {
       "path": "execution/comments_server.py",
@@ -148,7 +148,7 @@
     },
     {
       "path": "execution/fetch_ir_documents.py",
-      "sha256": "62f59b902037434e3e97c933311aebca95221c29cf8584c96a9e9ed1e73fc265"
+      "sha256": "b400a712dd0b67516f043bb0d598d1fd20703a1f0fb117ac5d2d354ca3939954"
     },
     {
       "path": "execution/fetch_sec_xbrl.py",
@@ -208,7 +208,7 @@
     },
     {
       "path": "execution/refresh_dcf.py",
-      "sha256": "54f41032754c5a7da3aa1569c37f090e3710ff3ca1ee7aa0557314cafdf70075"
+      "sha256": "554ff1c5745f732cd20bf8836d34fcb6d0227259e10f4017af032c8572377ddb"
     },
     {
       "path": "execution/refresh_portfolio_risk_snapshot.py",
@@ -232,7 +232,7 @@
     },
     {
       "path": "execution/sync_sec_filing_inventory.py",
-      "sha256": "371d7391ec40ecc360949a13ce3285541a20a61e206b4e30fd33ffee066bf6f7"
+      "sha256": "44a6e72c440857cee5580a9637ee3fd5cb3d874e23cb978e8439c096edc15820"
     },
     {
       "path": "execution/track_evaluation_names.py",
@@ -248,7 +248,7 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "1fb6b499fd60cbb17c2b7c9548d59b5f0c5dffb5503a13db25f1760a8bf95760"
+      "sha256": "51951535fba330e48884f3bb20abfba083632c3fd8fda0e6e11d9d96358339c2"
     },
     {
       "path": "scripts/check_investing_skill.py",
@@ -288,11 +288,11 @@
     },
     {
       "path": "src/dcf/grade_evidence.py",
-      "sha256": "f212cc8ca1a98586ba9cd46028087419877eb606b26f20aa1f333eb3e527ee88"
+      "sha256": "8d28c27a10d46d11f5167512fcd450340309f36d990370d88f6884d5cd2db0a6"
     },
     {
       "path": "src/dcf/readiness.py",
-      "sha256": "734c32a18c29d15ff6f3600deb081ed2cd3231e95556dd2b7e773bb524e749a4"
+      "sha256": "7147988b3e9cc844d198251e258803cd9e4f1215940cfe29d2c2d5185fc703cb"
     },
     {
       "path": "src/earnings_brief.py",
@@ -312,7 +312,7 @@
     },
     {
       "path": "src/integrations/portfolio_tracker_client.py",
-      "sha256": "f46e9dd651fa845148184a85a85f30d0c7bb3c578afa1aa0c761bd930902bd50"
+      "sha256": "6184c8768d17182b4575898e89388ed8056df0175dcc5fdbfe50b26fc00d2a68"
     },
     {
       "path": "src/integrations/portfolio_tracker_v1.py",

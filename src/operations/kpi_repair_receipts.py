@@ -63,6 +63,81 @@ class _Receipt(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class KpiJudgePurposeQualification(_Receipt):
+    """Attributable evaluation evidence for one model and repair purpose.
+
+    The qualification artifact is supplied by the independent evaluation owner.
+    Validation checks its sealed contract; it does not invent an evaluation or
+    promote a provider candidate because the provider advertises capability.
+    """
+
+    schema_version: Literal["kpi_judge_purpose_qualification.v1"] = (
+        "kpi_judge_purpose_qualification.v1"
+    )
+    purpose: Literal["kpi_source_repair", "kpi_semantic_disposition"]
+    capability_role: Literal["frontier-synthesizer"] = "frontier-synthesizer"
+    model_id: str = Field(min_length=1, max_length=128)
+    dataset_version: str = Field(min_length=1, max_length=128)
+    dataset_sha256: str = Field(pattern=_SHA256)
+    evaluator_code_sha256: str = Field(pattern=_SHA256)
+    run_evidence_sha256: str = Field(pattern=_SHA256)
+    attempted_cases: int = Field(gt=0)
+    passed_cases: int = Field(gt=0)
+    required_cases: int = Field(gt=0)
+    result: Literal["passed"]
+    evaluated_at: datetime
+    expires_at: datetime
+    content_sha256: str = Field(pattern=_SHA256)
+
+    @model_validator(mode="after")
+    def _qualification(self) -> KpiJudgePurposeQualification:
+        if self.evaluated_at.tzinfo is None or self.expires_at.tzinfo is None:
+            raise ValueError("qualification timestamps must be timezone-aware")
+        if self.expires_at <= self.evaluated_at:
+            raise ValueError("qualification expiry must follow evaluation")
+        if not self.attempted_cases == self.passed_cases == self.required_cases:
+            raise ValueError("qualification requires complete passing case coverage")
+        if self.content_sha256 != canonical_sha256(
+            self.model_dump(mode="json", exclude={"content_sha256"})
+        ):
+            raise ValueError("qualification receipt hash mismatch")
+        return self
+
+
+def _validate_judge_qualification(
+    *,
+    model: str,
+    purpose: str,
+    observed_at: datetime,
+    qualification: KpiJudgePurposeQualification | None,
+    legacy: bool,
+) -> None:
+    if legacy:
+        if model != "gpt-5.6-sol" or qualification is not None:
+            raise ValueError("historical judge receipt must retain its original model contract")
+        return
+    if qualification is None:
+        raise ValueError("current judge receipt requires purpose qualification")
+    if qualification.model_id != model or qualification.purpose != purpose:
+        raise ValueError("judge qualification model or purpose mismatch")
+    if not qualification.evaluated_at <= observed_at < qualification.expires_at:
+        raise ValueError("judge purpose qualification is not current")
+
+
+def judge_qualification_is_current(
+    judge: KpiRepairJudgeReceipt | KpiDispositionJudgeReceipt, *, now: datetime
+) -> bool:
+    """Historical receipts reconstruct, but do not grant new apply authority."""
+    qualification = judge.qualification
+    return bool(
+        now.tzinfo is not None
+        and qualification is not None
+        and qualification.model_id == judge.judge_model
+        and qualification.purpose == judge.purpose
+        and qualification.evaluated_at <= judge.observed_at <= now < qualification.expires_at
+    )
+
+
 class KpiRepairAttemptReceipt(_Receipt):
     schema_version: Literal["kpi_repair_attempt.v2", "kpi_repair_attempt.v3"] = (
         "kpi_repair_attempt.v2"
@@ -146,7 +221,7 @@ class KpiRepairAttemptReceipt(_Receipt):
 
 
 class KpiRepairJudgeReceipt(_Receipt):
-    schema_version: Literal["kpi_repair_judge.v2"] = "kpi_repair_judge.v2"
+    schema_version: Literal["kpi_repair_judge.v2", "kpi_repair_judge.v3"] = "kpi_repair_judge.v2"
     manifest_sha256: str = Field(pattern=_SHA256)
     dry_run_receipt_sha256: str = Field(pattern=_SHA256)
     review_bundle_sha256: str = Field(pattern=_SHA256)
@@ -154,7 +229,8 @@ class KpiRepairJudgeReceipt(_Receipt):
     purpose: Literal["kpi_source_repair"] = "kpi_source_repair"
     rubric_version: str = Field(min_length=1, max_length=80)
     evidence_tier: Literal["J2", "J3"]
-    judge_model: Literal["gpt-5.6-sol"] = "gpt-5.6-sol"
+    judge_model: str = Field(default="gpt-5.6-sol", min_length=1, max_length=128)
+    qualification: KpiJudgePurposeQualification | None = None
     judge_run_id: str = Field(min_length=1, max_length=160)
     prompt_sha256: str = Field(pattern=_SHA256)
     response_sha256: str = Field(pattern=_SHA256)
@@ -173,10 +249,27 @@ class KpiRepairJudgeReceipt(_Receipt):
 
     @model_validator(mode="after")
     def _hash_matches(self) -> KpiRepairJudgeReceipt:
+        _validate_judge_qualification(
+            model=self.judge_model,
+            purpose=self.purpose,
+            observed_at=self.observed_at,
+            qualification=self.qualification,
+            legacy=self.schema_version == "kpi_repair_judge.v2",
+        )
         payload = self.model_dump(mode="json", exclude={"content_sha256"})
         if self.content_sha256 != canonical_sha256(payload):
             raise ValueError("KPI repair judge receipt hash mismatch")
         return self
+
+    @model_serializer(mode="wrap")
+    def _historical_shape(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        payload = handler(self)
+        if not isinstance(payload, dict):
+            raise TypeError("judge serializer must return an object")
+        result = cast("dict[str, object]", payload)
+        if self.schema_version == "kpi_repair_judge.v2":
+            result.pop("qualification", None)
+        return result
 
 
 class KpiDispositionAttemptReceipt(_Receipt):
@@ -216,7 +309,9 @@ class KpiDispositionAttemptReceipt(_Receipt):
 
 
 class KpiDispositionJudgeReceipt(_Receipt):
-    schema_version: Literal["kpi_disposition_judge.v1"] = "kpi_disposition_judge.v1"
+    schema_version: Literal["kpi_disposition_judge.v1", "kpi_disposition_judge.v2"] = (
+        "kpi_disposition_judge.v1"
+    )
     manifest_sha256: str = Field(pattern=_SHA256)
     dry_run_receipt_sha256: str = Field(pattern=_SHA256)
     review_bundle_sha256: str = Field(pattern=_SHA256)
@@ -224,7 +319,8 @@ class KpiDispositionJudgeReceipt(_Receipt):
     purpose: Literal["kpi_semantic_disposition"] = "kpi_semantic_disposition"
     rubric_version: str = Field(min_length=1, max_length=80)
     evidence_tier: Literal["J2", "J3"]
-    judge_model: Literal["gpt-5.6-sol"] = "gpt-5.6-sol"
+    judge_model: str = Field(default="gpt-5.6-sol", min_length=1, max_length=128)
+    qualification: KpiJudgePurposeQualification | None = None
     judge_run_id: str = Field(min_length=1, max_length=160)
     prompt_sha256: str = Field(pattern=_SHA256)
     response_sha256: str = Field(pattern=_SHA256)
@@ -243,10 +339,27 @@ class KpiDispositionJudgeReceipt(_Receipt):
 
     @model_validator(mode="after")
     def _hash_matches(self) -> KpiDispositionJudgeReceipt:
+        _validate_judge_qualification(
+            model=self.judge_model,
+            purpose=self.purpose,
+            observed_at=self.observed_at,
+            qualification=self.qualification,
+            legacy=self.schema_version == "kpi_disposition_judge.v1",
+        )
         payload = self.model_dump(mode="json", exclude={"content_sha256"})
         if self.content_sha256 != canonical_sha256(payload):
             raise ValueError("KPI disposition judge receipt hash mismatch")
         return self
+
+    @model_serializer(mode="wrap")
+    def _historical_shape(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        payload = handler(self)
+        if not isinstance(payload, dict):
+            raise TypeError("judge serializer must return an object")
+        result = cast("dict[str, object]", payload)
+        if self.schema_version == "kpi_disposition_judge.v1":
+            result.pop("qualification", None)
+        return result
 
 
 def seal_attempt(**values: object) -> KpiRepairAttemptReceipt:
@@ -268,7 +381,12 @@ def seal_attempt(**values: object) -> KpiRepairAttemptReceipt:
 
 
 def seal_judgment(**values: object) -> KpiRepairJudgeReceipt:
-    payload = {"schema_version": "kpi_repair_judge.v2", **values}
+    payload = {
+        "schema_version": "kpi_repair_judge.v3"
+        if values.get("qualification") is not None
+        else "kpi_repair_judge.v2",
+        **values,
+    }
     return KpiRepairJudgeReceipt.model_validate(
         {**payload, "content_sha256": canonical_sha256(payload)}
     )
@@ -282,7 +400,12 @@ def seal_disposition_attempt(**values: object) -> KpiDispositionAttemptReceipt:
 
 
 def seal_disposition_judgment(**values: object) -> KpiDispositionJudgeReceipt:
-    payload = {"schema_version": "kpi_disposition_judge.v1", **values}
+    payload = {
+        "schema_version": "kpi_disposition_judge.v2"
+        if values.get("qualification") is not None
+        else "kpi_disposition_judge.v1",
+        **values,
+    }
     return KpiDispositionJudgeReceipt.model_validate(
         {**payload, "content_sha256": canonical_sha256(payload)}
     )

@@ -465,6 +465,20 @@
     },
     {
       "disposition": "schema_field",
+      "evidence": "_magnitude_guard_violation compares only this literal tuple of KpiSemanticContext data fields between admitted contexts. The returned attributes are compared for equality; they are not invoked or used to select code.",
+      "fingerprint": "da529716f3925be1878d9ad85db3586b0d08059cd6dda4d5b4acc4e52ab03998",
+      "line": 424,
+      "path": "src/pipeline/kpi_persistence.py",
+      "targets": [
+        "accounting_basis",
+        "consolidation_scope",
+        "dimensions",
+        "period_role",
+        "publication_lane"
+      ]
+    },
+    {
+      "disposition": "schema_field",
       "evidence": "getattr reads only _COMPARE_METRIC_ROWS TickerMetrics fields.",
       "fingerprint": "e5ec682a7e3bd2b59d5d40013de8200dca58759eb7aa6d15e3ed70017b8b1b31",
       "line": 2005,
@@ -495,6 +509,31 @@
     },
     {
       "disposition": "closed_literal_set",
+      "evidence": "resolve_analysis_coverage iterates only the fixed literal source-identity field tuple and reads each field from the schema-validated frozen ExpectedDocument. The attribute name is not supplied by a request or source document; the value is compared with captured metadata and is not invoked.",
+      "fingerprint": "9f9e9e19676fb26ca0829cb61b7961b2d82330e2f17874670b867878825fc05d",
+      "line": 450,
+      "path": "src/provenance/analysis_scope.py",
+      "targets": [
+        "issuer_id",
+        "document_type",
+        "form_type",
+        "accession_number",
+        "source_url"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "resolve_analysis_coverage iterates only the fixed literal period_start/period_end tuple on the schema-validated frozen ExpectedDocument. These reads enforce exact source-period equality; they perform no dynamic dispatch or resource selection.",
+      "fingerprint": "0a72df9f575cedbd860b3e28c22f863733d7edc593d202175b02ba65b8080186",
+      "line": 453,
+      "path": "src/provenance/analysis_scope.py",
+      "targets": [
+        "period_start",
+        "period_end"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
       "evidence": "getattr projects only _DISPOSITION_COLUMNS fields.",
       "fingerprint": "dedf20b2e0c84ce6b6486f8c8b65f89c4321adf4b8188cc24c03bd45b6c204c1",
       "line": 220,
@@ -511,6 +550,29 @@
       "path": "src/provenance/filing_xbrl_extraction_ledger.py",
       "targets": [
         "_SEAL_COLUMNS"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "publish_discrete_quarter compares only the local literal fields tuple on the selected operands' FactCellV2 source coordinates. The returned attributes are compared for equality; they are not invoked or used to select code.",
+      "fingerprint": "bada77fb2be45ecf78627350ff7b84dae19079a7ba05ced2fda8b5bdeb793ec4",
+      "line": 139,
+      "path": "src/provenance/financial_derivations.py",
+      "targets": [
+        "reporting_entity_id",
+        "scope_security_id",
+        "concept_namespace",
+        "concept_name",
+        "taxonomy_name",
+        "taxonomy_version",
+        "accounting_basis",
+        "consolidation_scope",
+        "period_kind",
+        "period_start",
+        "fiscal_year",
+        "dimensions",
+        "unit_key",
+        "currency"
       ]
     },
     {
@@ -681,31 +743,6 @@
         "_build_quarter_cells",
         "_build_annual_cells"
       ]
-    },
-    {
-      "disposition": "closed_literal_set",
-      "evidence": "resolve_analysis_coverage iterates only the fixed literal source-identity field tuple and reads each field from the schema-validated frozen ExpectedDocument. The attribute name is not supplied by a request or source document; the value is compared with captured metadata and is not invoked.",
-      "fingerprint": "9f9e9e19676fb26ca0829cb61b7961b2d82330e2f17874670b867878825fc05d",
-      "line": 450,
-      "path": "src/provenance/analysis_scope.py",
-      "targets": [
-        "issuer_id",
-        "document_type",
-        "form_type",
-        "accession_number",
-        "source_url"
-      ]
-    },
-    {
-      "disposition": "closed_literal_set",
-      "evidence": "resolve_analysis_coverage iterates only the fixed literal period_start/period_end tuple on the schema-validated frozen ExpectedDocument. These reads enforce exact source-period equality; they perform no dynamic dispatch or resource selection.",
-      "fingerprint": "0a72df9f575cedbd860b3e28c22f863733d7edc593d202175b02ba65b8080186",
-      "line": 453,
-      "path": "src/provenance/analysis_scope.py",
-      "targets": [
-        "period_start",
-        "period_end"
-      ]
     }
   ],
   "graph_provenance": {
@@ -713,7 +750,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "c1b1d740879ae873c3df971ae837eb9069adfd257226c7f8b6eca98a3a0eb2bf",
+      "source_sha256": "9fa1d575a19b5e6fb8ebdaffd364bb62b8a5808236dc03d2c06819fadf7cf726",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

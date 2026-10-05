@@ -21,7 +21,7 @@ from compute.thesis_metric_series import (
 )
 from models.facts import Unit
 from pipeline.kpi_definition_revisions import persist_kpi_definition_revision
-from pipeline.kpi_semantics import persist_kpi_semantic_context
+from pipeline.kpi_semantics import KpiSourcePrecision, persist_kpi_semantic_context
 from tests import test_source_fact_repository as foundation
 from tests.fixtures.kpi_revision_setup import (
     NOW,
@@ -312,12 +312,18 @@ def _kpi_database(text: str = "12.5") -> sqlite3.Connection:
     persist_kpi_semantic_context(
         conn,
         kpi_fact_id=fact_id,
-        context=semantic_fixture().model_copy(update={"source_value_text": text}),
+        context=semantic_fixture().model_copy(
+            update={"source_value_text": text, "source_precision": KpiSourcePrecision(kind="exact")}
+        ),
         reviewed_by="owner",
         knowledge_at=NOW,
         kpi_definition_revision_id=definition.kpi_definition_revision_id,
     )
     return conn
+
+
+# Shared admitted fixture for precision-lineage tests.
+kpi_database_fixture = _kpi_database
 
 
 def test_admitted_kpi_level_has_revision_and_source_manifest() -> None:
@@ -402,7 +408,12 @@ def test_kpi_proportion_is_converted_to_percentage_points() -> None:
         persist_kpi_semantic_context(
             conn,
             kpi_fact_id=fact_id,
-            context=semantic_fixture().model_copy(update={"source_value_text": "0.65"}),
+            context=semantic_fixture().model_copy(
+                update={
+                    "source_value_text": "0.65",
+                    "source_precision": KpiSourcePrecision(kind="exact"),
+                }
+            ),
             reviewed_by="owner",
             knowledge_at=NOW,
             kpi_definition_revision_id=definition.kpi_definition_revision_id,
@@ -494,3 +505,48 @@ def test_distinct_entities_without_population_is_invalid() -> None:
             right=_level("operating_income"),
             allow_distinct_entities=True,
         )
+
+
+def test_yoy_growth_uses_matched_discrete_quarter_and_preserves_lineage(
+    canonical_conn: sqlite3.Connection,
+) -> None:
+    seed_table(canonical_conn, _rows({"revenue": [100, 200, 400, 800, 110, 180]}))
+    result = calculate_metric_series(
+        canonical_conn,
+        "SYNTH",
+        MetricExpression(operation="yoy_growth", input=_level("revenue")),
+    )
+    assert result.status == "available"
+    assert [point.value for point in result.points] == [Decimal(10), Decimal(-10)]
+    assert all(point.unit == "percent" and point.currency is None for point in result.points)
+    assert result.source_manifests
+
+
+def test_yoy_growth_nonpositive_prior_is_unavailable(canonical_conn: sqlite3.Connection) -> None:
+    seed_table(canonical_conn, _rows({"operating_cash_flow": [0, 10, 10, 10, 20]}))
+    result = calculate_metric_series(
+        canonical_conn,
+        "SYNTH",
+        MetricExpression(operation="yoy_growth", input=_level("operating_cash_flow")),
+    )
+    assert result.status == "unavailable"
+    assert result.reason_code == "yoy_growth_requires_positive_prior"
+
+
+def test_quarter_fcf_margin_does_not_use_ttm_or_ytd(canonical_conn: sqlite3.Connection) -> None:
+    seed_table(
+        canonical_conn,
+        _rows(
+            {
+                "revenue": [100, 200],
+                "operating_cash_flow": [40, 90],
+                "capital_expenditure": [-10, -10],
+            }
+        ),
+    )
+    result = calculate_metric_series(
+        canonical_conn, "SYNTH", MetricExpression(operation="fcf_margin")
+    )
+    assert result.status == "available"
+    assert [point.value for point in result.points] == [Decimal(30), Decimal(40)]
+    assert result.source_manifests

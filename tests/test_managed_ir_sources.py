@@ -37,6 +37,14 @@ from pipeline.managed_ir_sources import (
 from runtime.job_runtime import JobLock
 
 
+@pytest.fixture(autouse=True)
+def configured_synthetic_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Each test owns this synthetic authority, independent of its launch environment.
+    monkeypatch.setenv(
+        "EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "state" / "data" / "portfolio.db")
+    )
+
+
 def _sha(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, separators=(",", ":"), sort_keys=True).encode()
@@ -60,6 +68,10 @@ def _request() -> IssuerDocumentStagingRequest:
         inventory_request=inventory,
         inventory_request_sha256=inventory.request_sha256,
     )
+
+
+# Shared synthetic request for historical-window boundary tests.
+request_fixture = _request
 
 
 def _outcome() -> CategorizationResult:
@@ -143,7 +155,7 @@ def _two_receipt(root: Path, request: IssuerDocumentStagingRequest) -> IssuerDoc
     receipt = IssuerDocumentStagingReceipt.model_validate(
         {**unsigned, "receipt_sha256": _sha(unsigned)}
     )
-    (staging / "staging_receipt.json").write_text(receipt.canonical_json + "\n", encoding="utf-8")
+    (staging / "staging_receipt.json").write_bytes((receipt.canonical_json + "\n").encode("utf-8"))
     return receipt
 
 
@@ -191,8 +203,8 @@ def _receipt(root: Path, request: IssuerDocumentStagingRequest) -> IssuerDocumen
     receipt = IssuerDocumentStagingReceipt.model_validate(
         {**unsigned, "receipt_sha256": _sha(unsigned)}
     )
-    (source.parent.parent / "staging_receipt.json").write_text(
-        receipt.canonical_json + "\n", encoding="utf-8"
+    (source.parent.parent / "staging_receipt.json").write_bytes(
+        (receipt.canonical_json + "\n").encode("utf-8")
     )
     return receipt
 
@@ -206,6 +218,32 @@ def test_staging_receipt_rejects_tampering(tmp_path: Path) -> None:
         IssuerDocumentStagingReceipt.model_validate(
             {**receipt.model_dump(mode="json"), "receipt_sha256": "c" * 64}
         )
+
+
+@pytest.mark.parametrize("two_documents", [False, True])
+def test_staging_receipt_fixture_preserves_canonical_bytes_on_windows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, two_documents: bool
+) -> None:
+    original = Path.write_text
+
+    def windows_write_text(
+        path: Path,
+        text: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        del newline
+        return original(
+            path, text.replace("\n", "\r\n"), encoding=encoding, errors=errors, newline=""
+        )
+
+    monkeypatch.setattr(Path, "write_text", windows_write_text)
+    root = tmp_path / "state"
+    request = _two_request() if two_documents else _request()
+    receipt = _two_receipt(root, request) if two_documents else _receipt(root, request)
+    path = root / ".tmp" / "managed_ir_staging" / request.attempt_id / "staging_receipt.json"
+    assert path.read_bytes() == (receipt.canonical_json + "\n").encode("utf-8")
 
 
 def test_managed_json_publish_preserves_installer_residue(
@@ -241,6 +279,14 @@ def test_validate_staging_rejects_tampered_bytes_and_request(
     request = _request()
     _receipt(root, request)
     assert validate_prepared_staging(request, state_root=root, db_path=db_path).request == request
+    receipt_path = (
+        root / ".tmp" / "managed_ir_staging" / request.attempt_id / "staging_receipt.json"
+    )
+    canonical_bytes = receipt_path.read_bytes()
+    receipt_path.write_bytes(canonical_bytes.replace(b"\n", b"\r\n"))
+    with pytest.raises(PreparedIssuerDocumentPublisherError, match="staging_receipt_invalid"):
+        validate_prepared_staging(request, state_root=root, db_path=db_path)
+    receipt_path.write_bytes(canonical_bytes)
     with pytest.raises(PreparedIssuerDocumentPublisherError, match="staging_receipt_invalid"):
         validate_prepared_staging(
             request.model_copy(update={"attempt_id": "attempt-0002"}),
@@ -348,7 +394,11 @@ def test_completed_publication_replays_after_attempt_tmp_is_deleted(
     assert result.receipt_path.startswith("data/managed_ir_publications/")
     assert result.inventory_receipt_path.startswith("data/managed_ir_publications/")
 
-    shutil.rmtree(root / ".tmp" / "managed_ir_staging" / request.attempt_id)
+    staging = root / ".tmp" / "managed_ir_staging" / request.attempt_id
+    # Only this disposable staging receipt needs write permission for Windows cleanup.
+    (staging / "publication_intent.json").chmod(0o600)
+    shutil.rmtree(staging)
+    assert not staging.exists()
     assert publish_prepared_issuer_documents(request, state_root=root, db_path=db_path) == result
 
 
