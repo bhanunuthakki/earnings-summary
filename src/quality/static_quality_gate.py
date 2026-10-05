@@ -44,10 +44,11 @@ def subsystem(path: str) -> str:
     return parts[0]
 
 
-def _tracked_python_files(root: Path) -> list[str]:
+def _retained_python_files(root: Path) -> list[str]:
+    """Include new non-ignored source files that Pyright already analyzes locally."""
     try:
         result = subprocess.run(
-            ["git", "ls-files", "-z", "--", "*.py"],
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", "*.py"],
             cwd=root,
             text=True,
             capture_output=True,
@@ -55,23 +56,23 @@ def _tracked_python_files(root: Path) -> list[str]:
             env=clean_local_git_env(),
         )
     except (OSError, UnicodeError) as exc:
-        raise StaticQualityGateError("unable to inventory tracked Python files") from exc
+        raise StaticQualityGateError("unable to inventory retained Python files") from exc
     if result.returncode:
         raise StaticQualityGateError(f"git ls-files failed ({result.returncode})")
     retained: list[str] = []
     for path in sorted({item for item in result.stdout.split("\0") if item}):
         candidate = PurePosixPath(path)
         if candidate.is_absolute() or ".." in candidate.parts or re.match(r"^[A-Za-z]:/", path):
-            raise StaticQualityGateError("tracked Python path escapes the repository")
+            raise StaticQualityGateError("retained Python path escapes the repository")
         if path.startswith(_NON_RETAINED_PREFIXES):
             continue
         target = root.joinpath(*candidate.parts)
         try:
             resolved = target.resolve(strict=True)
         except (OSError, RuntimeError) as exc:
-            raise StaticQualityGateError(f"tracked Python file is missing: {path}") from exc
+            raise StaticQualityGateError(f"retained Python file is missing: {path}") from exc
         if not resolved.is_relative_to(root) or not resolved.is_file():
-            raise StaticQualityGateError(f"tracked Python file escapes the repository: {path}")
+            raise StaticQualityGateError(f"retained Python file escapes the repository: {path}")
         retained.append(path)
     return retained
 
@@ -331,7 +332,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     root = args.repo_root.resolve()
     config_path = args.config if args.config.is_absolute() else root / args.config
     try:
-        retained = _tracked_python_files(root)
+        retained = _retained_python_files(root)
         expected_pyright, expected_suppressions = load_ceilings(config_path)
         prior_pyright, prior_suppressions = load_base_ceilings(root, config_path, args.base)
         violations = compare_descending("pyright diagnostics", prior_pyright, expected_pyright)

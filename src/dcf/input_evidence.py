@@ -32,6 +32,10 @@ from provenance.evidence_native_candidates import (
     select_evidence_native_candidates_by_id,
 )
 from provenance.fact_read_model import FactReadModel
+from provenance.financial_statement_admission import (
+    ReviewedFinancialStatementRole,
+    verify_reviewed_financial_role,
+)
 from provenance.immutable_artifact import read_stable_artifact
 from provenance.metric_ontology import CanonicalDimension, MetricOntology, canonical_json
 from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
@@ -91,13 +95,14 @@ class ModelCalculation(FrozenModel):
 
 class ModelInputRequest(FrozenModel):
     recipe: str
-    ticker: Literal["MELI", "ONON"]
+    ticker: str = Field(min_length=1, max_length=32, pattern=r"^[A-Z][A-Z0-9.-]*$")
     research_snapshot_id: str
     financial_period_end: date
     # Canonical bindings are REPORTED only. TTM/residuals are model calculations.
     facts: dict[str, FactBinding]
     assumptions: dict[str, AssumptionBasis]
     assumption_review: AssumptionReview | None = None
+    recipe_context: dict[str, object] | None = None
 
 
 class InputRequirement(FrozenModel):
@@ -106,7 +111,7 @@ class InputRequirement(FrozenModel):
     unit_key: str
     currency: str | None
     period_kind: Literal["instant", "duration"]
-    consolidation_scope: Literal["consolidated"] = "consolidated"
+    consolidation_scope: Literal["consolidated", "other"] = "consolidated"
     annual: bool = False
     accounting_basis: str | None = None
     period_start: date | None = None
@@ -742,6 +747,21 @@ def verify_model_inputs(
             or bundle.cell.scope_security_id is not None
         ):
             raise InputEvidenceError(f"input_semantic_admission_failed:{requirement.key}")
+        if requirement.role.startswith("cashflow_equity."):
+            reviews = definition.scope_constraints.get("financial_statement_reviews")
+            try:
+                if not isinstance(reviews, dict):
+                    raise ValueError("reviewed statement population missing")
+                review = ReviewedFinancialStatementRole.model_validate(
+                    reviews.get(ref.observation_id)
+                )
+                verify_reviewed_financial_role(conn, review, bundle, cutoff=cutoff)
+                if requirement.role != f"cashflow_equity.{review.concept}":
+                    raise ValueError("reviewed statement role mismatch")
+            except (ValueError, RuntimeError, sqlite3.Error) as exc:
+                raise InputEvidenceError(
+                    f"input_source_context_unverified:{requirement.key}"
+                ) from exc
         if (
             bundle.cell.reporting_entity_id not in snapshot.research_universe.reporting_entity_ids
             or fact.decimal_value is None

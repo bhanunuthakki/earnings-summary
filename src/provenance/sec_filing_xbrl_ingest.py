@@ -35,6 +35,10 @@ from provenance.filing_xbrl_fact_adapter import (
     FilingXbrlSubjectIdentity,
     NormalizedFilingXbrlFact,
 )
+from provenance.financial_statement_admission import (
+    FinancialStatementContextReview,
+    verify_financial_statement_context,
+)
 from provenance.issuer_registry import IssuerRegistry
 from provenance.reporting_entity_registry import ReportingEntityRegistry
 from provenance.sec_native_capture import load_captured_sec_filing_package
@@ -58,6 +62,7 @@ class FilingXbrlIngestRequest(_Closed):
     recorded_at: datetime
     offline_artifacts: tuple[ProcessorPackageMember, ...] = ()
     apply: bool = False
+    statement_context_reviews: tuple[FinancialStatementContextReview, ...] = ()
 
 
 class FilingXbrlIngestResult(_Closed):
@@ -151,6 +156,20 @@ def ingest_sec_filing_xbrl(
     )
     if subject.reporting_entity_id is None or subject.material_dissent:
         raise ValueError("filing-XBRL publication requires one undisputed reporting entity")
+    seen_periods: set[tuple[datetime | None, datetime]] = set()
+    for review in request.statement_context_reviews:
+        verify_financial_statement_context(conn, review, cutoff=effective_recorded_at)
+        if (
+            review.document_version_id != primary.document_version_id
+            or review.document_sha256 != primary.blob_sha256
+            or review.issuer_id != primary.issuer_id
+            or review.reporting_entity_id != subject.reporting_entity_id
+        ):
+            raise ValueError("filing-XBRL statement review is outside the captured filing subject")
+        period = (review.period_start, review.period_end)
+        if period in seen_periods:
+            raise ValueError("filing-XBRL statement reviews have ambiguous period scopes")
+        seen_periods.add(period)
     output, run_id, config_sha = _normalized_output(
         request=effective_request,
         manifest=manifest,
@@ -258,6 +277,7 @@ def _normalized_output(
                 "bundle_manifest_sha256": manifest.manifest_sha256,
                 "input_set_sha256": processor.package_member_set_sha256,
                 "runtime_artifact_sha256": processor.runtime_artifact_sha256,
+                **_review_identity(request),
             }
         ).encode()
     )
@@ -280,6 +300,24 @@ def _normalized_output(
                     "recorded_at": request.recorded_at,
                 }
             )
+            # A dimensionless XBRL context does not establish consolidation.
+            payload["consolidation_scope"] = "other"
+            if not payload.get("dimensions"):
+                for review in request.statement_context_reviews:
+                    if (
+                        None
+                        if payload.get("period_start") is None
+                        else _utc_datetime(payload["period_start"])
+                    ) == review.period_start and _utc_datetime(
+                        payload["period_end"]
+                    ) == review.period_end:
+                        if payload.get("accounting_basis") != review.accounting_basis:
+                            raise ValueError(
+                                "filing-XBRL statement accounting basis conflicts with source review"
+                            )
+                        payload["consolidation_scope"] = review.consolidation_scope
+                        payload["fiscal_year"] = review.fiscal_year
+                        payload["fiscal_period"] = review.fiscal_period
             entries.append(NormalizedFilingXbrlFact.model_validate(payload))
         else:
             rejections.append(
@@ -635,9 +673,20 @@ def _run_id(
             "bundle_manifest_sha256": manifest.manifest_sha256,
             "input_set_sha256": processor.package_member_set_sha256,
             "runtime_artifact_sha256": processor.runtime_artifact_sha256,
+            **_review_identity(request),
         }
     )
     return f"filing-xbrl-run:{_sha(seed.encode())}"
+
+
+def _review_identity(request: FilingXbrlIngestRequest) -> dict[str, object]:
+    if not request.statement_context_reviews:
+        return {}
+    return {
+        "statement_context_reviews": [
+            review.model_dump(mode="json") for review in request.statement_context_reviews
+        ]
+    }
 
 
 def _original_recorded_at(

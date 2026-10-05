@@ -47,6 +47,48 @@ The durable row is a ticker-scope `llm_artifacts` artifact with purpose
 `post_earnings_readout`, `fiscal_period=<selected transcript period_end>`, and
 the selected transcript document ID in `source_doc_ids`.
 
+## Analytical procedure within the five sections
+
+Follow the project skill's
+[research method](../src/advisor/skills/earnings-summary-investing/references/research-method.md).
+Use its working evidence record; do not add sections or change persistence schema.
+
+| Existing section | Procedure |
+| --- | --- |
+| Quarter in one line | Select the most material result and investment implication; keep evidence limits visible |
+| What changed versus expectations | Compare with the saved dated pre-call bar where available; distinguish guidance, sourced consensus and owner expectations; disclose an absent baseline |
+| What management said | Inspect the complete material Q&A exchange, including multipart questions and later responses; report unresolved components neutrally; compare language only with matched speaker/topic/context passages |
+| Thesis update | Connect outcomes and material moat mechanism evidence/counter-evidence to accepted pillars and model assumptions; preserve approved breaks; mark unsupported mechanisms unresolved |
+| What to verify next quarter | Give a public source, disclosure/event, observable condition and thesis/model consequence for each material check; avoid private-data homework |
+
+For historical quarters, distinguish known-at-call evidence from subsequent
+information and current thesis/valuation context. A missing pre-call brief cannot
+be recreated as a dated prior expectation. A truncated or unknown Q&A package
+cannot support an avoidance or dropped-topic claim. Text supports language
+observations, not vocal tone. Do not invent numeric sentiment or fair value.
+
+The runtime loads the same method through `src/research/method_contract.py`.
+Its manifest binds the exact assembled prompt and method identity before cache
+lookup. The ordinary lane selects a verified exact-event pre-call artifact from
+history, with original input/output commitments and parent ID. Missing evidence
+stays unavailable. Date-only call metadata excludes same-day briefs. An event
+association does not resolve the pre-brief fiscal target.
+
+The runtime includes every stored transcript segment and retains its identity,
+role, sequence, timestamps and content commitment. Full stored population does
+not prove complete acquisition, extraction or Q&A; these states remain unknown.
+Oversize transcript or complete prompt input fails before synthesis. Current
+mutable context is labeled separately from call evidence. No historical cutoff
+is enforced in this ordinary lane. A separate retained-trace lane must preserve
+its exclusive verified scope; it cannot inherit these unrestricted inputs.
+
+The output must retain the five nonempty level-two headings in order. Malformed
+output is rejected after the existing single call; no extra format repair or
+artifact write occurs. Inspect the installed route and selected artifact. Do not
+treat an old cached readout as regenerated under these instructions.
+Unavailable evidence must be explicit when it limits a material conclusion;
+omission alone does not establish that a question was answered.
+
 ## Refresh cadence and scope
 
 - Automatic: daily morning stage 1d, active `portfolio` names only.

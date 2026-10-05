@@ -19,7 +19,7 @@ from compute.thesis_evaluation_episodes import (
     EpisodeNondeterminismError,
 )
 from compute.thesis_evaluator import ThesisVerdict, evaluate_ticker_thesis, persist_verdict
-from llm_artifact_store import read_current
+from llm_artifact_store import Artifact, compute_input_sha256, read_current
 from pipeline.kpi_semantics import (
     KpiSemanticContext,
     current_kpi_semantic_context,
@@ -122,13 +122,63 @@ def _assert_pair_retained(source: dict[str, object], rows: list[sqlite3.Row]) ->
     assert "canonical_observation_id" not in encoded
 
 
+def _narrative(titles: tuple[str, ...], body: str) -> str:
+    return "\n\n".join(f"## {title}\n{body}" for title in titles)
+
+
+_PRE_TITLES = (
+    "What this quarter must show",
+    "Numbers to check the moment they print",
+    "What to listen for on the call",
+    "Thesis pressure points",
+)
+_POST_TITLES = (
+    "Quarter in one line",
+    "What changed versus expectations",
+    "What management said",
+    "Thesis update",
+    "What to verify next quarter",
+)
+
+
+def _assert_prompt_commitment(artifact: Artifact, prompt: str, leading: tuple[str, ...]) -> None:
+    assert isinstance(artifact.content_json, dict)
+    manifest = cast(dict[str, object], artifact.content_json)
+    assert manifest["rendered_prompt"] == prompt
+    blocks = cast(list[dict[str, object]], manifest["blocks"])
+    rendered = (
+        [str(block["content"]) for block in blocks]
+        if artifact.purpose == earnings_brief.PURPOSE
+        else [
+            f"## {block['label']}\n{block['content']}"
+            for block in blocks
+            if str(block["content"]).strip()
+        ]
+    )
+    assert artifact.input_sha256 == compute_input_sha256(
+        prompt_version=artifact.prompt_version,
+        cache_inputs=[
+            *leading,
+            *rendered,
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")),
+            prompt,
+        ],
+    )
+
+
 def _append_readout_target(conn: sqlite3.Connection) -> None:
     # One transcript version belongs to one immutable document. The second
     # fixture document already has its evidence ledger binding.
-    conn.execute(
+    inserted = conn.execute(
         "INSERT INTO transcripts(document_id,ticker,period_end,fiscal_period_type,has_qa_section) "
         "SELECT id,ticker,'2026-03-31','Q1',1 FROM documents WHERE ticker='NU' "
         "AND id NOT IN (SELECT document_id FROM transcripts) ORDER BY id LIMIT 1"
+    )
+    assert inserted.lastrowid is not None
+    conn.execute(
+        "INSERT INTO transcript_segments(transcript_id,seq,speaker,speaker_role,text) "
+        "VALUES (?,1,'Management','executive','Synthetic selected-input fixture transcript.')",
+        (inserted.lastrowid,),
     )
     conn.commit()
 
@@ -141,7 +191,7 @@ def test_public_readout_retains_both_selected_kpi_inputs(
 
     def llm(prompt: str, **_kwargs: object) -> str:
         prompts.append(prompt)
-        return "Readout from selected inputs."
+        return _narrative(_POST_TITLES, "Readout from selected inputs.")
 
     monkeypatch.setattr(earnings_readout, "call_llm", llm)
     database = _database_path(conn)
@@ -161,8 +211,15 @@ def test_public_readout_retains_both_selected_kpi_inputs(
     assert {int(row["source_doc_id"]) for row in _selected_rows(conn)} <= set(
         artifact.source_doc_ids
     )
-    assert artifact.content_json["schema_version"] == "post_earnings_readout_context@2"
+    assert artifact.content_json["schema_version"] == "post_earnings_readout_context@3"
     assert artifact.content_json["grounding_status"] == "partial"
+    assert artifact.parent_artifact_ids == []
+    baseline = next(item for item in blocks if item["kind"] == "saved_pre_call_baseline")
+    baseline_source = cast(dict[str, object], baseline["source"])
+    baseline_receipt = cast(dict[str, object], baseline_source["receipt"])
+    assert baseline_receipt["status"] == "unavailable"
+    assert baseline_receipt["reason"] == "missing_call_date"
+    _assert_prompt_commitment(artifact, prompts[0], ("2026-03-31", "Q1"))
 
 
 def test_public_brief_source_only_change_invalidates_existing_input_hash(
@@ -173,7 +230,7 @@ def test_public_brief_source_only_change_invalidates_existing_input_hash(
 
     def llm(prompt: str, **_kwargs: object) -> str:
         prompts.append(prompt)
-        return "Brief from selected inputs."
+        return _narrative(_PRE_TITLES, "Brief from selected inputs.")
 
     monkeypatch.setattr(earnings_brief, "call_llm", llm)
     monkeypatch.setattr(earnings_brief, "_evidence_text", _no_evidence)
@@ -210,6 +267,8 @@ def test_public_brief_source_only_change_invalidates_existing_input_hash(
     )
     assert second is not None
     assert first.input_sha256 != second.input_sha256
+    _assert_prompt_commitment(first, prompts[0], (candidate.er_date.isoformat(),))
+    _assert_prompt_commitment(second, prompts[1], (candidate.er_date.isoformat(),))
     assert len(prompts) == 2 and prompts[0] == prompts[1]
 
 
@@ -254,7 +313,7 @@ def test_public_readout_source_only_change_invalidates_existing_input_hash(
 
     def llm(prompt: str, **_kwargs: object) -> str:
         prompts.append(prompt)
-        return "Readout from selected inputs."
+        return _narrative(_POST_TITLES, "Readout from selected inputs.")
 
     monkeypatch.setattr(earnings_readout, "call_llm", llm)
     database = _database_path(conn)
@@ -279,6 +338,8 @@ def test_public_readout_source_only_change_invalidates_existing_input_hash(
         ticker="NU", purpose=earnings_readout.PURPOSE, fiscal_period="2026-03-31", db_path=database
     )
     assert second is not None and first.input_sha256 != second.input_sha256
+    _assert_prompt_commitment(first, prompts[0], ("2026-03-31", "Q1"))
+    _assert_prompt_commitment(second, prompts[1], ("2026-03-31", "Q1"))
     assert len(prompts) == 2 and prompts[0] == prompts[1]
     assert isinstance(second.content_json, dict)
     blocks = cast(list[dict[str, object]], second.content_json["blocks"])

@@ -25,6 +25,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+from filings.xbrl_units import unit_coordinates_from_payload
+
 _SHA256 = r"^[0-9a-f]{64}$"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _CANONICAL_APPROVAL_SEAL = _PROJECT_ROOT / "config" / "filing_xbrl_processor_approval.json"
@@ -32,6 +34,31 @@ _APPROVAL_CAPABILITY = object()
 _PACKAGE_CACHE_MAX_COMPLETED = 64
 _PACKAGE_CACHE_MAX_BYTES = 8 * 1024 * 1024 * 1024
 _PACKAGE_CACHE_MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024
+
+# Both retained-ledger consumers use this closed predicate with the fixed alias
+# ``artifact``. The migration freezes the same contract for durable admission.
+FILING_XBRL_PROTOCOL_SQL = (
+    "(CASE WHEN artifact.bridge_protocol_version='filing-xbrl-bridge.v1' THEN 1 "
+    "WHEN artifact.bridge_protocol_version='filing-xbrl-bridge.v2' "
+    "AND json_valid(artifact.canonical_manifest_json) THEN COALESCE((json_extract(artifact.canonical_manifest_json,'$.bridge_protocol_version')="
+    "artifact.bridge_protocol_version "
+    "AND json_type(artifact.canonical_manifest_json,'$.execution.runtime_members')='array' "
+    "AND json_type(artifact.canonical_manifest_json,'$.build_provenance.unit_source_sha256')='text' "
+    "AND length(json_extract(artifact.canonical_manifest_json,"
+    "'$.build_provenance.unit_source_sha256'))=64 "
+    "AND json_extract(artifact.canonical_manifest_json,'$.build_provenance.unit_source_sha256') "
+    "NOT GLOB '*[^0-9a-f]*' "
+    "AND (SELECT COUNT(*) FROM json_each(artifact.canonical_manifest_json,"
+    "'$.execution.runtime_members') unit_member "
+    "WHERE json_extract(CASE WHEN unit_member.type='object' THEN unit_member.value ELSE '{}' END,'$.relative_path')='earnings_summary_xbrl_units.py')=1 "
+    "AND EXISTS (SELECT 1 FROM json_each(artifact.canonical_manifest_json,"
+    "'$.execution.runtime_members') unit_member "
+    "WHERE json_extract(CASE WHEN unit_member.type='object' THEN unit_member.value ELSE '{}' END,'$.relative_path')='earnings_summary_xbrl_units.py' "
+    "AND json_extract(CASE WHEN unit_member.type='object' THEN unit_member.value ELSE '{}' END,'$.blob_sha256')="
+    "json_extract(artifact.canonical_manifest_json,'$.build_provenance.unit_source_sha256') "
+    "AND json_type(CASE WHEN unit_member.type='object' THEN unit_member.value ELSE '{}' END,'$.byte_size')='integer' "
+    "AND json_extract(CASE WHEN unit_member.type='object' THEN unit_member.value ELSE '{}' END,'$.byte_size')>=0)),0) ELSE 0 END)"
+)
 
 
 class _WindowsFunction(Protocol):
@@ -67,6 +94,10 @@ def _windows_last_error() -> int:
 
 class InlineXbrlProcessorError(RuntimeError):
     """The isolated processor failed or violated its qualified contract."""
+
+    def __init__(self, message: str, *, reason_code: str = "processor_evidence_rejected") -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
 
 
 class _Closed(BaseModel):
@@ -150,20 +181,36 @@ class ProcessorBuildProvenance(_Closed):
     xule_git_commit: Literal["40f774ced269ee6637a96d51db244efd6337e689"]
     bridge_source_sha256: str = Field(pattern=_SHA256)
     launcher_source_sha256: str = Field(pattern=_SHA256)
+    unit_source_sha256: str | None = Field(default=None, pattern=_SHA256)
 
 
 class ProcessorBundleManifest(_Closed):
     bundle_name: str = Field(min_length=1, max_length=128)
     bridge_module: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_.]*$")
-    bridge_protocol_version: Literal["filing-xbrl-bridge.v1"]
+    bridge_protocol_version: Literal["filing-xbrl-bridge.v1", "filing-xbrl-bridge.v2"]
     coordinates: ProcessorCoordinates
     execution: ProcessorExecution
     qualification: ProcessorQualification
     build_provenance: ProcessorBuildProvenance
 
+    @model_validator(mode="after")
+    def _unit_contract(self) -> Self:
+        if self.bridge_protocol_version == "filing-xbrl-bridge.v2":
+            unit_sha = self.build_provenance.unit_source_sha256
+            members = tuple(
+                item
+                for item in self.execution.runtime_members
+                if item.relative_path == "earnings_summary_xbrl_units.py"
+            )
+            if unit_sha is None or len(members) != 1 or members[0].blob_sha256 != unit_sha:
+                raise ValueError("v2 unit source is absent from the runtime closure")
+        elif self.build_provenance.unit_source_sha256 is not None:
+            raise ValueError("legacy bridge cannot claim the v2 unit contract")
+        return self
+
     @property
     def canonical_json(self) -> str:
-        return _canonical(self.model_dump(mode="json"))
+        return _canonical(self.model_dump(mode="json", exclude_none=True))
 
     @property
     def manifest_sha256(self) -> str:
@@ -178,6 +225,7 @@ class ProcessorBundleApprovalSeal(_Closed):
     sandbox_launcher_sha256: str = Field(pattern=_SHA256)
     bridge_source_sha256: str = Field(pattern=_SHA256)
     launcher_source_sha256: str = Field(pattern=_SHA256)
+    unit_source_sha256: str | None = Field(default=None, pattern=_SHA256)
 
 
 @dataclass(frozen=True)
@@ -346,7 +394,7 @@ class ProcessorRawFact(_Closed):
 
 
 class InlineXbrlProcessorResult(_Closed):
-    bridge_protocol_version: Literal["filing-xbrl-bridge.v1"]
+    bridge_protocol_version: Literal["filing-xbrl-bridge.v1", "filing-xbrl-bridge.v2"]
     coordinates: ProcessorCoordinates
     execution_evidence: ProcessorExecutionEvidence
     runtime_artifact_sha256: str = Field(pattern=_SHA256)
@@ -362,6 +410,27 @@ class InlineXbrlProcessorResult(_Closed):
 
     @model_validator(mode="after")
     def _complete_sets(self) -> Self:
+        for fact in self.facts:
+            normalized = fact.normalized_fact
+            if self.bridge_protocol_version == "filing-xbrl-bridge.v2" and normalized is not None:
+                if normalized.get("source_unit_id") != fact.canonical_raw_fact.get("unit_id"):
+                    raise ValueError("normalized source unit ID differs from raw evidence")
+                if normalized.get("source_unit_id") is not None:
+                    unit_key, currency = unit_coordinates_from_payload(
+                        fact.canonical_raw_fact.get("unit_measures")
+                    )
+                    if (normalized.get("unit_key"), normalized.get("currency")) != (
+                        unit_key,
+                        currency,
+                    ):
+                        raise ValueError("normalized unit differs from committed source measures")
+                elif normalized.get("value_kind") == "numeric":
+                    raise ValueError("numeric v2 fact has no source unit evidence")
+            elif (
+                self.bridge_protocol_version == "filing-xbrl-bridge.v1"
+                and "unit_measures" in fact.canonical_raw_fact
+            ):
+                raise ValueError("legacy bridge cannot claim the v2 unit contract")
         ordinals = tuple(item.input_ordinal for item in self.facts)
         if ordinals != tuple(range(len(self.facts))):
             raise ValueError("raw fact ordinals must be contiguous")
@@ -414,40 +483,96 @@ def _load_approved_processor_bundle_manifest(
         seal_bytes = _read_stable_file(approval_seal_path)
         seal = ProcessorBundleApprovalSeal.model_validate_json(seal_bytes)
     except (OSError, ValueError) as exc:
-        raise InlineXbrlProcessorError("approved filing-XBRL bundle evidence is invalid") from exc
+        raise InlineXbrlProcessorError(
+            "approved filing-XBRL bundle evidence is invalid", reason_code="bundle_evidence_invalid"
+        ) from exc
+    if manifest.execution.runtime_artifact_sha256 == "0" * 64:
+        raise InlineXbrlProcessorError(
+            "filing-XBRL bundle template is not an installed runtime",
+            reason_code="bundle_template_uninstalled",
+        )
     if manifest_bytes != (manifest.canonical_json + "\n").encode():
-        raise InlineXbrlProcessorError("approved filing-XBRL bundle manifest is not canonical")
+        raise InlineXbrlProcessorError(
+            "approved filing-XBRL bundle manifest is not canonical",
+            reason_code="bundle_noncanonical",
+        )
     if _sha(manifest_bytes) != seal.manifest_artifact_sha256:
-        raise InlineXbrlProcessorError("filing-XBRL manifest artifact digest is not approved")
+        raise InlineXbrlProcessorError(
+            "filing-XBRL manifest artifact digest is not approved", reason_code="bundle_unapproved"
+        )
     if manifest.manifest_sha256 != seal.manifest_sha256:
-        raise InlineXbrlProcessorError("filing-XBRL bundle is not in the committed approval seal")
+        raise InlineXbrlProcessorError(
+            "filing-XBRL bundle is not in the committed approval seal",
+            reason_code="bundle_unapproved",
+        )
     expected = (
         manifest.execution.runtime_artifact_sha256,
         manifest.execution.sandbox_launcher_sha256,
         manifest.build_provenance.bridge_source_sha256,
         manifest.build_provenance.launcher_source_sha256,
+        manifest.build_provenance.unit_source_sha256,
     )
     sealed = (
         seal.runtime_artifact_sha256,
         seal.sandbox_launcher_sha256,
         seal.bridge_source_sha256,
         seal.launcher_source_sha256,
+        seal.unit_source_sha256,
     )
     if expected != sealed:
-        raise InlineXbrlProcessorError("filing-XBRL bundle approval commitments do not match")
+        raise InlineXbrlProcessorError(
+            "filing-XBRL bundle approval commitments do not match",
+            reason_code="bundle_commitment_mismatch",
+        )
     source_paths = (
         _PROJECT_ROOT / "execution" / "filing_xbrl_bridge.py",
         _PROJECT_ROOT / "execution" / "filing_xbrl_appcontainer_launcher.cs",
     )
+    if manifest.bridge_protocol_version == "filing-xbrl-bridge.v2":
+        source_paths += (_PROJECT_ROOT / "src" / "filings" / "xbrl_units.py",)
     observed_sources = tuple(_sha(_read_stable_file(source)) for source in source_paths)
-    if observed_sources != sealed[2:]:
-        raise InlineXbrlProcessorError("filing-XBRL reviewed source identity changed")
+    if observed_sources != tuple(value for value in sealed[2:] if value is not None):
+        raise InlineXbrlProcessorError(
+            "filing-XBRL reviewed source identity changed",
+            reason_code="bundle_reviewed_source_changed",
+        )
     return ApprovedProcessorBundle(
         manifest=manifest,
         approval_seal=seal,
         approval_seal_sha256=_sha(seal_bytes),
         _capability=_APPROVAL_CAPABILITY,
     )
+
+
+def verify_processor_installation(
+    approved_bundle: ApprovedProcessorBundle,
+    *,
+    runtime_root: Path,
+    sandbox_launcher: Path,
+    bundle_python: Path | None = None,
+) -> Path:
+    """Verify installed bytes without launching a child or claiming native qualification."""
+
+    if not isinstance(cast(object, approved_bundle), ApprovedProcessorBundle):
+        raise InlineXbrlProcessorError("filing-XBRL bundle is not approved")
+    manifest = approved_bundle.manifest
+    _verify_executable(
+        sandbox_launcher, manifest.execution.sandbox_launcher_sha256, "OS sandbox launcher"
+    )
+    _verify_runtime_closure(
+        runtime_root,
+        manifest.execution.runtime_members,
+        expected_sha256=manifest.execution.runtime_artifact_sha256,
+    )
+    expected_python = runtime_root / PurePosixPath(manifest.execution.bundle_python_relative_path)
+    if bundle_python is not None and bundle_python.resolve() != expected_python.resolve():
+        raise InlineXbrlProcessorError(
+            "qualified filing-XBRL bundle Python is outside its runtime lock"
+        )
+    _verify_executable(
+        expected_python, manifest.execution.bundle_python_sha256, "qualified bundle Python"
+    )
+    return expected_python
 
 
 def _read_stable_file(path: Path) -> bytes:
@@ -661,6 +786,8 @@ def _run_inline_xbrl_processor(
         result = InlineXbrlProcessorResult.model_validate_json(stdout)
     except ValueError as exc:
         raise InlineXbrlProcessorError("filing-XBRL processor output violates protocol") from exc
+    if result.bridge_protocol_version != manifest.bridge_protocol_version:
+        raise InlineXbrlProcessorError("filing-XBRL processor protocol is not qualified")
     if result.coordinates != manifest.coordinates:
         raise InlineXbrlProcessorError("filing-XBRL processor coordinates are not qualified")
     if result.runtime_artifact_sha256 != runtime_artifact_sha256:

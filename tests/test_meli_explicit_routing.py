@@ -127,6 +127,10 @@ def test_invalid_explicit_authority_refuses_before_outputs(
         "MELI", tmp_path, tmp_path / "db", valuation_year=2026, meli_assumptions_path=artifact
     )
     assert result["status"] == "error"
+    if failure == "wrong_ticker":
+        assert result["reason"] == "meli_input_recipe_ticker_mismatch"
+    elif failure == "wrong_recipe":
+        assert result["reason"] == "model_input_recipe_mismatch"
     assert dest.read_bytes() == b"keep"
     assert staged.read_bytes() == b"keep staged"
     assert not (tmp_path / "db").exists()
@@ -165,13 +169,21 @@ def test_non_meli_bulk_routing_ignores_meli_package(
 
 @pytest.mark.parametrize("field,value", [("ticker", "NU"), ("recipe", "other/v1")])
 def test_child_rejects_wrong_identity_before_database_access(
-    tmp_path: Path, field: str, value: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, field: str, value: str
 ) -> None:
     artifact = package(tmp_path / "reviewed.json")
     data = json.loads(artifact.read_text())
     data["input_evidence"][field] = value
     artifact.write_text(json.dumps(data))
-    with pytest.raises(InputEvidenceError):
+
+    def forbidden_database(_path: Path | str | None = None) -> Path:
+        pytest.fail("identity refusal must precede database path resolution")
+
+    monkeypatch.setattr(meli, "require_db_path", forbidden_database)
+    reason = (
+        "meli_input_recipe_ticker_mismatch" if field == "ticker" else "model_input_recipe_mismatch"
+    )
+    with pytest.raises(InputEvidenceError, match=reason):
         meli.load_verified_assumptions(
             "MELI",
             db_path=tmp_path / "missing.db",

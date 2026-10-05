@@ -583,7 +583,12 @@ def _verified_model_authority(
     except (ValueError, AttributeError) as exc:
         raise InputEvidenceError("model_input_request_missing_or_invalid") from exc
     if request.ticker != ticker:
-        raise InputEvidenceError("model_input_recipe_ticker_mismatch")
+        reason = (
+            "meli_input_recipe_ticker_mismatch"
+            if ticker == "MELI"
+            else "model_input_recipe_ticker_mismatch"
+        )
+        raise InputEvidenceError(reason)
     if request.recipe != recipe:
         raise InputEvidenceError("model_input_recipe_mismatch")
     for hint_path, nested in (

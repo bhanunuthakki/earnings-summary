@@ -1109,6 +1109,7 @@ def _canonical_source(
         doc_id=cell.legacy_document_id,
         locator=evidence.source_locator.model_dump_json(),
         extracted_by=bundle.observation.method_name,
+        source_scope_label=cell.source_scope_label,
         canonical_reference=FinancialEvidenceReference(
             ticker=ticker.upper(),
             concept=cell.concept,

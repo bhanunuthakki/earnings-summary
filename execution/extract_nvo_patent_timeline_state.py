@@ -8,10 +8,9 @@ import sys
 from pathlib import Path
 from typing import Protocol, cast
 
-CODE_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(CODE_ROOT / "src"))
-
-import db  # noqa: E402
+import db
+from db_paths import require_db_path
+from runtime.secrets import load_project_env
 
 
 class _NvoExtractor(Protocol):
@@ -40,24 +39,28 @@ def _load_extractor() -> _NvoExtractor:
     return cast("_NvoExtractor", module)
 
 
-def _bind_state(extractor: _NvoExtractor, state_root: Path) -> None:
+def _bind_state(extractor: _NvoExtractor, state_root: Path, database: Path) -> None:
     extractor.PROJECT_ROOT = state_root
     extractor.OUT_DIR = state_root / ".tmp" / "nvo_patents"
     extractor.IR_DOCS_DIR = state_root / "ir_documents" / "NVO"
     extractor.SOURCES_DIR = state_root / "micro_thesis" / "sources" / "NVO"
     extractor.load_project_env(state_root)
-    db.set_db_path(state_root / "data" / "portfolio.db")
+    db.set_db_path(database, state_root=state_root)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, required=True)
+    parser.add_argument("--db", type=Path)
     parser.add_argument("--pdf", type=Path)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
 
+    state_root = args.repo_root.resolve()
+    load_project_env(state_root)
+    database = require_db_path(args.db)
     extractor = _load_extractor()
-    _bind_state(extractor, args.repo_root.resolve())
+    _bind_state(extractor, state_root, database)
     legacy_argv = ["extract_nvo_patent_timeline.py"]
     if args.pdf is not None:
         legacy_argv.extend(["--pdf", str(args.pdf)])

@@ -31,12 +31,14 @@ import json
 import sqlite3
 import sys
 import time
+from pathlib import Path
 
 try:
     from _lib import PROJECT_ROOT
 except ImportError:
     from execution._lib import PROJECT_ROOT
 
+from db_paths import require_db_path
 from llm_artifact_store import mark_artifacts_dirty_for_fact_change
 from models.companies import ListType
 from models.runs import StageStatus
@@ -48,7 +50,6 @@ from pipeline.run_accounting import (
     suppression_payload,
 )
 from pipeline.sec_xbrl import (
-    CIK_MAP,
     NO_SEC_FILERS,
     IngestStats,
     SecCompanyFactsAuthenticationDeniedError,
@@ -223,36 +224,52 @@ def _resolve_tickers(args: argparse.Namespace, conn: sqlite3.Connection) -> list
                 )
                 + "\n"
             )
-    uncovered = sorted(t for t in allowed if t not in CIK_MAP and t not in NO_SEC_FILERS)
-    if uncovered:
-        sys.stderr.write(
-            json.dumps({"event": "sec_cik_map_stale", "tickers_missing_cik": uncovered}) + "\n"
-        )
-    return [ticker for ticker in allowed if ticker in CIK_MAP]
+    # Canonical issuer resolution occurs before HTTP inside ingestion. A missing
+    # historical static pin cannot silently discard an authorized new company.
+    return [ticker for ticker in allowed if ticker not in NO_SEC_FILERS]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--ticker",
-        help="Active portfolio/evaluation/watchlist ticker (must be in CIK_MAP)",
+        help="Active portfolio/evaluation/watchlist ticker with verified SEC issuer identity",
     )
     parser.add_argument(
         "--all-mapped",
         action="store_true",
         help="Compatibility flag; stored role and instrument policy still govern automatic scope",
     )
-    parser.add_argument("--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"))
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help="Existing portfolio database; otherwise use the configured database authority",
+    )
+    parser.add_argument(
+        "--project-root",
+        type=Path,
+        default=PROJECT_ROOT,
+        help="Explicit artifact root for retained SEC responses and immutable snapshots",
+    )
     args = parser.parse_args()
 
-    conn = open_db(args.db)
+    try:
+        database = require_db_path(args.db)
+    except (RuntimeError, OSError):
+        print(
+            json.dumps(
+                {
+                    "event": "sec_xbrl_database_unavailable",
+                    "status": "unavailable",
+                    "reason_code": "database_authority_unavailable",
+                }
+            )
+        )
+        return 3
+    conn = open_db(database)
     try:
         tickers = _resolve_tickers(args, conn)
-        unmapped = [t for t in tickers if t not in CIK_MAP]
-        if unmapped:
-            print(json.dumps({"error": "no CIK for", "tickers": unmapped}, indent=2))
-            return 1
-
         try:
             run_id = start_run(conn, directive="fetch_sec_xbrl", ticker_scope=tickers)
         except PipelineRunSuppressedError as exc:
@@ -268,7 +285,7 @@ def main() -> int:
                 stats = ingest_for_ticker(
                     conn,
                     ticker=ticker,
-                    project_root=PROJECT_ROOT,
+                    project_root=args.project_root,
                     run_id=run_id,
                     timing_sink=lambda receipt: emit_ingest_timing(
                         receipt,
@@ -315,7 +332,11 @@ def main() -> int:
                 # Per GEMINI.md, capture the raw response location so the
                 # operator can inspect it before re-running.
                 raw_path = (
-                    PROJECT_ROOT / "data" / "historical" / "sec" / f"{ticker}_companyfacts.json"
+                    args.project_root
+                    / "data"
+                    / "historical"
+                    / "sec"
+                    / f"{ticker}_companyfacts.json"
                 )
                 rows.append(
                     {
@@ -332,7 +353,7 @@ def main() -> int:
                 conn,
                 ticker=ticker,
                 stats=stats,
-                db_path=args.db,
+                db_path=str(database),
             )
             rows.append(
                 {

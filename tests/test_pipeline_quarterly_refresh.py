@@ -398,10 +398,10 @@ def test_refresh_ticker_includes_sec_stage_when_opt_in(
     assert stage_names[0] == StageName.FETCH_SEC_XBRL
 
 
-def test_refresh_ticker_skips_sec_stage_for_unmapped_ticker(
+def test_refresh_ticker_skips_sec_stage_for_unresolved_identity(
     conn: sqlite3.Connection, tmp_path: Path
 ) -> None:
-    """A ticker absent from CIK_MAP gets SKIPPED on the SEC stage (no error)."""
+    """Unresolved identity is denied before SEC HTTP, independently of static maps."""
     _seed_thesis_state(conn, "FLKR")
     _write_holdings(tmp_path, "FLKR", threshold=0)
     report = refresh_ticker(
@@ -414,7 +414,7 @@ def test_refresh_ticker_skips_sec_stage_for_unmapped_ticker(
     )
     sec_stage = next(s for s in report.stages if s.name == StageName.FETCH_SEC_XBRL)
     assert sec_stage.status == StageStatus.SKIPPED
-    assert "no CIK" in sec_stage.notes
+    assert "stored_identity_unavailable" in sec_stage.notes
 
 
 def test_quarterly_sec_stage_denies_index_member_before_network(

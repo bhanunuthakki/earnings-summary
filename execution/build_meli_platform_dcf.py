@@ -852,6 +852,8 @@ def load_verified_assumptions(
         request = ModelInputRequest.model_validate(request_payload.get("input_evidence"))
     except (OSError, ValueError, AttributeError) as exc:
         raise InputEvidenceError("model_input_request_missing_or_invalid") from exc
+    if request.ticker != ticker:
+        raise InputEvidenceError("meli_input_recipe_ticker_mismatch")
     if request.recipe != RECIPE:
         raise InputEvidenceError("model_input_recipe_mismatch")
     s = Assum()

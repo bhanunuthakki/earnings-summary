@@ -181,6 +181,7 @@ from llm.untrusted import (
 from llm.untrusted import (
     spotlight as spotlight,
 )
+from research.method_contract import ResearchMode, load_research_method, validate_research_input
 from runtime.secrets import load_project_env
 
 _call_claude = call_claude
@@ -241,9 +242,9 @@ class _BearFailureModeWire(BaseModel):
 class _BearCaseWire(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    failure_modes: list[_BearFailureModeWire] = Field(min_length=3, max_length=5)
+    failure_modes: list[_BearFailureModeWire] = Field(max_length=5)
     most_underweighted: str = Field(min_length=1, max_length=1200)
-    out_of_scope_flags: list[str] = Field(min_length=1, max_length=3)
+    out_of_scope_flags: list[str] = Field(max_length=3)
 
 
 class _QaTopicWire(BaseModel):
@@ -604,8 +605,7 @@ def generate_summary(text: str, anchor_block: str = "", ticker: str | None = Non
       thesis
     - Restating analyst Q&A topic by topic — the workspace shows the full
       parsed Q&A roster separately; pull only the Q&A moments that REVEAL
-      something (management dodge, surprising disclosure, contentious
-      pushback)
+      something supported by a complete cited exchange (surprising disclosure, substantive pushback, partial or declined answer)
 
     {NUMBER_FORMATTING_BLOCK}
 
@@ -615,18 +615,15 @@ def generate_summary(text: str, anchor_block: str = "", ticker: str | None = Non
     the single most important thing this quarter, framed as it bears on
     the thesis? Lead with the verdict, then the reasoning. ~3-5 sentences.
     If a THESIS ANCHOR is provided above, the takeaway MUST name at least
-    one tier-1 KPI from the anchor and state how this print moves its
-    distance to break. If a BEAR-CASE ANCHOR is provided, the takeaway
-    must state whether this print confirms or refutes one of the named
-    failure modes (cite the failure-mode hypothesis verbatim).
+    one supplied tier-1 KPI when comparable evidence permits; otherwise state its current status unverified. If a BEAR-CASE ANCHOR is provided, the takeaway
+    must test a supplied failure mode and allow unresolved support; cite its hypothesis without forcing confirmation or refutation.
 
     Then 3-5 H3-led prose paragraphs (use your own headers — don't pick
     from a template). Suggested directions to cover (pick what's relevant,
     skip what's not):
 
       ### What accelerated
-      Which lines / KPIs broke trend vs prior quarter? Quantify deltas
-      against the prior 2-4 quarters, not just YoY. Tie each to the
+      Which supplied comparable lines / KPIs broke trend? Quantify deltas only when dated prior values are supplied. Missing prior evidence remains unavailable. Tie each to the
       underlying driver where management explained it.
 
       ### What decelerated or hit headwinds
@@ -639,13 +636,10 @@ def generate_summary(text: str, anchor_block: str = "", ticker: str | None = Non
       print.
 
       ### What management is / isn't talking about
-      Where did management lean in (and why)? What got conspicuously
-      light coverage? Call out specific Q&A dodges or topic shifts vs
-      the prior call.
+      Compare cited management wording on the same speaker/topic/context only when a dated prior call is supplied. Source completeness and Q&A coverage are unknown absent explicit receipts. Do not infer motive, avoidance or dropped topics from absent text.
 
       ### Next-quarter setup
-      Concrete: what should we expect in the next print given THIS
-      quarter's signals? Frame as a 1-quarter-out check on the thesis.
+      State the next feasible public check and its affected thesis assumption. Separate sourced management guidance, dated consensus and owner expectations. Missing forecasts stay unavailable.
       When a THESIS ANCHOR is provided above, list the specific tier-1
       KPI values to watch (by their anchor names) and what reading
       would confirm or break the thesis next quarter.
@@ -670,11 +664,13 @@ def generate_summary(text: str, anchor_block: str = "", ticker: str | None = Non
     Transcript:
     """
     body = spotlight(
-        bound_summary_transcript(text),
+        text,
         source="earnings call transcript (issuer-published document)",
     )
+    complete_prompt = prompt + body + "\n" + research_method_block("earnings")
+    validate_research_input(complete_prompt)
     try:
-        return call_llm(prompt + body, purpose="transcript_summary", ticker=ticker)
+        return call_llm(complete_prompt, purpose="transcript_summary", ticker=ticker)
     except Exception as e:
         log.error(f"CRITICAL ERROR: Summary generation failed: {e}")
         raise
@@ -771,6 +767,17 @@ Presentation Text:
         raise
 
 
+def research_method_block(mode: ResearchMode) -> str:
+    """Render the one canonical method with its exact source identity."""
+    method = load_research_method(mode)
+    return (
+        "## Research method\n"
+        + json.dumps(method.as_dict(), sort_keys=True)
+        + "\n"
+        + method.instructions
+    )
+
+
 # ---------------------------------------------------------------------------
 # Shared building blocks for the thesis-tracker prompt
 # ---------------------------------------------------------------------------
@@ -786,42 +793,25 @@ _HARD_RULES_BLOCK = """**Hard rules — non-negotiable:**
 2. Every numeric KPI value, dated event, and management quote must carry an inline source tag of the form `[Source: <doc type>, <Q# YYYY>, <speaker or section>]`. Tag at the point of claim, including inside table cells.
 3. The three judgment surfaces — Thesis Status, Say-Do, and Valuation-Trigger Stress — MUST each include a fully populated Adversarial Loop. A surface that lacks a credible Strongest Counter is under-examined and should be flagged as such with Net Conviction = Low rather than papered over.
 4. **Inferred figures audit-trail:** any value you computed yourself rather than reading directly from a source (e.g., Q4 standalone derived as FY minus 9M; ex-items decomposition; YoY delta) MUST carry an audit-trail source tag of the form `[Source: implied = <FY src> minus <9M src>]` or `[Source: implied = <calculation>]`. Use the doc_type marker `[implied]` so inferred figures are searchable separately from primary citations. The reader must be able to reproduce your inference.
-5. **Ex-items decomposition required:** for any margin / EPS / FCF / operating-income cell where the source document discloses a one-off (tax credit, restructuring charge, gain on sale, settlement, impairment, provision reversal), report as `headline X% / underlying Y% (excluding $Zm <item> [Source: ...])`. The headline number alone misleads run-rate analysis. If no one-offs are disclosed for a cell, no decomposition is needed.
-6. **Methodology consistency:** when comparing the same metric across two periods, verify methodology consistency. If the issuer disclosed a methodology change, footnote restatement, or scope expansion (different geographies, different revenue recognition, different segment definition, managerial-P&L introduction), flag the comparability gap AT the comparison cell — not buried in Analyst Notes. State the prior-method value, new-method value, and approximate delta attributable to methodology vs. underlying.
+5. **Ex-items decomposition required:** for any margin / EPS / FCF / operating-income cell where the source document discloses a one-off (tax credit, restructuring charge, gain on sale, settlement, impairment, provision reversal), report as `headline X% / underlying Y% (excluding $Zm <item> [Source: ...])`. Calculate underlying only when the supplied figures, scope and accounting basis permit reconstruction. Otherwise preserve headline and disclosed one-off, and mark underlying unavailable. If no one-offs are disclosed for a cell, no decomposition is needed.
+6. **Methodology consistency:** when comparing the same metric across two periods, verify methodology consistency. If the issuer disclosed a methodology change, footnote restatement, or scope expansion (different geographies, different revenue recognition, different segment definition, managerial-P&L introduction), flag the comparability gap AT the comparison cell — not buried in Analyst Notes. State supplied prior-method and new-method values. Quantify the definition-change effect only if supplied comparable figures establish it; otherwise leave attribution unresolved.
 7. **Prior-period guidance reference for Say-Do:** when the corpus contains the immediately-prior quarter, treat its Outlook/Guidance section as the source of "guided X" values; treat the latest-quarter's printed actuals as "actual Y." When the corpus contains only the latest quarter, Say-Do can only be evaluated if THIS quarter's docs reference prior guidance ranges. If neither condition holds, Say-Do is un-evaluable — state this explicitly and cap Say-Do conviction at Low. Do NOT fall back to trusting management's own self-attestation phrases like "we exceeded guidance across the board."
 """
 
-_PRINCIPLES_BLOCK = """**Investment principles — frame all verdicts and recommendations through these:**
-
-1. **One-page thesis test.** A position only earns capital if there's a coherent paragraph
-   answering: (a) what the company does, (b) why the market is mispricing it, (c) what
-   specifically catalyzes the re-rating, (d) when. If the report can't generate that
-   paragraph from the evidence, the verdict skews toward CUT, not HOLD.
-2. **Killer variables.** Identify the 2-3 fundamental drivers that actually move the
-   outcome for THIS business (not generic "macro / rates / sentiment"). Frame KPI
-   verdicts and Open Questions around those, not the long tail.
-3. **Invalidation triggers — fundamental, not price.** Break conditions are about
-   business reality (revenue growth thresholds, competitor launches, regulatory rulings),
-   never about stock price drawdowns. A 20% price decline is not, by itself, a sell signal.
-4. **Sizing by conviction.** Recommendations should be tiered:
-     - High conviction (clean thesis + low ambiguity + observable catalysts): up to ~8-10%
-     - Standard (thesis intact, some ambiguity): ~3-5%
-     - Speculative (asymmetric option, broken thesis with optionality, early stage): ~1-2%
-   The Sizing call must reference Net Conviction from the Adversarial Loops, not feel.
-5. **Time horizon.** A fundamental thesis is years, not months. Pre-commit to N quarters
-   of holding unless an invalidation trigger fires. State the horizon explicitly.
-6. **Sell discipline.** Sells are justified by exactly one of: (a) thesis fully realized
-   (target valuation hit / re-rating happened), (b) a specific named invalidation trigger
-   fired, (c) explicit IRR comparison shows a better opportunity. NOT: bad week, boredom,
-   tax-loss harvesting at the cost of the thesis. Reflect this in the verdict framing.
+_PRINCIPLES_BLOCK = """**Investment principles:**
+1. State the business mechanism, investment case, strongest counter and public evidence gap. A missing thesis or source is an unresolved research question, not a sell signal.
+2. Identify the 2-3 supplied fundamental drivers that change the investment case.
+3. Preserve accepted owner break conditions exactly. Label proposed revisions as proposals; never replace an accepted rule with management guidance.
+4. Do not invent position percentages, holding commitments or owner policy. Sizing requires supplied portfolio, tax, liquidity and risk constraints. Otherwise state that sizing is not assessed.
+5. Distinguish a fundamental thesis change from valuation and price changes. A price decline alone does not prove a broken thesis.
+6. Separate portfolio recommendations from evaluation drafts. Missing source coverage limits conviction and defines the next feasible public check.
 """
-
 
 _ADVERSARIAL_LOOP_FORMAT_BLOCK = """**Adversarial Loop format (use these exact field names):**
 - **Primary Thesis:** the asserted reading + strongest supporting evidence (with source tags)
 - **Strongest Counter:** the most credible name-specific challenge — alternative read, contradicting datapoint, mix/composition effect, management-credibility caveat. Reject generic macro hand-waving.
 - **Resolution:** how the two sides reconcile — **Net Conviction: High / Medium / Low**. State the specific observable that would flip the verdict next period.
-- **Sensitivity:** quantified impact if the primary read is wrong by ±X% on the key variable.
+- **Sensitivity:** trace the affected model assumption. Quantify only with supplied model inputs and a reproducible calculation; otherwise state the directional impact and missing inputs.
 """
 
 
@@ -837,7 +827,7 @@ def _compute_staleness(
             0,
             False,
             f"Corpus staleness: unknown (no corpus_latest_date provided). Report date {report_date}.",
-            "Corpus is current. Standard scorecard format applies.",
+            "Corpus freshness is unknown. Preserve accepted rules; current-period verdicts remain unverified until dated evidence is supplied.",
         )
 
     report_dt = date.fromisoformat(report_date)
@@ -849,8 +839,8 @@ def _compute_staleness(
     if is_stale:
         directive = f"""**STALE-CORPUS MODE** (staleness {staleness_days}d > {STALE_CORPUS_THRESHOLD_DAYS}d threshold). Apply these adaptations:
 1. Add a CORPUS STALENESS DISCLAIMER as the first content under the title, naming the gap and what it means for verdict precision.
-2. In the Tier-1 KPI Scorecard, REPLACE the 'vs. Break Threshold' column with 'vs. Latest Disclosed Forward Target' — compare current value to management's own most-recent forward commitment, not the schema's quantitative break (which assumes quarterly cadence the corpus does not provide).
-3. Add a 'Staleness Adjustment' column on the scorecard noting an explicit ±X% uncertainty band reflecting unobserved drift over the staleness period.
+2. Preserve the 'vs. Break Threshold' column and accepted owner thresholds. Label current-period breach status unverified when stale evidence cannot establish it. Management forward targets are separate dated claims, never replacement owner rules.
+3. Add a 'Staleness Adjustment' column describing the missing period and the next public filing or call needed. Do not invent an uncertainty band.
 4. Cap Net Conviction across all three Adversarial Loops at Low UNLESS the report explicitly justifies a higher conviction with the specific in-corpus evidence that supports it. State the cap reasoning in the Thesis Status loop's Resolution line."""
     else:
         directive = "Corpus is current. Standard scorecard format applies."
@@ -898,15 +888,11 @@ def _build_pass_a_prompt(
 ) -> str:
     """Pass A — evidence tables. Schema Hygiene, Tier-1 Scorecard, Key Developments, Breakers, Competitive."""
     thesis_text = _serialize_schema_for_llm(schema)
-    scorecard_target_col = (
-        "vs. Latest Disclosed Forward Target" if is_stale else "vs. Break Threshold"
-    )
+    scorecard_target_col = "vs. Break Threshold"
     scorecard_staleness_col = "Staleness Adjustment | " if is_stale else ""
     scorecard_staleness_sep = "--- | " if is_stale else ""
     scorecard_distance_phrase = (
-        "distance to forward target (state as % or absolute gap) and ±X% uncertainty band reflecting unobserved drift"
-        if is_stale
-        else "distance to break condition (state as % or absolute gap)"
+        "distance to accepted break condition if comparable evidence permits; otherwise unverified"
     )
 
     return f"""You are a senior fundamental equity analyst tracking a concentrated long position.
@@ -931,6 +917,7 @@ def _build_pass_a_prompt(
 {_HARD_RULES_BLOCK}
 {NUMBER_FORMATTING_BLOCK}
 {_PRINCIPLES_BLOCK}
+{research_method_block("thesis")}
 **Output Format (Strict Markdown — start directly at `## Schema Hygiene`, no preamble, no title):**
 
 ## Schema Hygiene (REQUIRED)
@@ -1000,6 +987,7 @@ def _build_pass_b_prompt(
 {_HARD_RULES_BLOCK}
 {NUMBER_FORMATTING_BLOCK}
 {_PRINCIPLES_BLOCK}
+{research_method_block("thesis")}
 {_ADVERSARIAL_LOOP_FORMAT_BLOCK}
 **Output Format (Strict Markdown — start directly at `## Thesis Status:`, no preamble, no title):**
 
@@ -1033,7 +1021,7 @@ For each tier_1_kpi within ~15% of its break_condition (read distances from the 
 - **Primary Thesis:** [Is this trigger genuinely about to fire / has fired structurally?]
 - **Strongest Counter:** [false-positive risk — single-print artifact, mix effect, FX, calendarization, methodology change per Hard Rule 6, etc.]
 - **Resolution:** ... — Net Conviction: H / M / L. Confirm-or-clear observable: ...
-- **Sensitivity:** [distance to threshold under ±X% scenarios on the input drivers]
+- **Sensitivity:** [reproducible supplied scenarios only; otherwise directional impact and missing model inputs]
 
 ## Open Questions for Next Quarter
 [2\u20133 specific things to listen for / look for in next earnings — each tied to a Resolution flip-observable named above.]
@@ -1041,7 +1029,7 @@ For each tier_1_kpi within ~15% of its break_condition (read distances from the 
 ## Portfolio & Thesis Fit
 This section operationalizes the investment principles above into a position-management view. Be specific; refuse to write generic content.
 
-**One-paragraph thesis** *(the discipline test — if you can't articulate this in one paragraph drawing only on this report's evidence, the position is mis-defined and the recommendation defaults to CUT/PASS):*
+**One-paragraph thesis** *(state missing support explicitly; an evidence gap is not an automatic CUT/PASS):*
 [≤120 words covering: what the company does, why the market is mispricing it (or has correctly priced it — say so), what specifically catalyzes a re-rating (or what would close the gap), expected horizon. No filler.]
 
 **Killer variables (2\u20133, business-specific):**
@@ -1050,18 +1038,15 @@ This section operationalizes the investment principles above into a position-man
 - [variable 3 if needed]
 
 **Invalidation triggers (fundamental, not price):**
-- [trigger 1 — specific quarter-level observable, e.g. "FoA revenue growth <10% CC for 2 consecutive quarters"]
+- [accepted owner trigger 1, unchanged; label any new proposed trigger as an unapproved proposal]
 - [trigger 2]
 - [trigger 3 if relevant — competitive event, regulator action, etc.]
 
 **Sizing recommendation:**
-- **Tier:** High conviction (≤8\u201310%) / Standard (3\u20135%) / Speculative (1\u20132%) / Avoid
-- **Rationale:** [Tie this to Net Conviction from the three Adversarial Loops above. High conviction requires Net Conviction = High on Thesis Status AND no fired triggers. Speculative is the right call when Net Conviction = Low but the asymmetry is favorable; specify the asymmetry.]
+[Assess only when supplied full-portfolio constraints support it. Otherwise state sizing not assessed, explain the missing inputs and discuss business conviction separately. Do not infer percentages from conviction labels.]
 
 **Time horizon & holding commitment:**
-- **Pre-commit horizon:** [N quarters minimum, e.g. 8 quarters / 2 years]
-- **Re-evaluation cadence:** every earnings + on any invalidation-trigger fire
-- **What would shorten this:** [only the named invalidation triggers; explicitly NOT price-action]
+[State the recorded owner horizon if supplied. Otherwise mark unavailable. Give the next public review event without inventing a holding commitment.]
 
 **Sell trigger preview (for use later):**
 - **Thesis-realized exit:** [specific scenario — target valuation, named re-rating event]
@@ -1091,7 +1076,7 @@ def _assemble_tracker(
                 "> **CORPUS STALENESS DISCLAIMER**: latest evidence in this tracker is "
                 f"{corpus_latest_date} — {staleness_days} days stale vs. report date {report_date} "
                 f"(threshold: {STALE_CORPUS_THRESHOLD_DAYS} days). Verdicts apply STALE-CORPUS MODE: "
-                "scorecard compares vs. latest disclosed forward target rather than break thresholds, "
+                "accepted break thresholds are preserved and stale current-period assessments remain unverified, "
                 "and adversarial-loop conviction is capped at Low absent explicit in-corpus justification.",
                 "",
             ]
@@ -1150,6 +1135,7 @@ def generate_thesis_update(
         staleness_directive,
         quarters_context,
     )
+    validate_research_input(pass_a_prompt)
     log.info({"event": "thesis_pass_start", "ticker": ticker, "pass": "A"})
     try:
         pass_a_output = call_llm(pass_a_prompt, purpose="thesis_pass_a", ticker=ticker)
@@ -1175,6 +1161,7 @@ def generate_thesis_update(
         quarters_context,
         pass_a_output,
     )
+    validate_research_input(pass_b_prompt)
     log.info({"event": "thesis_pass_start", "ticker": ticker, "pass": "B"})
     try:
         pass_b_output = call_llm(pass_b_prompt, purpose="thesis_pass_b", ticker=ticker)
@@ -1783,24 +1770,17 @@ BAR + framing rules:
   earn an automatic rewrite. Tie each risk to a named mechanic of THIS
   business — its pricing, unit economics, regulatory exposure, capex
   profile, channel concentration, switching-cost economics, etc.
-- At least TWO of the failure_modes must be NON-CONSENSUS — risks that
-  sell-side coverage has NOT broadly flagged or that are systematically
-  underweighted by buy-side because of organizational bias, model inertia,
-  or framing blind-spots. If you can't think of a non-consensus failure
-  mode for this business, you haven't thought hard enough.
+- Claim a risk is non-consensus or underweighted only when supplied dated consensus evidence supports the comparison. Otherwise state consensus positioning unavailable and present the risk as an analyst hypothesis.
 - Cite competitive dynamics with NAMED rivals where relevant ("OpenAI
   + Anthropic capture X% of the GenAI query budget that was previously
   Google Search... ", "AWS retains the enterprise-AI workload pipeline
   via Bedrock's distribution lead..."). Quantify where the input data
   supports it; otherwise be honest about the qualitative claim.
-- Each `evidence_in_data` MUST cite a specific number or trend from the
+- Each `evidence_in_data` must cite a specific supplied observation, number or trend from the
   inputs (e.g., "FCF dropped from $24.6B Q4'25 to $5.3B Q2'25 — capex
   inflection running ahead of OCF growth"). Vague "growth is decelerating"
   doesn't qualify.
-- `quantitative_impact` must do the actual math: link the failure mode to
-  a specific revenue / margin / FCF / NPV-per-share delta with the
-  reasoning chain shown. The reader should be able to plug your numbers
-  into a model and replicate your scenario.
+- `quantitative_impact`: quantify only when supplied assumptions permit a reproducible calculation. Otherwise state not quantified, describe the affected revenue/margin/FCF assumption and the missing inputs. Do not invent an NPV delta.
 - Grounded ONLY in the data below. Don't fabricate. If a real risk is
   real but not derivable from these inputs, put it under
   `out_of_scope_flags` with a 1-line explanation of why it's parked.
@@ -1841,19 +1821,20 @@ Produce a JSON object with EXACTLY these keys (no markdown, no commentary):
   "failure_modes": [
     {{
       "hypothesis": "one-sentence concrete failure mode — must name a specific business-model mechanic of {ticker}",
-      "evidence_in_data": "cite a specific number or trend from the inputs above (with the value AND the time period). Vague paraphrasing earns an automatic rewrite.",
-      "leading_indicator": "what would confirm it in the NEXT 1-2 prints. Must be a numerical / disclosed metric, not a qualitative vibe.",
-      "quantitative_impact": "do the math: link the failure mode to a specific revenue / margin / FCF / NPV-per-share delta. Show the reasoning chain so the reader can replicate or stress-test.",
+      "evidence_in_data": "cite a supplied observation with its source and period; numbers only when supplied. Missing support remains explicit.",
+      "leading_indicator": "what would confirm it in the NEXT 1-2 prints. Use a feasible public disclosure or call observation; no private-channel test or invented threshold.",
+      "quantitative_impact": "show a reproducible impact calculation only if inputs permit; otherwise state not quantified, affected model assumption and missing inputs.",
       "refutation_criteria": "what management would have to disclose or demonstrate over the next 2-4Q to neutralize this thesis. Specific and falsifiable."
     }}
   ],
-  "most_underweighted": "one-paragraph editorial argument: which of the failure modes above is most underweighted by sell-side / consensus, and WHY consensus is structurally blind to it (e.g., model inertia, organizational bias of legacy bull-side analysts, framing blind-spot, etc.). Don't pick the most-likely failure mode — pick the one that consensus is most-wrongly-pricing relative to its actual probability \u00d7 impact.",
+  "most_underweighted": "identify the strongest underweighted hypothesis only with supplied dated consensus evidence; otherwise state consensus comparison unavailable and explain the most consequential supplied risk.",
   "out_of_scope_flags": ["each entry: a real risk that's NOT derivable from the inputs above (regulatory, macro, technological, etc.) — with a brief reason why we're parking it. 1-3 entries max."]
 }}
 
-Provide 3 to 5 failure_modes. At least 2 must be non-consensus per the rule
-above. Return strictly the JSON object — nothing else.
+Provide up to 5 supported failure_modes. Do not fill a quota with unsupported risks. Return strictly the JSON object — nothing else.
 """
+    prompt += "\n" + research_method_block("company")
+    validate_research_input(prompt)
     try:
         # call_llm_structured: parse + one retry-with-feedback + loud-fail
         # (StructuredParseError) instead of a silent fence-strip that ships
@@ -1983,7 +1964,7 @@ beats/misses.
         raise
 
 
-def generate_company_description(
+def build_company_description_prompt(
     ticker: str,
     profile_description: str,
     sector: str | None,
@@ -2058,8 +2039,8 @@ investment memo on {ticker}. Voice: a senior buy-side analyst's working
 note. Not Wikipedia. Not a 10-K paraphrase.
 
 ANCHOR YOUR WRITEUP ON THE ANALYST'S THESIS (below). Every paragraph
-should advance one of the thesis pillars (value driver, moat, pressure
-point, optionality) with specific numbers and named competitors.
+should advance a supplied thesis pillar (value driver, moat, pressure
+point, optionality). Use numbers and named competitors only when supported by the supplied inputs. Missing thesis or competitive evidence stays explicit.
 
 When the IR ANCHOR block is present below, treat it as COMPANY-PROVIDED
 FRAMING — material useful for understanding *how management positions the
@@ -2095,13 +2076,13 @@ choices.
 
 ```json
 {{
-  "value_driver_phrase": "noun-phrase clause, 6-15 words, that will be CONCATENATED into the string '{ticker}: <phrase>.'. Must read as a continuation of '{ticker}: ', NOT as a standalone sentence. Must name the cash-engine mechanic AND a concrete economic anchor (margin, take rate, scale figure).",
-  "central_bet": "10-20 words framing the central bull-vs-bear debate as a TESTABLE quantified hypothesis. Will be concatenated as 'The bet: <central_bet>'. Examples: 'whether GCP margin expansion absorbs the $180B+ 2026 capex before Gemini cannibalization compresses Search', 'whether ARPAC sustains 25%+ CAGR through 2028 once secured-credit saturates Brazil'.",
+  "value_driver_phrase": "noun-phrase clause, 6-15 words, that will be CONCATENATED into the string '{ticker}: <phrase>.'. Must read as a continuation of '{ticker}: ', NOT as a standalone sentence. Must name the cash-engine mechanic and a supported economic mechanism. A numeric anchor is optional when not supplied.",
+  "central_bet": "10-20 words framing the central bull-vs-bear debate as a publicly testable hypothesis. Quantify only from supplied assumptions; do not invent a target or period. Will be concatenated as 'The bet: <central_bet>'.",
   "swing_variable": "Optional null-able 1-sentence on what to watch for the next 4 quarters — the single most important number that will resolve the bet. Pass null if no clean swing variable exists.",
   "paragraphs": [
     {{
       "opener": "<ONE OF: 'The cash engine is' / 'The growth optionality is' / 'The structural debate is' / 'The pressure point most analysts underweight is' / 'What is non-obvious is' / 'The competitive dynamic is' / 'The moat depends on'>",
-      "body": "Rest of the paragraph, ~80-200 words. MUST cite at least one specific number from the inputs (revenue, margin, growth rate, market share). MUST name at least one specific competitor or comparable company. MUST tie back to a thesis pillar."
+      "body": "Rest of the paragraph, ~80-200 words. Cite supplied public evidence and distinguish management claims from analyst inference. Use numbers or named competitors only where supplied. Explain missing evidence rather than invent it. Tie back to the investment case."
     }}
   ],
   "revenue_mechanics": [
@@ -2111,7 +2092,7 @@ choices.
     }}
   ],
   "segments": [
-    {{"name": "<exact segment name from the SEGMENTS list above>", "description": "1-2 sentences with a SPECIFIC economic mechanic (margin trajectory, growth rate, contribution to OI) + competitive position. Forbidden phrases: 'includes products such as', 'encompasses', 'generates revenue from'. Immaterial segments: 'immaterial (<X% of revenue), primarily Y, runs Z operating loss/year'."}}
+    {{"name": "<exact segment name from the SEGMENTS list above>", "description": "1-2 sentences with a SPECIFIC economic mechanic (margin trajectory, growth rate, contribution to OI) + competitive position. Forbidden phrases: 'includes products such as', 'encompasses', 'generates revenue from'. Immaterial segments: describe supported scale; do not invent a revenue share or loss."}}
   ],
   "geographies": [
     {{"name": "<exact geography name from the GEOGRAPHIES list above>", "description": "1 sentence with analytical content (concentration, growth differential, regulatory exposure). Skip generic geo-disclosure rows."}}
@@ -2123,15 +2104,9 @@ Field-by-field rules:
 
 - `value_driver_phrase`: must be a NOUN PHRASE. It will be string-
   concatenated as `f"{ticker}: {{value_driver_phrase}}."`. So "a
-  search-ads cash engine ($240B run-rate)" is valid; "the company
-  operates a search business" is invalid because it parses as a verb
-  phrase + the assembled sentence would read awkwardly. Good examples:
-  * "a search-ads quasi-monopoly funding the largest first-party AI
-    distribution stack in the world (~$240B run-rate, 35%+ op margin)"
-  * "the per-customer monetization arc compounding ~3x faster than
-    incumbent banks at 1/10th the cost-to-serve"
-  * "a semiconductor monopoly capturing ~$0.92 of every hyperscaler GPU
-    dollar at 73% gross margin"
+  search-ads cash engine" is valid; "the company operates a search business"
+  is invalid because it is a verb phrase. Use supplied economic evidence;
+  do not copy a numeric example or assert monopoly power without evidence.
 
 - `paragraphs`: emit 3-5 entries. Use openers from the allowed list.
   Don't reuse the same opener twice. Order them by analytical priority
@@ -2150,6 +2125,40 @@ Field-by-field rules:
 
 Return ONLY the JSON object. No markdown fence, no prose before or after.
 """
+    prompt += "\n" + research_method_block("company")
+    validate_research_input(prompt)
+    return prompt
+
+
+def generate_company_description(
+    ticker: str,
+    profile_description: str,
+    sector: str | None,
+    industry: str | None,
+    form_10k_text: str,
+    segment_names: list[str],
+    geo_names: list[str],
+    fiscal_year: int | None,
+    thesis_text: str = "",
+    recent_earnings_md: str = "",
+    recent_ir_md: str = "",
+    ir_anchor_md: str = "",
+) -> str:
+    """Generate a company description from the exact cacheable prompt."""
+    prompt = build_company_description_prompt(
+        ticker,
+        profile_description,
+        sector,
+        industry,
+        form_10k_text,
+        segment_names,
+        geo_names,
+        fiscal_year,
+        thesis_text,
+        recent_earnings_md,
+        recent_ir_md,
+        ir_anchor_md,
+    )
     try:
         payload = call_llm_structured(
             prompt,

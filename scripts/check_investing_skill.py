@@ -20,9 +20,33 @@ from typing import cast
 SKILL = "src/advisor/skills/earnings-summary-investing"
 BASELINE = f"{SKILL}/references/reviewed-sources.json"
 _LINK = re.compile(r"\[[^\]]*\]\(([^\s)]+)(?:\s+[^)]*)?\)")
-_CODE = re.compile(r"`([^`]+)`")
+_CODE = re.compile(r"(?<!`)(`+)(?!`)(.*?)(?<!`)\1(?!`)", re.DOTALL)
 _ROOT_FILES = {"AGENTS.md", "DEFINITIONS.md", "reconstruction_manifest.json"}
 _SOURCE_DIRS = {"directives", "execution", "src", "scripts"}
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+
+def _without_fenced_blocks(text: str) -> str:
+    """Keep prose references separate from fenced illustrative examples."""
+    lines: list[str] = []
+    fence: str | None = None
+    for line in text.splitlines(keepends=True):
+        match = _FENCE.match(line.rstrip("\r\n"))
+        if fence is not None:
+            if (
+                match
+                and match[1][0] == fence[0]
+                and len(match[1]) >= len(fence)
+                and not match[2].strip()
+            ):
+                fence = None
+            lines.append("\n")
+        elif match and (match[1][0] != "`" or "`" not in match[2]):
+            fence = match[1]
+            lines.append("\n")
+        else:
+            lines.append(line)
+    return "".join(lines)
 
 
 def _safe_path(root: Path, relative: str) -> Path:
@@ -40,6 +64,21 @@ def _safe_path(root: Path, relative: str) -> Path:
     if not resolved.is_relative_to(root):
         raise ValueError("path resolves outside repository")
     return resolved
+
+
+def _public_source(root: Path, relative: str) -> Path:
+    candidate = _safe_path(root, relative)
+    if not candidate.is_file():
+        raise ValueError("source must be an existing file")
+    for name in (relative, candidate.relative_to(root).as_posix()):
+        path = PurePosixPath(name)
+        if (
+            any(part.startswith(".") for part in path.parts)
+            or (name not in _ROOT_FILES and path.parts[0] not in _SOURCE_DIRS)
+            or path.suffix not in {".py", ".md", ".json", ".js"}
+        ):
+            raise ValueError("source name and target must be supported public source paths")
+    return candidate
 
 
 def _load_sources(baseline: Path) -> tuple[dict[str, object], dict[str, str]]:
@@ -90,6 +129,7 @@ def check(
     root = root.resolve()
     errors: list[str] = []
     changed: list[dict[str, str]] = []
+    skill_markdown_sha256: dict[str, str] = {}
     payload: dict[str, object] = {}
     try:
         baseline = _safe_path(root, baseline_relative)
@@ -104,9 +144,7 @@ def check(
         }, payload
     for relative, expected in sorted(sources.items()):
         try:
-            source = _safe_path(root, relative)
-            if not source.is_file():
-                raise ValueError("source is missing or not a file")
+            source = _public_source(root, relative)
             actual = hashlib.sha256(source.read_bytes()).hexdigest()
             if actual != expected:
                 changed.append(
@@ -122,9 +160,16 @@ def check(
         try:
             if not file.resolve().is_relative_to(root):
                 raise ValueError("skill file escapes repository")
-            text = file.read_text(encoding="utf-8")
-            for raw in _CODE.findall(text):
-                relative = raw.split()[0]
+            raw = file.read_bytes()
+            skill_markdown_sha256[file.relative_to(root).as_posix()] = hashlib.sha256(
+                raw
+            ).hexdigest()
+            text = _without_fenced_blocks(raw.decode("utf-8"))
+            for span in _CODE.finditer(text):
+                words = span[2].split()
+                if not words:
+                    continue
+                relative = words[0]
                 if relative.endswith("/") or "<" in relative:
                     continue
                 if relative not in _ROOT_FILES and not relative.startswith(
@@ -155,7 +200,12 @@ def check(
         except (ValueError, OSError, UnicodeError):
             errors.append("unsafe or unreadable skill Markdown file")
     status = "invalid" if errors else "drift" if changed else "clean"
-    return {"status": status, "errors": errors, "changed_sources": changed}, payload
+    return {
+        "status": status,
+        "errors": errors,
+        "changed_sources": changed,
+        "skill_markdown_sha256": skill_markdown_sha256,
+    }, payload
 
 
 def _record_review(
@@ -166,6 +216,7 @@ def _record_review(
     note: str | None,
     reviewed: list[str],
     replacements: list[str],
+    additions: list[str],
 ) -> None:
     if not note or not note.strip():
         raise ValueError("record-review requires a semantic review note")
@@ -173,18 +224,19 @@ def _record_review(
     original_sources = {entry["path"]: entry["sha256"] for entry in entries}
     sources = dict(original_sources)
     renamed: set[str] = set()
+    added: set[str] = set()
+    for relative in additions:
+        if relative in sources or relative in added:
+            raise ValueError("added source must be new and named once")
+        candidate = _public_source(root, relative)
+        sources[relative] = hashlib.sha256(candidate.read_bytes()).hexdigest()
+        added.add(relative)
     for replacement in replacements:
         old, separator, new = replacement.partition("=")
         if not separator or old not in sources or new in sources or old == new:
             raise ValueError("replacement must name one existing old source and a new source")
         _safe_path(root, old)
-        candidate = _safe_path(root, new)
-        if not candidate.is_file():
-            raise ValueError("replacement source must be a safe existing file")
-        if new not in _ROOT_FILES and PurePosixPath(new).parts[0] not in _SOURCE_DIRS:
-            raise ValueError("replacement is outside public procedure/code scope")
-        if candidate.suffix not in {".py", ".md", ".json", ".js"}:
-            raise ValueError("unsupported replacement source type")
+        candidate = _public_source(root, new)
         sources.pop(old)
         sources[new] = hashlib.sha256(candidate.read_bytes()).hexdigest()
         renamed.update((old, new))
@@ -195,9 +247,9 @@ def _record_review(
         )
     changed = cast(list[dict[str, str]], proposed_report["changed_sources"])
     changed_paths = {entry["path"] for entry in changed}
-    if set(reviewed) != changed_paths | renamed or len(reviewed) != len(set(reviewed)):
+    if set(reviewed) != changed_paths | renamed | added or len(reviewed) != len(set(reviewed)):
         raise ValueError("explicitly name each changed path with --reviewed-source")
-    if not changed and not renamed:
+    if not changed and not renamed and not added:
         return
     actual = {entry["path"]: entry["current_sha256"] for entry in changed}
     updated: dict[str, object] = {
@@ -248,6 +300,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Record-review only: explicitly reviewed changed source path",
     )
     parser.add_argument(
+        "--add-reviewed-source",
+        action="append",
+        default=[],
+        help="Record-review only: new public source; also name it with --reviewed-source",
+    )
+    parser.add_argument(
         "--replace-reviewed-source",
         action="append",
         default=[],
@@ -266,12 +324,16 @@ def main(argv: list[str] | None = None) -> int:
                 args.review_note,
                 args.reviewed_source,
                 args.replace_reviewed_source,
+                args.add_reviewed_source,
             )
             report, _ = check(root, str(args.baseline))
         except (ValueError, OSError) as exc:
             report = {**report, "status": "invalid", "errors": [str(exc)]}
     elif not args.record_review and (
-        args.review_note is not None or args.reviewed_source or args.replace_reviewed_source
+        args.review_note is not None
+        or args.reviewed_source
+        or args.replace_reviewed_source
+        or args.add_reviewed_source
     ):
         report = {
             **report,

@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Generator, Mapping
 from contextlib import AbstractContextManager, contextmanager, suppress
@@ -21,7 +22,7 @@ from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol, cast
+from typing import BinaryIO, Protocol, cast
 from uuid import uuid4
 from xml.etree.ElementTree import ParseError
 
@@ -497,6 +498,8 @@ def _run_managed_child(
     env: dict[str, str],
     scheduler_owner: tuple[int, str | None] | None,
     timeout_seconds: float | None = None,
+    stdout: BinaryIO | None = None,
+    stderr: BinaryIO | None = None,
 ) -> int:
     """Run a job and tear down its tree if Task Scheduler kills the wrapper.
 
@@ -506,11 +509,19 @@ def _run_managed_child(
     assignment or resume failure terminates that root before returning.
     """
     if scheduler_owner is None and timeout_seconds is None:
-        return subprocess.run(command, cwd=cwd, check=False, env=env).returncode
+        return subprocess.run(
+            command, cwd=cwd, check=False, env=env, stdout=stdout, stderr=stderr
+        ).returncode
 
     deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
     creationflags = _CREATE_SUSPENDED if os.name == "nt" else 0
-    process = subprocess.Popen(command, cwd=cwd, env=env, creationflags=creationflags)
+    process = (
+        subprocess.Popen(command, cwd=cwd, env=env, creationflags=creationflags)
+        if stdout is None and stderr is None
+        else subprocess.Popen(
+            command, cwd=cwd, env=env, creationflags=creationflags, stdout=stdout, stderr=stderr
+        )
+    )
     process_tree_job: _WindowsKillOnCloseJob | None = None
     try:
         process_tree_job = _create_process_tree_job(process)
@@ -550,6 +561,40 @@ def _run_managed_child(
     finally:
         if process_tree_job is not None:
             process_tree_job.close()
+
+
+def run_captured_application_child(
+    command: list[str], *, cwd: Path, timeout_seconds: float
+) -> subprocess.CompletedProcess[str]:
+    """Capture a bounded command using the existing owned-tree deadline.
+
+    Temporary spools avoid pipe deadlock. Callers receive at most 2 MiB per
+    stream; larger output is a failed machine contract, never truncated JSON.
+    Windows uses the same suspended-create Job Object boundary as scheduled
+    work. This helper does not register a scheduled job or acquire a DB lock.
+    """
+    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
+        status = _run_managed_child(
+            command,
+            cwd=cwd,
+            env=dict(os.environ),
+            scheduler_owner=None,
+            timeout_seconds=timeout_seconds,
+            stdout=output,
+            stderr=errors,
+        )
+        output.seek(0)
+        errors.seek(0)
+        raw_output = output.read(2_097_153)
+        raw_errors = errors.read(2_097_153)
+        if len(raw_output) > 2_097_152 or len(raw_errors) > 2_097_152:
+            raise ValueError("application_child_output_limit_exceeded")
+        return subprocess.CompletedProcess(
+            command,
+            status,
+            raw_output.decode("utf-8", errors="replace"),
+            raw_errors.decode("utf-8", errors="replace"),
+        )
 
 
 @dataclass(frozen=True, slots=True)

@@ -195,3 +195,16 @@ def test_six_k_report_date_is_not_promoted_to_a_financial_period(
     )
     assert parsed.filings[0].report_date == (report_date or None)
     assert periodic_report_date(parsed.filings[0]) is None
+
+
+@pytest.mark.parametrize("form", ["10-12B", "10-12B/A"])
+def test_registration_form_and_source_report_date_never_become_periodic_anchor(form: str) -> None:
+    from filings.sec_submissions_inventory import periodic_report_date
+
+    columns = _columns(["0000001001-25-000001"], forms=[form])
+    parsed = parse_sec_submissions_inventory(
+        cik="1001", ticker="ACME", primary_body=_root(columns, []), historical=()
+    )
+    assert parsed.filings[0].form_type == form
+    assert parsed.filings[0].report_date == "2024-12-31"
+    assert periodic_report_date(parsed.filings[0]) is None

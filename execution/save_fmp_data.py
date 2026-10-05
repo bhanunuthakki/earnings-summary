@@ -30,20 +30,19 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, TypeAlias, TypedDict, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-import db as portfolio_db  # noqa: E402
-from compute.split_normalization import (  # noqa: E402
+import db as portfolio_db
+from compute.split_normalization import (
     NormalizationEvent,
     normalize_estimates,
 )
-from log_redact import redact  # noqa: E402
-from models.fmp_payloads import STABLE_FMP_RECORD_MODELS  # noqa: E402
-from net.client import (  # noqa: E402
+from db_paths import require_db_path
+from log_redact import redact
+from models.fmp_payloads import STABLE_FMP_RECORD_MODELS
+from net.client import (
     FMP_CLIENT,
     FMP_ORIGIN,
     HttpAttempt,
@@ -52,18 +51,20 @@ from net.client import (  # noqa: E402
     QueryValue,
     RetryPolicy,
 )
-from pipeline.deferred_fmp import (  # noqa: E402
+from pipeline.deferred_fmp import (
     DeferredFmpTask,
     default_store_path,
     log_deferred,
 )
-from pipeline.fmp_payload_validation import (  # noqa: E402
+from pipeline.fmp_payload_validation import (
     FmpPayloadContractError,
     FmpPayloadCoordinate,
     validate_fmp_prewrite_payload,
 )
-from runtime.secrets import load_project_env  # noqa: E402
-from sources import registry as source_calls_log  # noqa: E402
+from runtime.secrets import load_project_env
+from sources import registry as source_calls_log
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 load_project_env(PROJECT_ROOT)
 API_KEY = os.environ.get("FMP_API_KEY")
@@ -443,7 +444,7 @@ def _candidates(
 def fmp_call(
     endpoint_path: str,
     symbol: str | None = None,
-    extra: dict | None = None,
+    extra: dict[str, object] | None = None,
 ) -> tuple[int, object | None, str | None, str | None]:
     """Try all URL variants. The first HTTP 200 response wins.
 
@@ -689,7 +690,16 @@ PEER_ENDPOINT_ALLOWLIST: dict[str, dict[str, object] | None] = {
 }
 
 
-def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict[str, object]]:
+class FmpEndpointJob(TypedDict):
+    path: str
+    symbol: str
+    period: str
+    suffix: str
+    extra: dict[str, object]
+    file_override: str | None
+
+
+def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[FmpEndpointJob]:
     """Build the endpoint job list for a ticker.
 
     list_type controls scope:
@@ -701,7 +711,7 @@ def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict[s
     """
     s = symbol.upper()
     skip_10k = list_type in ("index_member", "etf")
-    jobs: list[dict[str, object]] = []
+    jobs: list[FmpEndpointJob] = []
 
     def add(
         path: str,
@@ -709,7 +719,7 @@ def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict[s
         suffix: str,
         extra: dict[str, object] | None = None,
         file_override: str | None = None,
-    ):
+    ) -> None:
         jobs.append(
             {
                 "path": path,
@@ -846,7 +856,7 @@ def per_ticker_jobs(symbol: str, *, list_type: str = "portfolio") -> list[dict[s
     if list_type == "index_member":
         jobs = [j for j in jobs if j["suffix"] in PEER_ENDPOINT_ALLOWLIST]
         for job in jobs:
-            override = PEER_ENDPOINT_ALLOWLIST[cast("str", job["suffix"])]
+            override = PEER_ENDPOINT_ALLOWLIST[job["suffix"]]
             if override is not None:
                 job["extra"] = dict(override)
 
@@ -872,6 +882,22 @@ _STATUS_UPSERT_SQL = """
 """
 
 
+FmpStatusRow: TypeAlias = tuple[
+    str,
+    str,
+    str,
+    str,
+    int | None,
+    int | None,
+    str | None,
+    str | None,
+    str | None,
+    int | None,
+    str | None,
+    str,
+]
+
+
 def _build_status_row(
     ticker: str,
     endpoint: str,
@@ -885,7 +911,7 @@ def _build_status_row(
     file_path: str | None = None,
     file_bytes: int | None = None,
     error_msg: str | None = None,
-) -> tuple:
+) -> FmpStatusRow:
     """Build the 12-tuple for the fmp_endpoint_status upsert."""
     return (
         ticker,
@@ -903,7 +929,7 @@ def _build_status_row(
     )
 
 
-def _flush_status_batch(rows: list[tuple]) -> None:
+def _flush_status_batch(rows: list[FmpStatusRow]) -> None:
     """Upsert many fmp_endpoint_status rows in one transaction with retry-on-lock.
 
     Batched commits cut per-ticker DB time from ~1.1s (57 separate fsyncs) to
@@ -968,13 +994,14 @@ def _record_status(
     )
 
 
-def _date_bounds(records) -> tuple[str | None, str | None]:
+def _date_bounds(records: object) -> tuple[str | None, str | None]:
     if not isinstance(records, list) or not records:
         return (None, None)
-    dates = []
-    for rec in records:
-        if not isinstance(rec, dict):
+    dates: list[str] = []
+    for raw_record in cast("list[object]", records):
+        if not isinstance(raw_record, dict):
             continue
+        rec = cast("dict[str, object]", raw_record)
         for k in ("date", "period", "fillingDate", "calendarYear"):
             v = rec.get(k)
             if isinstance(v, (str, int)):
@@ -1033,7 +1060,7 @@ def run_ticker(
 
     # Accumulate fmp_endpoint_status upserts and flush once at end-of-ticker.
     # 57 individual commits cost ~1s/ticker on Windows; one batch commit is ~50ms.
-    pending: list[tuple] = []
+    pending: list[FmpStatusRow] = []
     # Parallel accumulator of source_calls rows for FMP cache-hit observability;
     # batch-flushed alongside `pending` so per-row connections don't reintroduce
     # the per-call fsync cost the status batching avoids. kind = the FMP endpoint
@@ -1041,9 +1068,9 @@ def run_ticker(
     src_calls: list[source_calls_log.PendingSourceCall] = []
 
     for job_index, job in enumerate(jobs):
-        endpoint = cast("str", job["path"])
-        period = cast("str", job["period"])
-        suffix = cast("str", job["suffix"])
+        endpoint = job["path"]
+        period = job["period"]
+        suffix = job["suffix"]
 
         if (endpoint, period) in already_ok and not (
             endpoint in TIME_SENSITIVE_ENDPOINTS
@@ -1208,8 +1235,9 @@ def run_ticker(
                 )
                 snapshot_index[f"{ticker}_{suffix}"] = TODAY_STR
 
-            count = len(body) if isinstance(body, list) else 1
-            earliest, latest = _date_bounds(body if isinstance(body, list) else [body])
+            count = len(cast("list[object]", body)) if isinstance(body, list) else 1
+            date_records = cast("list[object]", body) if isinstance(body, list) else [body]
+            earliest, latest = _date_bounds(date_records)
             pending.append(
                 _build_status_row(
                     ticker,
@@ -1293,7 +1321,7 @@ def run_ticker(
                 src_calls.append(
                     source_calls_log.PendingSourceCall(
                         source_name=_FMP_SOURCE,
-                        kind=cast("str", remaining_job["path"]),
+                        kind=remaining_job["path"],
                         ticker=ticker,
                         status=source_calls_log.CallStatus.SKIPPED,
                         notes="provider_quota_exhausted",
@@ -1457,7 +1485,7 @@ GICS_SECTORS = [
 ]
 
 
-def _save_global(name: str, body) -> Path:
+def _save_global(name: str, body: object) -> Path:
     p = SECTOR_DIR / f"{name}.json"
     p.write_text(json.dumps(body, indent=2), encoding="utf-8")
     return p
@@ -1468,11 +1496,11 @@ def _save_global_status(
     key: str,
     status: str,
     *,
-    http_code=None,
-    record_count=None,
-    file_path=None,
-    error_msg=None,
-):
+    http_code: int | None = None,
+    record_count: int | None = None,
+    file_path: str | None = None,
+    error_msg: str | None = None,
+) -> None:
     _record_status(
         "__GLOBAL__",
         endpoint,
@@ -1485,7 +1513,8 @@ def _save_global_status(
     )
 
 
-def run_sector_industry(profiles_dir: Path = FMP_DIR) -> None:
+def run_sector_industry(profiles_dir: Path | None = None) -> None:
+    profiles_dir = profiles_dir or FMP_DIR
     print("\n=== sector + industry one-time ===", flush=True)
 
     # Snapshots
@@ -1499,14 +1528,14 @@ def run_sector_industry(profiles_dir: Path = FMP_DIR) -> None:
         if code == 200 and body is not None:
             p = _save_global(ep.replace("-", "_"), body)
             print(
-                f"  ok   {ep:42s}                  rows={len(body) if isinstance(body, list) else 1}"
+                f"  ok   {ep:42s}                  rows={len(cast('list[object]', body)) if isinstance(body, list) else 1}"
             )
             _save_global_status(
                 ep,
                 "snapshot",
                 "ok",
                 http_code=code,
-                record_count=len(body) if isinstance(body, list) else 1,
+                record_count=len(cast("list[object]", body)) if isinstance(body, list) else 1,
                 file_path=str(p.relative_to(PROJECT_ROOT)),
             )
         else:
@@ -1522,7 +1551,7 @@ def run_sector_industry(profiles_dir: Path = FMP_DIR) -> None:
             key = f"{sector}".replace(" ", "_")
             if code == 200 and body is not None:
                 p = _save_global(f"{ep.replace('-', '_')}_{key}", body)
-                n = len(body) if isinstance(body, list) else 1
+                n = len(cast("list[object]", body)) if isinstance(body, list) else 1
                 print(f"  ok   {ep:42s} {sector:24s} n={n}")
                 _save_global_status(
                     ep,
@@ -1540,11 +1569,14 @@ def run_sector_industry(profiles_dir: Path = FMP_DIR) -> None:
     industries: set[str] = set()
     for f in profiles_dir.glob("*_profile.json"):
         try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-            recs = data if isinstance(data, list) else [data]
-            for r in recs:
-                if isinstance(r, dict) and r.get("industry"):
-                    industries.add(r["industry"])
+            data: object = json.loads(f.read_text(encoding="utf-8"))
+            recs = cast("list[object]", data) if isinstance(data, list) else [data]
+            for raw_record in recs:
+                if isinstance(raw_record, dict):
+                    record = cast("dict[str, object]", raw_record)
+                    industry = record.get("industry")
+                    if isinstance(industry, str) and industry:
+                        industries.add(industry)
         except Exception:
             continue
 
@@ -1558,7 +1590,7 @@ def run_sector_industry(profiles_dir: Path = FMP_DIR) -> None:
             key = industry.replace(" ", "_").replace("/", "_")
             if code == 200 and body is not None:
                 p = _save_global(f"{ep.replace('-', '_')}_{key}", body)
-                n = len(body) if isinstance(body, list) else 1
+                n = len(cast("list[object]", body)) if isinstance(body, list) else 1
                 print(f"  ok   {ep:42s} {industry:32s} n={n}")
                 _save_global_status(
                     ep,
@@ -1576,7 +1608,7 @@ def run_sector_industry(profiles_dir: Path = FMP_DIR) -> None:
     code, body, err, _kind = fmp_call("company-symbols-list", None)
     if code == 200 and body is not None:
         p = _save_global("company_symbols_list", body)
-        n = len(body) if isinstance(body, list) else 1
+        n = len(cast("list[object]", body)) if isinstance(body, list) else 1
         print(f"  ok   company-symbols-list                                       n={n}")
         _save_global_status(
             "company-symbols-list",
@@ -1619,14 +1651,14 @@ def run_stable_probe(ticker: str) -> dict[str, list[str]]:
     unavailable on free and degrades to the SEC source-of-truth path).
     """
     _enable_stable_only()
-    jobs = cast("list[dict[str, object]]", per_ticker_jobs(ticker))
+    jobs = per_ticker_jobs(ticker)
     report: dict[str, list[str]] = {"ok": [], "empty": [], "forbidden": [], "error": []}
     markers = {"ok": "ok   ", "empty": "empty", "forbidden": "403  ", "error": "err  "}
     print(f"\n=== STABLE PROBE: {ticker} ({len(jobs)} endpoints, stable-only) ===", flush=True)
     for job in jobs:
-        endpoint = cast("str", job["path"])
-        period = cast("str", job["period"])
-        extra = cast("dict[str, object]", job["extra"])
+        endpoint = job["path"]
+        period = job["period"]
+        extra = job["extra"]
         label = f"{endpoint}:{period}" if period else endpoint
         code, _body, err, kind = fmp_call(endpoint, ticker, extra)
         if code == 200 and _body is not None:
@@ -1656,8 +1688,27 @@ def run_stable_probe(ticker: str) -> dict[str, list[str]]:
     return report
 
 
+def configure_runtime(repo_root: Path, db_path: Path | None) -> Path:
+    """Bind retained bytes and telemetry before opening a writer or HTTP call."""
+    global PROJECT_ROOT, FMP_DIR, SNAP_DIR, SECTOR_DIR, _BUDGET_DIR, _VALIDATION_DUMP_DIR, API_KEY
+    load_project_env(repo_root)
+    database = require_db_path(db_path)
+    PROJECT_ROOT = repo_root
+    FMP_DIR = repo_root / "data/historical/fmp"
+    SNAP_DIR = repo_root / "data/historical/fmp_snapshots"
+    SECTOR_DIR = repo_root / "data/historical/sector_industry"
+    _BUDGET_DIR = repo_root / ".tmp/cacher"
+    _VALIDATION_DUMP_DIR = repo_root / ".tmp/fmp_validation_failures"
+    portfolio_db.set_db_path(database, state_root=repo_root)
+    source_calls_log.set_db_path(database)
+    API_KEY = os.environ.get("FMP_API_KEY")
+    return database
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    ap.add_argument("--db", type=Path)
     ap.add_argument("--probe", action="store_true", help="Run full endpoint set on GOOGL only")
     ap.add_argument("--tickers", help="Comma-separated tickers")
     ap.add_argument("--portfolio", action="store_true")
@@ -1727,6 +1778,15 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    try:
+        configure_runtime(args.repo_root, args.db)
+    except (OSError, RuntimeError) as exc:
+        print(
+            json.dumps({"event": "fmp_database_unavailable", "error_type": type(exc).__name__}),
+            file=sys.stderr,
+        )
+        return 3
+
     if not API_KEY:
         print("FATAL: FMP_API_KEY not configured", file=sys.stderr)
         return 1
@@ -1752,12 +1812,30 @@ def main() -> int:
     manifest_filter: dict[str, set[tuple[str, str]]] | None = None
     if args.manifest:
         with open(args.manifest, encoding="utf-8") as mf:
-            payload = json.load(mf)
-        entries = payload["items"] if isinstance(payload, dict) else payload
+            payload: object = json.load(mf)
+        if isinstance(payload, dict):
+            envelope = cast("dict[str, object]", payload)
+            entries = envelope["items"]
+        else:
+            entries = payload
+        if not isinstance(entries, list):
+            raise TypeError("FMP manifest items must be a list")
         manifest_filter = {}
-        for e in entries:
-            t = e["ticker"].upper()
-            manifest_filter.setdefault(t, set()).add((e["endpoint"], e.get("period", "")))
+        for raw_entry in cast("list[object]", entries):
+            if not isinstance(raw_entry, dict):
+                raise TypeError("FMP manifest item must be an object")
+            entry = cast("dict[str, object]", raw_entry)
+            ticker = entry["ticker"]
+            endpoint = entry["endpoint"]
+            period = entry.get("period", "")
+            if (
+                not isinstance(ticker, str)
+                or not isinstance(endpoint, str)
+                or not isinstance(period, str)
+            ):
+                raise TypeError("FMP manifest coordinates must be strings")
+            t = ticker.upper()
+            manifest_filter.setdefault(t, set()).add((endpoint, period))
         targets = sorted(manifest_filter.keys())
         if (
             args.work_receipt is not None
@@ -1791,7 +1869,7 @@ def main() -> int:
         targets += _ticker_list("index_member") + _ticker_list("etf")
         do_sector = True
 
-    seen = set()
+    seen: set[str] = set()
     targets = [t for t in targets if not (t in seen or seen.add(t))]
 
     if not targets and not do_sector:

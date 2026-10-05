@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import sqlite3
+from contextlib import nullcontext
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -180,3 +183,138 @@ def test_sheet_import_forwards_only_explicit_source_root_to_refresh(
         argv.extend(("--state-root", str(sources)))
     assert dcf_sheets.main(argv) == 0
     assert seen == [sources if explicit_source else None]
+
+
+@pytest.mark.parametrize("entrypoint", ["prepare-memo", "verify-memo", "cashflow"])
+@pytest.mark.parametrize("binding", ["argument", "environment", "absent"])
+def test_decision_entrypoints_use_only_explicit_source_byte_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entrypoint: str, binding: str
+) -> None:
+    from dcf.cashflow_refresh import PreparedCashflowDcfRequest, PreparedCashflowDcfResult
+    from dcf.input_evidence import InputEvidenceError, verify_input_source_bytes
+    from execution import prepare_cashflow_dcf, prepare_decision_brief, verify_decision_brief
+    from research.decision_brief import DecisionBriefReadiness
+    from research.decision_brief_workflow import (
+        DecisionBriefPreparationReceipt,
+        DecisionBriefPreparationRequest,
+    )
+    from tests.test_decision_brief_workflow import prepared, report
+
+    output = tmp_path / "output-state"
+    output.mkdir()
+    database = tmp_path / "database-authority" / "synthetic.db"
+    sources = tmp_path / "source-authority"
+    expected = SourceReadContext.for_sec_state_root(sources) if binding != "absent" else None
+    seen: list[SourceReadContext | None] = []
+    monkeypatch.delenv("DCF_SOURCE_STATE_ROOT", raising=False)
+    if binding == "environment":
+        monkeypatch.setenv("DCF_SOURCE_STATE_ROOT", str(sources))
+    elif binding == "argument":
+        # An explicit argument wins over a separate explicitly configured source.
+        monkeypatch.setenv("DCF_SOURCE_STATE_ROOT", str(tmp_path / "other-source-authority"))
+
+    class Connection:
+        closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    connection = Connection()
+
+    def connect(path: Path, **_kwargs: object) -> Connection:
+        assert path == database
+        return connection
+
+    def require(path: Path | str) -> Path:
+        assert Path(path) == database
+        return database
+
+    def lock(*_args: object, **_kwargs: object):
+        return nullcontext()
+
+    def load_env(root: Path) -> None:
+        assert root == output
+
+    def prepare(request: DecisionBriefPreparationRequest) -> DecisionBriefPreparationReceipt:
+        assert request.repo_root == output and request.database == database
+        assert request.source_state_root == (sources if binding != "absent" else None)
+        seen.append(
+            SourceReadContext.for_sec_state_root(request.source_state_root)
+            if request.source_state_root is not None
+            else None
+        )
+        return DecisionBriefPreparationReceipt(
+            ticker=request.ticker, requested_at=datetime.now(UTC), stages=(), status="planned"
+        )
+
+    def assess(_conn: sqlite3.Connection, **kwargs: object) -> DecisionBriefReadiness:
+        supplied = kwargs["source_context"]
+        assert supplied is None or isinstance(supplied, SourceReadContext)
+        seen.append(supplied)
+        assert kwargs["repo_root"] == output
+        return DecisionBriefReadiness(
+            artifact_id="synthetic-memo",
+            ticker="NEW",
+            body_sha256=None,
+            evaluated_at=datetime.now(UTC),
+            reason_codes=("synthetic_evidence_incomplete",),
+        )
+
+    def calculate(
+        conn: sqlite3.Connection, request: PreparedCashflowDcfRequest, **kwargs: object
+    ) -> PreparedCashflowDcfResult:
+        supplied = kwargs["source_context"]
+        assert supplied is None or isinstance(supplied, SourceReadContext)
+        seen.append(supplied)
+        assert kwargs["repo_root"] == output and kwargs["apply"] is False
+        if supplied is None:
+            # The actual byte verifier refuses before any connection access.
+            verify_input_source_bytes(conn, (), supplied)
+        return PreparedCashflowDcfResult(
+            mode="dry_run",
+            ticker=request.model_inputs.ticker,
+            model_input_receipt={},
+            effective_inputs={},
+            model_output={},
+            calculated_at=datetime.now(UTC),
+            source_observed_at=datetime.now(UTC),
+        )
+
+    module = {
+        "prepare-memo": prepare_decision_brief,
+        "verify-memo": verify_decision_brief,
+        "cashflow": prepare_cashflow_dcf,
+    }[entrypoint]
+    monkeypatch.setattr(module, "require_db_path", require)
+    monkeypatch.setattr(module, "load_project_env", load_env)
+    argv = ["--db", str(database), "--repo-root", str(output)]
+    if binding == "argument":
+        argv.extend(
+            ("--state-root" if entrypoint == "cashflow" else "--source-state-root", str(sources))
+        )
+    if entrypoint == "prepare-memo":
+        monkeypatch.setattr(prepare_decision_brief, "JobLock", lock)
+        monkeypatch.setattr(prepare_decision_brief, "prepare_decision_brief", prepare)
+        assert prepare_decision_brief.main([*argv, "--ticker", "NEW"]) == 0
+    elif entrypoint == "verify-memo":
+        manifest = report(output)
+        monkeypatch.setattr(verify_decision_brief, "connect_sqlite", connect)
+        monkeypatch.setattr(verify_decision_brief, "assess_decision_brief", assess)
+        assert verify_decision_brief.main([*argv, "--artifact-manifest", str(manifest)]) == 3
+        assert connection.closed
+    else:
+        path, digest = prepared(output, "NEW")
+        artifact = output / "calculation.json"
+        monkeypatch.setattr(prepare_cashflow_dcf, "JobLock", lock)
+        monkeypatch.setattr(prepare_cashflow_dcf, "connect_sqlite", connect)
+        monkeypatch.setattr(prepare_cashflow_dcf, "prepare_cashflow_dcf", calculate)
+        argv.extend(
+            ("--request", str(path), "--request-sha256", digest, "--artifact", str(artifact))
+        )
+        if binding == "absent":
+            with pytest.raises(InputEvidenceError, match="model_input_source_context_unavailable"):
+                prepare_cashflow_dcf.main(argv)
+        else:
+            assert prepare_cashflow_dcf.main(argv) == 0
+        assert connection.closed and not artifact.exists()
+    assert seen == [expected]

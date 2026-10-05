@@ -17,6 +17,10 @@ from pydantic import BaseModel, ConfigDict
 
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import FactReadModel
+from provenance.financial_statement_admission import (
+    ReviewedFinancialStatementRole,
+    verify_reviewed_financial_role,
+)
 from provenance.metric_ontology import MetricOntology
 
 FinancialConcept = Literal[
@@ -42,6 +46,7 @@ class GrowthFactReference(BaseModel):
     unit: str
     accounting_basis: str
     consolidation_scope: str
+    source_scope_label: Literal["consolidated", "combined_carve_out"] | None = None
     value: Decimal
 
 
@@ -101,6 +106,7 @@ def calculate_growth_financials(
                     item.unit,
                     item.accounting_basis,
                     item.consolidation_scope,
+                    item.source_scope_label,
                 )
                 for item in selected
             }
@@ -184,19 +190,35 @@ def read_financial_history(
         if owns_snapshot:
             conn.execute("BEGIN")
         rows = conn.execute(
-            "SELECT DISTINCT binding.canonical_metric_cell_id,source.concept_name,source.period_end "
+            "SELECT DISTINCT binding.canonical_metric_cell_id,"
+            "CASE WHEN source.concept_namespace='urn:earnings-summary:legacy:financial' "
+            "THEN source.concept_name ELSE json_extract(definition.scope_constraints_json,'$.financial_statement_concept') END,source.period_end "
             "FROM fact_cell_canonical_binding_revisions binding "
             "JOIN fact_cells_v2 source ON source.fact_cell_id=binding.fact_cell_id "
+            "JOIN canonical_metric_cells target ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id "
+            "JOIN canonical_metric_definition_revisions definition ON definition.metric_id=target.metric_id "
             "JOIN fact_observations_v2 observation "
             "ON observation.observation_id=binding.source_observation_id "
             "JOIN evidence_document_versions document "
             "ON document.document_version_id=observation.document_version_id "
             "WHERE document.ticker=? "
-            "AND source.concept_namespace='urn:earnings-summary:legacy:financial' "
-            "AND source.concept_name IN (SELECT value FROM json_each(?)) "
+            "AND ((source.concept_namespace='urn:earnings-summary:legacy:financial' "
+            "AND source.concept_name IN (SELECT value FROM json_each(?))) "
+            "OR json_extract(definition.scope_constraints_json,'$.financial_statement_concept') "
+            "IN (SELECT value FROM json_each(?))) "
             "AND binding.binding_status='bound' "
+            "AND julianday(binding.recorded_at)<=julianday(?) AND julianday(definition.recorded_at)<=julianday(?) "
+            "AND julianday(binding.knowledge_at)<=julianday(?) AND julianday(definition.knowledge_at)<=julianday(?) "
             "ORDER BY source.concept_name,binding.canonical_metric_cell_id",
-            (ticker, json.dumps(concepts)),
+            (
+                ticker,
+                json.dumps(concepts),
+                json.dumps(concepts),
+                cutoff.isoformat(),
+                cutoff.isoformat(),
+                cutoff.isoformat(),
+                cutoff.isoformat(),
+            ),
         ).fetchall()
         resolver = CanonicalFactResolutionEngine(conn)
         reader = FactReadModel(conn)
@@ -271,6 +293,29 @@ def read_financial_history(
             ):
                 unresolved.append((str(concept), candidate_end))
                 continue
+            scope_label = None
+            if definition.scope_constraints.get("financial_statement_concept") is not None:
+                reviews = definition.scope_constraints.get("financial_statement_reviews")
+                try:
+                    if (
+                        not isinstance(reviews, dict)
+                        or definition.scope_constraints.get("financial_statement_concept")
+                        != concept
+                    ):
+                        raise ValueError("financial statement review is missing")
+                    role = ReviewedFinancialStatementRole.model_validate(
+                        reviews.get(value.observation_id)
+                    )
+                    verify_reviewed_financial_role(conn, role, bundle, cutoff=cutoff)
+                    scope_label = role.context.source_scope_label
+                except (ValueError, RuntimeError):
+                    unresolved.append((str(concept), candidate_end))
+                    continue
+            elif bundle.cell.consolidation_scope == "consolidated":
+                scope_label = "consolidated"
+            # The existing legacy analytics slice retains its historical
+            # explicit 'other' coordinate without claiming decision grade.
+            # Native taxonomy candidates require the review above.
             facts.append(
                 GrowthFactReference.model_validate(
                     {
@@ -290,6 +335,7 @@ def read_financial_history(
                         "unit": value.unit_key,
                         "accounting_basis": bundle.cell.accounting_basis,
                         "consolidation_scope": bundle.cell.consolidation_scope,
+                        "source_scope_label": scope_label,
                         "value": value.decimal_value,
                     }
                 )

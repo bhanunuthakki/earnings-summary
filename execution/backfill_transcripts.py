@@ -112,21 +112,21 @@ except ImportError:
     )
 
 import db
+from db_paths import require_db_path
+from runtime.secrets import load_project_env
 
 _RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
 _PROCESSED_DIR = PROJECT_ROOT / "transcripts" / "processed"
 _DEFAULT_LOOKBACK = SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters
 
 
-def _retarget_paths(repo_root: Path) -> None:
+def _retarget_paths(repo_root: Path, *, db_path: Path | None = None) -> None:
     """Override db module paths AND this script's dir constants so all reads
     hit `repo_root` instead of this script's parent. Lets worktree-based runs
     target the main repo's data dir without copying the DB."""
     global _RAW_DIR, _PROCESSED_DIR
     db.PROJECT_ROOT = str(repo_root)
-    db.DATA_DIR = str(repo_root / "data")
-    db.DB_PATH = str(repo_root / "data" / "portfolio.db")
-    db.FMP_DIR = str(repo_root / "data" / "historical" / "fmp")
+    db.set_db_path(db_path or db.DB_PATH, state_root=repo_root)
     _RAW_DIR = repo_root / "transcripts" / "raw"
     _PROCESSED_DIR = repo_root / "transcripts" / "processed"
     fetch_qa_transcript_module.RAW_DIR = _RAW_DIR
@@ -761,6 +761,7 @@ def _run_ingest(
     dry_run: bool,
     *,
     owner_requested: bool,
+    db_path: Path | None = None,
 ) -> int:
     """Ingest newly fetched files for one ticker.
 
@@ -781,6 +782,8 @@ def _run_ingest(
         str(PROJECT_ROOT / "execution" / "ingest_transcripts_state.py"),
         "--repo-root",
         str(repo_root),
+        "--db",
+        str(db_path or db.DB_PATH),
         "--ticker",
         ticker,
     ]
@@ -816,7 +819,7 @@ def _run_extract(
         "--transcript-id",
         str(transcript_id),
         "--db",
-        str(repo_root / "data" / "portfolio.db"),
+        str(db.DB_PATH),
     ]
     proc = subprocess.run(cmd, cwd=str(repo_root))
     return proc.returncode
@@ -1204,15 +1207,16 @@ def main() -> int:
         help="Repo root containing data/, transcripts/. Default: this repo. "
         "Worktree-based runs should pass the main repo path.",
     )
+    p.add_argument("--db", type=Path)
     args = p.parse_args()
     if args.lookback_quarters < 1 or args.lookback_quarters > _DEFAULT_LOOKBACK:
         p.error(f"--lookback-quarters must be between 1 and {_DEFAULT_LOOKBACK}")
     repo_root = args.repo_root.resolve()
-    if repo_root != PROJECT_ROOT:
-        _retarget_paths(repo_root)
+    load_project_env(repo_root)
+    selected_db_path = require_db_path(args.db)
+    _retarget_paths(repo_root, db_path=selected_db_path)
 
     today = date.today()
-    selected_db_path = repo_root / "data" / "portfolio.db"
     tickers = _resolve_tickers(args.ticker)
     if not tickers:
         print(json.dumps({"event": "no_tickers"}))

@@ -181,6 +181,7 @@ from dashboard.inbox import (
     schema_drift_notice,
 )
 from dashboard.upcoming import render_upcoming_strip
+from db_paths import require_db_path
 from dcf import persist as dcf_persist
 from dcf import redesign as dcf_redesign
 from dcf.input_evidence import SourceReadContext
@@ -256,7 +257,6 @@ from pipeline.work_os_shell import render_work_os_shell_result
 from portfolio_risk_snapshot_store import read_latest_snapshot
 from readme_updater import evidence_sha256
 from research.proposal_approval import bind_ask_proposal_events
-from runtime.job_runtime import portfolio_db_path
 from runtime.portfolio_tracker import (
     AtomicFileLease,
     ListenerObservation,
@@ -5328,8 +5328,11 @@ def configure_runtime_db(repo_root: Path) -> Path:
     import db
 
     load_project_env(repo_root)
-    db_path = portfolio_db_path(repo_root)
-    db.set_db_path(db_path)
+    configured = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
+    if not configured:
+        raise RuntimeError("An explicit configured portfolio database is required")
+    db_path = require_db_path(configured)
+    db.set_db_path(db_path, state_root=repo_root)
     return db_path
 
 

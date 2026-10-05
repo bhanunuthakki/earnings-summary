@@ -340,6 +340,8 @@ def prepare_onon_inputs(
 ) -> tuple[dict[str, float], ModelInputReceipt]:
     if request.ticker != "ONON":
         raise InputEvidenceError("onon_ticker_required")
+    if request.recipe_context is not None:
+        raise InputEvidenceError("onon_recipe_context_unsupported")
     proposed = {key: value for key, value in effective_inputs.items() if key in ASSUMPTION_KEYS}
     proof = verify_model_inputs(
         conn,

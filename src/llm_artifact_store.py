@@ -300,6 +300,50 @@ def read_artifact(
         conn.close()
 
 
+@dataclass(frozen=True, slots=True)
+class HistoricalArtifactVersion:
+    """An exact-key historical row, including an explicit decoding failure."""
+
+    artifact_id: int
+    artifact: Artifact | None
+    error: str | None = None
+    generated_at_raw: str | None = None
+
+
+def historical_versions(
+    conn: sqlite3.Connection, *, ticker: str, purpose: str, fiscal_period: str
+) -> list[HistoricalArtifactVersion]:
+    """Read all exact-key versions in the caller's snapshot; never filter by currentness.
+
+    The historical consumer must verify commitments and normalize aware times.
+    Query failures propagate, so they cannot become an empty historical baseline.
+    """
+    previous_factory = conn.row_factory
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM llm_artifacts WHERE ticker=? AND scope='ticker' "
+            "AND purpose=? AND fiscal_period=? ORDER BY id",
+            (ticker, purpose, fiscal_period),
+        ).fetchall()
+        versions: list[HistoricalArtifactVersion] = []
+        for row in rows:
+            ident = int(row["id"])
+            try:
+                artifact = _row_to_artifact(row)
+            except (ValueError, TypeError, KeyError, IndexError):
+                versions.append(HistoricalArtifactVersion(ident, None, "malformed_artifact"))
+            else:
+                versions.append(
+                    HistoricalArtifactVersion(
+                        ident, artifact, generated_at_raw=str(row["generated_at"])
+                    )
+                )
+        return versions
+    finally:
+        conn.row_factory = previous_factory
+
+
 def upsert(
     req: UpsertRequest,
     *,

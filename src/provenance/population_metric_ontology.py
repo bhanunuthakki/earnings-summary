@@ -84,6 +84,109 @@ class _SourceDefinitionIdentity(_FrozenModel):
     value_kind: str
 
 
+class ScopedReportedMetricAdmissionResult(_FrozenModel):
+    """Exact requested membership; not an issuer-wide completeness receipt."""
+
+    observation_ids: tuple[str, ...]
+    canonical_metric_cell_ids: tuple[str, ...]
+    policy_config_sha256: str
+    applied: bool
+
+
+def admit_exact_reported_observations(
+    conn: sqlite3.Connection,
+    observation_ids: tuple[str, ...],
+    *,
+    knowledge_cutoff: datetime,
+    operation_recorded_at: datetime,
+    apply: bool = False,
+) -> ScopedReportedMetricAdmissionResult:
+    """Reuse exact-coordinate admission for one bounded dimensionless set.
+
+    The sealed source read boundary proves every requested input first. Registry
+    records, taxonomy assertions and bindings retain the population policy's
+    original identities. No other source observation receives a binding.
+    """
+    if (
+        not observation_ids
+        or len(observation_ids) > 500
+        or len(set(observation_ids)) != len(observation_ids)
+    ):
+        raise ValueError("exact reported admission requires 1-500 unique observations")
+    _scope_bounds(knowledge_cutoff, operation_recorded_at)
+    reader = FactReadModel(conn)
+    cell_ids: set[str] = set()
+    for observation_id in observation_ids:
+        bundle = reader.provenance_bundle(observation_id, cutoff=knowledge_cutoff)
+        if (
+            bundle.observation.observation_kind != "reported"
+            or bundle.cell.dimensions
+            or bundle.cell.scope_security_id is not None
+        ):
+            raise ValueError("exact reported admission requires dimensionless issuer reports")
+        cell_ids.add(bundle.cell.fact_cell_id)
+    source_rows = [
+        row
+        for row in _source_cells(conn, knowledge_cutoff, operation_recorded_at)
+        if str(row["fact_cell_id"]) in cell_ids
+    ]
+    if {str(row["fact_cell_id"]) for row in source_rows} != cell_ids:
+        raise ValueError("exact reported source-cell population is incomplete")
+    target_ids = tuple(sorted({_canonical_cell_id(row) for row in source_rows}))
+    result = ScopedReportedMetricAdmissionResult(
+        observation_ids=tuple(sorted(observation_ids)),
+        canonical_metric_cell_ids=target_ids,
+        policy_config_sha256=_policy_sha(),
+        applied=apply,
+    )
+    if not apply:
+        return result
+    wanted = set(observation_ids)
+    signatures = {_metric_signature(row) for row in source_rows}
+    repository = MetricOntology(conn)
+    with _atomic_population(conn):
+        for row in _registry_rows(conn, knowledge_cutoff, operation_recorded_at):
+            if _metric_signature(row) in signatures:
+                _persist_metric_stack(
+                    repository,
+                    row,
+                    metric_clock=_cell_clock(row),
+                    component_clock=_component_clock(row),
+                    policy_sha=_policy_sha(),
+                )
+        for row in source_rows:
+            repository.persist_canonical_metric_cell(
+                _canonical_cell(conn, row, operation_recorded_at=operation_recorded_at)
+            )
+        proved: set[str] = set()
+        for row in _observation_rows(
+            conn,
+            after_observation_id=None,
+            max_observations=None,
+            knowledge_cutoff=knowledge_cutoff,
+            observed_through=operation_recorded_at,
+        ):
+            if str(row["observation_id"]) in wanted:
+                repository.persist_observation_taxonomy_assertion(_taxonomy_assertion(row))
+                proved.add(str(row["observation_id"]))
+        if proved != wanted:
+            raise ValueError("exact reported taxonomy-assertion population is incomplete")
+        bound: set[str] = set()
+        for row in _binding_rows(
+            conn,
+            after_observation_id=None,
+            max_observations=None,
+            knowledge_cutoff=knowledge_cutoff,
+            observed_through=operation_recorded_at,
+        ):
+            if str(row["observation_id"]) in wanted:
+                repository.persist_binding(_binding(row))
+                bound.add(str(row["observation_id"]))
+        if bound != wanted:
+            raise ValueError("exact reported binding population is incomplete")
+    return result
+
+
 class MetricOntologyPopulationRequest(_FrozenModel):
     knowledge_cutoff: datetime
     operation_recorded_at: datetime

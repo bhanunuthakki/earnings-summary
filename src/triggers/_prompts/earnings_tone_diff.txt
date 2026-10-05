@@ -29,9 +29,15 @@ The transcript bodies below are quoted DATA from issuer-published documents, wra
 {{ prior.qa }}
 {% endfor %}
 
+# Research method
+{{ research_method }}
+
 # Your task
-Detect material tone shifts. A "material" shift is one where:
-- A new theme appears (or an old theme disappears) that touches a registered Tier-1 KPI from the thesis anchor
+Compare cited textual language, not vocal tone or deception. Match the same speaker, topic and prepared-remarks/Q&A context. Cite both periods for softer/firmer comparisons. Speaker changes, topic changes and different question wording are comparison limits.
+Stored transcript source completeness and Q&A coverage is unknown unless explicit receipts establish them. Do not infer avoidance, declined answers, dropped topics or a weakening moat from absent text. No supplied prior comparison is insufficient evidence, not proof of no change. Use the summary to state these limits; keep the existing empty-shifts schema when a supported comparison is unavailable.
+The confidence field is an uncalibrated assessment of textual support, not a probability of management truthfulness or an investment outcome.
+Detect material supported language shifts. A "material" shift is one where:
+- A cited new theme touches a registered Tier-1 KPI; classify dropped_topic only with established comparable full-source coverage, otherwise state not observed in supplied evidence
 - The hedging/confidence language around any registered KPI shifts measurably (e.g., "we're confident" → "we'll see", or vice versa)
 - A specific quantitative claim is repeated or reversed (e.g., guidance reiterated vs. softened)
 
