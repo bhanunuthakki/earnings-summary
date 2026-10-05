@@ -215,8 +215,227 @@ def _process_identity_is_alive(identity: tuple[int, str | None]) -> bool:
     return expected_start is None or _process_start_identity(pid) == expected_start
 
 
-def _process_is_in_job(pid: int) -> bool:
+@dataclass(frozen=True, slots=True)
+class NativeHandleObservation:
+    """One actual source-owned handle return; no identity/closure verdict."""
+
+    ordinal: int
+    operation: str
+    api: str
+    reference_role: str
+    handle: int
+    requested_monotonic: float
+    requested_at: str
+    returned_monotonic: float
+    returned_at: str
+    raw_return: int | None
+    last_error: int
+    raised_type: str | None
+
+
+class NativeObservationRetentionError(RuntimeError):
+    """The actual fact survives on this exception; no native retry is allowed."""
+
+    def __init__(self, fact: NativeHandleObservation) -> None:
+        super().__init__("bounded native observation buffer is full")
+        self.fact = fact
+
+
+class NativeHandleObservations:
+    """Exact fixed256 in-memory sink. No callback, I/O or native authority."""
+
+    __slots__ = ("_cleanup_failures", "_facts", "_retention_error_type", "_unretained")
+
+    def __init__(self) -> None:
+        self._facts: tuple[NativeHandleObservation, ...] = ()
+        self._unretained: NativeHandleObservation | None = None
+        self._retention_error_type: str | None = None
+        self._cleanup_failures: tuple[
+            tuple[str, int, str, NativeHandleObservation | None], ...
+        ] = ()
+
+    @property
+    def facts(self) -> tuple[NativeHandleObservation, ...]:
+        return self._facts
+
+    @property
+    def unretained(self) -> NativeHandleObservation | None:
+        return self._unretained
+
+    @property
+    def retention_error_type(self) -> str | None:
+        return self._retention_error_type
+
+    @property
+    def cleanup_failures(self) -> tuple[tuple[str, int, str, NativeHandleObservation | None], ...]:
+        return self._cleanup_failures
+
+    def retain(self, fact: NativeHandleObservation) -> None:
+        if (
+            self._retention_error_type is not None
+            or self._unretained is not None
+            or len(self._facts) >= 256
+        ):
+            if self._unretained is None:
+                self._unretained = fact
+            raise NativeObservationRetentionError(fact)
+        self._facts += (fact,)
+
+    def record_retention_failure(self, error: BaseException) -> None:
+        self._retention_error_type = type(error).__name__
+
+    def cleanup_failed(self, role: str, handle: int, error: BaseException) -> None:
+        if len(self._cleanup_failures) < 256:
+            fact = error.fact if type(error) is NativeObservationRetentionError else None
+            self._cleanup_failures += ((role, handle, type(error).__name__, fact),)
+        else:
+            self._retention_error_type = "cleanup-disposition-cap-exceeded"
+
+
+def _handle_observations(
+    value: NativeHandleObservations | None,
+) -> NativeHandleObservations | None:
+    if value is not None and type(value) is not NativeHandleObservations:
+        raise TypeError("exact NativeHandleObservations buffer required")
+    return value
+
+
+def _handle_request(observations: NativeHandleObservations | None) -> tuple[float, str] | None:
+    if observations is None:
+        return None
+    return time.monotonic(), datetime.now(UTC).isoformat()
+
+
+def _retain_handle_return(
+    observations: NativeHandleObservations | None,
+    request: tuple[float, str] | None,
+    *,
+    operation: str,
+    api: str,
+    role: str,
+    handle: int,
+    raw_return: int | None,
+    last_error: int,
+    raised_type: str | None = None,
+    prior_error: BaseException | None = None,
+) -> None:
+    if observations is None:
+        return
+    if request is None:
+        raise ValueError("actual request clock is missing")
+    try:
+        fact = NativeHandleObservation(
+            len(observations.facts) + 1,
+            operation,
+            api,
+            role,
+            handle,
+            request[0],
+            request[1],
+            time.monotonic(),
+            datetime.now(UTC).isoformat(),
+            raw_return,
+            last_error,
+            raised_type,
+        )
+        observations.retain(fact)
+    except BaseException as error:
+        observations.record_retention_failure(error)
+        if prior_error is None:
+            raise
+        # Preserve the original native exception if fact construction/storage fails.
+        # The sink remains explicitly failed; no completeness is inferred.
+
+
+def _source_close_handle(
+    kernel32: _ProcessQueryKernel32,
+    handle: int,
+    role: str,
+    observations: NativeHandleObservations | None,
+) -> None:
+    if observations is None:
+        kernel32.CloseHandle(handle)
+        return
+    import ctypes
+
+    # Observation clocks must not prevent the known reference's only close attempt.
+    request_error: BaseException | None = None
+    try:
+        request = _handle_request(observations)
+    except BaseException as error:
+        request = None
+        request_error = error
+    try:
+        result = kernel32.CloseHandle(handle)
+    except BaseException as error:
+        last_error = cast("Callable[[], int]", vars(ctypes)["get_last_error"])()
+        if request_error is not None:
+            try:
+                observations.record_retention_failure(request_error)
+            finally:
+                raise error
+        _retain_handle_return(
+            observations,
+            request,
+            operation="close",
+            api="CloseHandle",
+            role=role,
+            handle=handle,
+            raw_return=None,
+            last_error=last_error,
+            raised_type=type(error).__name__,
+            prior_error=error,
+        )
+        raise
+    last_error = cast("Callable[[], int]", vars(ctypes)["get_last_error"])()
+    if request_error is not None:
+        try:
+            observations.record_retention_failure(request_error)
+        finally:
+            raise request_error
+    _retain_handle_return(
+        observations,
+        request,
+        operation="close",
+        api="CloseHandle",
+        role=role,
+        handle=handle,
+        raw_return=int(result),
+        last_error=last_error,
+    )
+
+
+def _release_source_handles(
+    kernel32: _ProcessQueryKernel32,
+    references: tuple[tuple[str, int], ...],
+    observations: NativeHandleObservations | None,
+    *,
+    prior_error: BaseException | None = None,
+) -> None:
+    """Attempt each known exact reference once; keep errors and unknowns visible."""
+    first_error: BaseException | None = None
+    for role, handle in references:
+        try:
+            _source_close_handle(kernel32, handle, role, observations)
+        except BaseException as error:
+            if observations is not None:
+                try:
+                    observations.cleanup_failed(role, handle, error)
+                except BaseException as retention_error:
+                    observations.record_retention_failure(retention_error)
+            if first_error is None:
+                first_error = error
+    if first_error is not None and prior_error is None:
+        raise first_error
+
+
+def _process_is_in_job(
+    pid: int,
+    *,
+    native_observations: NativeHandleObservations | None = None,
+) -> bool:
     """Return whether *pid* belongs to any Windows Job Object."""
+    observations = _handle_observations(native_observations)
     if os.name != "nt":
         return False
     import ctypes
@@ -229,16 +448,47 @@ def _process_is_in_job(pid: int) -> bool:
     kernel32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.c_void_p]
     kernel32.IsProcessInJob.restype = wintypes.BOOL
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    request = _handle_request(observations)
     process_handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    acquire_error = ctypes.get_last_error() if observations is not None else 0
     if not process_handle:
-        raise ctypes.WinError(ctypes.get_last_error())
+        error = ctypes.WinError(
+            acquire_error if observations is not None else ctypes.get_last_error()
+        )
+        _retain_handle_return(
+            observations,
+            request,
+            operation="acquire",
+            api="OpenProcess",
+            role="membership-query-process",
+            handle=0,
+            raw_return=0,
+            last_error=acquire_error,
+            prior_error=error,
+        )
+        raise error
     in_job = wintypes.BOOL()
     try:
+        _retain_handle_return(
+            observations,
+            request,
+            operation="acquire",
+            api="OpenProcess",
+            role="membership-query-process",
+            handle=int(process_handle),
+            raw_return=int(process_handle),
+            last_error=acquire_error,
+        )
         if not kernel32.IsProcessInJob(process_handle, None, ctypes.byref(in_job)):
             raise ctypes.WinError(ctypes.get_last_error())
         return bool(in_job.value)
     finally:
-        kernel32.CloseHandle(process_handle)
+        _release_source_handles(
+            kernel32,
+            (("membership-query-process", int(process_handle)),),
+            observations,
+            prior_error=sys.exception() if observations is not None else None,
+        )
 
 
 class _WindowsKillOnCloseJob:
@@ -250,11 +500,17 @@ class _WindowsKillOnCloseJob:
     ownership.
     """
 
-    def __init__(self, handle: int) -> None:
+    def __init__(
+        self, handle: int, *, native_observations: NativeHandleObservations | None = None
+    ) -> None:
         self._handle = handle
+        self._native_observations = _handle_observations(native_observations)
 
     @classmethod
-    def create_for_process(cls, pid: int) -> _WindowsKillOnCloseJob:
+    def create_for_process(
+        cls, pid: int, *, native_observations: NativeHandleObservations | None = None
+    ) -> _WindowsKillOnCloseJob:
+        observations = _handle_observations(native_observations)
         if os.name != "nt":
             raise OSError("Windows Job Objects are unavailable on this platform")
         import ctypes
@@ -314,11 +570,37 @@ class _WindowsKillOnCloseJob:
         kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
         kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 
+        request = _handle_request(observations)
         job_handle = kernel32.CreateJobObjectW(None, None)
+        acquire_error = ctypes.get_last_error() if observations is not None else 0
         if not job_handle:
-            raise ctypes.WinError(ctypes.get_last_error())
+            error = ctypes.WinError(
+                acquire_error if observations is not None else ctypes.get_last_error()
+            )
+            _retain_handle_return(
+                observations,
+                request,
+                operation="acquire",
+                api="CreateJobObjectW",
+                role="owned-job",
+                handle=0,
+                raw_return=0,
+                last_error=acquire_error,
+                prior_error=error,
+            )
+            raise error
         process_handle: int | None = None
         try:
+            _retain_handle_return(
+                observations,
+                request,
+                operation="acquire",
+                api="CreateJobObjectW",
+                role="owned-job",
+                handle=int(job_handle),
+                raw_return=int(job_handle),
+                last_error=acquire_error,
+            )
             limits = _ExtendedLimitInformation()
             limits.basic_limit_information.limit_flags = job_object_limit_kill_on_job_close
             if not kernel32.SetInformationJobObject(
@@ -328,14 +610,44 @@ class _WindowsKillOnCloseJob:
                 ctypes.sizeof(limits),
             ):
                 raise ctypes.WinError(ctypes.get_last_error())
+            request = _handle_request(observations)
             process_handle = kernel32.OpenProcess(
                 process_set_quota | process_terminate,
                 False,
                 pid,
             )
+            acquire_error = ctypes.get_last_error() if observations is not None else 0
             if not process_handle:
-                raise ctypes.WinError(ctypes.get_last_error())
-            nested = _process_is_in_job(pid)
+                error = ctypes.WinError(
+                    acquire_error if observations is not None else ctypes.get_last_error()
+                )
+                _retain_handle_return(
+                    observations,
+                    request,
+                    operation="acquire",
+                    api="OpenProcess",
+                    role="assignment-process",
+                    handle=0,
+                    raw_return=0,
+                    last_error=acquire_error,
+                    prior_error=error,
+                )
+                raise error
+            _retain_handle_return(
+                observations,
+                request,
+                operation="acquire",
+                api="OpenProcess",
+                role="assignment-process",
+                handle=int(process_handle),
+                raw_return=int(process_handle),
+                last_error=acquire_error,
+            )
+            nested = (
+                _process_is_in_job(pid)
+                if observations is None
+                else _process_is_in_job(pid, native_observations=observations)
+            )
             if not kernel32.AssignProcessToJobObject(job_handle, process_handle):
                 error = ctypes.get_last_error()
                 kernel32.TerminateProcess(process_handle, 1)
@@ -343,9 +655,23 @@ class _WindowsKillOnCloseJob:
                     error,
                     f"AssignProcessToJobObject failed (already_in_parent_job={nested})",
                 )
+            if observations is not None:
+                handle, process_handle = process_handle, None
+                _release_source_handles(
+                    kernel32, (("assignment-process", int(handle)),), observations
+                )
+                return cls(int(job_handle), native_observations=observations)
             return cls(int(job_handle))
-        except Exception:
-            kernel32.CloseHandle(job_handle)
+        except BaseException as error:
+            if observations is None:
+                if isinstance(error, Exception):
+                    kernel32.CloseHandle(job_handle)
+                raise
+            references = (("owned-job", int(job_handle)),)
+            if process_handle:
+                references += (("assignment-process", int(process_handle)),)
+                process_handle = None
+            _release_source_handles(kernel32, references, observations, prior_error=error)
             raise
         finally:
             if process_handle:
@@ -357,11 +683,14 @@ class _WindowsKillOnCloseJob:
 
         handle, self._handle = self._handle, 0
         kernel32 = _load_process_query_kernel32()
-        kernel32.CloseHandle(handle)
+        _release_source_handles(kernel32, (("owned-job", handle),), self._native_observations)
 
 
-def _resume_process_threads(pid: int) -> None:
+def _resume_process_threads(
+    pid: int, *, native_observations: NativeHandleObservations | None = None
+) -> None:
     """Resume every thread in a newly created suspended Windows process."""
+    observations = _handle_observations(native_observations)
     if os.name != "nt":
         return
     import ctypes
@@ -395,33 +724,95 @@ def _resume_process_threads(pid: int) -> None:
     kernel32.ResumeThread.restype = wintypes.DWORD
     kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 
+    request = _handle_request(observations)
     snapshot = kernel32.CreateToolhelp32Snapshot(th32cs_snapthread, 0)
+    acquire_error = ctypes.get_last_error() if observations is not None else 0
     if int(snapshot) == invalid_handle_value:
-        raise ctypes.WinError(ctypes.get_last_error())
+        error = ctypes.WinError(
+            acquire_error if observations is not None else ctypes.get_last_error()
+        )
+        _retain_handle_return(
+            observations,
+            request,
+            operation="acquire",
+            api="CreateToolhelp32Snapshot",
+            role="thread-snapshot",
+            handle=int(snapshot),
+            raw_return=int(snapshot),
+            last_error=acquire_error,
+            prior_error=error,
+        )
+        raise error
     resumed = 0
     entry = _ThreadEntry32()
     entry.size = ctypes.sizeof(entry)
     try:
+        _retain_handle_return(
+            observations,
+            request,
+            operation="acquire",
+            api="CreateToolhelp32Snapshot",
+            role="thread-snapshot",
+            handle=int(snapshot),
+            raw_return=int(snapshot),
+            last_error=acquire_error,
+        )
         has_entry = bool(kernel32.Thread32First(snapshot, ctypes.byref(entry)))
         while has_entry:
             if int(entry.owner_process_id) == pid:
+                request = _handle_request(observations)
                 thread_handle = kernel32.OpenThread(
                     thread_suspend_resume,
                     False,
                     entry.thread_id,
                 )
+                acquire_error = ctypes.get_last_error() if observations is not None else 0
                 if not thread_handle:
-                    raise ctypes.WinError(ctypes.get_last_error())
+                    error = ctypes.WinError(
+                        acquire_error if observations is not None else ctypes.get_last_error()
+                    )
+                    _retain_handle_return(
+                        observations,
+                        request,
+                        operation="acquire",
+                        api="OpenThread",
+                        role="resume-thread",
+                        handle=0,
+                        raw_return=0,
+                        last_error=acquire_error,
+                        prior_error=error,
+                    )
+                    raise error
                 try:
+                    _retain_handle_return(
+                        observations,
+                        request,
+                        operation="acquire",
+                        api="OpenThread",
+                        role="resume-thread",
+                        handle=int(thread_handle),
+                        raw_return=int(thread_handle),
+                        last_error=acquire_error,
+                    )
                     if kernel32.ResumeThread(thread_handle) == resume_failed:
                         raise ctypes.WinError(ctypes.get_last_error())
                     resumed += 1
                 finally:
-                    kernel32.CloseHandle(thread_handle)
+                    _release_source_handles(
+                        kernel32,
+                        (("resume-thread", int(thread_handle)),),
+                        observations,
+                        prior_error=sys.exception() if observations is not None else None,
+                    )
             entry.size = ctypes.sizeof(entry)
             has_entry = bool(kernel32.Thread32Next(snapshot, ctypes.byref(entry)))
     finally:
-        kernel32.CloseHandle(snapshot)
+        _release_source_handles(
+            kernel32,
+            (("thread-snapshot", int(snapshot)),),
+            observations,
+            prior_error=sys.exception() if observations is not None else None,
+        )
     if resumed == 0:
         raise OSError(f"no suspended thread found for process {pid}")
 

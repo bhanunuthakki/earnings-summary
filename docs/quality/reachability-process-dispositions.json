@@ -863,8 +863,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Same operator-supplied command in no-owner/no-deadline branch; now forwards optional stdout/stderr. It is not a closed internal Python target.",
-      "fingerprint": "82fb2b661c22c583680e1cedb63ec86c98ab10524c4646f776074a4774f256c4",
-      "line": 512,
+      "fingerprint": "4e6af971fa746e68240163e762143e9fd987ad3408bfea97db29c52655157c96",
+      "line": 903,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -873,8 +873,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Old single Popen becomes two branches: no redirection and stdout/stderr redirection. Both retain command/cwd/env/suspended-create flags and owned job-tree lifecycle; each requires a separate disposition.",
-      "fingerprint": "5d1f3157868e2417357c140ff185075ddb0a8d4ef2884d54063021b5022b2545",
-      "line": 519,
+      "fingerprint": "0f4f536a8afeee61c7f8832b666149172cc0b96995cdc61b2b181b86cfc8b181",
+      "line": 910,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -883,8 +883,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Old single Popen becomes two branches: no redirection and stdout/stderr redirection. Both retain command/cwd/env/suspended-create flags and owned job-tree lifecycle; each requires a separate disposition.",
-      "fingerprint": "95cf834822e7ed54426dff2113185f3aa877b5f8dd66269e58dbd0f9e07b7810",
-      "line": 521,
+      "fingerprint": "2f6486616983f75c565ff9c151e59310218f0cd7d6799e912c2eaad7597e686d",
+      "line": 912,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -945,7 +945,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "fe04bed5016616903ced1e7423a2c33a0af55efba36b271e489549a14a58ecd1",
+      "source_sha256": "86d580980ba91b049f18b27471c8fc8b9876ca77f01f66065f10525c01ddb2da",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
