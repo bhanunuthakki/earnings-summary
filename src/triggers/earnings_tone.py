@@ -71,7 +71,9 @@ from llm_artifact_store import (
     read_current,
     upsert,
 )
+from llm_client import research_method_block
 from provenance.selection import selected_transcripts_relation
+from research.method_contract import validate_research_input
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from triggers.base import (
     AlertDraft,
@@ -424,8 +426,9 @@ def _render_prompt(
         }
         for p in prior_transcripts
     ]
-    return template.render(
+    prompt = template.render(
         ticker=ticker,
+        research_method=research_method_block("language"),
         fiscal_period_type=fiscal_period_type,
         fiscal_period=fiscal_period,
         prior_periods=prior_periods,
@@ -441,6 +444,8 @@ def _render_prompt(
         ),
         prior_transcripts=spotlit_priors,
     )
+    validate_research_input(prompt)
+    return prompt
 
 
 def _sha256_text(text: str) -> str:
@@ -899,6 +904,16 @@ class EarningsToneTrigger:
         cache_inputs)``. A hit short-circuits the LLM call. A miss runs
         the LLM, then writes the response back via ``upsert``.
         """
+        prompt = _render_prompt(
+            ticker=ticker,
+            fiscal_period_type=fiscal_period_type,
+            fiscal_period=fiscal_period,
+            thesis_anchor_block=thesis_anchor_block,
+            current_prepared_remarks=current_prepared_remarks,
+            current_qa=current_qa,
+            prior_transcripts=prior_transcripts,
+        )
+        cache_inputs = [*cache_inputs, prompt]
         existing = read_current(ticker=ticker, purpose=_ARTIFACT_PURPOSE, db_path=db_path)
         new_sha = compute_input_sha256(prompt_version=_PROMPT_VERSION, cache_inputs=cache_inputs)
         if (
@@ -916,15 +931,6 @@ class EarningsToneTrigger:
             )
             return cached
 
-        prompt = _render_prompt(
-            ticker=ticker,
-            fiscal_period_type=fiscal_period_type,
-            fiscal_period=fiscal_period,
-            thesis_anchor_block=thesis_anchor_block,
-            current_prepared_remarks=current_prepared_remarks,
-            current_qa=current_qa,
-            prior_transcripts=prior_transcripts,
-        )
         parsed = _call_llm_with_retry(prompt, ticker=ticker)
         upsert(
             UpsertRequest(

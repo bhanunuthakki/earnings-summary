@@ -177,3 +177,16 @@ def test_missing_primary_document_is_preserved_as_authority_unavailable() -> Non
     assert result.complete
     assert result.filings[0].primary_document is None
     assert result.filings[0].primary_document_url is None
+
+
+@pytest.mark.parametrize("form", ["10-12B", "10-12B/A"])
+def test_registration_form_and_source_report_date_never_become_periodic_anchor(form: str) -> None:
+    from filings.sec_submissions_inventory import periodic_report_date
+
+    columns = _columns(["0000001001-25-000001"], forms=[form])
+    parsed = parse_sec_submissions_inventory(
+        cik="1001", ticker="ACME", primary_body=_root(columns, []), historical=()
+    )
+    assert parsed.filings[0].form_type == form
+    assert parsed.filings[0].report_date == "2024-12-31"
+    assert periodic_report_date(parsed.filings[0]) is None

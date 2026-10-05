@@ -22,9 +22,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run_ingest builds a fixed execution/ingest_transcripts_state.py command with managed_python_prefix.",
-      "fingerprint": "bc6a87f4677aca194190a85b73ec96f610a5b773fededf0e087286b98eef5133",
-      "line": 791,
+      "evidence": "Fixed ingest_transcripts_state.py retained; adds selected --db while --repo-root, owner-requested and exact receipt IDs remain.",
+      "fingerprint": "d314e3cf85cc9bd6118f3cbf761aec8052f4e44ff0250e059b66a3adc15230c5",
+      "line": 794,
       "path": "execution/backfill_transcripts.py",
       "targets": [
         "execution/ingest_transcripts_state.py"
@@ -32,9 +32,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run_extract builds a fixed execution/extract_commitments_from_transcript.py command with managed_python_prefix.",
-      "fingerprint": "e146dc141b3f8fb3ce6819e136b4fac9ec2258e5f8cce52627dd367a3d606299",
-      "line": 821,
+      "evidence": "Fixed extract_commitments_from_transcript.py retained; --auto/exact transcript ID remain; --db now uses db.DB_PATH rather than derived state-local portfolio.db.",
+      "fingerprint": "9e0af7735f220af29c92a17fdb5ccf925d5884fd0fb97cd76064196c8d2b311d",
+      "line": 824,
       "path": "execution/backfill_transcripts.py",
       "targets": [
         "execution/extract_commitments_from_transcript.py"
@@ -64,9 +64,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run_ticker_specific_extractors runs the _TICKER_SPECIFIC_EXTRACTORS fixed script via managed_python_prefix.",
-      "fingerprint": "09053a3981106ed14c5f9719aa492c96548389e26dde4e2fa92ea1c17967495e",
-      "line": 119,
+      "evidence": "_TICKER_SPECIFIC_EXTRACTORS remains one NVO extract_nvo_patent_timeline_state.py entry; adds require_db_path() --db. Optional LLM gating is separate caller behavior.",
+      "fingerprint": "0489584797cd9e6101344d68369d67138d7876e17456965e3558206fb55bafc0",
+      "line": 121,
       "path": "execution/build_artifacts.py",
       "targets": [
         "execution/extract_nvo_patent_timeline_state.py"
@@ -203,9 +203,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "onboard_one runs only the four fixed managed-Python onboard, eval, DCF, and commitment scripts.",
-      "fingerprint": "f94015ba289ae1b840bfab075689f5439c7b837ec74d8cbd10cecf8439c55473",
-      "line": 336,
+      "evidence": "Four callers in onboard_one build the four declared fixed managed Python targets. Explicit state/database arguments and stage eligibility changed; target set remains closed.",
+      "fingerprint": "a07639ae61283ac6f6a8b63b206dab8a9102960efb5bd13daf46c4d74e8c92e5",
+      "line": 325,
       "path": "execution/onboard_pending_tickers.py",
       "targets": [
         "execution/onboard_ticker.py",
@@ -216,9 +216,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run_fmp_fetch runs the fixed _FMP_SCRIPT via managed_python_prefix.",
-      "fingerprint": "8046ecaeeae3ce0e3331abae1f88c2d13d3e8e8b8fb09bde9e2f6a33ad2243a8",
-      "line": 382,
+      "evidence": "_FMP_SCRIPT still names PROJECT_ROOT/execution/save_fmp_data.py; adds explicit state root/database.",
+      "fingerprint": "9f9ae83a24e93c895c7d3d86292da2b1a2e1485aa85ddb2e0e39d26b83b74452",
+      "line": 485,
       "path": "execution/onboard_ticker.py",
       "targets": [
         "execution/save_fmp_data.py"
@@ -226,9 +226,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run_transcript_backfill runs the fixed _BACKFILL_SCRIPT via managed_python_prefix.",
-      "fingerprint": "7b78ac97da0998a1a8fa1f75466b37e147d123925ee0da5d7e3ecaa89dddbd5d",
-      "line": 398,
+      "evidence": "_BACKFILL_SCRIPT still names PROJECT_ROOT/execution/backfill_transcripts.py; adds state/database and optional --skip-extract for skip_llm.",
+      "fingerprint": "56631d7ce4dcde43daa41a66bdaaa0bc7a6e168d58770e40bc7ed9428610a29c",
+      "line": 507,
       "path": "execution/onboard_ticker.py",
       "targets": [
         "execution/backfill_transcripts.py"
@@ -236,19 +236,19 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run_saydo first runs the fixed execution/process_ir_documents.py command.",
-      "fingerprint": "d2e200738f81a466db29c3b52e5329c4710d9a28fe57c007b517bfbce488853a",
-      "line": 468,
+      "evidence": "process_ir now names execution/process_ir_documents_state.py, replacing execution/process_ir_documents.py. Explicit state/database flags accompany the changed state adapter. Old target file existence cannot validate the old declaration.",
+      "fingerprint": "a9da13e4c5f70850d0477e2f45e4f7699215ee35eaec07eaa1b4f6dd949eb921",
+      "line": 576,
       "path": "execution/onboard_ticker.py",
       "targets": [
-        "execution/process_ir_documents.py"
+        "execution/process_ir_documents_state.py"
       ]
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run_saydo then runs the fixed execution/build_saydo_pairs.py command.",
-      "fingerprint": "be9211419c7f451c20a708f963ab8dd68bfac483ad1912dc0999bcd79b6d88a4",
-      "line": 480,
+      "evidence": "build_saydo still names PROJECT_ROOT/execution/build_saydo_pairs.py; adds --repo-root. First-stage failure still prevents this stage.",
+      "fingerprint": "6f3804af00d65070f507c49c14c25869444754ee366883cd2df8e4eacb0ce821",
+      "line": 592,
       "path": "execution/onboard_ticker.py",
       "targets": [
         "execution/build_saydo_pairs.py"
@@ -256,9 +256,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "ETF path runs the fixed execution/build_etf_workup.py via managed_python_prefix.",
-      "fingerprint": "60d385c5c4acc72f33ee16054fb4e10866deae3291f04303de02157cb8d61959",
-      "line": 535,
+      "evidence": "Literal build_etf_workup.py retained; adds --repo-root and --db-path. The LLM-capable ETF synthesis is not executed or provider-qualified here.",
+      "fingerprint": "4ac0faf4ec941af19765c0797b54435477dfd9bbd56020c0fc2e79ef62de7e5f",
+      "line": 654,
       "path": "execution/onboard_ticker.py",
       "targets": [
         "execution/build_etf_workup.py"
@@ -310,8 +310,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_bank runs the fixed _BANK_BUILDER via managed_python_prefix.",
-      "fingerprint": "5c0cae3712f494bc3420c69601fcb9ac05a67556902c208f7d141e85159504a3",
-      "line": 856,
+      "fingerprint": "ab45e5e5a9ac0c7ef777e7a03ee7460a460f2097f409879135cb89662b8169ee",
+      "line": 861,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_bank_dcf.py"
@@ -320,8 +320,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_holdco runs the fixed _HOLDCO_BUILDER via managed_python_prefix.",
-      "fingerprint": "078e08b70ee28dd232cb0f804522cc347f805cde37fac318b439ee3691dd4430",
-      "line": 901,
+      "fingerprint": "935d9330e441879f125994581ed5677397899a44efc4417271913f5fe66d3d10",
+      "line": 906,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_holdco_sotp.py"
@@ -330,8 +330,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_fintech_sotp runs the fixed _FINTECH_BUILDER via managed_python_prefix.",
-      "fingerprint": "4dede07fedf6292325b4d31ad880bb38e175b12f60a354170df611cf1ed87fb0",
-      "line": 954,
+      "fingerprint": "afc8733bcba21544b3bfbdae51d93f46c8d18ba72a238126872ac9950cd2b22e",
+      "line": 959,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_fintech_sotp.py"
@@ -340,8 +340,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_platform runs the fixed _PLATFORM_BUILDER via managed_python_prefix.",
-      "fingerprint": "9c2f8ce8d28dd2f23b0fc939c639ef01729da6622a62a96c891359c1e14f4ade",
-      "line": 1007,
+      "fingerprint": "722f9888134d35b8628cd0765a7ac1558e5e306dcc79d661a3d3b981cf9d810a",
+      "line": 1012,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_nu_platform_dcf.py"
@@ -350,8 +350,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_meli_sotp runs the fixed _MELI_SOTP_BUILDER via managed_python_prefix.",
-      "fingerprint": "00ddc6323f6cd08510e4f992b852f3d38177d1b1bee0b993f7e5e82f2c246898",
-      "line": 1081,
+      "fingerprint": "330ba8e236df1d51eba67444ffe9582d5a42189017c752bf60d3dbea652a5e15",
+      "line": 1086,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_meli_platform_dcf.py"
@@ -360,8 +360,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_onon runs only the fixed _ONON_BUILDER execution/build_onon_dcf.py through managed_python_prefix; the explicit hash-bound reviewed input artifact supplies model inputs, not executable code.",
-      "fingerprint": "7cf7e3d18803b9e4a9cb66d7e54c1a6682fda8b4c346370025ed46b868c80e3c",
-      "line": 1154,
+      "fingerprint": "cf89c540e4604488d5b386422aea2e02a898b8c84f46dc1d05fcc1ff3e2ff0f4",
+      "line": 1159,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_onon_dcf.py"
@@ -370,8 +370,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_builder runs the fixed _BUILDER_SCRIPT via managed_python_prefix.",
-      "fingerprint": "e1463fc0f70e30ee126fc83f5c083653d836d44c5fbaedc963dbbe727a32fce3",
-      "line": 1219,
+      "fingerprint": "b3e89087da3d1a8d627c3609f53a5edf46273b18b527a2d24c37f009c45e639e",
+      "line": 1224,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_redesigned_dcf.py"
@@ -559,9 +559,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_spawn_onboard_async launches the fixed execution/onboard_ticker.py via managed_python_argv.",
-      "fingerprint": "86534bee40a11dd1e8798252b767f8fe31676a16c4ca384af27113803b70df53",
-      "line": 616,
+      "evidence": "Windows launch still uses fixed managed onboard_ticker.py; explicit DB_PATH/STATE_ROOT added; working directory/logs changed to STATE_ROOT.",
+      "fingerprint": "7cf660f88798861027fde2d5673fb2ee84bc2dec17519d22aba22d92502c78d0",
+      "line": 632,
       "path": "src/db.py",
       "targets": [
         "execution/onboard_ticker.py"
@@ -569,9 +569,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_spawn_onboard_async POSIX branch launches the same fixed onboard script.",
-      "fingerprint": "da52c38b3453e95f9e3cdfd19c2c41474658c3931755c59266b5fa433c98e55d",
-      "line": 626,
+      "evidence": "POSIX launch uses same fixed managed onboard_ticker.py with explicit selectors; working directory/logs changed to STATE_ROOT.",
+      "fingerprint": "5667ae7c8f60606636d8f69a961e2efdf64018e589a2d1008e561bbd1eada78b",
+      "line": 642,
       "path": "src/db.py",
       "targets": [
         "execution/onboard_ticker.py"
@@ -590,8 +590,8 @@
     {
       "disposition": "external_process",
       "evidence": "Windows ACL fence spawns the fixed powershell.exe fence script.",
-      "fingerprint": "1ed8035984514facda59a1b460c46322e2517244c5b1a25d80cdfe322e6a5753",
-      "line": 1050,
+      "fingerprint": "bf527e38a1b6838f6358f8a793776cf77a560f411cc61ea52e521ce98221f7c6",
+      "line": 1177,
       "path": "src/filings/inline_xbrl_processor.py",
       "targets": [
         "powershell.exe"
@@ -600,8 +600,8 @@
     {
       "disposition": "external_process",
       "evidence": "Processor runs the hash-pinned OS sandbox launcher executable.",
-      "fingerprint": "4fdb5d8903373cc2d58d433811cabd0fc7a49316ea0d91d4c401ae31f39227ea",
-      "line": 1337,
+      "fingerprint": "566de36ddb5fcac1fbc6e5107d640f14dc58fcfde19c53f0e3e44a3117e82c7b",
+      "line": 1464,
       "path": "src/filings/inline_xbrl_processor.py",
       "targets": [
         "sandbox launcher"
@@ -803,8 +803,8 @@
     {
       "disposition": "external_process",
       "evidence": "The whole-tree gate invokes only the pinned Pyright executable with the checked-in configuration and selected project interpreter.",
-      "fingerprint": "eca1914742ef7a21016cab88e9b920d50524b492670f92a4154492f195d22c2c",
-      "line": 262,
+      "fingerprint": "10c0f7786e1beb83f44f00efc85891c08fa261f80ebbf3e486c95ee2401a4af2",
+      "line": 263,
       "path": "src/quality/static_quality_gate.py",
       "targets": [
         "pyright"
@@ -813,8 +813,8 @@
     {
       "disposition": "external_process",
       "evidence": "The hidden-path parity scan invokes only the pinned Pyright executable over byte-identical temporary copies of tracked hidden Python files.",
-      "fingerprint": "33167f84fd599527d6ee72061372ad175cab91dffb96e917d93a7d66ea019eab",
-      "line": 286,
+      "fingerprint": "cbaebd441641644fb25da8b418430a24ca4447d04dea4da8d95a4843d1d40a68",
+      "line": 287,
       "path": "src/quality/static_quality_gate.py",
       "targets": [
         "pyright"
@@ -862,9 +862,9 @@
     },
     {
       "disposition": "operator_supplied_process",
-      "evidence": "_run_managed_child runs the operator-supplied managed command.",
-      "fingerprint": "7a4e1a6b00cf3a9bd60f70ac4f5aab40f03b64ff7e674d7164dbb59eae414f14",
-      "line": 509,
+      "evidence": "Same operator-supplied command in no-owner/no-deadline branch; now forwards optional stdout/stderr. It is not a closed internal Python target.",
+      "fingerprint": "82fb2b661c22c583680e1cedb63ec86c98ab10524c4646f776074a4774f256c4",
+      "line": 512,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -872,9 +872,19 @@
     },
     {
       "disposition": "operator_supplied_process",
-      "evidence": "Popen runs the operator-supplied managed command.",
-      "fingerprint": "8b239b968135f703dee298130146e7cf052da397bac7fd578f7614119c34772a",
-      "line": 513,
+      "evidence": "Old single Popen becomes two branches: no redirection and stdout/stderr redirection. Both retain command/cwd/env/suspended-create flags and owned job-tree lifecycle; each requires a separate disposition.",
+      "fingerprint": "5d1f3157868e2417357c140ff185075ddb0a8d4ef2884d54063021b5022b2545",
+      "line": 519,
+      "path": "src/runtime/job_runtime.py",
+      "targets": [
+        "operator-supplied command argv"
+      ]
+    },
+    {
+      "disposition": "operator_supplied_process",
+      "evidence": "Old single Popen becomes two branches: no redirection and stdout/stderr redirection. Both retain command/cwd/env/suspended-create flags and owned job-tree lifecycle; each requires a separate disposition.",
+      "fingerprint": "95cf834822e7ed54426dff2113185f3aa877b5f8dd66269e58dbd0f9e07b7810",
+      "line": 521,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -935,7 +945,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "1817fe63c31646a4177d376a75880ae1c79aa640cfd3ad9d16413f0c1881d620",
+      "source_sha256": "5adbd7214dce079b2c89696a3821b30564b30d3d0e94bdf09bf36a78300e8ce0",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

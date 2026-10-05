@@ -1,29 +1,34 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import hashlib
 import json
 import shutil
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
+from typing import Literal, Protocol
 
 import pytest
 from alembic.config import Config
 from pydantic import ValidationError
 
 from alembic import command
+from provenance import research_snapshot as snapshot_module
+from provenance import source_coverage as coverage_module
 from provenance.document_processing_evidence import (
     DocumentProcessingEvidenceIntegrityError,
     DocumentProcessingEvidenceMissingError,
     publish_document_processing_evidence,
     verify_document_processing_evidence,
 )
-from provenance.evidence_ledger import EvidenceLocator
+from provenance.evidence_ledger import EvidenceLocator, EvidenceNode
 from provenance.filing_xbrl_extraction_ledger import (
     FilingXbrlExtractionLedger,
 )
+from provenance.filing_xbrl_fact_adapter import FilingXbrlNormalizedOutput, NormalizedFilingXbrlFact
+from provenance.pdf_table_extraction import PdfTableExtractionArtifact
 from provenance.research_snapshot import (
     CorpusProjectionBundle,
     DocumentProcessingDisposition,
@@ -31,14 +36,11 @@ from provenance.research_snapshot import (
     DocumentProcessingPolicy,
     DocumentProcessingScope,
     ProcessingEvidenceReference,
+    ProcessingLane,
+    ResearchSnapshotAdmission,
     ResearchSnapshotRequest,
     ResearchUniverse,
     VerifiedResearchReference,
-    _build_research_snapshot_with_verifier,
-    _DefaultResearchReferenceVerifier,
-    _document_family,
-    _validate_document_obligation_subject_pairs,
-    _verify_research_snapshot_with_verifier,
     admit,
     derive_obligations,
     record_disposition,
@@ -49,32 +51,188 @@ from provenance.research_snapshot import (
 from provenance.source_coverage import (
     ExpectedDocument as CoverageExpectedDocument,
 )
-from provenance.source_coverage import (
-    SourceCoverageLedger,
-    SourceInventorySnapshot,
-    _expected_document_family,
-)
+from provenance.source_coverage import SourceCoverageLedger, SourceInventorySnapshot
 from provenance.source_fact_publication import PublicationVerificationError
-from tests.test_document_processing_evidence import (
-    _pdf_table_fixture,
-    _seed_exact_pptx_run,
-    _seed_pdf_table_artifact_for_existing_document,
-)
-from tests.test_document_processing_evidence import (
-    _seed_run as _seed_native_processing_run,
-)
+from tests import test_document_processing_evidence as document_fixtures
+from tests import test_filing_xbrl_extraction_ledger as filing_fixtures
 from tests.test_filing_xbrl_extraction_ledger import (
     STAMP,
 )
-from tests.test_filing_xbrl_extraction_ledger import (
-    _database as _filing_database,
+
+
+class _ReferenceVerifier(Protocol):
+    def verify(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        requested_lane: str,
+        reference_id: str,
+        cutoff_at: datetime,
+        request: ResearchSnapshotRequest,
+    ) -> VerifiedResearchReference: ...
+
+
+class _DocumentStateView(Protocol):
+    document_version_id: str
+    issuer_id: str
+    document_type: str
+    form_type: str
+    media_type: str
+    blob_sha256: str
+    document_recorded_at: datetime
+    evidence_knowledge_at: datetime
+    evidence_recorded_at: datetime
+
+
+class _DocumentStateFactory(Protocol):
+    def __call__(
+        self,
+        document_version_id: str,
+        issuer_id: str,
+        document_type: str,
+        form_type: str,
+        media_type: str,
+        blob_sha256: str,
+        document_recorded_at: datetime,
+        evidence_knowledge_at: datetime,
+        evidence_recorded_at: datetime,
+    ) -> _DocumentStateView: ...
+
+
+class _SnapshotBuilder(Protocol):
+    def __call__(
+        self,
+        conn: sqlite3.Connection,
+        request: ResearchSnapshotRequest,
+        *,
+        verifier: _ReferenceVerifier,
+    ) -> ResearchSnapshotAdmission: ...
+
+
+class _SnapshotVerifier(Protocol):
+    def __call__(
+        self, conn: sqlite3.Connection, research_snapshot_id: str, *, verifier: _ReferenceVerifier
+    ) -> ResearchSnapshotAdmission: ...
+
+
+class _SourceObligations(Protocol):
+    def __call__(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        issuer_id: str,
+        document_family: str,
+        cutoff_at: datetime,
+        observed_through: datetime,
+        include_optional: bool,
+        financial_authority: Literal["sec_edgar", "issuer_publisher"] | None = ...,
+    ) -> tuple[sqlite3.Row, ...]: ...
+
+
+class _ExpectedFamily(Protocol):
+    def __call__(self, record: CoverageExpectedDocument, *, issuer_kind: str) -> str: ...
+
+
+class _PdfFixture(Protocol):
+    def __call__(self, *, table: bool = ..., image_only: bool = ...) -> bytes: ...
+
+
+class _PptxSeed(Protocol):
+    def __call__(
+        self, conn: sqlite3.Connection, *, document_version_id: str, blob_sha: str, run_id: str
+    ) -> tuple[EvidenceNode, ...]: ...
+
+
+class _PdfSeed(Protocol):
+    def __call__(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        document_version_id: str,
+        raw_pdf_bytes: bytes,
+        artifact: PdfTableExtractionArtifact | None = ...,
+        run_id: str = ...,
+        code_version: str | None = ...,
+    ) -> tuple[PdfTableExtractionArtifact, str]: ...
+
+
+class _NativeSeed(Protocol):
+    def __call__(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        document_version_id: str,
+        blob_sha: str,
+        run_id: str,
+        extractor_name: str,
+        extractor_code_version: str,
+        extractor_config_sha256: str,
+        children: tuple[tuple[str, str, EvidenceLocator], ...],
+        legacy_ascii_output: bool = ...,
+    ) -> tuple[EvidenceNode, ...]: ...
+
+
+class _FilingEntry(Protocol):
+    def __call__(
+        self,
+        ordinal: int,
+        *,
+        source_entry_sha256: str | None = ...,
+        concept_name: str = ...,
+        numeric_value: Decimal = ...,
+        period_kind: str = ...,
+        period_start: datetime | None = ...,
+    ) -> NormalizedFilingXbrlFact: ...
+
+
+class _FilingOutput(Protocol):
+    def __call__(
+        self,
+        entries: tuple[NormalizedFilingXbrlFact, ...],
+        *,
+        extraction_run_id: str = ...,
+        document_version_id: str = ...,
+        extractor_config_sha256: str | None = ...,
+    ) -> FilingXbrlNormalizedOutput: ...
+
+
+class _FilingDatabase(Protocol):
+    def __call__(
+        self,
+        tmp_path: Path,
+        output: FilingXbrlNormalizedOutput,
+        migrated_db: Callable[[Path], Path] | None = ...,
+    ) -> sqlite3.Connection: ...
+
+
+_build_research_snapshot_with_verifier: _SnapshotBuilder = getattr(
+    snapshot_module, "_build_research_snapshot_with_verifier"
 )
-from tests.test_filing_xbrl_extraction_ledger import (
-    _entry as _filing_entry,
+_verify_research_snapshot_with_verifier: _SnapshotVerifier = getattr(
+    snapshot_module, "_verify_research_snapshot_with_verifier"
 )
-from tests.test_filing_xbrl_extraction_ledger import (
-    _output as _filing_output,
+_DefaultResearchReferenceVerifier: Callable[[], _ReferenceVerifier] = getattr(
+    snapshot_module, "_DefaultResearchReferenceVerifier"
 )
+_document_family: Callable[[str, str], str] = getattr(snapshot_module, "_document_family")
+_validate_document_obligation_subject_pairs: Callable[
+    [dict[str, tuple[str, str]], tuple[sqlite3.Row | tuple[object, ...], ...]], None
+] = getattr(snapshot_module, "_validate_document_obligation_subject_pairs")
+_DocumentState: _DocumentStateFactory = getattr(snapshot_module, "_DocumentState")
+_applicable_lanes: Callable[[_DocumentStateView], set[ProcessingLane]] = getattr(
+    snapshot_module, "_applicable_lanes"
+)
+_source_obligations: _SourceObligations = getattr(snapshot_module, "_source_obligations")
+_expected_document_family: _ExpectedFamily = getattr(coverage_module, "_expected_document_family")
+_pdf_table_fixture: _PdfFixture = getattr(document_fixtures, "_pdf_table_fixture")
+_seed_exact_pptx_run: _PptxSeed = getattr(document_fixtures, "_seed_exact_pptx_run")
+_seed_pdf_table_artifact_for_existing_document: _PdfSeed = getattr(
+    document_fixtures, "_seed_pdf_table_artifact_for_existing_document"
+)
+_seed_native_processing_run: _NativeSeed = getattr(document_fixtures, "_seed_run")
+_filing_database: _FilingDatabase = getattr(filing_fixtures, "_database")
+_filing_entry: _FilingEntry = getattr(filing_fixtures, "_entry")
+_filing_output: _FilingOutput = getattr(filing_fixtures, "_output")
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_REVISION = "0213_decision_draft_provider_id"
@@ -1969,3 +2127,81 @@ def test_embedding_promotion_absent_at_cutoff_fails_closed(
             cutoff_at=T1,
             request=_research_request("processing:t1"),
         )
+
+
+@pytest.mark.parametrize("form", ["10-12B", "10-12B/A"])
+def test_registration_financial_processing_family_and_xbrl_lane(form: str) -> None:
+
+    assert _document_family("filing", form) == "issuer_financial_statements"
+    document = _DocumentState(
+        document_version_id="registration",
+        issuer_id="issuer",
+        document_type="filing",
+        form_type=form,
+        media_type="text/html",
+        blob_sha256="a" * 64,
+        document_recorded_at=T1,
+        evidence_knowledge_at=T1,
+        evidence_recorded_at=T1,
+    )
+    assert _applicable_lanes(document) == {"html_native_hierarchy", "filing_xbrl"}
+
+
+def test_registration_financial_obligation_selection_excludes_publisher_and_wrong_rule() -> None:
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "CREATE TABLE source_obligation_revisions ("
+        "obligation_revision_id TEXT,obligation_key TEXT,revision INTEGER,issuer_id TEXT,"
+        "document_family TEXT,obligation_state TEXT,active_from TEXT,active_to TEXT,"
+        "effective_at TEXT,knowledge_at TEXT,recorded_at TEXT,authority_kind TEXT,completeness_rule TEXT)"
+    )
+    try:
+        for key, authority, rule in [
+            ("registration", "sec_edgar", "regulator_inventory"),
+            ("publisher", "issuer_publisher", "publisher_surface_exhaustion"),
+            ("wrong-rule", "sec_edgar", "manual_exception"),
+        ]:
+            conn.execute(
+                "INSERT INTO source_obligation_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    key,
+                    key,
+                    1,
+                    "issuer",
+                    "issuer_financial_statements",
+                    "required",
+                    T1.isoformat(),
+                    None,
+                    T1.isoformat(),
+                    T1.isoformat(),
+                    T1.isoformat(),
+                    authority,
+                    rule,
+                ),
+            )
+
+        def selected(authority: str | None = None) -> tuple[str, ...]:
+            from typing import cast
+
+            rows = _source_obligations(
+                conn,
+                issuer_id="issuer",
+                document_family="issuer_financial_statements",
+                cutoff_at=T1,
+                observed_through=T1,
+                include_optional=True,
+                financial_authority=cast(
+                    Literal["sec_edgar", "issuer_publisher"] | None, authority
+                ),
+            )
+            return tuple(str(row["obligation_revision_id"]) for row in rows)
+
+        assert selected("sec_edgar") == ("registration",)
+        assert selected() == ("publisher",)
+        conn.execute("DELETE FROM source_obligation_revisions WHERE obligation_key='registration'")
+        with pytest.raises(ValueError, match="lacks an applicable source obligation"):
+            selected("sec_edgar")
+    finally:
+        conn.close()

@@ -115,8 +115,12 @@ def test_registry_is_frozen_typed_and_complete() -> None:
 
     assert isinstance(registry.REGISTERED, frozenset)
     assert isinstance(registry.GOVERNED, frozenset)
+    for producer in ("earnings_brief.py", "earnings_readout.py"):
+        entry = next(item for item in registry.VISUAL_EMITTER_MANIFEST if item.path == producer)
+        assert entry.disposition is registry.EmitterDisposition.NONVISUAL
+        assert producer not in registry.REGISTERED
     assert len(registry.REGISTERED) == 113
-    assert len(registry.VISUAL_EMITTER_MANIFEST) == 158
+    assert len(registry.VISUAL_EMITTER_MANIFEST) == 160
     calculation_evidence = next(
         entry
         for entry in registry.VISUAL_EMITTER_MANIFEST

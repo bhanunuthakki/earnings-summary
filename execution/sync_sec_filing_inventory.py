@@ -38,6 +38,7 @@ from filings.sec_financial_classification import (
     load_package_subject_reviews,
 )
 from filings.sec_submissions_inventory import (
+    SEC_REGISTRATION_FINANCIAL_FORMS,
     HistoricalComponent,
     SecFilingInventoryEntry,
     SecInventoryContractError,
@@ -81,7 +82,7 @@ _TIMEOUT = (10, 60)
 _COLLECTOR = "sync-sec-filing-inventory@5"
 _DEFAULT_PACKAGE_LIMIT = 250
 _SEC_REQUEST_DELAY_SECONDS = 0.25
-_PACKAGE_SCOPE_POLICY_VERSION = "governed-reporting-package-scope@4"
+_PACKAGE_SCOPE_POLICY_VERSION = "governed-reporting-package-scope@6"
 PACKAGE_ELIGIBLE_FORMS = frozenset(
     {
         "10-K",
@@ -97,6 +98,7 @@ PACKAGE_ELIGIBLE_FORMS = frozenset(
         "8-K",
         "8-K/A",
     }
+    | SEC_REGISTRATION_FINANCIAL_FORMS
 )
 ISSUER_OR_REGISTRATION_INVENTORY_FORMS = frozenset(
     {
@@ -326,6 +328,7 @@ EXTERNAL_OR_ADMINISTRATIVE_FORMS = frozenset(
         "U-3A-2",
         "U-3A-2/A",
         "U-57",
+        "SEC STAFF ACTION",
         "SEC STAFF LETTER",
         "UPLOAD",
     }

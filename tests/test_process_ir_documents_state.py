@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Tests for the split-root IR-document processing adapter."""
 
 from __future__ import annotations
@@ -7,15 +6,10 @@ import sys
 from pathlib import Path
 from typing import cast
 
+import process_ir_documents_state as adapter
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import process_ir_documents_state as adapter  # noqa: E402
-
-import db  # noqa: E402
+import db
 
 
 class _FakeIndexManager:
@@ -42,12 +36,12 @@ class _FakeProcessor:
 def test_bind_state_routes_every_mutable_ir_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    processor = cast("adapter._ProcessIrDocuments", _FakeProcessor())
+    processor = cast("adapter.ProcessIrDocuments", _FakeProcessor())
     original_db_path = db.DB_PATH
     monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
 
     try:
-        adapter._bind_state(processor, tmp_path)
+        adapter.bind_state(processor, tmp_path, tmp_path / "data/portfolio.db")
 
         assert tmp_path == processor.PROJECT_ROOT
         assert tmp_path / ".tmp" == processor.CACHE_DIR
@@ -65,13 +59,18 @@ def test_main_binds_state_and_forwards_only_legacy_ticker_args(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_processor = _FakeProcessor()
-    processor = cast("adapter._ProcessIrDocuments", fake_processor)
+    processor = cast("adapter.ProcessIrDocuments", fake_processor)
+    database = tmp_path / "authority.sqlite"
+    database.touch()
     original_argv = list(sys.argv)
     original_db_path = db.DB_PATH
     monkeypatch.setattr(adapter, "_load_processor", lambda: processor)
 
     try:
-        assert adapter.main(["--ticker", "NU", "--repo-root", str(tmp_path)]) == 0
+        assert (
+            adapter.main(["--ticker", "NU", "--repo-root", str(tmp_path), "--db", str(database)])
+            == 0
+        )
 
         assert tmp_path == processor.PROJECT_ROOT
         assert fake_processor.seen_argv == ["process_ir_documents.py", "--ticker", "NU"]

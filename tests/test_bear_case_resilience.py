@@ -145,7 +145,7 @@ def test_build_serves_cache_without_llm(tmp_path: Path, monkeypatch: pytest.Monk
     failure modes sat on disk."""
     cache = tmp_path / "data" / "bear_case"
     cache.mkdir(parents=True)
-    (cache / "NU.json").write_text(_VALID_RESPONSE, encoding="utf-8")
+    vars(bear_case)["_cache_bear_response"]("NU", tmp_path, _VALID_RESPONSE)
 
     # The LLM must NOT be called when a fresh cache exists.
     def _boom(*args: object, **kwargs: object) -> str:
@@ -163,3 +163,30 @@ def test_build_pending_without_llm_when_no_cache(tmp_path: Path) -> None:
     """Cold path unchanged: no cache + no LLM still returns LLM_PENDING."""
     section = _build_no_llm(tmp_path)
     assert section.status == SectionStatus.LLM_PENDING
+
+
+def test_unmarked_or_changed_method_cache_cannot_claim_current_method(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dataclasses import replace
+
+    from research.method_contract import ResearchMethod, ResearchMode
+
+    cache = tmp_path / "data/bear_case"
+    cache.mkdir(parents=True)
+    (cache / "NU.json").write_text(_VALID_RESPONSE)
+    assert vars(bear_case)["_read_cache"]("NU", tmp_path, 7) is None
+    vars(bear_case)["_cache_bear_response"]("NU", tmp_path, _VALID_RESPONSE)
+    assert vars(bear_case)["_read_cache"]("NU", tmp_path, 7) is not None
+    original = bear_case.load_research_method
+
+    def changed_method(mode: ResearchMode) -> ResearchMethod:
+        return replace(original(mode), source_sha256="f" * 64)
+
+    monkeypatch.setattr(bear_case, "load_research_method", changed_method)
+    assert vars(bear_case)["_read_cache"]("NU", tmp_path, 7) is None
+
+
+def test_malformed_json_is_not_stamped_current(tmp_path: Path) -> None:
+    vars(bear_case)["_cache_bear_response"]("NU", tmp_path, '{"failure_modes":"bad"}')
+    assert not (tmp_path / "data/bear_case/NU.json").exists()

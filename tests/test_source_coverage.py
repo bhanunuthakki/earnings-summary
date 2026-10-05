@@ -329,3 +329,52 @@ def test_migration_round_trip(tmp_path: Path) -> None:
         )
     finally:
         conn.close()
+
+
+@pytest.mark.parametrize("form", ["10-12B", "10-12B/A"])
+def test_registration_financial_duty_requires_sec_authority(
+    tmp_path: Path, migrated_db: Callable[..., Path], form: str
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    try:
+        ledger = SourceCoverageLedger(conn)
+        ledger.persist(_snapshot())
+        record = _expected().model_copy(
+            update={"form_type": form, "document_type": "filing", "period_end": None}
+        )
+        values = list(
+            conn.execute(
+                "SELECT * FROM source_obligation_revisions WHERE obligation_revision_id='sec-periodic:v1'"
+            ).fetchone()
+        )
+        values[0:3] = ["publisher-financial:v1", "publisher-financial:v1", "publisher-financial"]
+        values[6:10] = [
+            "issuer_publisher",
+            "issuer_financial_statements",
+            "required",
+            "publisher_surface_exhaustion",
+        ]
+        conn.execute(
+            "INSERT INTO source_obligation_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            values,
+        )
+        with pytest.raises(ValueError, match="exactly one explicit active source"):
+            ledger.persist(record)
+        values[0:3] = ["sec-financial:v1", "sec-financial:v1", "sec-financial"]
+        values[6:10] = [
+            "sec_edgar",
+            "issuer_financial_statements",
+            "required",
+            "regulator_inventory",
+        ]
+        conn.execute(
+            "INSERT INTO source_obligation_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            values,
+        )
+        ledger.persist(record)
+        assert conn.execute(
+            "SELECT source_obligation_revision_id,document_family FROM expected_document_obligation_bindings WHERE expected_document_id=?",
+            (record.expected_document_id,),
+        ).fetchone() == ("sec-financial:v1", "issuer_financial_statements")
+    finally:
+        conn.close()

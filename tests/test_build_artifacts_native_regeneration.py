@@ -33,10 +33,42 @@ def builder(
     migrated_db: Callable[..., Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> Any:
     module = _load_module()
-    for name in ("PROJECT_ROOT", "DB_PATH", "DATA_DIR", "FMP_DIR"):
+    for name in ("PROJECT_ROOT", "STATE_ROOT", "DB_PATH", "DATA_DIR", "FMP_DIR"):
         monkeypatch.setattr(module.db, name, getattr(module.db, name))
     with db_path_context(migrated_db(tmp_path / "authority.sqlite")):
         yield module
+
+
+def test_acquisition_only_full_build_does_not_call_optional_llm_extractors(
+    builder: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def denied(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("optional LLM extractor ran during acquisition-only build")
+
+    def reached_report(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("synthetic report boundary reached")
+
+    def equity(*_args: object) -> object:
+        return builder.InstrumentType.EQUITY
+
+    def no_sync(*_args: object) -> None:
+        return None
+
+    def no_bypass(*_args: object, **_kwargs: object) -> bool:
+        return False
+
+    monkeypatch.setattr(builder, "_resolve_kind", equity)
+    monkeypatch.setattr(builder.db, "scan_and_sync_artifacts", no_sync)
+    monkeypatch.setattr(builder, "_ensure_segment_definitions", denied)
+    monkeypatch.setattr(builder, "_run_ticker_specific_extractors", denied)
+    monkeypatch.setattr(builder, "_ensure_peer_selection", denied)
+    monkeypatch.setattr(builder, "_ensure_key_metrics", denied)
+    monkeypatch.setattr(builder.ticker_settings, "get_bypass_budget", no_bypass)
+    monkeypatch.setattr(builder, "build_report", reached_report)
+    with pytest.raises(RuntimeError, match="synthetic report boundary reached"):
+        builder._build_one("NVO", tmp_path, enable_llm=False)
 
 
 @pytest.mark.parametrize("purpose", ["bear_case", "qa_topics", "valuation_basis"])

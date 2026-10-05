@@ -189,21 +189,21 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    assert len(graph.unknown_edges) == 132
+    # Integrated research and main test seams remain visible; no production gap is admitted.
+    assert len(graph.unknown_edges) == 141
+    # Ten new acquisition/authority fixture calls preserve synthetic db globals.
+    # Exact AST evidence is retained in followup-test-edge-census.json.
+    new_fixture_calls = (
+        {("tests/test_onboard_sec_fallback.py", line) for line in (70, 320, 365, 397, 403)}
+        | {("tests/test_onboarding_state_authority.py", line) for line in (31, 60, 75)}
+        | {
+            ("tests/test_scheduled_singleflight.py", 98),
+            ("tests/test_split_root_legacy_adapters.py", 25),
+        }
+    )
+    assert new_fixture_calls <= {(edge.source, edge.line) for edge in graph.unknown_edges}
     # A checked private-helper lookup removes the scheduled test's broad type
     # suppression. Its dynamic name remains visible as one test-only seam.
-    assert (
-        GraphEdge(
-            source="tests/test_scheduled_singleflight.py",
-            target="<dynamic attribute>",
-            kind="getattr",
-            evidence="dynamic getattr expression",
-            confidence="low",
-            line=27,
-            unknown=True,
-        )
-        in graph.unknown_edges
-    )
     # Six new synthetic children test artifact ownership and database refusal.
     # Their executable choices remain test-only and visible in this inventory.
     remedy_children = {
@@ -229,7 +229,7 @@ def test_actual_head_is_supported() -> None:
             kind="unknown",
             evidence="subprocess/runpy expression",
             confidence="low",
-            line=608,
+            line=622,
             unknown=True,
         )
         in graph.unknown_edges
@@ -241,7 +241,7 @@ def test_actual_head_is_supported() -> None:
             kind="unknown",
             evidence="subprocess/runpy expression",
             confidence="low",
-            line=160,
+            line=371,
             unknown=True,
         )
         in graph.unknown_edges

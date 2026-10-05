@@ -17,6 +17,7 @@ EquityDirectValuationArchetype = Literal[
     "fintech_sotp",
     "platform_sotp",
     "platform_fcfe",
+    "operating_cashflow_equity",
 ]
 
 

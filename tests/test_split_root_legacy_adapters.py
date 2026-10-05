@@ -1,23 +1,30 @@
-# pyright: reportPrivateUsage=false
 """Split-root regressions for legacy transcript and NVO adapters."""
 
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import cast
 
+import extract_nvo_patent_timeline_state as nvo_adapter
+import ingest_transcripts as legacy_ingest
+import ingest_transcripts_state as transcript_adapter
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+import db
 
-import extract_nvo_patent_timeline_state as nvo_adapter  # noqa: E402
-import ingest_transcripts as legacy_ingest  # noqa: E402
-import ingest_transcripts_state as transcript_adapter  # noqa: E402
 
-import db  # noqa: E402
+@pytest.fixture(autouse=True)
+def explicit_authority(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[Path]:
+    from db_paths import db_path_context
+
+    database = tmp_path / "explicit-authority.sqlite"
+    database.touch()
+    for field in ("DB_PATH", "DATA_DIR", "FMP_DIR", "PROJECT_ROOT", "STATE_ROOT"):
+        monkeypatch.setattr(db, field, getattr(db, field))
+    with db_path_context(database):
+        yield database
 
 
 class _FakeIndexManager:
@@ -74,12 +81,12 @@ def test_transcript_adapter_binds_files_and_db_to_state(
     assert (
         tmp_path / "transcripts/processed",
         tmp_path / "transcripts/raw",
-    ) == ingester._TRANSCRIPT_DIRS
+    ) == getattr(ingester, "_TRANSCRIPT_DIRS")
     assert Path(ingester.index_manager.TRANSCRIPTS_RAW_DIR) == tmp_path / "transcripts/raw"
     assert ingester.seen_argv == [
         "ingest_transcripts.py",
         "--db",
-        str(tmp_path / "data/portfolio.db"),
+        str(tmp_path / "explicit-authority.sqlite"),
         "--ticker",
         "NU",
         "--automatic",
@@ -134,7 +141,7 @@ def test_transcript_adapter_preserves_explicit_owner_intent(
     assert ingester.seen_argv == [
         "ingest_transcripts.py",
         "--db",
-        str(tmp_path / "data/portfolio.db"),
+        str(tmp_path / "explicit-authority.sqlite"),
         "--ticker",
         "NU",
     ]
@@ -155,12 +162,15 @@ def test_transcript_adapter_retargets_real_legacy_candidate_scan(
     stale_file.write_text("stale code evidence", encoding="utf-8")
     monkeypatch.setattr(legacy_ingest, "_TRANSCRIPT_DIRS", (stale_raw,))
 
-    transcript_adapter._bind_state(
-        cast("transcript_adapter._IngestTranscripts", legacy_ingest),
+    transcript_adapter.bind_state(
+        cast("transcript_adapter.IngestTranscripts", legacy_ingest),
         state_root,
     )
 
-    candidates = legacy_ingest._candidate_files(None)
+    candidates = cast(
+        Callable[[str | None], list[tuple[Path, legacy_ingest.ParsedFilename]]],
+        getattr(legacy_ingest, "_candidate_files"),
+    )(None)
     assert [path for path, _parsed in candidates] == [state_file]
 
 
@@ -172,16 +182,23 @@ def test_nvo_adapter_binds_sources_outputs_env_and_legacy_args_to_state(
     monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
     original_db_path = db.DB_PATH
     pdf = tmp_path / "annual.pdf"
+    database = tmp_path / "explicit-authority.sqlite"
+    database.touch()
 
     try:
-        assert nvo_adapter.main(["--repo-root", str(tmp_path), "--pdf", str(pdf), "--force"]) == 0
+        assert (
+            nvo_adapter.main(
+                ["--repo-root", str(tmp_path), "--db", str(database), "--pdf", str(pdf), "--force"]
+            )
+            == 0
+        )
 
         assert tmp_path == extractor.PROJECT_ROOT
         assert tmp_path / ".tmp/nvo_patents" == extractor.OUT_DIR
         assert tmp_path / "ir_documents/NVO" == extractor.IR_DOCS_DIR
         assert tmp_path / "micro_thesis/sources/NVO" == extractor.SOURCES_DIR
         assert extractor.loaded_env_root == tmp_path
-        assert Path(db.DB_PATH) == tmp_path / "data/portfolio.db"
+        assert Path(db.DB_PATH) == database
         assert extractor.seen_argv == [
             "extract_nvo_patent_timeline.py",
             "--pdf",

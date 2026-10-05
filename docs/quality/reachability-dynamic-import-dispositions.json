@@ -11,10 +11,20 @@
       ]
     },
     {
+      "disposition": "external_adapter",
+      "evidence": "The isolated bridge imports the fixed bundled unit helper. build_filing_xbrl_processor_bundle requires its exact byte equality with src/filings/xbrl_units.py; the bundle seals one earnings_summary_xbrl_units.py member and digest, and the approved loader rechecks current source bytes. This boundary does not prove installed/native qualification.",
+      "fingerprint": "b31977f6ee73d5cc836ddd6fcfb1da0867b99ab708044e6c94085cb17471e957",
+      "line": 27,
+      "path": "execution/filing_xbrl_bridge.py",
+      "targets": [
+        "earnings_summary_xbrl_units"
+      ]
+    },
+    {
       "disposition": "external_optional_dependency",
       "evidence": "Bridge lazily loads the optional arelle.api.Session factory.",
-      "fingerprint": "a734ab7b7568a72fb8519927557f789e08e4ba78786ffe4d59c42ee25514844e",
-      "line": 338,
+      "fingerprint": "a15cfa75ec25a7e79ef7ca8051fe6d8e94367010372e89573881906638db5eb9",
+      "line": 351,
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "arelle.api.Session"
@@ -23,8 +33,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Bridge lazily loads the optional arelle.RuntimeOptions factory.",
-      "fingerprint": "7f03132271fb47a13a453811c9e272a18d90a02da692f1c4cc34311f02ff32a4",
-      "line": 342,
+      "fingerprint": "3e238bdad6c000866c243ef12d91eebdd2cc2dc09429a5fac2f5b830dea30b75",
+      "line": 355,
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "arelle.RuntimeOptions"
@@ -33,8 +43,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Bridge lazily loads the optional lxml.etree parser.",
-      "fingerprint": "cd0298c2db2809f1b2b0ea70ec0283ae036a37085158e497161a22dd406e2283",
-      "line": 404,
+      "fingerprint": "5f3dd33c49748b3816f0ceee5ca2d9426dc1cd93eeee5dca6b0c1413424bd716",
+      "line": 417,
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "lxml.etree"
@@ -43,8 +53,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Bridge lazily loads the optional arelle.XbrlConst module.",
-      "fingerprint": "f4fe6d5e6a2f044451a7c2b320101f751b7a1af3952fa1e4cf63c748a66b1c44",
-      "line": 840,
+      "fingerprint": "e6375b01931e2bf8c4f570c1565561cad66a67fd2efd435d737a3028ba603350",
+      "line": 862,
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "arelle.XbrlConst"
@@ -247,6 +257,39 @@
       "targets": [
         "statsmodels.tsa.seasonal"
       ]
+    },
+    {
+      "disposition": "internal_target",
+      "evidence": "Synthetic service-authority regression imports only the literal pytest entrypoint pair comments_server and execution.capture_poller. Each test disables real environment loading and uses temporary files. The named entrypoints resolve to these exact repository sources; no caller or provider supplies the module name.",
+      "fingerprint": "b090616c03ef3905aaeafefc22bd1e08fe450a60b4f5ad5ecaf2b92094677540",
+      "line": 26,
+      "path": "tests/test_runtime_state_authority.py",
+      "targets": [
+        "execution/comments_server.py",
+        "execution/capture_poller.py"
+      ]
+    },
+    {
+      "disposition": "internal_target",
+      "evidence": "Synthetic service-authority regression imports only the literal pytest entrypoint pair comments_server and execution.capture_poller. Each test disables real environment loading and uses temporary files. The named entrypoints resolve to these exact repository sources; no caller or provider supplies the module name.",
+      "fingerprint": "79926b8f66057c7dec9cf1791b244b9c1af97e5d259e45f3ffa519cbdf88ab2a",
+      "line": 51,
+      "path": "tests/test_runtime_state_authority.py",
+      "targets": [
+        "execution/comments_server.py",
+        "execution/capture_poller.py"
+      ]
+    },
+    {
+      "disposition": "internal_target",
+      "evidence": "Synthetic service-authority regression imports only the literal pytest entrypoint pair comments_server and execution.capture_poller. Each test disables real environment loading and uses temporary files. The named entrypoints resolve to these exact repository sources; no caller or provider supplies the module name.",
+      "fingerprint": "817077c7a5a5159bc580d9ee69a31a54695cf16ae9b9ec055b9566aeec1a5264",
+      "line": 76,
+      "path": "tests/test_runtime_state_authority.py",
+      "targets": [
+        "execution/comments_server.py",
+        "execution/capture_poller.py"
+      ]
     }
   ],
   "graph_provenance": {
@@ -254,7 +297,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "1817fe63c31646a4177d376a75880ae1c79aa640cfd3ad9d16413f0c1881d620",
+      "source_sha256": "5adbd7214dce079b2c89696a3821b30564b30d3d0e94bdf09bf36a78300e8ce0",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

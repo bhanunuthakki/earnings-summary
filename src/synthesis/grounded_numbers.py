@@ -20,6 +20,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from db_paths import require_db_path
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # A $-figure asserted as the DCF/intrinsic/fair value, e.g. "fair value is $55",
@@ -69,7 +70,7 @@ class GroundedNumbers:
 
 def load_grounded_numbers(ticker: str, repo_root: Path) -> GroundedNumbers | None:
     """Latest consolidated dcf_runs row as GroundedNumbers, or None when absent."""
-    db = repo_root / "data" / "portfolio.db"
+    db = require_db_path()
     if not db.exists():
         return None
     conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)

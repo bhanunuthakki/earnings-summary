@@ -439,6 +439,7 @@ _EQUITY_DIRECT_ARCHETYPES = {
     "fintech_sotp",
     "platform_sotp",
     "platform_fcfe",
+    "operating_cashflow_equity",
 }
 
 

@@ -432,6 +432,8 @@ def prepare_meli_inputs(
 ) -> tuple[dict[str, float], ModelInputReceipt]:
     if request.ticker != "MELI":
         raise InputEvidenceError("input_recipe_issuer_mismatch")
+    if request.recipe_context is not None:
+        raise InputEvidenceError("meli_recipe_issuer_or_context_mismatch")
     proposed = {key: value for key, value in effective_inputs.items() if key in ASSUMPTION_KEYS}
     proof = verify_model_inputs(
         conn,

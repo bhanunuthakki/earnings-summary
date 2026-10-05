@@ -8,6 +8,9 @@ import sys
 from pathlib import Path
 from typing import Protocol, cast
 
+from db_paths import require_db_path
+from runtime.secrets import load_project_env
+
 
 class _IndexManager(Protocol):
     PROJECT_ROOT: str
@@ -18,22 +21,22 @@ class _IndexManager(Protocol):
     TRANSCRIPTS_PROCESSED_DIR: str
 
 
-class _IngestTranscripts(Protocol):
+class IngestTranscripts(Protocol):
     PROJECT_ROOT: Path
     index_manager: _IndexManager
 
     def main(self) -> int: ...
 
 
-def _load_ingester() -> _IngestTranscripts:
+def _load_ingester() -> IngestTranscripts:
     module = importlib.import_module("ingest_transcripts")
     required = ("PROJECT_ROOT", "_TRANSCRIPT_DIRS", "index_manager", "main")
     if not all(hasattr(module, name) for name in required):
         raise RuntimeError("ingest_transcripts module does not satisfy the state adapter contract")
-    return cast("_IngestTranscripts", module)
+    return cast("IngestTranscripts", module)
 
 
-def _bind_state(ingester: _IngestTranscripts, state_root: Path) -> None:
+def bind_state(ingester: IngestTranscripts, state_root: Path) -> None:
     cache_dir = state_root / ".tmp"
     ingester.PROJECT_ROOT = state_root
     vars(ingester)["_TRANSCRIPT_DIRS"] = (
@@ -52,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--ticker", help="Restrict ingestion to one ticker")
+    parser.add_argument("--db", type=Path)
     parser.add_argument(
         "--receipt-id",
         action="append",
@@ -69,12 +73,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--owner-requested requires --ticker")
 
     state_root = args.repo_root.resolve()
+    load_project_env(state_root)
+    database = require_db_path(args.db)
     ingester = _load_ingester()
-    _bind_state(ingester, state_root)
+    bind_state(ingester, state_root)
     legacy_argv = [
         "ingest_transcripts.py",
         "--db",
-        str(state_root / "data" / "portfolio.db"),
+        str(database),
     ]
     if args.ticker:
         legacy_argv.extend(["--ticker", args.ticker.upper()])

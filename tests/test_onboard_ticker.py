@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Tests for execution/onboard_ticker.py — the `apply_industry_template` path.
 
 The pipeline+network stages (FMP fetch, refresh, transcript backfill) are
@@ -15,20 +14,34 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
+from execution import onboard_ticker
+from execution.onboard_ticker import apply_industry_template
+from industry_classifier import IndustryTemplate
 
-import onboard_ticker  # noqa: E402
-from onboard_ticker import (  # noqa: E402
-    _merge_tier_1_kpis,
-    apply_industry_template,
+
+class SayDoPolicy(Protocol):
+    def __call__(
+        self, list_type: str | None, *, force: bool, instrument: str | None = None
+    ) -> bool: ...
+
+
+_merge_tier_1_kpis = cast(
+    "Callable[[dict[str, object], IndustryTemplate], tuple[list[str], list[str]]]",
+    getattr(onboard_ticker, "_merge_tier_1_kpis"),
 )
+saydo_should_run = cast("SayDoPolicy", getattr(onboard_ticker, "_saydo_should_run"))
+lookup_list_type = cast("Callable[[str], str | None]", getattr(onboard_ticker, "_lookup_list_type"))
+run_saydo = cast("Callable[[str], int]", getattr(onboard_ticker, "_run_saydo"))
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 
 # ---------------------------------------------------------------------------
 # Test DB fixture — entity spine + tracked_companies columns onboard touches
@@ -164,6 +177,7 @@ def test_apply_template_creates_holdings_json(env: dict[str, Path]) -> None:
     # Should have ALL 9 software_saas tier-1 KPIs (it was a fresh stub)
     tier_1 = holdings["tier_1_kpis"]
     assert isinstance(tier_1, list)
+    tier_1 = cast("list[dict[str, object]]", tier_1)
     assert len(tier_1) == 9
     names = {row["name"] for row in tier_1}
     assert "Net Revenue Retention" in names
@@ -417,6 +431,7 @@ def test_merge_tier_1_kpis_appends_to_empty_list() -> None:
     assert kept == []
     tier_1 = holdings["tier_1_kpis"]
     assert isinstance(tier_1, list)
+    tier_1 = cast("list[object]", tier_1)
     assert len(tier_1) == len(t.canonical_kpis)
 
 
@@ -457,13 +472,13 @@ class _FakeProc:
 def test_saydo_should_run_gates_to_evaluation() -> None:
     """Say-Do generation runs for evaluation names; other lists are skipped
     unless explicitly forced (the per-decision policy)."""
-    assert onboard_ticker._saydo_should_run("evaluation", force=False) is True
-    assert onboard_ticker._saydo_should_run("portfolio", force=False) is False
-    assert onboard_ticker._saydo_should_run("watchlist", force=False) is False
-    assert onboard_ticker._saydo_should_run(None, force=False) is False
+    assert saydo_should_run("evaluation", force=False) is True
+    assert saydo_should_run("portfolio", force=False) is False
+    assert saydo_should_run("watchlist", force=False) is False
+    assert saydo_should_run(None, force=False) is False
     # --force-saydo overrides the gate (used for backfilling existing names).
-    assert onboard_ticker._saydo_should_run("portfolio", force=True) is True
-    assert onboard_ticker._saydo_should_run(None, force=True) is True
+    assert saydo_should_run("portfolio", force=True) is True
+    assert saydo_should_run(None, force=True) is True
 
 
 def test_lookup_list_type_reads_tracked_companies(
@@ -480,16 +495,16 @@ def test_lookup_list_type_reads_tracked_companies(
     conn.close()
     monkeypatch.setattr(onboard_ticker, "_DB_PATH", db_path)
 
-    assert onboard_ticker._lookup_list_type("UBER") == "evaluation"
-    assert onboard_ticker._lookup_list_type("NU") == "portfolio"
-    assert onboard_ticker._lookup_list_type("ZZZZ") is None
+    assert lookup_list_type("UBER") == "evaluation"
+    assert lookup_list_type("NU") == "portfolio"
+    assert lookup_list_type("ZZZZ") is None
 
 
 def test_lookup_list_type_missing_db_returns_none(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(onboard_ticker, "_DB_PATH", tmp_path / "nope" / "portfolio.db")
-    assert onboard_ticker._lookup_list_type("UBER") is None
+    assert lookup_list_type("UBER") is None
 
 
 def test_run_saydo_runs_summary_then_pairs(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -501,18 +516,31 @@ def test_run_saydo_runs_summary_then_pairs(monkeypatch: pytest.MonkeyPatch) -> N
 
     monkeypatch.setattr(onboard_ticker.subprocess, "run", fake_run)
 
-    rc = onboard_ticker._run_saydo("UBER")
+    rc = run_saydo("UBER")
 
     assert rc == 0
     assert len(calls) == 2
-    # 1) process_ir_documents.py --ticker UBER --regenerate-missing
+    # The state adapter preserves the summary selector and both authorities.
     assert Path(calls[0][1]).name == "sqlite_bootstrap.py"
-    assert Path(calls[0][2]).name == "process_ir_documents.py"
-    assert calls[0][3:] == ["--ticker", "UBER", "--regenerate-missing"]
+    assert Path(calls[0][2]).name == "process_ir_documents_state.py"
+    assert calls[0][3:] == [
+        "--ticker",
+        "UBER",
+        "--regenerate-missing",
+        "--repo-root",
+        str(cast("Path", getattr(onboard_ticker, "_STATE_ROOT"))),
+        "--db",
+        str(cast("Path", getattr(onboard_ticker, "_DB_PATH"))),
+    ]
     # 2) build_saydo_pairs.py --ticker UBER
     assert Path(calls[1][1]).name == "sqlite_bootstrap.py"
     assert Path(calls[1][2]).name == "build_saydo_pairs.py"
-    assert calls[1][3:] == ["--ticker", "UBER"]
+    assert calls[1][3:] == [
+        "--ticker",
+        "UBER",
+        "--repo-root",
+        str(cast("Path", getattr(onboard_ticker, "_STATE_ROOT"))),
+    ]
 
 
 def test_run_saydo_short_circuits_on_summary_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -526,7 +554,7 @@ def test_run_saydo_short_circuits_on_summary_failure(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(onboard_ticker.subprocess, "run", fake_run)
 
-    rc = onboard_ticker._run_saydo("UBER")
+    rc = run_saydo("UBER")
 
     assert rc == 3
     assert len(calls) == 1  # build_saydo_pairs.py not invoked

@@ -23,7 +23,20 @@ from typing import Protocol, TypeAlias, cast
 from unittest.mock import patch
 from urllib.parse import unquote, urlsplit
 
-_PROTOCOL = "filing-xbrl-bridge.v1"
+try:
+    _unit_module = importlib.import_module("earnings_summary_xbrl_units")
+except ModuleNotFoundError as exc:
+    if exc.name != "earnings_summary_xbrl_units":
+        raise
+    _unit_module = importlib.import_module("filings.xbrl_units")
+
+UNIT_CONTRACT_VERSION = cast(str, _unit_module.UNIT_CONTRACT_VERSION)
+canonicalize_xbrl_unit = cast(
+    Callable[[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]], tuple[str, str | None]],
+    _unit_module.canonicalize_xbrl_unit,
+)
+
+_PROTOCOL = "filing-xbrl-bridge.v2"
 _SANDBOX_CONTRACT = "earnings-xbrl-os-sandbox.v1"
 _COORDINATES = {"arelle": "2.39.8", "edgar": "26.1", "xule": "30052"}
 _SHA256_LENGTH = 64
@@ -592,6 +605,13 @@ def _extracted_fact(
         filing_period_end=filing_period_end,
         accounting_basis=accounting_basis,
     )
+    if normalized is not None and unit_id is not None:
+        numerator, denominator = _unit_measures(fact)
+        canonical_raw["unit_measures"] = {
+            "contract": UNIT_CONTRACT_VERSION,
+            "numerator": [[namespace, name] for namespace, name in numerator],
+            "denominator": [[namespace, name] for namespace, name in denominator],
+        }
     return ExtractedFact(
         member_ordinal=member_ordinal,
         fact_id=fact_id,
@@ -735,25 +755,27 @@ def _context_dimensions(context: object) -> list[JsonValue]:
     return dimensions
 
 
+def _unit_measures(fact: object) -> tuple[tuple[tuple[str, str], ...], tuple[tuple[str, str], ...]]:
+    unit = getattr(fact, "unit", None)
+    measures: object = getattr(unit, "measures", None)
+    if not isinstance(measures, (tuple, list)):
+        raise ValueError("XBRL unit has no complete numerator and denominator")
+    checked = cast(Sequence[object], measures)
+    if len(checked) != 2:
+        raise ValueError("XBRL unit has no complete numerator and denominator")
+    coordinates: list[tuple[tuple[str, str], ...]] = []
+    for values in checked:
+        if not isinstance(values, (tuple, list)):
+            raise ValueError("XBRL unit measure array is invalid")
+        coordinates.append(tuple(_qname_parts(value) for value in cast(Sequence[object], values)))
+    return coordinates[0], coordinates[1]
+
+
 def _fact_unit(fact: object, unit_id: str | None) -> tuple[str, str | None]:
     if unit_id is None:
         return "pure", None
-    unit = getattr(fact, "unit", None)
-    measures = cast(object, getattr(unit, "measures", ((), ()))) if unit is not None else ((), ())
-    raw_numerator: object = ()
-    if isinstance(measures, (tuple, list)) and measures:
-        raw_numerator = cast(Sequence[object], measures)[0]
-    numerator = (
-        tuple(cast(Sequence[object], raw_numerator))
-        if isinstance(raw_numerator, (tuple, list))
-        else ()
-    )
-    currency: str | None = None
-    if len(numerator) == 1:
-        namespace, local_name = _qname_parts(numerator[0])
-        if "iso4217" in namespace.casefold() and len(local_name) == 3:
-            currency = local_name.upper()
-    return unit_id, currency
+    numerator, denominator = _unit_measures(fact)
+    return canonicalize_xbrl_unit(numerator, denominator)
 
 
 def _normalize_fact(
@@ -800,7 +822,7 @@ def _normalize_fact(
             "accounting_basis": accounting_basis,
             "concept_name": concept_name,
             "concept_namespace": concept_namespace,
-            "consolidation_scope": "consolidated" if not dimensions else "other",
+            "consolidation_scope": "other",
             "currency": currency,
             "decimals": _optional_text(getattr(fact, "decimals", None)),
             "dimensions": dimensions,
