@@ -528,6 +528,14 @@ contract are retained. This adds no operator action, scheduler, managed
 service, source acquisition permission, or production activation; the
 Operations registry and visible workspace contracts remain unchanged.
 
+The same existing morning stage also materializes a bounded cockpit file-input
+snapshot under `.cache/` for FMP profile, valuation-basis, earnings-calendar,
+and holdings inputs. The cockpit continues to read the original source files on
+a per-ticker cache miss or invalid entry; source authority and freshness
+semantics do not change. This adds no operator action, schedule, managed
+service, source acquisition permission, or production activation; the
+Operations registry and visible workspace contracts remain unchanged.
+
 ### Canonical revenue year-over-year computation
 
 The existing metrics engine can now persist an admitted canonical revenue

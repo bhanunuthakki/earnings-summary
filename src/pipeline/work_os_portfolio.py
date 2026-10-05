@@ -30,8 +30,12 @@ from integrations.portfolio_allocation import (
 )
 from integrations.portfolio_offline_snapshot import OfflinePortfolioSnapshot
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
+from pipeline.cockpit_file_inputs import (
+    cockpit_input_is_current,
+    read_materialized_cockpit_file_inputs,
+)
 from pipeline.research_cockpit import CockpitRow, PendingAlertRef
-from pipeline.work_os_briefs import build_brief_library
+from pipeline.work_os_briefs import latest_brief_urls_for_tickers
 from pipeline.work_os_earnings import EarningsReadoutSummary
 from portfolio_risk_snapshot_store import RiskSnapshot
 
@@ -568,29 +572,44 @@ def build_work_os_portfolio_research_links(
 ) -> dict[str, WorkOsPortfolioResearchLinks]:
     """Resolve only concrete brief and DCF artifacts for portfolio rows."""
 
+    tickers = {row.base.ticker.strip().upper() for row in rows if row.base.ticker.strip()}
     try:
-        library = build_brief_library(
+        report_urls = latest_brief_urls_for_tickers(
             repo_root,
-            conn=conn,
-            artifact_kind="full_brief",
+            conn,
+            tickers,
             coverage_role="portfolio",
-            limit=10_000,
         )
-        report_urls = {
-            item.ticker.strip().upper(): item.standalone_url
-            for item in library.items
-            if item.coverage_role == "portfolio" and item.standalone_url
-        }
     except (OSError, ValueError, sqlite3.Error):
         report_urls = {}
 
+    file_inputs = read_materialized_cockpit_file_inputs(repo_root)
     links: dict[str, WorkOsPortfolioResearchLinks] = {}
     for row in rows:
         ticker = row.base.ticker.strip().upper()
         dcf_url = None
         if not row.is_etf:
             try:
-                if resolve_dcf_route_artifact(repo_root, ticker) is not None:
+                ticker_inputs = file_inputs.get(ticker)
+                dcf_artifact = (
+                    resolve_dcf_route_artifact(
+                        repo_root,
+                        ticker,
+                        holdings_payload=ticker_inputs.holdings_payload,
+                    )
+                    if (
+                        ticker_inputs is not None
+                        and ticker_inputs.holdings_readable
+                        and cockpit_input_is_current(
+                            repo_root,
+                            ticker,
+                            ticker_inputs,
+                            "holdings",
+                        )
+                    )
+                    else resolve_dcf_route_artifact(repo_root, ticker)
+                )
+                if dcf_artifact is not None:
                     dcf_url = f"/dcf/{ticker}"
             except (OSError, TypeError, ValueError):
                 dcf_url = None

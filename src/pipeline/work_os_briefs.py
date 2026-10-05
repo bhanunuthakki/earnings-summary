@@ -18,6 +18,7 @@ from report.artifacts import (
     CoverageRole,
     ReportArtifactRef,
     latest_report_artifacts,
+    latest_report_artifacts_for_tickers,
     load_report_artifact_index,
 )
 
@@ -600,6 +601,26 @@ def build_brief_library(
     )
 
 
+def latest_brief_urls_for_tickers(
+    repo_root: Path,
+    conn: sqlite3.Connection,
+    tickers: set[str],
+    *,
+    coverage_role: CoverageRole,
+) -> dict[str, str]:
+    """Resolve current verified brief URLs without constructing the full library."""
+    normalized = {ticker.strip().upper() for ticker in tickers if ticker.strip()}
+    if not normalized:
+        return {}
+    roles, _names = _current_company_info(conn, normalized)
+    artifacts = latest_report_artifacts_for_tickers(repo_root, normalized)
+    return {
+        ticker: f"/reports/{artifact.ticker}?artifact_id={artifact.artifact_id}"
+        for ticker, artifact in artifacts.items()
+        if roles.get(ticker, artifact.coverage_role) == coverage_role
+    }
+
+
 def resolve_report_artifact(repo_root: Path, artifact_id: str) -> ReportArtifactRef | None:
     return next(
         (
@@ -673,6 +694,7 @@ __all__ = [
     "build_brief_descriptor",
     "build_brief_library",
     "format_artifact_title",
+    "latest_brief_urls_for_tickers",
     "load_report_reader_payload",
     "resolve_report_artifact",
 ]

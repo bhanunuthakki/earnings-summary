@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Literal
+from typing import Literal, NoReturn
 
 import pytest
 
@@ -38,6 +38,7 @@ from pipeline.work_os_portfolio import (
     build_work_os_portfolio_research_links,
 )
 from portfolio_risk_snapshot_store import RiskSnapshot
+from report.artifacts import ReportArtifactIndex, ReportArtifactRef, report_artifact_index_path
 
 
 def _available_allocation(
@@ -322,26 +323,83 @@ def test_portfolio_research_links_require_concrete_report_and_dcf_artifacts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     conn = sqlite3.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE tracked_companies (ticker TEXT, name TEXT, list_type TEXT, archived_at TEXT)"
+    )
+    conn.executemany(
+        "INSERT INTO tracked_companies VALUES (?, ?, ?, NULL)",
+        [("NU", "Nu Holdings", "portfolio"), ("MELI", "MercadoLibre", "portfolio")],
+    )
+    artifact_root = tmp_path / "output" / "research" / "NU"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "verified.html").write_text("verified", encoding="utf-8")
+    refs = (
+        ReportArtifactRef(
+            artifact_id="verified",
+            ticker="NU",
+            title="NU Brief",
+            coverage_role="portfolio",
+            report_date=date(2026, 8, 1),
+            generated_at=datetime(2026, 8, 1, tzinfo=UTC),
+            reader_mode="legacy_standalone",
+            standalone_path="output/research/NU/verified.html",
+            manifest_path="output/research/NU/verified.json",
+            workspace_sha256="a" * 64,
+        ),
+        ReportArtifactRef(
+            artifact_id="missing-newer",
+            ticker="NU",
+            title="Missing newer NU Brief",
+            coverage_role="portfolio",
+            report_date=date(2026, 9, 1),
+            generated_at=datetime(2026, 9, 1, tzinfo=UTC),
+            reader_mode="legacy_standalone",
+            standalone_path="output/research/NU/missing.html",
+            manifest_path="output/research/NU/missing.json",
+            workspace_sha256="b" * 64,
+        ),
+    )
+    index_path = report_artifact_index_path(tmp_path)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text(
+        ReportArtifactIndex(
+            generated_at=datetime(2026, 9, 1, tzinfo=UTC), items=refs
+        ).model_dump_json()
+        + "\n",
+        encoding="utf-8",
+    )
 
-    def brief_builder(*args: object, **kwargs: object) -> SimpleNamespace:
-        return SimpleNamespace(
-            items=[
-                SimpleNamespace(
-                    ticker="NU",
-                    coverage_role="portfolio",
-                    standalone_url="/reports/NU?artifact_id=verified",
-                )
-            ]
-        )
+    def forbidden_library(*args: object, **kwargs: object) -> NoReturn:
+        raise AssertionError("portfolio research-links path must not build the brief library")
+
+    import pipeline.work_os_briefs as briefs
 
     def resolve_dcf(_repo_root: Path, ticker: str) -> DcfRouteArtifact | None:
-        return DcfRouteArtifact(kind="workbook", target="NU.xlsx") if ticker == "NU" else None
+        return (
+            DcfRouteArtifact(kind="workbook", target=f"{ticker}.xlsx")
+            if ticker in {"NU", "BHP"}
+            else None
+        )
 
-    monkeypatch.setattr(portfolio, "build_brief_library", brief_builder)
+    monkeypatch.setattr(briefs, "build_brief_library", forbidden_library)
     monkeypatch.setattr(portfolio, "resolve_dcf_route_artifact", resolve_dcf)
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    original_glob = Path.glob
+    globs: list[tuple[Path, str]] = []
+
+    def counted_glob(path: Path, pattern: str) -> object:
+        globs.append((path, pattern))
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(Path, "glob", counted_glob)
 
     links = build_work_os_portfolio_research_links(
-        [_row("NU", name="Nu Holdings"), _row("MELI", name="MercadoLibre")],
+        [
+            _row("NU", name="Nu Holdings"),
+            _row("MELI", name="MercadoLibre"),
+            _row("BHP", name="BHP"),
+        ],
         tmp_path,
         conn,
     )
@@ -350,8 +408,105 @@ def test_portfolio_research_links_require_concrete_report_and_dcf_artifacts(
         "NU": WorkOsPortfolioResearchLinks(
             report_url="/reports/NU?artifact_id=verified",
             dcf_url="/dcf/NU",
+        ),
+        "BHP": WorkOsPortfolioResearchLinks(report_url=None, dcf_url="/dcf/BHP"),
+    }
+    assert len(statements) == 1
+    assert "tracked_companies" in statements[0]
+    assert globs == []
+
+
+def test_portfolio_links_survive_index_and_holdings_removal(tmp_path: Path) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE tracked_companies (
+            id INTEGER PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            name TEXT NOT NULL,
+            list_type TEXT NOT NULL,
+            added_at TEXT,
+            sec_validated INTEGER NOT NULL DEFAULT 0,
+            ir_url TEXT,
+            instrument_type TEXT,
+            filing_regime TEXT,
+            fiscal_year_end TEXT,
+            fmp_data_saved INTEGER NOT NULL DEFAULT 0,
+            fmp_data_upto TEXT,
+            archived_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO tracked_companies (user_id, ticker, name, list_type, instrument_type) "
+        "VALUES ('bhanu', 'NU', 'Nu Holdings', 'portfolio', 'equity')"
+    )
+    holdings_path = tmp_path / "micro_thesis" / "holdings" / "NU.json"
+    holdings_path.parent.mkdir(parents=True)
+    holdings_path.write_text(
+        json.dumps(
+            {
+                "thesis": "Nu Holdings keeps compounding in Brazil.",
+                "dcf_defaults": {"gsheet_id": "nu-sheet"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    workbook = tmp_path / "dcf" / "NU.xlsx"
+    workbook.parent.mkdir(parents=True)
+    workbook.write_bytes(b"stub workbook")
+    artifact_root = tmp_path / "output" / "research" / "NU"
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "verified.html").write_text("verified", encoding="utf-8")
+    index_path = report_artifact_index_path(tmp_path)
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    index_path.write_text(
+        ReportArtifactIndex(
+            generated_at=datetime(2026, 8, 1, tzinfo=UTC),
+            items=(
+                ReportArtifactRef(
+                    artifact_id="verified",
+                    ticker="NU",
+                    title="NU Brief",
+                    coverage_role="portfolio",
+                    report_date=date(2026, 8, 1),
+                    generated_at=datetime(2026, 8, 1, tzinfo=UTC),
+                    reader_mode="legacy_standalone",
+                    standalone_path="output/research/NU/verified.html",
+                    manifest_path="output/research/NU/verified.json",
+                    workspace_sha256="a" * 64,
+                ),
+            ),
+        ).model_dump_json()
+        + "\n",
+        encoding="utf-8",
+    )
+    from pipeline.cockpit_file_inputs import materialize_cockpit_file_inputs
+
+    assert materialize_cockpit_file_inputs(conn, tmp_path) == 1
+    links = build_work_os_portfolio_research_links([_row("NU", name="Nu Holdings")], tmp_path, conn)
+    assert links == {
+        "NU": WorkOsPortfolioResearchLinks(
+            report_url="/reports/NU?artifact_id=verified",
+            dcf_url="/dcf/NU",
         )
     }
+
+    index_path.unlink()
+    holdings_path.unlink()
+    removed = build_work_os_portfolio_research_links(
+        [_row("NU", name="Nu Holdings")], tmp_path, conn
+    )
+    cache_path = tmp_path / ".cache" / "cockpit_file_inputs.json"
+    cache_path.unlink()
+    direct = build_work_os_portfolio_research_links(
+        [_row("NU", name="Nu Holdings")], tmp_path, conn
+    )
+
+    assert removed == direct
+    assert removed == {"NU": WorkOsPortfolioResearchLinks(report_url=None, dcf_url="/dcf/NU")}
 
 
 def test_portfolio_hydration_surfaces_readout_projection_failure() -> None:

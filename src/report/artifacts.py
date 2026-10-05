@@ -6,7 +6,7 @@ import hashlib
 import os
 import re
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath
 from typing import Literal
@@ -302,6 +302,34 @@ def latest_report_artifacts(index: ReportArtifactIndex) -> tuple[ReportArtifactR
             reverse=True,
         )
     )
+
+
+def latest_report_artifacts_for_tickers(
+    repo_root: Path,
+    tickers: Collection[str],
+) -> dict[str, ReportArtifactRef]:
+    """Resolve only the newest existing indexed brief for each requested ticker.
+
+    This avoids building the full library or statting unrelated deliverables on
+    a per-roster URL lookup. The index remains the sole artifact authority.
+    """
+    requested = {ticker.strip().upper() for ticker in tickers if ticker.strip()}
+    if not requested:
+        return {}
+    latest: dict[str, ReportArtifactRef] = {}
+    for artifact in _read_index(repo_root).items:
+        ticker = artifact.ticker.strip().upper()
+        if ticker not in requested:
+            continue
+        if not (repo_root / artifact.standalone_path).is_file():
+            continue
+        prior = latest.get(ticker)
+        if prior is None or (artifact.generated_at, artifact.artifact_id) > (
+            prior.generated_at,
+            prior.artifact_id,
+        ):
+            latest[ticker] = artifact
+    return latest
 
 
 def _write_index(repo_root: Path, items: tuple[ReportArtifactRef, ...]) -> None:
@@ -883,6 +911,7 @@ __all__ = [
     "ReportSectionRef",
     "backfill_report_fiscal_periods",
     "latest_report_artifacts",
+    "latest_report_artifacts_for_tickers",
     "load_report_artifact_index",
     "migrate_legacy_report_bodies",
     "persist_report_artifact",

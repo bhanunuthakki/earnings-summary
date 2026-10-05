@@ -115,7 +115,13 @@ def test_mixed_company_and_etf_preserve_input_order_and_user_doorways(
 
     monkeypatch.setattr(evaluation, "build_brief_library", brief_builder)
 
-    def resolve_dcf(_repo_root: Path, ticker: str) -> DcfRouteArtifact | None:
+    def resolve_dcf(
+        _repo_root: Path,
+        ticker: str,
+        *,
+        holdings_payload: object | None = None,
+    ) -> DcfRouteArtifact | None:
+        del holdings_payload
         return DcfRouteArtifact(kind="workbook", target="MELI.xlsx") if ticker == "MELI" else None
 
     monkeypatch.setattr(evaluation, "resolve_dcf_route_artifact", resolve_dcf)
@@ -254,7 +260,13 @@ def test_malformed_artifacts_and_missing_position_schema_degrade_without_connect
     def broken_brief_builder(*args: object, **kwargs: object) -> NoReturn:
         raise ValueError("bad artifact index")
 
-    def broken_dcf_resolver(repo_root: Path, ticker: str) -> NoReturn:
+    def broken_dcf_resolver(
+        repo_root: Path,
+        ticker: str,
+        *,
+        holdings_payload: object | None = None,
+    ) -> NoReturn:
+        del holdings_payload
         raise OSError(f"unreadable holdings for {ticker} under {repo_root}")
 
     monkeypatch.setattr(evaluation, "build_brief_library", broken_brief_builder)
@@ -271,6 +283,134 @@ def test_malformed_artifacts_and_missing_position_schema_degrade_without_connect
     assert "micro_thesis_unavailable" in payload.warnings
     assert "position_entries_unavailable" in payload.warnings
     assert "dcf_route_unavailable" in payload.warnings
+
+
+def test_evaluation_parses_holdings_once_for_thesis_and_dcf(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE tracked_companies (
+            id INTEGER PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            name TEXT NOT NULL,
+            list_type TEXT NOT NULL,
+            added_at TEXT,
+            sec_validated INTEGER NOT NULL DEFAULT 0,
+            ir_url TEXT,
+            instrument_type TEXT,
+            filing_regime TEXT,
+            fiscal_year_end TEXT,
+            fmp_data_saved INTEGER NOT NULL DEFAULT 0,
+            fmp_data_upto TEXT,
+            archived_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO tracked_companies (user_id, ticker, name, list_type, instrument_type) "
+        "VALUES ('bhanu', 'MELI', 'MercadoLibre', 'evaluation', 'equity')"
+    )
+    holdings_path = tmp_path / "micro_thesis" / "holdings" / "MELI.json"
+    holdings_path.parent.mkdir(parents=True)
+    holdings_path.write_text(
+        json.dumps(
+            {
+                "thesis": "Marketplace economics continue to improve.",
+                "dcf_defaults": {"gsheet_id": "sheet-123"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    original_read_text = Path.read_text
+    reads = 0
+
+    def counted_read_text(
+        path: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        nonlocal reads
+        if path == holdings_path:
+            reads += 1
+        return original_read_text(path, encoding=encoding, errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", counted_read_text)
+    from pipeline.cockpit_file_inputs import materialize_cockpit_file_inputs
+
+    assert materialize_cockpit_file_inputs(conn, tmp_path) == 1
+    item = evaluation.build_work_os_evaluation([_row("MELI")], tmp_path, conn).items[0]
+
+    assert reads == 1
+    assert item.thesis_excerpt == "Marketplace economics continue to improve."
+    assert item.source == "micro_thesis"
+    assert item.dcf_url == "/dcf/MELI"
+
+
+def test_evaluation_holdings_removal_after_materialization_matches_direct_build(
+    tmp_path: Path,
+) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        """
+        CREATE TABLE tracked_companies (
+            id INTEGER PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            ticker TEXT NOT NULL,
+            name TEXT NOT NULL,
+            list_type TEXT NOT NULL,
+            added_at TEXT,
+            sec_validated INTEGER NOT NULL DEFAULT 0,
+            ir_url TEXT,
+            instrument_type TEXT,
+            filing_regime TEXT,
+            fiscal_year_end TEXT,
+            fmp_data_saved INTEGER NOT NULL DEFAULT 0,
+            fmp_data_upto TEXT,
+            archived_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO tracked_companies (user_id, ticker, name, list_type, instrument_type) "
+        "VALUES ('bhanu', 'MELI', 'MercadoLibre', 'evaluation', 'equity')"
+    )
+    holdings_path = tmp_path / "micro_thesis" / "holdings" / "MELI.json"
+    holdings_path.parent.mkdir(parents=True)
+    holdings_path.write_text(
+        json.dumps(
+            {
+                "thesis": "Marketplace economics continue to improve.",
+                "dcf_defaults": {"gsheet_id": "sheet-123"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    workbook = tmp_path / "dcf" / "MELI.xlsx"
+    workbook.parent.mkdir(parents=True)
+    workbook.write_bytes(b"stub workbook")
+    from pipeline.cockpit_file_inputs import materialize_cockpit_file_inputs
+
+    assert materialize_cockpit_file_inputs(conn, tmp_path) == 1
+    built_with = evaluation.build_work_os_evaluation([_row("MELI")], tmp_path, conn).items[0]
+    assert built_with.thesis_excerpt == "Marketplace economics continue to improve."
+    assert built_with.source == "micro_thesis"
+    assert built_with.dcf_url == "/dcf/MELI"
+
+    holdings_path.unlink()
+    removed = evaluation.build_work_os_evaluation([_row("MELI")], tmp_path, conn).items[0]
+    cache_path = tmp_path / ".cache" / "cockpit_file_inputs.json"
+    cache_path.unlink()
+    direct = evaluation.build_work_os_evaluation([_row("MELI")], tmp_path, conn).items[0]
+
+    assert removed == direct
+    assert removed.thesis_excerpt is None
+    assert removed.dcf_url == "/dcf/MELI"
 
 
 def test_unreviewed_dcf_fails_closed(

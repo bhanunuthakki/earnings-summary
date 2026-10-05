@@ -59,6 +59,16 @@ from compute.thesis_evaluation_episodes import episode_history_source
 from dashboard._styles import COCKPIT_CSS
 from dcf.latest import LatestDcfRow, latest_dcf_rows
 from expected_earnings import upcoming_by_ticker
+from pipeline.cockpit_file_inputs import (
+    cached_next_earnings,
+    cockpit_input_is_current,
+    next_earnings,
+    profile_quote,
+    read_materialized_cockpit_file_inputs,
+)
+from pipeline.cockpit_file_inputs import (
+    read_peg_ratio as _peg_ratio,
+)
 from pipeline.dashboard_status import DashboardRow, build_dashboard_rows
 from pipeline.freshness import freshness_verdict
 from pipeline.kpi_semantics import semantic_admission_sql
@@ -525,6 +535,7 @@ def build_cockpit_rows(
     # morning pipeline materialised (stage 0f). Absent (fresh install / no
     # pipeline run) → no Fit chip, exactly like the fundamentals cache.
     candidate_fit = read_materialized_candidate_fit(repo_root)
+    file_inputs = read_materialized_cockpit_file_inputs(repo_root)
     instrument_types = _instrument_types(conn)
     # ETF sibling scores (fund-appropriate factors, Stage 0f cache) — read
     # lazily only when the evaluation list actually carries an ETF.
@@ -546,12 +557,31 @@ def build_cockpit_rows(
         built: list[CockpitRow] = []
         for row in rows:
             t = row.ticker
-            price, day_move, price_asof = profile_quote(repo_root, t)
+            ticker_inputs = file_inputs.get(t)
+            if (
+                ticker_inputs is not None
+                and ticker_inputs.profile_readable
+                and cockpit_input_is_current(repo_root, t, ticker_inputs, "profile")
+            ):
+                price, day_move, price_asof = (
+                    ticker_inputs.price,
+                    ticker_inputs.day_move_pct,
+                    ticker_inputs.price_asof,
+                )
+            else:
+                price, day_move, price_asof = profile_quote(repo_root, t)
             rule_summary, evaluated_at, rule_tones = evals.get(t, (None, None, {}))
             deltas = _toned(kpi_facts.get(t, []), rule_tones) if t in portfolio_tickers else []
             fv_gap, fair_value, dcf_price, dcf_date = dcf.get(t, (None, None, None, None))
             rev_yoy, fcf_margin = fundamentals.get(t, (None, None))
-            peg = _peg_ratio(repo_root, t)
+            if (
+                ticker_inputs is not None
+                and ticker_inputs.peg_readable
+                and cockpit_input_is_current(repo_root, t, ticker_inputs, "peg")
+            ):
+                peg = ticker_inputs.peg_ratio
+            else:
+                peg = _peg_ratio(repo_root, t)
             score: float | None = None
             why: str | None = None
             partial = False
@@ -603,7 +633,21 @@ def build_cockpit_rows(
                     dcf_date=dcf_date,
                     dcf_unreviewed=t in dcf_flagged,
                     peg_ratio=peg,
-                    next_earnings=next_er.get(t) or next_earnings(repo_root, t, ref),
+                    next_earnings=(
+                        next_er.get(t)
+                        or (
+                            cached_next_earnings(ticker_inputs, ref)
+                            if ticker_inputs is not None
+                            and ticker_inputs.earnings_calendar_readable
+                            and cockpit_input_is_current(
+                                repo_root,
+                                t,
+                                ticker_inputs,
+                                "earnings_calendar",
+                            )
+                            else next_earnings(repo_root, t, ref)
+                        )
+                    ),
                     pending_alerts=alert_index.counts.get(t, 0),
                     pending_tier1_alerts=alert_index.tier1_counts.get(t, 0),
                     pending_alert_refs=alert_index.refs.get(t, ()),
@@ -1151,77 +1195,6 @@ def _toned(deltas: list[KpiDelta], rule_tones: dict[str, str]) -> list[KpiDelta]
         )
     toned.sort(key=lambda d: (_TONE_PRIORITY.get(d.tone, 2), -d.magnitude, d.name))
     return toned[:_MAX_KPI_CHIPS]
-
-
-# --------------------------------------------------------------------------- #
-# Disk caches (read-only; no source_calls logging on a render path)
-# --------------------------------------------------------------------------- #
-
-
-def _read_json(path: Path) -> object | None:
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def profile_quote(repo_root: Path, ticker: str) -> tuple[float | None, float | None, str | None]:
-    """(price, day-move %, as-of) from ``data/historical/fmp/<T>_profile.json``.
-    As-of is the file mtime — the price is from the last FMP cycle, which the
-    staleness dot already surfaces; a render path must not hit the network.
-    Public: the ticker hover mini-card (pipeline.peeks) reads the same quote
-    so it can never disagree with the cockpit row it annotates."""
-    path = repo_root / "data" / "historical" / "fmp" / f"{ticker.upper()}_profile.json"
-    payload = _read_json(path)
-    rec: dict[str, object] | None = None
-    if isinstance(payload, list) and payload and isinstance(payload[0], dict):
-        rec = cast("dict[str, object]", payload[0])
-    elif isinstance(payload, dict):
-        rec = cast("dict[str, object]", payload)
-    if rec is None:
-        return None, None, None
-    raw_price = rec.get("price")
-    price = float(raw_price) if isinstance(raw_price, (int, float)) and raw_price > 0 else None
-    raw_move = rec.get("changePercentage", rec.get("changesPercentage"))
-    move = float(raw_move) if isinstance(raw_move, (int, float)) else None
-    asof = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC).isoformat(timespec="seconds")
-    return price, move, asof
-
-
-def _peg_ratio(repo_root: Path, ticker: str) -> float | None:
-    """PEG from the §Valuation cache (``data/valuation_basis/<T>.json``). A
-    tolerant field pluck, not ``compute.valuation_basis.load`` — the cockpit
-    must survive cache-shape drift and must not import the LLM compute path."""
-    payload = _read_json(repo_root / "data" / "valuation_basis" / f"{ticker.upper()}.json")
-    if not isinstance(payload, dict):
-        return None
-    v = cast("dict[str, object]", payload).get("peg_ratio")
-    return float(v) if isinstance(v, (int, float)) else None
-
-
-def next_earnings(repo_root: Path, ticker: str, now: datetime) -> str | None:
-    """Earliest calendar date >= today from the FMP earnings-calendar cache.
-    Read-only twin of ``sources.earnings_calendar._try_fmp_cache`` minus its
-    ``source_calls`` logging (a dashboard render is not a sourcing decision).
-    Public: shared with the ticker hover mini-card (pipeline.peeks).
-    FALLBACK only: ``build_cockpit_rows`` prefers the ``expected_earnings``
-    table; this covers pre-0082 DBs and tickers the refresher hasn't seen."""
-    payload = _read_json(
-        repo_root / "data" / "historical" / "fmp" / f"{ticker.upper()}_earnings_calendar.json"
-    )
-    if not isinstance(payload, list):
-        return None
-    today = now.date().isoformat()
-    upcoming: list[str] = []
-    for item in cast("list[object]", payload):
-        if not isinstance(item, dict):
-            continue
-        ds = cast("dict[str, object]", item).get("date")
-        if isinstance(ds, str) and len(ds) >= 10 and ds[:10] >= today:
-            upcoming.append(ds[:10])
-    return min(upcoming) if upcoming else None
 
 
 # --------------------------------------------------------------------------- #
