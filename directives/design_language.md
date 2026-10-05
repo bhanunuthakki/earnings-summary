@@ -7,10 +7,10 @@
 - **Inputs:** task, hierarchy, state, and owning master.
 - **Output:** registered markup or a tested master/registry extension.
 - **Refresh:** decision-model changes only.
-- **Logical Idempotency Key:** master/contract and visual decision.
-- **Content Identity:** master, registry, or evidence digest.
-- **Observation Version:** inspected master and registry revision.
-- **Attempt Identity:** validation/browser invocation and receipt.
+- **Logical Idempotency Key:** owning master/contract and named visual decision.
+- **Content Identity:** master, registry, or rendered evidence digest.
+- **Observation Version:** current inspected master and registry revision.
+- **Attempt Identity:** unique validation/browser invocation and receipt.
 - **Rate-limit budget:** none; verification is local and deterministic.
 - **Failure policy:** reject drift; never widen approval to pass.
 
@@ -48,12 +48,12 @@ Start from the nearest shipped sibling serving the same task. Preserve its regis
 navigation, four type roles, controls, density, responsive behavior, and state anatomy; content
 may differ.
 
-Add a visual family only when existing families cannot express the task. Use the extension
-protocol with a typed rationale and adversarial continuity test.
+A new visual family is allowed only when no existing family can express the task. Use the
+extension protocol with a typed rationale and an adversarial continuity test.
 
 ## 3. Visual grammar
 
-Only masters own literal values.
+Literal values live only in executable masters.
 ### Typography
 
 - Use four visible roles: display, title, body, and meta.
@@ -118,19 +118,17 @@ semantics, keyboard access, focus, labels, contrast, non-color cues, and reduced
 ### Compositional restraint
 
 The shared `frontend-quality` procedure owns the generic rubric. This project narrows it:
-- Use the four visible type roles; sans is prose/labels. Mono is limited to financial values,
-  code, tickers, timestamps, and locators.
-- Start in normal flow with registered recipes. Each nested box needs a semantic, state,
+- Start in normal flow with registered recipes. Each nested box needs a named semantic, state,
   interaction, or ownership boundary; flatten the rest.
 - Accent marks interaction, selection, focus, or unread state. Status has a separate semantic
-  role and a non-color cue. Decorative rails and ornamental variation are prohibited.
+  role and a non-color cue. Decorative left rails and ornamental variation are prohibited.
 - Equivalent sections share a registered grammar. Bullets and indents express structure;
   subtitles add information rather than repeat titles.
 - Before the composed guard, remove redundant decoration, containers, headings, subtitles,
   badges, dividers, and icons. Remaining visual differences need a typed master rationale
   and an adversarial extension test.
-- For material work, inspect the sibling and affected page before implementation; verify
-  final states and widths in a browser. Production uses masters; mockup CSS is prototype-only.
+- For material work, inspect the sibling and affected page in a browser before implementation;
+  verify final states and widths in a browser. Production uses masters; mockup CSS is prototype-only.
 
 Keep product behavior in its owners:
 
@@ -146,7 +144,7 @@ Keep product behavior in its owners:
 - discovery and ingestion policy: `directives/news_sources_plan.md` and
   `directives/ir_events_ingestion.md`.
 
-Behavior contracts do not authorize visual recipes.
+Those contracts may specify behavior, data, and state. They do not authorize a new visual recipe.
 ## 6. Extension protocol
 
 For a legitimate new visual need:
@@ -168,7 +166,7 @@ and product specifications.
 
 ## 7. Verification
 
-Run the composed guard after visual changes:
+Run the composed guard for every visual change:
 
 ```powershell
 python scripts/check_design_sync.py
