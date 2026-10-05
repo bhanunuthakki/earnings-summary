@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -180,3 +181,80 @@ def test_sheet_import_forwards_only_explicit_source_root_to_refresh(
         argv.extend(("--state-root", str(sources)))
     assert dcf_sheets.main(argv) == 0
     assert seen == [sources if explicit_source else None]
+
+
+@pytest.mark.parametrize("invalid_root", ["relative", "anchor", "parent"])
+def test_preflight_invalid_source_root_is_structured_before_database_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    invalid_root: str,
+) -> None:
+    from execution import valuation_preflight
+
+    roots = {
+        "relative": Path("relative-source-state"),
+        "anchor": Path(tmp_path.anchor),
+        "parent": tmp_path / "source-state" / "..",
+    }
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        pytest.fail("invalid source authority attempted database access")
+
+    monkeypatch.setattr(valuation_preflight, "require_db_path", forbidden)
+    monkeypatch.setattr(valuation_preflight, "connect_sqlite", forbidden)
+    monkeypatch.setattr(valuation_preflight, "load_valuation_readiness", forbidden)
+    result = valuation_preflight.main(
+        [
+            "--ticker",
+            "MELI",
+            "--db-path",
+            str(tmp_path / "never-open.db"),
+            "--state-root",
+            str(roots[invalid_root]),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert result == 3
+    assert json.loads(captured.out) == {
+        "status": "unavailable",
+        "reason_code": "source_authority_unavailable",
+    }
+    assert captured.err == ""
+    assert not (tmp_path / "never-open.db").exists()
+
+
+@pytest.mark.parametrize("explicit_source", [False, True])
+def test_preflight_source_context_does_not_grant_database_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    explicit_source: bool,
+) -> None:
+    from execution import valuation_preflight
+
+    database = tmp_path / "never-open.db"
+    seen: list[Path | None] = []
+
+    def unavailable(override: Path | None) -> Path:
+        seen.append(override)
+        raise RuntimeError("isolated unavailable database")
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        pytest.fail("unavailable database authority attempted database access")
+
+    monkeypatch.setattr(valuation_preflight, "require_db_path", unavailable)
+    monkeypatch.setattr(valuation_preflight, "connect_sqlite", forbidden)
+    monkeypatch.setattr(valuation_preflight, "load_valuation_readiness", forbidden)
+    argv = ["--ticker", "MELI", "--db-path", str(database)]
+    if explicit_source:
+        argv.extend(("--state-root", str(tmp_path / "source-state")))
+    assert valuation_preflight.main(argv) == 3
+    assert seen == [database]
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {
+        "status": "unavailable",
+        "reason_code": "database_authority_unavailable",
+    }
+    assert captured.err == ""
+    assert not database.exists()
