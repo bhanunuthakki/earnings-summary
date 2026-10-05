@@ -18,7 +18,9 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 _ACCESSION = re.compile(r"^\d{10}-\d{2}-\d{6}$")
 _REPORT_DATE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
-_PERIODIC_REPORT_FORMS = frozenset({"10-K", "10-K/A", "10-Q", "10-Q/A"})
+_PERIODIC_REPORT_FORMS = frozenset(
+    {"10-K", "10-K/A", "10-Q", "10-Q/A", "20-F", "20-F/A", "40-F", "40-F/A"}
+)
 _SUBMISSIONS_BASE = "https://data.sec.gov/submissions"
 _ARCHIVE_BASE = "https://www.sec.gov/Archives/edgar/data"
 _REQUIRED_COLUMNS = (

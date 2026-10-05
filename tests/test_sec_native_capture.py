@@ -128,6 +128,7 @@ def _conn(
     *,
     source_url: str = SOURCE_URL,
     expected_period_end: datetime | None = datetime(2025, 12, 31, tzinfo=UTC),
+    expected_form_type: str = "10-K",
 ) -> sqlite3.Connection:
     path = tmp_path / "sec-native-capture.db"
     migrated_db(path)
@@ -227,7 +228,7 @@ def _conn(
             ticker="ACME",
             source_kind="sec_filing",
             document_type="filing",
-            form_type="10-K",
+            form_type=expected_form_type,
             accession_number="0000000001-26-000001",
             source_url=source_url,
             primary_document="acme-20251231x10k.htm",
@@ -307,14 +308,15 @@ def _request(
     )
 
 
+@pytest.mark.parametrize("form_type", ["10-K", "20-F", "20-F/A", "40-F", "40-F/A"])
 def test_sec_report_date_flows_through_expected_document_to_native_capture_and_replay(
-    tmp_path: Path, migrated_db: Callable[..., Path]
+    tmp_path: Path, migrated_db: Callable[..., Path], form_type: str
 ) -> None:
     filing = SecFilingInventoryEntry(
         issuer_id="issuer-acme",
         ticker="ACME",
         accession_number="0000000001-26-000001",
-        form_type="10-K",
+        form_type=form_type,
         filing_date="2026-02-10",
         report_date="2025-12-31",
         accepted_at=None,
@@ -326,7 +328,12 @@ def test_sec_report_date_flows_through_expected_document_to_native_capture_and_r
         issuer_id=filing.issuer_id, filings=(filing,), packages=()
     )[0]
     assert expected.period_end == datetime(2025, 12, 31, tzinfo=UTC)
-    conn = _conn(tmp_path, migrated_db, expected_period_end=expected.period_end)
+    conn = _conn(
+        tmp_path,
+        migrated_db,
+        expected_period_end=expected.period_end,
+        expected_form_type=expected.form_type or "",
+    )
     try:
         request = _request(tmp_path, apply=False)
         preview = capture_expected_sec_documents(
@@ -342,10 +349,11 @@ def test_sec_report_date_flows_through_expected_document_to_native_capture_and_r
         )
         assert replay.considered == 0
         version = conn.execute(
-            "SELECT period_start,period_end FROM evidence_document_versions"
+            "SELECT period_start,period_end,form_type FROM evidence_document_versions"
         ).fetchone()
         assert version is not None and version[0] is None
         assert datetime.fromisoformat(str(version[1])) == expected.period_end
+        assert version[2] == form_type
     finally:
         conn.close()
 

@@ -133,6 +133,7 @@
         "src/pipeline/source_policy.py",
         "src/pipeline/managed_ir_sources.py",
         "src/provenance/fulltext_extractor_identity.py",
+        "src/filings/edgar_fetch.py",
         "src/filings/sec_financial_classification.py",
         "src/provenance/sec_package_subject_witness.py",
         "src/provenance/reviewed_sec_financial_tables.py",
@@ -143,7 +144,7 @@
       ],
       "test_commands": [
         "pytest tests/test_source_policy_contract.py -q",
-        "pytest tests/test_sec_financial_classification.py tests/test_reviewed_sec_financial_tables.py tests/test_publish_reviewed_sec_financial_tables.py tests/test_onon_retained_integration.py -q"
+        "pytest tests/test_sec_financial_classification.py tests/test_reviewed_sec_financial_tables.py tests/test_publish_reviewed_sec_financial_tables.py tests/test_onon_retained_integration.py tests/test_edgar_filing_selector.py -q"
       ],
       "documentation": [
         "directives/design_language.md"

@@ -285,7 +285,7 @@
     },
     "tests/test_ask_proposal_approval.py": {
       "seconds": 0.58,
-      "shard": "1 overflow"
+      "shard": "8 overflow"
     },
     "tests/test_ask_proposal_approval_migration.py": {
       "seconds": 4.21,
@@ -433,7 +433,7 @@
     },
     "tests/test_bha92_report_design.py": {
       "seconds": 0.54,
-      "shard": "8 overflow"
+      "shard": "5"
     },
     "tests/test_boilerplate_classify.py": {
       "seconds": 1.4,
@@ -1282,6 +1282,10 @@
     "tests/test_edgar_8k_extract.py": {
       "seconds": 1.8,
       "shard": "8 overflow"
+    },
+    "tests/test_edgar_filing_selector.py": {
+      "seconds": 0.596,
+      "shard": "1 overflow"
     },
     "tests/test_embedding_candidate_governance_migration.py": {
       "seconds": 5.07,
@@ -2569,7 +2573,7 @@
     },
     "tests/test_model_source_coverage.py": {
       "seconds": 0.091,
-      "shard": "2"
+      "shard": "3"
     },
     "tests/test_models_unit_convert.py": {
       "seconds": 1.6,
@@ -2665,15 +2669,15 @@
     },
     "tests/test_onon_inputs.py": {
       "seconds": 0.097,
-      "shard": "6"
+      "shard": "1"
     },
     "tests/test_onon_model.py": {
       "seconds": 0.067,
-      "shard": "1"
+      "shard": "8"
     },
     "tests/test_onon_provenance.py": {
       "seconds": 0.005,
-      "shard": "3"
+      "shard": "6"
     },
     "tests/test_ooxml_native_inventory.py": {
       "seconds": 2.0,
@@ -3229,7 +3233,7 @@
     },
     "tests/test_publish_reviewed_sec_financial_tables.py": {
       "seconds": 0.121,
-      "shard": "2"
+      "shard": "6"
     },
     "tests/test_qa_roster.py": {
       "seconds": 1.6,
@@ -3489,7 +3493,7 @@
     },
     "tests/test_reviewed_sec_financial_tables.py": {
       "seconds": 0.451,
-      "shard": "3 overflow"
+      "shard": "2"
     },
     "tests/test_risk_drift.py": {
       "seconds": 4.97,
@@ -3609,7 +3613,7 @@
     },
     "tests/test_scenario_acceptance.py": {
       "seconds": 0.02,
-      "shard": "2"
+      "shard": "6"
     },
     "tests/test_scenario_prior.py": {
       "seconds": 2.1,
@@ -3701,7 +3705,7 @@
     },
     "tests/test_sec_financial_classification.py": {
       "seconds": 0.019,
-      "shard": "6"
+      "shard": "1 overflow"
     },
     "tests/test_sec_former_ticker_bootstrap.py": {
       "seconds": 1.2,
@@ -3937,7 +3941,7 @@
     },
     "tests/test_source_context_entrypoints.py": {
       "seconds": 0.532,
-      "shard": "5"
+      "shard": "3 overflow"
     },
     "tests/test_source_cost_attribution.py": {
       "seconds": 2.1,

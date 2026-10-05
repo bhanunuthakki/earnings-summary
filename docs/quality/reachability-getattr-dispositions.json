@@ -369,8 +369,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "EDGAR CIK fallback resolves the fixed legacy _lookup_cik_for_ticker helper through a typed compatibility boundary.",
-      "fingerprint": "085409f1b512f0f77ec639e31f196ab8200066c3ef9455cbb9c0608189d1df53",
-      "line": 166,
+      "fingerprint": "e270f385238c606c31ad4b50ab7a4ae952674ea53aa36b3be94b85d160457dec",
+      "line": 168,
       "path": "src/filings/edgar_fetch.py",
       "targets": [
         "src/insider_transactions.py"
@@ -379,8 +379,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "EDGAR document fetch resolves the fixed legacy _strip_html helper through a typed compatibility boundary.",
-      "fingerprint": "4cdc82625eebc2836ef6f6d8b7fdb1cf2a7b1b693aaf64061dc1cfdfe23594d2",
-      "line": 293,
+      "fingerprint": "5ee12bdea8e1a6c3c4b2ed189abb74e190d9a55e840ab2b8de45c826e6f0272d",
+      "line": 295,
       "path": "src/filings/edgar_fetch.py",
       "targets": [
         "src/filing_text_fetcher.py"
@@ -737,7 +737,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "b907e47a9ee3be126cf88c04881ba986ff4d7346c2bf0e28aa589542ac47c3bd",
+      "source_sha256": "ea70c66f7943a8fd84e7f7dcc7528a40673a654687eb37f761cc8190bca07b0b",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

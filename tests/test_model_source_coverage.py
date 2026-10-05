@@ -13,6 +13,8 @@ from typing import cast
 import pytest
 
 from dcf import input_evidence as evidence
+from execution import sync_sec_filing_inventory as inventory_cli
+from filings.sec_submissions_inventory import SecFilingInventoryEntry
 from provenance.research_snapshot import ResearchSnapshotRequest
 
 NOW = datetime(2026, 10, 1, 20, tzinfo=UTC)
@@ -152,7 +154,29 @@ def test_foreign_and_domestic_periodic_forms_name_the_financial_anchor(
     monkeypatch: pytest.MonkeyPatch, form: str
 ) -> None:
     conn = coverage_db(monkeypatch)
-    add_document(conn, "annual", form, "2025-12-31")
+    filing = SecFilingInventoryEntry(
+        issuer_id="issuer-1",
+        ticker="ONON",
+        accession_number="0001858985-26-000001",
+        form_type=form,
+        filing_date="2026-02-10",
+        report_date="2025-12-31",
+        accepted_at=None,
+        primary_document="annual.htm",
+        primary_document_url="https://www.sec.gov/Archives/edgar/data/1858985/000185898526000001/annual.htm",
+        source_component_name="CIK0001858985.json",
+    )
+    expected = inventory_cli.build_expected_documents(
+        issuer_id=filing.issuer_id, filings=(filing,), packages=()
+    )[0]
+    add_document(
+        conn,
+        "annual",
+        form,
+        expected.period_end.isoformat() if expected.period_end else None,
+        source_kind="sec_filing",
+        filing_at=expected.filing_at.isoformat() if expected.filing_at else None,
+    )
     assert evidence.verify_source_coverage(conn, request("2025-12-31"), NOW)[2] == ("inventory",)
 
 
@@ -705,4 +729,116 @@ def test_historical_dated_bound_does_not_weaken_expected_issuer_authority(
         "UPDATE expected_documents SET issuer_id='other' WHERE expected_document_id='unknown'"
     )
     with pytest.raises(evidence.InputEvidenceError, match="authority_invalid"):
+        evidence.verify_source_coverage(conn, request("2025-12-31"), NOW)
+
+
+@pytest.mark.parametrize("form", ["20-F", "20-F/A", "40-F", "40-F/A"])
+def test_recent_unknown_annual_period_cannot_certify_an_older_anchor(
+    monkeypatch: pytest.MonkeyPatch, form: str
+) -> None:
+    conn = coverage_db(monkeypatch)
+    add_document(conn, "known", "20-F", "2025-12-31")
+    add_document(conn, "unknown", form, None, source_kind="sec_filing", filing_at="2026-09-30")
+    with pytest.raises(evidence.InputEvidenceError, match="financial_reporting_period_missing"):
+        evidence.verify_source_coverage(conn, request("2025-12-31"), NOW)
+
+
+def test_unknown_annual_period_without_a_proven_anchor_is_explicitly_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = coverage_db(monkeypatch)
+    add_document(conn, "unknown", "20-F", None, source_kind="sec_filing", filing_at="2026-02-10")
+    with pytest.raises(evidence.InputEvidenceError, match="financial_reporting_period_missing"):
+        evidence.verify_source_coverage(conn, request("2025-12-31"), NOW)
+
+
+def test_unknown_historical_annual_does_not_displace_a_proven_interim_anchor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = coverage_db(monkeypatch)
+    add_document(conn, "known", "20-F", "2025-12-31")
+    add_document(
+        conn,
+        "interim",
+        "6-K",
+        "2026-06-30",
+        kind="financial_statement",
+        family="issuer_financial_statements",
+    )
+    add_document(conn, "unknown", "20-F", None, source_kind="sec_filing", filing_at="2026-06-30")
+    assert evidence.verify_source_coverage(conn, request("2026-06-30"), NOW)[2] == ("inventory",)
+
+
+@pytest.mark.parametrize("irrelevant", ["other-inventory", "after-cutoff", "supporting-attachment"])
+def test_unresolved_annual_only_considers_current_known_primary_duties(
+    monkeypatch: pytest.MonkeyPatch, irrelevant: str
+) -> None:
+    conn = coverage_db(monkeypatch)
+    add_document(conn, "known", "20-F", "2025-12-31")
+    add_document(conn, "unknown", "20-F", None, source_kind="sec_filing", filing_at="2026-09-30")
+    if irrelevant == "other-inventory":
+        conn.execute(
+            "UPDATE expected_documents SET snapshot_id='superseded' WHERE expected_document_id='unknown'"
+        )
+    elif irrelevant == "after-cutoff":
+        conn.execute(
+            "UPDATE expected_documents SET recorded_at='2026-10-02' WHERE expected_document_id='unknown'"
+        )
+    else:
+        conn.execute(
+            "UPDATE expected_documents SET document_type='sec_supporting_attachment' WHERE expected_document_id='unknown'"
+        )
+    assert evidence.verify_source_coverage(conn, request("2025-12-31"), NOW)[2] == ("inventory",)
+
+
+def test_known_annual_financial_package_period_is_not_lost_to_unknown_cover_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = coverage_db(monkeypatch)
+    add_document(
+        conn,
+        "report",
+        "20-F",
+        "2025-12-31",
+        kind="sec_financial_report",
+        source_kind="sec_filing",
+        filing_at="2026-02-10",
+    )
+    add_document(conn, "cover", "20-F", None, source_kind="sec_filing", filing_at="2026-02-10")
+    conn.execute("UPDATE expected_documents SET accession_number='same-annual'")
+    assert evidence.verify_source_coverage(conn, request("2025-12-31"), NOW)[2] == ("inventory",)
+
+
+def test_unknown_annual_cover_cannot_hide_known_package_period_after_cover_filing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = coverage_db(monkeypatch)
+    add_document(
+        conn,
+        "report",
+        "20-F",
+        "2025-12-31",
+        kind="sec_financial_report",
+        source_kind="sec_filing",
+        filing_at="2026-02-10",
+    )
+    add_document(conn, "cover", "20-F", None, source_kind="sec_filing", filing_at="2025-12-30")
+    conn.execute("UPDATE expected_documents SET accession_number='same-annual'")
+    with pytest.raises(
+        evidence.InputEvidenceError, match="financial_reporting_period_after_filing"
+    ):
+        evidence.verify_source_coverage(conn, request("2025-12-31"), NOW)
+
+
+@pytest.mark.parametrize("form", ["20-F", "40-F"])
+def test_known_foreign_annual_period_still_rejects_future_of_filing(
+    monkeypatch: pytest.MonkeyPatch, form: str
+) -> None:
+    conn = coverage_db(monkeypatch)
+    add_document(
+        conn, "annual", form, "2025-12-31", source_kind="sec_filing", filing_at="2025-12-30"
+    )
+    with pytest.raises(
+        evidence.InputEvidenceError, match="financial_reporting_period_after_filing"
+    ):
         evidence.verify_source_coverage(conn, request("2025-12-31"), NOW)

@@ -1210,7 +1210,10 @@ def _coverage_fixture(monkeypatch: pytest.MonkeyPatch) -> sqlite3.Connection:
         CREATE TABLE source_inventory_snapshots (snapshot_id TEXT, inventory_key TEXT, revision INTEGER,
             issuer_id TEXT, ticker TEXT, source_kind TEXT, outcome TEXT, authoritative INTEGER,
             completed_at TEXT, recorded_at TEXT);
-        CREATE TABLE expected_documents (snapshot_id TEXT, period_end TEXT, form_type TEXT, recorded_at TEXT, filing_at TEXT);
+        CREATE TABLE expected_documents (
+            snapshot_id TEXT, period_end TEXT, form_type TEXT, recorded_at TEXT, filing_at TEXT,
+            document_type TEXT, accession_number TEXT, issuer_id TEXT, ticker TEXT,
+            source_kind TEXT, expectation_basis TEXT);
     """)
     conn.execute(
         "INSERT INTO research_snapshot_headers VALUES (?,?)",
@@ -1222,7 +1225,8 @@ def _coverage_fixture(monkeypatch: pytest.MonkeyPatch) -> sqlite3.Connection:
         (NOW.isoformat(), NOW.isoformat()),
     )
     conn.execute(
-        "INSERT INTO expected_documents VALUES ('inventory','2026-06-30','10-Q',?,?)",
+        "INSERT INTO expected_documents VALUES ('inventory','2026-06-30','10-Q',?,?,"
+        "'filing','0001099590-26-000001','issuer-1','MELI','sec_filing','authoritative')",
         (NOW.isoformat(), NOW.isoformat()),
     )
 

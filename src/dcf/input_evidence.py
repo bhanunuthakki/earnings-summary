@@ -581,24 +581,64 @@ def verify_source_coverage(
     # Expected periodic documents, rather than today's calendar quarter, name
     # the latest financial period. Snapshot verification proves document closure.
     latest_period: date | None = None
+    unresolved_annuals: list[tuple[tuple[str, str] | None, date]] = []
+    resolved_annuals: dict[tuple[str, str], date] = {}
+    annual_forms = {"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"}
     for inventory_id in inventories:
         for row in conn.execute(
-            """SELECT period_end,filing_at FROM expected_documents
+            """SELECT period_end,filing_at,form_type,document_type,accession_number,
+                issuer_id,ticker,source_kind,expectation_basis FROM expected_documents
                 WHERE snapshot_id=? AND form_type IN (
                     '10-K','10-K/A','10-Q','10-Q/A','20-F','20-F/A','40-F','40-F/A')
-                AND period_end IS NOT NULL AND datetime(recorded_at)<=datetime(?)""",
+                AND datetime(recorded_at)<=datetime(?)""",
             (inventory_id, cutoff.isoformat()),
         ):
+            if (
+                str(row[5]) != snapshot.research_universe.issuer_id
+                or str(row[6]).upper() != request.ticker
+                or str(row[8]) != "authoritative"
+            ):
+                raise InputEvidenceError("financial_reporting_package_authority_invalid")
+            form, kind = str(row[2]), str(row[3])
+            annual_key = (form, str(row[4])) if row[4] is not None else None
+            if row[0] is None:
+                # Supporting files do not add a second unresolved annual duty.
+                if form in annual_forms and kind == "filing":
+                    if str(row[7]) != "sec_filing":
+                        raise InputEvidenceError("financial_reporting_package_authority_invalid")
+                    unresolved_annuals.append((annual_key, _financial_filing_date(row[1], cutoff)))
+                continue
             end = _time(row[0]).date()
             if end > cutoff.date():
                 raise InputEvidenceError("financial_reporting_period_after_cutoff")
             if end > _financial_filing_date(row[1], cutoff):
                 raise InputEvidenceError("financial_reporting_period_after_filing")
+            if (
+                annual_key is not None
+                and form in annual_forms
+                and kind in {"filing", "sec_financial_report"}
+                and str(row[7]) == "sec_filing"
+            ):
+                if annual_key in resolved_annuals and resolved_annuals[annual_key] != end:
+                    raise InputEvidenceError("financial_reporting_package_authority_invalid")
+                resolved_annuals[annual_key] = end
             latest_period = max(latest_period, end) if latest_period is not None else end
     for end in _foreign_interim_periods(
         conn, tuple(inventories), snapshot, request.ticker, cutoff, latest_period
     ):
         latest_period = max(latest_period, end) if latest_period is not None else end
+    for annual_key, filed in unresolved_annuals:
+        if annual_key is not None and annual_key in resolved_annuals:
+            if resolved_annuals[annual_key] > filed:
+                raise InputEvidenceError("financial_reporting_period_after_filing")
+            continue
+        # The existing reader admits only period_end <= filing date. Thus a
+        # filing on/before a proven period cannot introduce a newer admissible
+        # anchor. This is no legal claim or inferred period: the unknown annual
+        # remains in document closure/readership with its original metadata.
+        if latest_period is not None and filed <= latest_period:
+            continue
+        raise InputEvidenceError("financial_reporting_period_missing")
     if latest_period != request.financial_period_end:
         raise InputEvidenceError("financial_anchor_not_latest_published_period")
     return snapshot, admission.member_set_sha256, tuple(sorted(inventories))
