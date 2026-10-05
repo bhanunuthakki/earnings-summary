@@ -189,8 +189,9 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    # Integrated research and main test seams remain visible; no production gap is admitted.
-    assert len(graph.unknown_edges) == 141
+    # Retain 141 main test seams and the three compact-reader process harnesses.
+    # No production gap is admitted.
+    assert len(graph.unknown_edges) == 144
     # Ten new acquisition/authority fixture calls preserve synthetic db globals.
     # Exact AST evidence is retained in followup-test-edge-census.json.
     new_fixture_calls = (
@@ -270,6 +271,24 @@ def test_actual_head_is_supported() -> None:
         edge.kind == "unknown" and edge.target == "<dynamic process entrypoint>"
         for edge in graph.unknown_edges
         if (edge.source, edge.line) in lifecycle_children
+    )
+
+    # Three bounded Node harnesses exercise rail state, exact-edition routing,
+    # and lazy research disclosures. Keep them visible as test-only processes.
+    compact_reader_children = {
+        ("tests/test_compact_brief_reader.py", 162),
+        ("tests/test_compact_brief_routing.py", 23),
+        ("tests/test_full_brief_chrome.py", 133),
+    }
+    assert {
+        (edge.source, edge.line)
+        for edge in graph.unknown_edges
+        if edge.source in {source for source, _line in compact_reader_children}
+    } == compact_reader_children
+    assert all(
+        edge.kind == "unknown" and edge.target == "<dynamic process entrypoint>"
+        for edge in graph.unknown_edges
+        if (edge.source, edge.line) in compact_reader_children
     )
 
     assert (

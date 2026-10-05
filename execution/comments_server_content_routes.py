@@ -8,11 +8,13 @@ state.
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
+from urllib.parse import urlencode
 
 from comments_server_evaluation_projection import resolve_work_os_evaluation_item
 from flask import (
@@ -26,6 +28,7 @@ from flask import (
 
 from integrations.portfolio_tracker_client import LivePortfolio
 from pipeline.work_os_briefs import (
+    build_brief_descriptor,
     build_brief_library,
     load_report_reader_payload,
     resolve_report_artifact,
@@ -33,6 +36,7 @@ from pipeline.work_os_briefs import (
 )
 from pipeline.work_os_company import build_company_desk
 from pipeline.work_os_decisions import build_decision_projection
+from report.artifacts import load_report_artifact_index
 
 
 class _TickerCommandCenter(Protocol):
@@ -529,6 +533,18 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             artifact_path = repo_root / artifact.standalone_path
             if not artifact_path.is_file():
                 abort(404)
+            if artifact.reader_mode == "shared_body" and request.args.get("standalone") != "1":
+                return redirect(
+                    "/?"
+                    + urlencode(
+                        {
+                            "ticker": validated,
+                            "work_os_brief": validated,
+                            "work_os_brief_artifact": artifact.artifact_id,
+                        }
+                    )
+                    + "#screen-workspace"
+                )
             return send_file(artifact_path)
         research_dir = repo_root / "output" / "research" / validated
         if not research_dir.exists():
@@ -536,7 +552,46 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         matches = sorted(research_dir.glob("*_workspace.html"))
         if not matches:
             abort(404)
+        artifact = next(
+            (
+                item
+                for item in load_report_artifact_index(repo_root).items
+                if item.ticker == validated
+                and item.workspace_sha256 == hashlib.sha256(matches[-1].read_bytes()).hexdigest()
+            ),
+            None,
+        )
+        if (
+            artifact
+            and artifact.reader_mode == "shared_body"
+            and request.args.get("standalone") != "1"
+        ):
+            return redirect(
+                "/?"
+                + urlencode(
+                    {
+                        "ticker": validated,
+                        "work_os_brief": validated,
+                        "work_os_brief_artifact": artifact.artifact_id,
+                    }
+                )
+                + "#screen-workspace"
+            )
         return send_file(matches[-1])
+
+    @app.route("/api/work-os/briefs/<artifact_id>", methods=["GET"])
+    def brief_descriptor_api(artifact_id: str):
+        artifact = resolve_report_artifact(repo_root, artifact_id)
+        if artifact is None:
+            abort(404)
+        response = Response(
+            build_brief_descriptor(
+                repo_root, artifact, conn=context.get_read_db()
+            ).model_dump_json(),
+            mimetype="application/json",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.route("/api/work-os/briefs", methods=["GET"])
     def brief_library_api():
@@ -612,7 +667,9 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         artifact = resolve_report_artifact(repo_root, artifact_id)
         if artifact is None:
             abort(404)
-        standalone_url = f"/reports/{artifact.ticker}?artifact_id={artifact.artifact_id}"
+        standalone_url = (
+            f"/reports/{artifact.ticker}?artifact_id={artifact.artifact_id}&standalone=1"
+        )
         if artifact.reader_mode != "shared_body" or artifact.body_path is None:
             return (
                 {
