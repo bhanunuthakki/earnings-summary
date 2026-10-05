@@ -866,11 +866,26 @@ selector does not manufacture locators, source coverage, or canonical admission.
 
 `sync_sec_filing_inventory.py` retains the entire parsed SEC submissions population,
 including administrative, ownership and registration filings. Existing
-`governed-reporting-package-scope@4` selects only periodic/current-report roots and
-their package attachments for expected-document duty binding. A governed root with
+`governed-reporting-package-scope@6` selects periodic/current-report roots, the
+exact `10-12B` and `10-12B/A` registration financial roots, and their package
+attachments for expected-document duty binding. Registration forms retain their
+actual form and remain separate from periodic-report dates and latest financial
+anchors. Their `issuer_financial_statements` duty requires `sec_edgar` authority
+and `regulator_inventory` completeness. An issuer-publisher statement duty cannot
+satisfy that SEC obligation. The shared `SEC_REGISTRATION_FINANCIAL_FORMS` constant
+owns the exact form set. Document-processing policy @2 and document-processing selection v2 use the
+same registration financial family and required native lane. Research-snapshot
+selection retains its existing `research-snapshot-terminal-at-k-observed-through-o.v1`
+policy; its family and duty resolution now includes the exact registration forms. A governed root with
 no primary locator remains `authority_unavailable`; it is not filtered away.
 Unclassified forms remain visible and add a failed required scope-validation
 component, so their inventory cannot acquire a complete seal.
+
+The exact `SEC STAFF ACTION` form is administrative and remains inventory-only.
+Its accession and source evidence remain in the derived scope manifest. The policy
+version changes; the collector and package checkpoint configuration do not. A new
+revision can seal that reviewed disposition while preserving an earlier partial
+revision. Unknown staff forms still fail the scope check.
 
 Apply preserves a hash-bound `sec_inventory_duty_scope.v1` JSON manifest as an
 existing evidence blob and `sec_inventory_scope_derived` source observation,
@@ -952,6 +967,67 @@ standalone-quarter durations; YTD labels cannot substitute for those inputs.
 No new scheduler, listener, provider request or external message action is added.
 The existing evaluation and attention lifecycle remains the delivery owner.
 
+### SEC CompanyFacts identity and explicit state root
+
+`execution/fetch_sec_xbrl.py` retains authorized evaluation tickers without a static
+CIK entry. Ingestion resolves their stored canonical issuer and one verified SEC
+authority before HTTP. Conflicts, material dissent and unusable recorded bindings
+fail closed. Retained historical pins remain compatibility evidence.
+
+`--project-root` selects the configured product-state root for immutable CompanyFacts
+bytes and working caches. `--db` independently selects the database. Operators must
+resolve both through approved configuration; neither path can be guessed from the
+other. This adds an explicit CLI path selector to the existing native ingestion
+interface. It does not add a provider, schedule, fact writer, admission rule or
+financial-readiness override.
+
+### Requested decision brief and source continuations
+
+`execution/prepare_decision_brief.py` plans by default. Its `--apply` path coordinates
+authorized onboarding, current inventory, bounded package capture, installation
+preflight, source-context continuations, prepared valuation and the existing full
+evaluation renderer. It holds no database write lock across child processes.
+Each child must return its typed terminal receipt; exit zero alone is insufficient.
+`--skip-fmp` leaves SEC enabled. Optional LLM stages require `--enable-llm`.
+Acquisition-only mode retains transcript and IR collection with `--skip-llm`;
+it suppresses extraction/synthesis model work rather than skipping source bytes.
+Review and valuation requests must match the selected ticker and canonical issuer.
+A failed dependent stage does not fabricate completeness or stop independent
+report delivery. The exact returned artifact and readiness receipt remain bound.
+
+`execution/continue_companyfacts_statements.py` accepts source-bound matched or
+raw-entry reviews. Dry run verifies identity, exact bytes, locator, source entry,
+actual filing context and semantic role. Apply appends immutable observations,
+reviewed roles and canonical selections. It never rewrites a legacy proof.
+`execution/prepare_cashflow_dcf.py` applies a prepared request only under its exact
+SHA. The generic recipe has an explicit supported method/cadence; it is not an
+all-sector certification. Neither continuation creates owner-thesis approval.
+
+The prepared generic cash-flow request may include `AnalystCashflowScenarioReview`.
+It binds the exact admitted base receipt, source snapshot/member commitment,
+base/bear/bull effective inputs, attributed assumptions, probabilities and replayed
+outputs. Readiness rechecks the retained request bytes, SHA, size and file time.
+The source-data cutoff, actual request capture and actual calculation are separate
+clocks; a freshly written request is not rejected merely because its mtime follows
+the data cutoff. Future capture metadata, quotes and review clocks fail closed.
+`load_valuation_readiness(..., purpose="analyst_memo")` consumes this evidence for
+the registered generic recipe only. The default `allocation` purpose retains
+`scenario_acceptance_unverified`; this review grants no owner approval or allocation
+permission. MELI's existing scenario-acceptance boundary remains unchanged.
+
+`execution/ingest_sec_filing_xbrl.py --preflight` reads one configured typed
+installation descriptor. Missing, template, unapproved, source-drift and runtime
+failures are separate states. Preflight cannot approve a bundle. Protocol v2
+uses canonical XBRL measure units and a separately committed unit helper.
+
+`execution/verify_decision_brief.py` checks the retained body and reader, exact
+claim population, sealed processing and canonical-resolution membership, admitted
+financial values, calculation replay, raw-source reconstruction, current source
+coverage and valuation readiness. `--inspect-body` returns the actual text
+population without database access. `--persist` appends a content-addressed
+readiness receipt; a successful render alone cannot receive decision-grade.
+These operations add no schedule, public disclosure, trade or publication approval.
+Local implementation does not establish installed/live availability.
 
 ### Source repair disposition (2026-10-03)
 

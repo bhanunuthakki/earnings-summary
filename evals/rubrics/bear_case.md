@@ -1,4 +1,4 @@
-# Rubric: bear_case (v1)
+# Rubric: bear_case (v2)
 
 Pass threshold: 0.70
 
@@ -24,30 +24,26 @@ Generic risks ("revenue could decelerate", "macro could weaken",
 hypothesis that could be pasted into any other ticker's bear case scores 0
 for this facet.
 
-## Facet: non_consensus — at least two failure modes are genuinely non-consensus
+## Facet: contrary_case — substantive company-specific counter-evidence
 
-At least TWO failure modes must argue something sell-side coverage does not
-broadly flag — a systematically underweighted risk, an organizational
-blind-spot, a framing inversion — rather than restating widely-discussed
-concerns. Score 1.0 when two or more clear the bar, 0.5 when exactly one
-does, 0.0 when none do. The `most_underweighted` paragraph counts as
-evidence of intent but does not substitute for the failure modes themselves.
+Test the strongest plausible failure mechanisms against supplied support and
+counter-evidence. Do not claim a risk is non-consensus without a dated consensus
+reference. Explicitly unavailable consensus earns no penalty. Unsupported claims
+about what the market believes are misses.
 
 ## Facet: evidence_citation — evidence_in_data cites concrete numbers with periods
 
-Every `evidence_in_data` must cite a specific number or trend FROM the
-inputs, with the value AND the time period ("FCF dropped from $24.6B Q4'25
-to $5.3B Q2'25"). Vague paraphrasing ("growth is decelerating", "margins
-are under pressure") without a value-and-period citation is a miss for
-that failure mode.
+Every `evidence_in_data` must identify supplied evidence with period and locator.
+Use figures when supplied and comparable. A specific cited qualitative disclosure
+is valid evidence. Missing evidence must remain explicit; never invent a number
+to satisfy this facet.
 
 ## Facet: quantified_impact — quantitative_impact shows a replicable math chain
 
-Every `quantitative_impact` must link the failure mode to a specific
-revenue / margin / FCF / NPV-per-share delta with the reasoning chain shown —
-the reader should be able to plug the numbers into a model and replicate the
-scenario. A bare directional claim ("this would hurt margins") or a number
-with no derivation is a miss for that failure mode.
+Where model inputs permit a calculation, show the replicable assumption and
+math chain with comparable units. Otherwise name the affected model assumption
+and missing inputs. Explicit inability to quantify is valid; invented valuation
+or magnitude is a miss.
 
 ## Facet: refutation_criteria — falsifiable, disclosure-anchored refutation paths
 
@@ -55,7 +51,7 @@ Every `refutation_criteria` must state what management would have to
 disclose or demonstrate over the next 2–4 quarters to neutralize the
 hypothesis — specific and falsifiable (a named metric, disclosure, or
 event), not "if results improve". Every `leading_indicator` must likewise
-be a numerical / disclosed metric observable in the next 1–2 prints.
+name a public source, observable condition, expected event and investment consequence. A specific qualitative disclosure check is valid.
 
 ## Facet: grounding_discipline — no fabricated numbers, out-of-scope risks parked properly
 

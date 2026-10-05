@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 from datetime import UTC, date, datetime, timedelta
 from io import StringIO
 from pathlib import Path
@@ -93,12 +93,14 @@ def seed_table(
     publication_prefix: str = "report",
     populate: bool = True,
     currency: str = "USD",
-    currencies: dict[int, str] | None = None,
+    currencies: Mapping[int, str | None] | None = None,
     fiscal_years: dict[int, int | None] | None = None,
     legacy_document_id: int | None = None,
     source_observation_id: str | None = None,
     legacy_scope_node: bool = False,
     concept_namespace: str = "urn:earnings-summary:legacy:financial",
+    accounting_basis: str = "us_gaap",
+    consolidation_scope: str = "consolidated",
 ) -> tuple[ReportedSourceFact, ...]:
     """concept/start/end/fiscal-period/value/unit; one sealed synthetic document."""
     document_id = f"{publication_prefix}-document"
@@ -186,9 +188,14 @@ def seed_table(
                 "semantic_key_sha256": None,
                 "concept_namespace": concept_namespace,
                 "concept_name": concept,
+                "accounting_basis": accounting_basis,
+                "consolidation_scope": consolidation_scope,
                 "taxonomy_name": "earnings-summary-legacy",
                 "taxonomy_version": "2026",
-                "period_start": datetime.fromisoformat(start).replace(tzinfo=UTC),
+                "period_start": datetime.fromisoformat(start).replace(tzinfo=UTC)
+                if start
+                else None,
+                "period_kind": "duration" if start else "instant",
                 "period_end": datetime.fromisoformat(end).replace(tzinfo=UTC),
                 "fiscal_year": (fiscal_years or {}).get(index, int(end[:4])),
                 "fiscal_period": fiscal or None,

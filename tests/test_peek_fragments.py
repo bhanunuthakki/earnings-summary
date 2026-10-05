@@ -1446,7 +1446,13 @@ def test_evaluation_readout_is_explicit_on_request_and_persists(
 
     def fake_call_llm(_prompt: str, **kwargs: object) -> str:
         calls.append(str(kwargs["ticker"]))
-        return "## Quarter in one line\nPersisted evaluation readout."
+        return (
+            "## Quarter in one line\nPersisted evaluation readout.\n"
+            "## What changed versus expectations\nNo sourced baseline available.\n"
+            "## What management said\nNo tone inference from sparse evidence.\n"
+            "## Thesis update\nAccepted rules remain unchanged.\n"
+            "## What to verify next quarter\nCheck the public issuer release."
+        )
 
     def fake_budget(*_args: object, **_kwargs: object) -> None:
         return None

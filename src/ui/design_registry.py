@@ -698,6 +698,8 @@ _NONVISUAL_CENSUS_CLASSIFICATIONS = (
     "compute/soft_rule_evaluator.py",
     "decision_conditions.py",
     "decision_extractor.py",
+    "earnings_brief.py",  # Section-title placeholders are prompt text, not product markup.
+    "earnings_readout.py",  # Section-title placeholders are prompt text, not product markup.
     "etf_sources/nport.py",
     "execution/comments_server_panel_cache.py",
     "execution/design_route_canaries.py",

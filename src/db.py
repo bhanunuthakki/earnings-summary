@@ -51,12 +51,13 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # the gap for cron children that never call configure_runtime_db. Unset (the
 # universal case in CI/dev and every scheduled run) => the checkout default,
 # unchanged.
+STATE_ROOT = PROJECT_ROOT
 DB_PATH = os.fspath(configured_db_path(Path(PROJECT_ROOT)))
 DATA_DIR = os.path.dirname(DB_PATH)
 FMP_DIR = os.path.join(DATA_DIR, "historical", "fmp")
 
 
-def set_db_path(db_path: str | os.PathLike[str]) -> None:
+def set_db_path(db_path: str | os.PathLike[str], *, state_root: Path | None = None) -> None:
     """Re-point the module's data globals at an explicit portfolio DB.
 
     A CLI that accepts ``--db-path`` MUST call this, because not every writer
@@ -74,14 +75,20 @@ def set_db_path(db_path: str | os.PathLike[str]) -> None:
     ``db.DB_PATH``. Note it covers only ``resolve_db_path`` consumers — not
     ``DATA_DIR`` / ``FMP_DIR`` / ``get_connection``, which still need this sync.
 
-    Re-derives ``DATA_DIR`` / ``FMP_DIR`` from the DB's parent so DB-adjacent
+    An explicit ``state_root`` binds retained caches and onboarding separately
+    from the database location. Otherwise this compatibility API
+    re-derives ``DATA_DIR`` / ``FMP_DIR`` from the DB's parent so DB-adjacent
     data resolves consistently. ``PROJECT_ROOT`` is left untouched: code,
     templates, and holdings/micro_thesis files still resolve from the running
     checkout even when the DB lives elsewhere.
     """
-    global DB_PATH, DATA_DIR, FMP_DIR
+    global DB_PATH, DATA_DIR, FMP_DIR, STATE_ROOT
     DB_PATH = os.fspath(db_path)
-    DATA_DIR = os.path.dirname(DB_PATH)
+    if state_root is not None:
+        STATE_ROOT = os.fspath(state_root)
+    DATA_DIR = (
+        os.fspath(state_root / "data") if state_root is not None else os.path.dirname(DB_PATH)
+    )
     FMP_DIR = os.path.join(DATA_DIR, "historical", "fmp")
 
 
@@ -469,7 +476,7 @@ def _scan_processed_dir(ticker: str, artifacts: dict[tuple[int, Quarter], Artifa
     """
     upper = ticker.upper()
     for subdir in ("processed", "raw"):
-        d = os.path.join(PROJECT_ROOT, "transcripts", subdir)
+        d = os.path.join(STATE_ROOT, "transcripts", subdir)
         if not os.path.exists(d):
             continue
         for fname in os.listdir(d):
@@ -484,7 +491,7 @@ def _scan_tmp_dir(
     artifacts: dict[tuple[int, Quarter], ArtifactFlags],
 ) -> None:
     """Walk .tmp/, dispatch by ArtifactKind, set the corresponding step flag."""
-    tmp_dir = os.path.join(PROJECT_ROOT, ".tmp")
+    tmp_dir = os.path.join(STATE_ROOT, ".tmp")
     if not os.path.exists(tmp_dir):
         return
     upper = ticker.upper()
@@ -604,18 +611,27 @@ def _spawn_onboard_async(ticker: str) -> None:
         )
         return
 
-    log_dir = os.path.join(PROJECT_ROOT, "logs")
+    log_dir = os.path.join(STATE_ROOT, "logs")
     os.makedirs(log_dir, exist_ok=True)
     stamp = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
     log_path = os.path.join(log_dir, f"onboard_{ticker}_{stamp}.log")
-    cmd = managed_python_argv(PROJECT_ROOT, script, "--ticker", ticker)
+    cmd = managed_python_argv(
+        PROJECT_ROOT,
+        script,
+        "--ticker",
+        ticker,
+        "--db",
+        DB_PATH,
+        "--project-root",
+        STATE_ROOT,
+    )
 
     try:
         with open(log_path, "w", encoding="utf-8") as log_handle:
             if os.name == "nt":
                 subprocess.Popen(
                     cmd,
-                    cwd=PROJECT_ROOT,
+                    cwd=STATE_ROOT,
                     stdin=subprocess.DEVNULL,
                     stdout=log_handle,
                     stderr=subprocess.STDOUT,
@@ -625,7 +641,7 @@ def _spawn_onboard_async(ticker: str) -> None:
             else:
                 subprocess.Popen(
                     cmd,
-                    cwd=PROJECT_ROOT,
+                    cwd=STATE_ROOT,
                     stdin=subprocess.DEVNULL,
                     stdout=log_handle,
                     stderr=subprocess.STDOUT,

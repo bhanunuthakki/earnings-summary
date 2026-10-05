@@ -17,6 +17,7 @@ from typing import Literal, Self, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from filings.sec_submissions_inventory import SEC_REGISTRATION_FINANCIAL_FORMS
 from provenance.issuer_registry import evidence_document_relation
 
 InventorySourceKind: TypeAlias = Literal["sec_submissions", "ir_crawl", "earnings_events"]
@@ -166,6 +167,10 @@ def _expected_document_family(
         }
         if form in operating_periodic and issuer_kind == "operating_company":
             return "operating_company_periodic"
+        if form in SEC_REGISTRATION_FINANCIAL_FORMS:
+            if issuer_kind != "operating_company":
+                raise ValueError(f"SEC form {form} is incompatible with issuer kind {issuer_kind}")
+            return "issuer_financial_statements"
         if form in investment_company_periodic and issuer_kind == "fund":
             return "investment_company_periodic"
         if form in continuous_disclosure:
@@ -489,10 +494,21 @@ class SourceCoverageLedger:
             record.source_obligation_revision_id,
             record.source_obligation_revision_id,
         ]
+        authority_sql = ""
+        authority_parameters: tuple[str, ...] = ()
+        if expected_family == "issuer_financial_statements":
+            authority_sql = "AND authority_kind=? "
+            authority_parameters = (
+                "sec_edgar" if record.source_kind == "sec_filing" else "issuer_publisher",
+            )
+            if record.source_kind == "sec_filing":
+                authority_sql += "AND completeness_rule=? "
+                authority_parameters += ("regulator_inventory",)
         rows = self._conn.execute(
             "SELECT obligation_revision_id,reporting_entity_id,document_family "
             "FROM source_obligation_revisions "
             "WHERE issuer_id=? AND document_family=? "
+            f"{authority_sql}"  # nosec B608 -- fixed optional predicate; values are bound
             "AND obligation_state IN ('required','optional') "
             "AND datetime(active_from)<=datetime(?) "
             "AND (active_to IS NULL OR datetime(active_to)>datetime(?)) "
@@ -500,7 +516,11 @@ class SourceCoverageLedger:
             "AND datetime(recorded_at)<=datetime(?) "
             "AND (? IS NULL OR obligation_revision_id=?) "
             "ORDER BY obligation_revision_id",
-            tuple(params),
+            (
+                *params[:2],
+                *authority_parameters,
+                *params[2:],
+            ),
         ).fetchall()
         if len(rows) != 1:
             qualifier = (

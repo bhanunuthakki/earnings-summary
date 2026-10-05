@@ -247,8 +247,8 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "P1",
         "hot",
         "synthesis",
-        "Describe what the company sells, to whom, and how it makes money in decision-useful terms.",
-        "Generic marketing copy that omits the actual economic model.",
+        "Describe business economics and moat mechanisms with public evidence, counter-evidence and alternative causes.",
+        "Invented precision/competitors, generic claims, or private-data checks offered as public evidence.",
     ),
     _q(
         "customer_concentration_extraction",
@@ -281,8 +281,8 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "P1",
         "warm",
         "judgment",
-        "Identify material changes in management tone tied to specific language and business facts.",
-        "Calling stylistic variation a business inflection or missing a substantive reversal.",
+        "Compare cited same-speaker/topic/context language with coverage and personnel limits; separate textual observation from inference.",
+        "Unsupported avoidance/dropped-topic/motive inference, unmatched comparisons, or calibrated sentiment claimed without qualification.",
     ),
     _q(
         "etf_role_synthesis",
@@ -595,16 +595,16 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "P2",
         "cold",
         "synthesis",
-        "Brief the owner for an earnings call from their thesis, tracked KPIs, and open questions.",
-        "A generic preview, an invented figure, or ignoring the owner's stated watch items.",
+        "Preserve dated guidance, consensus and owner bars separately; link public observables, accepted rules and material questions.",
+        "Invented thresholds/consensus, missing dated baseline or private-data homework, or ignoring accepted rules.",
     ),
     _q(
         "post_earnings_readout",
         "P2",
         "cold",
         "synthesis",
-        "Update the owner's thesis from one reported quarter using actuals, transcript evidence, and open watch items.",
-        "An invented figure or quote, blurred fact-versus-inference, or no falsifiable next-quarter checks.",
+        "Compare the same verified pre-call bar with actuals; distinguish later context and assess complete material exchanges with source limits.",
+        "Retrospective invented expectations, unsupported non-answer/tone judgments, blurred current versus call evidence, or no public next check.",
     ),
     _q(
         "presentation_brief",
@@ -692,8 +692,8 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "P2",
         "warm",
         "synthesis",
-        "Apply the named analytical lens faithfully to supplied evidence without changing facts.",
-        "A lens that invents evidence or repeats generic analysis unrelated to its frame.",
+        "Apply the named lens with evidence/counter-evidence and explicit missing prior view, model and portfolio context.",
+        "Invented evidence, prior baseline, numeric valuation/size or approved triggers; absent inputs treated as zero.",
     ),
 )
 

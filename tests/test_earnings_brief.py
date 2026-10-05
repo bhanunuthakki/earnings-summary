@@ -33,6 +33,19 @@ from llm_artifact_store import read_current
 
 TODAY = date(2026, 8, 1)
 
+
+def _valid_brief() -> str:
+    return "\n\n".join(
+        f"## {title}\ncanned brief body"
+        for title in (
+            "What this quarter must show",
+            "Numbers to check the moment they print",
+            "What to listen for on the call",
+            "Thesis pressure points",
+        )
+    )
+
+
 _SCHEMA = """
 CREATE TABLE tracked_companies (
     ticker TEXT NOT NULL, name TEXT, list_type TEXT NOT NULL, archived_at TIMESTAMP);
@@ -71,7 +84,7 @@ def _empty_response(*args: object, **kwargs: object) -> str:
 
 
 def _brief_body(*args: object, **kwargs: object) -> str:
-    return "brief body"
+    return _valid_brief()
 
 
 def _lost_persist(*args: object, **kwargs: object) -> tuple[None, bool]:
@@ -119,7 +132,7 @@ def fake_llm(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 
     def _fake(prompt: str, **kwargs: object) -> str:
         calls.append(str(kwargs.get("ticker")))
-        return "**What this quarter must show** — canned brief body."
+        return _valid_brief()
 
     monkeypatch.setattr(earnings_brief, "call_llm", _fake)
     monkeypatch.setattr(earnings_brief, "should_skip_for_budget", _no_op)
@@ -237,7 +250,7 @@ def test_transient_failure_defers_that_ticker_only(
         calls.append(t)
         if t == "WIX":
             raise TimeoutError("transient CLI timeout")
-        return "brief body"
+        return _valid_brief()
 
     monkeypatch.setattr(earnings_brief, "call_llm", _flaky)
     monkeypatch.setattr(earnings_brief, "should_skip_for_budget", _no_op)
@@ -317,7 +330,7 @@ def test_manifest_reconstructs_prompt_without_claiming_fiscal_or_source_identity
 
     def llm(prompt: str, **kwargs: object) -> str:
         prompts.append(prompt)
-        return "brief"
+        return _valid_brief()
 
     monkeypatch.setattr(earnings_brief, "assemble_context", context)
     monkeypatch.setattr(earnings_brief, "call_llm", llm)
@@ -328,7 +341,7 @@ def test_manifest_reconstructs_prompt_without_claiming_fiscal_or_source_identity
     )
     assert artifact is not None and isinstance(artifact.content_json, dict)
     manifest = cast(dict[str, object], artifact.content_json)
-    assert manifest["schema_version"] == "pre_earnings_brief_context@1"
+    assert manifest["schema_version"] == "pre_earnings_brief_context@2"
     assert manifest["ticker"] == "NU"
     assert manifest["as_of"] == TODAY.isoformat()
     assert manifest["expected_earnings_date"] == "2026-08-05"
@@ -342,7 +355,8 @@ def test_manifest_reconstructs_prompt_without_claiming_fiscal_or_source_identity
     blocks = cast(list[dict[str, object]], manifest["blocks"])
     rendered = [str(block["content"]) for block in blocks]
     assert rendered == sections
-    assert str(manifest["prompt_header"]) + "\n\n" + "\n\n".join(rendered) == prompts[0]
+    assert manifest["rendered_prompt"] == prompts[0]
+    assert "Q&A: assess the complete exchange" in prompts[0]
     assert all(
         cast(dict[str, object], block["source"])["identity_status"] == "missing" for block in blocks
     )
@@ -365,7 +379,7 @@ def test_manifest_and_metadata_are_bound_into_artifact_hash(
         return sections
 
     def llm(prompt: str, **kwargs: object) -> str:
-        return "brief"
+        return _valid_brief()
 
     monkeypatch.setattr(earnings_brief, "assemble_context", context)
     monkeypatch.setattr(earnings_brief, "call_llm", llm)
@@ -377,7 +391,12 @@ def test_manifest_and_metadata_are_bound_into_artifact_hash(
     assert artifact is not None
     manifest = cast(dict[str, object], artifact.content_json)
     serialized = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
-    inputs: list[str | bytes] = ["2026-08-05", *sections, serialized]
+    inputs: list[str | bytes] = [
+        "2026-08-05",
+        *sections,
+        serialized,
+        str(manifest["rendered_prompt"]),
+    ]
     assert artifact.input_sha256 == compute_input_sha256(
         prompt_version=artifact.prompt_version, cache_inputs=inputs
     )
@@ -389,6 +408,7 @@ def test_manifest_and_metadata_are_bound_into_artifact_hash(
                 "2026-08-05",
                 *sections,
                 json.dumps(changed, sort_keys=True, separators=(",", ":")),
+                str(manifest["rendered_prompt"]),
             ],
         )
 

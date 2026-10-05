@@ -56,6 +56,13 @@ _POLICY = ResolutionPolicy(
         "source_tier_preference": False,
     },
 )
+
+
+def complete_sealed_assertion_policy() -> ResolutionPolicy:
+    """Return the canonical policy for a scoped caller-owned resolution."""
+    return _POLICY.model_copy(deep=True)
+
+
 _RESOLUTION_SELECTION_POLICY = "canonical-resolution-terminal-at-k-observed-through-o.v1"
 _PROJECTION_SELECTION_POLICY = "canonical-projection-terminal-at-k-observed-through-o.v1"
 

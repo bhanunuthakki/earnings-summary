@@ -383,6 +383,18 @@ def _ingest_database(
     return conn
 
 
+def synthetic_companyfacts_body() -> bytes:
+    """Exact public fixture bytes for downstream capture-continuation tests."""
+    return _body()
+
+
+def synthetic_companyfacts_database(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> sqlite3.Connection:
+    """A migrated synthetic issuer database, without any live authority."""
+    return _ingest_database(tmp_path, migrated_db)
+
+
 def test_current_schema_companyfacts_fact_admission_is_ordered(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

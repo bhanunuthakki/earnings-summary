@@ -548,6 +548,7 @@ class CellSource(BaseModel):
     # Exact admitted report selection. The shared chip prefers this over
     # mutable legacy fact/document references when it is present.
     canonical_reference: FinancialEvidenceReference | None = None
+    source_scope_label: Literal["consolidated", "combined_carve_out"] | None = None
     calculation_reference: FinancialGrowthReference | None = None
 
 

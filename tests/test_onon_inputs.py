@@ -154,6 +154,40 @@ def test_incomplete_or_wrong_signed_reported_population_fails() -> None:
         onon_inputs.calculate_actuals(original.model_copy(update={"inputs": bad}))
 
 
+@pytest.mark.parametrize(
+    "ticker,context,reason",
+    [
+        ("ONON", {}, "onon_recipe_context_unsupported"),
+        (
+            "ONON",
+            {"economic_method": "nonfinancial_operating_company"},
+            "onon_recipe_context_unsupported",
+        ),
+        ("MELI", {}, "onon_ticker_required"),
+    ],
+)
+def test_foreign_recipe_context_rejected_before_source_queries(
+    ticker: str,
+    context: dict[str, object],
+    reason: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = proof().request.model_copy(update={"ticker": ticker, "recipe_context": context})
+
+    def forbidden_source_verification(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("issuer/context refusal must precede source and database queries")
+
+    monkeypatch.setattr(onon_inputs, "verify_model_inputs", forbidden_source_verification)
+    queries: list[str] = []
+    with sqlite3.connect(":memory:") as conn:
+        conn.set_trace_callback(queries.append)
+        with pytest.raises(InputEvidenceError, match=reason):
+            onon_inputs.prepare_onon_inputs(
+                conn, request, effective_inputs=memo_inputs(), as_of=NOW
+            )
+    assert queries == []
+
+
 def test_missing_canonical_bindings_fail_before_snapshot_queries() -> None:
     request = proof().request.model_copy(update={"facts": {}})
     with (

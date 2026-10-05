@@ -15,8 +15,21 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict
 
 from dcf import meli_inputs, onon_inputs
+from dcf.cashflow_inputs import RECIPE as CASHFLOW_RECIPE
+from dcf.cashflow_scenarios import (
+    AnalystCashflowScenarioReview,
+    AnalystCashflowScenarioSource,
+    verify_analyst_cashflow_scenarios,
+    verify_analyst_scenario_source,
+)
 from dcf.grade_evidence import DcfGradeEvidence, load_dcf_grade_evidence
 from dcf.input_evidence import InputEvidenceError, ModelInputReceipt, canonical_digest
+from dcf.input_recipes import (
+    effective_numeric_inputs,
+    model_engine,
+    model_output,
+    verify_model_input_receipt,
+)
 from dcf.scenario_acceptance import ScenarioAcceptance, verify_scenario_acceptance
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import (
@@ -46,6 +59,7 @@ class ValuationReadiness(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     schema_version: Literal["valuation_readiness.v1"] = "valuation_readiness.v1"
     ticker: str
+    purpose: Literal["allocation", "analyst_memo"] = "allocation"
     evaluated_at: str
     ready: bool = False
     status: Literal["ready", "degraded", "missing", "failed"] = "degraded"
@@ -218,11 +232,17 @@ def _legacy_inputs(
     return inputs
 
 
-def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> ValuationReadiness:
+def _assess(
+    conn: sqlite3.Connection,
+    ticker: str,
+    cutoff: datetime,
+    purpose: Literal["allocation", "analyst_memo"],
+) -> ValuationReadiness:
     evidence = load_dcf_grade_evidence(conn, ticker)
     if evidence.status != "available":
         return ValuationReadiness(
             ticker=ticker,
+            purpose=purpose,
             evaluated_at=cutoff.isoformat(),
             status="missing" if evidence.status == "missing" else "failed",
             reason_codes=(
@@ -270,24 +290,30 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
     scenario_reviewed_at: str | None = None
     scenario_review_attribution: Literal["analyst", "owner"] | None = None
     raw_receipt = (evidence.provenance or {}).get("model_input_receipt")
-    if ticker in {"MELI", "ONON"} and raw_receipt is not None:
+    if raw_receipt is not None:
         try:
             receipt = ModelInputReceipt.model_validate(raw_receipt)
             snapshot = evidence.assumption_snapshot or {}
-            model = "meli_platform_sotp" if ticker == "MELI" else "onon_economic_fcff"
-            engine_version = model + "_v1"
             if receipt.request.ticker != ticker:
                 raise InputEvidenceError("input_recipe_issuer_mismatch")
+            if receipt.recipe == onon_inputs.RECIPE:
+                model = "onon_economic_fcff"
+                engine_version = model + "_v1"
+            else:
+                model = model_engine(receipt.recipe)
+                engine_version = (
+                    CASHFLOW_RECIPE if receipt.recipe == CASHFLOW_RECIPE else model + "_v1"
+                )
             if snapshot.get("model") != model or evidence.engine_version != engine_version:
                 raise InputEvidenceError("input_recipe_engine_mismatch")
-            if ticker == "MELI":
-                effective = meli_inputs.effective_numeric_inputs(
-                    _mapping(snapshot.get("effective_model_inputs"))
+            if receipt.recipe != onon_inputs.RECIPE:
+                effective = effective_numeric_inputs(
+                    receipt.recipe, _mapping(snapshot.get("effective_model_inputs"))
                 )
-                verified = meli_inputs.verify_meli_inputs(
+                verified = verify_model_input_receipt(
                     conn, receipt, effective_inputs=effective, as_of=cutoff
                 )
-                replay = meli_inputs.model_output(effective)
+                replay = model_output(receipt.recipe, effective)
             else:
                 effective = onon_inputs.effective_numeric_inputs(
                     _mapping(snapshot.get("effective_model_inputs"))
@@ -365,43 +391,73 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
                 ("equity_value", snapshot.get("equity_value_m")),
                 ("operating_ev", snapshot.get("operating_ev_m")),
             ]
-            if ticker == "MELI":
+            if receipt.recipe == meli_inputs.RECIPE:
                 outputs.append(("credit_equity_value", snapshot.get("credit_equity_value_m")))
             for key, stored in outputs:
                 expected = replay[key]
+                if expected is None and stored is None:
+                    continue
                 if (
                     not isinstance(expected, (float, int))
                     or not isinstance(stored, (float, int))
                     or isinstance(expected, bool)
                     or isinstance(stored, bool)
-                    or (ticker == "ONON" and expected != stored)
+                    or (receipt.recipe == onon_inputs.RECIPE and expected != stored)
                     or not math.isclose(expected, stored, rel_tol=1e-9, abs_tol=1e-6)
                 ):
                     raise InputEvidenceError("persisted_model_output_replay_mismatch")
             if receipt.request.assumption_review is not None:
                 assumption_reviewed_at = receipt.request.assumption_review.reviewed_at.isoformat()
-            raw_acceptance = (evidence.provenance or {}).get("scenario_acceptance")
-            if raw_acceptance is None:
-                reasons.append("scenario_acceptance_unverified")
+            if receipt.recipe == CASHFLOW_RECIPE:
+                if purpose == "allocation":
+                    reasons.append("scenario_acceptance_unverified")
+                else:
+                    scenario_raw = (evidence.provenance or {}).get("analyst_scenario_review")
+                    source_raw = (evidence.provenance or {}).get("analyst_scenario_source")
+                    if scenario_raw is None:
+                        raise InputEvidenceError("analyst_scenario_review_missing")
+                    if source_raw is None or calculated_at is None:
+                        raise InputEvidenceError("analyst_scenario_source_missing")
+                    scenario = AnalystCashflowScenarioReview.model_validate(scenario_raw)
+                    if snapshot.get("analyst_scenario_review") != scenario.model_dump(mode="json"):
+                        raise InputEvidenceError("analyst_scenario_snapshot_mismatch")
+                    verify_analyst_cashflow_scenarios(
+                        scenario,
+                        receipt,
+                        base_effective_inputs=effective,
+                        as_of=cutoff,
+                        calculated_at=calculated_at,
+                    )
+                    verify_analyst_scenario_source(
+                        AnalystCashflowScenarioSource.model_validate(source_raw),
+                        scenario,
+                        receipt,
+                        base_effective_inputs=effective,
+                        calculated_at=calculated_at,
+                    )
             else:
-                if calculated_at is None:
-                    raise InputEvidenceError("scenario_acceptance_model_clock_missing")
-                try:
-                    acceptance = ScenarioAcceptance.model_validate(raw_acceptance)
-                except ValueError as exc:
-                    raise InputEvidenceError("scenario_acceptance_invalid") from exc
-                review = verify_scenario_acceptance(
-                    acceptance,
-                    input_receipt=receipt,
-                    model=model,
-                    engine_version=engine_version,
-                    effective_inputs=effective,
-                    output=_scenario_replay(ticker, effective, replay, snapshot),
-                    as_of=cutoff,
-                    calculated_at=calculated_at,
-                )
-                scenario_reviewed_at = review.reviewed_at.isoformat()
-                scenario_review_attribution = review.attribution
+                raw_acceptance = (evidence.provenance or {}).get("scenario_acceptance")
+                if raw_acceptance is None:
+                    reasons.append("scenario_acceptance_unverified")
+                else:
+                    if calculated_at is None:
+                        raise InputEvidenceError("scenario_acceptance_model_clock_missing")
+                    try:
+                        acceptance = ScenarioAcceptance.model_validate(raw_acceptance)
+                    except ValueError as exc:
+                        raise InputEvidenceError("scenario_acceptance_invalid") from exc
+                    review = verify_scenario_acceptance(
+                        acceptance,
+                        input_receipt=receipt,
+                        model=model,
+                        engine_version=engine_version,
+                        effective_inputs=effective,
+                        output=_scenario_replay(ticker, effective, replay, snapshot),
+                        as_of=cutoff,
+                        calculated_at=calculated_at,
+                    )
+                    scenario_reviewed_at = review.reviewed_at.isoformat()
+                    scenario_review_attribution = review.attribution
         except sqlite3.Error:
             reasons.append("model_input_receipt_query_failed")
         except (ValueError, RuntimeError) as exc:
@@ -428,6 +484,7 @@ def _assess(conn: sqlite3.Connection, ticker: str, cutoff: datetime) -> Valuatio
     periods = [item.period_end for item in inputs if item.status == "admitted" and item.period_end]
     return ValuationReadiness(
         ticker=ticker,
+        purpose=purpose,
         evaluated_at=cutoff.isoformat(),
         ready=verified_population and not reasons,
         status=(
@@ -489,7 +546,11 @@ def _scenario_replay(
 
 
 def load_valuation_readiness(
-    conn: sqlite3.Connection, ticker: str, *, as_of: datetime
+    conn: sqlite3.Connection,
+    ticker: str,
+    *,
+    as_of: datetime,
+    purpose: Literal["allocation", "analyst_memo"] = "allocation",
 ) -> ValuationReadiness:
     """Assess persisted evidence under one read snapshot; no writes/network/fallback.
 
@@ -500,6 +561,8 @@ def load_valuation_readiness(
     """
     if as_of.tzinfo is None or as_of.utcoffset() is None:
         raise ValueError("as_of must have a timezone")
+    if purpose not in {"allocation", "analyst_memo"}:
+        raise ValueError("valuation readiness purpose is unsupported")
     cutoff = as_of.astimezone(UTC)
     ticker = ticker.upper()
     original_factory = conn.row_factory
@@ -508,10 +571,11 @@ def load_valuation_readiness(
         owns_snapshot = not conn.in_transaction
         if owns_snapshot:
             conn.execute("BEGIN")
-        return _assess(conn, ticker, cutoff)
+        return _assess(conn, ticker, cutoff, purpose)
     except sqlite3.Error:
         return ValuationReadiness(
             ticker=ticker,
+            purpose=purpose,
             evaluated_at=cutoff.isoformat(),
             status="failed",
             reason_codes=("valuation_evidence_query_failed",),

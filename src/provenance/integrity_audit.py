@@ -28,6 +28,7 @@ from pydantic import (
 )
 
 from ask.grounded_retrieval import GroundedAskItem, ask_item_bundle_sha256
+from filings.inline_xbrl_processor import FILING_XBRL_PROTOCOL_SQL, ProcessorBundleManifest
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.document_processing_evidence import (
     verify_document_processing_evidence,
@@ -622,10 +623,10 @@ def _audit_filing_xbrl_processor_closure(
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
         query=(
-            "SELECT processor_artifact_id FROM filing_xbrl_processor_artifacts "
+            "SELECT processor_artifact_id FROM filing_xbrl_processor_artifacts artifact "
             "WHERE arelle_version<>'2.39.8' OR edgar_version<>'26.1' "
             "OR xule_version<>'30052' "
-            "OR bridge_protocol_version<>'filing-xbrl-bridge.v1'"
+            f"OR NOT {FILING_XBRL_PROTOCOL_SQL}"  # nosec B608 -- closed processor contract
         ),
     )
     _query_finding(
@@ -768,6 +769,9 @@ def _audit_filing_xbrl_processor_closure(
                 and execution["sandbox_contract_version"] == "earnings-xbrl-os-sandbox.v1"
                 and execution["isolated_python"] is True
             )
+            if str(artifact[5]) == "filing-xbrl-bridge.v2":
+                typed_manifest = ProcessorBundleManifest.model_validate_json(manifest_json)
+                exact = exact and typed_manifest.canonical_json == manifest_json
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             exact = False
         if not exact:

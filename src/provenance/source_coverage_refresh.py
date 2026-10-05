@@ -17,6 +17,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from filings.inline_xbrl_processor import FILING_XBRL_PROTOCOL_SQL
 from provenance.fulltext_extractor_identity import (
     FULLTEXT_EXTRACTOR_NAME,
     resolve_fulltext_extractor_identity,
@@ -603,7 +604,7 @@ def _approved_filing_xbrl_run(
             f"AND {fact_predicate} "  # nosec B608 -- closed internal predicate
             "AND artifact.arelle_version='2.39.8' AND artifact.edgar_version='26.1' "
             "AND artifact.xule_version='30052' "
-            "AND artifact.bridge_protocol_version='filing-xbrl-bridge.v1' "
+            f"AND {FILING_XBRL_PROTOCOL_SQL} "  # nosec B608 -- closed processor contract
             "AND json_extract(artifact.canonical_manifest_json,"
             "'$.qualification.profile')='sec-inline-xbrl-investor-grade.v1' "
             "AND json_extract(artifact.canonical_manifest_json,"

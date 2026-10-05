@@ -146,7 +146,7 @@ def test_apply_captures_evidence_and_exact_replay_creates_nothing(
     )
     conn.commit()
 
-    assert first.records_created == 18
+    assert first.records_created == 19
     assert second.records_created == 0
     row = conn.execute(
         "SELECT i.issuer_id, i.normalized_value, r.outcome "
@@ -176,11 +176,12 @@ def test_apply_captures_evidence_and_exact_replay_creates_nothing(
     ).fetchone() == ("sec_cik", "0000123456")
     assert conn.execute(
         "SELECT authority_kind, document_family, obligation_state "
-        "FROM source_obligation_revisions ORDER BY document_family"
+        "FROM source_obligation_revisions ORDER BY document_family,authority_kind"
     ).fetchall() == [
         ("sec_edgar", "continuous_disclosure", "required"),
         ("issuer_publisher", "issuer_earnings_materials", "required"),
         ("issuer_publisher", "issuer_financial_statements", "required"),
+        ("sec_edgar", "issuer_financial_statements", "required"),
         ("issuer_publisher", "issuer_presentations", "required"),
         ("sec_edgar", "operating_company_periodic", "required"),
     ]
@@ -242,7 +243,7 @@ def test_new_source_observation_reuses_immutable_reporting_entity(
         "SELECT revision, supersedes_resolution_id IS NOT NULL "
         "FROM reporting_entity_identifier_resolution_outcomes ORDER BY revision"
     ).fetchall() == [(1, 0), (2, 1)]
-    assert conn.execute("SELECT COUNT(*) FROM source_obligation_revisions").fetchone() == (5,)
+    assert conn.execute("SELECT COUNT(*) FROM source_obligation_revisions").fetchone() == (6,)
     conn.close()
 
 

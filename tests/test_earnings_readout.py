@@ -14,7 +14,16 @@ import pytest
 
 
 def _readout_text(*_args: object, **_kwargs: object) -> str:
-    return "readout"
+    return "\n\n".join(
+        f"## {title}\nSynthetic readout"
+        for title in (
+            "Quarter in one line",
+            "What changed versus expectations",
+            "What management said",
+            "Thesis update",
+            "What to verify next quarter",
+        )
+    )
 
 
 def _no_budget_skip(*_args: object, **_kwargs: object) -> None:
@@ -188,7 +197,7 @@ def test_scheduled_generation_is_portfolio_only_and_idempotent(
 
     def capture_llm(prompt: str, **kwargs: object) -> str:
         calls.append(str(kwargs["ticker"]))
-        return "# Persisted readout"
+        return _readout_text()
 
     monkeypatch.setattr(earnings_readout, "call_llm", capture_llm)
     monkeypatch.setattr(earnings_readout, "should_skip_for_budget", _no_budget_skip)
@@ -220,7 +229,7 @@ def test_evaluation_name_generates_only_when_explicitly_requested(
 
     def capture_llm(prompt: str, **kwargs: object) -> str:
         calls.append(str(kwargs["ticker"]))
-        return "# NU readout"
+        return _readout_text()
 
     monkeypatch.setattr(earnings_readout, "call_llm", capture_llm)
     monkeypatch.setattr(earnings_readout, "should_skip_for_budget", _no_budget_skip)
@@ -265,7 +274,7 @@ def test_readout_persists_ordered_context_manifest_and_marks_missing_identity(
     assert artifact is not None
     assert isinstance(artifact.content_json, dict)
     manifest = cast(dict[str, object], artifact.content_json)
-    assert manifest["schema_version"] == "post_earnings_readout_context@2"
+    assert manifest["schema_version"] == "post_earnings_readout_context@3"
     assert manifest["grounding_status"] == "partial"
     raw_blocks = manifest["blocks"]
     assert isinstance(raw_blocks, list)
@@ -279,16 +288,21 @@ def test_readout_persists_ordered_context_manifest_and_marks_missing_identity(
         "call_tone_change",
         "current_valuation_stance",
         "earnings_call_transcript",
+        "saved_pre_call_baseline",
+        "context_time_limits",
     ]
     assert all(block["content"] for block in blocks)
     assert all(block["content_status"] == "present" for block in blocks)
-    transcript = blocks[-1]
+    transcript = blocks[7]
     transcript_source = transcript["source"]
     assert isinstance(transcript_source, dict)
     typed_transcript_source = cast(dict[str, object], transcript_source)
     assert typed_transcript_source["source_doc_id"] == 102
     assert typed_transcript_source["identity_status"] == "present"
-    block_sources = [block["source"] for block in blocks[:-1]]
+    block_sources = [
+        block["source"]
+        for block in [block for block in blocks if block["kind"] != "earnings_call_transcript"]
+    ]
     assert all(isinstance(source, dict) for source in block_sources)
     typed_block_sources = cast(list[dict[str, object]], block_sources)
     assert any(source["identity_status"] == "missing" for source in typed_block_sources)
@@ -321,12 +335,12 @@ def test_readout_manifest_preserves_empty_blocks_and_fails_grounding_closed(
     assert artifact is not None
     manifest = cast(dict[str, object], artifact.content_json)
     assert isinstance(manifest, dict)
-    assert manifest["schema_version"] == "post_earnings_readout_context@2"
+    assert manifest["schema_version"] == "post_earnings_readout_context@3"
     assert manifest["grounding_status"] == "partial"
     raw_blocks = manifest["blocks"]
     assert isinstance(raw_blocks, list)
     blocks = cast(list[dict[str, object]], raw_blocks)
-    assert len(blocks) == 8
+    assert len(blocks) == 10
     empty_kinds = {str(block["kind"]) for block in blocks if block["content_status"] == "missing"}
     assert empty_kinds == {
         "actuals_vs_consensus",
@@ -409,7 +423,7 @@ def test_budget_skip_prevents_on_request_token_burn(
 
     def capture_llm(*args: object, **kwargs: object) -> str:
         calls.append("burn")
-        return "readout"
+        return _readout_text()
 
     monkeypatch.setattr(earnings_readout, "call_llm", capture_llm)
     monkeypatch.setattr(earnings_readout, "should_skip_for_budget", _budget_skip)
@@ -441,7 +455,7 @@ def test_exact_target_uses_requested_quarter_not_latest_and_has_own_cache(
 
     def capture_llm(prompt: str, **kwargs: object) -> str:
         prompts.append(prompt)
-        return "readout"
+        return _readout_text()
 
     monkeypatch.setattr(earnings_readout, "call_llm", capture_llm)
     monkeypatch.setattr(earnings_readout, "should_skip_for_budget", _no_budget_skip)

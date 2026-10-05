@@ -1,13 +1,13 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Literal, Protocol
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 import provenance.population_document_processing as population
 from provenance.population_completeness import PopulationTemporalScope
@@ -26,6 +26,48 @@ from provenance.population_document_processing import (
 from provenance.population_document_processing import (
     build_document_processing_receipt as _build_document_processing_receipt,
 )
+
+
+class _CheckpointFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        bounded: bool,
+        prior_cursor: str | None,
+        processed: int,
+        total: int,
+        sealed: int,
+        blocker_count: int = ...,
+    ) -> DocumentProcessingCheckpoint: ...
+
+
+class _RetryCursor(Protocol):
+    def __call__(
+        self, *, prior_cursor: str | None, attempted_id: str, succeeded: bool
+    ) -> str | None: ...
+
+
+model_sha: Callable[[BaseModel], str] = getattr(population, "_model_sha")
+document_receipt_sha: Callable[[DocumentProcessingOperationReceipt], str] = getattr(
+    population, "_document_receipt_sha"
+)
+document_checkpoint: _CheckpointFactory = getattr(population, "_document_checkpoint")
+seal_complete_snapshots: Callable[
+    [sqlite3.Connection, dict[str, tuple[str, ...]], datetime, datetime], None
+] = getattr(population, "_seal_complete_snapshots")
+reporting_entity_scope_rows: Callable[
+    [sqlite3.Connection, tuple[ReportingDocumentDecision, ...]], list[list[object]]
+] = getattr(population, "_reporting_entity_scope_rows")
+document_blob_scope_rows: Callable[[sqlite3.Connection, tuple[str, ...]], list[list[object]]] = (
+    getattr(population, "_document_blob_scope_rows")
+)
+retry_cursor_after_attempt: _RetryCursor = getattr(population, "_retry_cursor_after_attempt")
+ensure_expected_document_binding: Callable[
+    [sqlite3.Connection, ReportingDocumentDecision, datetime, datetime], bool
+] = getattr(population, "_ensure_expected_document_binding")
+ensure_document_family_obligations: Callable[
+    [sqlite3.Connection, tuple[ReportingDocumentDecision, ...], datetime, datetime], int
+] = getattr(population, "_ensure_document_family_obligations")
 
 
 def build_test_document_processing_receipt(
@@ -164,8 +206,8 @@ def test_document_receipt_rejects_self_rehashed_plan_tamper() -> None:
         update={
             "request": forged_request,
             "result": forged_result,
-            "request_sha256": population._model_sha(forged_request),
-            "result_sha256": population._model_sha(forged_result),
+            "request_sha256": model_sha(forged_request),
+            "result_sha256": model_sha(forged_result),
             "operation_id": population.document_processing_operation_id(
                 database_instance_id=valid.database_instance_id,
                 request=forged_request,
@@ -174,7 +216,7 @@ def test_document_receipt_rejects_self_rehashed_plan_tamper() -> None:
             ),
         }
     )
-    forged = forged.model_copy(update={"receipt_sha256": population._document_receipt_sha(forged)})
+    forged = forged.model_copy(update={"receipt_sha256": document_receipt_sha(forged)})
 
     with pytest.raises(ValidationError, match="result plan commitment"):
         DocumentProcessingOperationReceipt.model_validate(forged.model_dump(mode="json"))
@@ -234,7 +276,7 @@ def test_bounded_apply_requires_dry_run_commitments() -> None:
 
 
 def test_bounded_checkpoint_never_claims_safe_to_seal() -> None:
-    checkpoint = population._document_checkpoint(
+    checkpoint = document_checkpoint(
         bounded=True,
         prior_cursor="obligation-1",
         processed=2,
@@ -249,7 +291,7 @@ def test_bounded_checkpoint_never_claims_safe_to_seal() -> None:
 
 
 def test_first_item_failure_does_not_claim_resumable_checkpoint() -> None:
-    checkpoint = population._document_checkpoint(
+    checkpoint = document_checkpoint(
         bounded=True,
         prior_cursor=None,
         processed=0,
@@ -336,7 +378,7 @@ def test_snapshot_batch_preflights_every_issuer_before_first_write(
     monkeypatch.setattr(population, "seal_processing_snapshot", seal_stub)
 
     with pytest.raises(ValueError, match="issuer-b"):
-        population._seal_complete_snapshots(
+        seal_complete_snapshots(
             conn,
             documents,
             datetime(2026, 7, 29, tzinfo=UTC),
@@ -389,7 +431,7 @@ def test_snapshot_batch_rolls_back_every_issuer_when_later_seal_fails(
     monkeypatch.setattr(population, "seal_processing_snapshot", seal_stub)
 
     with pytest.raises(ValueError, match="second issuer"):
-        population._seal_complete_snapshots(
+        seal_complete_snapshots(
             conn,
             documents,
             datetime(2026, 7, 29, tzinfo=UTC),
@@ -417,9 +459,9 @@ def test_read_set_binds_all_reporting_entity_fallback_candidates() -> None:
         reporting_entity_id=None,
     )
 
-    before = population._reporting_entity_scope_rows(conn, (decision,))
+    before = reporting_entity_scope_rows(conn, (decision,))
     conn.execute("INSERT INTO reporting_entities VALUES ('entity-2','issuer','second')")
-    after = population._reporting_entity_scope_rows(conn, (decision,))
+    after = reporting_entity_scope_rows(conn, (decision,))
 
     assert before != after
     assert len(before) == 1
@@ -447,13 +489,13 @@ def test_read_set_binds_selected_blob_metadata_but_excludes_unrelated_blobs() ->
         """
     )
 
-    original = population._document_blob_scope_rows(conn, ("document",))
+    original = document_blob_scope_rows(conn, ("document",))
     conn.execute(
         "UPDATE evidence_content_blobs SET media_type='text/plain' WHERE sha256='aaaaaaaa'"
     )
-    selected_change = population._document_blob_scope_rows(conn, ("document",))
+    selected_change = document_blob_scope_rows(conn, ("document",))
     conn.execute("UPDATE evidence_content_blobs SET media_type='image/png' WHERE sha256='bbbbbbbb'")
-    unrelated_change = population._document_blob_scope_rows(conn, ("document",))
+    unrelated_change = document_blob_scope_rows(conn, ("document",))
 
     assert selected_change != original
     assert unrelated_change == selected_change
@@ -672,7 +714,7 @@ def test_document_verifier_ignores_snapshot_recorded_after_observation() -> None
 
 def test_failed_disposition_keeps_cursor_at_last_success() -> None:
     assert (
-        population._retry_cursor_after_attempt(
+        retry_cursor_after_attempt(
             prior_cursor="obligation-1",
             attempted_id="obligation-2",
             succeeded=False,
@@ -891,7 +933,7 @@ def test_existing_binding_requires_exact_immutable_replay() -> None:
     )
     try:
         with pytest.raises(ValueError, match="binding replay changed immutable values"):
-            population._ensure_expected_document_binding(
+            ensure_expected_document_binding(
                 conn,
                 decision,
                 cutoff,
@@ -1014,3 +1056,88 @@ def test_ambiguous_ir_artifact_blocks_instead_of_silent_inclusion_or_exclusion()
     assert outcome == "unresolved"
     assert family is None
     assert reason == "unclassified_ir_reporting_document"
+
+
+@pytest.mark.parametrize("form", ["10-12B", "10-12B/A"])
+def test_registration_financial_processing_is_a_governed_registration_package(form: str) -> None:
+    assert classify_reporting_document(
+        source_kind="sec_filing", document_type="filing", form_type=form
+    ) == (
+        "governed_reporting",
+        "issuer_financial_statements",
+        "governed_registration_financial_package",
+    )
+    assert classify_reporting_document(
+        source_kind="sec_filing", document_type="filing", form_type="10-12G"
+    ) == ("excluded_supporting", None, "sec_form_outside_reporting_policy")
+
+
+def test_registration_processing_duty_does_not_reuse_publisher_duty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from provenance.reporting_entity_registry import (
+        PersistResult,
+        RegistryRecord,
+        ReportingEntityRegistry,
+        SourceObligationRevision,
+    )
+
+    cutoff = datetime(2026, 10, 4, tzinfo=UTC)
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(
+        "CREATE TABLE issuer_entities (issuer_id TEXT,entity_kind TEXT);"
+        "CREATE TABLE source_obligation_revisions (obligation_revision_id TEXT,"
+        "obligation_key TEXT,revision INTEGER,issuer_id TEXT,reporting_entity_id TEXT,"
+        "document_family TEXT,obligation_state TEXT,active_from TEXT,active_to TEXT,"
+        "knowledge_at TEXT,recorded_at TEXT,authority_kind TEXT,completeness_rule TEXT);"
+    )
+    conn.execute("INSERT INTO issuer_entities VALUES ('issuer','operating_company')")
+    conn.execute(
+        "INSERT INTO source_obligation_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "publisher",
+            "publisher",
+            1,
+            "issuer",
+            "reporting",
+            "issuer_financial_statements",
+            "required",
+            cutoff.isoformat(),
+            None,
+            cutoff.isoformat(),
+            cutoff.isoformat(),
+            "issuer_publisher",
+            "publisher_surface_exhaustion",
+        ),
+    )
+    written: list[SourceObligationRevision] = []
+
+    def capture(_self: ReportingEntityRegistry, record: RegistryRecord) -> PersistResult:
+        assert isinstance(record, SourceObligationRevision)
+        written.append(record)
+        return PersistResult(record_id=record.obligation_revision_id, created=True)
+
+    monkeypatch.setattr(ReportingEntityRegistry, "persist", capture)
+    decision = ReportingDocumentDecision(
+        expected_document_id="expected-registration",
+        issuer_id="issuer",
+        outcome="governed_reporting",
+        reason_code="governed_registration_financial_package",
+        document_family="issuer_financial_statements",
+        coverage_status="captured",
+        document_version_id="document",
+        reporting_entity_id="reporting",
+    )
+    try:
+        assert ensure_document_family_obligations(conn, (decision,), cutoff, cutoff) == 1
+        assert len(written) == 1
+        assert written[0].authority_kind == "sec_edgar"
+        assert written[0].document_family == "issuer_financial_statements"
+        assert written[0].completeness_rule == "regulator_inventory"
+        assert written[0].obligation_key == "reporting:sec_edgar:issuer_financial_statements"
+        conn.execute("UPDATE issuer_entities SET entity_kind='fund'")
+        with pytest.raises(ValueError, match="requires_operating_company"):
+            ensure_document_family_obligations(conn, (decision,), cutoff, cutoff)
+        assert len(written) == 1
+    finally:
+        conn.close()

@@ -183,3 +183,75 @@ def test_base_limits_fail_closed_without_a_valid_comparison(tmp_path: Path) -> N
         static_quality_gate.load_base_ceilings(tmp_path, tmp_path / "config.json", "--help")
     with pytest.raises(StaticQualityGateError, match="comparison base"):
         static_quality_gate.load_base_ceilings(tmp_path, tmp_path / "config.json", "missing")
+
+
+def test_local_gate_includes_new_retained_sources_without_staging(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    source = tmp_path / "src" / "existing.py"
+    source.parent.mkdir()
+    source.write_text("value = 1\n", encoding="utf-8")
+    config = tmp_path / "ceilings.json"
+    config.write_text(
+        json.dumps(
+            {
+                "schema_version": "bha-105.v1",
+                "pyright_diagnostics": {"src": 0},
+                "suppressions": {"src": 0},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / ".gitignore").write_text("src/ignored.py\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-qm",
+            "baseline",
+        ],
+        cwd=tmp_path,
+        check=True,
+    )
+    (source.parent / "new.py").write_text("value = 2\n", encoding="utf-8")
+    (source.parent / "ignored.py").write_text("value = 3\n", encoding="utf-8")
+    excluded = tmp_path / "alembic" / "versions" / "new.py"
+    excluded.parent.mkdir(parents=True)
+    excluded.write_text("value = 4\n", encoding="utf-8")
+    receipt = tmp_path / "pyright.json"
+    receipt.write_text(
+        json.dumps({"summary": {"filesAnalyzed": 2}, "generalDiagnostics": []}),
+        encoding="utf-8",
+    )
+    assert (
+        static_quality_gate.main(
+            [
+                "--repo-root",
+                str(tmp_path),
+                "--config",
+                str(config),
+                "--base",
+                "HEAD",
+                "--pyright-json",
+                str(receipt),
+            ]
+        )
+        == 0
+    )
+    assert "2 retained files" in capsys.readouterr().out
+    index = subprocess.run(
+        ["git", "ls-files", "--", "src/new.py"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert index.stdout == ""

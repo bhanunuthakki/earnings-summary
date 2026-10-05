@@ -213,6 +213,92 @@ def test_qualified_bundle_manifest_is_exact_and_fail_closed_by_default() -> None
     )
 
 
+def _measure_output(tmp_path: Path) -> dict[str, object]:
+    output = _fact_output(_request(tmp_path), "b" * 64)
+    output["bridge_protocol_version"] = "filing-xbrl-bridge.v2"
+    facts = cast(list[dict[str, object]], output["facts"])
+    fact = facts[0]
+    raw: dict[str, object] = {
+        "concept": "Revenue",
+        "value": "10",
+        "unit_id": "u17",
+        "unit_measures": {
+            "contract": "xbrl-measures/v1",
+            "numerator": [["http://www.xbrl.org/2003/iso4217", "USD"]],
+            "denominator": [["http://www.xbrl.org/2003/instance", "shares"]],
+        },
+    }
+    fact.update(
+        {
+            "canonical_raw_fact": raw,
+            "raw_fact_sha256": _sha(raw),
+            "normalization_outcome": "normalized",
+            "normalized_fact": {
+                "source_unit_id": "u17",
+                "unit_key": "USD/shares",
+                "currency": "USD",
+                "value_kind": "numeric",
+            },
+            "rejection_reason_code": None,
+            "rejection_detail": None,
+        }
+    )
+    fact["source_entry_sha256"] = _sha(
+        {
+            key: fact[key]
+            for key in (
+                "accession_number",
+                "observed_cik",
+                "package_member_blob_sha256",
+                "package_member_ordinal",
+                "raw_fact_sha256",
+                "source_locator_sha256",
+            )
+        }
+    )
+    output["raw_fact_set_sha256"] = _sha(
+        [
+            {
+                key: fact[key]
+                for key in (
+                    "input_ordinal",
+                    "raw_fact_sha256",
+                    "source_entry_sha256",
+                    "source_locator_sha256",
+                )
+            }
+        ]
+    )
+    return output
+
+
+def test_host_reconstructs_v2_divided_unit_from_exact_raw_measures(tmp_path: Path) -> None:
+    result = processor_module.InlineXbrlProcessorResult.model_validate(_measure_output(tmp_path))
+    assert result.facts[0].normalized_fact is not None
+    assert result.facts[0].normalized_fact["unit_key"] == "USD/shares"
+
+
+@pytest.mark.parametrize(
+    "field,value", [("unit_key", "USD"), ("currency", "EUR"), ("source_unit_id", "USD")]
+)
+def test_host_rejects_v2_normalization_that_drops_source_unit_semantics(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    output = _measure_output(tmp_path)
+    facts = cast(list[dict[str, object]], output["facts"])
+    normalized = cast(dict[str, object], facts[0]["normalized_fact"])
+    normalized[field] = value
+    with pytest.raises(ValueError, match="unit"):
+        processor_module.InlineXbrlProcessorResult.model_validate(output)
+
+
+def test_legacy_protocol_cannot_claim_measure_derived_v2_units(tmp_path: Path) -> None:
+    output = _measure_output(tmp_path)
+    output["bridge_protocol_version"] = "filing-xbrl-bridge.v1"
+    with pytest.raises(ValueError, match="legacy bridge"):
+        processor_module.InlineXbrlProcessorResult.model_validate(output)
+
+
 def test_public_runner_refuses_caller_constructed_manifest(tmp_path: Path) -> None:
     manifest = load_processor_bundle_manifest(ROOT / "config" / "filing_xbrl_processor_bundle.json")
     caller_claimed_bundle = cast(ApprovedProcessorBundle, manifest)
