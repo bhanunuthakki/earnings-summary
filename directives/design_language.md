@@ -120,7 +120,7 @@ Recipes cover semantics, keyboard access, focus, labels, contrast, non-color cue
 
 ### Compositional restraint
 
-The shared `frontend-quality` procedure owns the generic rubric. This project narrows it:
+`frontend-quality` owns the generic rubric. This project narrows it:
 
 - Follow §3 typography and color rules. Decorative left rails and ornamental variation are not recipes.
 - Start in normal flow with registered family recipes. Each nested box needs a named semantic,
@@ -150,7 +150,7 @@ Those contracts may specify behavior, data, and state. They do not authorize a n
 
 ## 6. Extension protocol
 
-For a legitimate new visual need:
+For a new visual need:
 
 1. Identify the owning global or family master. If none exists, add one typed
    master entry rather than styling the consumer.
@@ -176,7 +176,7 @@ Run the composed guard after visual changes:
 python scripts/check_design_sync.py
 ```
 
-For conformance, inspect the deterministic receipt:
+Inspect the deterministic conformance receipt:
 
 ```powershell
 python execution/verify_design_conformance.py --check --route-canaries
