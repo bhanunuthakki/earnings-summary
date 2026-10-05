@@ -1,5 +1,5 @@
 {
-  "review_note": "Current main2b6 reviewed source population is preserved. Root inspected combined PR1650 physical source-reader, annual-period and entrypoint changes; the new scenario digest and explicit source-root controls also received independent advisory review. Exact changed source commitments: .tmp/onon-current-main-integration-v1/source-review-v1.json. Delivery gates pending; no native, financial admission or decision-grade approval.",
+  "review_note": "Root inspected the Operations guide changes for retained-run read-only verification, strict run-ID validation, public aliases, and the guide's physical source-reader/reporting controls. Local delivery gates remain pending. Historical completed source-review context: Current main2b6 reviewed source population is preserved. Root inspected combined PR1650 physical source-reader, annual-period and entrypoint changes; the new scenario digest and explicit source-root controls also received independent advisory review. Exact changed source commitments: .tmp/onon-current-main-integration-v1/source-review-v1.json. Delivery gates pending; no native, financial admission or decision-grade approval.",
   "schema_version": 1,
   "sources": [
     {
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "a8e4a5b5d01b63a1ceed904d6aa0cd3adde5d7c46c7b861e3f63fc2f81628e7a"
+      "sha256": "7922d57b61a070a9bd88d68d58d443275bcaddbe17cb45633646f65e23be7ce2"
     },
     {
       "path": "directives/post_earnings_readout.md",
