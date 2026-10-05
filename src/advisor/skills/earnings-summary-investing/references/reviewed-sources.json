@@ -1,5 +1,5 @@
 {
-  "review_note": "Integrated main reader now returns an exact table or series point. Reviewed memo verifiers preserve the original table-only numeric/display/comparability contract and explicitly refuse unsupported series references at all entry sites; top-level receipt retains the degraded reason. Five failure-first cases and50 regression tests pass; no reader fallback, invented unit conversion or provenance cast.",
+  "review_note": "Reviewed static snapshot-membership SQL successor: both dynamic placeholder lists now use constant json_each SELECTs with a bound JSON array. Exact snapshot selection, extraction disposition seals, source document identity and cutoff checks remain intact. 50 memo tests and strict Pyright passed; Bandit 1.9.4 reports no medium or high findings on the changed file. No model, source-completeness or native Windows qualification is inferred.",
   "schema_version": 1,
   "sources": [
     {
@@ -448,7 +448,7 @@
     },
     {
       "path": "src/research/decision_brief.py",
-      "sha256": "66c0c8f6b359496db6bb40753ca5a9b795e29534a443954f929276b420baf642"
+      "sha256": "6c6ee6d24212c9a6fac0edf437308295d3a0dee10ad36d7dd71556df9fc1ba90"
     },
     {
       "path": "src/research/decision_brief_workflow.py",

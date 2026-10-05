@@ -8,6 +8,7 @@ references and valuation replay to the exact retained reader body.
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -344,7 +345,7 @@ def verify_memo_snapshot_node(
     snapshot: ResearchSnapshotRequest,
     cutoff: datetime,
 ) -> None:
-    marks = ",".join("?" for _ in snapshot.processing_snapshot_ids)
+    processing_snapshot_ids = json.dumps(snapshot.processing_snapshot_ids)
     row = conn.execute(
         "SELECT node.recorded_at,run.outcome,run.document_version_id FROM evidence_nodes node "
         "JOIN evidence_extraction_runs run USING(extraction_run_id) "
@@ -358,8 +359,8 @@ def verify_memo_snapshot_node(
         "WHERE node.node_id=? AND output.extraction_run_id=run.extraction_run_id "
         "AND output.document_version_id=run.document_version_id "
         "AND member.document_version_id=run.document_version_id "
-        f"AND member.processing_snapshot_id IN ({marks})",
-        (node_id, *snapshot.processing_snapshot_ids),
+        "AND member.processing_snapshot_id IN (SELECT value FROM json_each(?))",
+        (node_id, processing_snapshot_ids),
     ).fetchone()
     if row is None:
         # Native numeric nodes require the exact retained raw fact and the
@@ -375,8 +376,8 @@ def verify_memo_snapshot_node(
             "AND disposition.evidence_id=output.disposition_seal_id "
             "JOIN document_processing_snapshot_members member USING(processing_disposition_id) "
             "WHERE node.node_id=? AND member.document_version_id=run.document_version_id "
-            f"AND member.processing_snapshot_id IN ({marks})",
-            (node_id, *snapshot.processing_snapshot_ids),
+            "AND member.processing_snapshot_id IN (SELECT value FROM json_each(?))",
+            (node_id, processing_snapshot_ids),
         ).fetchone()
     if row is None or str(row[2]) not in snapshot.research_universe.document_version_ids:
         raise MemoEvidenceError("memo_claim_outside_exact_processing_snapshot")
