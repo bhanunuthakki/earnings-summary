@@ -6,6 +6,7 @@ excludes only explicit policy dispositions; unresolved expectations stay visible
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime
 from typing import Literal
@@ -49,10 +50,8 @@ def reporting_document_scope(
 ]:
     if inventory_snapshot_ids is not None and not inventory_snapshot_ids:
         raise ValueError("reporting projection requires at least one inventory snapshot")
-    snapshot_filter = (
-        " AND expected.snapshot_id IN (" + ",".join("?" for _ in inventory_snapshot_ids) + ")"
-        if inventory_snapshot_ids is not None
-        else ""
+    snapshot_ids_json = (
+        json.dumps(inventory_snapshot_ids) if inventory_snapshot_ids is not None else None
     )
     cursor = conn.cursor()
     cursor.row_factory = sqlite3.Row
@@ -89,8 +88,8 @@ def reporting_document_scope(
         "LEFT JOIN v_evidence_document_versions_canonical canonical "
         "ON canonical.document_version_id=coverage.document_version_id "
         "WHERE datetime(expected.recorded_at)<=datetime(?) "
-        + snapshot_filter
-        + " ORDER BY expected.issuer_id,expected.expected_document_key",
+        "AND (? IS NULL OR expected.snapshot_id IN (SELECT value FROM json_each(?))) "
+        "ORDER BY expected.issuer_id,expected.expected_document_key",
         (
             _db_time(cutoff),
             _db_time(observed_through),
@@ -101,7 +100,8 @@ def reporting_document_scope(
             _db_time(cutoff),
             _db_time(observed_through),
             _db_time(observed_through),
-            *(inventory_snapshot_ids or ()),
+            snapshot_ids_json,
+            snapshot_ids_json,
         ),
     ).fetchall()
     grouped: dict[str, list[str]] = {}
@@ -168,11 +168,6 @@ def reporting_document_scope(
         if reporting_entity_id is None:
             raise ValueError("governed reporting document lacks a canonical reporting entity")
         grouped.setdefault(str(row[1]), []).append(document_version_id)
-    inventory_filter = (
-        " AND inventory.snapshot_id IN (" + ",".join("?" for _ in inventory_snapshot_ids) + ")"
-        if inventory_snapshot_ids is not None
-        else ""
-    )
     incomplete_inventory_count = int(
         conn.execute(
             "SELECT COUNT(*) FROM source_inventory_snapshots inventory "
@@ -182,11 +177,13 @@ def reporting_document_scope(
             "AND newer.revision>inventory.revision "
             "AND datetime(newer.recorded_at)<=datetime(?)) "
             "AND NOT EXISTS (SELECT 1 FROM v_source_inventory_sealed_complete complete "
-            "WHERE complete.snapshot_id=inventory.snapshot_id)" + inventory_filter,
+            "WHERE complete.snapshot_id=inventory.snapshot_id) "
+            "AND (? IS NULL OR inventory.snapshot_id IN (SELECT value FROM json_each(?)))",
             (
                 _db_time(observed_through),
                 _db_time(observed_through),
-                *(inventory_snapshot_ids or ()),
+                snapshot_ids_json,
+                snapshot_ids_json,
             ),
         ).fetchone()[0]
     )
