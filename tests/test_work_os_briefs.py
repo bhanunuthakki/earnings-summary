@@ -309,7 +309,7 @@ def test_brief_library_returns_stable_indexed_artifacts(
             "status": "available",
             "open_url": "/reports/NU?artifact_id=" + body.artifact_id,
             "body_url": f"/api/work-os/briefs/{body.artifact_id}/body",
-            "standalone_url": "/reports/NU?artifact_id=" + body.artifact_id,
+            "standalone_url": "/reports/NU?artifact_id=" + body.artifact_id + "&standalone=1",
             "section_count": 1,
             "source_count": None,
             "comment_count": None,
@@ -415,7 +415,7 @@ def test_report_body_route_serves_complete_persisted_fragment(
     assert payload["artifact_id"] == body.artifact_id
     assert payload["ticker"] == "NU"
     assert "NU complete brief" in payload["body_html"]
-    assert payload["style_url"] == "/api/work-os/report-reader.css"
+    assert payload["style_url"].startswith("/api/work-os/report-reader.css?v=")
     assert payload["decision"]["relationship"] == "agree"
     assert payload["decision"]["owner"]["decision_id"] == 7
     assert payload["decision"]["owner"]["revision"] == "2026-08-07T12:00:00Z"
@@ -523,7 +523,7 @@ def test_legacy_brief_returns_structured_standalone_fallback(
         "schema_version": "report_body_unavailable.v1",
         "artifact_id": artifact_id,
         "status": "legacy_standalone",
-        "standalone_url": f"/reports/NU?artifact_id={artifact_id}",
+        "standalone_url": f"/reports/NU?artifact_id={artifact_id}&standalone=1",
     }
     standalone = work_os_client.get(response.get_json()["standalone_url"])
     assert standalone.status_code == 200
@@ -569,3 +569,24 @@ def test_brief_library_api_is_server_cached_with_a_no_store_client_contract(
     assert second.headers["X-Panel-Cache"] == "hit"
     assert second.get_data() == first.get_data()
     assert [item["artifact_id"] for item in second.get_json()["items"]] == [brief.artifact_id]
+
+
+def test_existing_report_links_open_exact_shared_edition_and_preserve_archive(
+    work_os_client: FlaskClient, work_os_app_repo: Path
+) -> None:
+    body = _persist_shared_brief(work_os_app_repo)
+    from urllib.parse import parse_qs, urlsplit
+
+    for url in ("/reports/NU", "/reports/NU?artifact_id=" + body.artifact_id):
+        response = work_os_client.get(url)
+        assert response.status_code == 302
+        params = parse_qs(urlsplit(response.headers["Location"]).query)
+        assert params["work_os_brief"] == ["NU"]
+        assert params["work_os_brief_artifact"] == [body.artifact_id]
+    archive = work_os_client.get("/reports/NU?artifact_id=" + body.artifact_id + "&standalone=1")
+    assert archive.status_code == 200
+    metadata = work_os_client.get("/api/work-os/briefs/" + body.artifact_id)
+    assert metadata.status_code == 200
+    assert metadata.get_json()["artifact_id"] == body.artifact_id
+    assert work_os_client.get("/reports/GOOG?artifact_id=" + body.artifact_id).status_code == 404
+    assert work_os_client.get("/api/work-os/briefs/not-an-artifact").status_code == 404

@@ -244,7 +244,8 @@ def test_counterread_home_survives_collapsed_and_mobile_sidebar_rules() -> None:
     assert ".app-sidebar.is-collapsed .sidebar-logo" in html
     assert ".app-sidebar.is-collapsed .sidebar-brand" in html
     assert "flex-direction: column" in html
-    assert ".sidebar-collapse-toggle, .nav-layer-title" in html
+    assert ".nav-layer-title, .sidebar-cmd-text, .nav-text" in html
+    assert 'id="workOsAppSidebarToggle"' in html
     assert ".sidebar-brand button, .nav-layer-title" not in html
     assert ".sidebar-home" in html
     assert "min-block-size: var(--touch-target-size)" in html
@@ -573,10 +574,11 @@ def test_work_os_routed_peeks_have_one_safe_full_page_host_and_deep_link_contrac
 def test_work_os_full_brief_and_threshold_return_contracts_are_routed() -> None:
     html = render_work_os_shell()
 
-    assert "function workOsBriefUrl(ticker, origin, focusId)" in html
+    assert "function workOsBriefUrl(ticker, origin, focusId, artifactId, sectionId)" in html
     assert "work_os_brief" in html
     assert "workOsBriefReader" in html
-    assert "window.openWorkOsBriefReader(briefTicker, { fromHistory: true })" in html
+    assert "window.openWorkOsBriefReader(briefTicker, {" in html
+    assert "params.get('work_os_brief_artifact')" in html
     assert "if (briefReaderOverlay) briefReaderOverlay.close();" in html
     assert "function workOsOpenThresholdReview(ticker)" in html
     assert "'/advisor/sizing-intents/' + encodeURIComponent(safeTicker)" in html
@@ -1171,12 +1173,14 @@ def test_company_desk_identity_ticker_uses_the_display_role_without_changing_sha
     assert 'class="k-ticker-symbol t-mono" id="deskTicker"' not in html
 
 
-def test_full_brief_reader_has_a_resolved_modal_stacking_token() -> None:
-    """The reader toolbar must stay above sticky app chrome and the scrim."""
+def test_full_brief_reader_preserves_application_navigation() -> None:
+    """The reader uses the app content area and leaves its navigation usable."""
     html = render_work_os_shell()
 
     assert "--z-modal: 300;" in html
-    assert ".work-os-reader { position: fixed; inset: 0; z-index: var(--z-modal);" in html
+    assert "inset-inline-start: var(--sidebar-width); z-index: var(--z-scrim);" in html
+    assert 'role="region"' in html
+    assert "modal: false, priority: window.CCOverlay.PRIORITY.PALETTE" in html
 
 
 def test_cockpit_hydration_does_not_construct_company_desk() -> None:
