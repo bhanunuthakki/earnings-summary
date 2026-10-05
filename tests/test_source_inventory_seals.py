@@ -12,6 +12,8 @@ from alembic.config import Config
 
 from alembic import command
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
+from provenance.issuer_registry import IssuerEntity, IssuerRegistry
+from provenance.reporting_entity_registry import ReportingEntityRegistry, SourceObligationRevision
 from provenance.source_coverage import SourceCoverageLedger, SourceInventorySnapshot
 from provenance.source_coverage_reconcile import (
     ExpectedDocumentImport,
@@ -32,6 +34,7 @@ from search.corpus_builder import (
     build_grounded_search_corpus,
     load_coverage_expected_document_inventory,
 )
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 ROOT = Path(__file__).resolve().parents[1]
 PRIOR = "0219_source_coverage_ledger"
@@ -47,11 +50,50 @@ def _config(path: Path) -> Config:
     return config
 
 
-def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+def _conn(
+    tmp_path: Path, migrated_db: Callable[..., Path], *, current: bool = False
+) -> sqlite3.Connection:
     path = tmp_path / "inventory.db"
-    migrated_db(path, stamp="0213_decision_draft_provider_id", archived=True, target=HEAD)
-    conn = sqlite3.connect(path)
+    if current:
+        migrated_db(path)
+    else:
+        migrated_db(path, stamp="0213_decision_draft_provider_id", archived=True, target=HEAD)
+    conn = (
+        connect_sqlite(path, role=SQLiteConnectionRole.WRITER) if current else sqlite3.connect(path)
+    )
+    conn.row_factory = None
     conn.execute("PRAGMA foreign_keys = ON")
+    if current:
+        IssuerRegistry(conn).persist(
+            IssuerEntity(
+                issuer_id="issuer",
+                idempotency_key="issuer",
+                entity_kind="operating_company",
+                created_at=STAMP,
+            )
+        )
+    if current:
+        ReportingEntityRegistry(conn).persist(
+            SourceObligationRevision(
+                obligation_revision_id="duty",
+                idempotency_key="duty",
+                obligation_key="duty",
+                revision=1,
+                issuer_id="issuer",
+                authority_kind="sec_edgar",
+                document_family="operating_company_periodic",
+                obligation_state="required",
+                completeness_rule="regulator_inventory",
+                active_from=STAMP,
+                active_to=None,
+                decision_kind="manual",
+                effective_at=STAMP,
+                knowledge_at=STAMP,
+                recorded_at=STAMP,
+                reason_code="synthetic_test_duty",
+                reason_details=(("scope", "test"),),
+            )
+        )
     ledger = EvidenceLedger(conn)
     for digest, observation_id, url in (
         (A, "obs-primary", "https://data.sec.gov/submissions/CIK1.json"),
@@ -262,7 +304,7 @@ def test_coverage_reconciliation_atomically_seals_component_inventory(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> None:
-    conn = _conn(tmp_path, migrated_db)
+    conn = _conn(tmp_path, migrated_db, current=True)
     try:
         conn.commit()
         request = SourceCoverageImport(
@@ -317,7 +359,7 @@ def test_coverage_reconciliation_atomically_seals_component_inventory(
             apply=True,
         )
         result = reconcile_source_coverage(conn, request)
-        assert result.records_created == 6
+        assert result.records_created == 7
         assert conn.execute(
             "SELECT completion_status FROM source_inventory_snapshot_seals WHERE snapshot_id = ?",
             (result.snapshot_id,),
@@ -327,7 +369,10 @@ def test_coverage_reconciliation_atomically_seals_component_inventory(
             (result.snapshot_id,),
         ).fetchone() == (2,)
         inventory, snapshot_ids = load_coverage_expected_document_inventory(
-            conn, ("issuer:sec-reconciled",)
+            conn,
+            ("issuer:sec-reconciled",),
+            knowledge_cutoff=STAMP,
+            observed_through=STAMP,
         )
         corpus = build_grounded_search_corpus(
             conn,
@@ -336,6 +381,7 @@ def test_coverage_reconciliation_atomically_seals_component_inventory(
                 revision=1,
                 selector_code_version="coverage-selector@1",
                 recorded_at=STAMP,
+                knowledge_cutoff=STAMP,
                 expected_documents=inventory.expected_documents,
                 source_inventory_snapshot_ids=snapshot_ids,
                 apply=True,

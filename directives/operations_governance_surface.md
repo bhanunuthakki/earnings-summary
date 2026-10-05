@@ -1173,3 +1173,35 @@ reader policy and all financial and scenario operands remain committed. Each
 replay still performs a new physical read. A retained v1 scenario review cannot
 reinterpret a v3 physical receipt; it requires an explicitly prepared v2 review.
 This version change grants no owner approval or allocation permission.
+
+
+### Governed reporting projection from sealed acquisition inventories
+
+`execution/build_grounded_search_corpus.py --coverage-inventory-key <key>` now
+requires both existing clock arguments: `--knowledge-cutoff <K>` and
+`--recorded-at <O>`. Use the approved explicit `--db`, repeat the inventory key
+for a union, and supply the existing corpus key, revision and selector code
+version. Preview without `--apply`; apply repeats the same scope through the
+existing managed SQLite bootstrap. O must not precede K. The current complete
+inventory and its seal must already be observed at O. A future or incomplete
+inventory refuses before corpus publication.
+
+The corpus and document-processing population use
+`provenance.reporting_document_scope` for lifecycle, coverage and retained SEC
+package-subject review at K/O. Positive supporting captures stay in the immutable
+acquisition inventory and source-duty bindings; they do not join the reporting
+included-document set. Uncaptured or quarantined supporting duty remains a missing
+or quarantined corpus membership. A discovery-complete inventory does not prove
+capture completeness. Missing lifecycle or an invalid 6-K subject witness remains
+visible as an unresolved, quarantined membership and prevents a complete corpus.
+
+The existing JSONL diagnostic names every selection disposition and both clocks.
+The builder reconstructs the shared projection from all supplied acquisition
+snapshot links and requires exact membership equality. Its existing immutable
+selection-config commitment also binds the complete decision population and K/O.
+A manually reduced request cannot use those links. Corrected membership requires
+a new corpus revision; no retained inventory, expectation, capture, duty, corpus
+or seal is rewritten. The explicitly unsafe caller-supplied JSON mode retains
+its existing separate contract. There is no new action, flag, service, schedule,
+provider or schema; this is a stricter clock requirement and corrected membership
+behavior for the existing sealed-inventory corpus command.

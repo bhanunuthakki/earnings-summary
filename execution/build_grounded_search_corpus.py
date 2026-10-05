@@ -1,6 +1,7 @@
 """Plan or build a sealed, evidence-grounded SQLite lexical corpus.
 
-The expected reporting universe must be supplied as a strict JSON inventory.
+The reporting universe is projected from complete sealed acquisition inventories.
+Caller-supplied JSON requires explicit administrative compatibility mode.
 Without ``--apply`` this command opens SQLite read-only and emits only a
 deterministic plan; its stdout is exactly one JSON result and stderr is JSONL.
 """
@@ -13,18 +14,19 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
-from search.corpus_builder import (  # noqa: E402
+from runtime.job_runtime import JobAlreadyRunningError, JobLock
+from search.corpus_builder import (
     ChunkerConfig,
     CorpusBuildRequest,
     build_grounded_search_corpus,
     load_coverage_expected_document_inventory,
     load_expected_document_inventory,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _event(event: str, **fields: object) -> None:
@@ -84,6 +86,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--inventory requires --allow-unsealed-inventory")
     if args.coverage_inventory_keys and args.allow_unsealed_inventory:
         parser.error("--allow-unsealed-inventory only applies to --inventory")
+    if args.coverage_inventory_keys and args.knowledge_cutoff is None:
+        parser.error("--coverage-inventory-key requires --knowledge-cutoff")
     if args.apply:
         try:
             with JobLock(
@@ -105,40 +109,50 @@ def main(argv: list[str] | None = None) -> int:
 def _run(args: argparse.Namespace) -> int:
     role = SQLiteConnectionRole.WRITER if args.apply else SQLiteConnectionRole.READ_ONLY
     conn = connect_sqlite(args.db, role=role, schema_preflight=args.apply)
-    if args.inventory is not None:
-        inventory = load_expected_document_inventory(str(args.inventory))
-        snapshot_ids: tuple[str, ...] = ()
-    else:
-        inventory, snapshot_ids = load_coverage_expected_document_inventory(
-            conn, tuple(args.coverage_inventory_keys)
-        )
-    request = CorpusBuildRequest(
-        corpus_key=args.corpus_key,
-        revision=args.revision,
-        selector_code_version=args.selector_code_version,
-        recorded_at=args.recorded_at,
-        knowledge_cutoff=args.knowledge_cutoff,
-        expected_documents=inventory.expected_documents,
-        source_inventory_snapshot_ids=snapshot_ids,
-        chunker=ChunkerConfig(max_characters=args.max_characters, max_tokens=args.max_tokens),
-        persist_batch_size=args.persist_batch_size,
-        required_extractor_names=tuple(
-            args.extractor_names
-            or (
-                "fulltext-evidence-backfill",
-                "governed-pdf-ocr",
-                "governed-image-ocr",
-            )
-        ),
-        apply=args.apply,
-    )
-    _event(
-        "grounded_search_corpus_started",
-        corpus_key=request.corpus_key,
-        revision=request.revision,
-        mode="apply" if request.apply else "dry_run",
-    )
     try:
+        if args.inventory is not None:
+            inventory = load_expected_document_inventory(str(args.inventory))
+            snapshot_ids: tuple[str, ...] = ()
+        else:
+            inventory, snapshot_ids = load_coverage_expected_document_inventory(
+                conn,
+                tuple(args.coverage_inventory_keys),
+                knowledge_cutoff=args.knowledge_cutoff,
+                observed_through=args.recorded_at,
+            )
+            _event(
+                "grounded_search_reporting_projection",
+                knowledge_cutoff=inventory.knowledge_cutoff.isoformat(),
+                observed_through=inventory.observed_through.isoformat(),
+                source_inventory_snapshot_ids=list(snapshot_ids),
+                decisions=[item.model_dump(mode="json") for item in inventory.reporting_decisions],
+            )
+        request = CorpusBuildRequest(
+            corpus_key=args.corpus_key,
+            revision=args.revision,
+            selector_code_version=args.selector_code_version,
+            recorded_at=args.recorded_at,
+            knowledge_cutoff=args.knowledge_cutoff,
+            expected_documents=inventory.expected_documents,
+            source_inventory_snapshot_ids=snapshot_ids,
+            chunker=ChunkerConfig(max_characters=args.max_characters, max_tokens=args.max_tokens),
+            persist_batch_size=args.persist_batch_size,
+            required_extractor_names=tuple(
+                args.extractor_names
+                or (
+                    "fulltext-evidence-backfill",
+                    "governed-pdf-ocr",
+                    "governed-image-ocr",
+                )
+            ),
+            apply=args.apply,
+        )
+        _event(
+            "grounded_search_corpus_started",
+            corpus_key=request.corpus_key,
+            revision=request.revision,
+            mode="apply" if request.apply else "dry_run",
+        )
         result = build_grounded_search_corpus(conn, request)
     finally:
         conn.close()

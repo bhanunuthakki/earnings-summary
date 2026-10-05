@@ -30,6 +30,11 @@ from provenance.image_ocr_extraction import (
     IMAGE_OCR_EXTRACTOR_CODE_VERSION,
     IMAGE_OCR_EXTRACTOR_NAME,
 )
+from provenance.reporting_document_scope import (
+    REPORTING_DOCUMENT_SELECTION_POLICY,
+    ReportingDocumentDecision,
+    reporting_document_scope,
+)
 from provenance.source_inventory_seal import (
     InventoryManifestLink,
     SourceInventorySealStore,
@@ -82,6 +87,14 @@ class ExpectedDocumentInventory(_ClosedModel):
         if len(keys) != len(set(keys)):
             raise ValueError("expected_document_key values must be unique")
         return self
+
+
+class CoverageExpectedDocumentInventory(ExpectedDocumentInventory):
+    """Governed reporting projection plus every acquisition selection disposition."""
+
+    reporting_decisions: tuple[ReportingDocumentDecision, ...]
+    knowledge_cutoff: datetime
+    observed_through: datetime
 
 
 class ChunkerConfig(_ClosedModel):
@@ -150,67 +163,95 @@ def load_expected_document_inventory(path_text: str) -> ExpectedDocumentInventor
 
 
 def load_coverage_expected_document_inventory(
-    conn: sqlite3.Connection, inventory_keys: tuple[str, ...]
-) -> tuple[ExpectedDocumentInventory, tuple[str, ...]]:
-    """Derive corpus membership from complete, sealed current source inventories."""
+    conn: sqlite3.Connection,
+    inventory_keys: tuple[str, ...],
+    *,
+    knowledge_cutoff: datetime,
+    observed_through: datetime,
+) -> tuple[CoverageExpectedDocumentInventory, tuple[str, ...]]:
+    """Project governed reporting scope without reducing sealed acquisition duty."""
 
     if not inventory_keys:
         raise ValueError("at least one source coverage inventory key is required")
     if len(inventory_keys) != len(set(inventory_keys)):
         raise ValueError("source coverage inventory keys must be unique")
+    if _utc_clock(observed_through) < _utc_clock(knowledge_cutoff):
+        raise ValueError("observed_through must not precede knowledge_cutoff")
     expected: list[ExpectedDocument] = []
     snapshot_ids: list[str] = []
+    document_keys: dict[str, str] = {}
     for inventory_key in sorted(inventory_keys):
         row = conn.execute(
-            "SELECT snapshot_id FROM v_source_inventory_sealed_complete WHERE inventory_key = ?",
-            (inventory_key,),
+            "SELECT snapshot_id FROM v_source_inventory_sealed_complete "
+            "WHERE inventory_key = ? AND datetime(recorded_at)<=datetime(?) "
+            "AND datetime(sealed_at)<=datetime(?)",
+            (
+                inventory_key,
+                _utc_clock(observed_through).isoformat(),
+                _utc_clock(observed_through).isoformat(),
+            ),
         ).fetchone()
         if row is None:
             raise ValueError(
-                "source inventory is absent, unsealed, incomplete, or not current: " + inventory_key
+                "source inventory is absent, unsealed, incomplete, not current, "
+                "or not yet observed: " + inventory_key
             )
         snapshot_id = str(row[0])
         snapshot_ids.append(snapshot_id)
         rows = conn.execute(
-            "SELECT expected.expected_document_key, assessment.document_version_id, "
-            "assessment.coverage_status, assessment.reason_code "
-            "FROM expected_documents AS expected "
-            "LEFT JOIN v_source_coverage_current AS assessment "
-            "ON assessment.expected_document_id = expected.expected_document_id "
-            "WHERE expected.snapshot_id = ? "
-            "ORDER BY expected.expected_document_key",
+            "SELECT expected_document_id,expected_document_key FROM expected_documents "
+            "WHERE snapshot_id=? ORDER BY expected_document_key",
             (snapshot_id,),
         ).fetchall()
-        for item in rows:
-            if item[2] is None:
-                raise ValueError(
-                    "expected document has no current coverage assessment: " + str(item[0])
-                )
-            status = str(item[2])
-            document_version_id = None if item[1] is None else str(item[1])
-            if status in {"captured", "extracted", "indexed"}:
-                if document_version_id is None:
-                    raise ValueError(
-                        "positive coverage status has no document version: " + str(item[0])
-                    )
-                membership_status: _MembershipStatus = "included"
-            elif status == "quarantined":
-                membership_status = "quarantined"
-                document_version_id = None
-            else:
-                membership_status = "missing"
-                document_version_id = None
-            expected.append(
-                ExpectedDocument(
-                    expected_document_key=str(item[0]),
-                    document_version_id=document_version_id,
-                    membership_status=membership_status,
-                    reason=f"coverage:{status}:{item[3]}",
-                )
+        document_keys.update((str(item[0]), str(item[1])) for item in rows)
+    decisions, _, incomplete_inventory_count = reporting_document_scope(
+        conn,
+        knowledge_cutoff,
+        observed_through,
+        inventory_snapshot_ids=tuple(snapshot_ids),
+    )
+    if incomplete_inventory_count:
+        raise ValueError("reporting projection includes an incomplete source inventory")
+    for decision in decisions:
+        status = decision.coverage_status
+        if decision.outcome == "excluded_supporting" and (
+            decision.reason_code == "expected_document_not_current"
+            or status in {"captured", "extracted", "indexed"}
+        ):
+            continue
+        # Discovery seals do not prove capture. Missing supporting duty remains a
+        # first-class incomplete membership without joining reporting included IDs.
+        document_version_id = decision.document_version_id
+        if decision.outcome == "unresolved":
+            membership_status: _MembershipStatus = "quarantined"
+            document_version_id = None
+        elif status in {"captured", "extracted", "indexed"}:
+            membership_status = "included"
+        elif status == "quarantined":
+            membership_status = "quarantined"
+            document_version_id = None
+        else:
+            membership_status = "missing"
+            document_version_id = None
+        expected.append(
+            ExpectedDocument(
+                expected_document_key=document_keys[decision.expected_document_id],
+                document_version_id=document_version_id,
+                membership_status=membership_status,
+                reason=f"reporting:{decision.reason_code}:coverage:{status}",
             )
+        )
     if not expected:
-        raise ValueError("sealed source inventories contain no expected documents")
-    return (ExpectedDocumentInventory(expected_documents=tuple(expected)), tuple(snapshot_ids))
+        raise ValueError("sealed source inventories contain no current reporting expectations")
+    return (
+        CoverageExpectedDocumentInventory(
+            expected_documents=tuple(expected),
+            reporting_decisions=decisions,
+            knowledge_cutoff=knowledge_cutoff,
+            observed_through=observed_through,
+        ),
+        tuple(snapshot_ids),
+    )
 
 
 def build_grounded_search_corpus(
@@ -400,17 +441,47 @@ def _plan(conn: sqlite3.Connection, request: CorpusBuildRequest) -> _CorpusPlan:
 
 def _metadata_plan(conn: sqlite3.Connection, request: CorpusBuildRequest) -> _CorpusMetadata:
     inventory = sorted(request.expected_documents, key=lambda item: item.expected_document_key)
-    config_sha = _sha256_json(
-        {
-            "corpus_key": request.corpus_key,
-            "revision": request.revision,
-            "expected_documents": [document.model_dump(mode="json") for document in inventory],
-            "required_extractor_names": sorted(request.required_extractor_names),
-            "knowledge_cutoff": request.knowledge_cutoff,
-            "source_inventory_snapshot_ids": sorted(request.source_inventory_snapshot_ids),
-            "node_selection_policy": _node_selection_policy_config(),
+    reporting_projection: dict[str, object] = {}
+    if request.source_inventory_snapshot_ids:
+        if request.knowledge_cutoff is None:
+            raise ValueError("sealed reporting projection requires an explicit knowledge cutoff")
+        keys: list[str] = []
+        for snapshot_id in request.source_inventory_snapshot_ids:
+            row = conn.execute(
+                "SELECT inventory_key FROM source_inventory_snapshots WHERE snapshot_id=?",
+                (snapshot_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("corpus acquisition snapshot is absent")
+            keys.append(str(row[0]))
+        projection, snapshots = load_coverage_expected_document_inventory(
+            conn,
+            tuple(keys),
+            knowledge_cutoff=request.knowledge_cutoff,
+            observed_through=request.recorded_at,
+        )
+        if set(snapshots) != set(request.source_inventory_snapshot_ids) or tuple(
+            sorted(projection.expected_documents, key=lambda item: item.expected_document_key)
+        ) != tuple(inventory):
+            raise ValueError("corpus must use the exact governed reporting projection")
+        reporting_projection = {
+            "selection_policy": REPORTING_DOCUMENT_SELECTION_POLICY,
+            "knowledge_cutoff": projection.knowledge_cutoff,
+            "observed_through": projection.observed_through,
+            "decisions": [item.model_dump(mode="json") for item in projection.reporting_decisions],
         }
-    )
+    config: dict[str, object] = {
+        "corpus_key": request.corpus_key,
+        "revision": request.revision,
+        "expected_documents": [document.model_dump(mode="json") for document in inventory],
+        "required_extractor_names": sorted(request.required_extractor_names),
+        "knowledge_cutoff": request.knowledge_cutoff,
+        "source_inventory_snapshot_ids": sorted(request.source_inventory_snapshot_ids),
+        "node_selection_policy": _node_selection_policy_config(),
+    }
+    if reporting_projection:
+        config["reporting_projection"] = reporting_projection
+    config_sha = _sha256_json(config)
     chunker_sha = _sha256_json(
         {
             "chunker": request.chunker.model_dump(mode="json"),
