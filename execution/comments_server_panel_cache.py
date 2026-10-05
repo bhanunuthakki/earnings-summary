@@ -9,11 +9,21 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True, slots=True)
 class PanelCacheEntry:
-    """One rendered panel response, independent of its insertion time."""
+    """One rendered panel response.
+
+    ``expires_at`` (monotonic) is set ONLY for entries whose body was rendered
+    from memoized cockpit data (M2 F5): the entry then expires when that data
+    ages past the cache TTL instead of a full TTL after insertion, preserving
+    the pre-memo staleness bound — no served cockpit data older than 30s at
+    response time — rather than widening it to memo-TTL + response-TTL.
+    ``None`` (the default, and every non-memo entry) keeps the standard
+    inserted-at + TTL lifetime.
+    """
 
     body: bytes
     content_type: str
     etag: str
+    expires_at: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +87,12 @@ class PanelResponseCache:
                 cached = self._entries.get(key)
                 if cached is not None:
                     inserted_at, entry = cached
-                    if now - inserted_at <= self._ttl_seconds:
+                    deadline_at = (
+                        entry.expires_at
+                        if entry.expires_at is not None
+                        else inserted_at + self._ttl_seconds
+                    )
+                    if now <= deadline_at:
                         return PanelCacheHit(entry)
                     self._entries.pop(key, None)
 

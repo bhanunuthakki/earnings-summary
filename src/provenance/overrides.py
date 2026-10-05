@@ -529,6 +529,46 @@ def active_scalar_override_map(
     return out
 
 
+def active_scalar_override_key_set(
+    conn: sqlite3.Connection,
+    *,
+    fact_kind: str,
+    user_id: str = DEFAULT_USER_ID,
+) -> frozenset[tuple[str, str]]:
+    """``(ticker, fact_key)`` pairs that carry an active ``replace``/``drop``
+    override for one fact kind — the batched existence form of
+    :func:`active_scalar_override_map`.
+
+    Membership answers exactly the question the scalar reader answers with one
+    query per key ("does any active value-changing override exist for this
+    logical fact?"), so a build screening N candidate keys pays one probe of
+    ``sqlite_master`` and one ``fact_overrides`` scan instead of N of each.
+    ``qualify`` is excluded and the absence of the table degrades to an empty
+    set, matching :func:`get_active_overrides` exactly. Ticker matching mirrors
+    the scalar reader's SQL equality: the stored ticker must equal the
+    caller-supplied ticker upper-cased.
+    """
+    if not _has_table(conn):
+        return frozenset()
+    rows = conn.execute(
+        "SELECT ticker, fact_key FROM fact_overrides "
+        "WHERE user_id = ? AND status = ? AND fact_kind = ? "
+        "AND action IN (?, ?)",
+        (
+            user_id,
+            STATUS_ACTIVE,
+            fact_kind,
+            OverrideAction.REPLACE.value,
+            OverrideAction.DROP.value,
+        ),
+    ).fetchall()
+    # NULL columns never match the scalar reader's SQL equality, so they stay
+    # out of the set exactly as they stayed out of the per-key map.
+    return frozenset(
+        {(str(row[0]), str(row[1])) for row in rows if row[0] is not None and row[1] is not None}
+    )
+
+
 def date_override_map(
     conn: sqlite3.Connection,
     *,

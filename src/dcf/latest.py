@@ -31,6 +31,7 @@ module's to make.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -148,22 +149,38 @@ def latest_dcf_row(conn: sqlite3.Connection, ticker: str) -> LatestDcfRow | None
     return _row_from(row) if row is not None else None
 
 
-def latest_dcf_rows(conn: sqlite3.Connection) -> dict[str, LatestDcfRow]:
+def latest_dcf_rows(
+    conn: sqlite3.Connection, tickers: Collection[str] | None = None
+) -> dict[str, LatestDcfRow]:
     """ticker -> latest top-level ``dcf_runs`` row, for every ticker on
-    file. ``{}`` on a missing table / query error."""
+    file. ``{}`` on a missing table / query error.
+
+    ``tickers`` optionally restricts the read to that roster. The map is
+    keyed by the uppercased ticker, so the restriction matches
+    ``UPPER(ticker)`` — every key a caller could look up from the roster is
+    preserved exactly; only never-queried tickers are dropped from the scan
+    (F4: the cockpit builds one snapshot per roster, not per ticker on file).
+    """
     cols = _dcf_columns(conn)
     if not cols:
         return {}
+    if tickers is not None:
+        wanted = sorted({str(t).upper() for t in tickers})
+        if not wanted:
+            return {}
+    else:
+        wanted = []
     # Identifiers come from module-constant column lists (PRAGMA-gated);
     # no user input reaches the SQL text.
+    roster_pred = f" AND UPPER(ticker) IN ({','.join('?' for _ in wanted)}) " if wanted else ""
     sql = (
         f"SELECT {_select_clause(cols)} FROM dcf_runs "  # nosec B608
-        f"WHERE {_where_clause(cols)} "
+        f"WHERE {_where_clause(cols)}{roster_pred} "
         "ORDER BY ticker, created_at DESC, id DESC"
     )
     try:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(sql).fetchall()
+        rows = conn.execute(sql, wanted).fetchall()
     except sqlite3.Error:
         return {}
     out: dict[str, LatestDcfRow] = {}

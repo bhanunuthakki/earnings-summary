@@ -44,6 +44,7 @@ from alerts import (
     list_alerts,
     list_pending_actions,
     list_queued_actions_for_alerts,
+    recent_alert_identities,
 )
 from dashboard._styles import INBOX_CSS
 from dashboard.inbox_rank import (
@@ -402,9 +403,15 @@ def collect_inbox_counted(
         status_by_alert: dict[int, str] = {}
         if pending:
             try:
-                for a in list_alerts(user_id=user_id, limit=500, db_path=db_path, conn=conn):
-                    ticker_by_alert[a.id] = a.ticker
-                    status_by_alert[a.id] = a.status
+                # The orphan check consumes only (ticker, status) per id —
+                # the lean identity projection of the same 500-most-recent
+                # window list_alerts read, without transferring and decoding
+                # every alert's full row (F4).
+                identities = recent_alert_identities(
+                    user_id=user_id, limit=500, db_path=db_path, conn=conn
+                )
+                ticker_by_alert = {a_id: t for a_id, (t, _s) in identities.items()}
+                status_by_alert = {a_id: s for a_id, (_t, s) in identities.items()}
             except SchemaRevisionMismatch:
                 raise  # drift is not an absent table — see _DRIFT_IS_NOT_EMPTY
             except sqlite3.Error:

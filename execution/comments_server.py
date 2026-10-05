@@ -79,6 +79,13 @@ from comments_server_attention_routes import (
     AttentionRouteContext,
     register_attention_routes,
 )
+from comments_server_cockpit_memo import (
+    CockpitDataBusy,
+    CockpitDataHit,
+    CockpitDataMemo,
+    CockpitDataReservation,
+    cockpit_data_memo_key,
+)
 from comments_server_content_routes import (
     ContentRouteContext,
     register_content_routes,
@@ -235,7 +242,7 @@ from pipeline.operations_panel import (
     build_operations_panel_view,
     render_operations_panel,
 )
-from pipeline.research_cockpit import build_cockpit_rows
+from pipeline.research_cockpit import CockpitRow, build_cockpit_rows
 from pipeline.ticker_command_center import (
     build_ticker_command_center,
     render_holding_fragment,
@@ -332,6 +339,21 @@ def _is_work_os_cached_route(path: str) -> bool:
     if path in _WORK_OS_CACHE_ROUTE_PATHS:
         return True
     return path.startswith("/api/work-os/companies/") and path.endswith("/desk")
+
+
+# The cached surfaces whose response bodies render memoized cockpit rows
+# (M2 F5). A mutation whose registry family set contains ANY of these prefixes
+# must drop the data memo as well as the response cache, so the memo's
+# invalidation set is never narrower than the response cache's for the routes
+# that share the data (validation contract VAL-SERVE-019). Unknown/CLEAR_ALL
+# mutations fail safe to a full memo clear, mirroring the response cache.
+_COCKPIT_DATA_MEMO_FAMILIES = frozenset(
+    {
+        "/api/panel/overview",
+        "/api/work-os/portfolio",
+        "/api/work-os/evaluation",
+    }
+)
 
 
 _BROWSER_USER_AGENT_RX = re.compile(r"(?:mozilla|chrome|chromium|safari|firefox|edg)/", re.I)
@@ -640,6 +662,19 @@ def create_app(
     # that same window so HTTP revalidation can stop *before* the route builder,
     # rather than paying the full build merely to discover the ETag is unchanged.
     panel_cache = PanelResponseCache(ttl_seconds=30.0, max_entries=256)
+    # Shared DATA-level memo for the cockpit rows (M2 F5): the three
+    # paint-cycle routes (overview + the two work-os hydrations) rebuild the
+    # same rows per response, so a cold paint paid the roster build up to
+    # three times. Keyed on DATA identity (repo root + resolved DB path +
+    # schema revision), never the request path; bounded to a few data
+    # identities with oldest-first eviction; single-flight per key; cleared
+    # by the same mutation-family hook that evicts the response cache.
+    # Fail-closed: a Busy lookup or a failed build falls back to a direct,
+    # unpublished build with unchanged semantics.
+    cockpit_memo = CockpitDataMemo(ttl_seconds=30.0, max_entries=4, wait_seconds=5.0)
+    app.config["COCKPIT_DATA_MEMO"] = cockpit_memo
+    cockpit_memo_key_value = cockpit_data_memo_key(repo_root, resolved_db_path)
+    app.config["COCKPIT_DATA_MEMO_KEY"] = cockpit_memo_key_value
     declared_operations = operations_registry or build_operations_registry(resolved_code_root)
     operations_review_code_identity = review_code_identity(resolved_code_root)
     app.config["CODE_ROOT"] = resolved_code_root
@@ -853,9 +888,19 @@ def create_app(
         families = resolve_mutation_families(getattr(route_rule, "rule", None))
         if families is None:
             panel_cache.clear()
+            cockpit_memo.clear()
         else:
             for prefix in families:
                 panel_cache.invalidate_prefix(prefix)
+            # The cockpit-data memo backs every surface in
+            # _COCKPIT_DATA_MEMO_FAMILIES, so any mutation the registry maps
+            # to one of them drops the memo too — its invalidation set is
+            # never narrower than the response cache's for that data
+            # (VAL-SERVE-019). Unmapped families (e.g. alert dismissal →
+            # journal/diet only) keep the memo's 30s bounded staleness,
+            # exactly the bound the response cache already had.
+            if any(prefix in _COCKPIT_DATA_MEMO_FAMILIES for prefix in families):
+                cockpit_memo.clear()
 
     @app.errorhandler(comments.CommentStoreReadError)
     def unavailable_comment_store(_error: comments.CommentStoreReadError):
@@ -901,6 +946,9 @@ def create_app(
         reservation = g.pop("panel_cache_reservation", None)
         if isinstance(reservation, PanelCacheReservation):
             panel_cache.abandon(reservation)
+        memo_reservation = g.pop("cockpit_memo_reservation", None)
+        if isinstance(memo_reservation, CockpitDataReservation):
+            cockpit_memo.abandon(memo_reservation)
 
     def get_read_db() -> sqlite3.Connection:
         if "request_read_db" not in g:
@@ -1121,6 +1169,10 @@ def create_app(
                             # Internal freshness validator only; work-os
                             # responses never emit it (no-store).
                             etag=hashlib.sha256(body).hexdigest(),
+                            # Memo-fed bodies inherit the memo's data clock so
+                            # the entry cannot serve cockpit data past the
+                            # memo's own expiry (M2 F5 staleness bound).
+                            expires_at=g.pop("cockpit_memo_expires_at", None),
                         ),
                     )
                 response.headers["X-Panel-Cache"] = "miss"
@@ -1142,6 +1194,10 @@ def create_app(
                             body=response.get_data(),
                             content_type=response.content_type or "application/octet-stream",
                             etag=response.headers["ETag"],
+                            # Memo-fed bodies inherit the memo's data clock so
+                            # the entry cannot serve cockpit data past the
+                            # memo's own expiry (M2 F5 staleness bound).
+                            expires_at=g.pop("cockpit_memo_expires_at", None),
                         ),
                     )
                 response.headers["X-Panel-Cache"] = "miss"
@@ -1424,10 +1480,45 @@ def create_app(
 
     # ----- DASHBOARD (unified tabbed command-center shell) -----
 
+    def cockpit_rows_snapshot(conn: sqlite3.Connection) -> dict[str, list[CockpitRow]]:
+        """The paint-cycle routes' shared cockpit-rows read (M2 F5).
+
+        Returns exactly what ``build_cockpit_rows(conn, repo_root)`` returns,
+        served from the shared data memo when a fresh snapshot exists — one
+        build per cold paint cycle instead of one per route — while each
+        route keeps its own response contract (HTML fragment with ETag versus
+        JSON hydration with no-store). Fail-closed: a memo build that raises
+        never publishes (the exception propagates unchanged, reservation
+        abandoned) and a Busy lookup builds directly without publishing, so
+        the memo can only make a response faster, never different.
+        """
+        lookup = cockpit_memo.get_or_reserve(cockpit_memo_key_value)
+        if isinstance(lookup, CockpitDataHit):
+            # Record the memo's data clock so the response entry this rows
+            # dict feeds cannot outlive it: the pre-memo bound (no served
+            # cockpit data older than the 30s TTL at response time) holds
+            # exactly, instead of widening to memo-TTL + response-TTL.
+            g.cockpit_memo_expires_at = lookup.entry.expires_at
+            return {role: list(role_rows) for role, role_rows in lookup.entry.rows.items()}
+        if isinstance(lookup, CockpitDataReservation):
+            g.cockpit_memo_reservation = lookup
+            try:
+                rows = build_cockpit_rows(conn, repo_root)
+            except BaseException:
+                cockpit_memo.abandon(lookup)
+                raise
+            cockpit_memo.publish(lookup, rows)
+            g.pop("cockpit_memo_reservation", None)
+            return rows
+        assert isinstance(lookup, CockpitDataBusy)
+        # Bounded wait expired or the in-flight bound is occupied: degrade to
+        # a direct, unpublished build with unchanged semantics.
+        return build_cockpit_rows(conn, repo_root)
+
     def _overview_fragment_response() -> Response:
         """Build the legacy Overview fragment for compatible live drill-throughs."""
         read_conn = get_read_db()
-        rows = build_cockpit_rows(read_conn, repo_root)
+        rows = cockpit_rows_snapshot(read_conn)
         coverage = tier_coverage_summary(repo_root, conn=read_conn)
         # Schema drift must not 500 the whole Home page, and must not render as
         # an empty rail either — the rail says it cannot be read, and the rest
@@ -1487,7 +1578,7 @@ def create_app(
     def work_os_portfolio_api():
         """Portfolio-only research state for Cockpit and Company Desk."""
         conn = get_read_db()
-        rows_by_role = build_cockpit_rows(conn, repo_root)
+        rows_by_role = cockpit_rows_snapshot(conn)
         rows = rows_by_role.get("portfolio", [])
         evaluation_rows = rows_by_role.get("evaluation", [])
         coverage_roles = {
@@ -1526,7 +1617,7 @@ def create_app(
     def work_os_evaluation_api():
         """Complete company and ETF evaluation coverage for the Research Engine."""
         conn = get_read_db()
-        rows = build_cockpit_rows(conn, repo_root).get("evaluation", [])
+        rows = cockpit_rows_snapshot(conn).get("evaluation", [])
         payload = build_work_os_evaluation(rows, repo_root, conn)
         response = app.json.response(payload.model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"

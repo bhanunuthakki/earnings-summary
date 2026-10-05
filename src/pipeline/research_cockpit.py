@@ -40,6 +40,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from html import escape
@@ -56,14 +57,14 @@ from cockpit_fundamentals import (
 from compute.kpi_resolver import semantic_series_identity_sql
 from compute.thesis_evaluation_episodes import episode_history_source
 from dashboard._styles import COCKPIT_CSS
-from dcf.latest import latest_dcf_rows
+from dcf.latest import LatestDcfRow, latest_dcf_rows
 from expected_earnings import upcoming_by_ticker
 from pipeline.dashboard_status import DashboardRow, build_dashboard_rows
 from pipeline.freshness import freshness_verdict
 from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
-from provenance.overrides import active_scalar_override_map
+from provenance.overrides import active_scalar_override_key_set
 from report.renderers.numfmt import fmt_date, fmt_pct, fmt_pp, fmt_reltime
 from ui import living_grid as lg
 from ui.controls import pill_tone_class, thesis_status_tone, ticker_label
@@ -499,13 +500,20 @@ def build_cockpit_rows(
     portfolio_tickers = {r.ticker for r in base_rows.get("portfolio", [])}
 
     names = _company_names(conn, tickers)
-    alerts = _pending_alert_counts(conn)
-    tier1_alerts = _pending_tier1_counts(conn)
-    alert_refs = _pending_alert_refs(conn)
-    dcf = latest_dcf_runs(conn)
-    dcf_flagged = dcf_sanity_flags(conn)
-    docs = _new_doc_counts(conn)
-    evals = _latest_evaluations(conn)
+    # One scan of the pending set feeds the count map, the tier-1 counts, and
+    # the stable refs together (F4a: formerly three scans + a double
+    # decisive_alert_reason JSON parse per alert).
+    alert_index = _pending_alert_index(conn)
+    # One DCF read feeds both the gap map and the sanity flags (F4: formerly
+    # latest_dcf_rows ran twice per build, PRAGMA probe included). The reads
+    # below are restricted to this roster — every consumer below looks keys up
+    # by a roster row's ticker, so never-read tickers are dropped from the
+    # scan, not from the result the rows render (F4).
+    latest_dcf = latest_dcf_rows(conn, tickers)
+    dcf = _dcf_gap_map(latest_dcf)
+    dcf_flagged = {ticker for ticker, row in latest_dcf.items() if row.sanity_flag}
+    docs = _new_doc_counts(conn, tickers)
+    evals = _latest_evaluations(conn, tickers)
     kpi_facts = tier1_kpi_deltas(conn, portfolio_tickers, as_of=ref.date())
     # Fast path: precomputed cache written by the morning pipeline (stage 0d).
     # Falls back to the live DB scan when the cache is absent (fresh install,
@@ -596,9 +604,9 @@ def build_cockpit_rows(
                     dcf_unreviewed=t in dcf_flagged,
                     peg_ratio=peg,
                     next_earnings=next_er.get(t) or next_earnings(repo_root, t, ref),
-                    pending_alerts=alerts.get(t, 0),
-                    pending_tier1_alerts=tier1_alerts.get(t, 0),
-                    pending_alert_refs=alert_refs.get(t, ()),
+                    pending_alerts=alert_index.counts.get(t, 0),
+                    pending_tier1_alerts=alert_index.tier1_counts.get(t, 0),
+                    pending_alert_refs=alert_index.refs.get(t, ()),
                     new_docs=docs.get(t, 0),
                     kpi_deltas=deltas,
                     rule_summary=rule_summary,
@@ -680,7 +688,22 @@ def _company_names(conn: sqlite3.Connection, tickers: list[str]) -> dict[str, st
     return {str(r["ticker"]): str(r["name"]) for r in rows if r["name"]}
 
 
+@dataclass(frozen=True)
+class PendingAlertIndex:
+    """The three pending-alert views one cockpit build needs, from ONE scan.
+
+    ``counts`` counts every pending alert per ticker, ``tier1_counts`` the
+    decisive subset, and ``refs`` the stable per-ticker identities — previously
+    three separate scans of the same pending set with ``decisive_alert_reason``
+    (a JSON parse) run twice per row (F4a)."""
+
+    counts: dict[str, int]
+    tier1_counts: dict[str, int]
+    refs: dict[str, tuple[PendingAlertRef, ...]]
+
+
 def _pending_alert_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Fallback counts view for schemas lacking the ref/tier-1 columns."""
     rows = _safe_rows(
         conn, "SELECT ticker, COUNT(*) AS n FROM alerts WHERE status='pending' GROUP BY ticker"
     )
@@ -688,10 +711,10 @@ def _pending_alert_counts(conn: sqlite3.Connection) -> dict[str, int]:
 
 
 def _pending_tier1_counts(conn: sqlite3.Connection) -> dict[str, int]:
-    """Pending alerts per ticker that are tier-1/decisive (owner falsifier
-    breach, registered threshold crossing) — the shared
-    ``decisive_alert_reason`` definition, so the cockpit pill and the feed
-    cards can never disagree about what counts as tier-1."""
+    """Fallback tier-1 view for schemas lacking the ref columns.
+
+    Keeps the shared ``decisive_alert_reason`` definition so the degraded
+    counts can never disagree with the full index about what is tier-1."""
     from dashboard.inbox_rank import decisive_alert_reason
 
     rows = _safe_rows(
@@ -708,48 +731,97 @@ def _pending_tier1_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return out
 
 
-def _pending_alert_refs(conn: sqlite3.Connection) -> dict[str, tuple[PendingAlertRef, ...]]:
-    """Return stable refs for pending alerts, grouped by ticker.
+def _pending_alert_index(conn: sqlite3.Connection) -> PendingAlertIndex:
+    """One ordered scan of pending alerts feeding the count map, the tier-1
+    count map, and the stable refs together.
 
-    This is deliberately narrower than the full alert row: the identity is
-    the persisted alert id plus its trigger/signature, while evidence text
-    remains behind the existing alert/feed read path. A missing or partial
-    alerts schema degrades to no refs, matching the cockpit's existing count
-    behavior and preventing a synthetic identity from being emitted.
+    Each output reproduces its former standalone pass exactly: ``counts``
+    counts every pending row per raw ticker string (including rows a ref view
+    would reject); ``tier1_counts`` keys the raw ticker and counts rows whose
+    ``decisive_alert_reason`` (the shared tier-1/decisive definition) is not
+    None; ``refs`` skips rows with an unparsable id or a missing stripped
+    ticker/kind/signature and keys the upper-cased ticker. A missing alerts
+    table degrades every view to empty; a partial schema keeps the former
+    per-pass degradation ladder (counts survive on ``(ticker, status)``; tier-1
+    counts on ``(trigger_kind, evidence_json)``; refs need the full identity
+    columns), preventing a synthetic identity from being emitted.
     """
     from dashboard.inbox_rank import decisive_alert_reason
 
-    rows = _safe_rows(
-        conn,
-        "SELECT id,ticker,trigger_kind,signature_sha,evidence_json "
-        "FROM alerts WHERE status='pending' ORDER BY id ASC",
-    )
+    try:
+        cur = conn.execute(
+            "SELECT id,ticker,trigger_kind,signature_sha,evidence_json "
+            "FROM alerts WHERE status='pending' ORDER BY id ASC"
+        )
+    except sqlite3.OperationalError:
+        return PendingAlertIndex(
+            counts=_pending_alert_counts(conn),
+            tier1_counts=_pending_tier1_counts(conn),
+            refs={},
+        )
+    cur.row_factory = sqlite3.Row
+    rows = cur.fetchall()
+    counts: dict[str, int] = {}
+    tier1: dict[str, int] = {}
     grouped: dict[str, list[PendingAlertRef]] = {}
     for row in rows:
+        ticker_key = str(row["ticker"])
+        counts[ticker_key] = counts.get(ticker_key, 0) + 1
+        raw_kind = str(row["trigger_kind"] or "")
+        evidence = str(row["evidence_json"] or "")
+        decisive = decisive_alert_reason(raw_kind, evidence) is not None
+        if decisive:
+            tier1[ticker_key] = tier1.get(ticker_key, 0) + 1
         try:
             alert_id = int(row["id"])
         except (TypeError, ValueError):
             continue
-        ticker = str(row["ticker"] or "").strip().upper()
-        trigger_kind = str(row["trigger_kind"] or "").strip()
+        ref_ticker = ticker_key.strip().upper()
+        ref_kind = raw_kind.strip()
         signature_sha = str(row["signature_sha"] or "").strip()
-        if not ticker or not trigger_kind or not signature_sha:
+        if not ref_ticker or not ref_kind or not signature_sha:
             continue
-        grouped.setdefault(ticker, []).append(
+        # The ref view's decisiveness used the STRIPPED kind while the tier-1
+        # count used the raw kind; the two only diverge on whitespace-padded
+        # trigger kinds, where the second call preserves the former behavior.
+        ref_decisive = (
+            decisive
+            if ref_kind == raw_kind
+            else decisive_alert_reason(ref_kind, evidence) is not None
+        )
+        grouped.setdefault(ref_ticker, []).append(
             PendingAlertRef(
                 alert_id=alert_id,
-                trigger_kind=trigger_kind,
+                trigger_kind=ref_kind,
                 signature_sha=signature_sha,
-                is_decisive=(
-                    decisive_alert_reason(
-                        trigger_kind,
-                        str(row["evidence_json"] or ""),
-                    )
-                    is not None
-                ),
+                is_decisive=ref_decisive,
             )
         )
-    return {ticker: tuple(refs) for ticker, refs in grouped.items()}
+    return PendingAlertIndex(
+        counts=counts,
+        tier1_counts=tier1,
+        refs={ticker: tuple(refs) for ticker, refs in grouped.items()},
+    )
+
+
+def _dcf_gap_map(
+    latest_rows: dict[str, LatestDcfRow],
+) -> dict[str, tuple[float | None, float | None, float | None, str | None]]:
+    """Project one ``latest_dcf_rows`` snapshot into the gap map — the shared
+    body of :func:`latest_dcf_runs` so a build that also needs the sanity
+    flags can read the DCF table once instead of twice (F4)."""
+    out: dict[str, tuple[float | None, float | None, float | None, str | None]] = {}
+    for t, row in latest_rows.items():
+        fv = row.npv_per_share
+        px = row.live_price
+        gap = (px / fv - 1.0) * 100.0 if fv is not None and fv > 0 and px is not None else None
+        # A sanity-flagged run (dcf_runs.sanity_flag, migration 0182) keeps its
+        # values visible but emits NO gap signal — a broken model must not rank
+        # names or drive trim/add framing anywhere this map is consumed.
+        if row.sanity_flag:
+            gap = None
+        out[t] = (gap, fv, px, row.valuation_date)
+    return out
 
 
 def latest_dcf_runs(
@@ -765,18 +837,7 @@ def latest_dcf_runs(
     ratio, and the row's own two fields are convention-proof and currency-
     consistent with each other. Public: the allocation-decisions panel (P2.2)
     reads the same gap so the two surfaces can never disagree."""
-    out: dict[str, tuple[float | None, float | None, float | None, str | None]] = {}
-    for t, row in latest_dcf_rows(conn).items():
-        fv = row.npv_per_share
-        px = row.live_price
-        gap = (px / fv - 1.0) * 100.0 if fv is not None and fv > 0 and px is not None else None
-        # A sanity-flagged run (dcf_runs.sanity_flag, migration 0182) keeps its
-        # values visible but emits NO gap signal — a broken model must not rank
-        # names or drive trim/add framing anywhere this map is consumed.
-        if row.sanity_flag:
-            gap = None
-        out[t] = (gap, fv, px, row.valuation_date)
-    return out
+    return _dcf_gap_map(latest_dcf_rows(conn))
 
 
 def dcf_sanity_flags(conn: sqlite3.Connection) -> set[str]:
@@ -812,31 +873,83 @@ def latest_dcf_scenarios(
     return out
 
 
-def _new_doc_counts(conn: sqlite3.Connection) -> dict[str, int]:
+def _new_doc_counts(
+    conn: sqlite3.Connection, tickers: Collection[str] | None = None
+) -> dict[str, int]:
     """Documents fetched after the ticker's last report build. ``julianday``
-    bridges the two timestamp spellings in play ('T' vs space separator)."""
+    bridges the two timestamp spellings in play ('T' vs space separator).
+
+    The count is driven from the built tickers (a correlated count per
+    ``tracked_companies`` row with ``last_built_at``) instead of a join that
+    scans every document and probes ``tracked_companies`` per row: the
+    ticker-leading documents index serves each count, and the build-side
+    ``julianday`` is evaluated once per built ticker instead of once per
+    joined document row. Exact same result set — tickers with zero new
+    documents appear in neither form (the join's GROUP BY only emits groups
+    with a qualifying row; the caller drops the correlated form's zero
+    counts in Python).
+
+    ``tickers`` optionally restricts the drive to that roster. The map is
+    keyed by the raw ``tracked_companies.ticker``, and the cockpit only
+    reads keys for its roster rows, so restricting to the roster's raw
+    tickers drops only never-read entries (F4)."""
+    roster_pred = ""
+    params: list[str] = []
+    if tickers is not None:
+        wanted = sorted(set(tickers))
+        if not wanted:
+            return {}
+        roster_pred = f" AND tc.ticker IN ({','.join('?' for _ in wanted)}) "
+        params = wanted
     rows = _safe_rows(
         conn,
-        "SELECT tc.ticker AS ticker, COUNT(d.id) AS n "
-        "FROM tracked_companies tc JOIN documents d ON d.ticker = tc.ticker "
-        "WHERE tc.last_built_at IS NOT NULL "
-        "  AND julianday(d.fetched_at) > julianday(tc.last_built_at) "
-        "GROUP BY tc.ticker",
+        "SELECT tc.ticker AS ticker, ("
+        "  SELECT COUNT(*) FROM documents d WHERE d.ticker = tc.ticker"
+        "    AND julianday(d.fetched_at) > julianday(tc.last_built_at)"
+        ") AS n "
+        "FROM tracked_companies tc "
+        f"WHERE tc.last_built_at IS NOT NULL{roster_pred}",
+        tuple(params),
     )
-    return {str(r["ticker"]): int(r["n"]) for r in rows}
+    return {str(r["ticker"]): int(r["n"]) for r in rows if int(r["n"]) > 0}
 
 
 def _latest_evaluations(
-    conn: sqlite3.Connection,
+    conn: sqlite3.Connection, tickers: Collection[str] | None = None
 ) -> dict[str, tuple[str | None, str | None, dict[str, str]]]:
     """ticker -> (rule summary for the badge hover, evaluated_at,
-    kpi_name -> worst rule status) from the latest thesis evaluation."""
+    kpi_name -> worst rule status) from the latest thesis evaluation.
+
+    The history is append-only by design, so the former ordered-full-scan with
+    first-per-ticker kept in Python transferred and ordered every history row
+    per build. The windowed CTE keeps the same pick — the first row per ticker
+    in the same ``ORDER BY ticker, latest_checked DESC`` ordering — inside
+    SQLite, so only the kept rows (and their rule JSON) cross the boundary
+    (F4b).
+
+    ``tickers`` optionally restricts the read to that roster. The map is
+    keyed by the raw relation ticker and the cockpit only reads keys for its
+    roster rows, so restricting to the roster's raw tickers drops only
+    never-read entries — and lets the indexed episodes branch serve the
+    per-ticker windows instead of expanding the whole history view."""
     source = episode_history_source(conn)
+    roster_pred = ""
+    params: list[str] = []
+    if tickers is not None:
+        wanted = sorted(set(tickers))
+        if not wanted:
+            return {}
+        roster_pred = f" WHERE ticker IN ({','.join('?' for _ in wanted)}) "
+        params = wanted
     rows = _safe_rows(
         conn,
+        "SELECT ticker,evaluated_at,rule_evaluations_json FROM ("
         f"SELECT ticker,{source.latest_checked_column} AS evaluated_at,"
-        f"rule_evaluations_json FROM {source.relation} "
-        f"ORDER BY ticker,{source.latest_checked_column} DESC",  # nosec B608 -- trusted closed relation
+        f"rule_evaluations_json,"
+        "ROW_NUMBER() OVER (PARTITION BY ticker "
+        f"ORDER BY {source.latest_checked_column} DESC) AS rn "
+        f"FROM {source.relation}{roster_pred}) WHERE rn = 1",  # nosec B608 -- trusted closed relation
+        tuple(params),
     )
     out: dict[str, tuple[str | None, str | None, dict[str, str]]] = {}
     for r in rows:
@@ -890,15 +1003,16 @@ def tier1_kpi_deltas(
         f"AND ticker IN ({marks})",
         ticker_params,
     )
+    # One batched override screen replaces the former per-definition
+    # ``active_scalar_override_map`` probe (one sqlite_master probe plus one
+    # fact_overrides scan per tier-1 definition per build; F4c). Membership is
+    # identical: a definition is excluded iff an active replace/drop override
+    # exists for (upper-cased ticker, definition name) under the default user.
+    override_keys = active_scalar_override_key_set(conn, fact_kind=OVERRIDE_KPI)
     definition_ids = tuple(
         int(row["id"])
         for row in definition_rows
-        if not active_scalar_override_map(
-            conn,
-            ticker=str(row["ticker"]),
-            fact_kind=OVERRIDE_KPI,
-            fact_key=str(row["name"]),
-        )
+        if (str(row["ticker"]).upper(), str(row["name"])) not in override_keys
     )
     if not definition_ids:
         return {}

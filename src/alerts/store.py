@@ -358,6 +358,46 @@ def list_alerts(
             db_conn.close()
 
 
+def recent_alert_identities(
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    limit: int = 500,
+    db_path: Path | str | None = None,
+    conn: sqlite3.Connection | None = None,
+) -> dict[int, tuple[str, str]]:
+    """id → (ticker, status) for the ``limit`` most recent alerts — the lean
+    identity projection of :func:`list_alerts` with the same filters, order
+    and window (F4: callers that only consume id/ticker/status — the inbox's
+    orphan check — no longer transfer and decode every alert's full row
+    (evidence_json included) to learn two fields).
+
+    Exact-parity note: same ``WHERE user_id = ?`` / ``ORDER BY fired_at DESC,
+    id DESC`` / ``LIMIT ?`` as ``list_alerts(user_id=..., limit=...)`` — the
+    same ids are selected and ``str()`` is applied to the same two columns
+    ``_row_to_alert`` would apply it to. A lean projection cannot raise the
+    hand-built-fixture ``IndexError`` the full row decoder tolerates, so a
+    missing-table/missing-column error degrades to ``{}`` like every other
+    best-effort read here.
+    """
+    db_conn = conn or _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        rows = db_conn.execute(
+            """
+            SELECT id, ticker, status FROM alerts
+            WHERE user_id = ?
+            ORDER BY fired_at DESC, id DESC
+            LIMIT ?
+            """,
+            (user_id, int(limit)),
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        if conn is None:
+            db_conn.close()
+    return {int(r["id"]): (str(r["ticker"]), str(r["status"])) for r in rows}
+
+
 def approve_alert(alert_id: int, db_path: Path | str | None = None) -> AlertRow:
     """Transition pending → approved. Stamps ``approved_at`` to now().
 
