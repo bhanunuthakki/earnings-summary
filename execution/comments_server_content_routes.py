@@ -76,6 +76,11 @@ def _parse_bbox_param(raw: str | None) -> tuple[float, float, float, float] | No
 
 
 def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
+    from comments_server_financial_evidence_routes import register_growth_evidence_routes
+
+    register_growth_evidence_routes(
+        app, get_read_db=context.get_read_db, safe_ticker=context.safe_ticker
+    )
     """Register read-only content routes without changing Flask contracts."""
     repo_root = context.repo_root
     db_path = context.db_path
@@ -470,8 +475,8 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
                 raise ValueError("invalid ticker")
         except ValueError:
             return Response("Invalid evidence reference.", status=400, mimetype="text/html")
-        # The shared reader owns admission and the complete table's rejection
-        # rules. It preserves the request's read snapshot and performs no writes.
+        # The reference selects its complete table or series admission owner.
+        # Both preserve the request read snapshot and perform no writes.
         try:
             cell = read_financial_evidence(context.get_read_db(), reference)
         except (OSError, RuntimeError, sqlite3.Error):

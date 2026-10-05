@@ -48,8 +48,8 @@ from compute.thesis_evaluator import (
 from decision_conditions import (
     DecisionCondition,
     OpenDecision,
-    fetch_financial_history,
     load_open_decisions,
+    read_financial_condition,
 )
 from models.facts import Unit
 from models.kpis import BreachStatus
@@ -102,7 +102,7 @@ def _breach_is_fresh(cond: DecisionCondition, breach_period_end: datetime, now: 
     breach_date = breach_period_end.date().isoformat()
     if cond.baseline_period_end:
         return breach_date > cond.baseline_period_end[:10]
-    age_days = (now - breach_period_end).days
+    age_days = (now.replace(tzinfo=None) - breach_period_end.replace(tzinfo=None)).days
     return age_days <= _LEGACY_FRESHNESS_DAYS
 
 
@@ -140,6 +140,18 @@ class DecisionConditionTrigger:
     cadence: ClassVar[Cadence] = Cadence.DAILY
 
     def scan(self, ticker: str, db: sqlite3.Connection) -> list[TriggerCandidate]:
+        owns_snapshot = not db.in_transaction
+        original_factory = db.row_factory
+        if owns_snapshot:
+            db.execute("BEGIN")
+        try:
+            return self._scan_snapshot(ticker, db)
+        finally:
+            db.row_factory = original_factory
+            if owns_snapshot and db.in_transaction:
+                db.rollback()
+
+    def _scan_snapshot(self, ticker: str, db: sqlite3.Connection) -> list[TriggerCandidate]:
         """Evaluate every resolvable condition on the ticker's open decisions;
         emit a candidate per condition whose status is BREACH — gated so the
         PUSH lane only carries breaches worth interrupting the owner for.
@@ -163,7 +175,8 @@ class DecisionConditionTrigger:
         db.row_factory = sqlite3.Row
         ticker = ticker.upper()
         candidates: list[TriggerCandidate] = []
-        now = datetime.now(UTC).replace(tzinfo=None)
+        cutoff = datetime.now(UTC)
+        now = cutoff.replace(tzinfo=None)
         is_portfolio = _is_portfolio_ticker(db, ticker)
 
         for decision in load_open_decisions(db, ticker):
@@ -200,12 +213,15 @@ class DecisionConditionTrigger:
                 rule = condition_to_rule(decision.decision_id, index, cond)
                 if rule is None:
                     continue
+                financial_manifest: dict[str, object] | None = None
                 if cond.metric_source == "kpi":
                     observations = fetch_kpi_observations(db, ticker, cond.metric, cond.for_periods)
                 else:
-                    observations = fetch_financial_history(
-                        db, ticker, cond.metric, cond.for_periods
-                    )
+                    history = read_financial_condition(db, ticker, cond, cutoff=cutoff)
+                    observations = history.observations
+                    if observations is None or history.sources is None:
+                        continue
+                    financial_manifest = history.manifest()
                 evaluation = evaluate_rule(rule, observations)
                 if evaluation.status is not BreachStatus.BREACH:
                     continue
@@ -227,7 +243,21 @@ class DecisionConditionTrigger:
                         ticker=ticker,
                         kind=self.kind,
                         key=f"{decision.decision_id}:{index}:{latest.period_end.date().isoformat()}",
-                        evidence=_evidence(decision, index, cond, evaluation.observations),
+                        evidence={
+                            **_evidence(decision, index, cond, evaluation.observations),
+                            **(
+                                {
+                                    "financial_source_manifest": financial_manifest,
+                                    "baseline_source_reference": cond.baseline_source_reference.model_dump(
+                                        mode="json"
+                                    )
+                                    if cond.baseline_source_reference
+                                    else None,
+                                }
+                                if cond.metric_source == "financial"
+                                else {}
+                            ),
+                        },
                         computed_at=now,
                     )
                 )

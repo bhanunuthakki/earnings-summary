@@ -11,6 +11,7 @@ from __future__ import annotations
 from io import StringIO
 
 from report.models import (
+    CellSource,
     FinancialsSection,
     SectionStatus,
     SegmentSecondaryExpansion,
@@ -30,6 +31,7 @@ from report.renderers.workspace_sections._shared import (
     _source_hover_title,
     _xlink_html,
 )
+from sources.financial_growth_evidence import FinancialGrowthReference
 from ui import living_grid as lg
 
 __all__ = [
@@ -627,6 +629,11 @@ def _line_items_yoy_panel(body: StringIO, fin: FinancialsSection) -> None:
                 unit=li.unit,
                 cell_titles=cell_titles,
                 label_suffix_html=label_suffix,
+                cell_suffix_html=[_growth_chip(reference) for reference in li.yoy_evidence_full],
+                cagr_suffix_html={
+                    int(years) * 4: _growth_chip(reference)
+                    for years, reference in li.level_cagr_evidence.items()
+                },
             )
         )
     if not rows:
@@ -723,9 +730,11 @@ def _line_items_levels_panel(body: StringIO, fin: FinancialsSection, seg: Segmen
             else:
                 body.write('<td class="num muted">—</td>')
         g = li.growth
-        body.write(_growth_cell(g.qoq))
-        body.write(_growth_cell(g.yoy))
-        body.write(_growth_cell(g.cagr_3y_ttm, muted=True))
+        body.write(_growth_cell(g.qoq, evidence=li.growth_evidence.get("qoq")))
+        body.write(_growth_cell(g.yoy, evidence=li.growth_evidence.get("yoy")))
+        body.write(
+            _growth_cell(g.cagr_3y_ttm, muted=True, evidence=li.growth_evidence.get("cagr_3y_ttm"))
+        )
         body.write("</tr>")
         if drillable:
             n_cols = 1 + len(last_labels) + 3
@@ -742,13 +751,20 @@ def _segment_drill_table(
     body: StringIO, real_segments: list[SegmentSeries], quarter_labels: list[str]
 ) -> None:
     last_labels = quarter_labels[-12:]
+    body.write(
+        '<p class="muted">Segment drill uses the retained segment projection. '
+        "Exact observation evidence is unavailable in this view.</p>"
+    )
     body.write('<table class="tbl tbl-nowrap fin-drill-table"><thead><tr>')
     body.write("<th>Segment</th>")
     for lbl in last_labels:
         body.write(f'<th class="num">{_esc(quarter_short(lbl))}</th>')
     body.write("</tr></thead><tbody>")
     for s in real_segments:
-        body.write(f"<tr><td>{_esc(s.segment_name)}</td>")
+        body.write(
+            f"<tr><td>{_esc(s.segment_name)} "
+            f'<span class="muted">({_esc(s.source_label)})</span></td>'
+        )
         for v in s.values[-12:]:
             if v is None:
                 body.write('<td class="num muted">—</td>')
@@ -780,8 +796,18 @@ def _sum_segments_at(segments: list[SegmentSeries], idx: int) -> float:
     return out
 
 
-def _growth_cell(v: float | None, *, muted: bool = False) -> str:
+def _growth_chip(reference: FinancialGrowthReference | None) -> str:
+    if reference is None:
+        return ""
+    return _source_chip_html(
+        CellSource(source="derived", calculation_reference=reference), link_only=True
+    )
+
+
+def _growth_cell(
+    v: float | None, *, muted: bool = False, evidence: FinancialGrowthReference | None = None
+) -> str:
     if v is None:
         return '<td class="num muted">—</td>'
     cls = "num muted" if muted else f"num {'pos' if v > 0 else 'neg'}"
-    return f'<td class="{cls}">{v * 100:+.1f}%</td>'
+    return f'<td class="{cls}">{v * 100:+.1f}%{_growth_chip(evidence)}</td>'

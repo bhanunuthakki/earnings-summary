@@ -79,6 +79,20 @@ from clock import now_iso
 from llm.cli import is_hard_stop
 from llm.structured import StructuredParseError, call_llm_structured
 from models.facts import Unit
+from sources.canonical_financial_series import (
+    CanonicalFinancialObservation,
+    FinancialCadence,
+    FinancialConsumerPoint,
+    FinancialConsumerSeries,
+    SeriesContinuity,
+    financial_metric_catalog,
+    read_financial_consumer_series,
+)
+from sources.report_financials import (
+    FinancialEvidenceReference,
+    financial_series_reference,
+    read_financial_evidence,
+)
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 if TYPE_CHECKING:
@@ -122,6 +136,7 @@ class _DecisionConditionWire(BaseModel):
     unit: Literal["actual", "thousands", "millions", "billions", "percent", "ratio", "bps", "count"]
     for_periods: int = Field(ge=1)
     not_before: str | None = None
+    financial_cadence: Literal["quarterly", "annual"] | None = None
     note: str | None = Field(default=None, max_length=300)
 
 
@@ -224,6 +239,10 @@ class DecisionCondition:
     not_before: str | None = None
     baseline_period_end: str | None = None
     breached_at_attach: bool = False
+    financial_cadence: Literal["quarterly", "annual"] | None = None
+    baseline_source_reference: FinancialEvidenceReference | None = None
+    baseline_source_context: CanonicalFinancialObservation | None = None
+    baseline_unavailable_reason: str | None = None
 
     def as_json_obj(self) -> dict[str, object]:
         return {
@@ -237,6 +256,14 @@ class DecisionCondition:
             "not_before": self.not_before,
             "baseline_period_end": self.baseline_period_end,
             "breached_at_attach": self.breached_at_attach,
+            "financial_cadence": self.financial_cadence,
+            "baseline_source_reference": self.baseline_source_reference.model_dump(mode="json")
+            if self.baseline_source_reference
+            else None,
+            "baseline_source_context": self.baseline_source_context.model_dump(mode="json")
+            if self.baseline_source_context
+            else None,
+            "baseline_unavailable_reason": self.baseline_unavailable_reason,
         }
 
 
@@ -400,6 +427,45 @@ def parse_condition(raw: object) -> DecisionCondition | None:
     )
     breached_at_attach = obj.get("breached_at_attach") is True
 
+    cadence_raw = obj.get("financial_cadence")
+    cadence: Literal["quarterly", "annual"] | None = (
+        cadence_raw if cadence_raw in ("quarterly", "annual") else None
+    )
+    reason_raw = obj.get("baseline_unavailable_reason")
+    reason = reason_raw if isinstance(reason_raw, str) else None
+    reference = None
+    context = None
+    try:
+        if obj.get("baseline_source_reference") is not None:
+            reference = FinancialEvidenceReference.model_validate_json(
+                json.dumps(obj["baseline_source_reference"])
+            )
+        if obj.get("baseline_source_context") is not None:
+            context = CanonicalFinancialObservation.model_validate(obj["baseline_source_context"])
+        if (reference is None) != (context is None):
+            raise ValueError("incomplete baseline identity")
+        if (
+            reference is not None
+            and context is not None
+            and (
+                reference.reader_kind != "series"
+                or reference.cadence is None
+                or reference.cadence.value != cadence
+                or reference.concept != metric
+                or reference.observation_id != context.observation_id
+                or reference.canonical_metric_cell_id != context.canonical_metric_cell_id
+                or reference.canonical_resolution_revision_id
+                != context.canonical_resolution_revision_id
+                or reference.metric_definition_revision_id != context.metric_definition_revision_id
+                or (baseline is not None and baseline[:10] != context.period_end.date().isoformat())
+            )
+        ):
+            raise ValueError("mismatched baseline identity")
+    except (ValueError, TypeError):
+        reason = "invalid_financial_baseline_identity"
+        reference, context = None, None
+    if metric_source == "financial" and cadence is None:
+        reason = "financial_cadence_unresolved"
     return DecisionCondition(
         metric=metric[:200],
         metric_source=metric_source,
@@ -411,6 +477,10 @@ def parse_condition(raw: object) -> DecisionCondition | None:
         not_before=not_before,
         baseline_period_end=baseline,
         breached_at_attach=breached_at_attach,
+        financial_cadence=cadence,
+        baseline_source_reference=reference,
+        baseline_source_context=context,
+        baseline_unavailable_reason=reason,
     )
 
 
@@ -518,6 +588,7 @@ Return ONLY a JSON array — no markdown fences, no commentary. Each element:
   "threshold": <number>,
   "unit": "actual" | "thousands" | "millions" | "billions" | "percent" | "ratio" | "bps" | "count",
   "for_periods": <integer >= 1>,
+  "financial_cadence": "quarterly" | "annual" | null,
   "not_before": "<YYYY-MM-DD>" | null,
   "note": "<short quote of the source phrase>"
 }}
@@ -529,6 +600,7 @@ Rules:
   "millions". "$1.2B" -> 1.2, "billions". "150bps" -> 150, "bps". A bare
   customer/user count -> "count".
 - "for_periods": "for 2 consecutive quarters" -> 2. Unstated -> 1.
+- "financial_cadence": copy only explicitly stated quarterly or annual measurement intent for a financial condition. Use null if the cadence is missing or ambiguous. A milestone deadline does not establish measurement cadence. Never infer it from available data. Use null for KPI conditions.
 - "not_before": for a FORWARD-LOOKING MILESTONE — the prose states a future
   horizon for the condition ("in ~12 months", "by FY27", "within 2 quarters",
   "ARR reaches $200M in a year") — set not_before to the decision date
@@ -576,6 +648,13 @@ def metric_vocabulary(conn: sqlite3.Connection, ticker: str) -> tuple[list[str],
         line_items = [str(r[0]) for r in rows]
     except sqlite3.Error:
         pass
+    line_items = sorted(
+        set(line_items)
+        | {
+            key
+            for key, _count in financial_metric_catalog(conn, [ticker], limit=_MAX_VOCAB_ENTRIES)
+        }
+    )[:_MAX_VOCAB_ENTRIES]
     return kpi_names, line_items
 
 
@@ -795,55 +874,156 @@ def _stance_excerpt(body_md: object) -> str | None:
     return text[:512] or None
 
 
+@dataclass(frozen=True)
+class FinancialConditionRead:
+    observations: list[KpiObservation] | None
+    sources: FinancialConsumerSeries | None
+    reason: str | None = None
+
+    def manifest(self) -> dict[str, object]:
+        return {
+            **(self.sources.manifest() if self.sources else {"status": "unavailable"}),
+            **({"condition_reason_code": self.reason} if self.reason else {}),
+        }
+
+
+def financial_condition_history(
+    conn: sqlite3.Connection,
+    ticker: str,
+    line_item: str,
+    n_periods: int,
+    *,
+    cadence: Literal["quarterly", "annual"] | None,
+    cutoff: datetime | None = None,
+) -> FinancialConditionRead:
+    from compute.thesis_evaluator import KpiObservation
+
+    if cadence is None:
+        return FinancialConditionRead(None, None, "financial_cadence_unresolved")
+    result = read_financial_consumer_series(
+        conn,
+        ticker,
+        line_item,
+        cutoff=cutoff or datetime.now(UTC),
+        cadence=FinancialCadence(cadence),
+        continuity=SeriesContinuity.STRICT_CONTIGUOUS,
+    )
+    if result.series.status != "available":
+        return FinancialConditionRead(None, result, result.series.reason_code)
+    if len(result.points) < n_periods:
+        return FinancialConditionRead(None, result, "insufficient_comparable_financial_history")
+    observations: list[KpiObservation] = []
+    for point in reversed(result.points[-n_periods:]):
+        item = point.observation
+        if item.unit != item.currency:
+            return FinancialConditionRead(None, result, "financial_threshold_unit_unavailable")
+        observations.append(
+            KpiObservation(
+                period_end=item.period_end,
+                value=item.value,
+                unit=Unit.ACTUAL,
+                fiscal_period_type=item.fiscal_period,
+                fiscal_year=item.fiscal_year,
+            )
+        )
+    return FinancialConditionRead(observations, result)
+
+
 def fetch_financial_history(
     conn: sqlite3.Connection,
     ticker: str,
     line_item: str,
     n_periods: int,
+    *,
+    cadence: Literal["quarterly", "annual"] | None = None,
+    cutoff: datetime | None = None,
 ) -> list[KpiObservation] | None:
-    """financial_facts twin of ``compute.thesis_evaluator.fetch_kpi_observations``.
+    """Compatibility projection; ambiguous cadence never admits financial inputs."""
+    return financial_condition_history(
+        conn, ticker, line_item, n_periods, cadence=cadence, cutoff=cutoff
+    ).observations
 
-    Line items are already canonical (the extraction prompt copies them
-    verbatim from the ticker's vocabulary), so no resolver pass. Coexisting
-    rows per period dedup to the latest-ingested source (MAX(source_doc_id)),
-    and one observation survives per period_end DATE — a same-date FY/Q4 pair
-    collapses rather than double-counting a consecutive-periods window.
-    Returns None when the line item has no rows at all (unresolvable),
-    matching the kpi fetcher's no-definition signal. Shared by the
-    decision-condition trigger (evaluation side) and the attach-time
-    watermark stamping below, so the two can never read different histories.
-    """
-    from compute.thesis_evaluator import KpiObservation
 
-    rows = conn.execute(
-        "SELECT ff.period_end, ff.value, ff.unit "
-        "FROM financial_facts ff "
-        "WHERE ff.ticker = ? AND ff.line_item = ? "
-        "  AND ff.id = ("
-        "      SELECT f2.id FROM financial_facts f2 "
-        "      WHERE f2.ticker = ff.ticker AND f2.line_item = ff.line_item "
-        "        AND f2.period_end = ff.period_end "
-        "      ORDER BY f2.source_doc_id DESC, f2.id DESC LIMIT 1) "
-        "ORDER BY ff.period_end DESC LIMIT ?",
-        (ticker.upper(), line_item, n_periods),
-    ).fetchall()
-    if not rows:
-        return None
-    out: list[KpiObservation] = []
-    for row in rows:
-        period = row["period_end"]
-        if isinstance(period, str):
-            period = datetime.fromisoformat(period)
-        try:
-            value = Decimal(str(row["value"]))
-            unit = Unit(row["unit"]) if row["unit"] else Unit.ACTUAL
-        except (InvalidOperation, ValueError):
-            continue
-        out.append(KpiObservation(period_end=period, value=value, unit=unit))
-    return out or None
+def financial_baseline_comparable(
+    baseline: CanonicalFinancialObservation, current: CanonicalFinancialObservation
+) -> bool:
+    fields = {
+        "metric_id",
+        "metric_definition_revision_id",
+        "cadence",
+        "reporting_entity_id",
+        "scope_security_id",
+        "currency",
+        "unit",
+        "accounting_basis",
+        "consolidation_scope",
+        "dimensions",
+    }
+    return baseline.model_dump(include=fields) == current.model_dump(include=fields)
+
+
+def read_financial_condition(
+    conn: sqlite3.Connection, ticker: str, condition: DecisionCondition, *, cutoff: datetime
+) -> FinancialConditionRead:
+    """Read current history and verify a saved baseline in one snapshot."""
+    if cutoff.tzinfo is None or cutoff > datetime.now(UTC):
+        raise ValueError("financial condition cutoff must be aware and not future")
+    if condition.baseline_unavailable_reason:
+        return FinancialConditionRead(None, None, condition.baseline_unavailable_reason)
+    owns_snapshot = not conn.in_transaction
+    if owns_snapshot:
+        conn.execute("BEGIN")
+    try:
+        history = financial_condition_history(
+            conn,
+            ticker,
+            condition.metric,
+            condition.for_periods,
+            cadence=condition.financial_cadence,
+            cutoff=cutoff,
+        )
+        if history.sources is None or history.observations is None:
+            return history
+        reference = condition.baseline_source_reference
+        if reference is not None:
+            if reference.ticker != ticker.upper() or reference.as_of > cutoff:
+                return FinancialConditionRead(
+                    None, history.sources, "invalid_financial_baseline_identity"
+                )
+            baseline = read_financial_evidence(conn, reference)
+            if (
+                not isinstance(baseline, FinancialConsumerPoint)
+                or baseline.observation != condition.baseline_source_context
+            ):
+                return FinancialConditionRead(
+                    None, history.sources, "financial_baseline_evidence_unavailable"
+                )
+            if not financial_baseline_comparable(
+                baseline.observation, history.sources.points[-1].observation
+            ):
+                return FinancialConditionRead(
+                    None, history.sources, "financial_baseline_context_changed"
+                )
+        return history
+    finally:
+        if owns_snapshot and conn.in_transaction:
+            conn.rollback()
 
 
 def stamp_condition_baselines(
+    conn: sqlite3.Connection, ticker: str, conditions: list[DecisionCondition]
+) -> list[DecisionCondition]:
+    owns_snapshot = not conn.in_transaction
+    if owns_snapshot:
+        conn.execute("BEGIN")
+    try:
+        return _stamp_condition_baselines_snapshot(conn, ticker, conditions)
+    finally:
+        if owns_snapshot and conn.in_transaction:
+            conn.rollback()
+
+
+def _stamp_condition_baselines_snapshot(
     conn: sqlite3.Connection,
     ticker: str,
     conditions: list[DecisionCondition],
@@ -869,16 +1049,29 @@ def stamp_condition_baselines(
     )
     from models.kpis import BreachStatus
 
+    cutoff = datetime.now(UTC)
     out: list[DecisionCondition] = []
     for cond in conditions:
         if cond.metric_source not in METRIC_SOURCES:
             out.append(cond)
             continue
+        history: FinancialConditionRead | None = None
         try:
             if cond.metric_source == "kpi":
                 observations = fetch_kpi_observations(conn, ticker, cond.metric, cond.for_periods)
             else:
-                observations = fetch_financial_history(conn, ticker, cond.metric, cond.for_periods)
+                history = financial_condition_history(
+                    conn,
+                    ticker,
+                    cond.metric,
+                    cond.for_periods,
+                    cadence=cond.financial_cadence,
+                    cutoff=cutoff,
+                )
+                observations = history.observations
+                if observations is None or history.sources is None:
+                    out.append(replace(cond, baseline_unavailable_reason=history.reason))
+                    continue
         except sqlite3.Error:
             out.append(cond)
             continue
@@ -902,7 +1095,28 @@ def stamp_condition_baselines(
             breached = evaluation.status is BreachStatus.BREACH
         except (ValueError, InvalidOperation):
             pass  # corrupt op/unit — baseline still worth keeping
-        out.append(replace(cond, baseline_period_end=baseline, breached_at_attach=breached))
+        if cond.metric_source == "financial":
+            assert history is not None and history.sources is not None
+            point = history.sources.points[-1]
+            reference = financial_series_reference(
+                point,
+                ticker=ticker.upper(),
+                cutoff=cutoff,
+                cadence=history.sources.series.cadence,
+                continuity=history.sources.series.continuity,
+            )
+            out.append(
+                replace(
+                    cond,
+                    baseline_period_end=baseline,
+                    breached_at_attach=breached,
+                    baseline_source_reference=reference,
+                    baseline_source_context=point.observation,
+                    baseline_unavailable_reason=None,
+                )
+            )
+        else:
+            out.append(replace(cond, baseline_period_end=baseline, breached_at_attach=breached))
         if breached:
             log.info(
                 {

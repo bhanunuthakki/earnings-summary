@@ -1,5 +1,5 @@
 {
-  "review_note": "2026-10-04 bounded successor semantic review: parent and child reject nested MELI evidence ticker before database/child/output access; exact refusal regressions pass. Memo numeric population binds every calculated result and separately admitted operand, rejects extra numbers, duplicates and conflicting percent markers, and accepts ordinary sentence punctuation. Targeted memo/migration92, identity/transcript/cashflow58, and final memo/coordinator70 checks passed; full prior candidate17826pass/67skip/4fail retained. This closes named source review only, not native, sealed-source-to-full-reader integration, installed or decision-grade qualification.",
+  "review_note": "Integrated main reader now returns an exact table or series point. Reviewed memo verifiers preserve the original table-only numeric/display/comparability contract and explicitly refuse unsupported series references at all entry sites; top-level receipt retains the degraded reason. Five failure-first cases and50 regression tests pass; no reader fallback, invented unit conversion or provenance cast.",
   "schema_version": 1,
   "sources": [
     {
@@ -20,11 +20,11 @@
     },
     {
       "path": "directives/data_pipeline_dag.md",
-      "sha256": "4b6e75808bd3ae6b891489558aa570488f2ad3f4657e039f5f7442c509f19b42"
+      "sha256": "cef764c3b26951ba529f1ea2b0ebb47c63a995d206e377c25a54611d9e8cc69d"
     },
     {
       "path": "directives/data_provenance.md",
-      "sha256": "c95c24b2ad5f0601a7d7f50dbb912e6a2554ac0089b1a6c73073d3064fe85241"
+      "sha256": "6b39ca437ca7622a615cb16d86c9e1d85a35d5b5579638e783931dc128bdb23c"
     },
     {
       "path": "directives/dcf_gsheets_setup.md",
@@ -40,7 +40,7 @@
     },
     {
       "path": "directives/folder_structure.md",
-      "sha256": "a836fbe51b30aea858b08d5b2b5ae34c0f087ca8266bb0408c896faecb9aa9ea"
+      "sha256": "f14a474be797afe4d4a4027105c42b018fd2878cf4eaaa1dc33f259d02916ccd"
     },
     {
       "path": "directives/holdings_json_schema.md",
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "31140d0d26d3c49471627c4de6ae1a3d29fd8a20dd36aac10d9180a51a3d535b"
+      "sha256": "f4d683627c6d47ebab74231754f54d9f3bf5e70ac19f6c17558bff95f70cf1ef"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -120,7 +120,7 @@
     },
     {
       "path": "execution/build_meli_platform_dcf.py",
-      "sha256": "f65c1b8d6be2451760dd02db65299f01c06b3a1491f410354d52b3a758384d29"
+      "sha256": "29cf3589bed65174d48c9abfcd76bbdb6fcca2f9087c3e13274123934f434129"
     },
     {
       "path": "execution/capture_expected_sec_documents.py",
@@ -128,11 +128,11 @@
     },
     {
       "path": "execution/capture_issuer_document_inventory.py",
-      "sha256": "609706ca065c179613e3c270a8b8df4d7e03ec8fb3cb92c17ac590c76296f1ac"
+      "sha256": "bfee5f09d733ad99cccdbf425ff2ad71ca8d89879f4437488ebe83052916d0c0"
     },
     {
       "path": "execution/comments_server.py",
-      "sha256": "5bc3b85c9c4c0586cdef71b260f393e4dc1ace59a7c547b4603f404ce0e3d075"
+      "sha256": "dcfa6682f351867b864ee178dfcd22c1d559f036c8e5e5a1bed5cb4fb8435a64"
     },
     {
       "path": "execution/comments_server_research_routes.py",
@@ -144,7 +144,7 @@
     },
     {
       "path": "execution/dcf_sheets.py",
-      "sha256": "822d6b58d3a020cd1a2304fcb8ec10e37c05fa0c0be3af600ce7649a328ace34"
+      "sha256": "c8bab3d1f35489f19e819ecc2fd7d589b201d8fd64acb9633c81dad5a52c021f"
     },
     {
       "path": "execution/discover_ir_documents_all.py",
@@ -160,7 +160,7 @@
     },
     {
       "path": "execution/fetch_ir_documents.py",
-      "sha256": "62f59b902037434e3e97c933311aebca95221c29cf8584c96a9e9ed1e73fc265"
+      "sha256": "b400a712dd0b67516f043bb0d598d1fd20703a1f0fb117ac5d2d354ca3939954"
     },
     {
       "path": "execution/fetch_sec_xbrl.py",
@@ -228,7 +228,7 @@
     },
     {
       "path": "execution/refresh_dcf.py",
-      "sha256": "2e6698ac5961e0d4d0719044842d276c848e548ced08994f20cec632ba110b76"
+      "sha256": "b1ec03e21eb30032240f95966c3cb0c5d6553a26e15392b512b02b8f95d12ea2"
     },
     {
       "path": "execution/refresh_portfolio_risk_snapshot.py",
@@ -256,7 +256,7 @@
     },
     {
       "path": "execution/sync_sec_filing_inventory.py",
-      "sha256": "0db0bc3cafa89c6c9540a71bf7ce694400eb875cdc9dc40ef680bf72466c0135"
+      "sha256": "e507ad4e2553f096eeb5247a8666d0ae17390742e5334440b59e2a42d881a7b1"
     },
     {
       "path": "execution/track_evaluation_names.py",
@@ -276,7 +276,7 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "a8a44e5921aa41a98a58f20696bc7cd45dd2cdd13a08257cd2f0fca47bb818b2"
+      "sha256": "1ddf2b186aa73cae78469f37d8d6869bf494adc928b869552d7d552d627349ad"
     },
     {
       "path": "scripts/check_investing_skill.py",
@@ -340,7 +340,7 @@
     },
     {
       "path": "src/dcf/grade_evidence.py",
-      "sha256": "869a112c71dd56343158a6a3cbd7536b52508552f377557810834218d368411f"
+      "sha256": "60fbae023148ab10b14f21d7401c7a0097faa226df40dde94ec5f509f19c52d0"
     },
     {
       "path": "src/dcf/input_recipes.py",
@@ -348,7 +348,7 @@
     },
     {
       "path": "src/dcf/readiness.py",
-      "sha256": "2f6015e2f55c00ea78b5abeefb36ff75e5caafd2ea4dc8dfeda68d69bf19ece7"
+      "sha256": "f87b98e14801b5ade6d41efa6042463fc15119342e0f4ad14c14f94621888cc4"
     },
     {
       "path": "src/earnings_brief.py",
@@ -376,11 +376,11 @@
     },
     {
       "path": "src/integrations/portfolio_tracker_client.py",
-      "sha256": "5ea9c0fdc38c9634c334eb6fd8b06aaf8f7aa0d219d5654c13bffbafa1fc1a62"
+      "sha256": "6184c8768d17182b4575898e89388ed8056df0175dcc5fdbfe50b26fc00d2a68"
     },
     {
       "path": "src/integrations/portfolio_tracker_v1.py",
-      "sha256": "87716d99214585550b73653a6ef4359a20423a63b8f7a3c5a67d5c72bbe43635"
+      "sha256": "04b84d26157474ea8549fb1d9de784f779167adb64f60ff7bb4c8458201b3308"
     },
     {
       "path": "src/llm/calibration.py",
@@ -388,7 +388,7 @@
     },
     {
       "path": "src/llm/prompt_versions.py",
-      "sha256": "6d7aeca27d0dc5560b658630d28188a58f1cd2ca0ccd14a4d5cb65fd518dc8f6"
+      "sha256": "23c4910d86f0cc95d59974f3964d2a0eee22c64324c6565235399af076225424"
     },
     {
       "path": "src/llm_artifact_store.py",
@@ -448,7 +448,7 @@
     },
     {
       "path": "src/research/decision_brief.py",
-      "sha256": "00f83f8b50b00f5f5ba5a7a5323255daec30c7bdeff927f19940e7f16f5d9505"
+      "sha256": "66c0c8f6b359496db6bb40753ca5a9b795e29534a443954f929276b420baf642"
     },
     {
       "path": "src/research/decision_brief_workflow.py",
@@ -460,7 +460,7 @@
     },
     {
       "path": "src/research/memo_claim_support.py",
-      "sha256": "df9c665381ecb2c4a8097db58bacff2acd415a0716ee521b0f2af0a0bf805d21"
+      "sha256": "d81315a2cd4b1b633ce75cc34cb1a5793793a17906b19d9b761531059ba9e1a6"
     },
     {
       "path": "src/research/method_contract.py",

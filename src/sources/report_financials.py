@@ -14,7 +14,15 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import FactReadModel, ProvenanceBundle
@@ -23,6 +31,13 @@ from provenance.financial_statement_admission import (
     verify_reviewed_financial_role,
 )
 from provenance.metric_ontology import MetricOntology
+from sources.canonical_financial_series import (
+    CanonicalFinancialSeriesReader,
+    FinancialCadence,
+    FinancialConsumerPoint,
+    SeriesContinuity,
+    read_financial_consumer_series,
+)
 
 FinancialReportConcept = Literal[
     "revenue",
@@ -55,12 +70,28 @@ class FinancialEvidenceReference(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", strict=True)
     ticker: str = Field(min_length=1, max_length=32, pattern=r"^[A-Z][A-Z0-9.-]*$")
-    concept: FinancialReportConcept
+    concept: str = Field(min_length=1, max_length=128, pattern=r"^[a-z][a-z0-9_]*$")
+    reader_kind: Literal["report_table", "series"] = "report_table"
+    cadence: FinancialCadence | None = None
+    continuity: SeriesContinuity | None = None
     canonical_metric_cell_id: str = Field(min_length=1, max_length=128)
     observation_id: str = Field(min_length=1, max_length=128)
     canonical_resolution_revision_id: str = Field(min_length=1, max_length=128)
     metric_definition_revision_id: str = Field(min_length=1, max_length=128)
     as_of: AwareDatetime
+
+    @model_validator(mode="after")
+    def _reader_shape(self) -> FinancialEvidenceReference:
+        if self.reader_kind == "report_table":
+            if (
+                self.concept not in REPORT_CONCEPTS
+                or self.cadence is not None
+                or self.continuity is not None
+            ):
+                raise ValueError("invalid report-table reference")
+        elif self.cadence is None or self.continuity is None:
+            raise ValueError("series reference requires cadence and continuity")
+        return self
 
     @field_validator(
         "canonical_metric_cell_id",
@@ -181,6 +212,10 @@ def _admit_cell(
     bundle = reader.provenance_bundle(resolution.selected_observation_id, cutoff=cutoff)
     value, source = bundle.observation, bundle.cell
     reasons: list[str] = []
+    if not CanonicalFinancialSeriesReader(conn, "", cutoff=cutoff).derivation_operands_current(
+        bundle
+    ):
+        reasons.append("derived_operand_selection_changed")
     definition = ontology.metric_definition_as_known(metric_id, cutoff)
     binding = ontology.binding_as_known(value.observation_id, cutoff)
     admitted = (
@@ -206,6 +241,9 @@ def _admit_cell(
         or definition.value_kind != "numeric"
         or definition.period_kind != "duration"
         or definition.unit_family != "currency"
+        or not CanonicalFinancialSeriesReader(conn, "", cutoff=cutoff).reviewed_currency_matches(
+            value.observation_id, source.currency
+        )
         or definition.accounting_basis != source.accounting_basis
         or definition.scope_constraints.get("reporting_entity_id") != source.reporting_entity_id
         or definition.scope_constraints.get("consolidation_scope") != source.consolidation_scope
@@ -232,7 +270,11 @@ def _admit_cell(
             scope_label = "consolidated"
         else:
             reasons.append("financial_statement_scope_unqualified")
-    if bundle.evidence is None or value.decimal_value is None or value.period_start is None:
+    if (
+        (bundle.evidence is None and bundle.derivation is None)
+        or value.decimal_value is None
+        or value.period_start is None
+    ):
         reasons.append("exact_reported_numeric_duration_unavailable")
     if value.period_end > cutoff:
         reasons.append("future_period")
@@ -307,27 +349,29 @@ def read_financial_table(
             conn.execute("BEGIN")
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT DISTINCT binding.canonical_metric_cell_id,"
-            "CASE WHEN source.concept_namespace='urn:earnings-summary:legacy:financial' "
-            "THEN source.concept_name ELSE json_extract(definition.scope_constraints_json,'$.financial_statement_concept') END,"
-            "target.metric_id "
+            "SELECT DISTINCT binding.canonical_metric_cell_id,CASE WHEN source.concept_namespace='urn:earnings-summary:legacy:financial' THEN source.concept_name ELSE COALESCE(json_extract(definition.scope_constraints_json,'$.financial_statement_concept'),metric.canonical_name) END,target.metric_id "
             "FROM fact_cell_canonical_binding_revisions binding "
             "JOIN fact_cells_v2 source ON source.fact_cell_id=binding.fact_cell_id "
             "JOIN canonical_metric_cells target ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id "
+            "JOIN canonical_metrics metric ON metric.metric_id=target.metric_id "
             "JOIN canonical_metric_definition_revisions definition ON definition.metric_id=target.metric_id "
             "JOIN fact_observations_v2 observation ON observation.observation_id=binding.source_observation_id "
-            "JOIN evidence_document_versions document ON document.document_version_id=observation.document_version_id "
-            "WHERE document.ticker=? AND ("
-            "(source.concept_namespace='urn:earnings-summary:legacy:financial' "
-            "AND source.concept_name IN (SELECT value FROM json_each(?))) "
-            "OR json_extract(definition.scope_constraints_json,'$.financial_statement_concept') "
-            "IN (SELECT value FROM json_each(?))) "
+            "LEFT JOIN evidence_document_versions document ON document.document_version_id=observation.document_version_id "
+            "WHERE (document.ticker=? OR (observation.observation_kind='derived' AND EXISTS ("
+            "SELECT 1 FROM fact_cells_v2 input_cell JOIN fact_observations_v2 input_observation ON input_observation.fact_cell_id=input_cell.fact_cell_id "
+            "JOIN evidence_document_versions input_document ON input_document.document_version_id=input_observation.document_version_id "
+            "WHERE input_cell.reporting_entity_id=source.reporting_entity_id AND input_document.ticker=?))) "
+            "AND ((source.concept_namespace='urn:earnings-summary:legacy:financial' AND source.concept_name IN (SELECT value FROM json_each(?))) "
+            "OR metric.canonical_name IN (SELECT value FROM json_each(?)) "
+            "OR json_extract(definition.scope_constraints_json,'$.financial_statement_concept') IN (SELECT value FROM json_each(?))) "
             "AND binding.binding_status='bound' "
             "AND julianday(binding.recorded_at)<=julianday(?) AND julianday(binding.knowledge_at)<=julianday(?) "
             "AND julianday(definition.recorded_at)<=julianday(?) AND julianday(definition.knowledge_at)<=julianday(?) "
             "ORDER BY source.concept_name,binding.canonical_metric_cell_id",
             (
                 ticker,
+                ticker,
+                json.dumps(REPORT_CONCEPTS),
                 json.dumps(REPORT_CONCEPTS),
                 json.dumps(REPORT_CONCEPTS),
                 cutoff.isoformat(),
@@ -401,12 +445,34 @@ def read_financial_table(
 
 def read_financial_evidence(
     conn: sqlite3.Connection, reference: FinancialEvidenceReference
-) -> FinancialTableCell | None:
+) -> FinancialTableCell | FinancialConsumerPoint | None:
     """Re-admit the exact report selection without a current or legacy fallback.
 
     The complete projection preserves table-wide rejection rules and its
     existing snapshot ownership. No further database read follows it.
     """
+    if reference.reader_kind == "series":
+        if reference.cadence is None or reference.continuity is None:
+            return None
+        result = read_financial_consumer_series(
+            conn,
+            reference.ticker,
+            reference.concept,
+            cutoff=reference.as_of,
+            cadence=reference.cadence,
+            continuity=reference.continuity,
+        )
+        for point in result.points:
+            item = point.observation
+            if (
+                item.canonical_metric_cell_id == reference.canonical_metric_cell_id
+                and item.observation_id == reference.observation_id
+                and item.canonical_resolution_revision_id
+                == reference.canonical_resolution_revision_id
+                and item.metric_definition_revision_id == reference.metric_definition_revision_id
+            ):
+                return point
+        return None
     projection = read_financial_table(conn, reference.ticker, as_of=reference.as_of)
     for cell in projection.cells:
         if (
@@ -420,3 +486,26 @@ def read_financial_evidence(
         ):
             return cell
     return None
+
+
+def financial_series_reference(
+    point: FinancialConsumerPoint,
+    *,
+    ticker: str,
+    cutoff: datetime,
+    cadence: FinancialCadence,
+    continuity: SeriesContinuity,
+) -> FinancialEvidenceReference:
+    item = point.observation
+    return FinancialEvidenceReference(
+        ticker=ticker,
+        concept=item.metric,
+        reader_kind="series",
+        cadence=cadence,
+        continuity=continuity,
+        canonical_metric_cell_id=item.canonical_metric_cell_id,
+        observation_id=item.observation_id,
+        canonical_resolution_revision_id=item.canonical_resolution_revision_id,
+        metric_definition_revision_id=item.metric_definition_revision_id,
+        as_of=cutoff,
+    )

@@ -45,7 +45,16 @@ from research.decision_brief_workflow import (
     prepare_decision_brief,
 )
 from runtime.job_runtime import run_captured_application_child
-from sources.report_financials import FinancialEvidenceReference, read_financial_table
+from sources.canonical_financial_series import (
+    FinancialCadence,
+    FinancialConsumerPoint,
+    SeriesContinuity,
+)
+from sources.report_financials import (
+    FinancialEvidenceReference,
+    read_financial_evidence,
+    read_financial_table,
+)
 from tests import test_report_canonical_financials as canonical
 from ui.source_chip import source_chip_html, source_hover_title
 
@@ -460,6 +469,16 @@ def test_financial_reference_requires_exact_ontology_and_resolution_members(
         }
     )
     verify_memo_snapshot_reference(database, reference, snapshot, "SYNTH", STAMP)
+    series_reference = reference.model_copy(
+        update={
+            "reader_kind": "series",
+            "cadence": FinancialCadence.QUARTERLY,
+            "continuity": SeriesContinuity.WINDOWED,
+        }
+    )
+    assert isinstance(read_financial_evidence(database, series_reference), FinancialConsumerPoint)
+    with pytest.raises(MemoEvidenceError, match="memo_financial_series_reference_unsupported"):
+        verify_memo_snapshot_reference(database, series_reference, snapshot, "SYNTH", STAMP)
     for field in ("ontology_snapshot_id", "canonical_fact_resolution_snapshot_id"):
         with pytest.raises(
             MemoEvidenceError, match="memo_financial_evidence_outside_exact_snapshot"
@@ -471,3 +490,49 @@ def test_financial_reference_requires_exact_ontology_and_resolution_members(
                 "SYNTH",
                 STAMP,
             )
+
+
+@pytest.mark.parametrize("numeric_cell", [False, True])
+def test_series_chip_degrades_memo_without_row_label_bypass(
+    database: sqlite3.Connection, tmp_path: Path, numeric_cell: bool
+) -> None:
+    reference = _reference(database).model_copy(
+        update={
+            "reader_kind": "series",
+            "cadence": FinancialCadence.QUARTERLY,
+            "continuity": SeriesContinuity.WINDOWED,
+        }
+    )
+    assert isinstance(read_financial_evidence(database, reference), FinancialConsumerPoint)
+    chip = source_chip_html(
+        CellSource(source="sec_official", canonical_reference=reference), link_only=True
+    )
+    cell = f'<td class="num">120.0{chip}</td>' if numeric_cell else f"<td>Revenue{chip}</td>"
+    report = _report(tmp_path, f"<table><tr>{cell}</tr></table>")
+    receipt = assess_decision_brief(database, repo_root=tmp_path, artifact=report, as_of=STAMP)
+    assert not receipt.decision_grade
+    assert receipt.status == "degraded"
+    assert receipt.financial_reference_count == 0
+    assert "memo_financial_series_reference_unsupported" in receipt.reason_codes
+
+
+def test_series_operand_cannot_use_memo_table_calculation_contract(
+    database: sqlite3.Connection,
+) -> None:
+    table_reference = _reference(database)
+    series_reference = table_reference.model_copy(
+        update={
+            "reader_kind": "series",
+            "cadence": FinancialCadence.QUARTERLY,
+            "continuity": SeriesContinuity.WINDOWED,
+        }
+    )
+    assert isinstance(read_financial_evidence(database, series_reference), FinancialConsumerPoint)
+    calculation = MemoCalculation(
+        operation="difference",
+        operands=(table_reference, series_reference),
+        displayed_value="0.0",
+        display_format="number1",
+    )
+    with pytest.raises(MemoEvidenceError, match="memo_financial_series_reference_unsupported"):
+        verify_memo_calculation(database, calculation)

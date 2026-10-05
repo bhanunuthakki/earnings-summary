@@ -18,20 +18,18 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-SRC = PROJECT_ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from provenance.verifier_identity import verifier_source_artifact_sha256  # noqa: E402
-from sqlite_freshness import SQLiteFileToken, sqlite_file_token  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
-from sqlite_snapshot import (  # noqa: E402
+from provenance.verifier_identity import verifier_source_artifact_sha256
+from sqlite_freshness import SQLiteFileToken, sqlite_file_token
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from sqlite_snapshot import (
     SnapshotManifest,
     SnapshotRequest,
     verify_snapshot_matches_source,
 )
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 _SUPPORTED_SNAPSHOT_SCHEMA_VERSION = "sqlite-reader-snapshot/v1"
 _SUPPORTED_SNAPSHOT_CODE_CONFIG_VERSIONS = frozenset({"sqlite-reader-snapshot/v1"})
 
@@ -99,6 +97,26 @@ def _revision_and_verification(path: Path) -> tuple[str, tuple[str, ...], int]:
     return revisions[0], integrity, foreign_keys
 
 
+def _revision(path: Path) -> str:
+    conn = connect_sqlite(path, role=SQLiteConnectionRole.READ_ONLY, schema_preflight=False)
+    try:
+        rows = conn.execute(
+            "SELECT version_num FROM alembic_version ORDER BY version_num"
+        ).fetchall()
+        if len(rows) != 1 or not isinstance(rows[0][0], str) or not rows[0][0]:
+            raise ValueError("database revision is not singular non-empty text")
+        return rows[0][0]
+    finally:
+        conn.close()
+
+
+def _aliases_source(snapshot: Path, source: Path) -> bool:
+    try:
+        return snapshot.samefile(source)
+    except OSError:
+        return snapshot == source
+
+
 def _evidence_id(receipt: BackupRestoreReadinessReceipt) -> str:
     payload = receipt.model_dump(mode="json", exclude={"evidence_id"})
     canonical = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
@@ -143,11 +161,7 @@ def validate_receipt_for_source(
         return tuple(dict.fromkeys(reasons))
 
     snapshot = Path(receipt.snapshot_resolved_path).resolve()
-    try:
-        snapshot_aliases_source = snapshot.samefile(source)
-    except OSError:
-        snapshot_aliases_source = snapshot == source
-    if snapshot_aliases_source:
+    if _aliases_source(snapshot, source):
         return ("backup_restore_snapshot_source_alias",)
 
     try:
@@ -206,6 +220,27 @@ def collect_backup_restore_receipt(
         if manifest_path is not None
         else snapshot.with_suffix(snapshot.suffix + ".manifest.json")
     )
+    # Reject both path aliases and hard links before opening either database
+    # or reading any snapshot/manifest artifact.
+    if _aliases_source(snapshot, source):
+        draft = BackupRestoreReadinessReceipt(
+            evidence_id="0" * 64,
+            observed_at=datetime.now(UTC),
+            source_db_requested_path=str(source_requested),
+            source_db_resolved_path=str(source),
+            source_db_revision=None,
+            snapshot_requested_path=str(snapshot_requested),
+            snapshot_resolved_path=str(snapshot),
+            snapshot_manifest_resolved_path=str(manifest_file),
+            restored_db_revision=None,
+            integrity_check=(),
+            verifier_code_sha256=verifier_code_sha256(),
+            verified=False,
+            blocking_reasons=("backup_restore_snapshot_source_alias",),
+        )
+        return draft.model_copy(update={"evidence_id": _evidence_id(draft)})
+
+    verifier_sha = verifier_code_sha256()
     reasons: list[str] = []
     source_revision: str | None = None
     source_size: int | None = None
@@ -224,7 +259,9 @@ def collect_backup_restore_receipt(
         source_size = stat.st_size
         source_mtime = stat.st_mtime_ns
         try:
-            source_revision, _, _ = _revision_and_verification(source)
+            # The fresh comparison below fully verifies a source-derived
+            # candidate. Only the exact revision is needed from this reader.
+            source_revision = _revision(source)
         except Exception:
             reasons.append("source_database_unreadable")
     else:
@@ -276,9 +313,6 @@ def collect_backup_restore_receipt(
         except Exception:
             reasons.append("source_identity_changed_since_snapshot")
 
-    if source_file_token != sqlite_file_token(source):
-        reasons.append("source_identity_changed_during_verification")
-
     if source_revision is not None and restored_revision != source_revision:
         reasons.append("restored_revision_mismatch")
     if integrity != ("ok",):
@@ -304,11 +338,31 @@ def collect_backup_restore_receipt(
         restored_db_revision=restored_revision,
         integrity_check=integrity,
         foreign_key_violation_count=foreign_keys,
-        verifier_code_sha256=verifier_code_sha256(),
+        verifier_code_sha256=verifier_sha,
         verified=not blocking_reasons,
         blocking_reasons=blocking_reasons,
     )
-    return draft.model_copy(update={"evidence_id": _evidence_id(draft)})
+    receipt = draft.model_copy(update={"evidence_id": _evidence_id(draft)})
+    if receipt.verified:
+        # The collector already performed the fresh full comparison. Retain
+        # the public commitment, current-verifier and immutable-artifact
+        # guards here without starting a second full comparison.
+        reasons.extend(
+            validate_receipt_for_source(
+                receipt,
+                source_db=source,
+                source_revision=source_revision,
+                require_current_identity=False,
+            )
+        )
+    # This final source fence must also cover the static receipt checks.
+    if source_file_token != sqlite_file_token(source):
+        reasons.append("source_identity_changed_during_verification")
+    blocking_reasons = tuple(dict.fromkeys(reasons))
+    receipt = receipt.model_copy(
+        update={"verified": not blocking_reasons, "blocking_reasons": blocking_reasons}
+    )
+    return receipt.model_copy(update={"evidence_id": _evidence_id(receipt)})
 
 
 def main(argv: list[str] | None = None) -> int:

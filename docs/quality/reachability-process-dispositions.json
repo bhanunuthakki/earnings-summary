@@ -12,9 +12,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Argv is the fixed execution/grade_decisions.py path run via managed_python_prefix.",
-      "fingerprint": "f9142a01b8d64c758af76bce674aca14cb5e4d600136d68830bdec17ccc136fb",
-      "line": 46,
+      "evidence": "Argv invokes fixed PROJECT_ROOT/execution/grade_decisions.py through managed_python_prefix. Explicit --db-path and --repo-root carry the selected database and artifact root; the artifact root no longer selects executable code. No new script target.",
+      "fingerprint": "791b308d3812f4ad27eaa588d20753ecd45284694053ace77e7e40c091164a03",
+      "line": 53,
       "path": "execution/backfill_seed_decisions.py",
       "targets": [
         "execution/grade_decisions.py"
@@ -134,8 +134,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_categorize invokes the fixed _CATEGORIZER script via managed_python_prefix.",
-      "fingerprint": "8dcc3d17deb950d7c832a6e236539822825acda4ba8a0bb095d99a42bc543440",
-      "line": 576,
+      "fingerprint": "31c1d250e92b6f908a4fab20feb9db246df66886afe34f8ca1b2f3749f8bcf7b",
+      "line": 577,
       "path": "execution/fetch_ir_documents.py",
       "targets": [
         "execution/categorize_ir_uploads.py"
@@ -310,8 +310,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_bank runs the fixed _BANK_BUILDER via managed_python_prefix.",
-      "fingerprint": "d7e7cd25109ed6088cabf1b75025ca1c4f8ae5564989340eb67fc69d5960a385",
-      "line": 731,
+      "fingerprint": "ab45e5e5a9ac0c7ef777e7a03ee7460a460f2097f409879135cb89662b8169ee",
+      "line": 861,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_bank_dcf.py"
@@ -320,8 +320,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_holdco runs the fixed _HOLDCO_BUILDER via managed_python_prefix.",
-      "fingerprint": "d9a7bc2072451dec6e3f9f03239fa4d2eca0d6209bb0098cc82a6a66c92036c2",
-      "line": 768,
+      "fingerprint": "935d9330e441879f125994581ed5677397899a44efc4417271913f5fe66d3d10",
+      "line": 906,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_holdco_sotp.py"
@@ -330,8 +330,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_fintech_sotp runs the fixed _FINTECH_BUILDER via managed_python_prefix.",
-      "fingerprint": "4ae2c6e2cc7b74f77f6e0f4eb431655437b7d826aec10e8fcd846c78abd6354b",
-      "line": 813,
+      "fingerprint": "afc8733bcba21544b3bfbdae51d93f46c8d18ba72a238126872ac9950cd2b22e",
+      "line": 959,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_fintech_sotp.py"
@@ -340,8 +340,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_platform runs the fixed _PLATFORM_BUILDER via managed_python_prefix.",
-      "fingerprint": "fd9bffc56d5b655343a7ab8b65437b7655e47e44842552c8eda66c07cf8f3191",
-      "line": 858,
+      "fingerprint": "722f9888134d35b8628cd0765a7ac1558e5e306dcc79d661a3d3b981cf9d810a",
+      "line": 1012,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_nu_platform_dcf.py"
@@ -350,8 +350,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_meli_sotp runs the fixed _MELI_SOTP_BUILDER via managed_python_prefix.",
-      "fingerprint": "3ae8e556aa28fd320aafcd621a9df976b55262d59eb294ea1e41c3f16a9b3e6e",
-      "line": 925,
+      "fingerprint": "330ba8e236df1d51eba67444ffe9582d5a42189017c752bf60d3dbea652a5e15",
+      "line": 1086,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_meli_platform_dcf.py"
@@ -359,9 +359,19 @@
     },
     {
       "disposition": "internal_python_target",
+      "evidence": "_refresh_onon runs only the fixed _ONON_BUILDER execution/build_onon_dcf.py through managed_python_prefix; the explicit hash-bound reviewed input artifact supplies model inputs, not executable code.",
+      "fingerprint": "cf89c540e4604488d5b386422aea2e02a898b8c84f46dc1d05fcc1ff3e2ff0f4",
+      "line": 1159,
+      "path": "execution/refresh_dcf.py",
+      "targets": [
+        "execution/build_onon_dcf.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
       "evidence": "_run_builder runs the fixed _BUILDER_SCRIPT via managed_python_prefix.",
-      "fingerprint": "66cf211fbe41cdb8e54a0edd42bc4cebabe0e2b78f66f39c74fda7f129c6f7c8",
-      "line": 974,
+      "fingerprint": "b3e89087da3d1a8d627c3609f53a5edf46273b18b527a2d24c37f009c45e639e",
+      "line": 1224,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_redesigned_dcf.py"
@@ -457,8 +467,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Add execution/process_document_evidence.py to existing closed STAGE_MANIFEST dispatch. _selected_specs chooses manifest members; _build_stages resolves execution/spec.script via managed_python_argv. New deterministic stage is --apply --resume --batch-size 100, timeout600s; depends on preflight/list identity only and has DB_AND_STATE_ROOT argument profile. The target does no LLM/narrative dispatch and no arbitrary process invocation. This is a reviewed change to target scope, not a line-only refresh.",
-      "fingerprint": "4335a4db0fd590f502744548a1b62dff3f0166e70dd087707b81ec11841a7e47",
-      "line": 372,
+      "fingerprint": "5f569590896c5286a44e020acef85b049f51624b752eae022c95fb5fb48c4c56",
+      "line": 377,
       "path": "execution/run_morning_pipeline.py",
       "targets": [
         "execution/validate_environment.py",
@@ -660,12 +670,12 @@
     },
     {
       "disposition": "external_process",
-      "evidence": "canonical_runtime_git_commit runs the fixed git rev-parse command.",
+      "evidence": "_collect_live_process_census executes the fixed SYSTEMROOT-based Windows PowerShell path with fixed -NoProfile -NonInteractive -Command flags and locally constructed Get-CimInstance Win32_Process census program. No caller-provided executable or Python target; timeout 60s, captured output, fail-closed return-code/JSON validation. This corrects existing git/canonical_runtime_git_commit metadata; the literal Git HEAD probe is a separate call. No runtime call was added.",
       "fingerprint": "bec37b420cb4ea3850b0d2016e3af3b5ae836258d4d1ecd5e8dbde67bdea0800",
       "line": 1824,
       "path": "src/provenance/gc_recovery.py",
       "targets": [
-        "git"
+        "SYSTEMROOT/System32/WindowsPowerShell/v1.0/powershell.exe"
       ]
     },
     {
@@ -690,9 +700,9 @@
     },
     {
       "disposition": "external_process",
-      "evidence": "Provider renders pages with the pinned pdftoppm executable.",
-      "fingerprint": "7e5d730cb7d836e4b5b60938e9e55aabbdafbe1679540446a095f3db2b874ab4",
-      "line": 374,
+      "evidence": "Provider renders pages with its configured, resolved pdftoppm executable. The descriptor records the executable version and SHA256; this disposition classifies the external process and does not approve an executable pin.",
+      "fingerprint": "8e02f0411cbd09f9f77d712dd6cf41bdf4560b603e32c83610bb1aac6ddc5522",
+      "line": 377,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "pdftoppm"
@@ -700,9 +710,9 @@
     },
     {
       "disposition": "external_process",
-      "evidence": "Provider extracts text with the pinned tesseract executable.",
-      "fingerprint": "e4ea5da31fe0ea10c9618104903c5ab66a57ca05f8f7a0a49efb919a7688c057",
-      "line": 397,
+      "evidence": "Provider extracts text with its configured, resolved tesseract executable. The descriptor records the executable version and SHA256; this disposition classifies the external process and does not approve an executable pin.",
+      "fingerprint": "d383bb389bafc600bd36fa6f487070de6bb0a8297096d783d55a9850f33fb63b",
+      "line": 400,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "tesseract"
@@ -710,9 +720,9 @@
     },
     {
       "disposition": "external_process",
-      "evidence": "_binary_version probes the pinned OCR executable version.",
-      "fingerprint": "5bad08a1e0a170572405e829ba7ee482c941ffcdf87ee3ed33c7a169b937583e",
-      "line": 1411,
+      "evidence": "_binary_version probes the configured, resolved OCR executable with the constructor's fixed version arguments. This is an external process identity probe, not an executable approval.",
+      "fingerprint": "627b9a2fb9a7cffd5550b858bc1e6bbbe87a8ea54bf05ff6e3fc8a2f3d6f4388",
+      "line": 1414,
       "path": "src/provenance/ocr_extraction.py",
       "targets": [
         "ocr executable"
@@ -935,7 +945,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "3826ce74ef46ec9851e1cfa481b4539bbdbb7fbb4d1ad9ba94f3773b5aac95fc",
+      "source_sha256": "d9c5611f95a23dd17244c52f4d69346fe7a9c23253e2dfcc8836ca7ca48df9cf",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

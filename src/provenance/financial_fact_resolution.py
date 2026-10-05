@@ -13,6 +13,7 @@ import json
 import logging
 import re
 import sqlite3
+from calendar import monthrange
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -25,6 +26,21 @@ from urllib.parse import unquote, urlparse
 from pydantic import BaseModel, ConfigDict, Field
 
 from models.documents import SourceType
+from models.facts import Unit
+from pipeline.kpi_definition_revisions import (
+    IssuerKpiDefinitionRevision,
+    KpiDefinitionPeriodKind,
+    KpiDefinitionStatus,
+    current_kpi_definition_revision,
+    kpi_definition_revision_by_id,
+)
+from pipeline.kpi_semantics import (
+    KpiSemanticContext,
+    KpiSemanticStatus,
+    current_kpi_semantic_context,
+    normalize_source_numeric,
+    parse_source_numeric,
+)
 from provenance.observation_resolution import (
     ObservationDimension,
     ObservationResolutionLedger,
@@ -70,6 +86,238 @@ DOCUMENT_FACT_REHYDRATION_SQL: Final = (
     "AND link.fact_table='financial_facts' AND link.fact_row_id=fact.id "
     "WHERE fact.source_doc_id=? ORDER BY fact.id"
 )
+
+
+class ReviewedKpiNativeProjection(BaseModel):
+    """One frozen proof for a newly published native KPI observation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_version: Literal["reviewed_kpi_native_projection.v1"] = (
+        "reviewed_kpi_native_projection.v1"
+    )
+    legacy_observation_id: str = Field(min_length=1)
+    fact_id: int = Field(gt=0)
+    ticker: str = Field(min_length=1)
+    context_id: int = Field(gt=0)
+    context_revision: int = Field(gt=0)
+    review_knowledge_at: datetime
+    source_node_recorded_at: datetime
+    context: KpiSemanticContext
+    definition: IssuerKpiDefinitionRevision
+    expected_definition_head_id: str = Field(min_length=1)
+    source_document_id: int = Field(gt=0)
+    source_document_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_document_version_id: str = Field(min_length=1)
+    source_evidence_node_id: str = Field(min_length=1)
+    source_locator_json: str = Field(min_length=1)
+    source_entry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fiscal_year: int = Field(ge=1900, le=2200)
+    fiscal_period: Literal["Q1", "Q2", "Q3", "Q4", "FY"]
+    raw_fact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+def prepare_reviewed_kpi_native_projection(
+    conn: sqlite3.Connection,
+    *,
+    observation_id: str,
+    source_evidence_node_id: str,
+    knowledge_cutoff: datetime,
+) -> ReviewedKpiNativeProjection:
+    """Validate durable capture coordinates; never repair an immutable v1 observation."""
+    if knowledge_cutoff.tzinfo is None:
+        raise ValueError("reviewed native projection cutoff must be aware")
+    prior_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT fact.*,document.sha256 AS source_sha256,link.observation_id,"
+            "observation.numeric_value AS captured_numeric,observation.unit AS captured_unit,observation.currency AS captured_currency,observation.fiscal_period_type AS captured_fiscal_period_type,observation.period_end AS captured_period_end,original_node.extraction_run_id AS captured_run_id "
+            "FROM kpi_facts fact JOIN fact_observation_revisions link "
+            "ON link.fact_table='kpi_facts' AND link.fact_row_id=fact.id "
+            "JOIN reported_observations observation ON observation.observation_id=link.observation_id "
+            "JOIN evidence_nodes original_node ON original_node.node_id=observation.evidence_node_id JOIN documents document ON document.id=fact.source_doc_id WHERE link.observation_id=? AND NOT EXISTS (SELECT 1 FROM kpi_facts successor WHERE successor.supersedes_id=fact.id)",
+            (observation_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("reviewed native KPI capture is absent")
+        if (
+            str(row["captured_fiscal_period_type"])
+            != _observation_period_type(str(row["fiscal_period_type"]))
+            or str(row["captured_period_end"])[:10] != str(row["period_end"])[:10]
+        ):
+            raise ValueError("reviewed native KPI fiscal coordinates differ from immutable capture")
+        current = current_kpi_semantic_context(conn, kpi_fact_id=int(row["id"]))
+        if current is None or current.context.status is not KpiSemanticStatus.ADMITTED:
+            raise ValueError("reviewed native KPI requires its admitted context")
+        if current.kpi_definition_revision_id is None:
+            raise ValueError("reviewed native KPI requires its exact definition binding")
+        definition = kpi_definition_revision_by_id(
+            conn, kpi_definition_revision_id=current.kpi_definition_revision_id
+        )
+        head = current_kpi_definition_revision(
+            conn, kpi_definition_id=int(row["kpi_definition_id"])
+        )
+        context = current.context
+        if (
+            definition is None
+            or head is None
+            or definition.status is not KpiDefinitionStatus.ADMITTED
+        ):
+            raise ValueError("reviewed native KPI definition is unavailable")
+        if any(
+            moment > knowledge_cutoff
+            for moment in (
+                current.knowledge_at,
+                definition.knowledge_at,
+                definition.recorded_at,
+                head.knowledge_at,
+                head.recorded_at,
+            )
+        ):
+            raise ValueError("reviewed native KPI proof is after the cutoff")
+        if context.source_precision is None or context.source_precision.kind == "unknown":
+            raise ValueError("reviewed native KPI requires explicit source precision")
+        if (
+            context.reported_period_start is None
+            or context.reported_period_end is None
+            or definition.period_kind is not KpiDefinitionPeriodKind.DURATION
+            or context.reported_period_end.isoformat() != str(row["period_end"])[:10]
+            or str(row["fiscal_period_type"]) not in {"Q1", "Q2", "Q3", "Q4", "FY"}
+        ):
+            raise ValueError("reviewed native KPI requires explicit quarterly duration coordinates")
+        fiscal_label = str(row["fiscal_period_type"])
+        quarter = 4 if fiscal_label == "FY" else int(fiscal_label[1])
+        end = context.reported_period_end
+        start = context.reported_period_start
+        calendar_end = end.replace(month=quarter * 3, day=monthrange(end.year, quarter * 3)[1])
+        quarter_start = end.replace(month=(quarter - 1) * 3 + 1, day=1)
+        year_start = end.replace(month=1, day=1)
+        header = context.source_column_header or ""
+        cumulative_marker = {2: "Six Months Ended", 3: "Nine Months Ended", 4: "Year Ended"}.get(
+            quarter
+        )
+        is_quarter = fiscal_label != "FY" and start == quarter_start
+        has_cumulative_header = any(
+            marker.lower() in header.lower()
+            for marker in ("Six Months Ended", "Nine Months Ended", "Year Ended")
+        )
+        is_cumulative = start == year_start and (
+            quarter == 1
+            or (cumulative_marker is not None and cumulative_marker.lower() in header.lower())
+        )
+        if (
+            end != calendar_end
+            or not (is_quarter or is_cumulative)
+            or (fiscal_label == "FY" and not is_cumulative)
+            or (is_quarter and has_cumulative_header)
+        ):
+            raise ValueError(
+                "reviewed native KPI duration does not match its exact source header and fiscal label"
+            )
+        if not isinstance(definition.unit_key, Unit):
+            raise ValueError("reviewed native KPI requires an explicit native unit")
+        if (
+            definition.accounting_basis != context.accounting_basis
+            or definition.consolidation_scope != context.consolidation_scope
+            or definition.dimensions != context.dimensions
+            or definition.unit_scale != context.unit_scale
+            or definition.unit_key.value != str(row["unit"])
+            or (None if definition.currency is None else definition.currency.value)
+            != row["currency"]
+        ):
+            raise ValueError("reviewed native KPI semantic axes disagree")
+        if (
+            Decimal(str(row["captured_numeric"])) != Decimal(str(row["value"]))
+            or str(row["captured_unit"]) != str(row["unit"])
+            or row["captured_currency"] != row["currency"]
+        ):
+            raise ValueError("reviewed native KPI value differs from its immutable capture")
+        node = conn.execute(
+            "SELECT node.text,node.locator_json,node.locator_sha256,run.document_version_id,"
+            "version.legacy_document_id,version.blob_sha256,node.recorded_at,run.input_sha256,run.extraction_run_id "
+            "FROM evidence_nodes node JOIN evidence_extraction_runs run "
+            "ON run.extraction_run_id=node.extraction_run_id JOIN evidence_document_versions version "
+            "ON version.document_version_id=run.document_version_id WHERE node.node_id=?",
+            (source_evidence_node_id,),
+        ).fetchone()
+        if node is None or (
+            str(node["extraction_run_id"]) != str(row["captured_run_id"])
+            or int(node["legacy_document_id"]) != int(row["source_doc_id"])
+            or str(node["blob_sha256"]) != str(row["source_sha256"])
+            or str(node["input_sha256"]) != str(row["source_sha256"])
+            or _datetime(node["recorded_at"], field="node.recorded_at") > knowledge_cutoff
+        ):
+            raise ValueError("reviewed native KPI evidence identity changed")
+        from models.facts import FactLocator
+        from provenance.evidence_ledger import EvidenceLocator
+
+        locator = EvidenceLocator.model_validate_json(str(node["locator_json"]))
+        fact_locator = FactLocator.model_validate_json(str(row["locator"]))
+        if locator.canonical_sha256 != str(node["locator_sha256"]) or (
+            fact_locator.pdf_page is not None and fact_locator.pdf_page != locator.page_number
+        ):
+            raise ValueError("reviewed native KPI evidence locator changed")
+        text = str(node["text"])
+        if any(
+            not quote or quote not in text
+            for quote in (
+                row["source_excerpt"],
+                context.source_value_text,
+                context.source_column_header,
+                context.source_row_label,
+            )
+        ):
+            raise ValueError("reviewed native KPI source wording is not in its evidence node")
+        if context.source_value_text is None or normalize_source_numeric(
+            parse_source_numeric(context.source_value_text),
+            unit=definition.unit_key,
+            unit_scale=context.unit_scale,
+        ) != Decimal(str(row["value"])):
+            raise ValueError("reviewed native KPI source token differs from the captured value")
+        if any(qualifier not in text for qualifier in context.source_precision.qualifiers):
+            raise ValueError("reviewed native KPI precision wording is absent")
+        raw_sha = hashlib.sha256(
+            json.dumps(dict(row), sort_keys=True, default=str).encode()
+        ).hexdigest()
+        entry_sha = hashlib.sha256(
+            json.dumps(
+                {
+                    "raw_fact_sha256": raw_sha,
+                    "context_id": current.id,
+                    "context_revision": current.revision,
+                    "context": context.model_dump(mode="json"),
+                    "definition_sha256": definition.commitment_sha256,
+                    "source_node": source_evidence_node_id,
+                    "source_locator_sha256": locator.canonical_sha256,
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        return ReviewedKpiNativeProjection(
+            legacy_observation_id=observation_id,
+            fact_id=int(row["id"]),
+            ticker=str(row["ticker"]).upper(),
+            context_id=current.id,
+            context_revision=current.revision,
+            context=context,
+            definition=definition,
+            review_knowledge_at=current.knowledge_at,
+            source_node_recorded_at=_datetime(node["recorded_at"], field="node.recorded_at"),
+            expected_definition_head_id=head.kpi_definition_revision_id,
+            source_document_id=int(row["source_doc_id"]),
+            source_document_sha256=str(row["source_sha256"]),
+            source_document_version_id=str(node["document_version_id"]),
+            source_evidence_node_id=source_evidence_node_id,
+            source_locator_json=locator.canonical_json,
+            source_entry_sha256=entry_sha,
+            fiscal_year=context.reported_period_end.year,
+            fiscal_period=cast(
+                Literal["Q1", "Q2", "Q3", "Q4", "FY"], str(row["fiscal_period_type"])
+            ),
+            raw_fact_sha256=raw_sha,
+        )
+    finally:
+        conn.row_factory = prior_factory
 
 
 class _CutoverModel(BaseModel):

@@ -131,6 +131,8 @@ def build_file_provenance(
     workbook_locator_path: Path | None = None,
     equity_direct_archetype: EquityDirectValuationArchetype | None = None,
     model_input_receipt: Mapping[str, object] | None = None,
+    equity_bridge_receipt: Mapping[str, object] | None = None,
+    scenario_acceptance: Mapping[str, object] | None = None,
 ) -> DcfInputProvenance:
     """Build durable file-based lineage without treating the mutable DB as input.
 
@@ -139,6 +141,8 @@ def build_file_provenance(
     the effective typed assumptions in the input hash, and use the latest file
     or market observation as a timezone-aware input cutoff.
     """
+    if equity_bridge_receipt is not None and equity_direct_archetype is not None:
+        raise ValueError("equity_bridge_authority_conflict")
     sources: list[dict[str, object]] = []
     observed_times: list[datetime] = []
     for path, role in source_files:
@@ -199,7 +203,9 @@ def build_file_provenance(
         "observed_at": normalized_live_at.isoformat() if normalized_live_at else None,
         "source": live_price_source,
     }
-    equity_bridge_receipt: dict[str, object] | None = None
+    equity_bridge_receipt = (
+        dict(equity_bridge_receipt) if equity_bridge_receipt is not None else None
+    )
     if equity_direct_archetype is not None:
         equity_bridge_receipt = {
             "schema_version": "dcf_equity_bridge_receipt.v3",
@@ -220,6 +226,8 @@ def build_file_provenance(
     }
     if model_input_receipt is not None:
         canonical["model_input_receipt"] = dict(model_input_receipt)
+    if scenario_acceptance is not None:
+        canonical["scenario_acceptance"] = dict(scenario_acceptance)
     encoded = json.dumps(
         canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     )
@@ -242,6 +250,11 @@ def build_file_provenance(
             **(
                 {"equity_bridge_receipt": equity_bridge_receipt}
                 if equity_bridge_receipt is not None
+                else {}
+            ),
+            **(
+                {"scenario_acceptance": dict(scenario_acceptance)}
+                if scenario_acceptance is not None
                 else {}
             ),
         },

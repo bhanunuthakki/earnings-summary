@@ -15,8 +15,8 @@ from filings.inline_xbrl_processor import FILING_XBRL_PROTOCOL_SQL
 from provenance.integrity_audit import AuditOptions, audit_connection
 
 ROOT = Path(__file__).resolve().parents[1]
-PARENT = "0050_kpi_fact_supersedes_lookup_index"
-REVISION = "0051_filing_xbrl_unit_protocol"
+PARENT = "0053_reviewed_financial_derivations"
+REVISION = "0054_filing_xbrl_unit_protocol"
 
 
 def _config(path: Path) -> Config:

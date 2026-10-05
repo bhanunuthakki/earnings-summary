@@ -17,6 +17,7 @@ import subprocess
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from calibration_guard import wilson_interval
 from llm.calibration import CalibrationScore, record_score
@@ -28,6 +29,28 @@ class EvalAbortError(RuntimeError):
     """The run cannot proceed for a non-quality reason (e.g. the target
     purpose is budget-skipped). Distinct from a case failing: aborting must
     not record a low score against the prompt."""
+
+
+def load_golden_document(path: Path, purpose: str) -> list[dict[str, object]]:
+    """Validate the shared envelope; each purpose validates its case fields."""
+    try:
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"golden file unreadable at {path}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("golden file must be a JSON object")
+    doc = cast("dict[str, object]", payload)
+    if doc.get("purpose") != purpose:
+        raise ValueError(f"golden file purpose must be {purpose!r}, got {doc.get('purpose')!r}")
+    raw_cases = doc.get("cases")
+    if not isinstance(raw_cases, list) or not raw_cases:
+        raise ValueError("golden file needs a non-empty `cases` list")
+    out: list[dict[str, object]] = []
+    for i, entry in enumerate(cast("list[object]", raw_cases)):
+        if not isinstance(entry, dict):
+            raise ValueError(f"cases[{i}]: must be an object")
+        out.append(cast("dict[str, object]", entry))
+    return out
 
 
 def now_naive_utc() -> datetime:

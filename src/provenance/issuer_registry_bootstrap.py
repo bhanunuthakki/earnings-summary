@@ -274,18 +274,14 @@ class BootstrapRequest(_ClosedModel):
     blob_root: Path
     apply: bool = False
     recorded_at: datetime
-    ticker_scope: tuple[str, ...] | None = None
+    ticker_scope: tuple[str, ...] = ()
 
     @field_validator("ticker_scope")
     @classmethod
-    def _ticker_scope(cls, value: tuple[str, ...] | None) -> tuple[str, ...] | None:
-        if value is None:
-            return None
-        normalized = tuple(item.strip().upper() for item in value)
-        if not normalized or len(normalized) > 250:
-            raise ValueError("explicit ticker scope must contain 1 to 250 names")
-        if any(not item for item in normalized) or len(normalized) != len(set(normalized)):
-            raise ValueError("explicit ticker scope requires unique non-empty names")
+    def _ticker_scope(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(ticker.strip().upper() for ticker in value)
+        if any(not ticker for ticker in normalized) or len(set(normalized)) != len(normalized):
+            raise ValueError("ticker scope must contain unique nonempty tickers")
         return tuple(sorted(normalized))
 
     @field_validator("recorded_at")
@@ -770,11 +766,13 @@ def bootstrap_issuer_reporting_registry(
     entries = parse_sec_company_tickers(raw_body)
     all_tracked, excluded_index_member_count = _tracked_reporting_scope(conn)
     tracked = all_tracked
-    if request.ticker_scope is not None:
-        active_names = {item.ticker for item in all_tracked if item.inclusion_state != "historical"}
-        if not set(request.ticker_scope) <= active_names:
-            raise SecCompanyTickerContractError("explicit bootstrap scope is not active membership")
-        tracked = tuple(item for item in all_tracked if item.ticker in request.ticker_scope)
+    if request.ticker_scope:
+        selected = set(request.ticker_scope)
+        if selected - {item.ticker for item in tracked}:
+            raise SecCompanyTickerContractError(
+                "ticker_scope_not_in_reporting_universe: no active membership or retained reporting evidence"
+            )
+        tracked = tuple(item for item in tracked if item.ticker in selected)
     candidates: dict[str, list[SecCompanyTickerEntry]] = defaultdict(list)
     for entry in entries:
         candidates[entry.ticker].append(entry)

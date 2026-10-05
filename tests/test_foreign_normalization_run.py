@@ -12,6 +12,15 @@ from pathlib import Path
 import pytest
 
 from execution import normalize_foreign_filings as cli
+from provenance.population_identity import (
+    PopulationIdentityRequest,
+    PopulationIdentityResult,
+)
+from provenance.reporting_entity_registry import (
+    EvidenceSubjectBindingRevision,
+    ReportingEntityRegistry,
+)
+from sources import foreign_normalization_run
 from sources.foreign_filers import ForeignFilingForm
 from sources.foreign_normalization_run import (
     ForeignDocumentInput,
@@ -357,6 +366,54 @@ def test_missing_subject_is_closed_from_canonical_authority_before_source_publis
         assert replay.subject_identity is not None
         assert replay.subject_identity.created_count == 0
         assert replay.receipts[0].publications == receipt.receipts[0].publications
+
+
+def test_subject_dissent_after_preview_rolls_back_before_source_publication(
+    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original = foreign_normalization_run.populate_recorded_subject_bindings
+    calls: list[bool] = []
+
+    def dissent_before_apply(
+        conn: sqlite3.Connection, request: PopulationIdentityRequest
+    ) -> PopulationIdentityResult:
+        calls.append(request.apply)
+        if request.apply:
+            assert conn.in_transaction
+            ReportingEntityRegistry(conn).persist(
+                EvidenceSubjectBindingRevision(
+                    binding_revision_id="binding-dissent",
+                    idempotency_key="binding-dissent",
+                    recorded_issuer_id="issuer-1",
+                    revision=2,
+                    issuer_id="issuer-1",
+                    reporting_entity_id="reporting-1",
+                    outcome="selected",
+                    decision_kind="deterministic",
+                    reason_code="fixture_dissent",
+                    reason_details=(("fixture", "synthetic dissent revision"),),
+                    material_dissent=True,
+                    effective_at=STAMP,
+                    knowledge_at=STAMP,
+                    recorded_at=STAMP,
+                    supersedes_binding_revision_id="binding-1",
+                )
+            )
+        return original(conn, request)
+
+    monkeypatch.setattr(
+        foreign_normalization_run, "populate_recorded_subject_bindings", dissent_before_apply
+    )
+    with sqlite3.connect(migrated_db(tmp_path / "identity-drift.db")) as conn:
+        manifest = seed_foreign_fixture(conn, tmp_path)
+        before = list(conn.iterdump())
+        with pytest.raises(ValueError, match="canonical_subject_identity_changed"):
+            normalize_foreign_sources(conn, manifest, input_manifest_sha256="4" * 64, apply=True)
+        assert calls == [False, True]
+        assert not conn.in_transaction
+        assert list(conn.iterdump()) == before
+        assert conn.execute("SELECT count(*) FROM fact_observations_v2").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM fact_cells_v2").fetchone()[0] == 0
 
 
 def test_partial_extraction_publishes_only_admitted_source_rows(

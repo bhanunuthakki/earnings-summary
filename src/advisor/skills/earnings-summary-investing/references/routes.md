@@ -70,21 +70,23 @@ route is not authority to run it on production.
   the latest quarter; the pre-earnings CLI has no exact fiscal selector.
   `--as-of` changes the run date. Never relabel a body or change live transcript
   selection to fit a requested period.
-- This checkout's `capture_issuer_document_inventory.py` accepts the v1 request
-  and validates calendar quarter ends. It reads the configured database and writes
-  a local receipt; it does not acquire bytes, admit facts or certify completeness.
-  The newer main-branch `v2_alias` retained-inventory route is unavailable in this
-  checkout. Do not round off-calendar issuer dates or route through unmerged code.
-  Retain precise dates and mark unsupported requested scope unavailable.
+- `execution/capture_issuer_document_inventory.py` supports the original v1
+  exact-URL route and the explicit `issuer_document_inventory_request.v2_alias`
+  route. The alias route verifies retained bytes, selected issuer and reporting
+  subject, native version, immutable source/document lineage and aware cutoffs.
+  It writes an exact local receipt; it does not acquire bytes, change source
+  identity, admit facts or certify completeness. Prepared staging and publication
+  remain strict v1. Verify installed revision before live use. Preserve exact
+  issuer dates; unsupported scope remains unavailable.
 - `execution/track_evaluation_names.py` uses the configured `db.DB_PATH`, but
   has a fixed ticker and template roster and writes state. It is not the general evaluation route.
-- This checkout lacks the newer DCF artifact-promotion and
-  `committed_cleanup_failed` recovery route. Inspect the current refresh/Sheet
-  implementation and its per-ticker results before authorized execution. A process
-  exit does not prove atomic publication or cleanup. Do not infer the newer-main
-  recovery guarantees or retry a possibly completed write without inspection.
-  Spreadsheet import/export can change model or external spreadsheet state;
-  authentication and each effect require their exact authorization.
+- DCF refresh and Sheet import/export use the existing per-ticker artifact owner
+  and atomic promotion. `committed_cleanup_failed` means publication committed
+  but cleanup failed. Inspect its recovery evidence before retrying. A process
+  exit alone does not prove publication or cleanup. Use the configured database;
+  artifact placement does not choose the database authority. Spreadsheet
+  import/export can change model or external spreadsheet state; authentication
+  and each effect require their exact authorization.
 - Model preflight is read-only and does not fetch facts or grant write authority.
   Readiness exit codes are 0 ready, 2 blocked and 3 unavailable. Respect bank,
   holding-company, platform and sum-of-parts routes. An ETF has no corporate DCF.

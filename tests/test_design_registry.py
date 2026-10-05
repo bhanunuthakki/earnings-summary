@@ -115,19 +115,29 @@ def test_registry_is_frozen_typed_and_complete() -> None:
 
     assert isinstance(registry.REGISTERED, frozenset)
     assert isinstance(registry.GOVERNED, frozenset)
-    assert len(registry.REGISTERED) == 112
-    assert len(registry.VISUAL_EMITTER_MANIFEST) == 159
     for producer in ("earnings_brief.py", "earnings_readout.py"):
         entry = next(item for item in registry.VISUAL_EMITTER_MANIFEST if item.path == producer)
         assert entry.disposition is registry.EmitterDisposition.NONVISUAL
         assert producer not in registry.REGISTERED
+    assert len(registry.REGISTERED) == 113
+    assert len(registry.VISUAL_EMITTER_MANIFEST) == 160
+    calculation_evidence = next(
+        entry
+        for entry in registry.VISUAL_EMITTER_MANIFEST
+        if entry.path == "execution/comments_server_financial_evidence_routes.py"
+    )
+    assert calculation_evidence.disposition is registry.EmitterDisposition.PRODUCTION
+    assert calculation_evidence.adapter_kinds == frozenset({registry.EvidenceAdapter.HTML})
+    assert calculation_evidence.evidence_modes == frozenset({registry.EvidenceMode.STATIC})
+    assert calculation_evidence.owner == "research-ui"
+    assert calculation_evidence.path in registry.REGISTERED
     backup_observer = next(
         entry
         for entry in registry.VISUAL_EMITTER_MANIFEST
         if entry.path == "operations/backup_observer.py"
     )
     assert backup_observer.disposition is registry.EmitterDisposition.NONVISUAL
-    assert len(registry.GOVERNED) == 133
+    assert len(registry.GOVERNED) == 134
     assert (
         frozenset(
             {

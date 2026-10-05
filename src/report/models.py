@@ -15,6 +15,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from sources.discovery_market import DiscoveryMarketContext
+from sources.financial_growth_evidence import FinancialGrowthReference
 from sources.report_financials import FinancialEvidenceReference, FinancialTableProjection
 
 
@@ -548,6 +549,7 @@ class CellSource(BaseModel):
     # mutable legacy fact/document references when it is present.
     canonical_reference: FinancialEvidenceReference | None = None
     source_scope_label: Literal["consolidated", "combined_carve_out"] | None = None
+    calculation_reference: FinancialGrowthReference | None = None
 
 
 class QuarterlyLineItem(BaseModel):
@@ -569,6 +571,9 @@ class QuarterlyLineItem(BaseModel):
     # per instance) — Field(default_factory=list) infers list[Unknown] here
     # and trips the pyright strict ratchet.
     sources_full: list[CellSource | None] = []
+    growth_evidence: dict[str, FinancialGrowthReference] = {}
+    yoy_evidence_full: list[FinancialGrowthReference | None] = []
+    level_cagr_evidence: dict[str, FinancialGrowthReference] = {}
     # Edge i admits comparison from i-1 to i. None is legacy/unmigrated;
     # an explicit empty or false mask never grants canonical comparability.
     comparison_eligible_edges: list[bool] | None = None

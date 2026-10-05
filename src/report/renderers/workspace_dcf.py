@@ -653,10 +653,13 @@ JS = r"""
             buildControls();
           }
           if (res.body.sensitivity) { renderScenarios(res.body); renderHeatmap(res.body.sensitivity); }
-          setStatus('Saved to model.', 'ok');
+          setStatus(res.body.recovery_required
+            ? 'Saved to model. Backup cleanup failed; further saves require recovery.'
+            : 'Saved to model.', res.body.recovery_required ? 'warn' : 'ok');
         } else {
           dirty = true;
-          setStatus('Earlier inputs saved. Current edits are unsaved.' + previewNote(), 'warn');
+          setStatus('Earlier inputs saved. Current edits are unsaved.' + previewNote()
+            + (res.body.recovery_required ? ' Backup cleanup failed; further saves require recovery.' : ''), 'warn');
         }
       }
       CCAction.receipt(elSave, '✓ Saved');

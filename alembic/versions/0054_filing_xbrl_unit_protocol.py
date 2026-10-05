@@ -1,7 +1,7 @@
 """Admit v2 measure units through the existing exact filing-XBRL seal.
 
-Revision ID: 0051_filing_xbrl_unit_protocol
-Revises: 0050_kpi_fact_supersedes_lookup_index
+Revision ID: 0054_filing_xbrl_unit_protocol
+Revises: 0053_reviewed_financial_derivations
 """
 
 from __future__ import annotations
@@ -10,8 +10,8 @@ from sqlalchemy import text
 
 from alembic import op
 
-revision = "0051_filing_xbrl_unit_protocol"
-down_revision = "0050_kpi_fact_supersedes_lookup_index"
+revision = "0054_filing_xbrl_unit_protocol"
+down_revision = "0053_reviewed_financial_derivations"
 branch_labels = None
 depends_on = None
 

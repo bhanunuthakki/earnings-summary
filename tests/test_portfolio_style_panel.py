@@ -7,6 +7,8 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from integrations.portfolio_tracker_client import LivePortfolio, PortfolioAnalytics
 from pipeline.portfolio_panel import compose_risk_page, compose_synthesis_page
 from portfolio_risk import CrowdedName
@@ -95,3 +97,41 @@ def test_synthesis_insights_use_registry_large_card_track(tmp_path: Path) -> Non
     )
     compact = " ".join(html.split())
     assert "grid-template-columns:repeat(auto-fit,minmax(var(--grid-card-lg),1fr))" in compact
+
+
+def test_risk_artifacts_use_explicit_root_separate_from_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pipeline.portfolio_panel as panel
+    from portfolio_weights import materialize_weights
+
+    artifacts = tmp_path / "artifacts"
+    db_path = tmp_path / "state" / "authority.db"
+    portfolio = LivePortfolio(
+        available=True, api_url="http://test", as_of="2025-01-01", is_stale=True
+    )
+    materialize_weights(artifacts, portfolio)
+    seen: list[Path | None] = []
+
+    def offline_probe(_api_url: str | None) -> tuple[bool, str]:
+        return False, "http://test"
+
+    def no_snapshot(**_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(panel, "probe_tracker", offline_probe)
+    monkeypatch.setattr(panel, "read_latest_snapshot", no_snapshot)
+
+    def read_guard(root: Path) -> None:
+        seen.append(root)
+
+    monkeypatch.setattr(panel, "read_position_guard_cache", read_guard)
+    html = panel.render_portfolio_risk_panel(db_path=db_path, repo_root=artifacts)
+    assert seen == [artifacts]
+    assert "Weights cache source as of 2025-01-01" in html
+    assert "source marked stale" in html
+    seen.clear()
+    panel.render_portfolio_risk_panel(db_path=db_path)
+    assert seen == []
+    assert not db_path.exists()

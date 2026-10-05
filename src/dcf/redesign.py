@@ -1060,14 +1060,14 @@ def _read_scenario_deltas(dsh: Worksheet, col: int, seed: ScenarioDeltas) -> Sce
 # Projection — the live mirror of the builder's _project / in-sheet formulas
 # --------------------------------------------------------------------------- #
 @dataclass(frozen=True)
-class _ProjectedStreams:
+class ProjectedStreams:
     revenue: list[float]
     ebit: list[float]
     da: list[float]
     valuation_fcf: list[float]
 
 
-def _project(inp: RedesignInputs) -> _ProjectedStreams:
+def project(inp: RedesignInputs) -> ProjectedStreams:
     """Project N_FC years of revenue / EBIT / D&A / valuation-FCF.
 
     Mirrors the in-sheet formulas: per-segment growth fades near→terminal over
@@ -1132,10 +1132,10 @@ def _project(inp: RedesignInputs) -> _ProjectedStreams:
         valuation_fcf.append(nopat + da[j] - capex - delta_nwc - sbc_after_tax)
         prev_rev = revenue[j]
 
-    return _ProjectedStreams(revenue, ebit, da, valuation_fcf)
+    return ProjectedStreams(revenue, ebit, da, valuation_fcf)
 
 
-def _terminal_metrics(streams: _ProjectedStreams, inp: RedesignInputs) -> val_mod.TerminalMetrics:
+def _terminal_metrics(streams: ProjectedStreams, inp: RedesignInputs) -> val_mod.TerminalMetrics:
     """Terminal-year line items the exit multiple can apply to (reporting ccy).
 
     EBITDA is BURDENED by terminal-year SBC (``ebitda = ebit − sbc + da``) so the
@@ -1164,7 +1164,7 @@ def value(inp: RedesignInputs) -> RedesignValuation:
     convert non-USD reporters to USD. Raises ``RedesignError`` only for a
     genuinely un-valuable assumption (perpetuity with WACC ≤ g).
     """
-    streams = _project(inp)
+    streams = project(inp)
     years = list(range(N_FC))  # discount exponents are positional, labels unused
     terminal = _terminal_metrics(streams, inp)
 

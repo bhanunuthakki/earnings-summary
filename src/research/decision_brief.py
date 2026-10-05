@@ -33,7 +33,11 @@ from research.memo_claim_support import (
     verify_memo_numeric_population,
     verify_reported_memo_claim,
 )
-from sources.report_financials import FinancialEvidenceReference, read_financial_evidence
+from sources.report_financials import (
+    FinancialEvidenceReference,
+    FinancialTableCell,
+    read_financial_evidence,
+)
 
 
 class _Closed(BaseModel):
@@ -218,6 +222,19 @@ def verify_memo_section_population(soup: BeautifulSoup, section_ids: tuple[str, 
             raise MemoEvidenceError("memo_required_section_degraded")
 
 
+def _read_memo_financial_cell(
+    conn: sqlite3.Connection, reference: FinancialEvidenceReference
+) -> FinancialTableCell | None:
+    # Memo display and calculation verification use the report table contract.
+    # Native series units and cadence need a separate reviewed memo contract.
+    if reference.reader_kind != "report_table":
+        raise MemoEvidenceError("memo_financial_series_reference_unsupported")
+    cell = read_financial_evidence(conn, reference)
+    if cell is not None and not isinstance(cell, FinancialTableCell):
+        raise MemoEvidenceError("memo_financial_series_reference_unsupported")
+    return cell
+
+
 def verify_memo_snapshot_reference(
     conn: sqlite3.Connection,
     reference: FinancialEvidenceReference,
@@ -225,7 +242,9 @@ def verify_memo_snapshot_reference(
     ticker: str,
     cutoff: datetime,
 ) -> None:
-    cell = read_financial_evidence(conn, reference.model_copy(update={"as_of": snapshot.cutoff_at}))
+    cell = _read_memo_financial_cell(
+        conn, reference.model_copy(update={"as_of": snapshot.cutoff_at})
+    )
     member = conn.execute(
         "SELECT canonical_resolution_revision_id FROM canonical_fact_resolution_snapshot_members "
         "WHERE resolution_snapshot_id=? AND canonical_metric_cell_id=?",
@@ -252,7 +271,7 @@ def verify_memo_snapshot_reference(
 
 
 def verify_memo_calculation(conn: sqlite3.Connection, calculation: MemoCalculation) -> None:
-    cells = [read_financial_evidence(conn, reference) for reference in calculation.operands]
+    cells = [_read_memo_financial_cell(conn, reference) for reference in calculation.operands]
     if any(cell is None or cell.display_value is None for cell in cells):
         raise MemoEvidenceError("memo_calculation_operand_unavailable")
     values = [Decimal(str(cell.display_value)) for cell in cells if cell is not None]
@@ -485,7 +504,7 @@ def _assess_decision_brief(
             reference = FinancialEvidenceReference.model_validate_json(value)
             if reference.ticker != artifact.ticker or reference.as_of > cutoff:
                 raise MemoEvidenceError("memo_financial_reference_identity_mismatch")
-            cell = read_financial_evidence(conn, reference)
+            cell = _read_memo_financial_cell(conn, reference)
             if cell is None:
                 raise MemoEvidenceError("memo_financial_reference_not_admitted")
             # A chip on a row label supplies provenance for a calculated

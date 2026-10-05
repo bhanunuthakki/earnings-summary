@@ -534,8 +534,10 @@ def test_morning_suppression_stops_stages_and_force_reaches_accounting(
     db_path = tmp_path / "portfolio.db"
     db_path.touch()
     captured: dict[str, object] = {}
+    artifact_root = tmp_path / "artifacts"
 
     def _suppress(_db_path: Path, **kwargs: object) -> str:
+        assert _db_path == db_path
         captured.update(kwargs)
         raise PipelineRunSuppressedError("morning_key", "morning_attempt", StageStatus.IN_PROGRESS)
 
@@ -547,6 +549,8 @@ def test_morning_suppression_stops_stages_and_force_reaches_accounting(
             [
                 "--db-path",
                 str(db_path),
+                "--repo-root",
+                str(artifact_root),
                 "--force",
                 "--max-cost-usd",
                 "7.5",
@@ -565,6 +569,7 @@ def test_morning_suppression_stops_stages_and_force_reaches_accounting(
     assert captured == {
         "start": True,
         "invocation_inputs": {
+            "artifact_root": str(artifact_root.resolve()),
             "max_cost_usd": 7.5,
             "news_source": "websearch",
             "only": "",

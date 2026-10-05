@@ -192,9 +192,10 @@ async function begin(){const promise=loadDcf();await respond(latest(),{inputs:ba
   assert.equal(body(save).inputs.wacc,0.02,'backend save owns derivation even with stale preview');
   nodes.get('dcf-edit-save').events.click();assert.equal(latest(),save,'no concurrent save');
   edit('beta',2.1);
-  await respond(save,{saved:true,inputs:{...base,beta:1.9,wacc:0.17},...preview(0.17)});
+  await respond(save,{saved:true,recovery_required:true,cleanup_warning:'retained backup',inputs:{...base,beta:1.9,wacc:0.17},...preview(0.17)});
   assert.equal(field('beta').value,'2.1','later unsaved input survives save completion');
   assert.match(nodes.get('dcf-edit-status').textContent,/unsaved/i);
+  assert.match(nodes.get('dcf-edit-status').textContent,/Backup cleanup failed/);
   fireTimer(280);await respond(latest(),preview(0.19));
   assert.match(nodes.get('dcf-edit-status').textContent,/unsaved/i);
   nodes.get('dcf-edit-reset').events.click();assert.equal(field('beta').value,'1.9','reset uses saved baseline');
@@ -204,8 +205,9 @@ async function begin(){const promise=loadDcf();await respond(latest(),{inputs:ba
   nodes.get('dcf-edit-save').events.click();const hiddenSave=latest();
   assert.equal(preHiddenSave.options.signal.aborted,true,'save cancels the stateless preview');
   nodes.get('dcf-edit-toggle').events.click();
-  await respond(hiddenSave,{saved:true,inputs:{...base,beta:1.9,wacc:0.17,near_op_margin:0.27},...preview(0.17)});
+  await respond(hiddenSave,{saved:true,recovery_required:true,cleanup_warning:'retained backup',inputs:{...base,beta:1.9,wacc:0.17,near_op_margin:0.27},...preview(0.17)});
   assert.doesNotMatch(nodes.get('dcf-edit-status').textContent,/unsaved/,'closing does not invalidate saved inputs');
+  assert.match(nodes.get('dcf-edit-status').textContent,/Saved to model.*Backup cleanup failed/);
   nodes.get('dcf-edit-toggle').events.click();
   while([...timers.values()].some(entry=>entry.ms===1500)) fireTimer(1500);
   edit('near_op_margin',28);fireTimer(280);await respond(latest(),preview(0.17));

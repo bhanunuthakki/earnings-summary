@@ -306,17 +306,20 @@ def test_condition_projection_uses_financial_history_and_keeps_non_green_gates(
     ) -> list[KpiObservation]:
         return [_observation("9", "2026-06-30")]
 
-    def fetch_financial_history(
-        _conn: sqlite3.Connection, _ticker: str, _metric: str, _periods: int
-    ) -> list[KpiObservation]:
-        calls.append("financial")
-        return [_observation("9", "2026-06-30")]
+    def read_financial_condition(
+        _conn: sqlite3.Connection,
+        _ticker: str,
+        condition: StoredDecisionCondition,
+        *,
+        cutoff: datetime,
+    ):
+        from decision_conditions import FinancialConditionRead
 
-    monkeypatch.setattr(
-        decisions_projection,
-        "fetch_financial_history",
-        fetch_financial_history,
-    )
+        calls.append("financial")
+        assert cutoff == datetime(2026, 8, 1, tzinfo=UTC)
+        return FinancialConditionRead(None, None, "financial_cadence_unresolved")
+
+    monkeypatch.setattr(decisions_projection, "read_financial_condition", read_financial_condition)
     monkeypatch.setattr(decisions_projection, "fetch_kpi_observations", fetch_kpi_observations)
     conn = sqlite3.connect(":memory:")
     as_of = datetime(2026, 8, 1, tzinfo=UTC)
@@ -362,6 +365,7 @@ def test_condition_projection_uses_financial_history_and_keeps_non_green_gates(
     )
 
     assert calls == ["financial"]
-    assert financial.status == "BREACH"
-    assert financial.evidence_ref == "financial_facts:Revenue:2026-06-30"
+    assert financial.status == "PENDING DATA"
+    assert financial.status_detail == "financial_cadence_unresolved"
+    assert financial.evidence_ref == "condition:unavailable:Revenue"
     assert future.status == stale.status == unresolved.status == "PENDING DATA"

@@ -47,7 +47,7 @@ from provenance.evidence_native_candidates import (
 _EXTRACTOR_NAME = "governed-pdf-ocr"
 _EXTRACTOR_CODE_VERSION = "governed-pdf-ocr@1"
 _DETECTOR_NAME = "pypdf-native-text-preflight"
-_DETECTOR_CODE_VERSION = "pypdf-native-text-preflight@1"
+_DETECTOR_CODE_VERSION = "pypdf-native-text-preflight@2-public-access"
 _NORMALIZATION_VERSION = "nfkc-lines-v1"
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 
@@ -271,7 +271,10 @@ class PypdfPDFInspector:
         try:
             reader = PdfReader(io.BytesIO(raw_bytes))
             if reader.is_encrypted:
-                return _failed_preflight("encrypted", "encrypted_pdf")
+                if not reader.decrypt(""):
+                    return _failed_preflight("encrypted", "encrypted_pdf")
+                if reader.are_permissions_valid is not True:
+                    return _failed_preflight("unreadable", "invalid_pdf_permissions")
             pages: list[tuple[int, str]] = []
             for page_number, page in enumerate(reader.pages, start=1):
                 pages.append((page_number, _normalize_text(page.extract_text() or "")))

@@ -285,6 +285,8 @@ def _overlay_sourced_series(
             continue
         prov = dict(obs.provenance)
         prov.update(override_provenance(ov))
+        prov.pop("fact_id", None)
+        prov.pop("fact_table", None)
         out.append(
             SourcedObservation(
                 period_end=obs.period_end,

@@ -170,3 +170,32 @@ implementation finding. Its two documentation precision corrections are applied.
 No provider calls, production database access, main merge, release, publication
 or trades followed from these repairs. Pinned-model qualification, native Windows
 qualification and actual company source-to-memo evidence remain separate.
+
+
+## Windows release integration — preparation
+
+The restored repair snapshot is now integrated with current main `fb3ed529` in
+an isolated release worktree. It preserves the published `0051`–`0053` migrations,
+main's approved ONON thesis, exact package-subject witnesses and cutoffs, source
+precision, reviewed financial derivations, and atomic DCF ownership. The earlier
+unpublished unit-protocol migration is now `0054_filing_xbrl_unit_protocol`, with
+`0053_reviewed_financial_derivations` as its parent. Its tests exercise that real
+predecessor, unchanged trigger predicates, unknown predecessor refusal and
+downgrade refusal with retained v2 evidence. Earlier test receipts keep their
+original revision identities.
+
+The skill routes now describe the existing retained source-alias and atomic
+artifact-recovery interfaces. Dedicated MELI and ONON recipe input guards remain
+strict. Generic cash-flow scenario research remains memo-only and cannot grant
+allocation eligibility. The source baseline was renewed only after semantic
+review of 17 changed source owners. Source equality does not certify financial
+quality, installed availability or live activation.
+
+Initial integrated checks passed 93 research, migration, design and scheduling
+tests and 216 source/provenance tests. The independent advisory review found a
+lost database/artifact-root separation assertion; it was restored and verified.
+The integrated full gate, native Windows qualification, exact installed method
+and agent-skill parity, runtime restart, and live read verification remain owed.
+The Booking operator retains the sole Windows release/runtime/database window.
+No native lease or main-release handoff has yet been granted. Windows activation
+is pending; local integration is not deployment.

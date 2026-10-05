@@ -33,6 +33,11 @@ earnings exchanges and decision implications within these paths.
    Check price freshness, fiscal basis and valuation readiness through the route
    map and `src/dcf/grade_evidence.py` for persisted assumptions and provenance.
    Separate business quality, forecast assumptions and price paid.
+   MELI and ONON use their dedicated input and scenario verifiers. The generic
+   cash-flow recipe supports only its declared domestic nonfinancial US-GAAP/USD
+   population. Its analyst scenario review can establish memo readiness; it does
+   not grant allocation eligibility or owner approval. Unsupported sectors remain
+   blocked. Explicit ONON/MELI input roles cannot accept a generic recipe context.
 2. Compare the approved assumptions with admitted results, guidance and current
    source-backed expectations. Show which revenue, margin, reinvestment, dilution,
    discount-rate or terminal assumptions changed. Respect the business-model route.

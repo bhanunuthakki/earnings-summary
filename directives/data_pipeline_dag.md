@@ -48,6 +48,15 @@ stops that provider. Independent items may proceed with a degraded batch result;
 dependent stages cannot consume a failed prerequisite as success. Retry checkpoints
 are bound to the intended database and retain failed item identities.
 
+The morning pipeline selects its database and artifact root independently.
+`execution/run_morning_pipeline.py --repo-root` names the artifact root; it
+defaults to the installed project root. `--db-path` names the database authority.
+Lifecycle reconciliation, document evidence and factor proxies receive the
+selected artifact root. Database placement does not select an artifact root.
+Checkpoint scope and invocation inputs bind both paths. A changed root cannot
+reuse a checkpoint from another artifact set. This contract does not start a
+pipeline or change scheduler activation.
+
 ## Stage sequence
 
 ```

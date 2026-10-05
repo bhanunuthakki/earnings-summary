@@ -17,7 +17,16 @@ from research.memo_claim_support import (
     financial_reader_value,
     verify_reported_memo_claim,
 )
-from sources.report_financials import FinancialEvidenceReference, read_financial_table
+from sources.canonical_financial_series import (
+    FinancialCadence,
+    FinancialConsumerPoint,
+    SeriesContinuity,
+)
+from sources.report_financials import (
+    FinancialEvidenceReference,
+    read_financial_evidence,
+    read_financial_table,
+)
 from tests import test_report_canonical_financials as canonical
 
 
@@ -237,3 +246,23 @@ def test_calculation_cannot_hide_a_false_reported_operand(database: sqlite3.Conn
             values=(value.model_copy(update={"displayed_value": "999.0"}),),
             calculated_values=("0.0",),
         )
+
+
+def test_native_series_value_cannot_use_memo_table_display_contract(
+    database: sqlite3.Connection,
+) -> None:
+    reference = admitted(database).model_copy(
+        update={
+            "reader_kind": "series",
+            "cadence": FinancialCadence.QUARTERLY,
+            "continuity": SeriesContinuity.WINDOWED,
+        }
+    )
+    point = read_financial_evidence(database, reference)
+    assert isinstance(point, FinancialConsumerPoint)
+    assert point.observation.value == Decimal("120000000")
+    value = MemoReportedValue(
+        reference=reference, displayed_value="120.0", display_format="number1"
+    )
+    with pytest.raises(MemoClaimSupportError, match="memo_financial_series_reference_unsupported"):
+        verify_reported_memo_claim(database, "Revenue was $120.0 million.", values=(value,))

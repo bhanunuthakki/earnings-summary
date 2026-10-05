@@ -31,13 +31,14 @@ import logging
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from db_paths import configured_db_path, require_db_path
+from identity import DEFAULT_USER_ID
+from journal_links import reconcile_linked_notes
+from position_lifecycle import sync_position_lifecycle
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from identity import DEFAULT_USER_ID  # noqa: E402
-from journal_links import reconcile_linked_notes  # noqa: E402
-from position_lifecycle import sync_position_lifecycle  # noqa: E402
-
 log = logging.getLogger("sync_position_lifecycle")
 
 
@@ -58,13 +59,13 @@ def main() -> int:
         "--repo-root",
         type=Path,
         default=PROJECT_ROOT,
-        help="Repo root containing data/portfolio.db.",
+        help="Artifact root containing holdings and derived caches.",
     )
     parser.add_argument(
         "--db-path",
         type=Path,
         default=None,
-        help="Override the portfolio DB path (wins over --repo-root derivation).",
+        help="Explicit existing database authority (otherwise use configured authority).",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
@@ -74,13 +75,14 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
 
-    db_path: Path = (
-        args.db_path
-        if args.db_path is not None
-        else args.repo_root.resolve() / "data" / "portfolio.db"
-    )
+    repo_root = args.repo_root.resolve()
+    try:
+        db_path = require_db_path(args.db_path or configured_db_path(PROJECT_ROOT))
+    except (OSError, ValueError, RuntimeError) as exc:
+        log.error("Database authority unavailable: %s", exc)
+        return 1
     tally = sync_position_lifecycle(
-        db_path=db_path, user_id=args.user_id, assume_preexisting=args.backfill
+        db_path=db_path, repo_root=repo_root, user_id=args.user_id, assume_preexisting=args.backfill
     )
     log.info({"event": "sync_position_lifecycle_done", **tally})
     print(

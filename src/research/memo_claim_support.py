@@ -17,7 +17,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from sources.report_financials import FinancialEvidenceReference, read_financial_evidence
+from sources.report_financials import (
+    FinancialEvidenceReference,
+    FinancialTableCell,
+    read_financial_evidence,
+)
 
 # Include signs, grouped digits, exponents and percentage markers. An unbound
 # date, fiscal year or percentage must not disappear from the claim population.
@@ -106,7 +110,12 @@ def verify_reported_memo_claim(
 
     declared: list[str] = list(calculated_values)
     for item in values:
+        # Series values use native units, outside the memo's table display contract.
+        if item.reference.reader_kind != "report_table":
+            raise MemoClaimSupportError("memo_financial_series_reference_unsupported")
         cell = read_financial_evidence(conn, item.reference)
+        if cell is not None and not isinstance(cell, FinancialTableCell):
+            raise MemoClaimSupportError("memo_financial_series_reference_unsupported")
         if cell is None or cell.display_value is None:
             raise MemoClaimSupportError("memo_reported_value_not_admitted")
         value = cell.display_value * Decimal(item.scale)
