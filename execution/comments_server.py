@@ -2732,7 +2732,12 @@ def create_app(
         ticker = request.args.get("ticker")
         if not ticker:
             return Response(render_holding_picker_band(repo_root), mimetype="text/html")
-        return Response(render_holding_fragment(repo_root, ticker), mimetype="text/html")
+        # The renderer reads the application's resolved runtime DB path — the
+        # same one this app's other panel routes use — never the forbidden
+        # checkout-default data/portfolio.db location (M2 audit F11).
+        return Response(
+            render_holding_fragment(repo_root, ticker, db_path=db_path), mimetype="text/html"
+        )
 
     @app.route("/api/position-lifecycle/<ticker>", methods=["GET"])
     def position_lifecycle_fragment(ticker: str):

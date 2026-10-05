@@ -915,14 +915,23 @@ def _freshness_dot(ident: TickerIdentity) -> str:
     )
 
 
-def render_holding_fragment(repo_root: Path, ticker: str) -> str:
+def render_holding_fragment(repo_root: Path, ticker: str, db_path: Path | None = None) -> str:
     """Assemble the Holding-tab panel for ``ticker`` (UX redesign PR4):
     the report IS the page. Slim utility header → collapsed 5-minute reread →
     the embedded ``/reports/<t>`` iframe at full width (it carries the inline
     comment / chat / apply pipeline). Everything operational moved into two
     on-demand drawers: **Ops** (refresh · budget bypass · DCF⇄Sheets ·
     analyses log · artifacts · freshness detail) and **Notes** (open analyst
-    notes + recent alerts — the old right-hand rail)."""
+    notes + recent alerts — the old right-hand rail).
+
+    ``db_path`` is the application's resolved runtime database path — the same
+    one every cockpit request handler uses. The fragment's DB readers (rereads,
+    position lifecycle, attribution, you-said, disclosure) read it, never a
+    guessed checkout location: the checkout-default ``repo_root/data/
+    portfolio.db`` is a forbidden Mac checkout DB (audit F11) and 500s the
+    holding route against a snapshot-restored runtime DB. Callers without a
+    resolved path (tests, offline tooling) keep the legacy checkout-local
+    default, which only ever exists outside this Mac checkout."""
     from identity import DEFAULT_USER_ID
     from pipeline.analytical_dashboard import build_analytical_dashboard
     from pipeline.analytical_dashboard_html import render_panel_fragment
@@ -930,9 +939,9 @@ def render_holding_fragment(repo_root: Path, ticker: str) -> str:
     from pipeline.position_lifecycle_panel import render_position_lifecycle_section
 
     t = ticker.upper()
+    resolved_db_path = db_path if db_path is not None else repo_root / "data" / "portfolio.db"
     tcc = build_ticker_command_center(repo_root, t)
-    db_path = repo_root / "data" / "portfolio.db"
-    dash = build_analytical_dashboard(db_path, sections={"rereads"}, ticker=t)
+    dash = build_analytical_dashboard(resolved_db_path, sections={"rereads"}, ticker=t)
     reread_html = render_panel_fragment(dash, "prereads") or ""
     # The 5-min reread folds into the Ops drawer (UX9c) — one band above the
     # report, nothing else inline. The reread leads the drawer (it's the most
@@ -948,11 +957,11 @@ def render_holding_fragment(repo_root: Path, ticker: str) -> str:
             # The position-lifecycle timeline (S5 PR2): entry/exit snapshots +
             # post-exit grading. Live-rendered, between the reread and the
             # operational sections — analytical content leads the drawer.
-            render_position_lifecycle_section(db_path, t, user_id=DEFAULT_USER_ID),
+            render_position_lifecycle_section(resolved_db_path, t, user_id=DEFAULT_USER_ID),
             # What drove this position's window alpha (S15 PR2): tracker
             # dollar alpha + entry posture + thesis/alert/decision events,
             # phrased deterministically. Degrades tracker-offline.
-            render_attribution_section(db_path, t, user_id=DEFAULT_USER_ID),
+            render_attribution_section(resolved_db_path, t, user_id=DEFAULT_USER_ID),
             _freshness_strip(tcc.identity),
             _refresh_section(t),
             _dcf_sheets_section(t),
@@ -966,8 +975,8 @@ def render_holding_fragment(repo_root: Path, ticker: str) -> str:
     return "".join(
         [
             render_ticker_fragment(tcc),
-            f'<div class="tcc-yousaid">{render_you_said_strip_for_path(db_path, t)}</div>',
-            _disclosure_change_strip(db_path, t),
+            f'<div class="tcc-yousaid">{render_you_said_strip_for_path(resolved_db_path, t)}</div>',
+            _disclosure_change_strip(resolved_db_path, t),
             f'<div class="tcc-report-main">{_report_embed_section(t, tcc.report_date)}</div>',
             _tcc_drawer("ops", "Ops · refresh & data", ops_body),
             _COMBO_STYLE,
