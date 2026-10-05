@@ -1023,6 +1023,17 @@ installation descriptor. Missing, template, unapproved, source-drift and runtime
 failures are separate states. Preflight cannot approve a bundle. Protocol v2
 uses canonical XBRL measure units and a separately committed unit helper.
 
+`provenance.integrity_audit.verify_filing_xbrl_run` is a read-only retained-run
+verifier. Its caller must hold one read transaction and supply an exact retained
+extraction-run ID. It rejects missing schema, run, input/disposition seal,
+referenced artifact, incomplete populations and bounded row/text overflow before
+full replay. It shares the global audit's raw commitment checks and the processor's
+QName unit rule. Global audit selection remains unchanged. The receipt distinguishes
+`verified_v2` unit semantics from `not_proven_legacy_v1`; it does not approve a
+processor, admit financial roles, verify publication membership, establish reader
+parity or grant decision-grade. There is no new CLI, schedule, service or writer.
+Actual execution still requires the existing canonical route and resource owner.
+
 `execution/verify_decision_brief.py` checks the retained body and reader, exact
 claim population, sealed processing and canonical-resolution membership, admitted
 financial values, calculation replay, raw-source reconstruction, current source
@@ -1205,3 +1216,5 @@ or seal is rewritten. The explicitly unsafe caller-supplied JSON mode retains
 its existing separate contract. There is no new action, flag, service, schedule,
 provider or schema; this is a stricter clock requirement and corrected membership
 behavior for the existing sealed-inventory corpus command.
+
+The retained-run verifier requires an exact built-in `str` run ID. It rejects string subclasses and non-string values. Typed public aliases expose the existing retained closure and eligibility owners; test fixtures reuse the existing persistence owners through their public aliases. Each alias references the original function object. These exports add no operator command or write authority. The processor measurement fixture export remains in `tests/`.

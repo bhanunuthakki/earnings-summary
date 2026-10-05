@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 from urllib.parse import unquote, urlparse
 
 from pydantic import (
@@ -28,7 +28,11 @@ from pydantic import (
 )
 
 from ask.grounded_retrieval import GroundedAskItem, ask_item_bundle_sha256
-from filings.inline_xbrl_processor import FILING_XBRL_PROTOCOL_SQL, ProcessorBundleManifest
+from filings.inline_xbrl_processor import (
+    FILING_XBRL_PROTOCOL_SQL,
+    ProcessorBundleManifest,
+    verify_raw_normalized_unit_semantics,
+)
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.document_processing_evidence import (
     verify_document_processing_evidence,
@@ -587,12 +591,242 @@ def audit_connection(conn: sqlite3.Connection, options: AuditOptions) -> Integri
     )
 
 
+class FilingXbrlRunVerificationLimits(BaseModel):
+    """Reject oversized complete populations before any retained replay."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    input_members: int = Field(strict=True, default=512, ge=1, le=512)
+    raw_facts: int = Field(strict=True, default=8192, ge=0, le=8192)
+    footnotes: int = Field(strict=True, default=8192, ge=0, le=8192)
+    nodes: int = Field(strict=True, default=8192, ge=0, le=8192)
+    dispositions: int = Field(strict=True, default=8192, ge=0, le=8192)
+    total_rows: int = Field(strict=True, default=81920, ge=1, le=81920)
+    individual_row_bytes: int = Field(strict=True, default=1048576, ge=1, le=1048576)
+    total_text_bytes: int = Field(strict=True, default=33554432, ge=1, le=33554432)
+
+
+class FilingXbrlRunVerificationReceipt(BaseModel):
+    """Raw integrity and source-unit replay; not publication or semantic admission."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["filing-xbrl-run-verification/v1"] = "filing-xbrl-run-verification/v1"
+    extraction_run_id: str
+    document_version_id: str
+    processor_artifact_id: str
+    input_member_count: int
+    raw_fact_count: int
+    footnote_count: int
+    node_count: int
+    disposition_count: int
+    normalized_fact_count: int
+    unit_semantics: Literal["verified_v2", "not_proven_legacy_v1"]
+
+
+def verify_filing_xbrl_run(
+    conn: sqlite3.Connection,
+    *,
+    extraction_run_id: str,
+    limits: FilingXbrlRunVerificationLimits | None = None,
+) -> FilingXbrlRunVerificationReceipt:
+    """Read every selected commitment in one caller-owned transaction, with no writes.
+
+    The global auditor and this entrypoint share the raw acceptance owner. Unit
+    replay shares the processor's exact rule. Historical v1 remains readable but
+    cannot receive a current unit-semantics claim. Publication, financial role,
+    canonical admission and reader qualification remain separate verifiers.
+    """
+    if type(extraction_run_id) is not str or not extraction_run_id or len(extraction_run_id) > 128:
+        raise ValueError("filing-XBRL replay requires an exact run ID")
+    if not conn.in_transaction:
+        raise ValueError("filing-XBRL replay requires one read transaction")
+    budget = limits or FilingXbrlRunVerificationLimits()
+    tables = _table_names(conn)
+    required = {
+        "filing_xbrl_processor_artifacts",
+        "filing_xbrl_extraction_input_members",
+        "filing_xbrl_extraction_input_seals",
+        "filing_xbrl_raw_fact_commitments",
+        "filing_xbrl_footnote_commitments",
+        "filing_xbrl_extraction_dispositions",
+        "filing_xbrl_extraction_disposition_seals",
+        "evidence_extraction_runs",
+        "evidence_nodes",
+        "evidence_content_blobs",
+        "evidence_document_versions",
+        "evidence_source_observations",
+        "issuer_identifier_assertions",
+        "issuer_identifier_resolution_outcomes",
+    }
+    if missing := required - tables:
+        raise ValueError(
+            "filing-XBRL replay required schema is missing: " + ", ".join(sorted(missing))
+        )
+    # The referenced artifact selector stays bound to this run; no newest fallback.
+    artifact_selector = (
+        "processor_artifact_id IN (SELECT processor_artifact_id "
+        "FROM filing_xbrl_extraction_input_seals WHERE extraction_run_id=?)"
+    )
+    populations = (
+        ("evidence_extraction_runs", "extraction_run_id=?", 1),
+        ("filing_xbrl_extraction_input_seals", "extraction_run_id=?", 1),
+        ("filing_xbrl_extraction_disposition_seals", "extraction_run_id=?", 1),
+        ("filing_xbrl_processor_artifacts", artifact_selector, 1),
+        ("filing_xbrl_extraction_input_members", "extraction_run_id=?", budget.input_members),
+        ("filing_xbrl_raw_fact_commitments", "extraction_run_id=?", budget.raw_facts),
+        ("filing_xbrl_footnote_commitments", "extraction_run_id=?", budget.footnotes),
+        ("evidence_nodes", "extraction_run_id=?", budget.nodes),
+        ("filing_xbrl_extraction_dispositions", "extraction_run_id=?", budget.dispositions),
+    )
+    counts: dict[str, int] = {}
+    total_rows = total_bytes = 0
+    for table, predicate, cap in populations:
+        columns = sorted(_columns(conn, table))
+        # Schema names are quoted; values are parameters. Count all selected rows,
+        # including rejections, duplicates and quarantines. Never truncate replay.
+        sizes = "+".join(
+            'COALESCE(length(CAST("' + column.replace('"', '""') + '" AS BLOB)),0)'
+            for column in columns
+        )
+        row = conn.execute(
+            f"SELECT COUNT(*),COALESCE(SUM({sizes}),0),COALESCE(MAX({sizes}),0) "  # nosec B608 -- quoted schema names and closed selectors; bound values
+            f"FROM {table} WHERE {predicate}",
+            (extraction_run_id,),
+        ).fetchone()
+        assert row is not None
+        count, byte_count, max_row = (int(value) for value in row)
+        if count > cap or max_row > budget.individual_row_bytes:
+            raise ValueError("filing-XBRL replay population or row-byte limit exceeded")
+        if table in {item[0] for item in populations[:4]} and count != 1:
+            raise ValueError("filing-XBRL replay run, seal or artifact is missing")
+        if table == "filing_xbrl_extraction_input_members" and count == 0:
+            raise ValueError("filing-XBRL replay input population is missing")
+        counts[table] = count
+        total_rows += count
+        total_bytes += byte_count
+    if total_rows > budget.total_rows or total_bytes > budget.total_text_bytes:
+        raise ValueError("filing-XBRL replay total population or byte limit exceeded")
+    seal = conn.execute(
+        "SELECT processor_artifact_id,recorded_at FROM filing_xbrl_extraction_input_seals "
+        "WHERE extraction_run_id=?",
+        (extraction_run_id,),
+    ).fetchone()
+    run = conn.execute(
+        "SELECT document_version_id FROM evidence_extraction_runs WHERE extraction_run_id=?",
+        (extraction_run_id,),
+    ).fetchone()
+    assert seal is not None and run is not None
+    # Lazy loading preserves the global auditor import surface; only selected
+    # replay loads these existing retained eligibility and atomic closure owners.
+    from provenance.sec_filing_xbrl_ingest import verify_retained_filing_xbrl_run_closure
+    from provenance.source_coverage_refresh import approved_filing_xbrl_run
+
+    if not approved_filing_xbrl_run(
+        conn,
+        extraction_run_id=extraction_run_id,
+        document_version_id=str(run[0]),
+        require_facts=counts["filing_xbrl_raw_fact_commitments"] > 0,
+    ):
+        raise ValueError("filing-XBRL replay retained run is unqualified or incomplete")
+
+    verify_retained_filing_xbrl_run_closure(
+        conn,
+        run_id=extraction_run_id,
+        recorded_at=_audit_utc_datetime(seal[1]),
+    )
+    findings: list[IntegrityFinding] = []
+    _audit_filing_xbrl_processor_closure(
+        conn,
+        tables,
+        findings,
+        AuditOptions(deep_sqlite_checks=False),
+        extraction_run_id=extraction_run_id,
+    )
+    if findings:
+        raise ValueError(
+            "filing-XBRL replay integrity failed: " + ", ".join(item.code for item in findings)
+        )
+    artifact = conn.execute(
+        "SELECT bridge_protocol_version FROM filing_xbrl_processor_artifacts "
+        "WHERE processor_artifact_id=?",
+        (seal[0],),
+    ).fetchone()
+    assert artifact is not None
+    protocol = str(artifact[0])
+    _, records = _verify_filing_disposition_commitments(
+        conn,
+        extraction_run_id=extraction_run_id,
+    )
+    normalized_count = 0
+    replayed = 0
+    for ordinal, row in enumerate(
+        conn.execute(
+            "SELECT raw.input_ordinal,raw.canonical_raw_fact_json,raw.normalization_outcome,"
+            "disposition.canonical_normalized_entry_json,raw.source_entry_sha256,raw.source_locator_sha256 "
+            "FROM filing_xbrl_raw_fact_commitments raw "
+            "JOIN filing_xbrl_extraction_dispositions disposition "
+            "ON disposition.extraction_run_id=raw.extraction_run_id "
+            "AND disposition.input_ordinal=raw.input_ordinal "
+            "WHERE raw.extraction_run_id=? ORDER BY raw.input_ordinal",
+            (extraction_run_id,),
+        )
+    ):
+        if int(row[0]) != ordinal:
+            raise ValueError("filing-XBRL replay raw ordinals are non-contiguous")
+        raw = _JSON_OBJECT_ADAPTER.validate_json(str(row[1]))
+        record = records[ordinal]
+        if (
+            record.input_ordinal != ordinal
+            or record.source_entry_sha256 != str(row[4])
+            or record.source_locator_sha256 != str(row[5])
+        ):
+            raise ValueError("filing-XBRL replay raw/disposition identity mismatch")
+        normalized = (
+            _JSON_OBJECT_ADAPTER.validate_json(record.canonical_normalized_entry_json)
+            if str(row[2]) == "normalized"
+            else None
+        )
+        verify_raw_normalized_unit_semantics(protocol, raw, normalized)
+        normalized_count += normalized is not None
+        replayed += 1
+    if replayed != counts["filing_xbrl_raw_fact_commitments"]:
+        raise ValueError("filing-XBRL replay raw/disposition population is incomplete")
+    return FilingXbrlRunVerificationReceipt(
+        extraction_run_id=extraction_run_id,
+        document_version_id=str(run[0]),
+        processor_artifact_id=str(seal[0]),
+        input_member_count=counts["filing_xbrl_extraction_input_members"],
+        raw_fact_count=counts["filing_xbrl_raw_fact_commitments"],
+        footnote_count=counts["filing_xbrl_footnote_commitments"],
+        node_count=counts["evidence_nodes"],
+        disposition_count=counts["filing_xbrl_extraction_dispositions"],
+        normalized_fact_count=normalized_count,
+        unit_semantics="verified_v2"
+        if protocol == "filing-xbrl-bridge.v2"
+        else "not_proven_legacy_v1",
+    )
+
+
 def _audit_filing_xbrl_processor_closure(
     conn: sqlite3.Connection,
     tables: set[str],
     findings: list[IntegrityFinding],
     options: AuditOptions,
+    *,
+    extraction_run_id: str | None = None,
 ) -> None:
+    params = {} if extraction_run_id is None else {"selected_run": extraction_run_id}
+
+    def run_scope(alias: str) -> str:
+        return "" if extraction_run_id is None else f" AND {alias}.extraction_run_id=:selected_run"
+
+    artifact_scope = (
+        ""
+        if extraction_run_id is None
+        else " AND artifact.processor_artifact_id IN (SELECT processor_artifact_id "
+        "FROM filing_xbrl_extraction_input_seals WHERE extraction_run_id=:selected_run)"
+    )
     required = {
         "filing_xbrl_processor_artifacts",
         "filing_xbrl_extraction_input_members",
@@ -619,20 +853,22 @@ def _audit_filing_xbrl_processor_closure(
         conn,
         findings,
         options,
+        params=params,
         code="FILING_XBRL_PROCESSOR_COORDINATES_UNQUALIFIED",
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
         query=(
             "SELECT processor_artifact_id FROM filing_xbrl_processor_artifacts artifact "
-            "WHERE arelle_version<>'2.39.8' OR edgar_version<>'26.1' "
+            "WHERE (arelle_version<>'2.39.8' OR edgar_version<>'26.1' "
             "OR xule_version<>'30052' "
-            f"OR NOT {FILING_XBRL_PROTOCOL_SQL}"  # nosec B608 -- closed processor contract
+            f"OR NOT {FILING_XBRL_PROTOCOL_SQL})" + artifact_scope  # nosec B608 -- closed processor contract
         ),
     )
     _query_finding(
         conn,
         findings,
         options,
+        params=params,
         code="FILING_XBRL_INPUT_SEAL_INCOMPLETE",
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
@@ -640,7 +876,7 @@ def _audit_filing_xbrl_processor_closure(
             "SELECT seal.extraction_run_id FROM filing_xbrl_extraction_input_seals seal "
             "LEFT JOIN filing_xbrl_extraction_input_members member "
             "ON member.extraction_run_id=seal.extraction_run_id "
-            "GROUP BY seal.extraction_run_id,seal.member_count "
+            "WHERE 1=1 " + run_scope("seal") + " GROUP BY seal.extraction_run_id,seal.member_count "
             "HAVING COUNT(member.input_member_id)<>seal.member_count "
             "OR MIN(member.member_ordinal)<>0 "
             "OR MAX(member.member_ordinal)<>seal.member_count-1 "
@@ -654,6 +890,7 @@ def _audit_filing_xbrl_processor_closure(
         conn,
         findings,
         options,
+        params=params,
         code="FILING_XBRL_RESULT_SEAL_INCOMPLETE",
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
@@ -664,7 +901,9 @@ def _audit_filing_xbrl_processor_closure(
             "LEFT JOIN filing_xbrl_footnote_commitments footnote "
             "ON footnote.extraction_run_id=raw.extraction_run_id "
             "AND footnote.input_ordinal=raw.input_ordinal "
-            "GROUP BY seal.extraction_run_id,seal.raw_fact_count,seal.footnote_count,"
+            "WHERE 1=1 "
+            + run_scope("seal")
+            + " GROUP BY seal.extraction_run_id,seal.raw_fact_count,seal.footnote_count,"
             "seal.zero_fact_disposition "
             "HAVING COUNT(DISTINCT raw.raw_fact_commitment_id)<>seal.raw_fact_count "
             "OR COUNT(footnote.footnote_commitment_id)<>seal.footnote_count "
@@ -677,6 +916,7 @@ def _audit_filing_xbrl_processor_closure(
         conn,
         findings,
         options,
+        params=params,
         code="FILING_XBRL_RAW_FACT_ORPHANED",
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
@@ -690,17 +930,18 @@ def _audit_filing_xbrl_processor_closure(
             "AND member.blob_sha256=raw.package_member_blob_sha256 "
             "LEFT JOIN filing_xbrl_extraction_input_seals seal "
             "ON seal.extraction_run_id=raw.extraction_run_id "
-            "WHERE node.node_id IS NULL OR node.extraction_run_id<>raw.extraction_run_id "
+            "WHERE (node.node_id IS NULL OR node.extraction_run_id<>raw.extraction_run_id "
             "OR node.locator_sha256<>raw.source_locator_sha256 "
             "OR member.input_member_id IS NULL "
             "OR seal.accession_number<>raw.accession_number "
-            "OR seal.expected_cik<>raw.observed_cik"
+            "OR seal.expected_cik<>raw.observed_cik)" + run_scope("raw")
         ),
     )
     _query_finding(
         conn,
         findings,
         options,
+        params=params,
         code="FILING_XBRL_FOOTNOTE_ORPHANED",
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
@@ -710,7 +951,7 @@ def _audit_filing_xbrl_processor_closure(
             "LEFT JOIN filing_xbrl_raw_fact_commitments raw "
             "ON raw.extraction_run_id=footnote.extraction_run_id "
             "AND raw.input_ordinal=footnote.input_ordinal "
-            "WHERE raw.raw_fact_commitment_id IS NULL"
+            "WHERE raw.raw_fact_commitment_id IS NULL" + run_scope("footnote")
         ),
     )
     digest_mismatches: list[str] = []
@@ -728,7 +969,10 @@ def _audit_filing_xbrl_processor_closure(
         "xule_version,bridge_protocol_version,artifact_sha256,"
         "sandbox_launcher_sha256,bundle_python_sha256,"
         "canonical_manifest_json,manifest_sha256 "
-        "FROM filing_xbrl_processor_artifacts ORDER BY processor_artifact_id"
+        "FROM filing_xbrl_processor_artifacts artifact WHERE 1=1 "
+        + artifact_scope
+        + " ORDER BY processor_artifact_id",
+        params,
     ):
         artifact_id = str(artifact[0])
         try:
@@ -783,7 +1027,10 @@ def _audit_filing_xbrl_processor_closure(
         "canonical_execution_evidence_json,execution_evidence_sha256,"
         "raw_fact_set_sha256,accession_number,expected_cik,processor_artifact_id,"
         "issuer_id "
-        "FROM filing_xbrl_extraction_input_seals ORDER BY extraction_run_id"
+        "FROM filing_xbrl_extraction_input_seals seal WHERE 1=1 "
+        + run_scope("seal")
+        + " ORDER BY extraction_run_id",
+        params,
     ):
         run_id = str(row[0])
         committed_sets = (
@@ -957,6 +1204,7 @@ def _audit_filing_xbrl_processor_closure(
         conn,
         findings,
         options,
+        params=params,
         code="FILING_XBRL_RAW_FACT_DISPOSITION_GAP",
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
@@ -966,15 +1214,16 @@ def _audit_filing_xbrl_processor_closure(
             "LEFT JOIN filing_xbrl_extraction_dispositions disposition "
             "ON disposition.extraction_run_id=raw.extraction_run_id "
             "AND disposition.input_ordinal=raw.input_ordinal "
-            "WHERE disposition.disposition_id IS NULL "
+            "WHERE (disposition.disposition_id IS NULL "
             "OR (raw.normalization_outcome='rejected' "
-            "AND disposition.disposition<>'quarantined')"
+            "AND disposition.disposition<>'quarantined'))" + run_scope("raw")
         ),
     )
     _query_finding(
         conn,
         findings,
         options,
+        params=params,
         code="FILING_XBRL_EVIDENCE_OR_CLOCK_BINDING_GAP",
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
@@ -988,7 +1237,7 @@ def _audit_filing_xbrl_processor_closure(
             "ON document.document_version_id=member.document_version_id "
             "LEFT JOIN evidence_extraction_runs run "
             "ON run.extraction_run_id=member.extraction_run_id "
-            "WHERE blob.sha256 IS NULL OR blob.byte_size<>member.byte_size "
+            "WHERE (blob.sha256 IS NULL OR blob.byte_size<>member.byte_size "
             "OR blob.media_type<>member.media_type "
             "OR julianday(blob.recorded_at)>julianday(seal.recorded_at) "
             "OR julianday(member.recorded_at)<>julianday(seal.recorded_at) "
@@ -1005,13 +1254,15 @@ def _audit_filing_xbrl_processor_closure(
             "FROM evidence_source_observations observation "
             "WHERE observation.source_url=member.source_url "
             "AND observation.blob_sha256=member.blob_sha256 "
-            "AND julianday(observation.retrieved_at)<=julianday(seal.recorded_at)))"
+            "AND julianday(observation.retrieved_at)<=julianday(seal.recorded_at))))"
+            + run_scope("member")
         ),
     )
     _query_finding(
         conn,
         findings,
         options,
+        params=params,
         code="FILING_XBRL_CIK_ISSUER_BINDING_GAP",
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
@@ -1031,13 +1282,14 @@ def _audit_filing_xbrl_processor_closure(
             "FROM issuer_identifier_resolution_outcomes newer "
             "WHERE newer.resolution_key=resolution.resolution_key "
             "AND newer.knowledge_at<=seal.recorded_at "
-            "AND newer.revision>resolution.revision))"
+            "AND newer.revision>resolution.revision))" + run_scope("seal")
         ),
     )
     _query_finding(
         conn,
         findings,
         options,
+        params=params,
         code="FILING_XBRL_PUBLICATION_CLOCK_OR_CLOSURE_GAP",
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
@@ -1046,7 +1298,7 @@ def _audit_filing_xbrl_processor_closure(
             "FROM filing_xbrl_extraction_input_seals seal "
             "LEFT JOIN filing_xbrl_extraction_disposition_seals disposition_seal "
             "ON disposition_seal.extraction_run_id=seal.extraction_run_id "
-            "WHERE disposition_seal.extraction_run_id IS NULL "
+            "WHERE (disposition_seal.extraction_run_id IS NULL "
             "OR disposition_seal.entry_count<>seal.raw_fact_count "
             "OR julianday(disposition_seal.recorded_at)<>julianday(seal.recorded_at) "
             "OR julianday(disposition_seal.knowledge_at)<>julianday(seal.recorded_at) "
@@ -1062,7 +1314,8 @@ def _audit_filing_xbrl_processor_closure(
             "OR EXISTS (SELECT 1 FROM filing_xbrl_extraction_dispositions disposition "
             "WHERE disposition.extraction_run_id=seal.extraction_run_id "
             "AND (julianday(disposition.recorded_at)<>julianday(seal.recorded_at) "
-            "OR julianday(disposition.knowledge_at)<>julianday(seal.recorded_at)))"
+            "OR julianday(disposition.knowledge_at)<>julianday(seal.recorded_at))))"
+            + run_scope("seal")
         ),
     )
 
@@ -1614,19 +1867,47 @@ def _verify_filing_disposition_cutover(
     cutoff_at: datetime,
     observed_through: datetime,
 ) -> None:
+    seal, _ = _verify_filing_disposition_commitments(conn, extraction_run_id=extraction_run_id)
+    verify_source_fact_publication(
+        conn,
+        publication_id=seal.publication_id,
+        cutoff=cutoff_at,
+        observed_through=observed_through,
+    )
+
+
+def _verify_filing_disposition_commitments(
+    conn: sqlite3.Connection,
+    *,
+    extraction_run_id: str,
+) -> tuple[FilingXbrlExtractionDispositionSeal, tuple[FilingXbrlExtractionDispositionRecord, ...]]:
+    """Shared exact disposition population; publication replay stays with its owner."""
     seal_row = conn.execute(
         "SELECT * FROM filing_xbrl_extraction_disposition_seals WHERE extraction_run_id=?",
         (extraction_run_id,),
     ).fetchone()
     if seal_row is None:
         raise ValueError("filing-XBRL extraction has no disposition seal")
-    seal = FilingXbrlExtractionDispositionSeal.model_validate(dict(seal_row))
+    seal_cursor = conn.execute("SELECT * FROM filing_xbrl_extraction_disposition_seals LIMIT 0")
+    assert seal_cursor.description is not None
+    seal_columns = [item[0] for item in seal_cursor.description]
+    seal = FilingXbrlExtractionDispositionSeal.model_validate(
+        dict(zip(seal_columns, seal_row, strict=True))
+    )
     rows = conn.execute(
         "SELECT * FROM filing_xbrl_extraction_dispositions "
         "WHERE extraction_run_id=? ORDER BY input_ordinal",
         (extraction_run_id,),
     ).fetchall()
-    records = tuple(FilingXbrlExtractionDispositionRecord.model_validate(dict(row)) for row in rows)
+    record_cursor = conn.execute("SELECT * FROM filing_xbrl_extraction_dispositions LIMIT 0")
+    assert record_cursor.description is not None
+    record_columns = [item[0] for item in record_cursor.description]
+    records = tuple(
+        FilingXbrlExtractionDispositionRecord.model_validate(
+            dict(zip(record_columns, row, strict=True))
+        )
+        for row in rows
+    )
     disposition_payloads: list[dict[str, JsonValue]] = []
     for record in records:
         normalized = _JSON_OBJECT_ADAPTER.validate_json(record.canonical_normalized_entry_json)
@@ -1655,12 +1936,7 @@ def _verify_filing_disposition_cutover(
         or seal.disposition_set_sha256 != publication_digest_text(disposition_set_json)
     ):
         raise ValueError("filing-XBRL disposition final seal mismatch")
-    verify_source_fact_publication(
-        conn,
-        publication_id=seal.publication_id,
-        cutoff=cutoff_at,
-        observed_through=observed_through,
-    )
+    return seal, records
 
 
 def _promotion_for_runtime_coordinate(
@@ -1783,18 +2059,26 @@ def _query_finding(
     severity: Severity,
     remediation: RemediationClass,
     query: str,
+    params: Mapping[str, object] | None = None,
 ) -> None:
     scoped_query = query.strip().removesuffix(";")
     count_row = conn.execute(
-        f"SELECT COUNT(*) FROM ({scoped_query}) AS audit_violations"  # nosec B608 -- trusted internal SQL shape; values remain bound
+        f"SELECT COUNT(*) FROM ({scoped_query}) AS audit_violations",  # nosec B608 -- trusted internal SQL shape; values remain bound
+        params or (),
     ).fetchone()
     count = 0 if count_row is None else int(count_row[0])
+    sample_parameter = ":_audit_sample_limit" if params else "?"
+    sample_parameters: Mapping[str, object] | tuple[int] = (
+        {**params, "_audit_sample_limit": options.sample_limit}
+        if params
+        else (options.sample_limit,)
+    )
     rows = (
         []
         if count == 0
         else conn.execute(
-            f"SELECT * FROM ({scoped_query}) AS audit_violations LIMIT ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
-            (options.sample_limit,),
+            f"SELECT * FROM ({scoped_query}) AS audit_violations LIMIT {sample_parameter}",  # nosec B608 -- trusted internal SQL shape and closed placeholder; values remain bound
+            sample_parameters,
         ).fetchmany(options.sample_limit)
     )
     _add(

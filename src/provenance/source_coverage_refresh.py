@@ -755,3 +755,7 @@ def _datetime(value: object, name: str) -> datetime:
 
 def _timeline(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+# Selected retained-run verification shares the coverage eligibility owner.
+approved_filing_xbrl_run = _approved_filing_xbrl_run
