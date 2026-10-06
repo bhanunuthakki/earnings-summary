@@ -518,6 +518,18 @@ def test_package_staging_refuses_source_growth_before_copying_extra_bytes(
     source = request.members[0].local_path
     source_body = source.read_bytes()
     original_open = Path.open
+    original_disk_usage = processor_module.shutil.disk_usage
+    cache_root = tmp_path / "filing-xbrl-package-cache"
+    reserve = getattr(processor_module, "_PACKAGE_CACHE_MIN_FREE_BYTES")
+    assert isinstance(reserve, int) and reserve > 0
+    headroom_probes: list[Path] = []
+
+    def sufficient_cache_headroom(path: str | os.PathLike[str]) -> tuple[int, int, int]:
+        usage = original_disk_usage(path)
+        if Path(path) == cache_root:
+            headroom_probes.append(cache_root)
+            return usage._replace(free=reserve + request.members[0].byte_size)
+        return usage
 
     def growing_open(
         path: Path,
@@ -538,14 +550,50 @@ def test_package_staging_refuses_source_growth_before_copying_extra_bytes(
             newline=newline,
         )
 
-    monkeypatch.setattr(Path, "open", growing_open)
-    with pytest.raises(InlineXbrlProcessorError, match="grew while staging"):
-        _stage_package_for_test(request, runtime_root=runtime_root)
+    # Admit only this fixture's cache so host free space cannot mask source growth.
+    with monkeypatch.context() as patch:
+        patch.setattr(processor_module.shutil, "disk_usage", sufficient_cache_headroom)
+        patch.setattr(Path, "open", growing_open)
+        with pytest.raises(InlineXbrlProcessorError, match="grew while staging"):
+            _stage_package_for_test(request, runtime_root=runtime_root)
 
-    staged_files = tuple(
-        path for path in (tmp_path / "filing-xbrl-package-cache").rglob("*") if path.is_file()
-    )
+    assert headroom_probes == [cache_root]
+    assert source.read_bytes() == source_body
+    staged_files = tuple(path for path in cache_root.rglob("*") if path.is_file())
+    assert len(staged_files) == 1 and staged_files[0].read_bytes() == source_body
     assert sum(path.stat().st_size for path in staged_files) <= request.members[0].byte_size
+    assert not (cache_root / request.package_member_set_sha256).exists()
+
+
+def test_package_cache_refuses_low_disk_headroom_before_copying(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    request = _request(tmp_path)
+    source_body = request.members[0].local_path.read_bytes()
+    cache_root = tmp_path / "filing-xbrl-package-cache"
+    original_disk_usage = processor_module.shutil.disk_usage
+    reserve = getattr(processor_module, "_PACKAGE_CACHE_MIN_FREE_BYTES")
+    assert isinstance(reserve, int) and reserve > 0
+    headroom_probes: list[Path] = []
+
+    def insufficient_cache_headroom(path: str | os.PathLike[str]) -> tuple[int, int, int]:
+        usage = original_disk_usage(path)
+        if Path(path) == cache_root:
+            headroom_probes.append(cache_root)
+            return usage._replace(free=reserve + request.members[0].byte_size - 1)
+        return usage
+
+    with monkeypatch.context() as patch:
+        patch.setattr(processor_module.shutil, "disk_usage", insufficient_cache_headroom)
+        with pytest.raises(InlineXbrlProcessorError, match="lacks disk headroom"):
+            _stage_package_for_test(request, runtime_root=runtime_root)
+
+    assert headroom_probes == [cache_root]
+    assert list(cache_root.iterdir()) == []
+    assert request.members[0].local_path.read_bytes() == source_body
 
 
 def test_processor_rejects_unpinned_launcher_before_execution(tmp_path: Path) -> None:
