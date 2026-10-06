@@ -30,6 +30,7 @@ from collections.abc import Callable
 from html import escape
 from pathlib import Path
 
+from dcf.input_evidence import SourceReadContext
 from identity import DEFAULT_USER_ID
 from pipeline.console_scaffold import ConsoleSection, render_console
 from pipeline.portfolio_styles import console_css
@@ -443,7 +444,9 @@ def render_portfolio_allocation_panel(
     )
 
 
-def _record_sections(db_path: Path, user_id: str) -> list[ConsoleSection]:
+def _record_sections(
+    db_path: Path, user_id: str, source_context: SourceReadContext | None = None
+) -> list[ConsoleSection]:
     """Portfolio → Record: the audit trail, on the D1 page model — the Band-1
     read leads, Decisions spans wide (it is the record), Memos and the
     Triggers ladder sit as side-by-side tiles."""
@@ -468,26 +471,49 @@ def _record_sections(db_path: Path, user_id: str) -> list[ConsoleSection]:
                 research_items_only=True,
             ),
         ),
-        ("memos", "Memos", lambda: render_advisor_memos_panel(db_path, user_id=user_id)),
+        (
+            "memos",
+            "Memos",
+            lambda: render_advisor_memos_panel(
+                db_path, user_id=user_id, source_context=source_context
+            ),
+        ),
         ("triggers", "Triggers", lambda: _render_triggers(db_path)),
     ]
 
 
 def render_portfolio_record_fragment(
-    db_path: Path, fragment: str, *, user_id: str = DEFAULT_USER_ID
+    db_path: Path,
+    fragment: str,
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    source_context: SourceReadContext | None = None,
 ) -> str:
     """Build one audit section without waiting for unrelated dependencies."""
-    for anchor, _label, builder in _record_sections(db_path, user_id):
+    sections = (
+        _record_sections(db_path, user_id)
+        if source_context is None
+        else _record_sections(db_path, user_id, source_context)
+    )
+    for anchor, _label, builder in sections:
         if anchor == fragment:
             return builder()
     raise ValueError("Unknown record fragment")
 
 
 def render_portfolio_record_panel(
-    db_path: Path, *, user_id: str = DEFAULT_USER_ID, lazy: bool = False
+    db_path: Path,
+    *,
+    user_id: str = DEFAULT_USER_ID,
+    lazy: bool = False,
+    source_context: SourceReadContext | None = None,
 ) -> str:
     """Render the audit console, deferring independent sections on live routes."""
-    sections = _record_sections(db_path, user_id)
+    sections = (
+        _record_sections(db_path, user_id)
+        if source_context is None
+        else _record_sections(db_path, user_id, source_context)
+    )
     return _CONSOLE_CSS + render_console(
         "Record",
         sections,

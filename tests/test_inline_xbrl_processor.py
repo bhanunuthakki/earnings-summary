@@ -723,3 +723,7 @@ def test_sandbox_refusal_diagnostic_is_closed() -> None:
         )
         == "refusal evidence malformed"
     )
+
+
+# Reuse the real processor fixture in selected retained-run verification tests.
+measured_processor_output_fixture = _measure_output

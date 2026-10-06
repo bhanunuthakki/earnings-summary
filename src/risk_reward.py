@@ -25,12 +25,14 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from statistics import median
 
 from allocation.book_risk import BookRisk, build_book_risk
-from dcf.latest import latest_dcf_rows_from_db
+from dcf.input_evidence import SourceReadContext
+from dcf.latest import latest_dcf_rows
+from dcf.readiness import load_valuation_readiness
 from dcf.scenario_reward import scenario_reward
 from identity import DEFAULT_USER_ID
 from sources.market_price_policy import PRICE_STALE_DAYS as PRICE_STALE_DAYS
@@ -252,13 +254,21 @@ def _parse_date(raw: object) -> date | None:
             return None
 
 
-def _dcf_reward_legs(db_path: Path, tickers: Sequence[str], today: date) -> dict[str, Reward]:
+def _dcf_reward_legs(
+    db_path: Path,
+    tickers: Sequence[str],
+    today: date,
+    *,
+    as_of: datetime | None = None,
+    source_context: SourceReadContext | None = None,
+) -> dict[str, Reward]:
     """Asymmetry-aware reward leg per ticker, with freshness-derived confidence.
 
     Reads the latest TOP-LEVEL (unsegmented, current-version) ``dcf_runs`` row
     per name through the canonical shared reader (``dcf.latest``, PR:
     canonical latest_dcf_run reader) — a segment or superseded row can't win
-    this reward leg. The L6 price-leg-fresh ``live_price`` and the value-of-
+    this reward leg. MELI and ONON also require the existing readiness gate
+    with explicit physical-source authority. The L6 price-leg-fresh ``live_price`` and the value-of-
     record ``npv_per_share`` feed ``dcf.scenario_reward``; ``valuation_date``
     (fair-value leg) and ``live_price_at`` (price leg) drive the low-
     confidence framing. A name with no row simply gets no entry (the caller
@@ -271,8 +281,30 @@ def _dcf_reward_legs(db_path: Path, tickers: Sequence[str], today: date) -> dict
     drive eligibility (``allocation.eligibility``)."""
     want = {t.upper() for t in tickers}
     out: dict[str, Reward] = {}
-    for t, row in latest_dcf_rows_from_db(db_path).items():
+    cutoff = as_of or datetime.now(UTC)
+    if not db_path.exists():
+        return out
+    try:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    except sqlite3.Error:
+        return out
+    try:
+        conn.execute("BEGIN")
+        rows = latest_dcf_rows(conn)
+        readiness = {
+            t: load_valuation_readiness(conn, t, as_of=cutoff, source_context=source_context)
+            for t in want
+            if t in {"MELI", "ONON"}
+        }
+    finally:
+        conn.close()
+    for t, row in rows.items():
         if t not in want:
+            continue
+        if t in readiness and not readiness[t].ready:
+            out[t] = Reward(
+                None, False, True, "; ".join(readiness[t].reason_codes) or readiness[t].status, None
+            )
             continue
         if row.sanity_flag:
             out[t] = Reward(
@@ -375,6 +407,7 @@ def build_risk_reward_gap(
     weights_source: str,
     user_id: str = DEFAULT_USER_ID,
     today: date | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> RiskRewardGap:
     """Assemble the risk-parity-gap table for the book described by ``weights``
     (ticker -> fraction of book). ``hidden_reason`` is set (rows empty) when the
@@ -395,7 +428,7 @@ def build_risk_reward_gap(
             notes=[],
             hidden_reason=book.hidden_reason,
         )
-    rewards = _dcf_reward_legs(db_path, book.tickers, today)
+    rewards = _dcf_reward_legs(db_path, book.tickers, today, source_context=source_context)
     intents = _latest_convictions(db_path, book.tickers, user_id)
     entry_fallback = _entry_convictions(db_path, book.tickers)
     # A recorded sizing intent always outranks the entry-time text; the

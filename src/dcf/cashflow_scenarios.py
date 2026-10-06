@@ -40,7 +40,9 @@ class AnalystCashflowScenario(FrozenModel):
 
 
 class AnalystCashflowScenarioReview(FrozenModel):
-    schema_version: Literal["analyst_cashflow_scenarios.v1"] = "analyst_cashflow_scenarios.v1"
+    schema_version: Literal["analyst_cashflow_scenarios.v1", "analyst_cashflow_scenarios.v2"] = (
+        "analyst_cashflow_scenarios.v2"
+    )
     recipe: Literal["operating_cashflow_equity.v1"] = RECIPE
     ticker: str
     base_model_input_receipt_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -54,6 +56,18 @@ class AnalystCashflowScenarioReview(FrozenModel):
     weighted_value_per_share: float = Field(gt=0, strict=True)
     owner_approval: Literal[False] = False
     allocation_permission: Literal[False] = False
+
+
+def cashflow_scenario_input_digest(receipt: ModelInputReceipt) -> str:
+    """Commit input content while allowing a fresh physical read observation."""
+    payload = receipt.model_dump(mode="json")
+    # The financial cutoff and every source commitment remain part of the hash.
+    # Only the physical reader's new observation clock changes during replay.
+    if receipt.schema_version == "dcf_model_inputs.v3":
+        payload["raw_documents"] = [
+            item.model_dump(mode="json", exclude={"verified_at"}) for item in receipt.raw_documents
+        ]
+    return canonical_digest(payload)
 
 
 class AnalystCashflowScenarioSource(FrozenModel):
@@ -111,10 +125,19 @@ def verify_analyst_cashflow_scenarios(
 ) -> None:
     """Reconstruct every case from the admitted base facts and reviewed assumptions."""
     if (
+        review.schema_version == "analyst_cashflow_scenarios.v1"
+        and receipt.schema_version == "dcf_model_inputs.v3"
+    ):
+        raise InputEvidenceError("analyst_scenario_physical_commitment_version_missing")
+    receipt_digest = (
+        canonical_digest(receipt.model_dump(mode="json"))
+        if review.schema_version == "analyst_cashflow_scenarios.v1"
+        else cashflow_scenario_input_digest(receipt)
+    )
+    if (
         receipt.recipe != RECIPE
         or review.ticker != receipt.request.ticker
-        or review.base_model_input_receipt_sha256
-        != canonical_digest(receipt.model_dump(mode="json"))
+        or review.base_model_input_receipt_sha256 != receipt_digest
         or review.base_effective_inputs_sha256 != canonical_digest(base_effective_inputs)
         or review.research_snapshot_id != receipt.request.research_snapshot_id
         or review.snapshot_member_sha256 != receipt.snapshot_member_sha256

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import os
 import sqlite3
+from collections.abc import Callable, Generator, Mapping
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,7 +26,7 @@ from dcf.cashflow_inputs import (
     requirements_for,
 )
 from dcf.cashflow_refresh import PreparedCashflowDcfRequest, prepare_cashflow_dcf
-from dcf.input_recipes import model_engine
+from dcf.input_recipes import model_engine, prepare_model_inputs, verify_model_input_receipt
 from dcf.readiness import load_valuation_readiness
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.fact_read_model import FactReadModel
@@ -39,7 +40,7 @@ from provenance.financial_statement_admission import (
 from provenance.metric_ontology import MetricOntology
 from provenance.research_snapshot import ResearchSnapshotRequest
 from tests.test_report_canonical_financials import STAMP, seed_table
-from tests.test_report_canonical_financials import database as database
+from tests.test_source_fact_repository import seed_foundation
 
 CLOCK = STAMP + timedelta(seconds=2)
 END = date(2025, 12, 31)
@@ -67,10 +68,33 @@ SOURCE_NAMES: dict[str, str] = dict(
 )
 
 
+@pytest.fixture
+def source_context(tmp_path: Path) -> evidence.SourceReadContext:
+    """Explicit isolated byte authority; the database path grants no file access."""
+    return evidence.SourceReadContext.for_sec_state_root(tmp_path / "source-state")
+
+
+@pytest.fixture
+def database(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    source_context: evidence.SourceReadContext,
+) -> Generator[sqlite3.Connection, None, None]:
+    conn = sqlite3.connect(migrated_db(tmp_path / "cashflow.db"))
+    conn.execute("PRAGMA foreign_keys = ON")
+    seed_foundation(conn, source_path=source_context.content_roots[0] / "fixture.json")
+    conn.commit()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
 def _request(
     conn: sqlite3.Connection,
     monkeypatch: pytest.MonkeyPatch,
     *,
+    source_context: evidence.SourceReadContext,
     debt_source_name: str = "TotalFinancialDebt",
 ) -> evidence.ModelInputRequest:
     def now(_zone: object) -> datetime:
@@ -312,6 +336,7 @@ def _request(
         effective_inputs=proposed,
         assumption_keys=frozenset(assumptions),
         as_of=CLOCK,
+        source_context=source_context,
     )
     actuals, _ = calculate_actuals(proof)
     complete = {
@@ -352,14 +377,18 @@ seed_cashflow_model_inputs = _request
 
 
 def test_generic_source_to_versioned_save_and_readiness_replay(
-    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    database: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_context: evidence.SourceReadContext,
 ) -> None:
-    request = _request(database, monkeypatch)
+    request = _request(database, monkeypatch, source_context=source_context)
     effective, receipt = prepare_cashflow_inputs(
         database,
         request,
         effective_inputs={key: item.value for key, item in request.assumptions.items()},
         as_of=CLOCK,
+        source_context=source_context,
     )
     assert effective["owner_cashflow"] == 86
     assert receipt.calculations[3].key == "reported_fcf_after_sbc"
@@ -386,6 +415,7 @@ def test_generic_source_to_versioned_save_and_readiness_replay(
         expected_request_sha256=digest,
         repo_root=tmp_path,
         artifact_path=artifact,
+        source_context=source_context,
     )
     assert planned.mode == "dry_run" and not artifact.exists()
     with pytest.raises(
@@ -398,6 +428,7 @@ def test_generic_source_to_versioned_save_and_readiness_replay(
             expected_request_sha256="0" * 64,
             repo_root=tmp_path,
             artifact_path=artifact,
+            source_context=source_context,
             apply=True,
         )
     assert not artifact.exists()
@@ -409,15 +440,20 @@ def test_generic_source_to_versioned_save_and_readiness_replay(
         expected_request_sha256=digest,
         repo_root=tmp_path,
         artifact_path=artifact,
+        source_context=source_context,
         apply=True,
     )
     assert result.version_created and artifact.is_file()
     assert hashlib.sha256(artifact.read_bytes()).hexdigest() == result.artifact_sha256
-    readiness = load_valuation_readiness(database, "SYNTH", as_of=CLOCK + timedelta(seconds=1))
+    readiness = load_valuation_readiness(
+        database, "SYNTH", as_of=CLOCK + timedelta(seconds=1), source_context=source_context
+    )
     assert readiness.financial_input_completeness == "verified", readiness.reason_codes
     assert readiness.reason_codes == ("scenario_acceptance_unverified",)
     database.execute("UPDATE dcf_runs SET npv=npv+1000 WHERE ticker='SYNTH'")
-    wrong = load_valuation_readiness(database, "SYNTH", as_of=CLOCK + timedelta(seconds=1))
+    wrong = load_valuation_readiness(
+        database, "SYNTH", as_of=CLOCK + timedelta(seconds=1), source_context=source_context
+    )
     assert "persisted_model_output_replay_mismatch" in wrong.reason_codes
 
 
@@ -425,9 +461,12 @@ def test_generic_source_to_versioned_save_and_readiness_replay(
     "change", ["population", "unit", "assumption", "scope", "method", "ticker", "calculated"]
 )
 def test_generic_inputs_fail_closed(
-    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, change: str
+    database: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+    source_context: evidence.SourceReadContext,
 ) -> None:
-    request = _request(database, monkeypatch)
+    request = _request(database, monkeypatch, source_context=source_context)
     effective = {key: item.value for key, item in request.assumptions.items()}
     if change == "population":
         request = request.model_copy(
@@ -452,7 +491,11 @@ def test_generic_inputs_fail_closed(
         request = request.model_copy(update={"recipe_context": context})
     elif change == "calculated":
         effective, _ = prepare_cashflow_inputs(
-            database, request, effective_inputs=effective, as_of=CLOCK
+            database,
+            request,
+            effective_inputs=effective,
+            as_of=CLOCK,
+            source_context=source_context,
         )
         effective["owner_cashflow"] += 1
     else:
@@ -466,7 +509,13 @@ def test_generic_inputs_fail_closed(
 
         monkeypatch.setattr(evidence, "verify_source_coverage", wrong_ticker)
     with pytest.raises((ValueError, RuntimeError)):
-        prepare_cashflow_inputs(database, request, effective_inputs=effective, as_of=CLOCK)
+        prepare_cashflow_inputs(
+            database,
+            request,
+            effective_inputs=effective,
+            as_of=CLOCK,
+            source_context=source_context,
+        )
 
 
 def test_unknown_recipe_has_no_dispatch() -> None:
@@ -475,13 +524,183 @@ def test_unknown_recipe_has_no_dispatch() -> None:
 
 
 def test_reported_debt_component_cannot_be_reviewed_as_the_total(
-    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+    database: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    source_context: evidence.SourceReadContext,
 ) -> None:
     with pytest.raises(ValueError, match="financial_aggregate_component_is_not_reported_total"):
-        _request(database, monkeypatch, debt_source_name="LongTermDebtCurrent")
+        _request(
+            database,
+            monkeypatch,
+            source_context=source_context,
+            debt_source_name="LongTermDebtCurrent",
+        )
     assert (
         database.execute(
             "SELECT COUNT(*) FROM canonical_metric_definition_revisions WHERE json_extract(scope_constraints_json,'$.financial_statement_concept') IS NOT NULL"
         ).fetchone()[0]
         == 0
     )
+
+
+@pytest.mark.parametrize("change", ["context", "missing", "bytes", "outside_root"])
+def test_cashflow_dispatch_rechecks_current_source_bytes(
+    database: sqlite3.Connection,
+    source_context: evidence.SourceReadContext,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    request = _request(database, monkeypatch, source_context=source_context)
+    effective, receipt = prepare_model_inputs(
+        database,
+        request,
+        effective_inputs={key: item.value for key, item in request.assumptions.items()},
+        as_of=CLOCK,
+        source_context=source_context,
+    )
+    assert receipt.schema_version == "dcf_model_inputs.v3"
+    assert receipt.source_integrity == "present_bytes_verified"
+    assert len(receipt.raw_documents) == 1
+    assert receipt.raw_documents[0].blob_sha256 == hashlib.sha256(b"filing bytes").hexdigest()
+    assert receipt.raw_documents[0].byte_size == 12
+    source_path = source_context.content_roots[0] / "fixture.json"
+    context: evidence.SourceReadContext | None = source_context
+    reason = "model_input_source_context_unavailable"
+    if change == "context":
+        context = None
+    elif change == "missing":
+        source_path.unlink()
+        reason = "model_input_source_bytes_unavailable"
+    elif change == "bytes":
+        source_path.write_bytes(b"filing wrong")
+        reason = "model_input_source_digest_or_size_mismatch"
+    else:
+        context = evidence.SourceReadContext.for_sec_state_root(tmp_path / "unapproved")
+        reason = "model_input_source_location_unapproved"
+    with pytest.raises(evidence.InputEvidenceError, match=reason):
+        verify_model_input_receipt(
+            database, receipt, effective_inputs=effective, as_of=CLOCK, source_context=context
+        )
+
+
+@pytest.mark.parametrize("change", ["fresh_clock", "storage_identity", "legacy"])
+def test_cashflow_receipt_preserves_physical_commitments(
+    database: sqlite3.Connection,
+    source_context: evidence.SourceReadContext,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    request = _request(database, monkeypatch, source_context=source_context)
+    effective, receipt = prepare_model_inputs(
+        database,
+        request,
+        effective_inputs={key: item.value for key, item in request.assumptions.items()},
+        as_of=CLOCK,
+        source_context=source_context,
+    )
+    if change == "legacy":
+        modified = receipt.model_copy(
+            update={
+                "schema_version": "dcf_model_inputs.v2",
+                "source_integrity": "unverified",
+                "raw_documents": (),
+            }
+        )
+        reason = "model_input_source_legacy_receipt_unverified"
+    else:
+        witness = receipt.raw_documents[0]
+        updates = (
+            {"verified_at": witness.verified_at + timedelta(seconds=1)}
+            if change == "fresh_clock"
+            else {"storage_uri_sha256": "0" * 64}
+        )
+        modified = receipt.model_copy(
+            update={"raw_documents": (witness.model_copy(update=updates),)}
+        )
+        reason = "model_input_receipt_mismatch"
+    if change == "fresh_clock":
+        verified = verify_model_input_receipt(
+            database,
+            modified,
+            effective_inputs=effective,
+            as_of=CLOCK,
+            source_context=source_context,
+        )
+        assert (
+            verified.raw_documents[0].storage_uri_sha256
+            == receipt.raw_documents[0].storage_uri_sha256
+        )
+    else:
+        with pytest.raises(evidence.InputEvidenceError, match=reason):
+            verify_model_input_receipt(
+                database,
+                modified,
+                effective_inputs=effective,
+                as_of=CLOCK,
+                source_context=source_context,
+            )
+
+
+def test_cashflow_transaction_rechecks_bytes_before_retention(
+    database: sqlite3.Connection,
+    tmp_path: Path,
+    source_context: evidence.SourceReadContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _request(database, monkeypatch, source_context=source_context)
+    prepared = PreparedCashflowDcfRequest(
+        model_inputs=request,
+        effective_inputs={key: item.value for key, item in request.assumptions.items()},
+        as_of=CLOCK,
+        valuation_date=CLOCK.date(),
+        market_price=10,
+        market_observed_at=CLOCK,
+        market_source="synthetic-current-observation",
+    )
+    path, artifact = tmp_path / "prepared.json", tmp_path / "calculation.json"
+    path.write_text(prepared.model_dump_json())
+    os.utime(path, (CLOCK.timestamp(), CLOCK.timestamp()))
+    calls = 0
+
+    def mutate_at_transaction_recheck(
+        conn: sqlite3.Connection,
+        input_request: evidence.ModelInputRequest,
+        *,
+        effective_inputs: Mapping[str, float],
+        as_of: datetime,
+        source_context: evidence.SourceReadContext | None = None,
+    ) -> tuple[dict[str, float], evidence.ModelInputReceipt]:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            assert conn.in_transaction
+            assert source_context is not None
+            (source_context.content_roots[0] / "fixture.json").write_bytes(b"filing wrong")
+        return prepare_cashflow_inputs(
+            conn,
+            input_request,
+            effective_inputs=effective_inputs,
+            as_of=as_of,
+            source_context=source_context,
+        )
+
+    monkeypatch.setattr(cashflow_refresh, "prepare_cashflow_inputs", mutate_at_transaction_recheck)
+    with pytest.raises(
+        evidence.InputEvidenceError, match="model_input_source_digest_or_size_mismatch"
+    ):
+        prepare_cashflow_dcf(
+            database,
+            prepared,
+            request_path=path,
+            expected_request_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+            repo_root=tmp_path,
+            artifact_path=artifact,
+            apply=True,
+            source_context=source_context,
+        )
+    assert calls == 2
+    assert not database.in_transaction
+    assert database.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
+    assert not artifact.exists()
+    assert not list(tmp_path.glob(".calculation.json.*.staged"))

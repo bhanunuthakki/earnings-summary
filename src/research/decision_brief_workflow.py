@@ -16,9 +16,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, field_validator
 
 from dcf.cashflow_refresh import PreparedCashflowDcfRequest, PreparedCashflowDcfResult
+from dcf.input_evidence import SourceReadContext
 from filings.sec_submissions_inventory import SEC_REGISTRATION_FINANCIAL_FORMS
 from pipeline.sec_xbrl import resolve_companyfacts_cik
 from pipeline.source_policy import (
@@ -62,6 +63,7 @@ class DecisionBriefPreparationRequest(_Closed):
     code_root: Path
     repo_root: Path
     database: Path
+    source_state_root: Path | None = None
     apply: bool = False
     skip_fmp: bool = False
     enable_llm: bool = False
@@ -72,6 +74,13 @@ class DecisionBriefPreparationRequest(_Closed):
     valuation_request: Path | None = None
     valuation_request_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     valuation_artifact: Path | None = None
+
+    @field_validator("source_state_root")
+    @classmethod
+    def explicit_source_authority(cls, root: Path | None) -> Path | None:
+        if root is not None:
+            SourceReadContext.for_sec_state_root(root)
+        return root
 
 
 class PreparationStage(_Closed):
@@ -740,6 +749,11 @@ def _prepare_decision_brief(
                     str(request.database),
                     "--repo-root",
                     str(request.repo_root),
+                    *(
+                        ["--state-root", str(request.source_state_root)]
+                        if request.source_state_root is not None
+                        else []
+                    ),
                     "--request",
                     str(request.valuation_request),
                     "--request-sha256",
@@ -831,6 +845,9 @@ def _prepare_decision_brief(
                     artifact=artifact,
                     as_of=datetime.now(UTC),
                     context_review=context,
+                    source_context=SourceReadContext.for_sec_state_root(request.source_state_root)
+                    if request.source_state_root is not None
+                    else None,
                 )
             finally:
                 conn.close()

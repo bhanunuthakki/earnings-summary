@@ -8,6 +8,7 @@ from pathlib import Path
 
 from db_paths import require_db_path
 from dcf.cashflow_refresh import PreparedCashflowDcfRequest, prepare_cashflow_dcf
+from dcf.input_evidence import SourceReadContext
 from provenance.immutable_artifact import population_database_lock_resources
 from runtime.job_runtime import JobLock
 from runtime.secrets import load_project_env
@@ -22,11 +23,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--artifact", type=Path, required=True)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument(
+        "--state-root", type=Path, help="Explicit model source-byte read authority."
+    )
     args = parser.parse_args(argv)
     load_project_env(args.repo_root)
     configured = args.db or os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
     if not configured:
         raise RuntimeError("An explicit configured portfolio database is required")
+    source_root = args.state_root or os.environ.get("DCF_SOURCE_STATE_ROOT")
+    source_context = (
+        SourceReadContext.for_sec_state_root(Path(source_root)) if source_root else None
+    )
     database = require_db_path(configured)
     request = PreparedCashflowDcfRequest.model_validate_json(args.request.read_bytes())
     role = SQLiteConnectionRole.WRITER if args.apply else SQLiteConnectionRole.READ_ONLY
@@ -45,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
                 repo_root=args.repo_root,
                 artifact_path=args.artifact,
                 apply=args.apply,
+                source_context=source_context,
             )
             print(result.model_dump_json(indent=2))
         finally:

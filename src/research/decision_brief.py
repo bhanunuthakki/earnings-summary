@@ -20,7 +20,7 @@ from bs4 import BeautifulSoup, Comment, Tag
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from dcf.grade_evidence import load_dcf_grade_evidence
-from dcf.input_evidence import ModelInputReceipt, verify_source_coverage
+from dcf.input_evidence import ModelInputReceipt, SourceReadContext, verify_source_coverage
 from dcf.readiness import load_valuation_readiness
 from provenance.immutable_artifact import canonical_text_artifact_sha256, publish_text_no_clobber
 from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
@@ -469,6 +469,7 @@ def _assess_decision_brief(
     artifact: ReportArtifactRef,
     as_of: datetime,
     context_review: MemoContextReview | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> DecisionBriefReadiness:
     """Check one immutable artifact. Missing proof stays separate and visible."""
     if as_of.tzinfo is None:
@@ -601,7 +602,7 @@ def _assess_decision_brief(
             reasons.add("memo_source_context_reconstruction_failed")
 
     valuation = load_valuation_readiness(
-        conn, artifact.ticker, as_of=cutoff, purpose="analyst_memo"
+        conn, artifact.ticker, as_of=cutoff, purpose="analyst_memo", source_context=source_context
     )
     if not valuation.ready:
         reasons.update(f"valuation_{reason}" for reason in valuation.reason_codes)
@@ -654,6 +655,7 @@ def assess_decision_brief(
     artifact: ReportArtifactRef,
     as_of: datetime,
     context_review: MemoContextReview | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> DecisionBriefReadiness:
     """Hold one read snapshot across every gate; preserve caller transactions."""
     if as_of.tzinfo is None:
@@ -669,6 +671,7 @@ def assess_decision_brief(
                 artifact=artifact,
                 as_of=as_of,
                 context_review=context_review,
+                source_context=source_context,
             )
         except MemoEvidenceError as exc:
             return DecisionBriefReadiness(

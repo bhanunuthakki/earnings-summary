@@ -2,6 +2,8 @@
 # Security floor: Flask serves the localhost app — keep it past the 2.x
 # session-cookie CVE (CVE-2023-30861, fixed 2.3.2).
 flask>=3.0.0
+# Security floor: CVE-2026-102598 affects Windows file serving (fixed 3.1.9).
+werkzeug>=3.1.9
 pandas
 # Security floor: lxml parses UNTRUSTED filing XML/HTML on the ingest path —
 # keep it past the old XXE/ReDoS CVEs (cleared by 5.x).

@@ -820,14 +820,15 @@ sealed-source verification receipt.
 
 ### Bounded accession capture
 
-For 10-K, 10-K/A, 10-Q and 10-Q/A, the SEC submissions `reportDate` is the
-source-declared reporting-period end. The inventory parser accepts it only as a
-real `YYYY-MM-DD` calendar date; the expected primary filing and financial-report
-package children carry that date at UTC midnight as `period_end`. SEC submissions
+For 10-K, 10-K/A, 10-Q, 10-Q/A, 20-F, 20-F/A, 40-F and 40-F/A, the SEC
+submissions `reportDate` is the source-declared reporting-period end. The inventory
+parser accepts it only as a real `YYYY-MM-DD` calendar date. The expected primary
+filing and financial-report package children carry that date at UTC midnight as
+`period_end`. SEC submissions
 does not establish `period_start`, which remains unknown. A blank `reportDate`
 remains unknown and cannot qualify a consumer requiring a dated filing. Filing
 date and acceptance time never substitute for the reporting period. Other forms,
-including 20-F and 40-F, are outside this narrowly qualified mapping.
+including 6-K and 6-K/A event report dates, remain outside this qualified mapping.
 
 The expected-document payload, including `period_end`, is committed in the
 immutable inventory snapshot. A corrected mapping requires a new inventory
@@ -835,7 +836,9 @@ revision and a new capture checkpoint scope; retained SEC responses keep their
 original acquisition identity and collector version. Already captured identical
 filing bytes with conflicting period metadata fail native replay and require a
 separately governed immutable correction, not an in-place date update. This
-mapping adds no automatic capture, operator control or valuation admission.
+collector has no executable same-byte native period-metadata correction route;
+an affected capture remains blocked pending that correction. This mapping adds no
+automatic capture, operator control or valuation admission.
 
 `execution/capture_expected_sec_documents.py --accession-number <SEC-accession>`
 selects exact dashed accession numbers within the supplied current, completely
@@ -1020,6 +1023,17 @@ installation descriptor. Missing, template, unapproved, source-drift and runtime
 failures are separate states. Preflight cannot approve a bundle. Protocol v2
 uses canonical XBRL measure units and a separately committed unit helper.
 
+`provenance.integrity_audit.verify_filing_xbrl_run` is a read-only retained-run
+verifier. Its caller must hold one read transaction and supply an exact retained
+extraction-run ID. It rejects missing schema, run, input/disposition seal,
+referenced artifact, incomplete populations and bounded row/text overflow before
+full replay. It shares the global audit's raw commitment checks and the processor's
+QName unit rule. Global audit selection remains unchanged. The receipt distinguishes
+`verified_v2` unit semantics from `not_proven_legacy_v1`; it does not approve a
+processor, admit financial roles, verify publication membership, establish reader
+parity or grant decision-grade. There is no new CLI, schedule, service or writer.
+Actual execution still requires the existing canonical route and resource owner.
+
 `execution/verify_decision_brief.py` checks the retained body and reader, exact
 claim population, sealed processing and canonical-resolution membership, admitted
 financial values, calculation replay, raw-source reconstruction, current source
@@ -1121,3 +1135,86 @@ owners. It is not a new workspace action or automatic pipeline stage. Native
 host, canonical route, current production authority and concrete reviewed
 request/receipt gates remain external prerequisites. No scheduler or live
 write capability is added by the read-only inventory route.
+
+
+### Physical source verification for reviewed model consumers
+
+The existing verified builders and persisted valuation readers now require an
+explicit `SourceReadContext`. `execution/refresh_dcf.py` and
+`execution/valuation_preflight.py` accept `--state-root`; the specialized child
+builders receive `DCF_SOURCE_STATE_ROOT`. The SEC capture owner stores blobs
+under `<state-root>/data/evidence/blobs`. A code checkout, database path, or
+workbook output root grants no source-read authority. The dashboard passes its
+explicit state-root context to valuation consumers and child actions.
+`execution/run_advisor_memos.py`, `execution/run_socratic_questions.py`, and
+`execution/dcf_sheets.py import` accept the same explicit `--state-root`.
+Socratic questions and memo synthesis forward that context to their existing
+advisor reader. The code/output root and source state root remain separate.
+`execution/refresh_dispatch.py --state-root` retains its existing data/output
+meaning. Its separate `--source-state-root` is the model byte-read authority.
+The dashboard forwards that separate flag only from its explicit source state
+root. Direct `refresh_dcf.py --state-root` retains the source-read meaning.
+
+`dcf_model_inputs.v3` records fresh, bounded, stable byte verification for every
+source document used by the recipe. Missing, changed, linked, oversized, or
+out-of-root source files fail closed. The present-byte verification clock is
+separate from the financial knowledge cutoff. A v2 receipt remains readable
+but cannot qualify a verified MELI, ONON or operating-cash-flow valuation. Source-byte verification
+does not replace source completeness, semantic admission, role review, model
+reconstruction, or assumption and scenario acceptance.
+
+Existing allocation and risk-reward consumers exclude unqualified MELI and
+ONON valuations from their reward legs. Their other ticker routes and scenario
+formulas retain their existing behavior. This is a read-only verification
+change. It creates no provider acquisition, scheduler, database writer,
+Operations control, or automatic receipt upgrade.
+
+The generic cash-flow input dispatcher, preparation and transaction recheck use
+the same source context. `execution/prepare_cashflow_dcf.py --state-root` selects
+that authority. `execution/prepare_decision_brief.py` and
+`execution/verify_decision_brief.py` accept `--source-state-root`. The three CLIs
+also accept the configured `DCF_SOURCE_STATE_ROOT`. Decision-brief preparation
+forwards only this explicit source root to its cash-flow child and final reader;
+its report root, code root and database location grant no byte-read authority.
+
+`analyst_cashflow_scenarios.v2` commits the complete model-input receipt except
+the fresh physical-reader observation clocks in `raw_documents[].verified_at`.
+The financial cutoff, source population, file digests, sizes, storage identities,
+reader policy and all financial and scenario operands remain committed. Each
+replay still performs a new physical read. A retained v1 scenario review cannot
+reinterpret a v3 physical receipt; it requires an explicitly prepared v2 review.
+This version change grants no owner approval or allocation permission.
+
+
+### Governed reporting projection from sealed acquisition inventories
+
+`execution/build_grounded_search_corpus.py --coverage-inventory-key <key>` now
+requires both existing clock arguments: `--knowledge-cutoff <K>` and
+`--recorded-at <O>`. Use the approved explicit `--db`, repeat the inventory key
+for a union, and supply the existing corpus key, revision and selector code
+version. Preview without `--apply`; apply repeats the same scope through the
+existing managed SQLite bootstrap. O must not precede K. The current complete
+inventory and its seal must already be observed at O. A future or incomplete
+inventory refuses before corpus publication.
+
+The corpus and document-processing population use
+`provenance.reporting_document_scope` for lifecycle, coverage and retained SEC
+package-subject review at K/O. Positive supporting captures stay in the immutable
+acquisition inventory and source-duty bindings; they do not join the reporting
+included-document set. Uncaptured or quarantined supporting duty remains a missing
+or quarantined corpus membership. A discovery-complete inventory does not prove
+capture completeness. Missing lifecycle or an invalid 6-K subject witness remains
+visible as an unresolved, quarantined membership and prevents a complete corpus.
+
+The existing JSONL diagnostic names every selection disposition and both clocks.
+The builder reconstructs the shared projection from all supplied acquisition
+snapshot links and requires exact membership equality. Its existing immutable
+selection-config commitment also binds the complete decision population and K/O.
+A manually reduced request cannot use those links. Corrected membership requires
+a new corpus revision; no retained inventory, expectation, capture, duty, corpus
+or seal is rewritten. The explicitly unsafe caller-supplied JSON mode retains
+its existing separate contract. There is no new action, flag, service, schedule,
+provider or schema; this is a stricter clock requirement and corrected membership
+behavior for the existing sealed-inventory corpus command.
+
+The retained-run verifier requires an exact built-in `str` run ID. It rejects string subclasses and non-string values. Typed public aliases expose the existing retained closure and eligibility owners; test fixtures reuse the existing persistence owners through their public aliases. Each alias references the original function object. These exports add no operator command or write authority. The processor measurement fixture export remains in `tests/`.

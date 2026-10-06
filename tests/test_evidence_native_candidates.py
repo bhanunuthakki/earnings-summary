@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
 from pathlib import Path
+
+import pytest
 
 from provenance.evidence_native_candidates import (
     has_evidence_native_after,
@@ -12,6 +15,7 @@ from provenance.evidence_native_candidates import (
     select_evidence_native_candidates,
     select_evidence_native_candidates_by_id,
 )
+from provenance.immutable_artifact import ImmutableArtifactConflictError, read_stable_artifact
 
 
 def _connection(tmp_path: Path) -> sqlite3.Connection:
@@ -158,3 +162,32 @@ def test_pdf_filter_uses_source_url_when_server_media_type_is_generic(tmp_path: 
         assert [candidate.document_version_id for candidate in candidates] == ["version-2"]
     finally:
         conn.close()
+
+
+def test_exact_legacy_selection_requires_explicit_opt_in(tmp_path: Path) -> None:
+    conn = _connection(tmp_path)
+    try:
+        with pytest.raises(ValueError, match="evidence-native document versions not found"):
+            select_evidence_native_candidates_by_id(conn, document_version_ids=("legacy-version",))
+        selected = select_evidence_native_candidates_by_id(
+            conn, document_version_ids=("legacy-version",), include_legacy=True
+        )
+        assert [candidate.document_version_id for candidate in selected] == ["legacy-version"]
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink fixture")
+def test_no_follow_resolution_preserves_lexical_path_for_reader_refusal(tmp_path: Path) -> None:
+    root = tmp_path / "allowed"
+    root.mkdir()
+    target = root / "source.bin"
+    target.write_bytes(b"exact")
+    link = root / "link.bin"
+    link.symlink_to(target)
+    assert resolve_local_storage_uri(link.as_uri(), allowed_roots=(root,)) == target
+    assert (
+        resolve_local_storage_uri(link.as_uri(), allowed_roots=(root,), follow_links=False) == link
+    )
+    with pytest.raises(ImmutableArtifactConflictError, match="reparse point"):
+        read_stable_artifact(link, max_bytes=5, allowed_root=root)

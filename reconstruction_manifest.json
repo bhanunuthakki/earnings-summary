@@ -82,14 +82,20 @@
         "execution/onboard_ticker.py",
         "execution/onboard_pending_tickers.py",
         "execution/prepare_decision_brief.py",
-        "src/pipeline/sec_onboarding_identity.py"
+        "src/pipeline/sec_onboarding_identity.py",
+        "execution/refresh_dcf.py",
+        "execution/refresh_dispatch.py",
+        "execution/dcf_sheets.py",
+        "execution/run_advisor_memos.py",
+        "execution/run_socratic_questions.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
         "pytest tests/test_pipeline*.py -q",
-        "pytest tests/test_onboard_sec_fallback.py tests/test_sec_onboarding_identity.py tests/test_onboarding_state_authority.py tests/test_runtime_state_authority.py tests/test_decision_brief_workflow.py -q"
+        "pytest tests/test_onboard_sec_fallback.py tests/test_sec_onboarding_identity.py tests/test_onboarding_state_authority.py tests/test_runtime_state_authority.py tests/test_decision_brief_workflow.py -q",
+        "pytest tests/test_source_context_entrypoints.py tests/test_refresh_dispatch.py -q"
       ],
       "documentation": [
         "AGENTS.md",
@@ -144,7 +150,8 @@
         "src/filings/sec_financial_classification.py",
         "src/provenance/sec_package_subject_witness.py",
         "src/provenance/reviewed_sec_financial_tables.py",
-        "execution/publish_reviewed_sec_financial_tables.py"
+        "execution/publish_reviewed_sec_financial_tables.py",
+        "src/filings/edgar_fetch.py"
       ],
       "dependencies": [
         "core_data_layer"
@@ -152,7 +159,7 @@
       "test_commands": [
         "pytest tests/test_source_policy_contract.py -q",
         "pytest tests/test_companyfacts_statement_continuation.py tests/test_financial_statement_admission.py tests/test_processor_installation.py tests/test_xbrl_units.py tests/test_filing_xbrl_unit_protocol_migration.py -q",
-        "pytest tests/test_sec_financial_classification.py tests/test_reviewed_sec_financial_tables.py tests/test_publish_reviewed_sec_financial_tables.py tests/test_onon_retained_integration.py -q"
+        "pytest tests/test_sec_financial_classification.py tests/test_reviewed_sec_financial_tables.py tests/test_publish_reviewed_sec_financial_tables.py tests/test_onon_retained_integration.py tests/test_edgar_filing_selector.py -q"
       ],
       "documentation": [
         "directives/design_language.md",
@@ -211,7 +218,9 @@
         "src/compute/thesis_metric_series.py",
         "src/evals/kpi_repair_judge.py",
         "src/dcf/reviewed_input_roles.py",
-        "execution/review_onon_input_roles.py"
+        "execution/review_onon_input_roles.py",
+        "src/dcf/input_evidence.py",
+        "src/dcf/readiness.py"
       ],
       "dependencies": [
         "core_data_layer"
@@ -220,7 +229,8 @@
         "pytest tests/test_metrics_engine.py -q",
         "pytest tests/test_cashflow_input_evidence.py tests/test_cashflow_scenarios.py tests/test_valuation_readiness.py -q",
         "pytest tests/test_onon_model.py tests/test_onon_inputs.py tests/test_build_onon_dcf.py tests/test_scenario_acceptance.py -q",
-        "pytest tests/test_reviewed_input_roles.py tests/test_review_onon_input_roles.py -q"
+        "pytest tests/test_reviewed_input_roles.py tests/test_review_onon_input_roles.py -q",
+        "pytest tests/test_model_source_bytes.py tests/test_source_context_entrypoints.py tests/test_meli_input_evidence.py tests/test_onon_explicit_routing.py -q"
       ],
       "documentation": [
         "directives/data_provenance.md"

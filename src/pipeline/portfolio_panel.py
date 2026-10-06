@@ -54,6 +54,7 @@ from bear_lint import (
     build_bear_lint,
 )
 from compute.thesis_evaluation_episodes import episode_history_source
+from dcf.input_evidence import SourceReadContext
 from integrations.portfolio_tracker_client import (
     TAX_BUCKETS,
     AllocationBucket,
@@ -1706,6 +1707,7 @@ def render_portfolio_risk_panel(
     db_path: Path | None = None,
     conn: sqlite3.Connection | None = None,
     repo_root: Path | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> str:
     """The Portfolio → Risk tab fragment: book drawdown + factor/style exposure
     (from the live tracker) and the whole-book macro-stress lens (from the local
@@ -1739,7 +1741,9 @@ def render_portfolio_risk_panel(
                 for t, s in rate_estimates.items()
             )
         if db_path is not None:
-            gap = _build_risk_reward_gap(analytics.positioning, db_path, repo_root=repo_root)
+            gap = _build_risk_reward_gap(
+                analytics.positioning, db_path, repo_root=repo_root, source_context=source_context
+            )
     style = _build_style_rollup(analytics.positioning, db_path, repo_root=repo_root)
     correlation = _build_correlation_read(analytics.positioning, db_path, repo_root=repo_root)
     tail_stress = _build_tail_stress(analytics.positioning, db_path, repo_root=repo_root)
@@ -1791,7 +1795,11 @@ def render_portfolio_risk_panel(
 
 
 def _build_risk_reward_gap(
-    pos: Positioning, db_path: Path, *, repo_root: Path | None = None
+    pos: Positioning,
+    db_path: Path,
+    *,
+    repo_root: Path | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> RiskRewardGap | None:
     """Assemble the risk-parity-gap table from the live book weights (the
     positioning endpoint's per-name weight_pct) — None when there are no
@@ -1805,7 +1813,13 @@ def _build_risk_reward_gap(
     }
     if not weights:
         return None
-    return build_risk_reward_gap(db_path, repo_root, weights, weights_source="tracker")
+    return build_risk_reward_gap(
+        db_path,
+        repo_root,
+        weights,
+        weights_source="tracker",
+        source_context=source_context,
+    )
 
 
 def _local_book_weights(pos: Positioning | None, repo_root: Path | None) -> dict[str, float]:

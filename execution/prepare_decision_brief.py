@@ -22,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ticker", required=True)
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--db", type=Path)
+    parser.add_argument("--source-state-root", type=Path)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--skip-fmp", action="store_true")
     parser.add_argument("--enable-llm", action="store_true")
@@ -39,11 +40,13 @@ def main(argv: list[str] | None = None) -> int:
     if not configured:
         raise RuntimeError("An explicit configured portfolio database is required")
     database = require_db_path(configured)
+    source_root = args.source_state_root or os.environ.get("DCF_SOURCE_STATE_ROOT", "").strip()
     request = DecisionBriefPreparationRequest(
         ticker=args.ticker.strip().upper(),
         code_root=PROJECT_ROOT,
         repo_root=args.repo_root,
         database=database,
+        source_state_root=Path(source_root) if source_root else None,
         apply=args.apply,
         skip_fmp=args.skip_fmp,
         enable_llm=args.enable_llm,

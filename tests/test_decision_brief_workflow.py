@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from dcf.input_evidence import SourceReadContext
 from pipeline.sec_onboarding_identity import IdentityStatus, ensure_sec_onboarding_identity
 from provenance.source_coverage import SourceCoverageLedger, SourceInventorySnapshot
 from report.artifacts import (
@@ -22,6 +23,7 @@ from report.artifacts import (
     persist_report_artifact,
 )
 from research import decision_brief_workflow as workflow
+from research.decision_brief import DecisionBriefReadiness, MemoContextReview
 from research.decision_brief_workflow import DecisionBriefPreparationRequest, prepare_decision_brief
 from tests.test_sec_onboarding_identity import STAMP, sec_identity_sources
 
@@ -454,9 +456,41 @@ def test_prepared_valuation_cannot_write_another_ticker(state: tuple[Path, Path,
     assert not (state[0] / "calculation.json").exists()
 
 
+@pytest.mark.parametrize("explicit_source", [False, True])
 def test_prepared_valuation_preserves_supported_child_contract(
     state: tuple[Path, Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+    explicit_source: bool,
 ) -> None:
+    source_root = state[0].parent / "source-authority"
+    assert source_root not in (state[0], state[1].parent, request(state).code_root)
+    expected_context = (
+        SourceReadContext.for_sec_state_root(source_root) if explicit_source else None
+    )
+    seen: list[SourceReadContext | None] = []
+    original_assess = workflow.assess_decision_brief
+
+    def assess(
+        conn: sqlite3.Connection,
+        *,
+        repo_root: Path,
+        artifact: ReportArtifactRef,
+        as_of: datetime,
+        context_review: MemoContextReview | None = None,
+        source_context: SourceReadContext | None = None,
+    ) -> DecisionBriefReadiness:
+        seen.append(source_context)
+        assert source_context == expected_context
+        return original_assess(
+            conn,
+            repo_root=repo_root,
+            artifact=artifact,
+            as_of=as_of,
+            context_review=context_review,
+            source_context=source_context,
+        )
+
+    monkeypatch.setattr(workflow, "assess_decision_brief", assess)
     path, digest = prepared(state[0], "NEW")
     children = Children(state[0])
     children.outputs["prepare_cashflow_dcf.py"] = (
@@ -480,6 +514,7 @@ def test_prepared_valuation_preserves_supported_child_contract(
             valuation_request=path,
             valuation_request_sha256=digest,
             valuation_artifact=state[0] / "calculation.json",
+            source_state_root=source_root if explicit_source else None,
         ),
         runner=children,
     )
@@ -487,7 +522,32 @@ def test_prepared_valuation_preserves_supported_child_contract(
     assert stage.status == "completed"
     assert stage.command[stage.command.index("--request-sha256") + 1] == digest
     assert "--artifact" in stage.command and "--apply" in stage.command
+    if explicit_source:
+        assert stage.command[stage.command.index("--state-root") + 1] == str(source_root)
+    else:
+        assert "--state-root" not in stage.command
+    assert seen == [expected_context]
     assert result.readiness and not result.readiness.decision_grade
+
+
+@pytest.mark.parametrize("invalid_source", ["relative", "filesystem-root", "parent-traversal"])
+def test_invalid_source_root_refuses_before_preparation_children(
+    state: tuple[Path, Path, str],
+    invalid_source: str,
+) -> None:
+    candidate = {
+        "relative": Path("relative-source"),
+        "filesystem-root": Path("/"),
+        "parent-traversal": state[0] / ".." / "source-authority",
+    }[invalid_source]
+    children = Children(state[0])
+    with pytest.raises(ValueError, match=r"explicit absolute|lexical absolute"):
+        # model_copy deliberately skips validators; this is the real request boundary.
+        validated = DecisionBriefPreparationRequest.model_validate(
+            {**request(state).model_dump(), "source_state_root": candidate}
+        )
+        prepare_decision_brief(validated, runner=children)
+    assert children.commands == []
 
 
 def test_native_reviews_are_filtered_to_each_exact_document(state: tuple[Path, Path, str]) -> None:

@@ -22,21 +22,31 @@ from dcf.cashflow_refresh import PreparedCashflowDcfRequest, prepare_cashflow_dc
 from dcf.cashflow_scenarios import (
     AnalystCashflowScenario,
     AnalystCashflowScenarioReview,
+    cashflow_scenario_input_digest,
     verify_analyst_cashflow_scenarios,
 )
-from dcf.input_evidence import AssumptionBasis, InputEvidenceError, canonical_digest
+from dcf.input_evidence import (
+    AssumptionBasis,
+    InputEvidenceError,
+    SourceReadContext,
+    canonical_digest,
+)
 from dcf.readiness import load_valuation_readiness
 from tests.test_cashflow_input_evidence import CLOCK, seed_cashflow_model_inputs
-from tests.test_report_canonical_financials import database as database
+from tests.test_cashflow_input_evidence import database as database
+from tests.test_cashflow_input_evidence import source_context as source_context
 
 
-def scenario_review(conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch):
-    request = seed_cashflow_model_inputs(conn, monkeypatch)
+def scenario_review(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, source_context: SourceReadContext
+):
+    request = seed_cashflow_model_inputs(conn, monkeypatch, source_context=source_context)
     effective, receipt = prepare_cashflow_inputs(
         conn,
         request,
         effective_inputs={key: item.value for key, item in request.assumptions.items()},
         as_of=CLOCK,
+        source_context=source_context,
     )
     cases: list[AnalystCashflowScenario] = []
     weighted = 0.0
@@ -71,7 +81,7 @@ def scenario_review(conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch):
         )
     review = AnalystCashflowScenarioReview(
         ticker=request.ticker,
-        base_model_input_receipt_sha256=canonical_digest(receipt.model_dump(mode="json")),
+        base_model_input_receipt_sha256=cashflow_scenario_input_digest(receipt),
         base_effective_inputs_sha256=canonical_digest(effective),
         research_snapshot_id=request.research_snapshot_id,
         snapshot_member_sha256=receipt.snapshot_member_sha256,
@@ -89,9 +99,10 @@ def retain(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
+    source_context: SourceReadContext,
     reviewed: bool = True,
 ):
-    request, effective, _receipt, review = scenario_review(conn, monkeypatch)
+    request, effective, _receipt, review = scenario_review(conn, monkeypatch, source_context)
     output = model_output(effective)
     value = output["vps"]
     assert isinstance(value, (int, float))
@@ -116,34 +127,50 @@ def retain(
         repo_root=tmp_path,
         artifact_path=tmp_path / "scenario-calculation.json",
         apply=True,
+        source_context=source_context,
     )
     assert result.version_created
     return source
 
 
 def test_reviewed_scenarios_enable_only_analyst_memo_valuation(
-    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    database: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_context: SourceReadContext,
 ) -> None:
-    retain(database, tmp_path, monkeypatch)
-    memo = load_valuation_readiness(database, "SYNTH", as_of=CLOCK, purpose="analyst_memo")
+    retain(database, tmp_path, monkeypatch, source_context=source_context)
+    memo = load_valuation_readiness(
+        database, "SYNTH", as_of=CLOCK, source_context=source_context, purpose="analyst_memo"
+    )
     assert memo.ready, memo.reason_codes
     assert memo.purpose == "analyst_memo" and memo.financial_input_completeness == "verified"
-    allocation = load_valuation_readiness(database, "SYNTH", as_of=CLOCK)
+    allocation = load_valuation_readiness(
+        database, "SYNTH", as_of=CLOCK, source_context=source_context
+    )
     assert not allocation.ready and allocation.reason_codes == ("scenario_acceptance_unverified",)
 
 
 def test_memo_without_review_remains_precisely_degraded(
-    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    database: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_context: SourceReadContext,
 ) -> None:
-    retain(database, tmp_path, monkeypatch, reviewed=False)
-    memo = load_valuation_readiness(database, "SYNTH", as_of=CLOCK, purpose="analyst_memo")
+    retain(database, tmp_path, monkeypatch, source_context=source_context, reviewed=False)
+    memo = load_valuation_readiness(
+        database, "SYNTH", as_of=CLOCK, source_context=source_context, purpose="analyst_memo"
+    )
     assert not memo.ready and memo.reason_codes == ("analyst_scenario_review_missing",)
 
 
 def test_fresh_request_after_data_cutoff_uses_actual_capture_and_calculation_clocks(
-    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    database: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    source_context: SourceReadContext,
 ) -> None:
-    request, effective, _receipt, review = scenario_review(database, monkeypatch)
+    request, effective, _receipt, review = scenario_review(database, monkeypatch, source_context)
     monkeypatch.setattr(cashflow_refresh, "datetime", datetime)
     review = review.model_copy(update={"reviewed_at": datetime.now(UTC)})
     value = model_output(effective)["vps"]
@@ -169,13 +196,18 @@ def test_fresh_request_after_data_cutoff_uses_actual_capture_and_calculation_clo
         repo_root=tmp_path,
         artifact_path=tmp_path / "fresh-calculation.json",
         apply=True,
+        source_context=source_context,
     )
     assert CLOCK < review.reviewed_at <= result.source_observed_at <= result.calculated_at
     assert source.stat().st_mtime <= result.source_observed_at.timestamp()
     created = database.execute("SELECT created_at FROM dcf_runs").fetchone()[0]
     assert datetime.fromisoformat(created) == result.calculated_at
     memo = load_valuation_readiness(
-        database, "SYNTH", as_of=result.calculated_at, purpose="analyst_memo"
+        database,
+        "SYNTH",
+        as_of=result.calculated_at,
+        source_context=source_context,
+        purpose="analyst_memo",
     )
     assert "model_calculation_after_cutoff" not in memo.reason_codes
     assert "analyst_scenario_review_clock_invalid" not in memo.reason_codes
@@ -185,9 +217,13 @@ def test_fresh_request_after_data_cutoff_uses_actual_capture_and_calculation_clo
 
 @pytest.mark.parametrize("clock", ["source", "data", "market", "valuation"])
 def test_future_prepared_clocks_fail_before_retention(
-    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, clock: str
+    database: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    clock: str,
+    source_context: SourceReadContext,
 ) -> None:
-    request, effective, _receipt, review = scenario_review(database, monkeypatch)
+    request, effective, _receipt, review = scenario_review(database, monkeypatch, source_context)
     prepared = PreparedCashflowDcfRequest(
         model_inputs=request,
         effective_inputs=effective,
@@ -211,6 +247,7 @@ def test_future_prepared_clocks_fail_before_retention(
             repo_root=tmp_path,
             artifact_path=tmp_path / "future-calculation.json",
             apply=True,
+            source_context=source_context,
         )
     assert database.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
     assert not (tmp_path / "future-calculation.json").exists()
@@ -220,9 +257,13 @@ def test_future_prepared_clocks_fail_before_retention(
     "change", ["source_bytes", "mtime", "source_missing", "snapshot", "model", "stale"]
 )
 def test_retained_scenario_proof_is_rechecked(
-    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+    database: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+    source_context: SourceReadContext,
 ) -> None:
-    source = retain(database, tmp_path, monkeypatch)
+    source = retain(database, tmp_path, monkeypatch, source_context=source_context)
     if change == "source_bytes":
         source.write_text(source.read_text() + " ")
     elif change == "mtime":
@@ -238,7 +279,9 @@ def test_retained_scenario_proof_is_rechecked(
     elif change == "model":
         database.execute("UPDATE dcf_runs SET npv=npv+1")
     cutoff = CLOCK + timedelta(days=10) if change == "stale" else CLOCK
-    memo = load_valuation_readiness(database, "SYNTH", as_of=cutoff, purpose="analyst_memo")
+    memo = load_valuation_readiness(
+        database, "SYNTH", as_of=cutoff, source_context=source_context, purpose="analyst_memo"
+    )
     assert not memo.ready, memo
 
 
@@ -260,9 +303,14 @@ def test_retained_scenario_proof_is_rechecked(
     ],
 )
 def test_unreviewed_or_false_scenarios_are_rejected(
-    database: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, change: str
+    database: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+    source_context: SourceReadContext,
 ) -> None:
-    _request_value, effective, receipt, review = scenario_review(database, monkeypatch)
+    _request_value, effective, receipt, review = scenario_review(
+        database, monkeypatch, source_context
+    )
     raw = review.model_dump(mode="json")
     case = raw["scenarios"][1]
     if change == "weights":
@@ -297,3 +345,81 @@ def test_unreviewed_or_false_scenarios_are_rejected(
             as_of=CLOCK,
             calculated_at=CLOCK,
         )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "fresh_clock",
+        "blob",
+        "size",
+        "storage_identity",
+        "population",
+        "duplicate",
+        "policy",
+        "integrity",
+        "financial_cutoff",
+        "legacy_review",
+    ],
+)
+def test_scenario_physical_commitment_allows_only_fresh_read_clock(
+    database: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    source_context: SourceReadContext,
+    change: str,
+) -> None:
+    _request, effective, receipt, review = scenario_review(database, monkeypatch, source_context)
+    witness = receipt.raw_documents[0]
+    if change == "fresh_clock":
+        modified = receipt.model_copy(
+            update={
+                "raw_documents": (
+                    witness.model_copy(
+                        update={"verified_at": witness.verified_at + timedelta(seconds=1)}
+                    ),
+                )
+            }
+        )
+    elif change in {"blob", "size", "storage_identity", "policy"}:
+        field, value = {
+            "blob": ("blob_sha256", "0" * 64),
+            "size": ("byte_size", witness.byte_size + 1),
+            "storage_identity": ("storage_uri_sha256", "0" * 64),
+            "policy": ("reader_policy", "unqualified-reader/v0"),
+        }[change]
+        modified = receipt.model_copy(
+            update={"raw_documents": (witness.model_copy(update={field: value}),)}
+        )
+    elif change in {"population", "duplicate"}:
+        modified = receipt.model_copy(
+            update={"raw_documents": () if change == "population" else (witness, witness)}
+        )
+    elif change == "integrity":
+        modified = receipt.model_copy(update={"source_integrity": "unverified"})
+    elif change == "financial_cutoff":
+        modified = receipt.model_copy(update={"verified_at": CLOCK + timedelta(seconds=1)})
+    else:
+        modified = receipt
+        review = review.model_copy(
+            update={
+                "schema_version": "analyst_cashflow_scenarios.v1",
+                "base_model_input_receipt_sha256": canonical_digest(
+                    receipt.model_dump(mode="json")
+                ),
+            }
+        )
+    if change == "fresh_clock":
+        assert cashflow_scenario_input_digest(modified) == cashflow_scenario_input_digest(receipt)
+        verify_analyst_cashflow_scenarios(
+            review, modified, base_effective_inputs=effective, as_of=CLOCK, calculated_at=CLOCK
+        )
+    else:
+        reason = (
+            "analyst_scenario_physical_commitment_version_missing"
+            if change == "legacy_review"
+            else "analyst_scenario_base_commitment_mismatch"
+        )
+        with pytest.raises(InputEvidenceError, match=reason):
+            verify_analyst_cashflow_scenarios(
+                review, modified, base_effective_inputs=effective, as_of=CLOCK, calculated_at=CLOCK
+            )

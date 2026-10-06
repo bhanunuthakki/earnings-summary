@@ -19,6 +19,7 @@ from dcf.input_evidence import (
     ModelCalculation,
     ModelInputReceipt,
     ModelInputRequest,
+    SourceReadContext,
     canonical_digest,
     verify_model_inputs,
 )
@@ -429,6 +430,7 @@ def prepare_meli_inputs(
     *,
     effective_inputs: Mapping[str, float],
     as_of: datetime,
+    source_context: SourceReadContext | None = None,
 ) -> tuple[dict[str, float], ModelInputReceipt]:
     if request.ticker != "MELI":
         raise InputEvidenceError("input_recipe_issuer_mismatch")
@@ -443,6 +445,7 @@ def prepare_meli_inputs(
         effective_inputs=proposed,
         assumption_keys=ASSUMPTION_KEYS,
         as_of=as_of,
+        source_context=source_context,
     )
     actuals, calculations = calculate_actuals(proof)
     complete = {**proposed, **{key: actuals[key] for key in REPORTED_DRIVER_KEYS}}
@@ -464,11 +467,21 @@ def verify_meli_inputs(
     *,
     effective_inputs: Mapping[str, float],
     as_of: datetime,
+    source_context: SourceReadContext | None = None,
 ) -> ModelInputReceipt:
+    if (
+        receipt.schema_version != "dcf_model_inputs.v3"
+        or receipt.source_integrity != "present_bytes_verified"
+    ):
+        raise InputEvidenceError("model_input_source_legacy_receipt_unverified")
     if receipt.recipe != RECIPE or receipt.verified_at > as_of:
         raise InputEvidenceError("model_input_receipt_recipe_or_clock_invalid")
     complete, verified = prepare_meli_inputs(
-        conn, receipt.request, effective_inputs=effective_inputs, as_of=as_of
+        conn,
+        receipt.request,
+        effective_inputs=effective_inputs,
+        as_of=as_of,
+        source_context=source_context,
     )
     if (
         dict(effective_inputs) != complete
@@ -483,6 +496,26 @@ def verify_meli_inputs(
         or receipt.calculations != verified.calculations
         or receipt.actuals_sha256 != verified.actuals_sha256
         or receipt.model_output_sha256 != verified.model_output_sha256
+        or tuple(
+            (
+                item.document_version_id,
+                item.blob_sha256,
+                item.byte_size,
+                item.reader_policy,
+                item.storage_uri_sha256,
+            )
+            for item in receipt.raw_documents
+        )
+        != tuple(
+            (
+                item.document_version_id,
+                item.blob_sha256,
+                item.byte_size,
+                item.reader_policy,
+                item.storage_uri_sha256,
+            )
+            for item in verified.raw_documents
+        )
     ):
         raise InputEvidenceError("model_input_receipt_mismatch")
     return verified

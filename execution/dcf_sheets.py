@@ -170,6 +170,7 @@ def _run_import(args: argparse.Namespace) -> int:
                 db_path,
                 valuation_year=args.valuation_year,
                 input_workbook=candidate,
+                source_state_root=args.state_root,
             )
     except JobAlreadyRunningError:
         refresh = {"status": "blocked", "reason": "dcf_writer_busy"}
@@ -339,6 +340,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="cutoff: > this is forecast, <= is actuals. Default: current calendar year.",
     )
     i.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    i.add_argument("--state-root", type=Path, help="Explicit model source-byte read authority.")
 
     a = sub.add_parser("auth", help="one-time OAuth browser consent (mints the token)")
     a.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)

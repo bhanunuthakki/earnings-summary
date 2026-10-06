@@ -20,7 +20,12 @@ from dcf.cashflow_scenarios import (
     AnalystCashflowScenarioReview,
     verify_analyst_cashflow_scenarios,
 )
-from dcf.input_evidence import FrozenModel, InputEvidenceError, ModelInputRequest
+from dcf.input_evidence import (
+    FrozenModel,
+    InputEvidenceError,
+    ModelInputRequest,
+    SourceReadContext,
+)
 from dcf.input_recipes import model_output
 from dcf.persist import DcfRunRow, upsert
 from dcf.provenance import build_file_provenance
@@ -68,6 +73,7 @@ def prepare_cashflow_dcf(
     repo_root: Path,
     artifact_path: Path,
     apply: bool = False,
+    source_context: SourceReadContext | None = None,
 ) -> PreparedCashflowDcfResult:
     """Reconstruct inputs, then optionally save through the existing atomic owner.
 
@@ -97,7 +103,11 @@ def prepare_cashflow_dcf(
     if not all(math.isfinite(value) for value in request.effective_inputs.values()):
         raise InputEvidenceError("prepared_cashflow_request_nonfinite_input")
     effective, receipt = prepare_cashflow_inputs(
-        conn, request.model_inputs, effective_inputs=request.effective_inputs, as_of=request.as_of
+        conn,
+        request.model_inputs,
+        effective_inputs=request.effective_inputs,
+        as_of=request.as_of,
+        source_context=source_context,
     )
     output = model_output(RECIPE, effective)
     calculated_at = datetime.now(UTC)
@@ -209,7 +219,11 @@ def prepare_cashflow_dcf(
         # Hold the write transaction across canonical recheck and model retention.
         conn.execute("BEGIN IMMEDIATE")
         prepare_cashflow_inputs(
-            conn, request.model_inputs, effective_inputs=effective, as_of=request.as_of
+            conn,
+            request.model_inputs,
+            effective_inputs=effective,
+            as_of=request.as_of,
+            source_context=source_context,
         )
         created = upsert(
             conn,

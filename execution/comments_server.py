@@ -184,6 +184,7 @@ from dashboard.upcoming import render_upcoming_strip
 from db_paths import require_db_path
 from dcf import persist as dcf_persist
 from dcf import redesign as dcf_redesign
+from dcf.input_evidence import SourceReadContext
 from discovery.store import BUILDABLE_STATUSES
 from dispatch_registry import Registry, RegistryConflict
 from identity import DEFAULT_USER_ID
@@ -624,7 +625,15 @@ def create_app(
     code_root: Path | None = None,
     chat_executor: concurrent.futures.Executor | None = None,
     server_origin: str | None = None,
+    source_context: SourceReadContext | None = None,
+    source_state_root: Path | None = None,
 ) -> Flask:
+    if source_state_root is not None:
+        child_context = SourceReadContext.for_sec_state_root(source_state_root)
+        if source_context is None:
+            source_context = child_context
+        elif source_context.content_roots != child_context.content_roots:
+            raise ValueError("source reader and child state root authorities differ")
     app = _RedactingFlask(__name__)
     register_tracker_read_routes(app)
     app.config["MAX_CONTENT_LENGTH"] = _MAX_REQUEST_BYTES
@@ -2149,7 +2158,10 @@ def create_app(
 
             return Response(
                 render_portfolio_risk_panel(
-                    db_path=db_path, repo_root=repo_root, conn=get_read_db()
+                    db_path=db_path,
+                    repo_root=repo_root,
+                    conn=get_read_db(),
+                    source_context=source_context,
                 ),
                 mimetype="text/html",
             )
@@ -2212,11 +2224,15 @@ def create_app(
                 if fragment not in ("brief", "decisions", "research-items", "memos", "triggers"):
                     abort(404)
                 return Response(
-                    render_portfolio_record_fragment(db_path, fragment, user_id=user_id),
+                    render_portfolio_record_fragment(
+                        db_path, fragment, user_id=user_id, source_context=source_context
+                    ),
                     mimetype="text/html",
                 )
             return Response(
-                render_portfolio_record_panel(db_path, user_id=user_id, lazy=True),
+                render_portfolio_record_panel(
+                    db_path, user_id=user_id, lazy=True, source_context=source_context
+                ),
                 mimetype="text/html",
             )
 
@@ -2610,7 +2626,7 @@ def create_app(
 
             user_id = DEFAULT_USER_ID
             return Response(
-                render_advisor_memos_panel(db_path, user_id=user_id),
+                render_advisor_memos_panel(db_path, user_id=user_id, source_context=source_context),
                 mimetype="text/html",
             )
 
@@ -4249,6 +4265,8 @@ def create_app(
             str(db_path),
             executable=executable,
         )
+        if source_state_root is not None:
+            argv.extend(("--source-state-root", str(source_state_root)))
         if force:
             argv.append("--force")
         if steps:
@@ -4580,6 +4598,8 @@ def create_app(
         sheet_id = str(body.get("sheet_id", "")).strip()
         if sheet_id:
             argv += ["--sheet-id", sheet_id]
+        if source_state_root is not None:
+            argv.extend(("--state-root", str(source_state_root)))
         try:
             job = job_registry.start(ticker=ticker, kind="dcf-import", argv=argv)
         except RegistryConflict as e:
@@ -4612,6 +4632,8 @@ def create_app(
             "--repo-root",
             str(repo_root),
         )
+        if source_state_root is not None:
+            argv.extend(("--state-root", str(source_state_root)))
         try:
             job = job_registry.start(ticker="_REPO", kind="rebuild-dcfs", argv=argv)
         except RegistryConflict as e:
@@ -4839,6 +4861,8 @@ def create_app(
             "--repo-root",
             str(repo_root),
         )
+        if source_state_root is not None:
+            argv.extend(("--state-root", str(source_state_root)))
         try:
             job = job_registry.start(ticker="_REPO", kind=f"advisor-{memo_kind}", argv=argv)
         except RegistryConflict as e:
@@ -4964,6 +4988,8 @@ def create_app(
             "--repo-root",
             str(repo_root),
         )
+        if source_state_root is not None:
+            argv.extend(("--state-root", str(source_state_root)))
         try:
             job = job_registry.start(ticker=ticker, kind="socratic-questions", argv=argv)
         except RegistryConflict as e:
@@ -5026,6 +5052,7 @@ def create_app(
                 questions=questions,
                 answers=answers,
                 horizon_days=horizon_days,
+                source_context=source_context,
             )
         except ValueError as exc:  # length mismatch / empty answers / bad horizon
             return ({"error": str(exc)}, 400)
@@ -5314,6 +5341,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=7421)
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument("--state-root", type=Path)
     parser.add_argument("--host")
     parser.add_argument(
         "--tailscale",
@@ -5336,7 +5364,15 @@ def main() -> int:
         file=sys.stderr,
     )
     origin_host = f"[{host}]" if ":" in host else host
-    app = create_app(repo_root, db_path=db_path, server_origin=f"http://{origin_host}:{args.port}")
+    app = create_app(
+        repo_root,
+        db_path=db_path,
+        server_origin=f"http://{origin_host}:{args.port}",
+        source_state_root=args.state_root,
+        source_context=SourceReadContext.for_sec_state_root(args.state_root)
+        if args.state_root
+        else None,
+    )
     # Flask's built-in dev server is fine here — this is a single-user
     # localhost tool, not a production service.
     app.run(host=host, port=args.port, debug=False, threaded=True)

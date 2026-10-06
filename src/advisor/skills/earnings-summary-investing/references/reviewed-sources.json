@@ -1,5 +1,5 @@
 {
-  "review_note": "Reviewed static snapshot-membership SQL successor: both dynamic placeholder lists now use constant json_each SELECTs with a bound JSON array. Exact snapshot selection, extraction disposition seals, source document identity and cutoff checks remain intact. 50 memo tests and strict Pyright passed; Bandit 1.9.4 reports no medium or high findings on the changed file. No model, source-completeness or native Windows qualification is inferred.",
+  "review_note": "Root inspected the Operations guide changes for retained-run read-only verification, strict run-ID validation, public aliases, and the guide's physical source-reader/reporting controls. Local delivery gates remain pending. Historical completed source-review context: Current main2b6 reviewed source population is preserved. Root inspected combined PR1650 physical source-reader, annual-period and entrypoint changes; the new scenario digest and explicit source-root controls also received independent advisory review. Exact changed source commitments: .tmp/onon-current-main-integration-v1/source-review-v1.json. Delivery gates pending; no native, financial admission or decision-grade approval.",
   "schema_version": 1,
   "sources": [
     {
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "f4d683627c6d47ebab74231754f54d9f3bf5e70ac19f6c17558bff95f70cf1ef"
+      "sha256": "7922d57b61a070a9bd88d68d58d443275bcaddbe17cb45633646f65e23be7ce2"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -120,7 +120,7 @@
     },
     {
       "path": "execution/build_meli_platform_dcf.py",
-      "sha256": "29cf3589bed65174d48c9abfcd76bbdb6fcca2f9087c3e13274123934f434129"
+      "sha256": "e841a99ecea2e7e7639aba785f365558bb6660ff7a48b25298b50e5a94a407ab"
     },
     {
       "path": "execution/capture_expected_sec_documents.py",
@@ -132,7 +132,7 @@
     },
     {
       "path": "execution/comments_server.py",
-      "sha256": "dcfa6682f351867b864ee178dfcd22c1d559f036c8e5e5a1bed5cb4fb8435a64"
+      "sha256": "b3c9a75c9e0f70598c81a2f7d7fa4faedcf965486d391c47529580a762646cde"
     },
     {
       "path": "execution/comments_server_research_routes.py",
@@ -144,7 +144,7 @@
     },
     {
       "path": "execution/dcf_sheets.py",
-      "sha256": "c8bab3d1f35489f19e819ecc2fd7d589b201d8fd64acb9633c81dad5a52c021f"
+      "sha256": "b0532f9bfe56f69c8e9ac7a7ea0a0c39b00e3182fedca5d52ce0db4d9e3995e8"
     },
     {
       "path": "execution/discover_ir_documents_all.py",
@@ -212,11 +212,11 @@
     },
     {
       "path": "execution/prepare_cashflow_dcf.py",
-      "sha256": "1996320a5567839727807a64923855808bf1856624db42ad500852861bfc5bd8"
+      "sha256": "538660442ebdddc9d2932bfc418fbec44038928fc5b01d4764996dfc1ba3a771"
     },
     {
       "path": "execution/prepare_decision_brief.py",
-      "sha256": "f4dea5eba4826c00b342db71ed961fa7152a7e474e8495c5c5f77085c06a162e"
+      "sha256": "1ab083db7557f1fcf02aa1a38ddbaaa538fa2bbd7c9ab1ce2d0fa6d40c45eee8"
     },
     {
       "path": "execution/pressure_test_thesis.py",
@@ -228,7 +228,7 @@
     },
     {
       "path": "execution/refresh_dcf.py",
-      "sha256": "b1ec03e21eb30032240f95966c3cb0c5d6553a26e15392b512b02b8f95d12ea2"
+      "sha256": "f4ad7282928d60f24941328628f6a8f688fecbfe4da4a03ec4d79576eee8f9d2"
     },
     {
       "path": "execution/refresh_portfolio_risk_snapshot.py",
@@ -264,11 +264,11 @@
     },
     {
       "path": "execution/valuation_preflight.py",
-      "sha256": "3340bbbdb9b139ecb0df35a08c81db166609faa1fa5476cc25bb53dec661eb32"
+      "sha256": "7c33ec2e96a46e49ee3725c0fc832ba34037125d643f6250e86871c4f18adfd6"
     },
     {
       "path": "execution/verify_decision_brief.py",
-      "sha256": "7c004be90512bfd43d95474ddeb6ac8f669ab5684c6a8d0e736ff5826f2edfd4"
+      "sha256": "a3d93db6586ae0ed2a98112dc2c781401fe3d28450a8e7939b223ef41b918e48"
     },
     {
       "path": "execution/verify_reconstruction_inventory.py",
@@ -276,7 +276,7 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "1ddf2b186aa73cae78469f37d8d6869bf494adc928b869552d7d552d627349ad"
+      "sha256": "def037a564b1dbc779b61cfe0b1a1d0d114ef22ad8c20b39ca3290223aa8d6ed"
     },
     {
       "path": "scripts/check_investing_skill.py",
@@ -328,15 +328,15 @@
     },
     {
       "path": "src/dcf/cashflow_inputs.py",
-      "sha256": "7b587c91a9072102d205328bfd45921a45438b67d72ef6e3d2f984c64d94998b"
+      "sha256": "2af3f4911a2db932aade42187071f6dad6852b8abdf800ca4cd48c2506a8d876"
     },
     {
       "path": "src/dcf/cashflow_refresh.py",
-      "sha256": "4cd3dd58aad53434598f287004d4ef111a018d35323f031892ed51ebff6e35e1"
+      "sha256": "ceacdc0d9b1a91d7e046befb054de31a75322e822ba75e07a007ded8ec589b38"
     },
     {
       "path": "src/dcf/cashflow_scenarios.py",
-      "sha256": "c49450fde17c95912a0a9f154ff0a162badc6bfefa7fb0485884cf0d97e91f8b"
+      "sha256": "ec64ca12b35bce47a36b034a030f5b5e152fc75ed8e3c4dd2ef20f1bfe62e39a"
     },
     {
       "path": "src/dcf/grade_evidence.py",
@@ -344,11 +344,11 @@
     },
     {
       "path": "src/dcf/input_recipes.py",
-      "sha256": "1120e5fe35a6b055751ae8b5a7ac226d53193913a3b79ac745936b1bcc7578de"
+      "sha256": "78632ef14e1dddba8ffbf3a8fce918868278f221e3ffca61fa73d76c2a4c24c0"
     },
     {
       "path": "src/dcf/readiness.py",
-      "sha256": "f87b98e14801b5ade6d41efa6042463fc15119342e0f4ad14c14f94621888cc4"
+      "sha256": "1cec8af61cc099dde4681b36f4a37f717a415e54fc3638cf892ede8983682d43"
     },
     {
       "path": "src/earnings_brief.py",
@@ -448,11 +448,11 @@
     },
     {
       "path": "src/research/decision_brief.py",
-      "sha256": "6c6ee6d24212c9a6fac0edf437308295d3a0dee10ad36d7dd71556df9fc1ba90"
+      "sha256": "471255e694f2f55e29c668f71c786f191612794777b272c993b827861bdf1dfd"
     },
     {
       "path": "src/research/decision_brief_workflow.py",
-      "sha256": "56fec6ea7553805a8d672d7a13a3381b292159756289733722c041707d0e72a2"
+      "sha256": "f09fd084e10339811737d0f8a0a319b81b09d18995b1eea2d87f484d951005be"
     },
     {
       "path": "src/research/investment_decision_card.py",

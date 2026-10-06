@@ -898,7 +898,9 @@ def test_expected_documents_keep_accession_parentage_for_every_package_child(
     )
 
 
-@pytest.mark.parametrize("form_type", ["10-Q", "10-Q/A", "10-K", "10-K/A"])
+@pytest.mark.parametrize(
+    "form_type", ["10-Q", "10-Q/A", "10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"]
+)
 def test_periodic_sec_report_date_reaches_primary_and_financial_package_expectations(
     form_type: str,
 ) -> None:
@@ -961,11 +963,13 @@ def test_periodic_sec_report_date_reaches_primary_and_financial_package_expectat
     assert all(item.filing_at == datetime(2026, 8, 1) for item in documents)
 
 
+@pytest.mark.parametrize("form_type", ["10-Q", "20-F", "20-F/A", "40-F", "40-F/A"])
 @pytest.mark.parametrize("report_date", [None, "", "20260630", "2026-02-30", "2026-06-30Z"])
 def test_missing_or_invalid_periodic_report_date_never_becomes_filing_date(
     report_date: str | None,
+    form_type: str,
 ) -> None:
-    filing = _filing("0000001001-26-000001", "report.htm", form_type="10-Q").model_copy(
+    filing = _filing("0000001001-26-000001", "report.htm", form_type=form_type).model_copy(
         update={"filing_date": "2026-08-01", "report_date": report_date}
     )
     if report_date in (None, ""):

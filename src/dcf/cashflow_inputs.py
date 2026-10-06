@@ -23,6 +23,7 @@ from dcf.input_evidence import (
     ModelCalculation,
     ModelInputReceipt,
     ModelInputRequest,
+    SourceReadContext,
     canonical_digest,
     verify_model_inputs,
 )
@@ -305,6 +306,7 @@ def prepare_cashflow_inputs(
     *,
     effective_inputs: Mapping[str, float],
     as_of: datetime,
+    source_context: SourceReadContext | None = None,
 ) -> tuple[dict[str, float], ModelInputReceipt]:
     if frozenset(effective_inputs) not in {ASSUMPTION_KEYS, ASSUMPTION_KEYS | REPORTED_KEYS}:
         raise InputEvidenceError("cashflow_effective_input_population_mismatch")
@@ -321,6 +323,7 @@ def prepare_cashflow_inputs(
         effective_inputs=proposed,
         assumption_keys=ASSUMPTION_KEYS,
         as_of=as_of,
+        source_context=source_context,
     )
     actuals, calculations = calculate_actuals(proof)
     complete = {**proposed, **{key: actuals[key] for key in REPORTED_KEYS}}
@@ -375,14 +378,28 @@ def verify_cashflow_inputs(
     *,
     effective_inputs: Mapping[str, float],
     as_of: datetime,
+    source_context: SourceReadContext | None = None,
 ) -> ModelInputReceipt:
+    if (
+        receipt.schema_version != "dcf_model_inputs.v3"
+        or receipt.source_integrity != "present_bytes_verified"
+    ):
+        raise InputEvidenceError("model_input_source_legacy_receipt_unverified")
     if receipt.recipe != RECIPE or receipt.verified_at > as_of:
         raise InputEvidenceError("model_input_receipt_recipe_or_clock_invalid")
     complete, verified = prepare_cashflow_inputs(
-        conn, receipt.request, effective_inputs=effective_inputs, as_of=as_of
+        conn,
+        receipt.request,
+        effective_inputs=effective_inputs,
+        as_of=as_of,
+        source_context=source_context,
     )
-    if complete != dict(effective_inputs) or verified.model_dump(
-        exclude={"verified_at"}
-    ) != receipt.model_dump(exclude={"verified_at"}):
+    if (
+        complete != dict(effective_inputs)
+        or verified.model_dump(exclude={"verified_at", "raw_documents"})
+        != receipt.model_dump(exclude={"verified_at", "raw_documents"})
+        or tuple(item.model_dump(exclude={"verified_at"}) for item in verified.raw_documents)
+        != tuple(item.model_dump(exclude={"verified_at"}) for item in receipt.raw_documents)
+    ):
         raise InputEvidenceError("model_input_receipt_mismatch")
     return verified

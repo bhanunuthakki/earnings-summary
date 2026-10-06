@@ -124,12 +124,13 @@ def _inputs() -> dict[str, float]:
 def _seed_real_inputs(
     conn: sqlite3.Connection,
     *,
+    source_path: Path | None = None,
     shared_revenues: bool = False,
     extra_country: bool = False,
     security_scope: bool = False,
 ) -> dict[str, evidence.FactBinding]:
     """No mocking source publication, ontology, binding, resolver or fact reader."""
-    seed_foundation(conn)
+    seed_foundation(conn, source_path=source_path)
     if security_scope:
         IssuerRegistry(conn).persist(
             Security(
@@ -706,7 +707,9 @@ def _seed_real_inputs(
 
 
 def _request(
-    conn: sqlite3.Connection, refs: dict[str, evidence.FactBinding]
+    conn: sqlite3.Connection,
+    refs: dict[str, evidence.FactBinding],
+    source_context: evidence.SourceReadContext,
 ) -> evidence.ModelInputRequest:
     inputs = _inputs()
     request = evidence.ModelInputRequest(
@@ -732,6 +735,7 @@ def _request(
         effective_inputs={key: inputs[key] for key in meli_inputs.ASSUMPTION_KEYS},
         assumption_keys=meli_inputs.ASSUMPTION_KEYS,
         as_of=NOW,
+        source_context=source_context,
     )
     actuals, _calculations = meli_inputs.calculate_actuals(proof)
     complete = {**inputs, **{key: actuals[key] for key in meli_inputs.REPORTED_DRIVER_KEYS}}
@@ -754,11 +758,20 @@ def _request(
 
 
 @pytest.fixture
+def source_context(tmp_path: Path) -> evidence.SourceReadContext:
+    """Explicit isolated raw-byte authority; no database-path inference."""
+    return evidence.SourceReadContext.for_sec_state_root(tmp_path / "source-state")
+
+
+@pytest.fixture
 def real_inputs(
-    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+    source_context: evidence.SourceReadContext,
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Generator[tuple[sqlite3.Connection, evidence.ModelInputRequest], None, None]:
     conn = sqlite3.connect(migrated_db(tmp_path / "meli.db"))
-    refs = _seed_real_inputs(conn)
+    refs = _seed_real_inputs(conn, source_path=source_context.content_roots[0] / "fixture.json")
 
     def coverage(
         _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime
@@ -767,17 +780,22 @@ def real_inputs(
 
     monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
     try:
-        yield conn, _request(conn, refs)
+        yield conn, _request(conn, refs, source_context)
     finally:
         conn.close()
 
 
 @pytest.fixture
 def shared_revenue_inputs(
-    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+    source_context: evidence.SourceReadContext,
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Generator[tuple[sqlite3.Connection, evidence.ModelInputRequest], None, None]:
     conn = sqlite3.connect(migrated_db(tmp_path / "meli-shared-revenues.db"))
-    refs = _seed_real_inputs(conn, shared_revenues=True)
+    refs = _seed_real_inputs(
+        conn, shared_revenues=True, source_path=source_context.content_roots[0] / "fixture.json"
+    )
 
     def coverage(
         _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime
@@ -786,12 +804,13 @@ def shared_revenue_inputs(
 
     monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
     try:
-        yield conn, _request(conn, refs)
+        yield conn, _request(conn, refs, source_context)
     finally:
         conn.close()
 
 
 def test_shared_revenues_qname_routes_four_roles_by_sealed_dimensions(
+    source_context: evidence.SourceReadContext,
     shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
 ) -> None:
     conn, request = shared_revenue_inputs
@@ -803,6 +822,7 @@ def test_shared_revenues_qname_routes_four_roles_by_sealed_dimensions(
         effective_inputs={key: item.value for key, item in request.assumptions.items()},
         assumption_keys=meli_inputs.ASSUMPTION_KEYS,
         as_of=NOW,
+        source_context=source_context,
     )
     selected = {
         item.key: item
@@ -832,6 +852,7 @@ def test_shared_revenues_qname_routes_four_roles_by_sealed_dimensions(
 
 @pytest.mark.parametrize("replacement", ["revenue_total_ytd", "revenue_fintech_ytd"])
 def test_shared_revenue_selector_rejects_missing_or_wrong_segment(
+    source_context: evidence.SourceReadContext,
     shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
     replacement: str,
 ) -> None:
@@ -840,7 +861,9 @@ def test_shared_revenue_selector_rejects_missing_or_wrong_segment(
         update={"facts": {**request.facts, "comm_rev0_ytd": request.facts[replacement]}}
     )
     with pytest.raises(evidence.InputEvidenceError, match="input_semantic_admission_failed"):
-        meli_inputs.prepare_meli_inputs(conn, altered, effective_inputs=_inputs(), as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, altered, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
 
 
 @pytest.mark.parametrize(
@@ -851,6 +874,7 @@ def test_shared_revenue_selector_rejects_missing_or_wrong_segment(
     ],
 )
 def test_real_published_distractor_cell_cannot_feed_meli_role(
+    source_context: evidence.SourceReadContext,
     tmp_path: Path,
     migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -924,6 +948,7 @@ def test_real_published_distractor_cell_cannot_feed_meli_role(
                 effective_inputs={key: inputs[key] for key in meli_inputs.ASSUMPTION_KEYS},
                 assumption_keys=meli_inputs.ASSUMPTION_KEYS,
                 as_of=NOW,
+                source_context=source_context,
             )
     finally:
         conn.close()
@@ -943,6 +968,7 @@ def test_real_published_distractor_cell_cannot_feed_meli_role(
     ],
 )
 def test_shared_revenue_revised_definition_fails_closed(
+    source_context: evidence.SourceReadContext,
     shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
     change: str,
 ) -> None:
@@ -1051,16 +1077,21 @@ def test_shared_revenue_revised_definition_fails_closed(
             }
         )
     with pytest.raises(evidence.InputEvidenceError, match="input_semantic_admission_failed"):
-        meli_inputs.prepare_meli_inputs(conn, request, effective_inputs=_inputs(), as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
 
 
 def test_shared_revenue_append_only_dimension_and_recipe_cannot_be_bypassed(
+    source_context: evidence.SourceReadContext,
     shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
 ) -> None:
     conn, request = shared_revenue_inputs
     old_recipe = request.model_copy(update={"recipe": "meli-platform-sotp-inputs/v3"})
     with pytest.raises(evidence.InputEvidenceError, match="input_recipe_mismatch"):
-        meli_inputs.prepare_meli_inputs(conn, old_recipe, effective_inputs=_inputs(), as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, old_recipe, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
     cell_id = request.facts["comm_rev0_ytd"].canonical_metric_cell_id
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         conn.execute(
@@ -1071,11 +1102,12 @@ def test_shared_revenue_append_only_dimension_and_recipe_cannot_be_bypassed(
 
 
 def test_real_reported_bindings_compute_ttm_and_bridge(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
 ) -> None:
     conn, request = real_inputs
     inputs, receipt = meli_inputs.prepare_meli_inputs(
-        conn, request, effective_inputs=_inputs(), as_of=NOW
+        conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
     )
     assert len(receipt.inputs) == 28
     assert all(item.observation_kind == "reported" for item in receipt.inputs)
@@ -1087,7 +1119,7 @@ def test_real_reported_bindings_compute_ttm_and_bridge(
     assert {item.key for item in receipt.calculations} >= {"comm_rev0", "net_cash", "fpay_rev0"}
     assert (
         meli_inputs.verify_meli_inputs(
-            conn, receipt, effective_inputs=inputs, as_of=NOW
+            conn, receipt, effective_inputs=inputs, as_of=NOW, source_context=source_context
         ).model_output_sha256
         == receipt.model_output_sha256
     )
@@ -1103,7 +1135,10 @@ def test_real_reported_bindings_compute_ttm_and_bridge(
     ],
 )
 def test_real_authorities_reject_tainted_population(
-    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest], change: str, reason: str
+    source_context: evidence.SourceReadContext,
+    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    change: str,
+    reason: str,
 ) -> None:
     conn, request = real_inputs
     if change == "missing":
@@ -1127,10 +1162,14 @@ def test_real_authorities_reject_tainted_population(
             }
         )
     with pytest.raises(evidence.InputEvidenceError, match=reason):
-        meli_inputs.prepare_meli_inputs(conn, request, effective_inputs=_inputs(), as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
 
 
-def test_meli_recipe_rejects_an_onon_request_before_reading_sources() -> None:
+def test_meli_recipe_rejects_an_onon_request_before_reading_sources(
+    source_context: evidence.SourceReadContext,
+) -> None:
     request = evidence.ModelInputRequest(
         recipe=meli_inputs.RECIPE,
         ticker="ONON",
@@ -1143,14 +1182,22 @@ def test_meli_recipe_rejects_an_onon_request_before_reading_sources() -> None:
         sqlite3.connect(":memory:") as conn,
         pytest.raises(evidence.InputEvidenceError, match="input_recipe_issuer_mismatch"),
     ):
-        meli_inputs.prepare_meli_inputs(conn, request, effective_inputs=_inputs(), as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
 
 
-def test_seed_only_model_cannot_persist(tmp_path: Path) -> None:
+def test_seed_only_model_cannot_persist(
+    source_context: evidence.SourceReadContext, tmp_path: Path
+) -> None:
     assumptions = meli.Assum(derive_capm=0)
     with pytest.raises(evidence.InputEvidenceError, match="model_input_receipt_required"):
         meli.persist_dcf_run(
-            assumptions, meli.mirror(assumptions), {}, db_path=tmp_path / "absent.db"
+            assumptions,
+            meli.mirror(assumptions),
+            {},
+            db_path=tmp_path / "absent.db",
+            source_context=source_context,
         )
     assert not (tmp_path / "absent.db").exists()
 
@@ -1163,7 +1210,10 @@ def _coverage_fixture(monkeypatch: pytest.MonkeyPatch) -> sqlite3.Connection:
         CREATE TABLE source_inventory_snapshots (snapshot_id TEXT, inventory_key TEXT, revision INTEGER,
             issuer_id TEXT, ticker TEXT, source_kind TEXT, outcome TEXT, authoritative INTEGER,
             completed_at TEXT, recorded_at TEXT);
-        CREATE TABLE expected_documents (snapshot_id TEXT, period_end TEXT, form_type TEXT, recorded_at TEXT, filing_at TEXT);
+        CREATE TABLE expected_documents (
+            snapshot_id TEXT, period_end TEXT, form_type TEXT, recorded_at TEXT, filing_at TEXT,
+            document_type TEXT, accession_number TEXT, issuer_id TEXT, ticker TEXT,
+            source_kind TEXT, expectation_basis TEXT);
     """)
     conn.execute(
         "INSERT INTO research_snapshot_headers VALUES (?,?)",
@@ -1175,7 +1225,8 @@ def _coverage_fixture(monkeypatch: pytest.MonkeyPatch) -> sqlite3.Connection:
         (NOW.isoformat(), NOW.isoformat()),
     )
     conn.execute(
-        "INSERT INTO expected_documents VALUES ('inventory','2026-06-30','10-Q',?,?)",
+        "INSERT INTO expected_documents VALUES ('inventory','2026-06-30','10-Q',?,?,"
+        "'filing','0001099590-26-000001','issuer-1','MELI','sec_filing','authoritative')",
         (NOW.isoformat(), NOW.isoformat()),
     )
 
@@ -1236,11 +1287,12 @@ def test_current_source_coverage_is_independent_of_quote_and_capture(
 
 
 def test_replayed_base_is_not_scenario_acceptance_and_wrong_outputs_are_blocked(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
 ) -> None:
     conn, request = real_inputs
     inputs, receipt = meli_inputs.prepare_meli_inputs(
-        conn, request, effective_inputs=_inputs(), as_of=NOW
+        conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
     )
     result = meli_inputs.model_output(inputs)
     snapshot = {
@@ -1267,20 +1319,21 @@ def test_replayed_base_is_not_scenario_acceptance_and_wrong_outputs_are_blocked(
             json.dumps({"model_input_receipt": receipt.model_dump(mode="json")}),
         ),
     )
-    good = load_valuation_readiness(conn, "MELI", as_of=NOW)
+    good = load_valuation_readiness(conn, "MELI", as_of=NOW, source_context=source_context)
     assert not good.ready
     assert good.financial_input_completeness == "verified", good.reason_codes
     assert good.latest_reporting_period_status == "verified"
     assert good.assumption_reviewed_at == NOW.isoformat()
     assert good.reason_codes == ("scenario_acceptance_unverified",)
     conn.execute("UPDATE dcf_runs SET npv=npv+1000")
-    wrong = load_valuation_readiness(conn, "MELI", as_of=NOW)
+    wrong = load_valuation_readiness(conn, "MELI", as_of=NOW, source_context=source_context)
     assert not wrong.ready
     assert "persisted_model_output_replay_mismatch" in wrong.reason_codes
     assert wrong.financial_input_completeness == "verified"
 
 
 def test_real_old_period_cannot_fill_current_ytd_slot(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
 ) -> None:
     conn, request = real_inputs
@@ -1288,11 +1341,14 @@ def test_real_old_period_cannot_fill_current_ytd_slot(
         update={"facts": {**request.facts, "comm_rev0_ytd": request.facts["comm_rev0_prior_ytd"]}}
     )
     with pytest.raises(evidence.InputEvidenceError, match="input_coordinate_mismatch"):
-        meli_inputs.prepare_meli_inputs(conn, request, effective_inputs=_inputs(), as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
 
 
 @pytest.mark.parametrize("adopt_revision", [False, True])
 def test_current_definition_supersession_invalidates_old_binding_recipe(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
     adopt_revision: bool,
 ) -> None:
@@ -1329,7 +1385,9 @@ def test_current_definition_supersession_invalidates_old_binding_recipe(
             }
         )
     with pytest.raises(evidence.InputEvidenceError, match="input_semantic_admission_failed"):
-        meli_inputs.prepare_meli_inputs(conn, request, effective_inputs=_inputs(), as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
 
 
 @pytest.mark.parametrize(
@@ -1337,6 +1395,7 @@ def test_current_definition_supersession_invalidates_old_binding_recipe(
     ["nimal", "credit_cash_allocation", "operating_cash_reserve", "credit_funding_debt_allocation"],
 )
 def test_changed_variance_or_actual_basis_requires_new_review(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
     driver_key: str,
 ) -> None:
@@ -1351,10 +1410,13 @@ def test_changed_variance_or_actual_basis_requires_new_review(
         }
     )
     with pytest.raises(evidence.InputEvidenceError, match="assumption_review_variance_mismatch"):
-        meli_inputs.prepare_meli_inputs(conn, request, effective_inputs=_inputs(), as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
 
 
 def test_verified_loader_uses_explicit_state_artifact_and_detects_changes(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1370,7 +1432,7 @@ def test_verified_loader_uses_explicit_state_artifact_and_detects_changes(
 
     monkeypatch.setattr(meli, "datetime", SimpleNamespace(now=now))
     assumptions, receipt = meli.load_verified_assumptions(
-        "MELI", db_path=db, assumptions_path=artifact
+        "MELI", db_path=db, assumptions_path=artifact, source_context=source_context
     )
     assert assumptions.comm_rev0 == pytest.approx(_inputs()["comm_rev0"])
     assert assumptions.price == 0
@@ -1385,6 +1447,7 @@ def test_verified_loader_uses_explicit_state_artifact_and_detects_changes(
             db_path=db,
             input_receipt=receipt,
             assumptions_path=artifact,
+            source_context=source_context,
         )
     assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
 
@@ -1410,6 +1473,7 @@ def test_verified_loader_rejects_seed_only_artifact(tmp_path: Path) -> None:
     ],
 )
 def test_reviewed_allocations_must_fit_reported_pools(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
     changes: dict[str, float],
 ) -> None:
@@ -1424,10 +1488,13 @@ def test_reviewed_allocations_must_fit_reported_pools(
         }
     )
     with pytest.raises(evidence.InputEvidenceError, match="allocation_outside_reported_pools"):
-        meli_inputs.prepare_meli_inputs(conn, revised, effective_inputs=inputs, as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, revised, effective_inputs=inputs, as_of=NOW, source_context=source_context
+        )
 
 
 def test_real_builder_persistence_keeps_subsecond_calculation_clock(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1450,7 +1517,7 @@ def test_real_builder_persistence_keeps_subsecond_calculation_clock(
     destination = tmp_path / "model.xlsx"
     monkeypatch.setattr(meli, "DEST", destination)
     assumptions, receipt = meli.load_verified_assumptions(
-        "MELI", db_path=db, assumptions_path=artifact
+        "MELI", db_path=db, assumptions_path=artifact, source_context=source_context
     )
     assumptions.price = 1700.0
     quote = SpecializedPriceObservation(
@@ -1479,17 +1546,18 @@ def test_real_builder_persistence_keeps_subsecond_calculation_clock(
         db_path=db,
         input_receipt=receipt,
         assumptions_path=artifact,
+        source_context=source_context,
     )
     saved = conn.execute("SELECT created_at,npv,npv_per_share FROM dcf_runs").fetchone()
     assert datetime.fromisoformat(saved[0]) == NOW
     assert saved[1] == model.equity_value
     assert saved[2] == model.vps
-    readiness = load_valuation_readiness(conn, "MELI", as_of=NOW)
+    readiness = load_valuation_readiness(conn, "MELI", as_of=NOW, source_context=source_context)
     assert readiness.financial_input_completeness == "verified", readiness.reason_codes
     assert "model_input_receipt_after_calculation" not in readiness.reason_codes
     assert "scenario_acceptance_unverified" in readiness.reason_codes
     # The old second-resolution SQL timestamp genuinely precedes this receipt.
     # Retain the strict consumer ordering instead of adding a time tolerance.
     conn.execute("UPDATE dcf_runs SET created_at=?", (NOW.replace(microsecond=0).isoformat(),))
-    truncated = load_valuation_readiness(conn, "MELI", as_of=NOW)
+    truncated = load_valuation_readiness(conn, "MELI", as_of=NOW, source_context=source_context)
     assert "model_input_receipt_after_calculation" in truncated.reason_codes

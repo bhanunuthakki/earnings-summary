@@ -189,9 +189,22 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    # Retain 141 main test seams and the three compact-reader process harnesses.
+    # The clock-route regression has one test-only OS proxy lookup.
+    assert (
+        GraphEdge(
+            source="tests/test_bounded_source_reader.py",
+            target="<dynamic attribute>",
+            kind="getattr",
+            evidence="dynamic getattr expression",
+            confidence="low",
+            line=197,
+            unknown=True,
+        )
+        in graph.unknown_edges
+    )
+    # Retain 141 prior test seams, the POSIX proxy lookup, and three compact-reader process harnesses.
     # No production gap is admitted.
-    assert len(graph.unknown_edges) == 144
+    assert len(graph.unknown_edges) == 145
     # Ten new acquisition/authority fixture calls preserve synthetic db globals.
     # Exact AST evidence is retained in followup-test-edge-census.json.
     new_fixture_calls = (

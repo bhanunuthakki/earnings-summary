@@ -51,6 +51,7 @@ from pydantic import ValidationError
 from allocation.candidate_fit import CandidateFit
 from allocation.digest import allocation_payload_sha
 from compute.thesis_evaluator import HoldingsSpec, load_holdings_spec
+from dcf.input_evidence import SourceReadContext
 from dcf.latest import LatestDcfRow, latest_dcf_row
 from dcf.readiness import load_valuation_readiness
 from models.companies import ListType
@@ -514,12 +515,19 @@ def cash_assessment(*, now: datetime | None = None) -> DecisionReadyAssessment:
 
 
 def assess_eligibility(
-    db_path: Path, repo_root: Path, ticker: str, *, list_type: ListType | str
+    db_path: Path,
+    repo_root: Path,
+    ticker: str,
+    *,
+    list_type: ListType | str,
+    source_context: SourceReadContext | None = None,
 ) -> DecisionReadyAssessment:
     """Own and close the read snapshot even when an unexpected reader fails."""
     conn = _ro_conn(db_path)
     try:
-        return _assess_eligibility(conn, db_path, repo_root, ticker, list_type=list_type)
+        return _assess_eligibility(
+            conn, db_path, repo_root, ticker, list_type=list_type, source_context=source_context
+        )
     finally:
         if conn is not None:
             conn.close()
@@ -532,6 +540,7 @@ def _assess_eligibility(
     ticker: str,
     *,
     list_type: ListType | str,
+    source_context: SourceReadContext | None = None,
 ) -> DecisionReadyAssessment:
     """The eight-check §7.3 read for one security. Never raises: a missing
     DB/cache/file degrades the checks that depend on it to a blocking
@@ -561,8 +570,20 @@ def _assess_eligibility(
     valuation_evidence: dict[str, object] = {}
     dcf_check, dcf_asof = _check_usable_dcf(dcf_row)
     if conn is not None:
-        readiness = load_valuation_readiness(conn, upper, as_of=now.replace(tzinfo=UTC))
-        valuation_evidence = readiness.model_dump(mode="json", exclude={"evaluated_at"})
+        readiness = (
+            load_valuation_readiness(conn, upper, as_of=now.replace(tzinfo=UTC))
+            if source_context is None
+            else load_valuation_readiness(
+                conn, upper, as_of=now.replace(tzinfo=UTC), source_context=source_context
+            )
+        )
+        valuation_evidence = readiness.model_dump(
+            mode="json",
+            exclude={
+                "evaluated_at": True,
+                "raw_document_verifications": {"__all__": {"verified_at"}},
+            },
+        )
         if not readiness.ready:
             dcf_check = EligibilityCheck(
                 False,
@@ -653,7 +674,9 @@ def _assess_eligibility(
     )
 
 
-def assess_universe(db_path: Path, repo_root: Path) -> dict[str, DecisionReadyAssessment]:
+def assess_universe(
+    db_path: Path, repo_root: Path, *, source_context: SourceReadContext | None = None
+) -> dict[str, DecisionReadyAssessment]:
     """``ticker -> DecisionReadyAssessment`` for every active (non-archived)
     portfolio + evaluation name (``pipeline.queries.tracked_companies_for_user``,
     the PRD §7.3 eligible universe before the gate). ``{}`` on a missing/
@@ -671,6 +694,10 @@ def assess_universe(db_path: Path, repo_root: Path) -> dict[str, DecisionReadyAs
     out: dict[str, DecisionReadyAssessment] = {}
     for company in (*portfolio, *evaluation):
         out[company.ticker.upper()] = assess_eligibility(
-            db_path, repo_root, company.ticker, list_type=company.list_type
+            db_path,
+            repo_root,
+            company.ticker,
+            list_type=company.list_type,
+            source_context=source_context,
         )
     return out

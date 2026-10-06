@@ -148,6 +148,8 @@ def test_refresh_routes_meli_to_sotp_builder(
         ),
         encoding="utf-8",
     )
+    source_state_root = tmp_path / "source-state"
+    source_state_root.mkdir()
     calls: list[list[str]] = []
 
     def run_builder(
@@ -156,6 +158,7 @@ def test_refresh_routes_meli_to_sotp_builder(
         calls.append(command)
         assert env["EARNINGS_SUMMARY_DB_PATH"] == str(db_path)
         assert env["DCF_MELI_ASSUMPTIONS_PATH"] == str(assumptions_path.resolve())
+        assert env["DCF_SOURCE_STATE_ROOT"] == str(source_state_root)
         Path(env["DCF_PROMOTE_DEST"]).parent.mkdir(parents=True, exist_ok=True)
         Path(env["DCF_PROMOTE_DEST"]).touch()
         return subprocess.CompletedProcess(command, 0, stdout="RESULT dcf_runs=ok\n", stderr="")
@@ -174,6 +177,8 @@ def test_refresh_routes_meli_to_sotp_builder(
             "MELI",
             "--repo-root",
             str(tmp_path),
+            "--state-root",
+            str(source_state_root),
             "--meli-assumptions-path",
             str(assumptions_path),
         ],

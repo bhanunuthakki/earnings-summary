@@ -20,6 +20,13 @@ from provenance.evidence_ledger import (
     SourceObservation,
 )
 from provenance.integrity_audit import AuditOptions, audit_connection
+from provenance.issuer_registry import IssuerEntity, IssuerRegistry
+from provenance.reporting_entity_registry import (
+    EvidenceSubjectBindingRevision,
+    ReportingEntity,
+    ReportingEntityRegistry,
+    SourceObligationRevision,
+)
 from provenance.source_coverage_reconcile import (
     ExpectedDocumentImport,
     ExplicitAbsence,
@@ -34,6 +41,7 @@ from search.corpus_builder import (
 )
 from search.embedding_promotion import LocalVectorRuntimeConfig
 from search.local_vector import LocalVectorCapabilityError
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 STAMP = datetime(2026, 7, 27, 6, 0, 0)
 A, B, C = "a" * 64, "b" * 64, "c" * 64
@@ -41,18 +49,73 @@ A, B, C = "a" * 64, "b" * 64, "c" * 64
 
 def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
     path = tmp_path / "ask.db"
-    migrated_db(
-        path,
-        stamp="0213_decision_draft_provider_id",
-        archived=True,
-        target="0221_ask_retrieval_traces",
-    )
-    conn = sqlite3.connect(path)
+    migrated_db(path)
+    conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER)
+    conn.row_factory = None
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
 def _seed_complete_corpus(conn: sqlite3.Connection) -> str:
+    IssuerRegistry(conn).persist(
+        IssuerEntity(
+            issuer_id="sec-cik:0000000001",
+            idempotency_key="issuer",
+            entity_kind="operating_company",
+            created_at=STAMP,
+        )
+    )
+    registry = ReportingEntityRegistry(conn)
+    registry.persist(
+        ReportingEntity(
+            reporting_entity_id="entity",
+            idempotency_key="entity",
+            issuer_id="sec-cik:0000000001",
+            reporting_entity_kind="legal_registrant",
+            display_name="Synthetic ACME",
+            created_at=STAMP,
+        )
+    )
+    registry.persist(
+        EvidenceSubjectBindingRevision(
+            binding_revision_id="subject",
+            idempotency_key="subject",
+            recorded_issuer_id="sec-cik:0000000001",
+            revision=1,
+            issuer_id="sec-cik:0000000001",
+            reporting_entity_id="entity",
+            outcome="selected",
+            decision_kind="manual",
+            material_dissent=False,
+            effective_at=STAMP,
+            knowledge_at=STAMP,
+            recorded_at=STAMP,
+            reason_code="synthetic_test_subject",
+            reason_details=(("scope", "test"),),
+        )
+    )
+    registry.persist(
+        SourceObligationRevision(
+            obligation_revision_id="duty",
+            idempotency_key="duty",
+            obligation_key="duty",
+            revision=1,
+            issuer_id="sec-cik:0000000001",
+            reporting_entity_id="entity",
+            authority_kind="sec_edgar",
+            document_family="operating_company_periodic",
+            obligation_state="required",
+            completeness_rule="regulator_inventory",
+            active_from=STAMP,
+            active_to=None,
+            decision_kind="manual",
+            effective_at=STAMP,
+            knowledge_at=STAMP,
+            recorded_at=STAMP,
+            reason_code="synthetic_test_duty",
+            reason_details=(("scope", "test"),),
+        )
+    )
     ledger = EvidenceLedger(conn)
     ledger.persist(
         ContentBlob(
@@ -164,7 +227,10 @@ def _seed_complete_corpus(conn: sqlite3.Connection) -> str:
         ),
     )
     inventory, snapshots = load_coverage_expected_document_inventory(
-        conn, ("sec-cik:0000000001:submissions",)
+        conn,
+        ("sec-cik:0000000001:submissions",),
+        knowledge_cutoff=STAMP,
+        observed_through=STAMP,
     )
     corpus = build_grounded_search_corpus(
         conn,
@@ -173,6 +239,7 @@ def _seed_complete_corpus(conn: sqlite3.Connection) -> str:
             revision=1,
             selector_code_version="selector@1",
             recorded_at=STAMP,
+            knowledge_cutoff=STAMP,
             expected_documents=inventory.expected_documents,
             source_inventory_snapshot_ids=snapshots,
             required_extractor_names=("parser",),
@@ -360,6 +427,36 @@ def test_reused_ticker_across_canonical_issuers_fails_closed(
     conn = _conn(tmp_path, migrated_db)
     try:
         _seed_complete_corpus(conn)
+        IssuerRegistry(conn).persist(
+            IssuerEntity(
+                issuer_id="issuer-other",
+                idempotency_key="issuer-other",
+                entity_kind="operating_company",
+                created_at=STAMP,
+            )
+        )
+        ReportingEntityRegistry(conn).persist(
+            SourceObligationRevision(
+                obligation_revision_id="other-duty",
+                idempotency_key="other-duty",
+                obligation_key="other-duty",
+                revision=1,
+                issuer_id="issuer-other",
+                authority_kind="sec_edgar",
+                document_family="operating_company_periodic",
+                obligation_state="required",
+                completeness_rule="regulator_inventory",
+                active_from=STAMP,
+                active_to=None,
+                decision_kind="manual",
+                effective_at=STAMP,
+                knowledge_at=STAMP,
+                recorded_at=STAMP,
+                reason_code="synthetic_test_duty",
+                reason_details=(("scope", "test"),),
+            )
+        )
+        conn.commit()
         reconcile_source_coverage(
             conn,
             SourceCoverageImport(

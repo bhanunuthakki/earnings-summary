@@ -393,6 +393,30 @@ class ProcessorRawFact(_Closed):
         return self
 
 
+def verify_raw_normalized_unit_semantics(
+    bridge_protocol_version: str,
+    raw_fact: Mapping[str, object],
+    normalized: Mapping[str, object] | None,
+) -> None:
+    """Replay the same source-unit rule for processor output and retained rows."""
+    if bridge_protocol_version not in {"filing-xbrl-bridge.v1", "filing-xbrl-bridge.v2"}:
+        raise ValueError("XBRL unit bridge protocol is unqualified")
+    if bridge_protocol_version == "filing-xbrl-bridge.v2" and normalized is not None:
+        if normalized.get("source_unit_id") != raw_fact.get("unit_id"):
+            raise ValueError("normalized source unit ID differs from raw evidence")
+        if normalized.get("source_unit_id") is not None:
+            unit_key, currency = unit_coordinates_from_payload(raw_fact.get("unit_measures"))
+            if (normalized.get("unit_key"), normalized.get("currency")) != (
+                unit_key,
+                currency,
+            ):
+                raise ValueError("normalized unit differs from committed source measures")
+        elif normalized.get("value_kind") == "numeric":
+            raise ValueError("numeric v2 fact has no source unit evidence")
+    elif bridge_protocol_version == "filing-xbrl-bridge.v1" and "unit_measures" in raw_fact:
+        raise ValueError("legacy bridge cannot claim the v2 unit contract")
+
+
 class InlineXbrlProcessorResult(_Closed):
     bridge_protocol_version: Literal["filing-xbrl-bridge.v1", "filing-xbrl-bridge.v2"]
     coordinates: ProcessorCoordinates
@@ -411,26 +435,9 @@ class InlineXbrlProcessorResult(_Closed):
     @model_validator(mode="after")
     def _complete_sets(self) -> Self:
         for fact in self.facts:
-            normalized = fact.normalized_fact
-            if self.bridge_protocol_version == "filing-xbrl-bridge.v2" and normalized is not None:
-                if normalized.get("source_unit_id") != fact.canonical_raw_fact.get("unit_id"):
-                    raise ValueError("normalized source unit ID differs from raw evidence")
-                if normalized.get("source_unit_id") is not None:
-                    unit_key, currency = unit_coordinates_from_payload(
-                        fact.canonical_raw_fact.get("unit_measures")
-                    )
-                    if (normalized.get("unit_key"), normalized.get("currency")) != (
-                        unit_key,
-                        currency,
-                    ):
-                        raise ValueError("normalized unit differs from committed source measures")
-                elif normalized.get("value_kind") == "numeric":
-                    raise ValueError("numeric v2 fact has no source unit evidence")
-            elif (
-                self.bridge_protocol_version == "filing-xbrl-bridge.v1"
-                and "unit_measures" in fact.canonical_raw_fact
-            ):
-                raise ValueError("legacy bridge cannot claim the v2 unit contract")
+            verify_raw_normalized_unit_semantics(
+                self.bridge_protocol_version, fact.canonical_raw_fact, fact.normalized_fact
+            )
         ordinals = tuple(item.input_ordinal for item in self.facts)
         if ordinals != tuple(range(len(self.facts))):
             raise ValueError("raw fact ordinals must be contiguous")

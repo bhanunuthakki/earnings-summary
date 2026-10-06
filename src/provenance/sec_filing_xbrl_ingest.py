@@ -984,3 +984,13 @@ def _canonical(value: object) -> str:
 
 def _sha(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+# Retained replay and its fixtures reuse these owners through typed public names.
+# Legacy private names remain bound to the same function objects.
+filing_xbrl_evidence_node_id = _node_id
+persist_filing_xbrl_evidence_nodes = _persist_evidence_nodes
+persist_filing_xbrl_input_closure = _persist_input_closure
+persist_filing_xbrl_processor_artifact = _persist_processor_artifact
+persist_filing_xbrl_raw_commitments = _persist_raw_commitments
+verify_retained_filing_xbrl_run_closure = _verify_existing_run_closure

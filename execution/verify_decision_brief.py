@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from db_paths import require_db_path
+from dcf.input_evidence import SourceReadContext
 from report.artifacts import ReportArtifactRef, validate_report_artifact_path
 from research.decision_brief import (
     MemoContextReview,
@@ -26,6 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument("--artifact-manifest", type=Path, required=True)
     parser.add_argument("--context-review", type=Path)
+    parser.add_argument("--source-state-root", type=Path)
     parser.add_argument("--persist", action="store_true")
     parser.add_argument(
         "--inspect-body",
@@ -66,6 +68,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.context_review
         else None
     )
+    source_root = args.source_state_root or os.environ.get("DCF_SOURCE_STATE_ROOT", "").strip()
+    source_context = (
+        SourceReadContext.for_sec_state_root(Path(source_root)) if source_root else None
+    )
     conn = connect_sqlite(database, role=SQLiteConnectionRole.READ_ONLY)
     try:
         receipt = assess_decision_brief(
@@ -74,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
             artifact=artifact,
             as_of=datetime.now(UTC),
             context_review=review,
+            source_context=source_context,
         )
     finally:
         conn.close()

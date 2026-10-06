@@ -7,7 +7,12 @@ from collections.abc import Mapping
 from datetime import datetime
 
 from dcf import cashflow_inputs, meli_inputs
-from dcf.input_evidence import InputEvidenceError, ModelInputReceipt, ModelInputRequest
+from dcf.input_evidence import (
+    InputEvidenceError,
+    ModelInputReceipt,
+    ModelInputRequest,
+    SourceReadContext,
+)
 
 
 def model_engine(recipe: str) -> str:
@@ -33,14 +38,23 @@ def prepare_model_inputs(
     *,
     effective_inputs: Mapping[str, float],
     as_of: datetime,
+    source_context: SourceReadContext | None = None,
 ) -> tuple[dict[str, float], ModelInputReceipt]:
     model_engine(request.recipe)
     if request.recipe == meli_inputs.RECIPE:
         return meli_inputs.prepare_meli_inputs(
-            conn, request, effective_inputs=effective_inputs, as_of=as_of
+            conn,
+            request,
+            effective_inputs=effective_inputs,
+            as_of=as_of,
+            source_context=source_context,
         )
     return cashflow_inputs.prepare_cashflow_inputs(
-        conn, request, effective_inputs=effective_inputs, as_of=as_of
+        conn,
+        request,
+        effective_inputs=effective_inputs,
+        as_of=as_of,
+        source_context=source_context,
     )
 
 
@@ -50,14 +64,23 @@ def verify_model_input_receipt(
     *,
     effective_inputs: Mapping[str, float],
     as_of: datetime,
+    source_context: SourceReadContext | None = None,
 ) -> ModelInputReceipt:
     model_engine(receipt.recipe)
     if receipt.recipe == meli_inputs.RECIPE:
         return meli_inputs.verify_meli_inputs(
-            conn, receipt, effective_inputs=effective_inputs, as_of=as_of
+            conn,
+            receipt,
+            effective_inputs=effective_inputs,
+            as_of=as_of,
+            source_context=source_context,
         )
     return cashflow_inputs.verify_cashflow_inputs(
-        conn, receipt, effective_inputs=effective_inputs, as_of=as_of
+        conn,
+        receipt,
+        effective_inputs=effective_inputs,
+        as_of=as_of,
+        source_context=source_context,
     )
 
 

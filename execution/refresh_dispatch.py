@@ -233,6 +233,7 @@ def execute(
     *,
     project_root: Path = PROJECT_ROOT,
     state_root: Path | None = None,
+    source_state_root: Path | None = None,
     out: TextIO = sys.stdout,
     runner: _Runner | None = None,
 ) -> int:
@@ -254,7 +255,9 @@ def execute(
         "news": _argv_news(project_root, resolved_state_root, plan.ticker),
         "extract_kpis": _argv_extract_kpis(project_root, resolved_state_root, plan.ticker),
         "saydo": _argv_saydo(project_root, resolved_state_root, plan.ticker),
-        "dcf": _argv_dcf(project_root, resolved_state_root, plan.ticker),
+        "dcf": _argv_dcf(
+            project_root, resolved_state_root, plan.ticker, source_state_root=source_state_root
+        ),
         "thesis_eval": _argv_thesis_eval(project_root, resolved_state_root, plan.ticker),
         "build_report": _argv_build(
             project_root,
@@ -393,8 +396,10 @@ def _argv_news(project_root: Path, state_root: Path, ticker: str) -> list[str]:
     )
 
 
-def _argv_dcf(project_root: Path, state_root: Path, ticker: str) -> list[str]:
-    return managed_python_argv(
+def _argv_dcf(
+    project_root: Path, state_root: Path, ticker: str, *, source_state_root: Path | None
+) -> list[str]:
+    argv = managed_python_argv(
         project_root,
         project_root / "execution" / "refresh_dcf.py",
         "--ticker",
@@ -402,6 +407,10 @@ def _argv_dcf(project_root: Path, state_root: Path, ticker: str) -> list[str]:
         "--repo-root",
         str(state_root),
     )
+
+    if source_state_root is not None:
+        argv.extend(("--state-root", str(source_state_root)))
+    return argv
 
 
 def _argv_thesis_eval(project_root: Path, state_root: Path, ticker: str) -> list[str]:
@@ -469,6 +478,11 @@ def main() -> int:
         default=PROJECT_ROOT,
         help="checkout that owns mutable data and generated artifacts (default: %(default)s)",
     )
+    parser.add_argument(
+        "--source-state-root",
+        type=Path,
+        help="Explicit model source-byte read authority; separate from data/output routing.",
+    )
     args = parser.parse_args()
 
     steps = [s for s in args.steps.split(",")] if args.steps else None
@@ -494,7 +508,12 @@ def main() -> int:
     if db_path != (state_root / "data" / "portfolio.db").resolve():
         print(json.dumps({"status": "refused", "reason_code": "database_state_root_mismatch"}))
         return 3
-    return execute(plan, project_root=PROJECT_ROOT, state_root=state_root)
+    return execute(
+        plan,
+        project_root=PROJECT_ROOT,
+        state_root=state_root,
+        source_state_root=args.source_state_root,
+    )
 
 
 if __name__ == "__main__":

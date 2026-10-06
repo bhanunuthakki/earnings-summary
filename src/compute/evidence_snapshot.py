@@ -8,6 +8,8 @@ import hashlib
 import importlib
 import os
 import sys
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
@@ -123,29 +125,52 @@ def _windows_open_no_follow(path: Path, *, directory: bool) -> int:
     create_file.restype = ctypes.c_void_p
     flags = 0x00200000 | (0x02000000 if directory else 0)
     share_mode = 0x7 if directory else 0x1
+    close_handle = _win_uint_function(kernel32, "CloseHandle")
+    close_handle.argtypes = [ctypes.c_void_p]
+    close_handle.restype = ctypes.c_int
     handle = create_file(str(path), 0x80000000, share_mode, None, 3, flags, None)
     invalid = ctypes.c_void_p(-1).value
     if handle in (None, invalid):
         if get_last_error() in {2, 3}:
             raise FileNotFoundError("evidence path is missing")
         raise EvidenceSourceChangedError("unable to open evidence handle")
+    transferred = False
+    try:
 
-    class FileAttributeTagInfo(ctypes.Structure):
-        _fields_ = [("attributes", ctypes.c_uint32), ("reparse_tag", ctypes.c_uint32)]
+        class FileAttributeTagInfo(ctypes.Structure):
+            _fields_ = [("attributes", ctypes.c_uint32), ("reparse_tag", ctypes.c_uint32)]
 
-    info = FileAttributeTagInfo()
-    get_info = _win_uint_function(kernel32, "GetFileInformationByHandleEx")
-    get_info.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
-    get_info.restype = ctypes.c_int
-    if not get_info(handle, 9, ctypes.byref(info), ctypes.sizeof(info)):
-        close_handle = _win_uint_function(kernel32, "CloseHandle")
-        close_handle(handle)
-        raise EvidenceSourceChangedError("unable to inspect evidence handle")
-    if info.attributes & 0x400:
-        close_handle = _win_uint_function(kernel32, "CloseHandle")
-        close_handle(handle)
-        raise UnsafeEvidencePathError("evidence handle is a reparse point")
-    return msvcrt.open_osfhandle(int(handle), os.O_RDONLY | getattr(os, "O_BINARY", 0))
+        info = FileAttributeTagInfo()
+        get_info = _win_uint_function(kernel32, "GetFileInformationByHandleEx")
+        get_info.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+        get_info.restype = ctypes.c_int
+        if not get_info(handle, 9, ctypes.byref(info), ctypes.sizeof(info)):
+            raise EvidenceSourceChangedError("unable to inspect evidence handle")
+        if info.attributes & 0x400:
+            raise UnsafeEvidencePathError("evidence handle is a reparse point")
+        descriptor = msvcrt.open_osfhandle(int(handle), os.O_RDONLY | getattr(os, "O_BINARY", 0))
+        transferred = True
+        return descriptor
+    finally:
+        if not transferred and not close_handle(handle):
+            raise EvidenceSourceChangedError("unable to close refused evidence handle")
+
+
+@contextmanager
+def open_windows_evidence_handle(
+    path: Path, *, directory: bool = False
+) -> Generator[int, None, None]:
+    """Own one existing Win32 no-reparse handle; close it on every exit."""
+    descriptor = _windows_open_no_follow(path, directory=directory)
+    try:
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+def windows_evidence_handle_path(descriptor: int) -> Path:
+    """Return the actual Win32 opened path, without a lexical fallback."""
+    return _windows_final_path(descriptor)
 
 
 def _open_no_follow(path: Path, *, directory: bool = False) -> int:

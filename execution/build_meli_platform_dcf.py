@@ -70,6 +70,7 @@ from dcf.input_evidence import (
     InputEvidenceError,
     ModelInputReceipt,
     ModelInputRequest,
+    SourceReadContext,
 )
 from dcf.meli_inputs import (
     ASSUMPTION_KEYS,
@@ -696,6 +697,7 @@ def persist_dcf_run(
     db_path: Path | None = None,
     input_receipt: ModelInputReceipt | None = None,
     assumptions_path: Path | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> bool:
     """``holdings=None`` (the pre-PR10 2-arg call shape every test/caller uses)
     loads ``micro_thesis/holdings/<T>.json`` itself, same as before. ``main()``
@@ -809,6 +811,7 @@ def persist_dcf_run(
             input_receipt,
             effective_inputs=effective_numeric_inputs(asdict(s)),
             as_of=datetime.now(UTC),
+            source_context=source_context if source_context is not None else model_source_context(),
         )
         if not schema_supports_provenance(conn):
             raise InputEvidenceError("model_input_receipt_schema_unavailable")
@@ -817,8 +820,19 @@ def persist_dcf_run(
         return persist_mod.upsert(conn, row, artifact_promotion=artifact_promotion)
 
 
+def model_source_context() -> SourceReadContext | None:
+    """Resolve only an explicitly injected product-state authority."""
+    state_root = os.environ.get("DCF_SOURCE_STATE_ROOT")
+    return SourceReadContext.for_sec_state_root(Path(state_root)) if state_root else None
+
+
 def load_verified_assumptions(
-    ticker: str, *, db_path: Path, assumptions_path: Path, expected_sha256: str | None = None
+    ticker: str,
+    *,
+    db_path: Path,
+    assumptions_path: Path,
+    expected_sha256: str | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> tuple[Assum, ModelInputReceipt]:
     """Read one explicit reviewed artifact; no repo/data or DB-directory fallback.
 
@@ -859,6 +873,7 @@ def load_verified_assumptions(
             request,
             effective_inputs=effective_numeric_inputs(asdict(s)),
             as_of=datetime.now(UTC),
+            source_context=source_context if source_context is not None else model_source_context(),
         )
     for key, value in values.items():
         setattr(s, key, int(value) if key in {"years", "derive_capm"} else value)
