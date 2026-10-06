@@ -183,11 +183,15 @@ class PanelResponseCache:
 WORK_OS_DESK_KIND = "/api/work-os/companies/"  # every company desk (any ticker)
 WORK_OS_BRIEFS_KIND = "/api/work-os/briefs"
 WORK_OS_EVALUATION_KIND = "/api/work-os/evaluation"
+WORK_OS_EVALUATION_DIALOGUES_KIND = "/api/work-os/evaluation-dialogues"
 WORK_OS_PORTFOLIO_KIND = "/api/work-os/portfolio"
 
 FAMILY_WORK_OS_DESK = (WORK_OS_DESK_KIND,)
 FAMILY_WORK_OS_BRIEFS = (WORK_OS_BRIEFS_KIND,)
-FAMILY_WORK_OS_EVALUATION = (WORK_OS_EVALUATION_KIND,)
+# Evaluation Dialogues (M2 F9) is a distinct cache key that shares the
+# evaluation family: its tracked-company, discovery, session-context and note
+# inputs are exactly the writes the evaluation family already schedules.
+FAMILY_WORK_OS_EVALUATION = (WORK_OS_EVALUATION_KIND, WORK_OS_EVALUATION_DIALOGUES_KIND)
 FAMILY_WORK_OS_PORTFOLIO = (WORK_OS_PORTFOLIO_KIND,)
 
 # Portfolio-family panels: tracker-derived analytics, the target book, the
@@ -289,6 +293,7 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
         *FAMILY_PANEL_JOURNAL,
         WORK_OS_DESK_KIND,
         WORK_OS_BRIEFS_KIND,
+        WORK_OS_EVALUATION_DIALOGUES_KIND,
     ),
     # ---- Decisions (→ Work OS evaluation/desk + decision-ledger panels) ----
     "/api/decisions/pass": (
@@ -404,7 +409,11 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
         *FAMILY_PANEL_JOURNAL,
         WORK_OS_EVALUATION_KIND,
     ),
-    "/api/notes": (*FAMILY_PANEL_OVERVIEW, *FAMILY_PANEL_JOURNAL),
+    "/api/notes": (
+        *FAMILY_PANEL_OVERVIEW,
+        *FAMILY_PANEL_JOURNAL,
+        WORK_OS_EVALUATION_DIALOGUES_KIND,
+    ),
     "/api/work-os/question-proposals": (*FAMILY_PANEL_OVERVIEW, *FAMILY_PANEL_JOURNAL),
     "/api/work-os/question-proposals/<int:proposal_id>/approve": (
         *FAMILY_PANEL_OVERVIEW,
@@ -500,6 +509,7 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
     "/api/discovery/candidates/<int:cand_id>/status": (
         *FAMILY_PANEL_OPERATIONS,
         *FAMILY_PANEL_DECISIONS,
+        WORK_OS_EVALUATION_DIALOGUES_KIND,
     ),
     "/api/discovery/candidates/<int:cand_id>/watch": (
         *FAMILY_PANEL_OPERATIONS,
@@ -527,8 +537,9 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
     ),
     "/api/coach/unmute": (WORK_OS_EVALUATION_KIND, *FAMILY_PANEL_DECISIONS),
     "/api/coach/attest-change": (*FAMILY_PANEL_DECISIONS, *FAMILY_PANEL_PORTFOLIO),
-    # ---- Ask / sessions (write the session store, render no cached surface) ----
-    "/api/ask/sessions/<session_id>": NO_CACHE_FAMILY,
+    # ---- Ask / sessions (session rename/delete changes Evaluation Dialogues
+    # linkage; Ask stream and distill already cover the evaluation family) ----
+    "/api/ask/sessions/<session_id>": (WORK_OS_EVALUATION_DIALOGUES_KIND,),
     "/api/ask/stream": (
         *FAMILY_PANEL_OVERVIEW,
         *FAMILY_PANEL_JOURNAL,

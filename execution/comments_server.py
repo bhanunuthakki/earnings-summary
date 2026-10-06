@@ -322,14 +322,18 @@ _STREAM_QUEUE_MAXSIZE = 64
 _MAX_ADMITTED_CHATS = 8
 _CORRELATION_ID_RX = re.compile(r"[A-Za-z0-9._-]{1,64}\Z")
 
-# The four work-os hydration GETs join the panel response cache: same 30s TTL,
+# The work-os hydration GETs join the panel response cache: same 30s TTL,
 # same single-flight, same mutation-clear. Server-side only — the client keeps
-# its strict no-store contract on every one of these routes.
+# its strict no-store contract on every one of these routes. Evaluation
+# Dialogues (M2 F9) joins them: it re-hashed and re-validated every session
+# context per request, work the mutation registry already schedules for the
+# session/note write families.
 _WORK_OS_CACHE_ROUTE_PATHS = frozenset(
     {
         "/api/work-os/portfolio",
         "/api/work-os/evaluation",
         "/api/work-os/briefs",
+        "/api/work-os/evaluation-dialogues",
     }
 )
 
