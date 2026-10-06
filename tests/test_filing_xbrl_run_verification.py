@@ -325,10 +325,18 @@ def test_full_run_is_read_only_and_reconstructs_v2_units(retained_run: sqlite3.C
     assert retained_run.total_changes == before
 
 
+@pytest.mark.parametrize(
+    "selected_run_id", ["run-1", "run' OR 1=1 --", "run'); DROP TABLE evidence_nodes; --"]
+)
 def test_unrelated_corrupt_run_is_excluded_but_global_audit_retains_detection(
     retained_run: sqlite3.Connection,
     tmp_path: Path,
+    selected_run_id: str,
 ) -> None:
+    if selected_run_id != "run-1":
+        selected = _fixture_output(tmp_path, selected_run_id)
+        insert_filing_xbrl_extraction_run(retained_run, selected[0])
+        _publish(retained_run, selected)
     fixture = _fixture_output(tmp_path, "run-2")
     insert_filing_xbrl_extraction_run(retained_run, fixture[0])
     _publish(retained_run, fixture)
@@ -337,8 +345,10 @@ def test_unrelated_corrupt_run_is_excluded_but_global_audit_retains_detection(
         "UPDATE filing_xbrl_extraction_input_seals SET member_set_sha256=? WHERE extraction_run_id='run-2'",
         ("f" * 64,),
     )
+    before = retained_run.total_changes
+    retained_run.execute("PRAGMA query_only=ON")
     assert (
-        verify_filing_xbrl_run(retained_run, extraction_run_id="run-1").unit_semantics
+        verify_filing_xbrl_run(retained_run, extraction_run_id=selected_run_id).unit_semantics
         == "verified_v2"
     )
     with pytest.raises(ValueError, match=r"integrity|unqualified"):
@@ -348,6 +358,8 @@ def test_unrelated_corrupt_run_is_excluded_but_global_audit_retains_detection(
         for item in audit_connection(retained_run, AuditOptions(deep_sqlite_checks=False)).findings
     }
     assert "FILING_XBRL_RESULT_COMMITMENT_DIGEST_MISMATCH" in codes
+    assert retained_run.total_changes == before
+    assert retained_run.in_transaction
 
 
 @pytest.mark.parametrize(

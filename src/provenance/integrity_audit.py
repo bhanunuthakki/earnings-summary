@@ -818,8 +818,15 @@ def _audit_filing_xbrl_processor_closure(
 ) -> None:
     params = {} if extraction_run_id is None else {"selected_run": extraction_run_id}
 
-    def run_scope(alias: str) -> str:
-        return "" if extraction_run_id is None else f" AND {alias}.extraction_run_id=:selected_run"
+    # Only fixed query aliases enter SQL text; the selected identity is always bound.
+    seal_scope = "" if extraction_run_id is None else " AND seal.extraction_run_id=:selected_run"
+    raw_scope = "" if extraction_run_id is None else " AND raw.extraction_run_id=:selected_run"
+    member_scope = (
+        "" if extraction_run_id is None else " AND member.extraction_run_id=:selected_run"
+    )
+    footnote_scope = (
+        "" if extraction_run_id is None else " AND footnote.extraction_run_id=:selected_run"
+    )
 
     artifact_scope = (
         ""
@@ -873,17 +880,23 @@ def _audit_filing_xbrl_processor_closure(
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
         query=(
-            "SELECT seal.extraction_run_id FROM filing_xbrl_extraction_input_seals seal "
-            "LEFT JOIN filing_xbrl_extraction_input_members member "
-            "ON member.extraction_run_id=seal.extraction_run_id "
-            "WHERE 1=1 " + run_scope("seal") + " GROUP BY seal.extraction_run_id,seal.member_count "
-            "HAVING COUNT(member.input_member_id)<>seal.member_count "
-            "OR MIN(member.member_ordinal)<>0 "
-            "OR MAX(member.member_ordinal)<>seal.member_count-1 "
-            "OR json_array_length(seal.canonical_member_set_json)<>seal.member_count "
-            "OR json_array_length(seal.canonical_network_artifact_set_json)"
-            "<>seal.network_artifact_count "
-            "OR json_array_length(seal.canonical_footnote_set_json)<>seal.footnote_count"
+            "".join(
+                (
+                    "SELECT seal.extraction_run_id FROM filing_xbrl_extraction_input_seals seal "
+                    "LEFT JOIN filing_xbrl_extraction_input_members member "
+                    "ON member.extraction_run_id=seal.extraction_run_id "
+                    "WHERE 1=1 ",
+                    seal_scope,
+                    " GROUP BY seal.extraction_run_id,seal.member_count "
+                    "HAVING COUNT(member.input_member_id)<>seal.member_count "
+                    "OR MIN(member.member_ordinal)<>0 "
+                    "OR MAX(member.member_ordinal)<>seal.member_count-1 "
+                    "OR json_array_length(seal.canonical_member_set_json)<>seal.member_count "
+                    "OR json_array_length(seal.canonical_network_artifact_set_json)"
+                    "<>seal.network_artifact_count "
+                    "OR json_array_length(seal.canonical_footnote_set_json)<>seal.footnote_count",
+                )
+            )
         ),
     )
     _query_finding(
@@ -895,21 +908,25 @@ def _audit_filing_xbrl_processor_closure(
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
         query=(
-            "SELECT seal.extraction_run_id FROM filing_xbrl_extraction_input_seals seal "
-            "LEFT JOIN filing_xbrl_raw_fact_commitments raw "
-            "ON raw.extraction_run_id=seal.extraction_run_id "
-            "LEFT JOIN filing_xbrl_footnote_commitments footnote "
-            "ON footnote.extraction_run_id=raw.extraction_run_id "
-            "AND footnote.input_ordinal=raw.input_ordinal "
-            "WHERE 1=1 "
-            + run_scope("seal")
-            + " GROUP BY seal.extraction_run_id,seal.raw_fact_count,seal.footnote_count,"
-            "seal.zero_fact_disposition "
-            "HAVING COUNT(DISTINCT raw.raw_fact_commitment_id)<>seal.raw_fact_count "
-            "OR COUNT(footnote.footnote_commitment_id)<>seal.footnote_count "
-            "OR (seal.raw_fact_count=0 "
-            "AND seal.zero_fact_disposition<>'verified_no_inline_xbrl') "
-            "OR (seal.raw_fact_count>0 AND seal.zero_fact_disposition IS NOT NULL)"
+            "".join(
+                (
+                    "SELECT seal.extraction_run_id FROM filing_xbrl_extraction_input_seals seal "
+                    "LEFT JOIN filing_xbrl_raw_fact_commitments raw "
+                    "ON raw.extraction_run_id=seal.extraction_run_id "
+                    "LEFT JOIN filing_xbrl_footnote_commitments footnote "
+                    "ON footnote.extraction_run_id=raw.extraction_run_id "
+                    "AND footnote.input_ordinal=raw.input_ordinal "
+                    "WHERE 1=1 ",
+                    seal_scope,
+                    " GROUP BY seal.extraction_run_id,seal.raw_fact_count,seal.footnote_count,"
+                    "seal.zero_fact_disposition "
+                    "HAVING COUNT(DISTINCT raw.raw_fact_commitment_id)<>seal.raw_fact_count "
+                    "OR COUNT(footnote.footnote_commitment_id)<>seal.footnote_count "
+                    "OR (seal.raw_fact_count=0 "
+                    "AND seal.zero_fact_disposition<>'verified_no_inline_xbrl') "
+                    "OR (seal.raw_fact_count>0 AND seal.zero_fact_disposition IS NOT NULL)",
+                )
+            )
         ),
     )
     _query_finding(
@@ -921,20 +938,25 @@ def _audit_filing_xbrl_processor_closure(
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
         query=(
-            "SELECT raw.raw_fact_commitment_id "
-            "FROM filing_xbrl_raw_fact_commitments raw "
-            "LEFT JOIN evidence_nodes node ON node.node_id=raw.evidence_node_id "
-            "LEFT JOIN filing_xbrl_extraction_input_members member "
-            "ON member.extraction_run_id=raw.extraction_run_id "
-            "AND member.member_ordinal=raw.package_member_ordinal "
-            "AND member.blob_sha256=raw.package_member_blob_sha256 "
-            "LEFT JOIN filing_xbrl_extraction_input_seals seal "
-            "ON seal.extraction_run_id=raw.extraction_run_id "
-            "WHERE (node.node_id IS NULL OR node.extraction_run_id<>raw.extraction_run_id "
-            "OR node.locator_sha256<>raw.source_locator_sha256 "
-            "OR member.input_member_id IS NULL "
-            "OR seal.accession_number<>raw.accession_number "
-            "OR seal.expected_cik<>raw.observed_cik)" + run_scope("raw")
+            "".join(
+                (
+                    "SELECT raw.raw_fact_commitment_id "
+                    "FROM filing_xbrl_raw_fact_commitments raw "
+                    "LEFT JOIN evidence_nodes node ON node.node_id=raw.evidence_node_id "
+                    "LEFT JOIN filing_xbrl_extraction_input_members member "
+                    "ON member.extraction_run_id=raw.extraction_run_id "
+                    "AND member.member_ordinal=raw.package_member_ordinal "
+                    "AND member.blob_sha256=raw.package_member_blob_sha256 "
+                    "LEFT JOIN filing_xbrl_extraction_input_seals seal "
+                    "ON seal.extraction_run_id=raw.extraction_run_id "
+                    "WHERE (node.node_id IS NULL OR node.extraction_run_id<>raw.extraction_run_id "
+                    "OR node.locator_sha256<>raw.source_locator_sha256 "
+                    "OR member.input_member_id IS NULL "
+                    "OR seal.accession_number<>raw.accession_number "
+                    "OR seal.expected_cik<>raw.observed_cik)",
+                    raw_scope,
+                )
+            )
         ),
     )
     _query_finding(
@@ -946,12 +968,17 @@ def _audit_filing_xbrl_processor_closure(
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
         query=(
-            "SELECT footnote.footnote_commitment_id "
-            "FROM filing_xbrl_footnote_commitments footnote "
-            "LEFT JOIN filing_xbrl_raw_fact_commitments raw "
-            "ON raw.extraction_run_id=footnote.extraction_run_id "
-            "AND raw.input_ordinal=footnote.input_ordinal "
-            "WHERE raw.raw_fact_commitment_id IS NULL" + run_scope("footnote")
+            "".join(
+                (
+                    "SELECT footnote.footnote_commitment_id "
+                    "FROM filing_xbrl_footnote_commitments footnote "
+                    "LEFT JOIN filing_xbrl_raw_fact_commitments raw "
+                    "ON raw.extraction_run_id=footnote.extraction_run_id "
+                    "AND raw.input_ordinal=footnote.input_ordinal "
+                    "WHERE raw.raw_fact_commitment_id IS NULL",
+                    footnote_scope,
+                )
+            )
         ),
     )
     digest_mismatches: list[str] = []
@@ -965,13 +992,17 @@ def _audit_filing_xbrl_processor_closure(
         )
 
     for artifact in conn.execute(
-        "SELECT processor_artifact_id,bundle_name,arelle_version,edgar_version,"
-        "xule_version,bridge_protocol_version,artifact_sha256,"
-        "sandbox_launcher_sha256,bundle_python_sha256,"
-        "canonical_manifest_json,manifest_sha256 "
-        "FROM filing_xbrl_processor_artifacts artifact WHERE 1=1 "
-        + artifact_scope
-        + " ORDER BY processor_artifact_id",
+        "".join(
+            (
+                "SELECT processor_artifact_id,bundle_name,arelle_version,edgar_version,"
+                "xule_version,bridge_protocol_version,artifact_sha256,"
+                "sandbox_launcher_sha256,bundle_python_sha256,"
+                "canonical_manifest_json,manifest_sha256 "
+                "FROM filing_xbrl_processor_artifacts artifact WHERE 1=1 ",
+                artifact_scope,
+                " ORDER BY processor_artifact_id",
+            )
+        ),
         params,
     ):
         artifact_id = str(artifact[0])
@@ -1021,15 +1052,19 @@ def _audit_filing_xbrl_processor_closure(
         if not exact:
             digest_mismatches.append(artifact_id)
     for row in conn.execute(
-        "SELECT extraction_run_id,canonical_member_set_json,member_set_sha256,"
-        "canonical_network_artifact_set_json,network_artifact_set_sha256,"
-        "canonical_footnote_set_json,footnote_set_sha256,"
-        "canonical_execution_evidence_json,execution_evidence_sha256,"
-        "raw_fact_set_sha256,accession_number,expected_cik,processor_artifact_id,"
-        "issuer_id "
-        "FROM filing_xbrl_extraction_input_seals seal WHERE 1=1 "
-        + run_scope("seal")
-        + " ORDER BY extraction_run_id",
+        "".join(
+            (
+                "SELECT extraction_run_id,canonical_member_set_json,member_set_sha256,"
+                "canonical_network_artifact_set_json,network_artifact_set_sha256,"
+                "canonical_footnote_set_json,footnote_set_sha256,"
+                "canonical_execution_evidence_json,execution_evidence_sha256,"
+                "raw_fact_set_sha256,accession_number,expected_cik,processor_artifact_id,"
+                "issuer_id "
+                "FROM filing_xbrl_extraction_input_seals seal WHERE 1=1 ",
+                seal_scope,
+                " ORDER BY extraction_run_id",
+            )
+        ),
         params,
     ):
         run_id = str(row[0])
@@ -1209,14 +1244,19 @@ def _audit_filing_xbrl_processor_closure(
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
         query=(
-            "SELECT raw.extraction_run_id,raw.input_ordinal "
-            "FROM filing_xbrl_raw_fact_commitments raw "
-            "LEFT JOIN filing_xbrl_extraction_dispositions disposition "
-            "ON disposition.extraction_run_id=raw.extraction_run_id "
-            "AND disposition.input_ordinal=raw.input_ordinal "
-            "WHERE (disposition.disposition_id IS NULL "
-            "OR (raw.normalization_outcome='rejected' "
-            "AND disposition.disposition<>'quarantined'))" + run_scope("raw")
+            "".join(
+                (
+                    "SELECT raw.extraction_run_id,raw.input_ordinal "
+                    "FROM filing_xbrl_raw_fact_commitments raw "
+                    "LEFT JOIN filing_xbrl_extraction_dispositions disposition "
+                    "ON disposition.extraction_run_id=raw.extraction_run_id "
+                    "AND disposition.input_ordinal=raw.input_ordinal "
+                    "WHERE (disposition.disposition_id IS NULL "
+                    "OR (raw.normalization_outcome='rejected' "
+                    "AND disposition.disposition<>'quarantined'))",
+                    raw_scope,
+                )
+            )
         ),
     )
     _query_finding(
@@ -1228,34 +1268,38 @@ def _audit_filing_xbrl_processor_closure(
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
         query=(
-            "SELECT member.input_member_id "
-            "FROM filing_xbrl_extraction_input_members member "
-            "JOIN filing_xbrl_extraction_input_seals seal "
-            "ON seal.extraction_run_id=member.extraction_run_id "
-            "LEFT JOIN evidence_content_blobs blob ON blob.sha256=member.blob_sha256 "
-            "LEFT JOIN evidence_document_versions document "
-            "ON document.document_version_id=member.document_version_id "
-            "LEFT JOIN evidence_extraction_runs run "
-            "ON run.extraction_run_id=member.extraction_run_id "
-            "WHERE (blob.sha256 IS NULL OR blob.byte_size<>member.byte_size "
-            "OR blob.media_type<>member.media_type "
-            "OR julianday(blob.recorded_at)>julianday(seal.recorded_at) "
-            "OR julianday(member.recorded_at)<>julianday(seal.recorded_at) "
-            "OR run.extractor_name<>'filing-native-xbrl' OR run.outcome<>'succeeded' "
-            "OR julianday(run.started_at)<>julianday(seal.recorded_at) "
-            "OR julianday(run.completed_at)<>julianday(seal.recorded_at) "
-            "OR (member.document_version_id IS NOT NULL "
-            "AND (document.document_version_id IS NULL "
-            "OR document.blob_sha256<>member.blob_sha256 "
-            "OR (member.member_role='primary_document' "
-            "AND document.issuer_id<>seal.issuer_id) "
-            "OR julianday(document.recorded_at)>julianday(seal.recorded_at))) "
-            "OR (member.document_version_id IS NULL AND NOT EXISTS (SELECT 1 "
-            "FROM evidence_source_observations observation "
-            "WHERE observation.source_url=member.source_url "
-            "AND observation.blob_sha256=member.blob_sha256 "
-            "AND julianday(observation.retrieved_at)<=julianday(seal.recorded_at))))"
-            + run_scope("member")
+            "".join(
+                (
+                    "SELECT member.input_member_id "
+                    "FROM filing_xbrl_extraction_input_members member "
+                    "JOIN filing_xbrl_extraction_input_seals seal "
+                    "ON seal.extraction_run_id=member.extraction_run_id "
+                    "LEFT JOIN evidence_content_blobs blob ON blob.sha256=member.blob_sha256 "
+                    "LEFT JOIN evidence_document_versions document "
+                    "ON document.document_version_id=member.document_version_id "
+                    "LEFT JOIN evidence_extraction_runs run "
+                    "ON run.extraction_run_id=member.extraction_run_id "
+                    "WHERE (blob.sha256 IS NULL OR blob.byte_size<>member.byte_size "
+                    "OR blob.media_type<>member.media_type "
+                    "OR julianday(blob.recorded_at)>julianday(seal.recorded_at) "
+                    "OR julianday(member.recorded_at)<>julianday(seal.recorded_at) "
+                    "OR run.extractor_name<>'filing-native-xbrl' OR run.outcome<>'succeeded' "
+                    "OR julianday(run.started_at)<>julianday(seal.recorded_at) "
+                    "OR julianday(run.completed_at)<>julianday(seal.recorded_at) "
+                    "OR (member.document_version_id IS NOT NULL "
+                    "AND (document.document_version_id IS NULL "
+                    "OR document.blob_sha256<>member.blob_sha256 "
+                    "OR (member.member_role='primary_document' "
+                    "AND document.issuer_id<>seal.issuer_id) "
+                    "OR julianday(document.recorded_at)>julianday(seal.recorded_at))) "
+                    "OR (member.document_version_id IS NULL AND NOT EXISTS (SELECT 1 "
+                    "FROM evidence_source_observations observation "
+                    "WHERE observation.source_url=member.source_url "
+                    "AND observation.blob_sha256=member.blob_sha256 "
+                    "AND julianday(observation.retrieved_at)<=julianday(seal.recorded_at))))",
+                    member_scope,
+                )
+            )
         ),
     )
     _query_finding(
@@ -1267,22 +1311,27 @@ def _audit_filing_xbrl_processor_closure(
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
         query=(
-            "SELECT seal.extraction_run_id "
-            "FROM filing_xbrl_extraction_input_seals seal "
-            "WHERE NOT EXISTS (SELECT 1 "
-            "FROM issuer_identifier_resolution_outcomes resolution "
-            "JOIN issuer_identifier_assertions assertion "
-            "ON assertion.assertion_id=resolution.selected_assertion_id "
-            "WHERE resolution.resolution_key='sec_cik:'||seal.expected_cik "
-            "AND resolution.outcome='selected' "
-            "AND assertion.issuer_id=seal.issuer_id "
-            "AND resolution.knowledge_at<=seal.recorded_at "
-            "AND assertion.knowledge_at<=seal.recorded_at "
-            "AND NOT EXISTS (SELECT 1 "
-            "FROM issuer_identifier_resolution_outcomes newer "
-            "WHERE newer.resolution_key=resolution.resolution_key "
-            "AND newer.knowledge_at<=seal.recorded_at "
-            "AND newer.revision>resolution.revision))" + run_scope("seal")
+            "".join(
+                (
+                    "SELECT seal.extraction_run_id "
+                    "FROM filing_xbrl_extraction_input_seals seal "
+                    "WHERE NOT EXISTS (SELECT 1 "
+                    "FROM issuer_identifier_resolution_outcomes resolution "
+                    "JOIN issuer_identifier_assertions assertion "
+                    "ON assertion.assertion_id=resolution.selected_assertion_id "
+                    "WHERE resolution.resolution_key='sec_cik:'||seal.expected_cik "
+                    "AND resolution.outcome='selected' "
+                    "AND assertion.issuer_id=seal.issuer_id "
+                    "AND resolution.knowledge_at<=seal.recorded_at "
+                    "AND assertion.knowledge_at<=seal.recorded_at "
+                    "AND NOT EXISTS (SELECT 1 "
+                    "FROM issuer_identifier_resolution_outcomes newer "
+                    "WHERE newer.resolution_key=resolution.resolution_key "
+                    "AND newer.knowledge_at<=seal.recorded_at "
+                    "AND newer.revision>resolution.revision))",
+                    seal_scope,
+                )
+            )
         ),
     )
     _query_finding(
@@ -1294,28 +1343,32 @@ def _audit_filing_xbrl_processor_closure(
         severity=Severity.BLOCKER,
         remediation=RemediationClass.REINGEST,
         query=(
-            "SELECT seal.extraction_run_id "
-            "FROM filing_xbrl_extraction_input_seals seal "
-            "LEFT JOIN filing_xbrl_extraction_disposition_seals disposition_seal "
-            "ON disposition_seal.extraction_run_id=seal.extraction_run_id "
-            "WHERE (disposition_seal.extraction_run_id IS NULL "
-            "OR disposition_seal.entry_count<>seal.raw_fact_count "
-            "OR julianday(disposition_seal.recorded_at)<>julianday(seal.recorded_at) "
-            "OR julianday(disposition_seal.knowledge_at)<>julianday(seal.recorded_at) "
-            "OR EXISTS (SELECT 1 FROM evidence_nodes node "
-            "WHERE node.extraction_run_id=seal.extraction_run_id "
-            "AND julianday(node.recorded_at)<>julianday(seal.recorded_at)) "
-            "OR EXISTS (SELECT 1 FROM filing_xbrl_raw_fact_commitments raw "
-            "WHERE raw.extraction_run_id=seal.extraction_run_id "
-            "AND julianday(raw.recorded_at)<>julianday(seal.recorded_at)) "
-            "OR EXISTS (SELECT 1 FROM filing_xbrl_footnote_commitments footnote "
-            "WHERE footnote.extraction_run_id=seal.extraction_run_id "
-            "AND julianday(footnote.recorded_at)<>julianday(seal.recorded_at)) "
-            "OR EXISTS (SELECT 1 FROM filing_xbrl_extraction_dispositions disposition "
-            "WHERE disposition.extraction_run_id=seal.extraction_run_id "
-            "AND (julianday(disposition.recorded_at)<>julianday(seal.recorded_at) "
-            "OR julianday(disposition.knowledge_at)<>julianday(seal.recorded_at))))"
-            + run_scope("seal")
+            "".join(
+                (
+                    "SELECT seal.extraction_run_id "
+                    "FROM filing_xbrl_extraction_input_seals seal "
+                    "LEFT JOIN filing_xbrl_extraction_disposition_seals disposition_seal "
+                    "ON disposition_seal.extraction_run_id=seal.extraction_run_id "
+                    "WHERE (disposition_seal.extraction_run_id IS NULL "
+                    "OR disposition_seal.entry_count<>seal.raw_fact_count "
+                    "OR julianday(disposition_seal.recorded_at)<>julianday(seal.recorded_at) "
+                    "OR julianday(disposition_seal.knowledge_at)<>julianday(seal.recorded_at) "
+                    "OR EXISTS (SELECT 1 FROM evidence_nodes node "
+                    "WHERE node.extraction_run_id=seal.extraction_run_id "
+                    "AND julianday(node.recorded_at)<>julianday(seal.recorded_at)) "
+                    "OR EXISTS (SELECT 1 FROM filing_xbrl_raw_fact_commitments raw "
+                    "WHERE raw.extraction_run_id=seal.extraction_run_id "
+                    "AND julianday(raw.recorded_at)<>julianday(seal.recorded_at)) "
+                    "OR EXISTS (SELECT 1 FROM filing_xbrl_footnote_commitments footnote "
+                    "WHERE footnote.extraction_run_id=seal.extraction_run_id "
+                    "AND julianday(footnote.recorded_at)<>julianday(seal.recorded_at)) "
+                    "OR EXISTS (SELECT 1 FROM filing_xbrl_extraction_dispositions disposition "
+                    "WHERE disposition.extraction_run_id=seal.extraction_run_id "
+                    "AND (julianday(disposition.recorded_at)<>julianday(seal.recorded_at) "
+                    "OR julianday(disposition.knowledge_at)<>julianday(seal.recorded_at))))",
+                    seal_scope,
+                )
+            )
         ),
     )
 
