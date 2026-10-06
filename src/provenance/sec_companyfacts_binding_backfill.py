@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from log_redact import redact
 from pipeline.sec_xbrl import (
+    CompanyFactsNotModified,
     FetchedCompanyFacts,
     enumerate_companyfacts_accessions,
     fetch_companyfacts,
@@ -66,7 +67,9 @@ _REQUIRED_VIEWS = frozenset(
 
 
 class CompanyFactsFetcher(Protocol):
-    def __call__(self, cik: str, *, timeout: int = 30) -> FetchedCompanyFacts: ...
+    def __call__(
+        self, cik: str, *, timeout: int = 30
+    ) -> FetchedCompanyFacts | CompanyFactsNotModified: ...
 
 
 class CompanyFactsBackfillError(RuntimeError):
@@ -363,6 +366,13 @@ def _fetch_fresh(
                 "SEC CompanyFacts authorization hard stop; verify the declared User-Agent"
             ) from None
         raise CompanyFactsBackfillError(f"SEC CompanyFacts request failed: {redact(exc)}") from None
+    if isinstance(fetched, CompanyFactsNotModified):
+        # This backfill never sends conditional validators, so an unconditional
+        # GET cannot legitimately answer 304; fail closed rather than capturing
+        # bytes nobody has.
+        raise CompanyFactsBackfillError(
+            "SEC answered 304 to an unconditional CompanyFacts GET; refusing to capture"
+        )
     expected_url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{target.normalized_cik}.json"
     if fetched.source_url != expected_url:
         raise CompanyFactsBackfillError(
