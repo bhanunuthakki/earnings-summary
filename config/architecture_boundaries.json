@@ -290,7 +290,6 @@
     "execution/run_tenet_accountability.py",
     "execution/run_thesis_collision.py",
     "execution/run_thesis_evaluator.py",
-    "execution/run_triggers.py",
     "execution/run_validation_engine.py",
     "execution/run_weekly_model_eval.py",
     "execution/run_weekly_packet.py",

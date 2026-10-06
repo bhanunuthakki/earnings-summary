@@ -15,7 +15,7 @@ This runbook is the single current repository authority for collision avoidance 
 
 | Job | Schedule | LLM work / constraint |
 |---|---|---|
-| `run_morning_pipeline` | daily 04:00 | news classification, decision-condition extraction, standup composition/judging, eligible pre-earnings briefs, and portfolio-only post-earnings readouts; canonical protected window |
+| `run_morning_pipeline` | daily 04:00 | news classification, decision-condition extraction, standup composition/judging, eligible pre-earnings briefs, and portfolio-only post-earnings readouts; canonical protected window. The stage_1 `material_news` classification sweep (2026-10-06, audit F1/F1b) runs inside this same window and leg — not a new window: per-ticker `material_news_classification` Opus calls now run with bounded concurrency (default ≤4 simultaneous calls, `run_triggers.py --scan-workers`), each ticker under a 180s per-ticker budget (`--scan-timeout-s`, deferred explicitly on timeout), with wave admission gated by the run's `--max-cost-usd` over the shared `llm_calls` ledger; a transient failure or budget stop defers the affected tickers explicitly and retries next run |
 | `refresh_scenario_priors` | monthly, 1st 03:00 | changed-input scenario-prior refresh |
 | `weekly_p2_lens_refresh` | Friday 22:00 | P2 reread and thesis-drift lenses; dispatch ends by 01:35 |
 | `tenet_accountability` | Saturday 09:00 | changed-tenet accountability calls |

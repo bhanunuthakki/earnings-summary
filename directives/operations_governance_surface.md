@@ -14,6 +14,10 @@
 
 ## Outcome
 
+### Trigger-stage scan sweep and cost-cap accounting (2026-10-06)
+
+Disposition: **no surface change** (internal execution change inside an existing scheduled stage). The stage_1 trigger driver (`execution/run_triggers.py`) now runs the `material_news` per-ticker classification scans in a bounded-concurrency sweep (new internal flags `--scan-workers`, default 4, and `--scan-timeout-s`, default 180s; the morning-pipeline manifest's stage argv is unchanged) and admits each wave only while the shared `llm_calls` ledger total since run start is below the run's `--max-cost-usd`, so scan-time spend is cap-accounted exactly like candidate spend. The LLM governance view remains complete and attributable with an unchanged schema: each `material_news_classification` call still writes its per-call ledger row (purpose, ticker, model, cost) at call time through the same transport writer — the change is that the run's cap decision now reads that spend. The run's stdout summary gained additive internal accounting (`scan_deferrals` with a closed reason set `cost_cap`/`per_ticker_timeout`, `scan_workers`); no alert, action, panel, route, scheduler-task, or managed-service surface changed, and no new operator action is supported. The driver also adopted the shared `execution/_lib.py` bootstrap seam in the same change (its legacy per-file `sys.path` bootstrap and the stale architecture-allowlist entry were removed together); its agreed CLI-flag change is the two sweep flags above. Evidence: `tests/test_run_triggers_material_news_sweep.py` (bounded worker maximum, wave-synchronized cap admission reconciling to the ledger total, explicit per-ticker timeout/cap deferrals, fixed-fixture driver parity via the unchanged `tests/test_run_triggers_e2e.py`).
+
 ### Cached host-owner monitoring endpoint
 
 Disposition: **linked governed view**. `GET /api/operations/host-runtime`

@@ -233,6 +233,32 @@ class Trigger(Protocol):
     ) -> list[QueuedActionDraft]: ...
 
 
+@runtime_checkable
+class ScanSweepTrigger(Protocol):
+    """Opt-in for the morning driver's bounded-concurrency scan sweep.
+
+    A trigger declares this marker when its per-ticker ``scan`` is the entire
+    deliverable: it emits NO candidates (the product is what ``scan`` persists
+    itself), its scan-time LLM spend is attributable per ticker through the
+    shared ``llm_calls`` ledger, and it tolerates concurrent scans — its own
+    writes are short writer transactions against the single SQLite writer
+    lock and its artifacts are keyed per (ticker, purpose). The driver then
+    runs these scans in waves of at most ``--scan-workers`` simultaneous
+    tickers, each scan under its own per-ticker wall-clock budget
+    (``--scan-timeout-s``), and admits each wave only while the ledger total
+    since run start is below the run's cost cap — so scan-time spend is
+    cap-accounted exactly like candidate spend. A ticker the cap or a
+    per-ticker timeout leaves unscanned is explicitly deferred, never
+    silently skipped. Stateful triggers (which own one transaction across
+    their whole pass) must not opt in.
+    """
+
+    kind: ClassVar[str]
+    concurrent_scan: ClassVar[bool]
+
+    def scan(self, ticker: str, db: sqlite3.Connection) -> list[TriggerCandidate]: ...
+
+
 @dataclass(frozen=True)
 class StatefulTriggerResult:
     """Outcome of an atomic, persistent sensor pass.
