@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import json
 import os
 import stat
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -244,14 +247,54 @@ def test_path_and_handle_clocks_keep_same_route_change_checks(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Requires actual Windows stat and file handle")
-def test_edited_windows_file_remains_readable(tmp_path: Path) -> None:
+def test_edited_windows_file_remains_readable(
+    tmp_path: Path, record_property: Callable[[str, object], None]
+) -> None:
     source = tmp_path / "edited.bin"
     source.write_bytes(b"created")
-    source.write_bytes(b"exact")
+    original_bytes = source.read_bytes()
+    original_stat = source.lstat()
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        time.sleep(0.01)
+        if time.monotonic() >= deadline:
+            pytest.fail(
+                "Fixture did not produce an actual modification-time change within one second"
+            )
+        source.write_bytes(b"exact")
+        if source.lstat().st_mtime_ns != original_stat.st_mtime_ns and time.monotonic() < deadline:
+            break
+    else:
+        pytest.fail("Fixture did not produce an actual modification-time change within one second")
+    assert source.lstat().st_mtime_ns != original_stat.st_mtime_ns
+    assert time.monotonic() < deadline, "Fixture edit exceeded its original one-second deadline"
+    assert original_bytes == b"created" and source.read_bytes() == b"exact"
     with evidence_snapshot.open_windows_evidence_handle(source) as descriptor:
-        path_clock = source.lstat().st_ctime_ns
-        handle_clock = os.fstat(descriptor).st_ctime_ns
-    if path_clock == handle_clock:
-        pytest.skip("Fixture did not produce distinct Windows path and handle ctime clocks")
+        path_stat, handle_stat = source.lstat(), os.fstat(descriptor)
+    fields = (
+        "st_dev",
+        "st_ino",
+        "st_mode",
+        "st_size",
+        "st_mtime_ns",
+        "st_ctime_ns",
+        "st_birthtime_ns",
+        "st_nlink",
+    )
+    record_property(
+        "edited_windows_file_metadata",
+        json.dumps(
+            {
+                name: {field: getattr(value, field, None) for field in fields}
+                for name, value in (
+                    ("before_edit", original_stat),
+                    ("path_after_edit", path_stat),
+                    ("handle_after_edit", handle_stat),
+                )
+            },
+            sort_keys=True,
+        ),
+    )
     snapshot, payload = read_stable_artifact(source, max_bytes=5, allowed_root=tmp_path)
     assert payload == b"exact" and snapshot.size_bytes == 5
+    immutable_artifact.assert_artifact_unchanged(snapshot)
