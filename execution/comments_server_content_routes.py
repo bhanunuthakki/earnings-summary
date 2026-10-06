@@ -8,6 +8,7 @@ state.
 
 from __future__ import annotations
 
+import concurrent.futures
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -532,16 +533,35 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             validated = context.safe_ticker(ticker)
         except ValueError:
             abort(400)
-        tracker_alive, tracker_url = context.probe_tracker()
-        live = (
-            context.fetch_live_portfolio()
-            if tracker_alive
-            else LivePortfolio(
-                available=False,
-                api_url=tracker_url,
-                error="tracker liveness probe failed (connection refused or timed out)",
-            )
+        # The liveness probe and the live-portfolio fetch are independent
+        # round-trips to the same tracker, so they overlap on a request-scoped
+        # 2-worker pool: a slow-but-alive tracker costs ONE window instead of
+        # probe-then-fetch (M2 audit F7), and the request still issues at most
+        # ONE probe. The probe keeps gating the payload: when it fails
+        # (connection refused or timed out) the response carries the exact
+        # same prompt degraded envelope as before and never waits for the
+        # in-flight fetch — the fetch result is discarded and its worker
+        # drains on its own bounded per-call timeout.
+        probe_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="desk-tracker"
         )
+        try:
+            probe_future = probe_pool.submit(context.probe_tracker)
+            live_future = probe_pool.submit(context.fetch_live_portfolio)
+            tracker_alive, tracker_url = probe_future.result()
+            if tracker_alive:
+                live = live_future.result()
+            else:
+                live = LivePortfolio(
+                    available=False,
+                    api_url=tracker_url,
+                    error="tracker liveness probe failed (connection refused or timed out)",
+                )
+        finally:
+            # wait=False: a failed probe must not block the response on the
+            # still-running fetch (bounded by its own per-call timeout); on
+            # the alive path both futures are already resolved.
+            probe_pool.shutdown(wait=False, cancel_futures=True)
         try:
             payload = build_company_desk(
                 repo_root,

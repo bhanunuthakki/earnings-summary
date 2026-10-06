@@ -8,9 +8,10 @@ from a ticker, fund name, domicile, or other free text.
 
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Literal, Protocol, TypeGuard
+from typing import Literal, Protocol, TypeGuard, TypeVar
 
 from pydantic import BaseModel, ConfigDict
 
@@ -298,31 +299,58 @@ def project_portfolio_allocation(
     )
 
 
+_T = TypeVar("_T")
+
+
+def _resolved_data(future: Future[V1Fetch[_T]]) -> _T | None:
+    """Wait for one v1 read and reduce it to its data, mirroring the serial
+    form's never-raise contract: a transport error, an explicit unavailable
+    envelope, or missing data all read as ``None`` (the caller maps that to
+    the documented reason code)."""
+    try:
+        fetch = future.result()
+    except Exception:
+        return None
+    if not fetch.available or fetch.data is None:
+        return None
+    return fetch.data
+
+
 def read_portfolio_allocation(reader: PortfolioAllocationReader) -> PortfolioAllocationProjection:
-    """Read the three required v1 endpoints without leaking transport details."""
+    """Read the three required v1 endpoints without leaking transport details.
+
+    The three reads are independent tracker snapshots, so they overlap on
+    three threads instead of serializing on the render path (M2 audit F7);
+    each call keeps its own client-side timeout and never-raise contract.
+    Degradation precedence is applied to the RESULTS in the same fixed order
+    as the serial form — health, then positions, then securities — so every
+    fault mode reports the identical reason code and payload regardless of
+    which read completes first. A failing read never aborts the in-flight
+    ones: on an early return they drain on their own bounded per-call
+    timeouts and are discarded, so the wall time stays the slowest NEEDED
+    read, never the sum.
+    """
+    pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="allocation-read")
     try:
-        health_fetch = reader.probe_v1()
-    except Exception:
-        return unavailable_portfolio_allocation("health_unavailable")
-    if not health_fetch.available or health_fetch.data is None:
-        return unavailable_portfolio_allocation("health_unavailable")
-    try:
-        positions_fetch = reader.get_positions()
-    except Exception:
-        return unavailable_portfolio_allocation("positions_unavailable")
-    if not positions_fetch.available or positions_fetch.data is None:
-        return unavailable_portfolio_allocation("positions_unavailable")
-    try:
-        securities_fetch = reader.get_securities()
-    except Exception:
-        return unavailable_portfolio_allocation("securities_unavailable")
-    if not securities_fetch.available or securities_fetch.data is None:
-        return unavailable_portfolio_allocation("securities_unavailable")
-    return project_portfolio_allocation(
-        health_fetch.data,
-        positions_fetch.data,
-        securities_fetch.data,
-    )
+        health_future = pool.submit(reader.probe_v1)
+        positions_future = pool.submit(reader.get_positions)
+        securities_future = pool.submit(reader.get_securities)
+        health = _resolved_data(health_future)
+        if health is None:
+            return unavailable_portfolio_allocation("health_unavailable")
+        positions = _resolved_data(positions_future)
+        if positions is None:
+            return unavailable_portfolio_allocation("positions_unavailable")
+        securities = _resolved_data(securities_future)
+        if securities is None:
+            return unavailable_portfolio_allocation("securities_unavailable")
+        return project_portfolio_allocation(health, positions, securities)
+    finally:
+        # wait=False: an early return must not block on reads whose data is
+        # already unusable (their worker threads drain on their own bounded
+        # per-call timeouts); on the healthy path all reads are resolved
+        # before this runs, so nothing is abandoned.
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def fetch_portfolio_allocation(api_url: str | None = None) -> PortfolioAllocationProjection:

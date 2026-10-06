@@ -1578,36 +1578,55 @@ def create_app(
     def work_os_portfolio_api():
         """Portfolio-only research state for Cockpit and Company Desk."""
         conn = get_read_db()
-        rows_by_role = cockpit_rows_snapshot(conn)
-        rows = rows_by_role.get("portfolio", [])
-        evaluation_rows = rows_by_role.get("evaluation", [])
-        coverage_roles = {
-            row.base.ticker.strip().upper(): role
-            for role, role_rows in (("portfolio", rows), ("evaluation", evaluation_rows))
-            for row in role_rows
-        }
-        readout_projection = load_latest_earnings_readouts(
-            conn,
-            list(coverage_roles),
-            coverage_roles=coverage_roles,
-        )
-        live = fetch_live_portfolio()
-        price_action_bands = load_work_os_price_action_bands(
-            conn,
-            [row.base.ticker for row in rows],
-        )
+        # The two tracker fetch groups — the legacy/v1 live-portfolio group and
+        # the v1 allocation group — are independent snapshots of one tracker
+        # process, so they overlap on a request-scoped 2-worker pool instead of
+        # serializing on the render path (M2 audit F7: a slow tracker used to
+        # cost the SUM of the two groups). Per-call timeouts, each group's
+        # internal structure, and the fail-closed degraded envelopes are
+        # unchanged; the pool holds no DB handle, so the request's read
+        # connection stays on this thread.
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="work-os-tracker"
+        ) as tracker_pool:
+            live_future = tracker_pool.submit(fetch_live_portfolio)
+            allocation_future = tracker_pool.submit(fetch_portfolio_allocation)
+            rows_by_role = cockpit_rows_snapshot(conn)
+            rows = rows_by_role.get("portfolio", [])
+            evaluation_rows = rows_by_role.get("evaluation", [])
+            coverage_roles = {
+                row.base.ticker.strip().upper(): role
+                for role, role_rows in (("portfolio", rows), ("evaluation", evaluation_rows))
+                for row in role_rows
+            }
+            readout_projection = load_latest_earnings_readouts(
+                conn,
+                list(coverage_roles),
+                coverage_roles=coverage_roles,
+            )
+            price_action_bands = load_work_os_price_action_bands(
+                conn,
+                [row.base.ticker for row in rows],
+            )
+            research_links = build_work_os_portfolio_research_links(rows, repo_root, conn)
+            risk_snapshot = read_latest_snapshot(db_path=db_path)
+            # Join the slowest group: both fetchers never raise on tracker
+            # problems — they return explicit degraded envelopes — and any
+            # unexpected error propagates exactly as the direct call did.
+            live = live_future.result()
+            allocation = allocation_future.result()
         payload = build_work_os_portfolio(
             rows,
             live,
-            fetch_portfolio_allocation(),
+            allocation,
             latest_readouts=readout_projection.readouts,
-            research_links=build_work_os_portfolio_research_links(rows, repo_root, conn),
+            research_links=research_links,
             price_action_bands=price_action_bands,
             readout_warnings=readout_projection.warnings,
             offline_snapshot=(
                 read_configured_offline_portfolio_snapshot() if not live.available else None
             ),
-            risk_snapshot=read_latest_snapshot(db_path=db_path),
+            risk_snapshot=risk_snapshot,
         )
         response = app.json.response(payload.model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"
