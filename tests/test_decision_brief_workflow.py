@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import subprocess
 from collections.abc import Callable, Generator
@@ -686,3 +687,87 @@ def test_checked_companyfacts_bytes_are_pinned_before_child_execution(
         == "completed"
     )
     assert result.readiness and not result.readiness.decision_grade
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Requires an actual Windows directory junction")
+def test_windows_claim_inventory_rejects_review_inputs_junction(
+    state: tuple[Path, Path, str], tmp_path: Path
+) -> None:
+    manifest = report(state[0])
+    artifact = ReportArtifactRef.model_validate_json(manifest.read_bytes())
+    outside = tmp_path / "outside-review-inputs"
+    outside.mkdir()
+    review_inputs = manifest.parent / "review_inputs"
+    subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(review_inputs), str(outside)],
+        check=True,
+        capture_output=True,
+        timeout=5,
+    )
+    try:
+        junction_check = getattr(review_inputs, "is_junction", None)
+        assert callable(junction_check) and junction_check()
+        with pytest.raises(ValueError, match="remain inside the repository"):
+            workflow.prepare_memo_claim_inventory(request(state), artifact)
+        assert list(outside.iterdir()) == []
+    finally:
+        review_inputs.rmdir()
+    assert not review_inputs.exists() and list(outside.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Requires an actual Windows directory junction")
+def test_windows_claim_inventory_rejects_retained_body_parent_junction(
+    state: tuple[Path, Path, str], tmp_path: Path
+) -> None:
+    artifact = ReportArtifactRef.model_validate_json(report(state[0]).read_bytes())
+    assert artifact.body_path
+    body = state[0] / artifact.body_path
+    original = body.read_bytes()
+    outside = tmp_path / "outside-body-parent"
+    body.parent.rename(outside)
+    subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(body.parent), str(outside)],
+        check=True,
+        capture_output=True,
+        timeout=5,
+    )
+    try:
+        junction_check = getattr(body.parent, "is_junction", None)
+        assert callable(junction_check) and junction_check()
+        with pytest.raises(ValueError, match="remain inside the repository"):
+            workflow.prepare_memo_claim_inventory(request(state), artifact)
+        assert not (outside / "review_inputs").exists()
+        assert (outside / body.name).read_bytes() == original
+    finally:
+        body.parent.rmdir()
+        outside.rename(body.parent)
+    assert body.read_bytes() == original
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Requires an actual Windows directory junction")
+def test_windows_claim_inventory_accepts_publisher_output_junction(
+    state: tuple[Path, Path, str], tmp_path: Path
+) -> None:
+    target = tmp_path / "publisher-output"
+    target.mkdir()
+    output = state[0] / "output"
+    subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(output), str(target)],
+        check=True,
+        capture_output=True,
+        timeout=5,
+    )
+    try:
+        junction_check = getattr(output, "is_junction", None)
+        assert callable(junction_check) and junction_check()
+        artifact = ReportArtifactRef.model_validate_json(report(state[0]).read_bytes())
+        inventory = workflow.prepare_memo_claim_inventory(request(state), artifact)
+        assert inventory.is_file() and inventory.resolve().is_relative_to(target)
+        retained = workflow.MemoClaimInventory.model_validate_json(inventory.read_bytes())
+        assert retained.artifact_id == artifact.artifact_id
+        assert retained.body_sha256 == artifact.body_sha256
+        assert retained.blocks[0].text == "Retained analyst draft."
+        assert retained.status == "requires_analyst_review" and not retained.decision_grade
+    finally:
+        output.rmdir()
+    assert not output.exists() and list(target.rglob("*.json"))
