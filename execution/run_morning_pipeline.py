@@ -8,7 +8,22 @@ stale HTML. This orchestrator chains the stages into one scheduled run. (The
 morning-digest render stage retired with the standalone /digest page,
 2026-06-11 — the live Home rail serves that view straight from the DB.)
 
-Twenty-one manifest-defined stages run in sequence as subprocess-isolated children.
+Twenty-one manifest-defined stages run as subprocess-isolated children,
+dispatched as bounded-parallel LANES by the dependency and writer data the
+manifest already declares (``pipeline.morning_manifest``):
+
+  * A stage is dispatched once every scheduling dependency that is part of the
+    run has SETTLED (any terminal outcome). In the all-success case a
+    dependent therefore never starts before its prerequisites succeed.
+  * Independent stages overlap: the read/compute stages the manifest marks
+    DB-non-writing (preflight, fundamentals, candidate fit, factor proxies,
+    position guard, the feed render) run concurrently with DB-writing stages.
+  * Single-writer SQLite discipline holds under the parallelism: at most one
+    ``db_writer`` stage is in flight at a time, so no two stage processes can
+    hold write transactions against the same database file.
+  * Each stage keeps its own manifest timeout, argv, subprocess isolation, and
+    per-stage resume checkpoint.
+
 The major phase boundaries are:
 
   0. news     -- ``fetch_news.py`` (ingest fresh per-ticker news into the
@@ -36,11 +51,13 @@ The major phase boundaries are:
 Resilience contract (the load-bearing behavior):
 
   * The orchestrator NEVER aborts early. A failed or timed-out stage is logged
-    and the remaining stages still run. The feed is a read-only render over
-    whatever alerts already exist, so a trigger failure must not leave the
-    user staring at a stale feed -- the render runs regardless. Likewise a
-    failed news fetch (stage 0) never blocks the trigger sweep: triggers run
-    over whatever news already exists, degrading to none.
+    and the remaining stages still run — across lanes too: a lane failure
+    never cancels any other lane. The feed is a read-only render over whatever
+    alerts already exist, so a trigger failure must not leave the user staring
+    at a stale feed -- the render runs regardless (lanes dispatch it as soon as
+    the sweep settles). Likewise a failed news fetch (stage 0) never blocks the
+    trigger sweep: triggers run over whatever news already exists, degrading
+    to none.
   * Each stage's stdout/stderr is captured and echoed under a stage header.
   * Exit code is the count of failed stages (0 = all good), reported only AFTER
     every non-skipped stage has been attempted. This lets cron / monitoring
@@ -75,7 +92,9 @@ import math
 import os
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
@@ -95,7 +114,9 @@ from pipeline.morning_manifest import (
     STAGE_PREFLIGHT,
     ArgumentProfile,
     StageSpec,
+    lane_dependencies,
     manifest_digest,
+    selection_closure,
 )
 from pipeline.run_accounting import (
     PipelineRunSuppressedError,
@@ -133,12 +154,21 @@ class StageStatus(StrEnum):
 
 @dataclass(slots=True)
 class _Stage:
-    """One pipeline stage: a labeled, time-bounded subprocess invocation."""
+    """One pipeline stage: a labeled, time-bounded subprocess invocation.
+
+    ``db_writer`` and ``scheduling_deps`` carry the manifest's lane
+    classification: the first gates the single-writer slot, the second the
+    dependency-driven dispatch order. ``scheduling_deps`` is already
+    intersected with the selected stage keys, so a skipped or unselected
+    dependency never delays its dependent.
+    """
 
     key: str
     label: str
     argv: list[str]
     timeout_s: int
+    db_writer: bool
+    scheduling_deps: frozenset[str]
 
 
 @dataclass(slots=True)
@@ -162,29 +192,12 @@ def _is_active(spec: StageSpec, args: argparse.Namespace) -> bool:
     return not any(bool(getattr(args, flag)) for flag in spec.skip_flags)
 
 
-def _selection_closure(target: str) -> set[str]:
-    """Return ``target`` and every transitive selection dependency."""
-
-    by_key = {spec.key: spec for spec in STAGE_MANIFEST}
-    selected: set[str] = set()
-
-    def add(key: str) -> None:
-        if key in selected:
-            return
-        selected.add(key)
-        for dependency in by_key[key].selection_dependencies:
-            add(dependency)
-
-    add(target)
-    return selected
-
-
 def _selected_specs(args: argparse.Namespace) -> list[StageSpec]:
     """Apply activation metadata and focused selection to the manifest."""
 
     selected_keys = set(_ALL_STAGE_KEYS)
     if args.only is not None:
-        selected_keys = _selection_closure(args.only)
+        selected_keys = set(selection_closure(args.only))
     elif args.from_stage is not None:
         start = _ALL_STAGE_KEYS.index(args.from_stage)
         selected_keys = set(_ALL_STAGE_KEYS[start:])
@@ -221,6 +234,8 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
     """Resolve the typed manifest into ordered subprocess invocations."""
 
     exec_dir = PROJECT_ROOT / "execution"
+    specs = _selected_specs(args)
+    selected_keys = {spec.key for spec in specs}
     return [
         _Stage(
             key=spec.key,
@@ -233,8 +248,10 @@ def _build_stages(args: argparse.Namespace) -> list[_Stage]:
                 unbuffered=True,
             ),
             timeout_s=spec.timeout_s,
+            db_writer=spec.db_writer,
+            scheduling_deps=frozenset(lane_dependencies(spec)) & selected_keys,
         )
-        for spec in _selected_specs(args)
+        for spec in specs
     ]
 
 
@@ -256,6 +273,12 @@ def _echo_captured_output(stdout: str | bytes | None, stderr: str | bytes | None
             sys.stdout.write("\n")
     if stderr:
         sys.stderr.write(stderr)
+
+
+# Lanes echo stage sections from several worker threads into one cron log;
+# the lock keeps each banner / output block contiguous instead of interleaved
+# mid-write. It never spans a child process, so it cannot serialize stages.
+_OUTPUT_LOCK = threading.Lock()
 
 
 STATE_FILE = PROJECT_ROOT / ".tmp" / "morning_pipeline" / "state.json"
@@ -344,16 +367,19 @@ def _clear_completed_stages() -> None:
     STATE_FILE.unlink(missing_ok=True)
 
 
-def _run_stage(stage: _Stage, *, checkpoint_scope: str | None = None) -> _StageResult:
+def _run_stage(stage: _Stage) -> _StageResult:
     """Invoke one stage as a subprocess; echo its output under a header.
 
     Child-process failures never raise. ``subprocess.run`` is called with ``check=False`` so a
     non-zero child exit returns a CompletedProcess rather than raising; the
     only child-runtime exceptions left are ``TimeoutExpired`` and ``OSError``
     (spawn failure), both caught and turned into a failed ``_StageResult``.
-    This is what guarantees the caller's loop never aborts early. A checkpoint
-    persistence error converts the otherwise-successful stage to a loud failure
-    so later stages still run without claiming progress that was not durable.
+    This is what guarantees the caller's lane loop never aborts early.
+
+    The resume checkpoint is NOT written here: concurrent lanes complete out
+    of order, so the single dispatcher thread records completions (see
+    ``_settle_stage``), keeping the read-modify-write on ``state.json``
+    serialized without a second lock.
 
     ``capture_output=True`` buffers the child's stdout/stderr entirely in
     memory and only returns it on a *normal* exit. A killed-on-timeout child's
@@ -364,8 +390,9 @@ def _run_stage(stage: _Stage, *, checkpoint_scope: str | None = None) -> _StageR
     per-ticker ``reprice_ticker_done`` events, or fetch_news's per-ticker
     events) instead of a completely empty stage section in the cron log.
     """
-    sys.stdout.write(f"\n{'=' * 72}\n=== {stage.label}\n{'=' * 72}\n")
-    sys.stdout.flush()
+    with _OUTPUT_LOCK:
+        sys.stdout.write(f"\n{'=' * 72}\n=== {stage.label}\n{'=' * 72}\n")
+        sys.stdout.flush()
 
     t0 = time.monotonic()
     try:
@@ -388,25 +415,20 @@ def _run_stage(stage: _Stage, *, checkpoint_scope: str | None = None) -> _StageR
         )
     except subprocess.TimeoutExpired as exc:
         elapsed = round(time.monotonic() - t0, 3)
-        _echo_captured_output(exc.stdout, exc.stderr)
+        with _OUTPUT_LOCK:
+            _echo_captured_output(exc.stdout, exc.stderr)
         return _fail(stage, f"timed out after {stage.timeout_s}s", elapsed)
     except OSError as exc:
         elapsed = round(time.monotonic() - t0, 3)
         return _fail(stage, f"spawn failed: {exc}", elapsed)
 
     elapsed = round(time.monotonic() - t0, 3)
-    _echo_captured_output(proc.stdout, proc.stderr)
+    with _OUTPUT_LOCK:
+        _echo_captured_output(proc.stdout, proc.stderr)
+        if proc.returncode == 0:
+            sys.stdout.write(f"[{stage.key}] OK (exit 0, {elapsed}s)\n")
 
     if proc.returncode == 0:
-        try:
-            _record_completed_stage(stage.key, checkpoint_scope=checkpoint_scope)
-        except (CheckpointStateError, OSError) as exc:
-            return _fail(
-                stage,
-                f"checkpoint persistence failed: {type(exc).__name__}: {exc}",
-                elapsed,
-            )
-        sys.stdout.write(f"[{stage.key}] OK (exit 0, {elapsed}s)\n")
         return _StageResult(
             key=stage.key,
             status=StageStatus.OK,
@@ -434,8 +456,9 @@ def _fail(
     so it must be loud in the cron log rather than buried in the child's
     captured output.
     """
-    sys.stderr.write(f"\n!!! [{stage.key}] FAILED - {reason}\n")
-    sys.stdout.write(f"[{stage.key}] FAILED - {reason} ({elapsed}s)\n")
+    with _OUTPUT_LOCK:
+        sys.stderr.write(f"\n!!! [{stage.key}] FAILED - {reason}\n")
+        sys.stdout.write(f"[{stage.key}] FAILED - {reason} ({elapsed}s)\n")
     return _StageResult(
         key=stage.key,
         status=StageStatus.FAILED,
@@ -443,6 +466,134 @@ def _fail(
         elapsed_seconds=elapsed,
         error=reason,
     )
+
+
+# Bounded lane width. One lane is reserved for the in-flight DB writer (the
+# single-writer slot), so this bounds the read/compute stages that may overlap
+# it; the manifest's non-writer set never offers more than two at once today.
+_MAX_CONCURRENT_STAGES = 3
+
+# Dispatch order of the most recent run, recorded by the single dispatcher
+# thread (never a worker), exposed for tests and log forensics.
+_LAST_DISPATCH_ORDER: list[str] = []
+
+
+def last_dispatch_order() -> tuple[str, ...]:
+    """Stage keys in dispatch order from the most recent run.
+
+    The dispatcher thread is the only writer, so the order is deterministic
+    for any given run even though stages overlap; it is the authoritative
+    record of what the lane scheduler decided (and when).
+    """
+    return tuple(_LAST_DISPATCH_ORDER)
+
+
+def _settle_stage(
+    future: Future[_StageResult],
+    stage: _Stage,
+    *,
+    checkpoint_scope: str | None,
+) -> _StageResult:
+    """Collect one finished stage on the dispatcher thread.
+
+    Checkpoint recording lives here — not inside ``_run_stage`` — so
+    concurrent lane completions merge through the existing atomic
+    read-modify-write on ``state.json`` without a second lock: only this one
+    thread ever writes it. A checkpoint persistence error still converts the
+    otherwise-successful stage to a loud failure so later stages run without
+    claiming progress that was not durable.
+    """
+    try:
+        result = future.result()
+    except Exception as exc:  # defensive: _run_stage never raises by contract
+        return _fail(stage, f"lane worker crashed: {type(exc).__name__}: {exc}", 0.0)
+    if result.status is StageStatus.OK:
+        try:
+            _record_completed_stage(stage.key, checkpoint_scope=checkpoint_scope)
+        except (CheckpointStateError, OSError) as exc:
+            return _fail(
+                stage,
+                f"checkpoint persistence failed: {type(exc).__name__}: {exc}",
+                result.elapsed_seconds,
+            )
+    return result
+
+
+def _run_stages(
+    stages: list[_Stage],
+    *,
+    checkpoint_scope: str | None,
+    pre_settled: set[str] | None = None,
+) -> list[_StageResult]:
+    """Run the selected stages as manifest-driven, bounded-parallel lanes.
+
+    ``pre_settled`` carries the stage keys a resume checkpoint already
+    completed in a prior attempt; their dependents see them as settled, which
+    is exactly the resume contract (an exact-checkpoint stage is never re-run,
+    so its dependent must not wait on it).
+
+    Scheduling contract (every rule comes from the manifest, none from
+    wall-clock heuristics):
+
+    * Dependency rule: a stage dispatches only once every scheduling
+      dependency in this run has SETTLED (any terminal outcome — ok, failed,
+      or timed out). That preserves both halves of the contract: dependent
+      stages never start before their prerequisites succeed on a clean run,
+      and the always-attempt resilience contract survives, because a failed
+      prerequisite stops delaying its dependent rather than cancelling it.
+    * Single-writer rule: at most one ``db_writer`` stage is in flight, so no
+      two stage processes can hold write transactions against the same SQLite
+      file. Independent read/compute stages overlap the writer freely.
+    * Width rule: at most ``_MAX_CONCURRENT_STAGES`` subprocesses at once.
+    * Identity rule: stage argv, timeouts, subprocess isolation, and the
+      per-stage checkpoint are ``_run_stage``'s unchanged contract; a lane
+      never extends a stage's own timeout budget.
+
+    The dispatcher loop is single-threaded and scans the pending stages in
+    manifest order each pass, so a writer blocked on the single-writer slot
+    never head-of-line blocks an independent ready stage behind it.
+    """
+    _LAST_DISPATCH_ORDER.clear()
+    results: list[_StageResult] = []
+    pending = list(stages)  # manifest order
+    settled: set[str] = set(pre_settled or ())
+    writer_in_flight = False
+    with ThreadPoolExecutor(
+        max_workers=_MAX_CONCURRENT_STAGES, thread_name_prefix="morning-lane"
+    ) as executor:
+        inflight: dict[Future[_StageResult], _Stage] = {}
+        while pending or inflight:
+            for stage in list(pending):
+                if len(inflight) >= _MAX_CONCURRENT_STAGES:
+                    break
+                if not stage.scheduling_deps <= settled:
+                    continue
+                if stage.db_writer and writer_in_flight:
+                    continue
+                pending.remove(stage)
+                _LAST_DISPATCH_ORDER.append(stage.key)
+                if stage.db_writer:
+                    writer_in_flight = True
+                inflight[executor.submit(_run_stage, stage)] = stage
+            if not inflight:
+                # Unreachable while validate_manifest enforces an acyclic,
+                # backward-looking dependency graph; kept as a fail-loud guard
+                # so a future manifest regression surfaces instead of hanging.
+                raise AssertionError(
+                    "lane scheduler stalled with pending stages: "
+                    f"{[stage.key for stage in pending]}"
+                )
+            done, _ = wait(inflight, return_when=FIRST_COMPLETED)
+            for future in done:
+                stage = inflight.pop(future)
+                if stage.db_writer:
+                    writer_in_flight = False
+                settled.add(stage.key)
+                results.append(_settle_stage(future, stage, checkpoint_scope=checkpoint_scope))
+    # Lanes settle out of order; returning manifest order keeps the recorded
+    # failed-stage summary deterministic.
+    manifest_position = {key: index for index, key in enumerate(_ALL_STAGE_KEYS)}
+    return sorted(results, key=lambda result: manifest_position[result.key])
 
 
 def _summarize(results: list[_StageResult], *, elapsed_seconds: float) -> dict[str, object]:
@@ -664,10 +815,13 @@ def _run_pipeline(args: argparse.Namespace, *, db_path: Path, t0: float) -> int:
     completed: set[str] = set() if args.force else _load_completed_stages(checkpoint_scope)
     runnable = [stage for stage in stages if stage.key not in completed]
 
-    # Always-attempt contract: iterate every built stage with no early return.
-    # _run_stage never raises, so a failure / timeout in one stage cannot stop
-    # the next from running.
-    results = [_run_stage(stage, checkpoint_scope=checkpoint_scope) for stage in runnable]
+    # Always-attempt contract: every built stage is dispatched with no early
+    # return. _run_stage never raises, and the lane dispatcher treats a
+    # failure / timeout as settled rather than blocking, so a failure in one
+    # stage cannot stop any other stage from running — across lanes as well as
+    # within them. Stages the resume checkpoint already completed count as
+    # settled from the start (they are not re-run; their dependents proceed).
+    results = _run_stages(runnable, checkpoint_scope=checkpoint_scope, pre_settled=completed)
 
     summary = _summarize(results, elapsed_seconds=round(time.monotonic() - t0, 3))
     sys.stdout.write("\n" + json.dumps(summary, indent=2) + "\n")

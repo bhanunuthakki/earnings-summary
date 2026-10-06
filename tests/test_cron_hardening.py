@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CRON = PROJECT_ROOT / "cron"
@@ -22,6 +24,61 @@ def _start_boundary(filename: str) -> str:
 def test_first_of_month_03_00_jobs_are_staggered() -> None:
     """The monthly jobs previously collided at 03:00 on every first day."""
     assert _start_boundary("refresh_scenario_priors.task.xml").endswith("03:40:00")
+
+
+_OVERNIGHT_WRITERS = {
+    "backfill_transcripts": "02:00",
+    "fetch_sec_xbrl": "01:40",
+    "submit_saydo_batch": "02:20",
+}
+
+
+def _minutes(hhmm: str) -> int:
+    hours, minutes = hhmm.split(":")[:2]
+    return int(hours) * 60 + int(minutes)
+
+
+def test_overnight_writer_cluster_is_staggered() -> None:
+    """backfill_transcripts, fetch_sec_xbrl and submit_saydo_batch all write
+    the single-writer portfolio database and previously all started at 02:00
+    on Saturdays. Their checked-in starts must be distinct, at least 20
+    minutes apart, identical in manifest and task XML, clear of every other
+    task start on a shared day, and outside the protected 03:00-05:00 LLM
+    window."""
+    manifest = json.loads((CRON / "task_manifest.json").read_text(encoding="utf-8"))
+    tasks = {task["task_name"].split("\\")[-1]: task for task in manifest["tasks"]}
+
+    starts: dict[str, int] = {}
+    for name, expected in _OVERNIGHT_WRITERS.items():
+        task = tasks[name]
+        manifest_start = task["schedule"]["start_boundary"]
+        assert manifest_start[11:16] == expected
+        assert _start_boundary(task["xml"]) == manifest_start
+        starts[name] = _minutes(expected)
+        assert not _minutes("03:00") <= starts[name] < _minutes("05:00")
+
+    ordered = sorted(starts.values())
+    assert all(later - earlier >= 20 for earlier, later in itertools.pairwise(ordered))
+
+    def _days(task: dict[str, Any]) -> set[str] | None:
+        days: list[str] = task["schedule"]["days_of_week"]
+        return set(days) or None
+
+    for name in _OVERNIGHT_WRITERS:
+        own_days = _days(tasks[name])
+        for other_name, other in tasks.items():
+            schedule = other["schedule"]
+            start = schedule["start_boundary"]
+            if other_name == name or start is None or schedule["repetition_interval"]:
+                continue
+            other_days = _days(other)
+            shares_day = own_days is None or other_days is None or bool(own_days & other_days)
+            if shares_day:
+                assert _minutes(start[11:16]) != starts[name], (name, other_name)
+
+    # The Friday P2 lens dispatch stops before 01:35; the earliest writer
+    # starts after it.
+    assert min(starts.values()) > _minutes("01:35")
 
 
 def test_retired_monthly_p3_task_is_absent_from_scheduler_surface() -> None:

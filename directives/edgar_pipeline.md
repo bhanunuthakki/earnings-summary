@@ -12,7 +12,7 @@
 
 ## Cadence
 
-Weekly Windows scheduled task `\earnings-summary\fetch_sec_xbrl`, Saturday 02:00 (`cron/fetch_sec_xbrl.task.xml` + `cron/run_fetch_sec_xbrl.bat`). Also runnable inside the quarterly refresh DAG via `execution/quarterly_refresh.py --fetch-sec`.
+Weekly Windows scheduled task `\earnings-summary\fetch_sec_xbrl`, Saturday 01:40 (`cron/fetch_sec_xbrl.task.xml` + `cron/run_fetch_sec_xbrl.bat`). Also runnable inside the quarterly refresh DAG via `execution/quarterly_refresh.py --fetch-sec`.
 
 - **Logical Idempotency Key:** SEC accession plus canonical fact locator and period.
 - **Content Identity:** SHA-256 of the exact SEC response/document bytes.

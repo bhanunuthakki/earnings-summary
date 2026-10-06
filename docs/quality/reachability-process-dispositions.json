@@ -477,8 +477,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Add execution/process_document_evidence.py to existing closed STAGE_MANIFEST dispatch. _selected_specs chooses manifest members; _build_stages resolves execution/spec.script via managed_python_argv. New deterministic stage is --apply --resume --batch-size 100, timeout600s; depends on preflight/list identity only and has DB_AND_STATE_ROOT argument profile. The target does no LLM/narrative dispatch and no arbitrary process invocation. This is a reviewed change to target scope, not a line-only refresh.",
-      "fingerprint": "4335a4db0fd590f502744548a1b62dff3f0166e70dd087707b81ec11841a7e47",
-      "line": 372,
+      "fingerprint": "3c500b4cacc9fe0666ee8902cdecc2529854b8e2d7860aea00dbec83835bfb06",
+      "line": 399,
       "path": "execution/run_morning_pipeline.py",
       "targets": [
         "execution/validate_environment.py",
@@ -945,7 +945,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "6c939f956661965411624bd3e5d9030d6e3ababeeea2062cf67abb23cad2900f",
+      "source_sha256": "98b9c9e3dbd2e8f8f9086c16296f58677230d33ceeb26c30a4b6d3605ad07c7b",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

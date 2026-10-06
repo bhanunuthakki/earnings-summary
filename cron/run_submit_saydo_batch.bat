@@ -1,5 +1,5 @@
 @echo off
-REM Weekly Saturday 02:00 — process any DUE SayDo verdict pairs through the
+REM Weekly Saturday 02:20 — process any DUE SayDo verdict pairs through the
 REM Anthropic Message Batches API (the 50%% off-hours discount lane). Two steps:
 REM
 REM   1. build_saydo_pairs.py --all --prepare-batch  — for every portfolio

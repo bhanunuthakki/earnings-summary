@@ -173,8 +173,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only StageSpec.skip_flags from the checked-in manifest.",
-      "fingerprint": "813fa293267fd90e28a8403a3cfd3e09966f1e96166f5bd3aaca789200f28a35",
-      "line": 162,
+      "fingerprint": "02abaf8d08c86211a4a28b51390b046557e7cf8bc6d6c0967c36ef370efb5c44",
+      "line": 192,
       "path": "execution/run_morning_pipeline.py",
       "targets": [
         "StageSpec.skip_flags"
@@ -701,7 +701,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "6c939f956661965411624bd3e5d9030d6e3ababeeea2062cf67abb23cad2900f",
+      "source_sha256": "98b9c9e3dbd2e8f8f9086c16296f58677230d33ceeb26c30a4b6d3605ad07c7b",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
