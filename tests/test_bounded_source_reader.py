@@ -7,6 +7,7 @@ import errno
 import json
 import os
 import stat
+import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -298,3 +299,108 @@ def test_edited_windows_file_remains_readable(
     snapshot, payload = read_stable_artifact(source, max_bytes=5, allowed_root=tmp_path)
     assert payload == b"exact" and snapshot.size_bytes == 5
     immutable_artifact.assert_artifact_unchanged(snapshot)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Requires actual Windows sharing protection")
+def test_windows_pinned_reader_denies_write_and_parent_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    record_property: Callable[[str, object], None],
+) -> None:
+    deadline = time.monotonic() + 5.0
+
+    def check_deadline() -> None:
+        assert time.monotonic() < deadline, (
+            "Windows protection fixture exceeded its original deadline"
+        )
+
+    check_deadline()
+    folder = tmp_path / "folder"
+    folder.mkdir()
+    source = folder / "source.bin"
+    check_deadline()
+    source.write_bytes(b"exact")
+    moved = tmp_path / "moved"
+    observations: list[dict[str, object]] = []
+
+    class PinnedReaderOs:
+        """Forward real OS calls; observe only the reader's actual pinned read."""
+
+        def __getattr__(self, name: str) -> object:
+            return getattr(os, name)
+
+        def read(self, descriptor: int, count: int) -> bytes:
+            check_deadline()
+            assert not observations and count == 5
+            assert evidence_snapshot.windows_evidence_handle_path(descriptor) == source
+            assert os.fstat(descriptor).st_size == 5
+            check_deadline()
+            with pytest.raises(PermissionError) as write_denied:
+                source.write_bytes(b"changed")
+            assert write_denied.value.errno == errno.EACCES
+            check_deadline()
+            with pytest.raises(PermissionError) as delete_denied:
+                source.unlink()
+            assert delete_denied.value.errno == errno.EACCES
+            assert getattr(delete_denied.value, "winerror", None) in {5, 32}
+            check_deadline()
+            with pytest.raises(PermissionError) as rename_denied:
+                folder.rename(moved)
+            assert rename_denied.value.errno == errno.EACCES
+            assert getattr(rename_denied.value, "winerror", None) == 5
+            observations.append(
+                {
+                    "write_errno": write_denied.value.errno,
+                    "write_winerror": getattr(write_denied.value, "winerror", None),
+                    "delete_errno": delete_denied.value.errno,
+                    "delete_winerror": getattr(delete_denied.value, "winerror", None),
+                    "rename_errno": rename_denied.value.errno,
+                    "rename_winerror": getattr(rename_denied.value, "winerror", None),
+                    "actual_pinned_path": str(source),
+                }
+            )
+            check_deadline()
+            return os.read(descriptor, count)
+
+    check_deadline()
+    with monkeypatch.context() as patch:
+        patch.setattr(immutable_artifact, "os", PinnedReaderOs())
+        snapshot, payload = read_stable_artifact(source, max_bytes=5, allowed_root=tmp_path)
+    check_deadline()
+    assert payload == b"exact" and snapshot.size_bytes == 5 and len(observations) == 1
+    immutable_artifact.assert_artifact_unchanged(snapshot)
+    check_deadline()
+    source.write_bytes(b"after-close")
+    check_deadline()
+    folder.rename(moved)
+    check_deadline()
+    assert (moved / source.name).read_bytes() == b"after-close"
+    assert not folder.exists()
+    check_deadline()
+    (moved / source.name).unlink()
+    check_deadline()
+    assert not (moved / source.name).exists()
+    record_property("windows_pinned_reader_protection", json.dumps(observations, sort_keys=True))
+    check_deadline()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Requires an actual Windows directory junction")
+def test_windows_bounded_reader_rejects_source_parent_junction(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "source.bin").write_bytes(b"exact")
+    link = tmp_path / "source-parent"
+    subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+        check=True,
+        capture_output=True,
+        timeout=5,
+    )
+    try:
+        junction_check = getattr(link, "is_junction", None)
+        assert callable(junction_check) and junction_check()
+        with pytest.raises(ImmutableArtifactConflictError, match="reparse"):
+            read_stable_artifact(link / "source.bin", max_bytes=5, allowed_root=tmp_path)
+    finally:
+        link.rmdir()
+    assert not link.exists() and (target / "source.bin").read_bytes() == b"exact"

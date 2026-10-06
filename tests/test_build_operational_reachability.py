@@ -189,7 +189,7 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    # Keep the OS proxy and actual native metadata field lookup test-only and exact.
+    # Keep the OS proxies and actual native metadata field lookup test-only and exact.
     assert [
         edge for edge in graph.unknown_edges if edge.source == "tests/test_bounded_source_reader.py"
     ] == [
@@ -202,11 +202,11 @@ def test_actual_head_is_supported() -> None:
             line=line,
             unknown=True,
         )
-        for line in (200, 288)
+        for line in (201, 289, 330)
     ]
-    # Retain 141 prior test seams, two bounded-source lookups, and three process harnesses.
+    # Retain 141 prior test seams, three bounded-source lookups, and three process harnesses.
     # No production gap is admitted.
-    assert len(graph.unknown_edges) == 146
+    assert len(graph.unknown_edges) == 147
     # Ten new acquisition/authority fixture calls preserve synthetic db globals.
     # Exact AST evidence is retained in followup-test-edge-census.json.
     new_fixture_calls = (
