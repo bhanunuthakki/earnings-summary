@@ -31,12 +31,24 @@ Then clears brief_dirty, records last_built_at and last_brief_hash. Each step
 is run as a subprocess so a failure in one ticker doesn't poison the worker's
 Python state.
 
+Tickers are independent, so their chains run on a small bounded worker pool
+(`--workers`, default 3): the wall-clock of a rebuild day is no longer the sum
+of every ticker's 4-5 process boots. The chain ORDER inside one ticker is
+unchanged — thesis evaluator → commitments → DCF → artifacts → history sweep —
+and only across-ticker work overlaps. Every parent-process database write stays
+serialized through one writer lock per database file (single-writer
+discipline), so no two writer connections are open on the same file at once;
+each step subprocess keeps its own connection and its own 600s timeout, so a
+hung ticker fails alone. The run summary still lists tickers in candidate
+order.
+
 Usage:
     python execution/daily_fetch_and_brief.py                   # dirty tickers due per tier cadence
     python execution/daily_fetch_and_brief.py --ticker META     # force-refresh one (bypasses all gates)
     python execution/daily_fetch_and_brief.py --enable-llm      # populate §8/§9 LLM sections
     python execution/daily_fetch_and_brief.py --force           # bypass gates B + C for queued tickers
     python execution/daily_fetch_and_brief.py --ignore-tier     # bypass tier-cadence gate (run on all dirty)
+    python execution/daily_fetch_and_brief.py --workers 4       # bounded ticker-overlap pool size (default 3)
     python execution/daily_fetch_and_brief.py --eval-cadence-days 14  # tune evaluation cadence
 """
 
@@ -48,26 +60,72 @@ import json
 import sqlite3
 import subprocess
 import sys
+import threading
+from collections.abc import Generator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:  # ``python -m execution.daily_fetch_and_brief``
+    from execution._lib import PROJECT_ROOT
 
-import db  # noqa: E402
-from llm_artifact_store import mark_artifacts_dirty_for_fact_change  # noqa: E402
-from models.companies import schedule_class_for_list_type  # noqa: E402
-from pipeline.tier_runner import tickers_due_for_refresh  # noqa: E402
-from provenance.selection import selected_transcripts_relation  # noqa: E402
-from runtime.python_process import ensure_managed_python_argv, managed_python_prefix  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+import db
+from llm_artifact_store import mark_artifacts_dirty_for_fact_change
+from models.companies import schedule_class_for_list_type
+from pipeline.tier_runner import tickers_due_for_refresh
+from provenance.selection import selected_transcripts_relation
+from runtime.python_process import ensure_managed_python_argv, managed_python_prefix
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 DEFAULT_EVAL_CADENCE_DAYS = 7
 DEFAULT_NO_CHANGE_TTL_DAYS = 7
 
+# Bounded ticker-overlap pool width. Each pool worker runs at most one step
+# subprocess at a time, so this is also the run's peak subprocess count.
+DEFAULT_WORKERS = 3
+
+_WRITER_LOCKS_GUARD = threading.Lock()
+_WRITER_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _writer_lock_for(db_path: Path) -> threading.Lock:
+    """One in-process writer lock per database file.
+
+    Keyed by path so a pool that ever runs against two databases still keeps
+    each file's writes to a single writer connection at a time.
+    """
+    key = str(Path(db_path))
+    with _WRITER_LOCKS_GUARD:
+        lock = _WRITER_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _WRITER_LOCKS[key] = lock
+        return lock
+
+
+@contextmanager
+def _db_write_slot(db_path: Path) -> Generator[None]:
+    """Serialize parent-process writes onto the database file.
+
+    Ticker chains overlap on the pool, so more than one worker can want to mark
+    artifacts dirty, record a skip, or record a completed build at the same
+    time. Every such write runs inside this slot, so at most one writer
+    connection per database file is open at once (single-writer discipline).
+    Step subprocesses keep their own connections — the slot covers only the
+    driver's writes.
+    """
+    with _writer_lock_for(db_path):
+        yield
+
 
 def main() -> int:
     args = _parse_args()
+    if args.workers < 1:
+        sys.stderr.write(f"FATAL: --workers must be >= 1 (got {args.workers})\n")
+        return 2
     repo_root = args.repo_root.resolve()
     db_path = repo_root / "data" / "portfolio.db"
     if not db_path.exists():
@@ -87,10 +145,7 @@ def main() -> int:
         print(json.dumps({"event": "no_dirty_tickers"}))
         return 0
 
-    results: list[dict[str, object]] = []
-    for ticker in tickers:
-        result = _refresh_one_ticker(ticker, repo_root, db_path, args)
-        results.append(result)
+    results = _refresh_tickers(tickers, repo_root, db_path, args, workers=args.workers)
 
     print(
         json.dumps(
@@ -103,6 +158,38 @@ def main() -> int:
         )
     )
     return 0
+
+
+def _refresh_tickers(
+    tickers: list[str],
+    repo_root: Path,
+    db_path: Path,
+    args: argparse.Namespace,
+    *,
+    workers: int,
+) -> list[dict[str, object]]:
+    """Run each ticker's synth-and-publish chain on a bounded worker pool.
+
+    Tickers are independent, so their chains overlap; the steps INSIDE one
+    ticker stay strictly ordered because ``_refresh_one_ticker`` runs them
+    sequentially on its worker thread. At most ``workers`` chains (and so at
+    most ``workers`` step subprocesses) are in flight at once. Results are
+    returned in the input ticker order, not completion order, so the run
+    summary is byte-stable regardless of which ticker finishes first.
+    """
+    results: list[dict[str, object] | None] = [None] * len(tickers)
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="brief-ticker") as executor:
+        futures = [
+            executor.submit(_refresh_one_ticker, ticker, repo_root, db_path, args)
+            for ticker in tickers
+        ]
+        # Collect in submission (candidate) order. An infrastructure failure in
+        # one ticker still propagates (fail loud, as the serial loop did); the
+        # executor's context exit then waits for the remaining chains instead of
+        # orphaning them.
+        for index, future in enumerate(futures):
+            results[index] = future.result()
+    return [result for result in results if result is not None]
 
 
 def _apply_tier_filter(
@@ -206,6 +293,16 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=DEFAULT_NO_CHANGE_TTL_DAYS,
         help=f"Max age in days for a 'same content' skip to apply (default {DEFAULT_NO_CHANGE_TTL_DAYS}).",
+    )
+    p.add_argument(
+        "--workers",
+        type=int,
+        default=DEFAULT_WORKERS,
+        help=(
+            "Bounded worker pool that overlaps independent tickers' chains "
+            f"(default {DEFAULT_WORKERS}). Steps inside one ticker stay ordered; "
+            "1 restores the strictly serial sweep. Must be >= 1."
+        ),
     )
     return p.parse_args()
 
@@ -361,7 +458,10 @@ def _record_skip(db_path: Path, ticker: str, current_hash: str, reason: str) -> 
     skipping until either content changes (hash flips) or the TTL elapses.
     """
     now = datetime.now().isoformat(timespec="seconds")
-    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
+    with (
+        _db_write_slot(db_path),
+        connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn,
+    ):
         conn.execute(
             "UPDATE tracked_companies "
             "SET brief_dirty = 0, last_built_at = ?, last_brief_hash = ? "
@@ -440,12 +540,15 @@ def _refresh_one_ticker(
     )
     # Mark fact-dependent LLM artifacts dirty so the build regenerates them
     # rather than hitting a stale cache. Cheap (one UPDATE per ticker) and
-    # only matters when --enable-llm is set, but harmless otherwise.
-    flipped = mark_artifacts_dirty_for_fact_change(
-        ticker=ticker,
-        reason="brief_rebuild",
-        db_path=db_path,
-    )
+    # only matters when --enable-llm is set, but harmless otherwise. It opens
+    # its own writer connection, so it takes the same per-database writer slot
+    # as the driver's other writes.
+    with _db_write_slot(db_path):
+        flipped = mark_artifacts_dirty_for_fact_change(
+            ticker=ticker,
+            reason="brief_rebuild",
+            db_path=db_path,
+        )
     if flipped:
         sys.stderr.write(
             json.dumps(
@@ -495,9 +598,12 @@ def _refresh_one_ticker(
     if overall_ok:
         # Re-compute hash AFTER build because match_commitments / refresh_dcf
         # may have written new rows that should be reflected.
-        with connect_sqlite(
-            db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True
-        ) as conn:
+        with (
+            _db_write_slot(db_path),
+            connect_sqlite(
+                db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True
+            ) as conn,
+        ):
             final_hash = _compute_brief_hash(conn, ticker, repo_root)
             conn.execute(
                 "UPDATE tracked_companies "

@@ -105,8 +105,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_step executes only the five fixed managed-Python stage scripts.",
-      "fingerprint": "0d00c2f62dd67939bca3757ae02087a276914c5e28a97e7608befbbcd6201bc4",
-      "line": 515,
+      "fingerprint": "e2557f5f509a5f07c8004189248c6959a4958c2d44e920ff2539b55c90d8b59f",
+      "line": 621,
       "path": "execution/daily_fetch_and_brief.py",
       "targets": [
         "execution/run_thesis_evaluator.py",
@@ -945,7 +945,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "98b9c9e3dbd2e8f8f9086c16296f58677230d33ceeb26c30a4b6d3605ad07c7b",
+      "source_sha256": "e01859d2b94f340742d9922d2665fcb8ee662f3ebb1b496a21ac87aaa8a7a912",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

@@ -99,7 +99,6 @@
     "execution/compute_derived_metrics.py",
     "execution/compute_macro_sensitivities.py",
     "execution/create_sqlite_snapshot.py",
-    "execution/daily_fetch_and_brief.py",
     "execution/db_gc.py",
     "execution/refresh_dcf_assumptions.py",
     "execution/dcf_sheets.py",
