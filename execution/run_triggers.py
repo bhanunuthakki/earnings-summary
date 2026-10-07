@@ -65,6 +65,11 @@ Note on ``--dry-run``: the sweep lane's scans run identically under
 ``--dry-run`` (as they always have — ``material_news.scan`` persists its
 ``news_events`` product before any candidate exists); ``--dry-run`` gates
 alert persistence in the serial lane, not scan-time classification.
+
+The ticker-independent 90-day dismissed-signature lookback
+(``_load_dismissed_signatures``) is loaded ONCE per run and shared by every
+(ticker × trigger) pair's user-state snapshot (audit F5) — it previously
+rebuilt the identical set, on a fresh read-only connection, per pair.
 """
 
 from __future__ import annotations
@@ -242,13 +247,24 @@ def _load_dismissed_signatures(db_path: Path, *, user_id: str, lookback_days: in
         conn.close()
 
 
-def _compose_user_state(db_path: Path, *, user_id: str, ticker: str) -> UserStateContext:
+def _compose_user_state(
+    db_path: Path,
+    *,
+    user_id: str,
+    ticker: str,
+    dismissed_signatures: set[str],
+) -> UserStateContext:
     """Snapshot the user-stated thesis state for ``ticker``.
 
     Best-effort: if the user_state tables are absent the snapshot
     degrades to empty lists / set rather than blocking the driver. The
     trigger's own ``should_fire`` decides how much of the context it
     cares about.
+
+    ``dismissed_signatures`` is the run-scope 90-day dismissed set the
+    driver loads once per run (the lookback takes no ticker argument, so
+    the per-(ticker x trigger) recompute rebuilt the identical set for
+    every pair — audit F5); the driver always supplies it.
     """
     try:
         kpi_rows = list_kpis(user_id=user_id, ticker=ticker, db_path=db_path)
@@ -260,13 +276,10 @@ def _compose_user_state(db_path: Path, *, user_id: str, ticker: str) -> UserStat
         intents: list[dict[str, object]] = [_dc_to_dict(r) for r in intent_rows]
     except (FileNotFoundError, RuntimeError, sqlite3.Error):
         intents = []
-    dismissed = _load_dismissed_signatures(
-        db_path, user_id=user_id, lookback_days=DISMISSED_LOOKBACK_DAYS
-    )
     return UserStateContext(
         registered_kpis=kpis,
         sizing_intents=intents,
-        recent_dismissed_signatures=dismissed,
+        recent_dismissed_signatures=dismissed_signatures,
     )
 
 
@@ -614,6 +627,7 @@ def _process_ticker_trigger(
     max_cost_usd: Decimal,
     run_started_at: datetime,
     summary: _RunSummary,
+    dismissed_signatures: set[str],
 ) -> bool:
     """Run one trigger against one ticker. Returns False iff the cost cap
     was reached mid-iteration and the driver should stop processing.
@@ -623,6 +637,10 @@ def _process_ticker_trigger(
     the whole driver — only this one (ticker, trigger) pair gets
     skipped. The summary still records the ticker as "seen" for the
     final processed-count.
+
+    ``dismissed_signatures`` is the run-scope 90-day set the driver
+    loaded once per run (F5); it flows into this pair's user-state
+    snapshot unmodified.
     """
     summary.seen_tickers.add(ticker)
     if isinstance(trigger, StatefulTrigger):
@@ -688,7 +706,12 @@ def _process_ticker_trigger(
         summary.no_candidate_skips += 1
         return True
 
-    user_state = _compose_user_state(db_path, user_id=user_id, ticker=ticker)
+    user_state = _compose_user_state(
+        db_path,
+        user_id=user_id,
+        ticker=ticker,
+        dismissed_signatures=dismissed_signatures,
+    )
 
     for candidate in candidates:
         current_cost = query_run_cost_usd(db_path, run_started_at)
@@ -1090,6 +1113,17 @@ def main(argv: list[str] | None = None) -> int:
 
     summary = _RunSummary(started_at=run_started_at.isoformat())
 
+    # Hoisted once per run (F5): the 90-day dismissed-signature lookback takes
+    # no ticker argument, so the per-(ticker x trigger) recompute rebuilt the
+    # identical set (and reopened a read-only connection) for every pair that
+    # produced candidates. One run-scope snapshot now feeds every pair's
+    # user-state context. No current sensor consults the set
+    # (find_by_signature already covers dismissed rows), so the snapshot's
+    # run-scope lifetime is unobservable today.
+    dismissed_signatures = _load_dismissed_signatures(
+        db_path, user_id=args.user_id, lookback_days=DISMISSED_LOOKBACK_DAYS
+    )
+
     # Lane partition (F1/F1b): scan-only triggers (material_news) sweep after
     # the serial candidate lane, so candidate/alert processing keeps its
     # existing cap priority and the sweep's admission then accounts the
@@ -1129,6 +1163,7 @@ def main(argv: list[str] | None = None) -> int:
                     max_cost_usd=max_cost_usd,
                     run_started_at=run_started_at,
                     summary=summary,
+                    dismissed_signatures=dismissed_signatures,
                 )
             except Exception as exc:
                 # Outer defense-in-depth: only a true programming error
