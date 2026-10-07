@@ -86,6 +86,38 @@ quarter endpoints. These formulas must remain distinct. Missing or incomparable
 inputs cannot receive a complete calculation reference. Reference validation and
 the read-only viewer do not admit a new fact or change raw source bytes.
 
+A `memo_context_review.v2` may compose independently sealed supporting issuer
+contexts. Each context retains its issuer, ticker, snapshot and exact member
+commitment. Its claims use the unchanged source, node and financial-reference
+readers for that context. The primary snapshot remains the valuation authority.
+Unknown, duplicate, unused or incomplete contexts fail closed. Each context uses
+the existing document bound. Reconstruction of the composed context source
+population shares one unreplenished byte budget. Existing model and readiness
+rechecks retain their independent per-call bounds and fresh source reads.
+The primary valuation context cannot be split to bypass its bound.
+
+Memo model selections retain the exact approved ONON run, receipt, effective
+inputs, model output and analyst scenario commitments. Finite selections replay
+through the existing model owners. Their units and display rounding are explicit.
+These are analyst calculations, not reported observations or new canonical
+series. Legacy memo reviews keep their existing rules.
+
+Valuation readiness and memo replay use the exact persisted model evidence
+through `load_dcf_verification_evidence` in `src/dcf/grade_evidence.py`. That
+reader shares latest-run selection and validation with the display reader,
+but has its own fixed internal byte bound. Oversized internal evidence is
+unavailable; it is never truncated for verification. The public display
+projection keeps its existing byte bound. Neither reader admits facts or
+replaces source, scenario, bridge or numerical replay checks.
+
+Research requests preserve the source-publication reference clock policy in
+their immutable request. `cutoff_v1` keeps legacy reference clocks and omits
+the default policy field from serialization to preserve existing commitments.
+`publication_created_v2` uses the verified publication's actual creation clock
+for the reference knowledge clock. Its recorded clock remains the verified
+recorded/sealed clock. The original publication graph, cutoff and
+observed-through checks still apply. Unknown clock policies fail closed.
+
 Financial condition cadence comes only from explicit saved measurement intent.
 A deadline does not establish annual or quarterly cadence. Missing or ambiguous
 cadence remains unresolved. Baseline identities, recency and alert deduplication

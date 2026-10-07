@@ -29,21 +29,20 @@ def _datetime(value: str) -> datetime:
 
 
 def _run(args: argparse.Namespace) -> int:
+    request = ResearchSnapshotPopulationRequest(
+        cutoff_at=args.cutoff_at,
+        operation_recorded_at=args.operation_recorded_at,
+        issuer_ids=tuple(args.issuer_id),
+        apply=args.apply,
+        projection_mode=args.projection_mode,
+        source_publication_reference_clock=args.source_publication_reference_clock,
+        input_commitment_sha256=args.input_commitment_sha256,
+        plan_commitment_sha256=args.plan_commitment_sha256,
+    )
     role = SQLiteConnectionRole.WRITER if args.apply else SQLiteConnectionRole.READ_ONLY
     conn = connect_sqlite(args.db, role=role, schema_preflight=args.apply)
     try:
-        result = populate_research_snapshots(
-            conn,
-            ResearchSnapshotPopulationRequest(
-                cutoff_at=args.cutoff_at,
-                operation_recorded_at=args.operation_recorded_at,
-                issuer_ids=tuple(args.issuer_id),
-                apply=args.apply,
-                projection_mode=args.projection_mode,
-                input_commitment_sha256=args.input_commitment_sha256,
-                plan_commitment_sha256=args.plan_commitment_sha256,
-            ),
-        )
+        result = populate_research_snapshots(conn, request)
     finally:
         conn.close()
     sys.stdout.write(result.model_dump_json() + "\n")
@@ -66,6 +65,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=("semantic", "lexical_only"),
         default="semantic",
         help="Explicit retrieval mode; semantic requires vector and promotion evidence.",
+    )
+    parser.add_argument(
+        "--source-publication-reference-clock",
+        choices=("cutoff_v1", "publication_created_v2"),
+        default="cutoff_v1",
+        help="Publication reference clock; v2 uses the verified publication creation time.",
     )
     parser.add_argument("--issuer-id", action="append", default=[])
     parser.add_argument("--input-commitment-sha256")

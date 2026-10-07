@@ -11,7 +11,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Protocol, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from filings.sec_submissions_inventory import SEC_REGISTRATION_FINANCIAL_FORMS
 
@@ -230,6 +238,22 @@ class ResearchSnapshotRequest(_Frozen):
     canonical_fact_projection_run_id: str = Field(min_length=1, max_length=128)
     cutoff_at: datetime
     recorded_at: datetime
+
+    source_publication_reference_clock: Literal["cutoff_v1", "publication_created_v2"] = "cutoff_v1"
+
+    @model_serializer(mode="wrap")
+    def _serialize_request(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        # Reject bypassed Literal validation before any persistence.
+        if self.source_publication_reference_clock not in {"cutoff_v1", "publication_created_v2"}:
+            raise ValueError("unsupported source publication reference clock")
+        # Legacy requests must retain their exact JSON and immutable digest.
+        value = handler(self)
+        if not isinstance(value, dict):
+            raise ValueError("research request serialization must be an object")
+        result = cast(dict[str, object], value)
+        if self.source_publication_reference_clock == "cutoff_v1":
+            result.pop("source_publication_reference_clock", None)
+        return result
 
     @model_validator(mode="after")
     def _request_shape(self) -> Self:
@@ -1604,12 +1628,18 @@ class _DefaultResearchReferenceVerifier:
                 cutoff=request.cutoff_at,
                 observed_through=request.recorded_at,
             )
+            if request.source_publication_reference_clock == "cutoff_v1":
+                publication_knowledge = request.cutoff_at
+            elif request.source_publication_reference_clock == "publication_created_v2":
+                publication_knowledge = verified.created_at
+            else:
+                raise ValueError("unsupported source publication reference clock")
             return VerifiedResearchReference(
                 requested_lane=requested_lane,
                 reference_table="source_fact_publication_seals",
                 reference_id=verified.publication_seal_id,
                 commitment_sha256=verified.member_set_sha256,
-                knowledge_at=request.cutoff_at,
+                knowledge_at=publication_knowledge,
                 recorded_at=max(verified.recorded_at, verified.sealed_at),
             )
         if requested_lane == "ontology_snapshot":
@@ -2284,6 +2314,8 @@ def _build_research_snapshot_with_verifier(
     *,
     verifier: _ResearchReferenceVerifier,
 ) -> ResearchSnapshotAdmission:
+    if request.source_publication_reference_clock not in {"cutoff_v1", "publication_created_v2"}:
+        raise ValueError("unsupported source publication reference clock")
     references = _verify_research_references(conn, request, verifier)
     request_json = canonical_json(request)
     members: list[dict[str, object]] = []

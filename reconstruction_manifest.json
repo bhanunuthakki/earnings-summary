@@ -1,5 +1,5 @@
 {
-  "manifest_version": "2026-10-04.1",
+  "manifest_version": "2026-10-07.1",
   "workspace_name": "earnings-summary",
   "description": "11-subsystem reconstruction manifest and deterministic inventory definition for the earnings-summary research platform.",
   "canonical_runtime": {
@@ -25,7 +25,10 @@
         "alembic/versions/0054_filing_xbrl_unit_protocol.py",
         "src/pipeline/kpi_legacy_disposition_capture.py",
         "src/pipeline/kpi_semantics.py",
-        "src/provenance/financial_derivations.py"
+        "src/provenance/financial_derivations.py",
+        "src/provenance/research_snapshot.py",
+        "src/provenance/population_research_snapshots.py",
+        "execution/populate_research_snapshots.py"
       ],
       "dependencies": [
         "requirements.lock",
@@ -33,6 +36,7 @@
       ],
       "test_commands": [
         "pytest tests/test_sqlite_runtime.py -q",
+        "pytest tests/test_research_snapshot.py tests/test_research_snapshot_publication_clock.py tests/test_population_research_snapshots.py tests/test_population_research_projection_mode.py -q",
         "pytest tests/test_kpi_legacy_dispositions.py tests/test_kpi_source_precision.py tests/test_financial_source_repairs.py tests/test_reviewed_kpi_native_population.py -q"
       ],
       "documentation": [
@@ -220,6 +224,7 @@
         "src/dcf/reviewed_input_roles.py",
         "execution/review_onon_input_roles.py",
         "src/dcf/input_evidence.py",
+        "src/dcf/grade_evidence.py",
         "src/dcf/readiness.py"
       ],
       "dependencies": [
@@ -227,6 +232,7 @@
       ],
       "test_commands": [
         "pytest tests/test_metrics_engine.py -q",
+        "pytest tests/test_dcf_grade_evidence.py -q",
         "pytest tests/test_cashflow_input_evidence.py tests/test_cashflow_scenarios.py tests/test_valuation_readiness.py -q",
         "pytest tests/test_onon_model.py tests/test_onon_inputs.py tests/test_build_onon_dcf.py tests/test_scenario_acceptance.py -q",
         "pytest tests/test_reviewed_input_roles.py tests/test_review_onon_input_roles.py -q",
@@ -279,7 +285,8 @@
         "execution/verify_decision_brief.py",
         "src/research/decision_brief_workflow.py",
         "src/research/decision_brief.py",
-        "src/research/memo_claim_support.py"
+        "src/research/memo_claim_support.py",
+        "src/research/memo_model_evidence.py"
       ],
       "dependencies": [
         "financial_compute_engine"
@@ -287,7 +294,8 @@
       "test_commands": [
         "pytest tests/test_advisor_memos.py -q",
         "pytest tests/test_qualitative_stress.py -q",
-        "pytest tests/test_decision_brief.py tests/test_memo_claim_support.py -q"
+        "pytest tests/test_decision_brief.py tests/test_memo_claim_support.py -q",
+        "pytest tests/test_memo_context_v2.py tests/test_memo_model_evidence.py tests/test_memo_model_roundtrip.py tests/test_memo_peer_roundtrip.py -q"
       ],
       "documentation": [
         "HOW_TO_USE_REPORTS.md",

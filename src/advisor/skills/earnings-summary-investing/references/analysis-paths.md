@@ -265,6 +265,22 @@ reconstruction and model readiness. A generated full brief remains degraded
 until all applicable gates pass. These new entrypoints require a released runtime;
 local tests do not prove they are installed on the canonical Windows host.
 
+Use `memo_context_review.v2` when a memo needs independently sealed peer issuer
+contexts or verified ONON model selections. Retain the primary snapshot used by
+the DCF. Name each supporting snapshot, issuer and member commitment explicitly;
+do not relabel peer evidence as the primary company. Model selections must bind
+the exact run, receipt, effective inputs, outputs and analyst scenario acceptance.
+Unsupported calculations remain unavailable. Current research requests that
+include earlier source publications use the explicit
+`source_publication_reference_clock="publication_created_v2"` policy. Preserve
+legacy requests and their exact commitments. The existing
+`execution/populate_research_snapshots.py` command selects that policy with
+`--source-publication-reference-clock publication_created_v2`; repeat the mode
+and its commitments in preview and apply. Model verification uses the exact
+internal evidence reader; a bounded display projection cannot replace its
+receipts. The existing memo verifier checks both review versions; rendering
+alone does not establish readiness.
+
 The generic cash-flow request can include a typed analyst scenario review. Its
 exact base/bear/bull inputs, probabilities, source/model commitments and outputs
 must replay. Request capture and calculation clocks are distinct from the data

@@ -1,5 +1,5 @@
 {
-  "review_note": "Root inspected the Operations guide changes for retained-run read-only verification, strict run-ID validation, public aliases, and the guide's physical source-reader/reporting controls. Local delivery gates remain pending. Historical completed source-review context: Current main2b6 reviewed source population is preserved. Root inspected combined PR1650 physical source-reader, annual-period and entrypoint changes; the new scenario digest and explicit source-root controls also received independent advisory review. Exact changed source commitments: .tmp/onon-current-main-integration-v1/source-review-v1.json. Delivery gates pending; no native, financial admission or decision-grade approval.",
+  "review_note": "Reviewed memo v2 issuer-separated evidence, finite committed ONON replay selectors, bounded exact internal DCF verification, and explicit publication-created clock routing. Legacy request bytes, default mode, issuer subset dry/apply commitments, source gates, terminal conflicts and public display bounds remain intact. Actual public producer fixture exposed and verified the canonical seal recorded_at query correction. This source review does not qualify a production memo or deployment.",
   "schema_version": 1,
   "sources": [
     {
@@ -24,7 +24,7 @@
     },
     {
       "path": "directives/data_provenance.md",
-      "sha256": "6b39ca437ca7622a615cb16d86c9e1d85a35d5b5579638e783931dc128bdb23c"
+      "sha256": "f9ac9571f7f35f5278c6ec1c235e165ec657f78892cada3324dd5e126f6db999"
     },
     {
       "path": "directives/dcf_gsheets_setup.md",
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "7922d57b61a070a9bd88d68d58d443275bcaddbe17cb45633646f65e23be7ce2"
+      "sha256": "65cda5c2a611ba6443ed96a3e976a5c93fd7a0c120a8d76206375065bec365c6"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -204,7 +204,7 @@
     },
     {
       "path": "execution/populate_research_snapshots.py",
-      "sha256": "6414cdbe20454a672fbf3cff614e7dfc3af9c5d9063a7ed003f1661280975e5d"
+      "sha256": "0f94c4e4fcd51f24a45395e71892494d98de2dca43a34516b9e11322835b6795"
     },
     {
       "path": "execution/populate_source_fact_plane.py",
@@ -268,7 +268,7 @@
     },
     {
       "path": "execution/verify_decision_brief.py",
-      "sha256": "a3d93db6586ae0ed2a98112dc2c781401fe3d28450a8e7939b223ef41b918e48"
+      "sha256": "83846f6ee5a55650e7c15ff5c5758f7321833199bea911f413496440af022256"
     },
     {
       "path": "execution/verify_reconstruction_inventory.py",
@@ -276,7 +276,7 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "def037a564b1dbc779b61cfe0b1a1d0d114ef22ad8c20b39ca3290223aa8d6ed"
+      "sha256": "2285abbda0b685b8f66abef76618dc6074091aa87029af6df989f22ce6d01422"
     },
     {
       "path": "scripts/check_investing_skill.py",
@@ -340,7 +340,7 @@
     },
     {
       "path": "src/dcf/grade_evidence.py",
-      "sha256": "60fbae023148ab10b14f21d7401c7a0097faa226df40dde94ec5f509f19c52d0"
+      "sha256": "f9a1bf6b5ebac70a54e28d6c8cc23662d0c3195765933eb18bc9f1987cd7effa"
     },
     {
       "path": "src/dcf/input_recipes.py",
@@ -348,7 +348,7 @@
     },
     {
       "path": "src/dcf/readiness.py",
-      "sha256": "1cec8af61cc099dde4681b36f4a37f717a415e54fc3638cf892ede8983682d43"
+      "sha256": "5b740363847764ae89bb847f702b0c5bcfbbab6d6cfcc701554890d6d9908ed0"
     },
     {
       "path": "src/earnings_brief.py",
@@ -420,11 +420,11 @@
     },
     {
       "path": "src/provenance/population_research_snapshots.py",
-      "sha256": "55a1aea8c240d46215114ecb867043dbfa4325fd7af425962e7ee17a98420a20"
+      "sha256": "aeebd8c9c040f11224ded96503b03247fc0461b8be875d8695292ac437d8b2ea"
     },
     {
       "path": "src/provenance/research_snapshot.py",
-      "sha256": "e9cf7dd2a385ae970c8b92f1a3c965ffc2b693657c79aa1c9df9f80e16e04b6d"
+      "sha256": "338312fca8fc597a346ac353e7cb6def056e115cf3b34f4887f81605e6ec5a8b"
     },
     {
       "path": "src/quality/static_quality_gate.py",
@@ -448,11 +448,11 @@
     },
     {
       "path": "src/research/decision_brief.py",
-      "sha256": "471255e694f2f55e29c668f71c786f191612794777b272c993b827861bdf1dfd"
+      "sha256": "a05ca193b9a93e0ddc165ee7e5e481d77e335b08374bfb6a6b756864ce9ee39b"
     },
     {
       "path": "src/research/decision_brief_workflow.py",
-      "sha256": "f09fd084e10339811737d0f8a0a319b81b09d18995b1eea2d87f484d951005be"
+      "sha256": "81b542c4135d8563d029d80e82ec20bc09033001c9c247bb849b9c586bbaabd6"
     },
     {
       "path": "src/research/investment_decision_card.py",
@@ -461,6 +461,10 @@
     {
       "path": "src/research/memo_claim_support.py",
       "sha256": "d81315a2cd4b1b633ce75cc34cb1a5793793a17906b19d9b761531059ba9e1a6"
+    },
+    {
+      "path": "src/research/memo_model_evidence.py",
+      "sha256": "2348e339b0684a261f4a62ae773217ba8d9d5876efbc7c364a406cea47bb3429"
     },
     {
       "path": "src/research/method_contract.py",
