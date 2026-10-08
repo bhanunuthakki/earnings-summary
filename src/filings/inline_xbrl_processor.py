@@ -72,6 +72,21 @@ class _Kernel32(Protocol):
     GetSystemDirectoryW: _WindowsFunction
     CreateFileW: _WindowsFunction
     CloseHandle: _WindowsFunction
+    GetCurrentProcess: _WindowsFunction
+    GetCurrentThread: _WindowsFunction
+    LocalFree: _WindowsFunction
+
+
+class _Advapi32(Protocol):
+    OpenThreadToken: _WindowsFunction
+    OpenProcessToken: _WindowsFunction
+    DuplicateToken: _WindowsFunction
+    GetNamedSecurityInfoW: _WindowsFunction
+    AccessCheck: _WindowsFunction
+
+
+class _Advapi32Factory(Protocol):
+    def __call__(self, name: str, *, use_last_error: bool) -> _Advapi32: ...
 
 
 class _WinDLLFactory(Protocol):
@@ -90,6 +105,13 @@ def _windows_last_error() -> int:
 
     get_last_error = cast("Callable[[], int]", getattr(ctypes, "get_last" + "_error"))
     return get_last_error()
+
+
+def _load_advapi32() -> _Advapi32:
+    import ctypes
+
+    factory = cast("_Advapi32Factory", getattr(ctypes, "Win" + "DLL"))
+    return factory("advapi32", use_last_error=True)
 
 
 class InlineXbrlProcessorError(RuntimeError):
@@ -1264,6 +1286,115 @@ def _release_windows_acl_fence(
         raise InlineXbrlProcessorError("Windows ACL fence cleanup failed")
 
 
+def _require_directory_nonwritable(path: Path, relative: str) -> None:
+    """Check the DACL without CreateFile's backup/restore privilege override."""
+
+    import ctypes
+    from ctypes import wintypes
+
+    class GenericMapping(ctypes.Structure):
+        _fields_ = [(name, wintypes.DWORD) for name in ("read", "write", "execute", "all")]
+
+    kernel32, security = _load_kernel32(), _load_advapi32()
+    for function in (kernel32.GetCurrentProcess, kernel32.GetCurrentThread):
+        function.argtypes = []
+        function.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+    token_pointer = ctypes.POINTER(wintypes.HANDLE)
+    security.OpenThreadToken.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.BOOL,
+        token_pointer,
+    ]
+    security.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, token_pointer]
+    security.DuplicateToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, token_pointer]
+    for function in (security.OpenThreadToken, security.OpenProcessToken, security.DuplicateToken):
+        function.restype = wintypes.BOOL
+    security.GetNamedSecurityInfoW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    security.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    security.AccessCheck.argtypes = [
+        ctypes.c_void_p,
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(GenericMapping),
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.POINTER(wintypes.BOOL),
+    ]
+    security.AccessCheck.restype = wintypes.BOOL
+    token, duplicate, descriptor = wintypes.HANDLE(), wintypes.HANDLE(), ctypes.c_void_p()
+    try:
+        # Query the effective caller. No impersonation or privilege changes occur.
+        if not security.OpenThreadToken(
+            kernel32.GetCurrentThread(), 0xA, True, ctypes.byref(token)
+        ) and (
+            _windows_last_error() != 1008
+            or not security.OpenProcessToken(kernel32.GetCurrentProcess(), 0xA, ctypes.byref(token))
+        ):
+            raise InlineXbrlProcessorError("filing-XBRL fence caller token cannot be verified")
+        if not token.value:
+            raise InlineXbrlProcessorError("filing-XBRL fence caller token is unavailable")
+        # SecurityIdentification is sufficient for AccessCheck, not impersonation.
+        if not security.DuplicateToken(token, 1, ctypes.byref(duplicate)) or not duplicate.value:
+            raise InlineXbrlProcessorError("filing-XBRL fence caller token cannot be duplicated")
+        # Owner and group are required by AccessCheck, in addition to the DACL.
+        status = security.GetNamedSecurityInfoW(
+            str(path), 1, 7, None, None, None, None, ctypes.byref(descriptor)
+        )
+        if status != 0 or not descriptor.value:
+            raise InlineXbrlProcessorError("filing-XBRL fenced directory DACL cannot be verified")
+        mapping = GenericMapping(0x120089, 0x120116, 0x1200A0, 0x1F01FF)
+        for right in (0x2, 0x4, 0x10, 0x40, 0x100):
+            privileges = ctypes.create_string_buffer(512)
+            size, granted, allowed = (
+                wintypes.DWORD(len(privileges)),
+                wintypes.DWORD(),
+                wintypes.BOOL(),
+            )
+            if not security.AccessCheck(
+                descriptor,
+                duplicate,
+                right,
+                ctypes.byref(mapping),
+                privileges,
+                ctypes.byref(size),
+                ctypes.byref(granted),
+                ctypes.byref(allowed),
+            ):
+                raise InlineXbrlProcessorError(
+                    "filing-XBRL fenced tree access cannot be verified "
+                    f"(directory {relative!r}, access=0x{right:08x}, winerror={_windows_last_error()})"
+                )
+            if allowed.value or granted.value:
+                raise InlineXbrlProcessorError(
+                    "filing-XBRL fenced tree remains writable "
+                    f"(directory {relative!r}, access=0x{right:08x})"
+                )
+    finally:
+        cleanup_failed = False
+        if descriptor.value:
+            cleanup_failed = bool(kernel32.LocalFree(descriptor))
+        for handle in (duplicate, token):
+            if handle.value and not kernel32.CloseHandle(handle):
+                cleanup_failed = True
+        if cleanup_failed:
+            raise InlineXbrlProcessorError("filing-XBRL directory access-check cleanup failed")
+
+
 def _require_tree_nonwritable(root: Path) -> None:
     import ctypes
     from ctypes import wintypes
@@ -1286,20 +1417,17 @@ def _require_tree_nonwritable(root: Path) -> None:
     invalid = wintypes.HANDLE(-1).value
     for path in (root, *enumerate_closed_local_tree(root, label="filing-XBRL fenced tree")):
         is_directory = path.is_dir()
-        flags = 0x02000000 if is_directory else 0x00000080
-        rights = (
-            (0x00000002, 0x00000004, 0x00000010, 0x00000040, 0x00000100)
-            if is_directory
-            else (0x40000000, 0x00010000)
-        )
-        for right in rights:
+        if is_directory:
+            _require_directory_nonwritable(path, path.relative_to(root).as_posix())
+            continue
+        for right in (0x40000000, 0x00010000):
             handle = create_file(
                 str(path),
                 right,
                 0x00000001 | 0x00000002 | 0x00000004,
                 None,
                 3,
-                flags,
+                0x00000080,
                 None,
             )
             if handle != invalid:

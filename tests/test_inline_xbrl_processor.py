@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import io
 import json
@@ -77,6 +78,62 @@ class _ProbeKernel32:
     def __init__(self, create_file: Callable[..., int], close_handle: Callable[..., int]) -> None:
         self.CreateFileW = _ProbeWindowsFunction(create_file)
         self.CloseHandle = _ProbeWindowsFunction(close_handle)
+        self.GetCurrentProcess = _ProbeWindowsFunction(lambda: 100)
+        self.GetCurrentThread = _ProbeWindowsFunction(lambda: 200)
+        self.LocalFree = _ProbeWindowsFunction(lambda *_args: 0)
+
+
+class _ProbeAdvapi32:
+    def __init__(self, calls: list[tuple[str, int]], target: Path | None, right: int) -> None:
+        self.path = ""
+
+        def open_token(*args: object) -> int:
+            output = getattr(args[-1], "_obj")
+            assert isinstance(output, wintypes.HANDLE)
+            output.value = 101
+            assert args[1] == 0xA
+            return 1
+
+        def duplicate_token(*args: object) -> int:
+            output = getattr(args[-1], "_obj")
+            assert isinstance(output, wintypes.HANDLE)
+            output.value = 201
+            assert args[1] == 1
+            return 1
+
+        def descriptor(*args: object) -> int:
+            assert isinstance(args[0], str)
+            self.path = args[0]
+            assert args[1:3] == (1, 7)
+            output = getattr(args[-1], "_obj")
+            assert isinstance(output, ctypes.c_void_p)
+            output.value = 301
+            return 0
+
+        def access_check(*args: object) -> int:
+            requested = args[2]
+            assert isinstance(requested, int)
+            calls.append((self.path, requested))
+            mapping = getattr(args[3], "_obj")
+            assert [getattr(mapping, name) for name in ("read", "write", "execute", "all")] == [
+                0x120089,
+                0x120116,
+                0x1200A0,
+                0x1F01FF,
+            ]
+            allowed = getattr(args[-1], "_obj")
+            granted = getattr(args[-2], "_obj")
+            assert isinstance(allowed, wintypes.BOOL) and isinstance(granted, wintypes.DWORD)
+            permit = self.path == str(target) and requested == right
+            allowed.value = int(permit)
+            granted.value = requested if permit else 0
+            return 1
+
+        self.OpenThreadToken = _ProbeWindowsFunction(open_token)
+        self.OpenProcessToken = _ProbeWindowsFunction(open_token)
+        self.DuplicateToken = _ProbeWindowsFunction(duplicate_token)
+        self.GetNamedSecurityInfoW = _ProbeWindowsFunction(descriptor)
+        self.AccessCheck = _ProbeWindowsFunction(access_check)
 
 
 def _canonical(value: object) -> str:
@@ -530,6 +587,8 @@ def test_tree_probe_identifies_each_allowed_mutation_right_and_closes_handle(
         return 42 if path == str(target) and access == right else invalid
 
     def close_handle(handle: object) -> int:
+        if isinstance(handle, wintypes.HANDLE):
+            handle = handle.value
         assert isinstance(handle, int)
         closed.append(handle)
         return 1
@@ -537,13 +596,16 @@ def test_tree_probe_identifies_each_allowed_mutation_right_and_closes_handle(
     monkeypatch.setattr(
         processor_module, "_load_kernel32", lambda: _ProbeKernel32(create_file, close_handle)
     )
+    monkeypatch.setattr(
+        processor_module, "_load_advapi32", lambda: _ProbeAdvapi32(calls, target, right)
+    )
     monkeypatch.setattr(processor_module, "_windows_last_error", lambda: 5)
     relative = target.relative_to(root).as_posix()
     with pytest.raises(InlineXbrlProcessorError) as failure:
         _require_tree_nonwritable_for_test(root)
     assert f"{kind} {relative!r}, access=0x{right:08x}" in str(failure.value)
     assert calls[-1] == (str(target), right)
-    assert closed == [42]
+    assert closed == ([201, 101] if kind == "directory" else [201, 101, 201, 101, 42])
 
 
 def test_tree_probe_preserves_fail_closed_unknown_access_error(
@@ -551,12 +613,14 @@ def test_tree_probe_preserves_fail_closed_unknown_access_error(
 ) -> None:
     invalid = wintypes.HANDLE(-1).value
     assert isinstance(invalid, int)
+    (tmp_path / "member.py").write_text("original")
     monkeypatch.setattr(
         processor_module,
         "_load_kernel32",
         lambda: _ProbeKernel32(lambda *_args: invalid, lambda *_args: 1),
     )
     monkeypatch.setattr(processor_module, "_windows_last_error", lambda: 32)
+    monkeypatch.setattr(processor_module, "_load_advapi32", lambda: _ProbeAdvapi32([], None, 0))
     with pytest.raises(InlineXbrlProcessorError, match="access cannot be verified"):
         _require_tree_nonwritable_for_test(tmp_path)
 
