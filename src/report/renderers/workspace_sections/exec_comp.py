@@ -76,10 +76,12 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
 
     # 3. NEO comp table
     if section.packages:
+        currencies = {pkg.currency or "currency unavailable" for pkg in section.packages}
+        currency_label = next(iter(currencies)) if len(currencies) == 1 else "mixed currencies"
         body.write(
             _panel_head(
                 "Named-Executive-Officer compensation",
-                sub=f"{len(section.packages)} executives · {section.packages[0].currency}",
+                sub=f"{len(section.packages)} executives · {currency_label}",
             )
             + lg.grid_open()
             + lg.filter_bar(len(section.packages), noun="executives")
@@ -113,22 +115,28 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
             body.write(f"<tr{data}>")
             body.write(f"<td>{_esc(pkg.executive_name)}{ceo_pill}</td>")
             body.write(f"<td>{_esc(pkg.role or '?')}</td>")
-            body.write(f'<td class="num">{_fmt_usd_short(pkg.base_salary)}</td>')
-            bonus_pair = _fmt_usd_short(pkg.cash_bonus_actual)
+            body.write(
+                f'<td class="num">{_fmt_usd_short(pkg.base_salary, currency=pkg.currency)}</td>'
+            )
+            bonus_pair = _fmt_usd_short(pkg.cash_bonus_actual, currency=pkg.currency)
             if pkg.cash_bonus_target is not None and pkg.cash_bonus_target != pkg.cash_bonus_actual:
-                bonus_pair += (
-                    f' <span class="muted">/ {_fmt_usd_short(pkg.cash_bonus_target)} tgt</span>'
-                )
+                bonus_pair += f' <span class="muted">/ {_fmt_usd_short(pkg.cash_bonus_target, currency=pkg.currency)} tgt</span>'
             body.write(f'<td class="num">{bonus_pair}</td>')
-            body.write(f'<td class="num">{_fmt_usd_short(pkg.equity_grant_value)}</td>')
-            body.write(f'<td class="num">{_fmt_usd_short(pkg.total_comp_granted)}</td>')
+            body.write(
+                f'<td class="num">{_fmt_usd_short(pkg.equity_grant_value, currency=pkg.currency)}</td>'
+            )
+            body.write(
+                f'<td class="num">{_fmt_usd_short(pkg.total_comp_granted, currency=pkg.currency)}</td>'
+            )
             rvg = pkg.realized_vs_granted_pct
             if rvg is not None:
                 tone = "pos" if rvg > 0 else "neg" if rvg < 0 else ""
                 body.write(f'<td class="num {tone}">{rvg * 100:+.0f}%</td>')
             else:
                 body.write('<td class="num muted">-</td>')
-            body.write(f"<td>{_esc(pkg.performance_metrics_summary or '(none disclosed)')}</td>")
+            body.write(
+                f"<td>{_esc(pkg.performance_metrics_summary or 'Disclosure not available in this report')}</td>"
+            )
             match = "✓ matches thesis" if pkg.metrics_have_thesis_kpi else "—"
             cls = "kpi-match" if pkg.metrics_have_thesis_kpi else "muted"
             body.write(f'<td class="{cls}">{_esc(match)}</td>')
@@ -140,8 +148,7 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
         if ceo and ceo.ceo_pay_ratio:
             body.write(
                 f'<tfoot><tr><td colspan="9" class="table-footer">CEO pay ratio: '
-                f"<strong>{ceo.ceo_pay_ratio:.0f}x</strong> median employee comp "
-                f"(S&amp;P 500 average ~300x).</td></tr></tfoot>"
+                f"<strong>{ceo.ceo_pay_ratio:.0f}x</strong> median employee comp.</td></tr></tfoot>"
             )
         body.write("</table>")
         body.write(lg.grid_close())
@@ -200,7 +207,7 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
             body.write(f"<td>{_esc(s.role or '?')}</td>")
             body.write(f"<td>{_esc(action)}</td>")
             body.write(f'<td class="num">{s.shares:,.0f}</td>')
-            body.write(f'<td class="num">{_fmt_usd_short(s.transaction_value)}</td>')
+            body.write(f'<td class="num">{_fmt_usd_short(s.transaction_value, currency=None)}</td>')
             body.write(f'<td class="num {strength_tone}">{strength_pct}</td>')
             body.write(f"<td>{_esc(s.rationale)}</td>")
             body.write("</tr>")
@@ -211,15 +218,23 @@ def _exec_comp_tab(body: StringIO, section: ExecCompSectionModel | None) -> None
     body.write("</div>")
 
 
-def _fmt_usd_short(v: float | None) -> str:
-    """Compact USD formatter for the comp table."""
+def _fmt_usd_short(v: float | None, *, currency: str | None = "USD") -> str:
+    """Compact amount formatter; keep its legacy USD entry point.
+
+    Compensation has an explicit currency. The current insider row model
+    has no currency field, so that surface must keep the missing unit visible.
+    """
     if v is None:
         return '<span class="muted">-</span>'
+    prefix = "$" if currency == "USD" else f"{_esc(currency)} " if currency else ""
+    suffix = " (currency unavailable)" if not currency else ""
     av = abs(v)
     if av >= 1e9:
-        return f"${v / 1e9:.1f}B"
-    if av >= 1e6:
-        return f"${v / 1e6:.1f}M"
-    if av >= 1e3:
-        return f"${v / 1e3:.0f}K"
-    return f"${v:,.0f}"
+        amount = f"{v / 1e9:.1f}B"
+    elif av >= 1e6:
+        amount = f"{v / 1e6:.1f}M"
+    elif av >= 1e3:
+        amount = f"{v / 1e3:.0f}K"
+    else:
+        amount = f"{v:,.0f}"
+    return prefix + amount + suffix

@@ -49,6 +49,15 @@ live database, fallback host or place for duplicate background services.
 
 ## Establish the evidence
 
+Apply the [financial narrative contract](../../../../directives/llm_calls.md#financial-narrative-grounding)
+to every requested brief, evaluation, assessment and financial answer. Use existing
+verified facts first. If the requested evidence is unavailable, flag the gap early
+and agree on the source classes, period window, effort and output limits before
+new collection or a response with lower coverage. Honor an already approved exact
+scope. A bounded request needs accurate facts within that window; it does not
+require an unrequested full-history ingestion. Open-ended reasoning may use
+explicit assumptions, but its factual anchors still require source support.
+
 Start with `micro_thesis/holdings/<TICKER>.json`, canonical database evidence,
 `transcripts/`, `ir_documents/` and existing research artifacts. Thesis thresholds
 and owner assumptions come from their recorded authority. A draft or stub does
@@ -99,6 +108,12 @@ that the thesis passed or that the owner should hold cash. Unsupported modes can
 produce bounded source-backed research without inventing a new durable pipeline.
 
 ## Deliver through the existing surface
+
+Check the complete narrative against its selected corpus before delivery. Verify
+metric meaning, periods, currency/units, scale, reporting scope, basis and
+actual/forecast qualifications as well as values and calculations. Retain the
+claim/source evidence and verification disposition. A citation, successful
+render or model self-check is not a passing factual verification gate.
 
 Use the route's existing schema and report family. Keep a quick answer concise;
 do not impose a model, deck, memo or intake form on every question. Save durable

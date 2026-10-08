@@ -580,9 +580,10 @@ def generate_summary(text: str, anchor_block: str = "", ticker: str | None = Non
     """
     prompt = f"""
     You are writing the per-quarter earnings note for an analyst-grade
-    research memo. The reader already has the numbers from the workspace
-    renderer (a separate FMP-driven table renders below this writeup) —
-    your job is the INTERPRETATION, not the data dump.
+    research memo. The workspace financial table uses the canonical verified
+    reader. Do not infer that a populated table exists or that this transcript
+    proves canonical financial admission. Use the supplied evidence for your
+    interpretation and explicitly flag missing verified financial context.
 
     {anchor_block}
 
@@ -595,8 +596,8 @@ def generate_summary(text: str, anchor_block: str = "", ticker: str | None = Non
     - Templated section headers like "## 1. Executive Summary" / "## 2.
       Financial Highlights" — write FLOWING PROSE with at most 3-4 H3
       subheads of your own choosing, not a checklist
-    - Re-listing the headline financials (Revenue / EPS / Op Margin) — the
-      workspace renders these from FMP data adjacent to your writeup
+    - Re-listing the headline financials (Revenue / EPS / Op Margin) — keep
+      interpretation separate from the workspace's source-bound financial table
     - "Key Drivers: [text analysis of what drove the numbers]" generic
       paraphrasing — be specific about which lever moved
     - "Strategic Initiatives:" bucket — name a specific initiative, frame

@@ -1,10 +1,10 @@
 {
-  "review_note": "Reviewed released earnings fix 1d87985a: pre/post CLIs resolve approved explicit or configured database; readout KPI periods stop at selected fiscal end while revisions remain current; exact call-event matching does not establish sourced consensus or historical cutoff; artifact reads and reuse verify stored output checksums. Reviewed ETF holdings reader snapshot-date/source/weight limits and direct-book membership overlap; added bounded ETF comparison guidance without a new application capability or write authority. Preserved all prior reviewed source commitments.",
+  "review_note": "Reviewed merged main change 1d87985a: earnings CLIs now require the configured canonical database; readouts use the selected call date and fiscal period end while retaining evidence limits; artifact readers and reuse reject corrupt or missing output checksums without erasing historical bytes. Existing skill instructions already require exact periods, configured state, preserved cache semantics and separate financial verification. No skill prose change is needed. Preserved the released financial narrative contract and its source commitments from f0c0162f. Reviewed released earnings fix 1d87985a: pre/post CLIs resolve approved explicit or configured database; readout KPI periods stop at selected fiscal end while revisions remain current; exact call-event matching does not establish sourced consensus or historical cutoff; artifact reads and reuse verify stored output checksums. Reviewed ETF holdings reader snapshot-date/source/weight limits and direct-book membership overlap; added bounded ETF comparison guidance without a new application capability or write authority. Preserved all prior reviewed source commitments.",
   "schema_version": 1,
   "sources": [
     {
       "path": "AGENTS.md",
-      "sha256": "a060d2f118a60f2c038d5bafbb702f02a97a63d71974e2ec9b1c85f06f2a63c5"
+      "sha256": "b07df6d6f883230685362e26dd5ad2a496236d0fc9def9ecb2d0dc14b7b6b532"
     },
     {
       "path": "DEFINITIONS.md",
@@ -32,7 +32,7 @@
     },
     {
       "path": "directives/directive_manifest.json",
-      "sha256": "275e8a409b72ac0061f90f9798512af9be853b08d186929f48c5387fc30e0733"
+      "sha256": "50250dbcdcfb0a887548b073c2ab7d834ba0bd4334093ebc528af82d61733265"
     },
     {
       "path": "directives/etf_data.md",
@@ -52,7 +52,7 @@
     },
     {
       "path": "directives/llm_calls.md",
-      "sha256": "4f47ea54f4f82b1f5a4610b655e419a592571bd5b90969ea174c5e82c038f12f"
+      "sha256": "d4f2641a6d83df11197a886e9d08d3e6288a68bcf242fbfc50bd928e229fdb1c"
     },
     {
       "path": "directives/llm_evals.md",
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "7922d57b61a070a9bd88d68d58d443275bcaddbe17cb45633646f65e23be7ce2"
+      "sha256": "4fe9742bb314d2b44e41b5d23b002a31f58e417ec4dc347f0275caf07cfbf06c"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -92,7 +92,7 @@
     },
     {
       "path": "directives/report_comments_and_chat.md",
-      "sha256": "055fe782588e23c9455dfaa4eaadd74a12de6bd44b90f5247becd3d2138c95d1"
+      "sha256": "be8add723f9351e3ef76859cef19d68fe1d576f3c03c11f0940d3d45779d95a6"
     },
     {
       "path": "execution/apply_issuer_fact_manifest.py",
@@ -284,7 +284,7 @@
     },
     {
       "path": "src/advisor/skills/earnings-summary-investing/references/research-method.md",
-      "sha256": "d44af8aa134850959c1ff5eae5efec7ce6ceab9cf646c320cebd0199a46ff5e5"
+      "sha256": "86b1fbaa7412a4ccda9b017ed5eccdfb300a0c01caf7e9a23857c41256db4287"
     },
     {
       "path": "src/advisor/skills/next-dollar-allocation/SKILL.md",
@@ -404,7 +404,7 @@
     },
     {
       "path": "src/llm_client.py",
-      "sha256": "680843db145811d74bb67bdfd4bb7e1e988ad02c531051d252cbf093799dc524"
+      "sha256": "d0282669e53d0f59662c9d79079941b76ffbe6e603413a9af7630fb087737006"
     },
     {
       "path": "src/pipeline/kpi_report_reference_resolver.py",
@@ -448,7 +448,7 @@
     },
     {
       "path": "src/report/sections/bear_case.py",
-      "sha256": "3f5f2247f44cc0659e34dec3b59f8f632767bcc9d7a38ca5f779c1f76278b261"
+      "sha256": "1928fea0e48e1fb16fcbd3cd66d168bdac9415c6dd6252bcd19a8933f96ea453"
     },
     {
       "path": "src/report/sections/thesis.py",

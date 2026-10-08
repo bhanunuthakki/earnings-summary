@@ -18,6 +18,14 @@
 
 ## Ownership boundary
 
+Every financial answer follows the [financial narrative contract](llm_calls.md#financial-narrative-grounding),
+including report handoffs, open questions, coaching and Ledger replies. Existing
+verified facts supply factual anchors. Open-ended reasoning can use labeled
+assumptions; missing required data calls for an early, bounded scope decision.
+The selected corpus must verify the complete financial answer before it is shown.
+A surface's use of Ask does not itself prove that its retrieval and output gates
+are enabled.
+
 This contract owns comment/Copilot semantics and proposal approval. `interaction_contract.md` owns
 shared doorway and overlay laws; `data_provenance.md` owns provenance meaning; and
 `operations_governance_surface.md` owns supported operator actions. UI composition remains subject
