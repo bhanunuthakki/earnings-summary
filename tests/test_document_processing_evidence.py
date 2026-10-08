@@ -335,6 +335,7 @@ def _seed_run(
     extractor_config_sha256: str,
     children: tuple[tuple[str, str, EvidenceLocator], ...],
     legacy_ascii_output: bool = False,
+    node_recorded_at: datetime = T0,
 ) -> tuple[EvidenceNode, ...]:
     document_node = _node(
         run_id=run_id,
@@ -358,6 +359,7 @@ def _seed_run(
             for ordinal, (kind, text, locator) in enumerate(children, start=1)
         ),
     )
+    nodes = tuple(node.model_copy(update={"recorded_at": node_recorded_at}) for node in nodes)
     output_payload = [item.model_dump(mode="json", exclude_none=True) for item in nodes]
     output_sha = hashlib.sha256(
         (
@@ -2063,4 +2065,180 @@ def test_pdf_legacy_seal_replays_but_cannot_authorize_new_seal(
             observed_through=T2,
         ).extraction_run_id
         == "historical-pdf-run"
+    )
+
+
+@pytest.mark.parametrize(
+    "stored_clock",
+    [
+        "2026-07-27T12:00:00",
+        "2026-07-27T12:00:00+00:00",
+        "2026-07-27T17:30:00+05:30",
+        "2026-07-27T08:00:00-04:00",
+    ],
+)
+def test_native_output_replays_original_clock_representation(
+    conn: sqlite3.Connection, stored_clock: str
+) -> None:
+    document_id = "clock-replay-deck"
+    blob_sha = _seed_document(
+        conn,
+        document_version_id=document_id,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    )
+    nodes = _seed_run(
+        conn,
+        document_version_id=document_id,
+        blob_sha=blob_sha,
+        run_id="clock-replay-run",
+        extractor_name=OFFICE_FULLTEXT_EXTRACTOR.name,
+        extractor_code_version=OFFICE_FULLTEXT_EXTRACTOR.code_version,
+        extractor_config_sha256=OFFICE_FULLTEXT_EXTRACTOR.config_sha256,
+        children=(
+            ("passage", "Revenue 10", EvidenceLocator(source_ref=document_id, slide_number=1)),
+        ),
+        legacy_ascii_output=True,
+        node_recorded_at=datetime.fromisoformat(stored_clock),
+    )
+    before = conn.execute("SELECT recorded_at FROM evidence_nodes ORDER BY rowid").fetchall()
+    # Exact fulltext producer contract: model JSON retains clock representation.
+    expected_output = hashlib.sha256(
+        json.dumps(
+            [node.model_dump(mode="json", exclude_none=True) for node in nodes],
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    assert (
+        conn.execute(
+            "SELECT output_sha256 FROM evidence_extraction_runs WHERE extraction_run_id=?",
+            ("clock-replay-run",),
+        ).fetchone()[0]
+        == expected_output
+    )
+    receipt = publish_document_processing_evidence(
+        conn,
+        document_version_id=document_id,
+        processing_lane="pptx_slides",
+        cutoff_at=T1,
+        recorded_at=T2,
+    )
+    verified = verify_document_processing_evidence(
+        conn,
+        receipt.evidence_seal_id,
+        document_version_id=document_id,
+        processing_lane="pptx_slides",
+        cutoff_at=T1,
+    )
+    assert verified.native_output_sha256 == expected_output
+    assert (
+        conn.execute("SELECT recorded_at FROM evidence_nodes ORDER BY rowid").fetchall() == before
+    )
+    member_clocks = conn.execute(
+        "SELECT DISTINCT native_recorded_at FROM document_processing_evidence_members"
+    ).fetchall()
+    assert [datetime.fromisoformat(row[0]) for row in member_clocks] == [T0]
+    assert all(datetime.fromisoformat(row[0]).tzinfo is not None for row in member_clocks)
+    assert (
+        publish_document_processing_evidence(
+            conn,
+            document_version_id=document_id,
+            processing_lane="pptx_slides",
+            cutoff_at=T1,
+            recorded_at=T2,
+        ).exact_replay
+        is True
+    )
+    # A same-instant change to the original representation must still break the digest.
+    changed_clock = T0.replace(tzinfo=None) if stored_clock.endswith("+00:00") else T0
+    conn.execute("DROP TRIGGER trg_evidence_nodes_append_only")
+    conn.execute("DROP TRIGGER trg_evidence_nodes_processing_evidence_frozen")
+    conn.execute(
+        "UPDATE evidence_nodes SET recorded_at=? WHERE node_id=?", (changed_clock, nodes[1].node_id)
+    )
+    with pytest.raises(
+        DocumentProcessingEvidenceIntegrityError,
+        match="native_extraction_output_commitment_mismatch",
+    ):
+        verify_document_processing_evidence(
+            conn,
+            receipt.evidence_seal_id,
+            document_version_id=document_id,
+            processing_lane="pptx_slides",
+            cutoff_at=T1,
+        )
+
+
+@pytest.mark.parametrize("stored_clock", ["2026-07-27T14:00:00", "2026-07-27T19:30:00+05:30"])
+def test_native_clock_cutoff_uses_utc_without_changing_output_payload(
+    conn: sqlite3.Connection, stored_clock: str
+) -> None:
+    document_id = "clock-cutoff-deck"
+    blob_sha = _seed_document(
+        conn,
+        document_version_id=document_id,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    )
+    _seed_run(
+        conn,
+        document_version_id=document_id,
+        blob_sha=blob_sha,
+        run_id="clock-cutoff-run",
+        extractor_name=OFFICE_FULLTEXT_EXTRACTOR.name,
+        extractor_code_version=OFFICE_FULLTEXT_EXTRACTOR.code_version,
+        extractor_config_sha256=OFFICE_FULLTEXT_EXTRACTOR.config_sha256,
+        children=(
+            ("passage", "Revenue 10", EvidenceLocator(source_ref=document_id, slide_number=1)),
+        ),
+        legacy_ascii_output=True,
+        node_recorded_at=datetime.fromisoformat(stored_clock),
+    )
+    with pytest.raises(DocumentProcessingEvidenceIntegrityError, match="native_node_after_cutoff"):
+        publish_document_processing_evidence(
+            conn,
+            document_version_id=document_id,
+            processing_lane="pptx_slides",
+            cutoff_at=T1,
+            recorded_at=T2,
+        )
+    assert (
+        conn.execute("SELECT COUNT(*) FROM document_processing_evidence_headers").fetchone()[0] == 0
+    )
+
+
+def test_native_clock_invalid_value_fails_closed(conn: sqlite3.Connection) -> None:
+    document_id = "invalid-clock-deck"
+    blob_sha = _seed_document(
+        conn,
+        document_version_id=document_id,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    )
+    _seed_run(
+        conn,
+        document_version_id=document_id,
+        blob_sha=blob_sha,
+        run_id="invalid-clock-run",
+        extractor_name=OFFICE_FULLTEXT_EXTRACTOR.name,
+        extractor_code_version=OFFICE_FULLTEXT_EXTRACTOR.code_version,
+        extractor_config_sha256=OFFICE_FULLTEXT_EXTRACTOR.config_sha256,
+        children=(
+            ("passage", "Revenue 10", EvidenceLocator(source_ref=document_id, slide_number=1)),
+        ),
+        legacy_ascii_output=True,
+    )
+    conn.execute("DROP TRIGGER trg_evidence_nodes_append_only")
+    conn.execute("UPDATE evidence_nodes SET recorded_at='invalid-clock'")
+    with pytest.raises(
+        DocumentProcessingEvidenceIntegrityError,
+        match=r"invalid_native_clock:evidence_nodes\.recorded_at",
+    ):
+        publish_document_processing_evidence(
+            conn,
+            document_version_id=document_id,
+            processing_lane="pptx_slides",
+            cutoff_at=T1,
+            recorded_at=T2,
+        )
+    assert (
+        conn.execute("SELECT COUNT(*) FROM document_processing_evidence_headers").fetchone()[0] == 0
     )
