@@ -33,6 +33,7 @@ from pipeline.work_os_research import (
 )
 from pipeline.work_os_route_contract import DESTINATION_SURFACE_IDS
 from pipeline.work_os_styles import WORK_OS_CSS
+from report.renderers.workspace_dcf import JS as DCF_JS
 from ui.cite_marks import CITE_MARKS_SNIPPET
 from ui.controls import controls_css, controls_js, icon_svg
 from ui.living_grid import head_assets as living_grid_head_assets
@@ -434,6 +435,7 @@ def _production_runtime(generated_at: datetime) -> str:
 <div class="work-os-live-status" id="workOsLiveStatus" aria-live="polite" data-generated-at="{stamp}"></div>
 <script id="work-os-action-runtime">{CC_ACTION_JS}</script>
 <script id="work-os-overlay-runtime">{CC_OVERLAY_JS}</script>
+<script id="work-os-dcf-runtime">{DCF_JS}</script>
 <script id="work-os-production-runtime">
   const WORK_OS_ENDPOINTS = {endpoint_json};
   const WORK_OS_LEGACY_HASHES = {legacy_hash_json};

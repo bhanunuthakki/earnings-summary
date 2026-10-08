@@ -7,7 +7,7 @@ import json
 import re
 import shutil
 import subprocess
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -947,6 +947,13 @@ def test_full_brief_is_transient_reader_state_not_persistent_navigation() -> Non
     assert "attachShadow" in html
     assert "report_reader_payload.v1" in html
     assert "content.innerHTML = payload.body_html" in html
+    assert 'id="work-os-dcf-runtime"' in html
+    assert "window.initDcfEditor(content.querySelector('.dcf-edit'), {" in html
+    assert "scope: root, ticker: artifact.ticker" in html
+    assert html.index(
+        "workOsDisposeReaderDcf();",
+        html.index("onBeforeClose: function () {", html.index("const briefReaderOverlay")),
+    ) < html.index("workOsBriefLookupSequence += 1;")
     assert 'id="workOsBriefReaderBack"' in html
     assert 'id="workOsBriefReaderDecision"' in html
     assert 'id="workOsBriefReaderSections"' in html
@@ -1728,7 +1735,22 @@ def test_company_context_playground_change_updates_url_and_history_restores_it()
 _STAMP_RX = re.compile(r'data-generated-at="([^"]+)"')
 
 
-def test_shell_render_is_memoized_within_the_thirty_second_bucket() -> None:
+@pytest.fixture
+def shell_clock(monkeypatch: pytest.MonkeyPatch) -> list[datetime]:
+    clock = [datetime(2026, 8, 7, 12, 0, 5, tzinfo=UTC)]
+
+    class FixedClock:
+        @staticmethod
+        def now(_zone: object) -> datetime:
+            return clock[0]
+
+    monkeypatch.setattr("pipeline.work_os_shell.datetime", FixedClock)
+    return clock
+
+
+def test_shell_render_is_memoized_within_the_thirty_second_bucket(
+    shell_clock: list[datetime],
+) -> None:
     clear_work_os_shell_render_cache()
     try:
         first = render_work_os_shell_result()
@@ -1743,11 +1765,15 @@ def test_shell_render_is_memoized_within_the_thirty_second_bucket() -> None:
         pinned_again = render_work_os_shell_result(generated_at=datetime(2026, 8, 7, tzinfo=UTC))
         assert pinned_again.cache_state == "hit"
         assert pinned_again.html == pinned.html
+        shell_clock[0] += timedelta(seconds=30)
+        expired = render_work_os_shell_result()
+        assert expired.cache_state == "miss"
+        assert expired.html != first.html
     finally:
         clear_work_os_shell_render_cache()
 
 
-def test_implicit_renders_share_one_stamped_render_per_bucket() -> None:
+def test_implicit_renders_share_one_stamped_render_per_bucket(shell_clock: list[datetime]) -> None:
     clear_work_os_shell_render_cache()
     try:
         first = render_work_os_shell()

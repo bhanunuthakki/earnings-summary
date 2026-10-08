@@ -205,6 +205,11 @@
   const peekDrawer = document.getElementById('peekDrawer');
   const fullPageDetail = document.getElementById('workOsFullPageDetail');
   const briefReader = document.getElementById('workOsBriefReader');
+  let workOsReaderDcf = null;
+  function workOsDisposeReaderDcf() {
+    if (workOsReaderDcf) workOsReaderDcf.destroy();
+    workOsReaderDcf = null;
+  }
   function workOsRestoreRailPreference(key, fallback) {
     try {
       const value = sessionStorage.getItem(key);
@@ -325,6 +330,7 @@
       if (main) main.inert = true;
     },
     onBeforeClose: function () {
+      workOsDisposeReaderDcf();
       workOsBriefLookupSequence += 1;
       if (workOsBriefLookupController) workOsBriefLookupController.abort();
       workOsBriefLookupController = null;
@@ -491,6 +497,7 @@
   }
 
   async function workOsLoadBriefArtifact(artifact, options) {
+    workOsDisposeReaderDcf();
     const title = document.getElementById('workOsBriefReaderTitle');
     const body = document.getElementById('workOsBriefReaderBody');
     const meta = document.getElementById('workOsBriefReaderMeta');
@@ -578,6 +585,9 @@
       }
       root.append(stylesheet, content);
       body.replaceChildren(host);
+      workOsReaderDcf = window.initDcfEditor(content.querySelector('.dcf-edit'), {
+        scope: root, ticker: artifact.ticker
+      });
       let selectPersistedSection = null;
       if (sections && Array.isArray(payload.sections)) {
         const sectionLookup = new Map(payload.sections
@@ -803,6 +813,7 @@
   }
 
   window.openWorkOsBriefReader = async function (tickerOrArtifact, options) {
+    workOsDisposeReaderDcf();
     const lookupSequence = ++workOsBriefLookupSequence;
     if (workOsBriefLookupController) workOsBriefLookupController.abort();
     workOsBriefLookupController = null;

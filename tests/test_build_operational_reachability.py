@@ -220,9 +220,9 @@ def test_actual_head_is_supported() -> None:
         )
         for line in (123, 913)
     ]
-    # Retain 147 prior test seams plus the two exact fence test lookups above.
+    # Retain 149 prior test seams plus one scoped DCF reader Node child.
     # No production gap is admitted.
-    assert len(graph.unknown_edges) == 149
+    assert len(graph.unknown_edges) == 150
     # Ten new acquisition/authority fixture calls preserve synthetic db globals.
     # Exact AST evidence is retained in followup-test-edge-census.json.
     new_fixture_calls = (
@@ -278,7 +278,7 @@ def test_actual_head_is_supported() -> None:
         )
         in graph.unknown_edges
     )
-    # Eleven bounded Node children exercise synthetic browser request lifecycles.
+    # Twelve bounded Node children exercise synthetic browser request lifecycles.
     # Keep their exact test-only inventory visible without admitting production edges.
     lifecycle_children = {
         ("tests/test_company_desk_read_lifecycle.py", 97),
@@ -290,8 +290,9 @@ def test_actual_head_is_supported() -> None:
         ("tests/test_ui_requests.py", 69),
         ("tests/test_work_os_read_lifecycle.py", 63),
         ("tests/test_work_os_read_lifecycle.py", 98),
-        ("tests/test_workspace_dcf_read_lifecycle.py", 63),
-        ("tests/test_workspace_dcf_read_lifecycle.py", 220),
+        ("tests/test_workspace_dcf_read_lifecycle.py", 104),
+        ("tests/test_workspace_dcf_read_lifecycle.py", 163),
+        ("tests/test_workspace_dcf_read_lifecycle.py", 324),
     }
     assert {
         (edge.source, edge.line)

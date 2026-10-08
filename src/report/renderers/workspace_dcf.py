@@ -152,8 +152,29 @@ CSS = DCF_CSS
 # heatmap tints via color-mix over --ok/--bad tokens) so test_ui_controls passes.
 JS = r"""
 (function () {
-  var root = document.getElementById('dcf-edit');
-  if (!root) return;
+  var editors = new WeakMap();
+  window.initDcfEditor = function (root, options) {
+  if (!root) return null;
+  if (editors.has(root)) return editors.get(root);
+  options = options || {};
+  var scope = options.scope || document;
+  var listeners = new AbortController();
+  var destroyed = false;
+  var presentationTimers = new Set();
+  function later(callback) {
+    var timer = setTimeout(function () {
+      presentationTimers.delete(timer);
+      if (!destroyed) callback();
+    }, 1500);
+    presentationTimers.add(timer);
+  }
+  function listen(target, event, callback) {
+    target.addEventListener(event, callback, {signal: listeners.signal});
+  }
+  function control(id) {
+    // Inert shared bodies keep the publisher's reader-<digest>- ID namespace.
+    return root.querySelector('[id="' + id + '"], [id$="-' + id + '"]');
+  }
   function readJson(id) {
     var el = document.getElementById(id);
     if (!el) return null;
@@ -163,21 +184,23 @@ JS = r"""
   var SERVER_URL = /^https?:$/.test(window.location.protocol)
     ? window.location.origin
     : (boot.server_url || 'http://localhost:7421');
-  var MUTATION_HEADERS = window.__workspaceMutationHeaders || {'Content-Type': 'application/json'};
+  var MUTATION_HEADERS = options.mutationHeaders || window.__workspaceMutationHeaders || {'Content-Type': 'application/json'};
   function requestHeaders() {
     return typeof MUTATION_HEADERS === 'function' ? MUTATION_HEADERS() : MUTATION_HEADERS;
   }
-  var TICKER = root.getAttribute('data-dcf-ticker') || boot.ticker;
+  var TICKER = options.ticker || root.getAttribute('data-dcf-ticker') || boot.ticker;
 
-  var elToggle = document.getElementById('dcf-edit-toggle');
-  var elBody = document.getElementById('dcf-edit-body');
-  var elStatus = document.getElementById('dcf-edit-status');
-  var elControls = document.getElementById('dcf-edit-controls');
-  var elScenarios = document.getElementById('dcf-edit-scenarios');
-  var elHeatmap = document.getElementById('dcf-edit-heatmap');
-  var elReset = document.getElementById('dcf-edit-reset');
-  var elSave = document.getElementById('dcf-edit-save');
-  var elRetry = document.getElementById('dcf-edit-retry');
+  var elToggle = control('dcf-edit-toggle');
+  var elBody = control('dcf-edit-body');
+  var elStatus = control('dcf-edit-status');
+  var elControls = control('dcf-edit-controls');
+  var elScenarios = control('dcf-edit-scenarios');
+  var elHeatmap = control('dcf-edit-heatmap');
+  var elReset = control('dcf-edit-reset');
+  var elSave = control('dcf-edit-save');
+  var elRetry = control('dcf-edit-retry');
+  if (!TICKER || !elToggle || !elBody || !elStatus || !elControls || !elScenarios
+      || !elHeatmap || !elReset || !elSave || !elRetry) return null;
   var loadController = null;
   var loadGeneration = 0;
   var INPUT_READ_TIMEOUT_MS = 15000;
@@ -253,7 +276,7 @@ JS = r"""
     inp.type = 'number';
     inp.step = String(spec.step);
     inp.value = spec.pct ? (Number(value) * 100).toFixed(2) : String(value);
-    inp.addEventListener('input', function () {
+    listen(inp, 'input', function () {
       var raw = parseFloat(inp.value);
       if (isNaN(raw)) return;
       onChange(spec.pct ? raw / 100 : raw);
@@ -291,7 +314,7 @@ JS = r"""
       if (model.terminal_method === opt) o.selected = true;
       sel.appendChild(o);
     });
-    sel.addEventListener('change', function () {
+    listen(sel, 'change', function () {
       model.terminal_method = sel.value;
       scheduleRecompute();
     });
@@ -355,7 +378,7 @@ JS = r"""
     var inp = document.createElement('input');
     inp.type = 'number'; inp.step = '0.5';
     inp.value = (Number(mapRef[name]) * 100).toFixed(2);
-    inp.addEventListener('input', function () {
+    listen(inp, 'input', function () {
       var raw = parseFloat(inp.value);
       if (isNaN(raw)) return;
       mapRef[name] = raw / 100;
@@ -441,7 +464,7 @@ JS = r"""
   }
 
   function recompute() {
-    if (!ready) return;
+    if (!ready || destroyed) return;
     var generation = editGeneration;
     var controller = new AbortController();
     previewController = controller;
@@ -504,6 +527,7 @@ JS = r"""
     loadController = null;
   }
   function load() {
+    if (destroyed) return;
     cancelLoad();
     modelGeneration++;
     inputGeneration++;
@@ -552,8 +576,8 @@ JS = r"""
         if (loadController === controller) loadController = null;
       });
   }
-  elRetry.addEventListener('click', load);
-  window.addEventListener('pagehide', cancelLoad);
+  listen(elRetry, 'click', load);
+  listen(window, 'pagehide', cancelLoad);
 
   // --- Wave 5: KPI -> DCF driver injection ---------------------------------
   // A captured report value carries a "-> DCF" affordance
@@ -570,13 +594,13 @@ JS = r"""
     if (inp && spec) {
       inp.value = spec.pct ? (value * 100).toFixed(2) : String(value);
       inp.classList.add('dcf-injected');
-      setTimeout(function () { inp.classList.remove('dcf-injected'); }, 1500);
+      later(function () { inp.classList.remove('dcf-injected'); });
     }
     setStatus('Injected ' + (label || key) + ' — recomputing…', 'ok');
     scheduleRecompute();
   }
-  window.dcfSetDriver = function (key, value, label) {
-    if (isNaN(value)) return;
+  function setDriver(key, value, label) {
+    if (destroyed || isNaN(value)) return;
     if (elBody.hidden) { elBody.hidden = false; elToggle.setAttribute('aria-expanded', 'true'); }
     root.scrollIntoView({behavior: 'smooth', block: 'center'});
     if (ready && model) {
@@ -586,19 +610,19 @@ JS = r"""
       if (loaded === null) load();
       else setStatus('Loading model to inject ' + (label || key) + '…', 'warn');
     }
-  };
-  document.addEventListener('click', function (ev) {
+  }
+  listen(scope, 'click', function (ev) {
     var a = ev.target && ev.target.closest ? ev.target.closest('[data-dcf-inject]') : null;
     if (!a) return;
     ev.preventDefault();
-    window.dcfSetDriver(
+    setDriver(
       a.getAttribute('data-dcf-inject'),
       parseFloat(a.getAttribute('data-dcf-value')),
       a.getAttribute('data-dcf-label') || ''
     );
   });
 
-  elToggle.addEventListener('click', function () {
+  listen(elToggle, 'click', function () {
     var open = elBody.hidden;
     elBody.hidden = !open;
     elToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
@@ -608,7 +632,7 @@ JS = r"""
     } else cancelLoad();
   });
 
-  elReset.addEventListener('click', function () {
+  listen(elReset, 'click', function () {
     if (!loaded) return;
     invalidatePreview();
     inputGeneration++;
@@ -618,7 +642,7 @@ JS = r"""
     recompute();
   });
 
-  elSave.addEventListener('click', function () {
+  listen(elSave, 'click', function () {
     if (!ready || saving) return;
     invalidatePreview();
     var savedInputGeneration = inputGeneration;
@@ -633,6 +657,7 @@ JS = r"""
     }).then(function (r) {
       return r.json().then(function (j) { return {ok: r.ok, status: r.status, body: j}; });
     }).then(function (res) {
+      if (destroyed) return;
       if (!res.ok) {
         saving = false;
         CCAction.release(elSave);
@@ -665,8 +690,9 @@ JS = r"""
       CCAction.receipt(elSave, '✓ Saved');
       // Saving again after further slider adjustments is the normal flow —
       // unlock once the receipt has registered rather than staying terminal.
-      setTimeout(function () { saving = false; CCAction.release(elSave); }, 1500);
+      later(function () { saving = false; CCAction.release(elSave); });
     }).catch(function () {
+      if (destroyed) return;
       saving = false;
       CCAction.release(elSave);
       if (loadedGeneration === modelGeneration && root.isConnected) {
@@ -674,5 +700,21 @@ JS = r"""
       }
     });
   });
+  function destroy() {
+    if (destroyed) return;
+    destroyed = true;
+    modelGeneration++;
+    cancelLoad();
+    listeners.abort();
+    presentationTimers.forEach(clearTimeout);
+    presentationTimers.clear();
+    editors.delete(root);
+  }
+  var handle = {destroy: destroy, setDriver: setDriver};
+  editors.set(root, handle);
+  return handle;
+  };
+  var standalone = window.initDcfEditor(document.getElementById('dcf-edit'));
+  if (standalone) window.dcfSetDriver = standalone.setDriver;
 })();
 """
