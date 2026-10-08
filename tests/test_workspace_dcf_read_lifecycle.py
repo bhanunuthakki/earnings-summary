@@ -99,6 +99,36 @@ const preview={wacc:0.11,current_price:50,fair_value_per_share_usd:70,scenarios:
   thirdMount.destroy();
   assert.equal([...timers.values()].some(timer=>timer.ms===280),false,'reader close clears debounce');
   assert.equal(timers.size,0,'reader close also clears presentation timers');
+  // The saved BKNG 2026-09-15 artifact predates the retry control.
+  const legacy=editor('reader-821c195fa2cd-');
+  legacy.controls.delete('dcf-edit-retry');
+  const legacyMount=window.initDcfEditor(legacy.root,{scope:legacy.scope,ticker:'BKNG'});
+  assert.ok(legacyMount,'missing optional retry control must not disable the saved editor');
+  const legacyToggle=legacy.controls.get('dcf-edit-toggle');
+  legacyToggle.fire('click');
+  assert.equal(legacy.controls.get('dcf-edit-body').hidden,false);
+  assert.equal(latest().url,'https://fixture.ts.net/api/dcf/inputs/BKNG');
+  latest().reject(new Error('unavailable'));await tick();
+  assert.match(legacy.controls.get('dcf-edit-status').textContent,/Close and reopen Edit assumptions/);
+  legacyToggle.fire('click');legacyToggle.fire('click');
+  latest().resolve({ok:false,status:503,json:()=>Promise.resolve({error:'Model service unavailable.'})});await tick();
+  assert.match(legacy.controls.get('dcf-edit-status').textContent,/Model service unavailable.*Close and reopen Edit assumptions/);
+  legacyToggle.fire('click');legacyToggle.fire('click');
+  await respond(latest(),{inputs:base});await respond(latest(),preview);
+  assert.match(legacy.controls.get('dcf-edit-status').textContent,/Base \$70\.00/);
+  legacyMount.setDriver('beta',1.8,'Synthetic beta');
+  const [debounceId,debounce]=[...timers.entries()].find(([,timer])=>timer.ms===280);
+  timers.delete(debounceId);debounce.callback();
+  const legacyPreview=latest();
+  assert.equal(JSON.parse(legacyPreview.options.body).inputs.beta,1.8);
+  legacy.controls.get('dcf-edit-reset').fire('click');
+  assert.equal(legacyPreview.options.signal.aborted,true,'legacy reset cancels obsolete preview');
+  assert.equal(JSON.parse(latest().options.body).inputs.beta,base.beta,'legacy reset restores loaded inputs');
+  await respond(latest(),preview);
+  legacyMount.destroy();
+  assert.equal(timers.size,0,'legacy cleanup removes read, preview and presentation timers');
+  const count=requests.length;legacyToggle.fire('click');
+  assert.equal(requests.length,count,'legacy cleanup removes the toggle listener');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """.replace("SCRIPT", json.dumps(JS))
     result = subprocess.run(
