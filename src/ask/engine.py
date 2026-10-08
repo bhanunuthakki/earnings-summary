@@ -97,6 +97,7 @@ from ask.grounding_trace import (
     view_trace_items,
 )
 from ask.sealed_retrieval import (
+    PRODUCTION_SCOPE_REGISTRY_PATH,
     PromotionVerificationError,
     SealedEvidenceItem,
     assess_retrieval_readiness,
@@ -154,9 +155,7 @@ _DATA_RX = re.compile(
     re.IGNORECASE,
 )
 
-_PRODUCTION_SCOPE_REGISTRY = (
-    Path(__file__).resolve().parents[2] / "config" / "ask_retrieval_production_scopes.json"
-)
+_PRODUCTION_SCOPE_REGISTRY = PRODUCTION_SCOPE_REGISTRY_PATH
 
 _SEALED_ANSWER_TEMPLATE = register(
     PromptTemplate(

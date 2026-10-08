@@ -171,6 +171,10 @@ from ask.exchange_store import (
     put_session_context,
     replay_exchange_events,
 )
+from ask.retrieval_boot_state import (
+    assess_ask_retrieval_boot_state_from_path,
+    log_ask_retrieval_boot_state,
+)
 from ask.store import (
     AskSession as _AskSession,
 )
@@ -5435,6 +5439,14 @@ def main() -> int:
     )
     origin_host = f"[{host}]" if ":" in host else host
     app = create_app(repo_root, db_path=db_path, server_origin=f"http://{origin_host}:{args.port}")
+    # Log the sealed-plane reachability state once per boot: the production
+    # scope registry, the retrieval mode, and the vector-runtime gate must be
+    # explicit, never silently off. The probe never blocks serving — sealed
+    # turns themselves remain the fail-closed gate.
+    try:
+        log_ask_retrieval_boot_state(assess_ask_retrieval_boot_state_from_path(db_path))
+    except Exception:
+        _LOGGER.exception("ask_retrieval_boot_state assessment failed")
     # Flask's built-in dev server is fine here — this is a single-user
     # localhost tool, not a production service.
     app.run(host=host, port=args.port, debug=False, threaded=True)

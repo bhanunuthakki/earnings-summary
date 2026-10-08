@@ -64,6 +64,9 @@ ASK_RETRIEVAL_VERIFIER_MANIFEST_VERSION = "ask-verifier-manifest.v3"
 PRODUCTION_SCOPE_REGISTRY_ID = "ask-retrieval-production-scopes"
 PRODUCTION_SCOPE_SCHEMA_VERSION = 2
 PRODUCTION_SUPPORTED_COHORT = ("operating_company:legal_registrant",)
+PRODUCTION_SCOPE_REGISTRY_PATH = (
+    Path(__file__).resolve().parents[2] / "config" / "ask_retrieval_production_scopes.json"
+)
 _VERIFIER_CONFIG = {
     "common_cutoff_required": True,
     "exact_semantic_recompute_required": True,
