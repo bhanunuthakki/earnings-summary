@@ -430,8 +430,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only _OPTIONAL_COLUMNS ledger fields.",
-      "fingerprint": "3e4219e0b4339e751304225c4c16ead957f099c9c98499fb4043a01b5a2a8ea3",
-      "line": 341,
+      "fingerprint": "7854f56a6a4fb6905854be2fe547fb68a8369b129ec7d88975141a74117c6478",
+      "line": 342,
       "path": "src/llm_call_ledger.py",
       "targets": [
         "_OPTIONAL_COLUMNS"
@@ -701,7 +701,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "8ef35177d0339aaf52bf886d7503cded21f141f80bd6414c69efe4ebd4ac266a",
+      "source_sha256": "84b8bc671be1b587c3cde5422925926ae15d6850e6452bc37f7a775248c344db",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

@@ -130,13 +130,22 @@ def _trace_max_depth_per_db(trace: Path) -> dict[str, int]:
     its ``exit`` line before releasing, so at any prefix of the file the
     unmatched ``enter`` count per database key equals the number of writer
     windows simultaneously open on that database.
+
+    The trace also carries ``writer_open``/``writer_close`` lines from the
+    connection seam (chain participants only, see
+    ``tests/test_daily_chain_auxiliary_writers.py``). They are a different
+    measurement — connection lifetime, not explicit window — and are ignored
+    here.
     """
     depths: dict[str, int] = {}
     open_now: dict[str, int] = {}
     for line in trace.read_text(encoding="utf-8").splitlines():
         event = json.loads(line)
+        kind = str(event["event"])
+        if kind not in {"enter", "exit"}:
+            continue
         key = str(event["db"])
-        if event["event"] == "enter":
+        if kind == "enter":
             open_now[key] = open_now.get(key, 0) + 1
             depths[key] = max(depths.get(key, 0), open_now[key])
         else:

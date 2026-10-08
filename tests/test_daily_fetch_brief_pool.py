@@ -346,11 +346,33 @@ def test_writer_connections_per_database_file_never_overlap(
             state["open"] -= 1
 
     class _TrackedConn:
+        """Counts one WRITER connection's lifetime.
+
+        The driver opens its WRITER connections inside the cross-process gate
+        and closes them explicitly (``contextlib.closing``) so the gate is held
+        for exactly the connection's life, so the wrapper must count BOTH the
+        context-manager exit and an explicit ``close()`` — exactly once. Only
+        the connection surface the driver actually uses is delegated.
+        """
+
         def __init__(self, conn: sqlite3.Connection) -> None:
             self._conn = conn
+            self._counted = False
 
-        def __enter__(self) -> sqlite3.Connection:
-            return self._conn
+        def execute(self, *args: Any, **kwargs: Any) -> Any:
+            return self._conn.execute(*args, **kwargs)
+
+        def commit(self) -> None:
+            self._conn.commit()
+
+        def _finish(self) -> None:
+            if not self._counted:
+                self._counted = True
+                exit_writer()
+                self._conn.close()
+
+        def __enter__(self) -> _TrackedConn:
+            return self
 
         def __exit__(
             self,
@@ -361,8 +383,10 @@ def test_writer_connections_per_database_file_never_overlap(
             try:
                 return bool(self._conn.__exit__(exc_type, exc, tb))
             finally:
-                exit_writer()
-                self._conn.close()
+                self._finish()
+
+        def close(self) -> None:
+            self._finish()
 
     def counting_connect(path: Any, *, role: Any, schema_preflight: bool | None = None) -> Any:
         conn = real_connect(path, role=role, schema_preflight=schema_preflight)

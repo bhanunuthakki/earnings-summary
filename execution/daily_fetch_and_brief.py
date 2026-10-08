@@ -36,13 +36,21 @@ Tickers are independent, so their chains run on a small bounded worker pool
 of every ticker's 4-5 process boots. The chain ORDER inside one ticker is
 unchanged — thesis evaluator → commitments → DCF → artifacts → history sweep —
 and only across-ticker work overlaps. Single-writer discipline holds across
-PROCESSES, not just the driver's threads: this driver and every writer-capable
-step subprocess serialize their actual database write windows through one
-cross-process writer gate per resolved database path
-(``pipeline.db_writer_gate``), so no two writer windows on the same file are
-ever open at once. The resolved database path is handed to each child
-entrypoint explicitly (`--db` / `--db-path`) — no child falls back to deriving
-a checkout-local default. Each step subprocess keeps its own connection and
+PROCESSES, not just the driver's threads, and it covers EVERY writer window,
+not only the entrypoint-visible ones: the driver marks the run by exporting
+the resolved database path (``pipeline.db_writer_gate.CHAIN_WRITER_DB_ENV``)
+for the duration of the run, every descendant process inherits that mark, and
+the SQLite connection seam (``sqlite_runtime.connect_sqlite``) then holds one
+cross-process writer gate per resolved database path for the LIFETIME of every
+``WRITER``-role connection those processes open on that database — the
+explicit write windows of each step AND the auxiliary best-effort writers that
+open their own connections (source-call telemetry from the live-price reads,
+HTTP measurement persistence, and, under `--enable-llm`, the `llm_calls`
+cost ledger, `llm_artifacts` upserts, `llm_budget_alerts`, and the quota
+breaker). No two writer connections on the same file are ever open at once,
+across pids. The resolved database path is handed to each child entrypoint
+explicitly (`--db` / `--db-path`) — no child falls back to deriving a
+checkout-local default. Each step subprocess keeps its own connection and
 its own 600s timeout, so a hung ticker fails alone. The run summary still
 lists tickers in candidate order.
 
@@ -72,7 +80,7 @@ import sys
 import threading
 from collections.abc import Generator
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -85,7 +93,7 @@ import db
 from db_paths import configured_db_path
 from llm_artifact_store import mark_artifacts_dirty_for_fact_change
 from models.companies import schedule_class_for_list_type
-from pipeline.db_writer_gate import hold_writer_gate
+from pipeline.db_writer_gate import chain_writer_scope, hold_writer_gate
 from pipeline.tier_runner import tickers_due_for_refresh
 from provenance.selection import selected_transcripts_relation
 from runtime.python_process import ensure_managed_python_argv, managed_python_prefix
@@ -144,32 +152,40 @@ def main() -> int:
         sys.stderr.write(f"FATAL: no DB at {db_path}\n")
         return 2
 
-    with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
-        conn.row_factory = sqlite3.Row
-        all_tickers = _resolve_tickers(conn, args)
+    # Mark this process (and, through environment inheritance, every step
+    # subprocess and grandchild it launches) as a daily-chain participant for
+    # the duration of the run: the SQLite connection seam then serializes
+    # every WRITER-role connection any of these processes opens on the
+    # resolved chain database — the explicit step windows AND the auxiliary
+    # telemetry/LLM-ledger writers — per that resolved path. The scope exits
+    # with the run, so nothing leaks into an embedding caller.
+    with chain_writer_scope(db_path):
+        with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
+            conn.row_factory = sqlite3.Row
+            all_tickers = _resolve_tickers(conn, args)
 
-    tickers, skipped_by_tier = _apply_tier_filter(all_tickers, repo_root, db_path, args)
+        tickers, skipped_by_tier = _apply_tier_filter(all_tickers, repo_root, db_path, args)
 
-    if skipped_by_tier:
-        print(json.dumps({"event": "tier_skip_summary", "skipped_by_tier": skipped_by_tier}))
+        if skipped_by_tier:
+            print(json.dumps({"event": "tier_skip_summary", "skipped_by_tier": skipped_by_tier}))
 
-    if not tickers:
-        print(json.dumps({"event": "no_dirty_tickers"}))
-        return 0
+        if not tickers:
+            print(json.dumps({"event": "no_dirty_tickers"}))
+            return 0
 
-    results = _refresh_tickers(tickers, repo_root, db_path, args, workers=args.workers)
+        results = _refresh_tickers(tickers, repo_root, db_path, args, workers=args.workers)
 
-    print(
-        json.dumps(
-            {
-                "started_at": datetime.now(UTC).isoformat(),
-                "tickers": results,
-                "skipped_by_tier": skipped_by_tier,
-            },
-            indent=2,
+        print(
+            json.dumps(
+                {
+                    "started_at": datetime.now(UTC).isoformat(),
+                    "tickers": results,
+                    "skipped_by_tier": skipped_by_tier,
+                },
+                indent=2,
+            )
         )
-    )
-    return 0
+        return 0
 
 
 def _refresh_tickers(
@@ -474,7 +490,13 @@ def _record_skip(db_path: Path, ticker: str, current_hash: str, reason: str) -> 
     now = datetime.now().isoformat(timespec="seconds")
     with (
         _db_write_slot(db_path, owner=f"daily-brief:skip:{ticker}"),
-        connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn,
+        # closing(): the chain's cross-process gate is held for the WRITER
+        # connection's whole lifetime, so the connection must close INSIDE the
+        # explicit window. Bare ``with conn:`` is a transaction scope, not a
+        # close — the leftover connection would hold the gate past the window.
+        closing(
+            connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        ) as conn,
     ):
         conn.execute(
             "UPDATE tracked_companies "
@@ -622,8 +644,10 @@ def _refresh_one_ticker(
         # may have written new rows that should be reflected.
         with (
             _db_write_slot(db_path, owner=f"daily-brief:record:{ticker}"),
-            connect_sqlite(
-                db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True
+            # closing(): see _record_skip — the gate lives as long as the
+            # connection, so the connection closes inside the window.
+            closing(
+                connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
             ) as conn,
         ):
             final_hash = _compute_brief_hash(conn, ticker, repo_root)

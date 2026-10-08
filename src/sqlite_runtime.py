@@ -6,14 +6,25 @@ The role is explicit because readers must not alter database-wide durability
 
 from __future__ import annotations
 
+import inspect
+import itertools
 import os
 import sqlite3
 import sys
 import time
 import unicodedata
+import weakref
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from pipeline.db_writer_gate import (
+    WriterConnectionClaim,
+    chain_gate_required,
+    claim_chain_writer_connection,
+    trace_writer_connection,
+    writer_connection_trace_enabled,
+)
 from runtime.sqlite_adapters import register_datetime_adapters
 from schema_compat import require_current_for_write
 from scope_identity import derive_retrieval_scope_id
@@ -96,6 +107,176 @@ class SQLiteConnectionRole(StrEnum):
     SNAPSHOT_DESTINATION = "snapshot_destination"
 
 
+# ---------------------------------------------------------------------------
+# The daily-chain writer seam
+#
+# Inside a chain-marked process, a WRITER-role connection on the marked
+# database is a writer window for its WHOLE lifetime: the connection seam
+# claims the cross-process writer gate before opening and releases it when
+# the connection closes (explicitly or via garbage collection). See
+# ``pipeline.db_writer_gate`` for the serialization scope and exclusions.
+# ---------------------------------------------------------------------------
+
+_WRITER_CONN_SEQ = itertools.count()
+
+
+@dataclass(slots=True)
+class _WriterConnectionState:
+    """Everything needed to release one gated/traced writer connection."""
+
+    claim: WriterConnectionClaim | None
+    db_path: str
+    conn_id: str
+    owner: str
+    chain: bool
+    #: True when THIS open took the cross-process lock file itself (rather
+    #: than riding a claim an enclosing window already holds). The opt-in
+    #: trace carries it so evidence can prove the file gate was held for the
+    #: connection's whole lifetime without inferring it from window nesting.
+    file_claim: bool
+    released: bool = False
+
+
+class _WriterConnection(sqlite3.Connection):
+    """A writer connection that frees its chain-gate slot when it closes.
+
+    Only instantiated for chain-gated connections; every other writer
+    connection is a plain ``sqlite3.Connection`` exactly as before.
+    """
+
+    _writer_connection_state: _WriterConnectionState
+
+    @classmethod
+    def attach(cls, conn: sqlite3.Connection, state: _WriterConnectionState) -> None:
+        """Bind the release state the ``close()`` override reads back.
+
+        The seam hands over the connection it just built with ``factory=cls``;
+        narrowing here is what keeps the private attribute assignment typed.
+        """
+        if not isinstance(conn, cls):
+            raise TypeError("chain writer state requires a _WriterConnection")
+        conn._writer_connection_state = state
+
+    def close(self) -> None:
+        try:
+            super().close()
+        finally:
+            state = getattr(self, "_writer_connection_state", None)
+            if state is not None:
+                _release_writer_connection_state(state)
+
+
+def _release_writer_connection_state(state: _WriterConnectionState) -> None:
+    """Close one connection's writer window; idempotent across threads.
+
+    Called from the wrapper's ``close()`` and again by the ``weakref.finalize``
+    backstop for connections that are never closed explicitly (the release
+    then happens when the object is collected). The gate interval (and the
+    ``writer_close`` trace line) must END before the claim releases, so every
+    writer close stays inside a chain gate interval.
+    """
+    if state.released:
+        return
+    state.released = True
+    if writer_connection_trace_enabled():
+        trace_writer_connection(
+            "writer_close",
+            db_path=state.db_path,
+            owner=state.owner,
+            conn_id=state.conn_id,
+            chain=state.chain,
+            file_claim=state.file_claim,
+        )
+    if state.claim is not None:
+        state.claim.release()
+
+
+def _writer_connection_owner() -> str:
+    """Label the gate/trace with the module that asked for this connection.
+
+    Skips this module's own frames (``connect_sqlite`` is the seam, not the
+    writer) so the label names the actual requesting module — the evidence
+    that auxiliary writers (``sources.registry``, ``llm_call_ledger``,
+    ``llm_artifact_store``) are the ones being serialized.
+    """
+    try:
+        callers = [
+            info for info in inspect.stack()[1:] if info.frame.f_globals.get("__name__") != __name__
+        ]
+        module = "unknown"
+        if callers:
+            module = str(callers[0].frame.f_globals.get("__name__", "unknown"))
+    except (IndexError, AttributeError):  # pragma: no cover - defensive introspection
+        return "connect:unknown"
+    return f"connect:{module}"
+
+
+def _open_writer_connection(
+    resolved: str,
+    *,
+    role: SQLiteConnectionRole,
+) -> sqlite3.Connection:
+    """Open one WRITER/destination connection under the chain-writer seam.
+
+    For a chain-marked database path the writer gate is claimed BEFORE the
+    connection opens (``WriterGateHeldError`` after the bounded wait — never a
+    silent long block), and released when the connection closes. The opt-in
+    trace records that open/close interval at this seam, so evidence can show
+    the serialized chain opens per pid. Every other connection — unmarked
+    processes, other database files — is opened exactly as before: no wrapper,
+    no trace, no gate.
+    """
+    claim: WriterConnectionClaim | None = None
+    if (
+        role is SQLiteConnectionRole.WRITER
+        and resolved != ":memory:"
+        and chain_gate_required(resolved)
+    ):
+        claim = claim_chain_writer_connection(resolved, owner=_writer_connection_owner())
+    # ONE raw connect site: the wrapper subclass is used exactly when this
+    # connection took the chain gate (otherwise the plain default factory, i.e.
+    # the previous behavior byte for byte).
+    factory: type[sqlite3.Connection] = (
+        _WriterConnection if claim is not None else sqlite3.Connection
+    )
+    try:
+        conn = sqlite3.connect(
+            resolved,
+            timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+            factory=factory,
+        )
+    except BaseException:
+        if claim is not None:
+            claim.release()
+        raise
+    if claim is None:
+        return conn
+    try:
+        state = _WriterConnectionState(
+            claim=claim,
+            db_path=resolved,
+            conn_id=f"{os.getpid()}-{next(_WRITER_CONN_SEQ)}",
+            owner=claim.owner,
+            chain=True,
+            file_claim=claim.claimed,
+        )
+        _WriterConnection.attach(conn, state)
+        weakref.finalize(conn, _release_writer_connection_state, state)
+        trace_writer_connection(
+            "writer_open",
+            db_path=resolved,
+            owner=state.owner,
+            conn_id=state.conn_id,
+            chain=state.chain,
+            file_claim=state.file_claim,
+        )
+        return conn
+    except BaseException:
+        conn.close()
+        claim.release()
+        raise
+
+
 def connect_sqlite(
     path: str | os.PathLike[str],
     *,
@@ -111,6 +292,15 @@ def connect_sqlite(
     preflight Alembic compatibility and set the WAL/durability policy. Snapshot
     destinations are new, caller-owned local files used by backup or isolated
     synthetic tooling and intentionally retain the default journal mode.
+
+    Daily-chain single-writer seam: inside a process marked as a daily-chain
+    participant (``pipeline.db_writer_gate.CHAIN_WRITER_DB_ENV``), every
+    ``WRITER`` connection opened on the marked database holds the cross-process
+    writer gate for the connection's whole lifetime — open through close — so
+    auxiliary writers that open their own connections (source-call telemetry,
+    the ``--enable-llm`` ledger/artifact/budget/quota-breaker writes) serialize
+    with the chain's explicit write windows per resolved database path.
+    Processes outside the daily chain keep exactly their previous behavior.
     """
     register_datetime_adapters()
     reject_forbidden_mac_checkout_database(path)
@@ -144,7 +334,7 @@ def connect_sqlite(
             raise FileNotFoundError("schema-preflighted writer requires an existing database")
         if resolved != ":memory:":
             Path(resolved).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(resolved, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
+        conn = _open_writer_connection(resolved, role=role)
 
     try:
         register_sqlite_integrity_functions(conn)

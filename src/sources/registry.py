@@ -42,6 +42,7 @@ Usage from an adapter:
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from dataclasses import dataclass, field
@@ -50,8 +51,12 @@ from enum import StrEnum
 from pathlib import Path
 
 from operations.context import current as current_operation_context
+from pipeline.db_writer_gate import WriterGateHeldError
 from sources.telemetry import SourceAttemptMeasurement, persist_source_attempt
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from telemetry_health import DROPPED_SOURCE_ATTEMPT_WRITE, DROPPED_SOURCE_CALL_WRITE
+
+log = logging.getLogger(__name__)
 
 
 # Marginal $/call estimate, used only to translate the cache-skip COUNT into a
@@ -77,6 +82,36 @@ def set_db_path(path: Path) -> None:
     """Override the DB path used by `log_call`. Used by tests and worktree runs."""
     global _DB_PATH
     _DB_PATH = path
+
+
+def _record_dropped_write(
+    kind: str,
+    *,
+    error: str,
+    source_name: str | None,
+    ticker: str | None,
+) -> None:
+    """Leave a warning plus a durable drop counter for one lost telemetry row.
+
+    Never raises (this runs inside the failure handler of a best-effort
+    writer); ``telemetry_health.record_dropped_write`` writes its JSONL beside
+    the database, where the cron-health panel reads it.
+    """
+    from telemetry_health import record_dropped_write
+
+    log.warning(
+        {
+            "event": "source_call_dropped",
+            "kind": kind,
+            "source": source_name,
+            "ticker": ticker,
+            "error": error[:200],
+        }
+    )
+    try:
+        record_dropped_write(kind, db_path=_DB_PATH, error=error, ticker=ticker)
+    except Exception:  # never escalate from a failure handler
+        log.debug({"event": "source_call_drop_counter_failed", "kind": kind})
 
 
 def _persisted_operation_id(conn: sqlite3.Connection, *, operation_columns: set[str]) -> str | None:
@@ -120,7 +155,10 @@ def log_call(
     """Insert one row into source_calls. Best-effort — never raises.
 
     A logging-failure must not cascade into the caller's data path. If the DB
-    is missing or locked we drop the row silently.
+    is missing we drop the row before opening anything; if the write fails
+    (a locked database, or a daily-chain writer-gate timeout while the gate
+    is serialized per resolved database path) the row is still dropped, but
+    observably: a WARNING plus a durable drop counter beside the database.
     """
     if not _DB_PATH.exists():
         return
@@ -165,8 +203,21 @@ def log_call(
             conn.commit()
         finally:
             conn.close()
-    except sqlite3.Error:
-        # Logging must not crash the fetch path. Silently drop.
+    except WriterGateHeldError as exc:
+        _record_dropped_write(
+            DROPPED_SOURCE_CALL_WRITE,
+            error=f"{type(exc).__name__}: {exc}",
+            source_name=source_name,
+            ticker=ticker,
+        )
+        return
+    except sqlite3.Error as exc:
+        _record_dropped_write(
+            DROPPED_SOURCE_CALL_WRITE,
+            error=f"{type(exc).__name__}: {exc}",
+            source_name=source_name,
+            ticker=ticker,
+        )
         return
 
 
@@ -245,7 +296,21 @@ def log_calls_batch(calls: list[PendingSourceCall]) -> None:
             conn.commit()
         finally:
             conn.close()
-    except sqlite3.Error:
+    except WriterGateHeldError as exc:
+        _record_dropped_write(
+            DROPPED_SOURCE_CALL_WRITE,
+            error=f"{type(exc).__name__}: {exc}",
+            source_name=calls[0].source_name if calls else None,
+            ticker=calls[0].ticker if calls else None,
+        )
+        return
+    except sqlite3.Error as exc:
+        _record_dropped_write(
+            DROPPED_SOURCE_CALL_WRITE,
+            error=f"{type(exc).__name__}: {exc}",
+            source_name=calls[0].source_name if calls else None,
+            ticker=calls[0].ticker if calls else None,
+        )
         return
 
 
@@ -442,13 +507,41 @@ def log_http_measurement(measurement: SourceAttemptMeasurement) -> bool:
         database = (
             _DB_PATH if root / "data" / "portfolio.db" != _DB_PATH else portfolio_db_path(root)
         )
-        if not database.exists():
-            return False
+    except (OSError, ValueError, RuntimeError):
+        return False
+    if not database.exists():
+        return False
+    try:
         conn = connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
             persist_source_attempt(conn, measurement)
         finally:
             conn.close()
+    except WriterGateHeldError as exc:
+        # A daily-chain writer-gate timeout drops the measurement row. The
+        # False return keeps absence observable; the warning + counter below
+        # make the DROP observable too, rather than a silent zero.
+        log.warning(
+            {
+                "event": "source_attempt_dropped",
+                "kind": DROPPED_SOURCE_ATTEMPT_WRITE,
+                "endpoint": measurement.endpoint,
+                "error": str(exc)[:200],
+            }
+        )
+        try:
+            from telemetry_health import record_dropped_write
+
+            record_dropped_write(
+                DROPPED_SOURCE_ATTEMPT_WRITE,
+                db_path=database,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        except Exception:  # never escalate from a failure handler
+            log.debug(
+                {"event": "source_call_drop_counter_failed", "kind": DROPPED_SOURCE_ATTEMPT_WRITE}
+            )
+        return False
     except (OSError, sqlite3.Error, ValueError, RuntimeError):
         return False
     return True
