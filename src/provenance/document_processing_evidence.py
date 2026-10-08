@@ -25,6 +25,7 @@ from provenance.fulltext_extractor_identity import (
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
     pdf_table_extractor_code_version,
 )
+from provenance.ocr_extraction import normalize_extracted_text
 from provenance.pdf_table_extraction import PdfTableExtractionArtifact
 
 DocumentProcessingLane = Literal[
@@ -1060,9 +1061,9 @@ def _node_derived(
             character_count = _require_int(page, "native_character_count")
             node = by_page.pop(page_number, None)
             if character_count > 0:
-                if node is None or _digest(_require_text(node, "text")) != _require_sha(
-                    page, "native_text_sha256"
-                ):
+                if node is None or _digest(
+                    normalize_extracted_text(_require_text(node, "text"))
+                ) != _require_sha(page, "native_text_sha256"):
                     raise DocumentProcessingEvidenceMissingError("pdf_native_page_output_missing")
                 members.append(_node_member(node, run, lane=lane))
             elif node is not None:
