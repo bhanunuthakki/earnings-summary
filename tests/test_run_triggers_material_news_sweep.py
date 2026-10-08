@@ -22,15 +22,30 @@ The stub writes the ``llm_calls`` ledger row the real transport would write
 (``llm.ledger.record_llm_call`` -> ``llm_call_ledger.record_call`` writes
 exactly this row after each call), because that row is what the driver's cap
 accounting reads; an entry that only existed post hoc would not prove the cap.
+
+The last section makes VAL-PIPE-003's owner-approved "at most one final wave
+crosses the cap" allowance directly observable at this stubbed boundary: a
+TEST-LOCAL tracer wraps the public ``run_triggers.query_run_cost_usd`` seam so
+every admission decision is captured with the committed shared-ledger spend it
+read (split by lane), each stubbed call carries the wave index that was in
+flight when it entered, and the trace proves pre-dispatch admission
+(``S < C``), settlement before the next admission read, the bounded
+``T <= C + F`` overshoot, and per-ticker deferrals. Production carries no wave
+id, log line, or schema change for this — the wave indexes are test-local, as
+VAL-PIPE-003 permits.
 """
 
 from __future__ import annotations
 
+import inspect
 import json
 import sqlite3
 import threading
 import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -305,6 +320,37 @@ def _diff_payload() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Test-local wave trace records
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class _SweepCall:
+    """One stubbed material-news call, stamped with its test-local wave index.
+
+    ``wave`` is ``-1`` when no tracer is attached. Otherwise it is the index of
+    the wave whose dispatch was in flight when the call entered the stub — the
+    number of sweep admission reads recorded at that instant minus one. This
+    is a pure test-local label; production carries no wave identity.
+    """
+
+    ticker: str
+    cost_usd: float
+    wave: int
+    started: float
+    finished: float
+
+
+@dataclass(frozen=True, slots=True)
+class _AdmissionRead:
+    """One ``query_run_cost_usd`` read the driver made, as the trace saw it."""
+
+    spend: Decimal
+    at: float
+    caller: str
+
+
+# ---------------------------------------------------------------------------
 # The stubbed LLM boundary
 # ---------------------------------------------------------------------------
 
@@ -319,6 +365,11 @@ class _StubMaterialNewsBoundary:
     payload. Tracks the in-flight count to prove the worker bound, and can
     hold specified tickers inside a call until ``release`` is set, simulating
     a hung call without blocking interpreter exit on an abandoned thread.
+
+    When ``wave_probe`` is attached, each call also records its entry/exit
+    monotonic times and the wave index the probe reports at entry, so the
+    caller can reconstruct admitted/completed calls per wave without any
+    production wave id.
     """
 
     def __init__(
@@ -328,11 +379,14 @@ class _StubMaterialNewsBoundary:
         cost_usd: float = 0.5,
         delay_s: float = 0.0,
         hang_tickers: frozenset[str] = frozenset(),
+        wave_probe: Callable[[], int] | None = None,
     ) -> None:
         self.db_path = db_path
         self.cost_usd = cost_usd
         self.delay_s = delay_s
         self.hang_tickers = hang_tickers
+        self.wave_probe = wave_probe
+        self.trace: list[_SweepCall] = []
         self.release = threading.Event()
         self.calls = 0
         self.finished = 0
@@ -342,6 +396,8 @@ class _StubMaterialNewsBoundary:
 
     def __call__(self, prompt: str, **kwargs: object) -> str:
         ticker = str(kwargs.get("ticker"))
+        started = time.monotonic()
+        wave = self.wave_probe() if self.wave_probe is not None else -1
         with self._lock:
             self.calls += 1
             self.in_flight += 1
@@ -364,9 +420,19 @@ class _StubMaterialNewsBoundary:
                 ]
             )
         finally:
+            finished = time.monotonic()
             with self._lock:
                 self.in_flight -= 1
                 self.finished += 1
+            self.trace.append(
+                _SweepCall(
+                    ticker=ticker,
+                    cost_usd=self.cost_usd,
+                    wave=wave,
+                    started=started,
+                    finished=finished,
+                )
+            )
 
     def _record_ledger_row(self, prompt: str, ticker: str) -> None:
         conn = sqlite3.connect(str(self.db_path))
@@ -773,3 +839,327 @@ def test_scan_worker_flags_fail_closed_on_invalid_values(
             ]
         )
     assert timeout_exc.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# 5. Wave accounting at the stubbed boundary: VAL-PIPE-003's pre-dispatch
+#    admission, settlement ordering, one-final-wave overshoot bound, and
+#    per-ticker deferrals made directly observable. Test-local instrumentation
+#    only — no production wave id, log line, or schema.
+# ---------------------------------------------------------------------------
+
+
+def _caller_name() -> str:
+    """Name of the driver function two frames above this helper.
+
+    ``_caller_name`` -> the tracer's ``recording`` wrapper -> the driver
+    function that performed the ledger read: ``_run_scan_sweep`` for a wave
+    admission, ``_process_ticker_trigger`` for the serial candidate lane. Used
+    only to attribute a read to a lane in the test trace.
+    """
+    frame = inspect.currentframe()
+    if frame is None or frame.f_back is None:
+        return ""
+    caller = frame.f_back.f_back
+    if caller is None:
+        return ""
+    return caller.f_code.co_name
+
+
+class _WaveAdmissionTracer:
+    """Test-local record of every shared-ledger read the driver performs.
+
+    Wraps the public, test-monkeypatchable seam the driver already exposes
+    (``run_triggers.query_run_cost_usd``) and returns the real value unchanged;
+    it only records ``(spend, monotonic time, caller)``. The sweep performs
+    exactly one read per wave and the serial candidate lane one read per
+    candidate, which is what makes the wave structure observable here without
+    adding any production wave identity, logging, or schema.
+    """
+
+    SWEEP_CALLER = "_run_scan_sweep"
+    SERIAL_CALLER = "_process_ticker_trigger"
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.reads: list[_AdmissionRead] = []
+        original = run_triggers.query_run_cost_usd
+
+        def recording(db_path: Path, run_started_at: datetime) -> Decimal:
+            spend = original(db_path, run_started_at)
+            self.reads.append(
+                _AdmissionRead(spend=spend, at=time.monotonic(), caller=_caller_name())
+            )
+            return spend
+
+        monkeypatch.setattr(run_triggers, "query_run_cost_usd", recording)
+
+    def sweep_reads(self) -> list[_AdmissionRead]:
+        """The sweep lane's per-wave admission reads, in dispatch order."""
+        return [read for read in self.reads if read.caller == self.SWEEP_CALLER]
+
+    def serial_reads(self) -> list[_AdmissionRead]:
+        """The serial candidate lane's per-candidate reads, in dispatch order."""
+        return [read for read in self.reads if read.caller == self.SERIAL_CALLER]
+
+    def next_wave_index(self) -> int:
+        """Test-local wave index for the calls about to be dispatched.
+
+        Called from inside a stubbed call at entry, when exactly that wave's
+        admission read (and no later one) has been recorded.
+        """
+        return len(self.sweep_reads()) - 1
+
+
+def _calls_by_wave(stub: _StubMaterialNewsBoundary) -> dict[int, list[_SweepCall]]:
+    """Group the stub's call trace by its test-local wave index."""
+    grouped: dict[int, list[_SweepCall]] = {}
+    for call in stub.trace:
+        grouped.setdefault(call.wave, []).append(call)
+    return grouped
+
+
+def test_wave_trace_proves_preadmission_spend_and_bounded_final_wave(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Eight tickers at $0.50 under a $2.00 cap with three workers, traced
+    call-by-call: each wave is admitted only on committed shared-ledger spend
+    below the cap, settles before the next admission read, never exceeds the
+    worker width, and the single crossing wave's actual cost bounds the only
+    permitted overshoot (C < T <= C + F) with every unstarted ticker deferred."""
+    db_path = _build_db(tmp_path, monkeypatch)
+    tickers = [f"W{i:02d}" for i in range(8)]
+    _seed_news(db_path, tickers)
+    tracer = _WaveAdmissionTracer(monkeypatch)
+    stub = _StubMaterialNewsBoundary(
+        db_path=db_path,
+        cost_usd=0.5,
+        delay_s=0.05,
+        wave_probe=tracer.next_wave_index,
+    )
+    monkeypatch.setattr("triggers.material_news.call_llm", stub)
+
+    cap_usd = 2.0
+    workers = 3
+    exit_code = run_triggers.main(
+        [
+            "--tickers",
+            ",".join(tickers),
+            "--triggers",
+            "material_news",
+            "--db-path",
+            str(db_path),
+            "--scan-workers",
+            str(workers),
+            "--max-cost-usd",
+            str(cap_usd),
+        ]
+    )
+    assert exit_code == 0
+
+    # One admission read per attempted wave, from the sweep lane only.
+    sweep_reads = tracer.sweep_reads()
+    assert tracer.serial_reads() == []
+    assert len(tracer.reads) == len(sweep_reads) == 3
+    spends = [float(read.spend) for read in sweep_reads]
+    assert spends == pytest.approx([0.0, 1.5, 3.0], abs=1e-9)
+
+    # Waves 0 and 1 were admitted on pre-dispatch spend strictly below the
+    # cap; the third read already saw spend at/over it, so no wave dispatched.
+    assert spends[0] < cap_usd
+    assert spends[1] < cap_usd
+    assert spends[2] >= cap_usd
+
+    by_wave = _calls_by_wave(stub)
+    assert sorted(by_wave) == [0, 1]
+    assert [sorted(call.ticker for call in by_wave[index]) for index in (0, 1)] == [
+        ["W00", "W01", "W02"],
+        ["W03", "W04", "W05"],
+    ]
+    for members in by_wave.values():
+        assert len(members) <= workers
+    assert stub.max_in_flight == workers
+
+    # Each admitted wave fully settled before the next admission read.
+    assert max(call.finished for call in by_wave[0]) < sweep_reads[1].at
+    assert max(call.finished for call in by_wave[1]) < sweep_reads[2].at
+
+    # Costs reconcile: each wave's trace cost equals the ledger delta its
+    # admission produced, and the trace total equals the run's ledger total.
+    ledger_total = sum(row[2] for row in _llm_call_rows(db_path))
+    assert ledger_total == pytest.approx(3.0)
+    assert sum(call.cost_usd for call in stub.trace) == pytest.approx(ledger_total)
+    for index in (0, 1):
+        wave_cost = sum(call.cost_usd for call in by_wave[index])
+        delta = float(sweep_reads[index + 1].spend - sweep_reads[index].spend)
+        assert wave_cost == pytest.approx(delta)
+
+    # The unique final wave — the one whose committed cost first brought the
+    # ledger to/over the cap — bounds the total overshoot: C < T <= C + F.
+    final_wave_index = max(by_wave)
+    final_wave_cost = sum(call.cost_usd for call in by_wave[final_wave_index])
+    assert final_wave_index == 1
+    assert final_wave_cost == pytest.approx(1.5)
+    assert ledger_total > cap_usd
+    assert ledger_total <= cap_usd + final_wave_cost
+
+    # Every unstarted ticker carries its own explicit cap-stop deferral.
+    summary, _events = _summary_events(capsys)
+    assert summary["cost_cap_reached"] is True
+    assert summary["scan_deferrals"] == [
+        {"ticker": ticker, "trigger_kind": "material_news", "reason": "cost_cap"}
+        for ticker in ("W06", "W07")
+    ]
+    assert summary["tickers_processed"] == 6
+
+
+def test_wave_trace_counts_serial_candidate_spend_before_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Cross-lane admission traced at the boundary: the serial candidate
+    lane's committed spend is in the shared ledger before the sweep runs, the
+    sweep's admitted wave is gated on that combined spend, and the single
+    crossing wave's actual cost bounds total run spend across both lanes."""
+    db_path = _build_db(tmp_path, monkeypatch)
+    _seed_five_quarters(db_path, ticker="MSFT")
+    news_tickers = [f"N{i:02d}" for i in range(5)]
+    _seed_news(db_path, ["MSFT", *news_tickers])
+    tracer = _WaveAdmissionTracer(monkeypatch)
+    tone_stub = _StubEarningsToneBoundary(db_path=db_path, cost_usd=8.0)
+    news_stub = _StubMaterialNewsBoundary(
+        db_path=db_path,
+        cost_usd=0.5,
+        delay_s=0.05,
+        wave_probe=tracer.next_wave_index,
+    )
+    monkeypatch.setattr("triggers.earnings_tone.call_llm", tone_stub)
+    monkeypatch.setattr("triggers.material_news.call_llm", news_stub)
+    tickers = ["MSFT", *news_tickers]
+
+    cap_usd = 9.0
+    workers = 4
+    exit_code = run_triggers.main(
+        [
+            "--tickers",
+            ",".join(tickers),
+            "--triggers",
+            "earnings_tone,material_news",
+            "--db-path",
+            str(db_path),
+            "--scan-workers",
+            str(workers),
+            "--max-cost-usd",
+            str(cap_usd),
+        ]
+    )
+    assert exit_code == 0
+
+    # The lanes' reads are separable: one serial per-candidate read ($0.00)
+    # then one sweep admission read per wave.
+    assert [float(read.spend) for read in tracer.serial_reads()] == [0.0]
+    sweep_spends = [float(read.spend) for read in tracer.sweep_reads()]
+    assert sweep_spends == pytest.approx([8.0, 10.0], abs=1e-9)
+
+    # The sweep's first — and only — wave was admitted on the shared ledger
+    # that already held the serial lane's $8.00, i.e. below the $9.00 cap;
+    # the next read saw the crossing at $10.00 and stopped dispatching.
+    assert sweep_spends[0] < cap_usd
+    assert sweep_spends[1] >= cap_usd
+
+    by_wave = _calls_by_wave(news_stub)
+    assert sorted(by_wave) == [0]
+    assert sorted(call.ticker for call in by_wave[0]) == ["MSFT", "N00", "N01", "N02"]
+    assert news_stub.max_in_flight == workers
+
+    ledger_rows = _llm_call_rows(db_path)
+    assert {row[0] for row in ledger_rows} == {
+        "earnings_tone_diff",
+        "material_news_classification",
+    }
+    total_run_spend = sum(row[2] for row in ledger_rows)
+    assert tone_stub.calls == 1
+    final_wave_cost = sum(call.cost_usd for call in by_wave[0])
+    assert final_wave_cost == pytest.approx(2.0)
+    assert total_run_spend == pytest.approx(10.0)
+    assert total_run_spend <= cap_usd + final_wave_cost
+
+    summary, _events = _summary_events(capsys)
+    assert summary["cost_cap_reached"] is True
+    assert summary["scan_deferrals"] == [
+        {"ticker": ticker, "trigger_kind": "material_news", "reason": "cost_cap"}
+        for ticker in ("N03", "N04")
+    ]
+
+
+def test_serial_candidate_lane_keeps_its_per_candidate_cap_boundary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The wave allowance stays sweep-only: the serial candidate lane admits
+    only while committed spend is below the cap and dispatches no candidate
+    once it is at/over, and with the cap already reached the sweep is granted
+    no wave at all — every unstarted ticker is explicitly deferred."""
+    db_path = _build_db(tmp_path, monkeypatch)
+    tickers = ["S1", "S2", "S3", "S4"]
+    for ticker in tickers:
+        _seed_five_quarters(db_path, ticker=ticker)
+    _seed_news(db_path, tickers)
+    tracer = _WaveAdmissionTracer(monkeypatch)
+    tone_stub = _StubEarningsToneBoundary(db_path=db_path, cost_usd=5.0)
+    news_stub = _StubMaterialNewsBoundary(
+        db_path=db_path,
+        cost_usd=0.5,
+        wave_probe=tracer.next_wave_index,
+    )
+    monkeypatch.setattr("triggers.earnings_tone.call_llm", tone_stub)
+    monkeypatch.setattr("triggers.material_news.call_llm", news_stub)
+
+    cap_usd = 9.0
+    exit_code = run_triggers.main(
+        [
+            "--tickers",
+            ",".join(tickers),
+            "--triggers",
+            "earnings_tone,material_news",
+            "--db-path",
+            str(db_path),
+            "--scan-workers",
+            "4",
+            "--max-cost-usd",
+            str(cap_usd),
+        ]
+    )
+    assert exit_code == 0
+
+    # Serial admission is per candidate: two candidates dispatched on spend
+    # below the cap; the third read saw spend at/over the cap and halted
+    # before any call — no wave-shaped allowance was applied to the lane.
+    serial_spends = [float(read.spend) for read in tracer.serial_reads()]
+    assert serial_spends == pytest.approx([0.0, 5.0, 10.0], abs=1e-9)
+    assert [spend for spend in serial_spends if spend < cap_usd] == pytest.approx([0.0, 5.0])
+    assert tone_stub.calls == 2
+
+    # No material-news wave was admitted: the sweep's first read already saw
+    # spend at/over the cap, so every sweep ticker was deferred, no call ran.
+    assert [float(read.spend) for read in tracer.sweep_reads()] == pytest.approx([10.0])
+    assert news_stub.calls == 0
+    assert not news_stub.trace
+
+    total_run_spend = sum(row[2] for row in _llm_call_rows(db_path))
+    assert total_run_spend == pytest.approx(10.0)
+    # The overshoot is bounded by one serial candidate unit, never a wave.
+    assert total_run_spend <= cap_usd + 5.0
+
+    summary, _events = _summary_events(capsys)
+    assert summary["cost_cap_reached"] is True
+    assert summary["scan_deferrals"] == [
+        {"ticker": "S4", "trigger_kind": "earnings_tone", "reason": "cost_cap"},
+        {"ticker": "S1", "trigger_kind": "material_news", "reason": "cost_cap"},
+        {"ticker": "S2", "trigger_kind": "material_news", "reason": "cost_cap"},
+        {"ticker": "S3", "trigger_kind": "material_news", "reason": "cost_cap"},
+        {"ticker": "S4", "trigger_kind": "material_news", "reason": "cost_cap"},
+    ]
