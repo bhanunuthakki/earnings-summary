@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import io
 import json
@@ -8,6 +9,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
+from ctypes import wintypes
 from pathlib import Path
 from typing import IO, Protocol, cast
 
@@ -55,6 +57,140 @@ _tree_write_denial_fence_for_test = cast(
     Callable[[Sequence[Path]], AbstractContextManager[str]],
     getattr(processor_module, "_tree_write_denial_fence"),
 )
+_require_tree_nonwritable_for_test = cast(
+    Callable[[Path], None],
+    getattr(processor_module, "_require_tree_nonwritable"),
+)
+
+_scope_without_backup_restore_for_test = cast(
+    Callable[[], AbstractContextManager[None]],
+    getattr(processor_module, "_windows_without_backup_restore_privileges"),
+)
+
+
+class _ProbeWindowsFunction:
+    argtypes: object = None
+    restype: object = None
+
+    def __init__(self, callback: Callable[..., int]) -> None:
+        self.callback = callback
+
+    def __call__(self, *args: object) -> int:
+        return self.callback(*args)
+
+
+class _ProbeKernel32:
+    def __init__(self, create_file: Callable[..., int], close_handle: Callable[..., int]) -> None:
+        self.CreateFileW = _ProbeWindowsFunction(create_file)
+        self.CloseHandle = _ProbeWindowsFunction(close_handle)
+        self.GetCurrentProcess = _ProbeWindowsFunction(lambda: 100)
+        self.GetCurrentThread = _ProbeWindowsFunction(lambda: 200)
+        self.LocalFree = _ProbeWindowsFunction(lambda *_args: 0)
+
+
+class _ProbeAdvapi32:
+    def __init__(self, calls: list[tuple[str, int]], target: Path | None, right: int) -> None:
+        self.path = ""
+
+        def open_token(*args: object) -> int:
+            output = getattr(args[-1], "_obj")
+            assert isinstance(output, wintypes.HANDLE)
+            output.value = 101
+            assert args[1] == 0xA
+            return 1
+
+        def duplicate_token(*args: object) -> int:
+            output = getattr(args[-1], "_obj")
+            assert isinstance(output, wintypes.HANDLE)
+            output.value = 201
+            assert args[1] == 1
+            return 1
+
+        def descriptor(*args: object) -> int:
+            assert isinstance(args[0], str)
+            self.path = args[0]
+            assert args[1:3] == (1, 7)
+            output = getattr(args[-1], "_obj")
+            assert isinstance(output, ctypes.c_void_p)
+            output.value = 301
+            return 0
+
+        def access_check(*args: object) -> int:
+            requested = args[2]
+            assert isinstance(requested, int)
+            calls.append((self.path, requested))
+            mapping = getattr(args[3], "_obj")
+            assert [getattr(mapping, name) for name in ("read", "write", "execute", "all")] == [
+                0x120089,
+                0x120116,
+                0x1200A0,
+                0x1F01FF,
+            ]
+            allowed = getattr(args[-1], "_obj")
+            granted = getattr(args[-2], "_obj")
+            assert isinstance(allowed, wintypes.BOOL) and isinstance(granted, wintypes.DWORD)
+            permit = self.path == str(target) and requested == right
+            allowed.value = int(permit)
+            granted.value = requested if permit else 0
+            return 1
+
+        self.OpenThreadToken = _ProbeWindowsFunction(open_token)
+        self.OpenProcessToken = _ProbeWindowsFunction(open_token)
+        self.DuplicateToken = _ProbeWindowsFunction(duplicate_token)
+        self.GetNamedSecurityInfoW = _ProbeWindowsFunction(descriptor)
+        self.AccessCheck = _ProbeWindowsFunction(access_check)
+
+
+class _ScopeAdvapi32:
+    def __init__(self, *, prior: bool, failed: str | None, events: list[str]) -> None:
+        def output_token(name: str, handle: int, *args: object) -> int:
+            events.append(name)
+            if name == failed or (name == "thread" and not prior):
+                return 0
+            output = getattr(args[-1], "_obj")
+            assert isinstance(output, wintypes.HANDLE)
+            output.value = handle
+            return 1
+
+        def lookup(_system: object, name: object, output: object) -> int:
+            assert name in ("SeBackupPrivilege", "SeRestorePrivilege")
+            events.append(str(name))
+            luid = getattr(output, "_obj")
+            setattr(luid, "low", 17 if name == "SeBackupPrivilege" else 18)
+            return int(failed != "lookup")
+
+        def restrict(*args: object) -> int:
+            assert args[1:5] == (0, 0, None, 2)
+            assert args[6:8] == (0, None)
+            deleted = args[5]
+            assert isinstance(deleted, ctypes.Array)
+            assert [getattr(getattr(item, "luid"), "low") for item in deleted] == [17, 18]
+            assert [getattr(item, "attributes") for item in deleted] == [0, 0]
+            return output_token("restrict", 202, *args)
+
+        def duplicate(*args: object) -> int:
+            assert args[1] == 2
+            return output_token("duplicate", 303, *args)
+
+        def set_token(thread: object, token: object) -> int:
+            assert thread is None
+            value = token.value if isinstance(token, wintypes.HANDLE) else None
+            name = "install" if value == 303 else "restore"
+            events.append(name)
+            if name == "restore":
+                assert value == (101 if prior else None)
+            return int(name != failed)
+
+        self.OpenThreadToken = _ProbeWindowsFunction(
+            lambda *args: output_token("thread", 101, *args)
+        )
+        self.OpenProcessToken = _ProbeWindowsFunction(
+            lambda *args: output_token("process", 101, *args)
+        )
+        self.LookupPrivilegeValueW = _ProbeWindowsFunction(lookup)
+        self.CreateRestrictedToken = _ProbeWindowsFunction(restrict)
+        self.DuplicateToken = _ProbeWindowsFunction(duplicate)
+        self.SetThreadToken = _ProbeWindowsFunction(set_token)
 
 
 def _canonical(value: object) -> str:
@@ -481,6 +617,245 @@ def test_processor_rejects_runtime_junction(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("kind", "right"),
+    [("directory", right) for right in (0x2, 0x4, 0x10, 0x40, 0x100)]
+    + [("file", right) for right in (0x40000000, 0x10000)],
+)
+def test_tree_probe_identifies_each_allowed_mutation_right_and_closes_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, right: int
+) -> None:
+    root = tmp_path / "runtime"
+    member = root / "nested" / "member.py"
+    member.parent.mkdir(parents=True)
+    member.write_text("original")
+    target = root if kind == "directory" else member
+    calls: list[tuple[str, int]] = []
+    closed: list[int] = []
+    invalid = wintypes.HANDLE(-1).value
+    assert isinstance(invalid, int)
+
+    def create_file(*args: object) -> int:
+        path, access = args[:2]
+        assert isinstance(path, str) and isinstance(access, int)
+        calls.append((path, access))
+        assert args[2:5] == (7, None, 3)
+        assert args[5] == (0x02000000 if Path(path).is_dir() else 0x80)
+        return 42 if path == str(target) and access == right else invalid
+
+    def close_handle(handle: object) -> int:
+        if isinstance(handle, wintypes.HANDLE):
+            handle = handle.value
+        assert isinstance(handle, int)
+        closed.append(handle)
+        return 1
+
+    monkeypatch.setattr(
+        processor_module, "_load_kernel32", lambda: _ProbeKernel32(create_file, close_handle)
+    )
+    monkeypatch.setattr(
+        processor_module, "_load_advapi32", lambda: _ProbeAdvapi32(calls, target, right)
+    )
+    monkeypatch.setattr(processor_module, "_windows_last_error", lambda: 5)
+    relative = target.relative_to(root).as_posix()
+    with pytest.raises(InlineXbrlProcessorError) as failure:
+        _require_tree_nonwritable_for_test(root)
+    assert f"{kind} {relative!r}, access=0x{right:08x}" in str(failure.value)
+    assert calls[-1] == (str(target), right)
+    assert closed == ([201, 101] if kind == "directory" else [201, 101, 201, 101, 42])
+
+
+def test_tree_probe_preserves_fail_closed_unknown_access_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    invalid = wintypes.HANDLE(-1).value
+    assert isinstance(invalid, int)
+    (tmp_path / "member.py").write_text("original")
+    monkeypatch.setattr(
+        processor_module,
+        "_load_kernel32",
+        lambda: _ProbeKernel32(lambda *_args: invalid, lambda *_args: 1),
+    )
+    monkeypatch.setattr(processor_module, "_windows_last_error", lambda: 32)
+    monkeypatch.setattr(processor_module, "_load_advapi32", lambda: _ProbeAdvapi32([], None, 0))
+    with pytest.raises(InlineXbrlProcessorError, match="access cannot be verified"):
+        _require_tree_nonwritable_for_test(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("failed_call", "message", "closed", "freed"),
+    [
+        ("OpenThreadToken", "caller token cannot be verified", [], []),
+        ("DuplicateToken", "caller token cannot be duplicated", [101], []),
+        ("GetNamedSecurityInfoW", "DACL cannot be verified", [201, 101], []),
+        ("AccessCheck", "access cannot be verified", [201, 101], [301]),
+        ("LocalFree", "cleanup failed", [201, 101], [301]),
+        ("CloseHandle", "cleanup failed", [201, 101], [301]),
+    ],
+)
+def test_directory_access_check_fails_closed_and_releases_resources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_call: str,
+    message: str,
+    closed: list[int],
+    freed: list[int],
+) -> None:
+    observed_closed: list[int] = []
+    observed_freed: list[int] = []
+
+    def close_handle(handle: object) -> int:
+        assert isinstance(handle, wintypes.HANDLE) and isinstance(handle.value, int)
+        observed_closed.append(handle.value)
+        return int(failed_call != "CloseHandle")
+
+    def local_free(descriptor: object) -> int:
+        assert isinstance(descriptor, ctypes.c_void_p) and isinstance(descriptor.value, int)
+        observed_freed.append(descriptor.value)
+        return int(failed_call == "LocalFree")
+
+    kernel = _ProbeKernel32(lambda *_args: 0, close_handle)
+    kernel.LocalFree = _ProbeWindowsFunction(local_free)
+    security = _ProbeAdvapi32([], None, 0)
+    if failed_call not in ("LocalFree", "CloseHandle"):
+        # GetNamedSecurityInfoW returns an error code; the other calls return BOOL.
+        failure_result = 5 if failed_call == "GetNamedSecurityInfoW" else 0
+        monkeypatch.setattr(
+            security, failed_call, _ProbeWindowsFunction(lambda *_args: failure_result)
+        )
+    monkeypatch.setattr(processor_module, "_load_kernel32", lambda: kernel)
+    monkeypatch.setattr(processor_module, "_load_advapi32", lambda: security)
+    monkeypatch.setattr(processor_module, "_windows_last_error", lambda: 5)
+    with pytest.raises(InlineXbrlProcessorError, match=message):
+        _require_tree_nonwritable_for_test(tmp_path)
+    assert observed_closed == closed
+    assert observed_freed == freed
+
+
+def test_directory_access_check_uses_process_token_only_when_thread_has_no_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, int]] = []
+    security = _ProbeAdvapi32(calls, None, 0)
+    security.OpenThreadToken = _ProbeWindowsFunction(lambda *_args: 0)
+    process_opens: list[bool] = []
+    original_open = security.OpenProcessToken
+
+    def process_open(*args: object) -> int:
+        process_opens.append(True)
+        return original_open(*args)
+
+    security.OpenProcessToken = _ProbeWindowsFunction(process_open)
+    monkeypatch.setattr(processor_module, "_load_advapi32", lambda: security)
+    monkeypatch.setattr(
+        processor_module,
+        "_load_kernel32",
+        lambda: _ProbeKernel32(lambda *_args: 0, lambda *_args: 1),
+    )
+    monkeypatch.setattr(processor_module, "_windows_last_error", lambda: 1008)
+    _require_tree_nonwritable_for_test(tmp_path)
+    assert process_opens == [True]
+    assert [right for _path, right in calls] == [0x2, 0x4, 0x10, 0x40, 0x100]
+    process_opens.clear()
+    monkeypatch.setattr(processor_module, "_windows_last_error", lambda: 5)
+    with pytest.raises(InlineXbrlProcessorError, match="caller token cannot be verified"):
+        _require_tree_nonwritable_for_test(tmp_path)
+    assert not process_opens
+
+
+@pytest.mark.parametrize("prior", [False, True])
+@pytest.mark.parametrize("body_failure", [False, True])
+def test_privilege_scope_restores_exact_prior_token_on_success_and_body_failure(
+    monkeypatch: pytest.MonkeyPatch, prior: bool, body_failure: bool
+) -> None:
+    events: list[str] = []
+
+    def close(handle: object) -> int:
+        assert isinstance(handle, wintypes.HANDLE)
+        events.append(f"close:{handle.value}")
+        return 1
+
+    monkeypatch.setattr(
+        processor_module, "_load_kernel32", lambda: _ProbeKernel32(lambda *_args: 0, close)
+    )
+    monkeypatch.setattr(
+        processor_module,
+        "_load_advapi32",
+        lambda: _ScopeAdvapi32(prior=prior, failed=None, events=events),
+    )
+    monkeypatch.setattr(processor_module, "_windows_last_error", lambda: 1008)
+
+    def exercise() -> None:
+        with _scope_without_backup_restore_for_test():
+            events.append("body")
+            if body_failure:
+                raise ValueError("body failed")
+
+    if body_failure:
+        with pytest.raises(ValueError, match="body failed"):
+            exercise()
+    else:
+        exercise()
+    assert events == (
+        ["thread"]
+        + ([] if prior else ["process"])
+        + [
+            "SeBackupPrivilege",
+            "SeRestorePrivilege",
+            "restrict",
+            "duplicate",
+            "install",
+            "body",
+            "restore",
+            "close:303",
+            "close:202",
+            "close:101",
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("failed", "message", "closed"),
+    [
+        ("thread", "caller token unavailable", []),
+        ("lookup", "privilege identity unavailable", [101]),
+        ("restrict", "restriction failed", [101]),
+        ("duplicate", "duplication failed", [202, 101]),
+        ("install", "installation failed", [303, 202, 101]),
+        ("restore", "restoration failed", [303, 202, 101]),
+        ("close", "cleanup failed", [303, 202, 101]),
+    ],
+)
+def test_privilege_scope_fails_closed_and_closes_all_acquired_tokens(
+    monkeypatch: pytest.MonkeyPatch, failed: str, message: str, closed: list[int]
+) -> None:
+    events: list[str] = []
+    actual_closed: list[int] = []
+
+    def close(handle: object) -> int:
+        assert isinstance(handle, wintypes.HANDLE) and isinstance(handle.value, int)
+        actual_closed.append(handle.value)
+        return int(failed != "close")
+
+    monkeypatch.setattr(
+        processor_module, "_load_kernel32", lambda: _ProbeKernel32(lambda *_args: 0, close)
+    )
+    monkeypatch.setattr(
+        processor_module,
+        "_load_advapi32",
+        lambda: _ScopeAdvapi32(prior=True, failed=failed, events=events),
+    )
+    monkeypatch.setattr(processor_module, "_windows_last_error", lambda: 5)
+    with (
+        pytest.raises(InlineXbrlProcessorError, match=message),
+        _scope_without_backup_restore_for_test(),
+    ):
+        assert failed in ("restore", "close")
+    assert actual_closed == closed
+    assert "process" not in events
+    assert ("restore" in events) == (failed in ("restore", "close"))
+
+
 def test_windows_tree_fence_blocks_and_then_restores_runtime_writes(tmp_path: Path) -> None:
     if os.name != "nt":
         pytest.skip("Windows share-mode fence is unavailable")
@@ -490,6 +865,166 @@ def test_windows_tree_fence_blocks_and_then_restores_runtime_writes(tmp_path: Pa
     with _tree_write_denial_fence_for_test((runtime_root,)), pytest.raises(OSError):
         (runtime_root / "sitecustomize.py").write_text("injected")
     (runtime_root / "restored.py").write_text("restored")
+
+
+def test_windows_tree_fence_denies_existing_and_nested_mutations_and_restores_them(
+    tmp_path: Path,
+) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows share-mode fence is unavailable")
+    runtime_root = tmp_path / "runtime"
+    nested = runtime_root / "nested"
+    nested.mkdir(parents=True)
+    members = (runtime_root / "member.py", nested / "member.py")
+    for member in members:
+        member.write_text("original")
+    with _tree_write_denial_fence_for_test((runtime_root,)):
+        for directory in (runtime_root, nested):
+            with pytest.raises(PermissionError):
+                (directory / "new.py").write_text("injected")
+            with pytest.raises(PermissionError):
+                (directory / "new-directory").mkdir()
+        for member in members:
+            with pytest.raises(PermissionError):
+                member.write_text("injected")
+            with pytest.raises(PermissionError):
+                member.unlink()
+            with pytest.raises(PermissionError):
+                member.rename(member.with_name("renamed.py"))
+            assert member.read_text() == "original"
+        with pytest.raises(PermissionError):
+            nested.rename(runtime_root / "renamed-directory")
+    for directory in (runtime_root, nested):
+        (directory / "new.py").write_text("restored")
+        (directory / "new-directory").mkdir()
+    for member in members:
+        member.write_text("restored")
+        renamed = member.rename(member.with_name("renamed.py"))
+        renamed.unlink()
+    nested.rename(runtime_root / "renamed-directory")
+
+
+def _native_token_snapshot(*, primary: bool) -> tuple[bytes, dict[tuple[int, int], int]] | None:
+    """Read token identity and privilege entries without changing the token."""
+    kernel = cast(_ScopeAdvapi32, getattr(processor_module, "_load_kernel32")())
+    security = cast(_ScopeAdvapi32, getattr(processor_module, "_load_advapi32")())
+    get_current = cast(
+        _ProbeWindowsFunction,
+        getattr(kernel, "GetCurrentProcess" if primary else "GetCurrentThread"),
+    )
+    get_current.argtypes, get_current.restype = [], wintypes.HANDLE
+    token = wintypes.HANDLE()
+    opener = security.OpenProcessToken if primary else security.OpenThreadToken
+    opener.argtypes = (
+        [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+        if primary
+        else [wintypes.HANDLE, wintypes.DWORD, wintypes.BOOL, ctypes.POINTER(wintypes.HANDLE)]
+    )
+    opener.restype = wintypes.BOOL
+    opened = (
+        opener(get_current(), 8, ctypes.byref(token))
+        if primary
+        else opener(get_current(), 8, True, ctypes.byref(token))
+    )
+    if not opened:
+        assert not primary and getattr(processor_module, "_windows_last_error")() == 1008
+        return None
+    get_info = cast(_ProbeWindowsFunction, getattr(security, "GetTokenInformation"))
+    get_info.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    get_info.restype = wintypes.BOOL
+    close = cast(_ProbeWindowsFunction, getattr(kernel, "CloseHandle"))
+    close.argtypes, close.restype = [wintypes.HANDLE], wintypes.BOOL
+
+    def read(information_class: int) -> bytes:
+        size = wintypes.DWORD()
+        assert not get_info(token, information_class, None, 0, ctypes.byref(size))
+        assert size.value > 0
+        buffer = ctypes.create_string_buffer(size.value)
+        assert get_info(token, information_class, buffer, len(buffer), ctypes.byref(size))
+        return buffer.raw
+
+    try:
+        # TokenStatistics begins with TokenId (LUID); TokenPrivileges uses 12-byte entries.
+        identity = read(10)[:8]
+        raw = read(3)
+        count = int.from_bytes(raw[:4], "little")
+        privileges: dict[tuple[int, int], int] = {}
+        for offset in range(4, 4 + count * 12, 12):
+            low = int.from_bytes(raw[offset : offset + 4], "little")
+            high = int.from_bytes(raw[offset + 4 : offset + 8], "little", signed=True)
+            privileges[(low, high)] = int.from_bytes(raw[offset + 8 : offset + 12], "little")
+        return identity, privileges
+    finally:
+        assert close(token)
+
+
+def test_windows_privilege_scope_preserves_primary_and_restores_existing_thread_token() -> None:
+    if os.name != "nt":
+        pytest.skip("Windows thread tokens are unavailable")
+    before_primary = _native_token_snapshot(primary=True)
+    before_thread = _native_token_snapshot(primary=False)
+    assert before_primary is not None
+    security = cast(_ScopeAdvapi32, getattr(processor_module, "_load_advapi32")())
+
+    class Luid(ctypes.Structure):
+        _fields_ = [("low", wintypes.DWORD), ("high", wintypes.LONG)]
+
+    lookup = security.LookupPrivilegeValueW
+    lookup.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.POINTER(Luid)]
+    lookup.restype = wintypes.BOOL
+    removed: set[tuple[int, int]] = set()
+    for name in ("SeBackupPrivilege", "SeRestorePrivilege"):
+        luid = Luid()
+        assert lookup(None, name, ctypes.byref(luid))
+        removed.add((luid.low, luid.high))
+    before_effective = before_thread or before_primary
+    with _scope_without_backup_restore_for_test():
+        outer = _native_token_snapshot(primary=False)
+        assert outer is not None and outer[0] != before_effective[0]
+        assert outer[1] == {
+            key: value for key, value in before_effective[1].items() if key not in removed
+        }
+        assert _native_token_snapshot(primary=True) == before_primary
+        # The nested entry has an existing impersonation token and must restore it exactly.
+        with _scope_without_backup_restore_for_test():
+            inner = _native_token_snapshot(primary=False)
+            assert inner is not None and inner[0] != outer[0] and inner[1] == outer[1]
+            assert _native_token_snapshot(primary=True) == before_primary
+        assert _native_token_snapshot(primary=False) == outer
+    assert _native_token_snapshot(primary=False) == before_thread
+    assert _native_token_snapshot(primary=True) == before_primary
+
+
+def test_windows_tree_fence_restores_acl_after_admission_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows share-mode fence is unavailable")
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    before_primary = _native_token_snapshot(primary=True)
+    before_thread = _native_token_snapshot(primary=False)
+
+    def refuse(_root: Path) -> None:
+        with pytest.raises(PermissionError):
+            (_root / "blocked.py").write_text("injected")
+        raise InlineXbrlProcessorError("test admission refusal")
+
+    monkeypatch.setattr(processor_module, "_require_tree_nonwritable", refuse)
+    with (
+        pytest.raises(InlineXbrlProcessorError, match="test admission refusal"),
+        _tree_write_denial_fence_for_test((runtime_root,)),
+    ):
+        pytest.fail("failed fence admission must not yield")
+    (runtime_root / "restored.py").write_text("restored")
+    assert _native_token_snapshot(primary=False) == before_thread
+    assert _native_token_snapshot(primary=True) == before_primary
 
 
 def test_package_cache_refuses_new_entry_at_completed_limit(
