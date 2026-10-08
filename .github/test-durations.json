@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "generated": "2026-10-08",
-  "source": "Per-file seconds seeded from main CI run 35388990584 (push 8a0cf865, 13 test jobs). Measured files use the pytest --durations=25 'slowest 25 durations' sums from each shard's log; unmeasured files use each shard's residual (2x wall minus measured) spread evenly over its unmeasured files. The per-file 'shard' fields are the output of the deterministic 13-bin LPT pack over these durations. Added ONON test-file seconds from local pytest JUnit case-time sums on 2026-10-04; failed workbook samples were replaced by the passing final sample. Existing measured seconds and defaults are unchanged. Shards were regenerated with the existing deterministic 13-bin LPT pack. Research method/runtime measured serial synthetic JUnit totals from the independently tested 2026-10-04 snapshot are retained for tests/test_earnings_research_runtime.py, tests/test_research_method_contract.py, tests/test_research_prompt_runtime.py. Combined timings use the existing deterministic 13-bin LPT packing. Added 13 affected-module seconds from passing local serial synthetic pytest JUnit testcase time totals on 2026-10-04 (173 passing cases; retained timing-cohort-20261004.xml). All earlier per-file seconds and default_seconds are preserved. Shard pins and totals use canonical pack_test_shards. Added tests/test_reporting_document_scope.py from passing local serial pytest JUnit testcase time totals on 2026-10-05 (9 cases; reporting-test-timing.xml). All earlier seconds and default_seconds remain unchanged. Shards and totals use canonical pack_test_shards. Added two retained test-file timings from passing serial macOS pytest JUnit testcase setup/call/teardown time sums on 2026-10-06 UTC (2026-10-05 local): tests/test_retained_state_paths.py=0.360 seconds (5 passing cases), tests/test_bounded_source_reader.py=0.015 seconds (12 passing cases). The native Windows stat/file-handle case was skipped and is not measured or qualified by this sample. Source: ci-duration-repair-timing.xml, SHA-256 3c344e8843ca7738b1b5e0220e1565a317689bebe4aca77a797c1d1457df556c. All earlier seconds and default_seconds are unchanged. Pins and shard totals use canonical pack_test_shards; collection and process startup time are excluded from the per-file sums. Added tests/test_earnings_generation_db_authority.py from passing serial macOS JUnit testcase time sums on 2026-10-08 UTC (10 cases, 0.565 seconds). Source: booking-db-authority-duration.xml, SHA-256 1ad2aa66dc0cefb7adf04fbea14dde20eb4f3e2e22244a05c56a5a8f2959a8f0. Existing timings and defaults are unchanged. Pins and totals use canonical pack_test_shards as required by the CI invariant.",
+  "source": "Per-file seconds seeded from main CI run 35388990584 (push 8a0cf865, 13 test jobs). Measured files use the pytest --durations=25 'slowest 25 durations' sums from each shard's log; unmeasured files use each shard's residual (2x wall minus measured) spread evenly over its unmeasured files. The per-file 'shard' fields are the output of the deterministic 13-bin LPT pack over these durations. Added ONON test-file seconds from local pytest JUnit case-time sums on 2026-10-04; failed workbook samples were replaced by the passing final sample. Existing measured seconds and defaults are unchanged. Shards were regenerated with the existing deterministic 13-bin LPT pack. Research method/runtime measured serial synthetic JUnit totals from the independently tested 2026-10-04 snapshot are retained for tests/test_earnings_research_runtime.py, tests/test_research_method_contract.py, tests/test_research_prompt_runtime.py. Combined timings use the existing deterministic 13-bin LPT packing. Added 13 affected-module seconds from passing local serial synthetic pytest JUnit testcase time totals on 2026-10-04 (173 passing cases; retained timing-cohort-20261004.xml). All earlier per-file seconds and default_seconds are preserved. Shard pins and totals use canonical pack_test_shards. Added tests/test_reporting_document_scope.py from passing local serial pytest JUnit testcase time totals on 2026-10-05 (9 cases; reporting-test-timing.xml). All earlier seconds and default_seconds remain unchanged. Shards and totals use canonical pack_test_shards. Added two retained test-file timings from passing serial macOS pytest JUnit testcase setup/call/teardown time sums on 2026-10-06 UTC (2026-10-05 local): tests/test_retained_state_paths.py=0.360 seconds (5 passing cases), tests/test_bounded_source_reader.py=0.015 seconds (12 passing cases). The native Windows stat/file-handle case was skipped and is not measured or qualified by this sample. Source: ci-duration-repair-timing.xml, SHA-256 3c344e8843ca7738b1b5e0220e1565a317689bebe4aca77a797c1d1457df556c. All earlier seconds and default_seconds are unchanged. Pins and shard totals use canonical pack_test_shards; collection and process startup time are excluded from the per-file sums. Added tests/test_earnings_generation_db_authority.py from passing serial macOS JUnit testcase time sums on 2026-10-08 UTC (10 cases, 0.594 seconds). Source: booking-db-authority-duration-final.xml, SHA-256 349db8971c0e2149a771294cd0b7b4b9e0ebdc75d134e353b52bee6ca8d4bf34. Existing timings and defaults are unchanged. Pins and totals use canonical pack_test_shards as required by the CI invariant.",
   "default_seconds": 1.6,
   "labels": [
     "1",
@@ -285,7 +285,7 @@
     },
     "tests/test_ask_proposal_approval.py": {
       "seconds": 0.58,
-      "shard": "1"
+      "shard": "3 overflow"
     },
     "tests/test_ask_proposal_approval_migration.py": {
       "seconds": 4.21,
@@ -1288,8 +1288,8 @@
       "shard": "8 overflow"
     },
     "tests/test_earnings_generation_db_authority.py": {
-      "seconds": 0.565,
-      "shard": "3 overflow"
+      "seconds": 0.594,
+      "shard": "1"
     },
     "tests/test_earnings_readout.py": {
       "seconds": 1.3,
@@ -3497,7 +3497,7 @@
     },
     "tests/test_research_prompt_runtime.py": {
       "seconds": 0.322,
-      "shard": "7"
+      "shard": "1"
     },
     "tests/test_research_proposals.py": {
       "seconds": 1.7,
@@ -3549,7 +3549,7 @@
     },
     "tests/test_retained_state_paths.py": {
       "seconds": 0.36,
-      "shard": "1"
+      "shard": "7"
     },
     "tests/test_review_onon_input_roles.py": {
       "seconds": 13.826,
@@ -4657,17 +4657,17 @@
     }
   },
   "shard_timings_seconds": {
-    "1": 248.73,
+    "1": 248.706,
     "1 overflow": 248.771,
     "2": 248.497,
     "2 overflow": 248.772,
     "3": 248.649,
-    "3 overflow": 248.772,
+    "3 overflow": 248.787,
     "4": 248.793,
     "5": 248.518,
     "6": 248.499,
     "6 overflow": 248.502,
-    "7": 248.702,
+    "7": 248.74,
     "8": 248.495,
     "8 overflow": 248.495
   }

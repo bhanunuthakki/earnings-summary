@@ -1,15 +1,13 @@
 """Earnings generators must use the explicit or configured database authority."""
 
-import runpy
 import sys
-from collections.abc import Callable
 from pathlib import Path
-from typing import cast
 
 import pytest
 
 import earnings_brief
 import earnings_readout
+from execution import generate_post_earnings_readouts, generate_pre_earnings_briefs
 
 
 @pytest.mark.parametrize("lane", ["pre", "post"])
@@ -52,7 +50,9 @@ def test_generator_database_authority(
     elif route == "absent":
         monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(tmp_path / "absent-state.db"))
     monkeypatch.setattr(sys, "argv", argv)
-    main = cast(Callable[[], int], runpy.run_path(str(script))["main"])
+    main = (
+        generate_pre_earnings_briefs.main if lane == "pre" else generate_post_earnings_readouts.main
+    )
 
     if route in {"missing", "checkout", "absent"}:
         with pytest.raises(SystemExit) as error:
