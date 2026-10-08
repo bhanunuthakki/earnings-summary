@@ -1218,3 +1218,13 @@ provider or schema; this is a stricter clock requirement and corrected membershi
 behavior for the existing sealed-inventory corpus command.
 
 The retained-run verifier requires an exact built-in `str` run ID. It rejects string subclasses and non-string values. Typed public aliases expose the existing retained closure and eligibility owners; test fixtures reuse the existing persistence owners through their public aliases. Each alias references the original function object. These exports add no operator command or write authority. The processor measurement fixture export remains in `tests/`.
+
+### Financial narrative grounding audit — no operational surface change
+
+The October 2026 grounding contract and template repairs change instruction
+delivery, financial context serialization and missing-data wording. They add no
+operator action, route, service, schedule, provider, model pin, budget, schema or
+live-state write. Synthetic prompt/template tests and workspace golden comparison
+check the changed behavior. The dated [audit](history/financial_narrative_grounding_audit_2026_10.md)
+records the remaining runtime gates; these instruction changes do not establish
+that all financial narratives are verified before release.

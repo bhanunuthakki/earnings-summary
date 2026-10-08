@@ -77,6 +77,21 @@ UI work uses the shared `frontend-quality` procedure. Registered controls and fa
 
 ## Application LLM authority
 
+Financial narrative grounding is a core product invariant. It applies to every
+LLM financial answer, including free-form chat, reports, briefs, evaluations,
+portfolio assessments, cached lenses and scheduled summaries. Follow the
+[financial narrative contract](directives/llm_calls.md#financial-narrative-grounding):
+select existing verified facts first, retain their financial context, and check
+the complete output against the selected corpus before release. Prompt adherence,
+a citation, a schema-valid response or a warning footnote is not verification.
+
+When required verified evidence is missing, flag the gap before generation and
+obtain the owner's agreement to a bounded source/period/effort plan before new
+collection or a lower-coverage research response. Honor an already approved exact
+scope. A shorter ad hoc window reduces coverage, not the accuracy of included
+facts. Open-ended reasoning may use explicit assumptions; factual anchors still
+require support. Never present absent evidence as a zero or a negative finding.
+
 The global fleet policy and usage index own ordinary membership-provider order and its environment variables. `src/llm/fleet_policy.py` resolves that policy for the application; it does not set a competing provider order. `LLM_MODELS` in `src/llm/cli.py` owns per-purpose model pins, `directives/model_eval_loop.md` owns qualification and promotion, and `directives/cheapest_model_routing.md` owns economic ordering. These local owners do not override fleet provider priority. Explicit Judge selection and independence remain separate at the authorities registered in the fleet usage index. Session delegation and review follow the global contract.
 
 ## LLM scheduling and quota — repo scope note
