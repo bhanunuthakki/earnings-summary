@@ -8,6 +8,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager
+from ctypes import wintypes
 from pathlib import Path
 from typing import IO, Protocol, cast
 
@@ -55,6 +56,27 @@ _tree_write_denial_fence_for_test = cast(
     Callable[[Sequence[Path]], AbstractContextManager[str]],
     getattr(processor_module, "_tree_write_denial_fence"),
 )
+_require_tree_nonwritable_for_test = cast(
+    Callable[[Path], None],
+    getattr(processor_module, "_require_tree_nonwritable"),
+)
+
+
+class _ProbeWindowsFunction:
+    argtypes: object = None
+    restype: object = None
+
+    def __init__(self, callback: Callable[..., int]) -> None:
+        self.callback = callback
+
+    def __call__(self, *args: object) -> int:
+        return self.callback(*args)
+
+
+class _ProbeKernel32:
+    def __init__(self, create_file: Callable[..., int], close_handle: Callable[..., int]) -> None:
+        self.CreateFileW = _ProbeWindowsFunction(create_file)
+        self.CloseHandle = _ProbeWindowsFunction(close_handle)
 
 
 def _canonical(value: object) -> str:
@@ -479,6 +501,64 @@ def test_processor_rejects_runtime_junction(tmp_path: Path) -> None:
             sandbox_launcher=launcher,
             runtime_root=runtime_root,
         )
+
+
+@pytest.mark.parametrize(
+    ("kind", "right"),
+    [("directory", right) for right in (0x2, 0x4, 0x10, 0x40, 0x100)]
+    + [("file", right) for right in (0x40000000, 0x10000)],
+)
+def test_tree_probe_identifies_each_allowed_mutation_right_and_closes_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str, right: int
+) -> None:
+    root = tmp_path / "runtime"
+    member = root / "nested" / "member.py"
+    member.parent.mkdir(parents=True)
+    member.write_text("original")
+    target = root if kind == "directory" else member
+    calls: list[tuple[str, int]] = []
+    closed: list[int] = []
+    invalid = wintypes.HANDLE(-1).value
+    assert isinstance(invalid, int)
+
+    def create_file(*args: object) -> int:
+        path, access = args[:2]
+        assert isinstance(path, str) and isinstance(access, int)
+        calls.append((path, access))
+        assert args[2:5] == (7, None, 3)
+        assert args[5] == (0x02000000 if Path(path).is_dir() else 0x80)
+        return 42 if path == str(target) and access == right else invalid
+
+    def close_handle(handle: object) -> int:
+        assert isinstance(handle, int)
+        closed.append(handle)
+        return 1
+
+    monkeypatch.setattr(
+        processor_module, "_load_kernel32", lambda: _ProbeKernel32(create_file, close_handle)
+    )
+    monkeypatch.setattr(processor_module, "_windows_last_error", lambda: 5)
+    relative = target.relative_to(root).as_posix()
+    with pytest.raises(InlineXbrlProcessorError) as failure:
+        _require_tree_nonwritable_for_test(root)
+    assert f"{kind} {relative!r}, access=0x{right:08x}" in str(failure.value)
+    assert calls[-1] == (str(target), right)
+    assert closed == [42]
+
+
+def test_tree_probe_preserves_fail_closed_unknown_access_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    invalid = wintypes.HANDLE(-1).value
+    assert isinstance(invalid, int)
+    monkeypatch.setattr(
+        processor_module,
+        "_load_kernel32",
+        lambda: _ProbeKernel32(lambda *_args: invalid, lambda *_args: 1),
+    )
+    monkeypatch.setattr(processor_module, "_windows_last_error", lambda: 32)
+    with pytest.raises(InlineXbrlProcessorError, match="access cannot be verified"):
+        _require_tree_nonwritable_for_test(tmp_path)
 
 
 def test_windows_tree_fence_blocks_and_then_restores_runtime_writes(tmp_path: Path) -> None:

@@ -1304,9 +1304,18 @@ def _require_tree_nonwritable(root: Path) -> None:
             )
             if handle != invalid:
                 close_handle(handle)
-                raise InlineXbrlProcessorError("filing-XBRL fenced tree remains writable")
-            if _windows_last_error() != 5:
-                raise InlineXbrlProcessorError("filing-XBRL fenced tree access cannot be verified")
+                kind = "directory" if is_directory else "file"
+                relative = path.relative_to(root).as_posix()
+                raise InlineXbrlProcessorError(
+                    "filing-XBRL fenced tree remains writable "
+                    f"({kind} {relative!r}, access=0x{right:08x})"
+                )
+            error = _windows_last_error()
+            if error != 5:
+                raise InlineXbrlProcessorError(
+                    "filing-XBRL fenced tree access cannot be verified "
+                    f"(access=0x{right:08x}, winerror={error})"
+                )
 
 
 @contextmanager
