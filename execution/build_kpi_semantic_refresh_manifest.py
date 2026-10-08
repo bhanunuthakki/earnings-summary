@@ -30,11 +30,10 @@ from pydantic import (
     model_validator,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from execution.apply_kpi_semantic_refresh import (  # noqa: E402
+from execution.apply_kpi_semantic_refresh import (
     MAX_KNOWLEDGE_AT_FUTURE_SKEW,
     RefreshEntry,
     RefreshManifest,
@@ -43,13 +42,13 @@ from execution.apply_kpi_semantic_refresh import (  # noqa: E402
     schema_revision,
     validate_refresh_entry,
 )
-from models.facts import Currency, Unit  # noqa: E402
-from operations.kpi_semantic_review_export import KpiSemanticReviewExport  # noqa: E402
-from pipeline.kpi_definition_revisions import (  # noqa: E402
+from models.facts import Currency, Unit
+from operations.kpi_semantic_review_export import KpiSemanticReviewExport
+from pipeline.kpi_definition_revisions import (
     IssuerKpiDefinitionRevision,
     KpiDefinitionComparabilityRevision,
 )
-from pipeline.kpi_semantic_review import (  # noqa: E402
+from pipeline.kpi_semantic_review import (
     QUARANTINED_PREDECESSOR_SCOPE_REASON,
     KpiEvidenceCandidate,
     KpiEvidenceLocatorCoordinates,
@@ -57,17 +56,19 @@ from pipeline.kpi_semantic_review import (  # noqa: E402
     KpiSemanticReviewState,
     fact_locator_from_evidence_coordinates,
 )
-from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definitions  # noqa: E402
-from pipeline.kpi_semantics import (  # noqa: E402
+from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definitions
+from pipeline.kpi_semantics import (
     KpiSemanticContext,
     KpiSemanticStatus,
     current_kpi_semantic_context,
     normalize_source_numeric,
     parse_source_numeric,
 )
-from provenance.evidence_ledger import EvidenceLocator  # noqa: E402
-from provenance.financial_fact_resolution import canonical_fact_relation  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from provenance.evidence_ledger import EvidenceLocator
+from provenance.financial_fact_resolution import canonical_fact_relation
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 MAX_REVIEWED_DECISIONS_PER_MANIFEST = 25
 _SHA256 = r"^[0-9a-f]{64}$"
