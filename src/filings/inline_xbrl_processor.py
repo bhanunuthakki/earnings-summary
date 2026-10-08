@@ -83,6 +83,9 @@ class _Advapi32(Protocol):
     DuplicateToken: _WindowsFunction
     GetNamedSecurityInfoW: _WindowsFunction
     AccessCheck: _WindowsFunction
+    LookupPrivilegeValueW: _WindowsFunction
+    CreateRestrictedToken: _WindowsFunction
+    SetThreadToken: _WindowsFunction
 
 
 class _Advapi32Factory(Protocol):
@@ -1095,6 +1098,111 @@ def _admit_package_cache(cache_root: Path, *, incoming_bytes: int) -> None:
 
 
 @contextmanager
+def _windows_without_backup_restore_privileges() -> Generator[None, None, None]:
+    """Restrict only this thread; keep the original token and privileges intact."""
+
+    import ctypes
+    from ctypes import wintypes
+
+    class Luid(ctypes.Structure):
+        _fields_ = [("low", wintypes.DWORD), ("high", wintypes.LONG)]
+
+    class LuidAndAttributes(ctypes.Structure):
+        _fields_ = [("luid", Luid), ("attributes", wintypes.DWORD)]
+
+    kernel32, security = _load_kernel32(), _load_advapi32()
+    for function in (kernel32.GetCurrentProcess, kernel32.GetCurrentThread):
+        function.argtypes = []
+        function.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    token_pointer = ctypes.POINTER(wintypes.HANDLE)
+    security.OpenThreadToken.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.BOOL,
+        token_pointer,
+    ]
+    security.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, token_pointer]
+    security.DuplicateToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, token_pointer]
+    security.LookupPrivilegeValueW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        ctypes.POINTER(Luid),
+    ]
+    security.CreateRestrictedToken.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(LuidAndAttributes),
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        token_pointer,
+    ]
+    security.SetThreadToken.argtypes = [token_pointer, wintypes.HANDLE]
+    for function in (
+        security.OpenThreadToken,
+        security.OpenProcessToken,
+        security.DuplicateToken,
+        security.LookupPrivilegeValueW,
+        security.CreateRestrictedToken,
+        security.SetThreadToken,
+    ):
+        function.restype = wintypes.BOOL
+    original, restricted, scoped = wintypes.HANDLE(), wintypes.HANDLE(), wintypes.HANDLE()
+    had_thread_token = False
+    installed = False
+    try:
+        # TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_IMPERSONATE permits exact restoration.
+        had_thread_token = bool(
+            security.OpenThreadToken(kernel32.GetCurrentThread(), 0xE, True, ctypes.byref(original))
+        )
+        if not had_thread_token and (
+            _windows_last_error() != 1008
+            or not security.OpenProcessToken(
+                kernel32.GetCurrentProcess(), 0xA, ctypes.byref(original)
+            )
+        ):
+            raise InlineXbrlProcessorError("filing-XBRL privilege scope caller token unavailable")
+        if not original.value:
+            raise InlineXbrlProcessorError("filing-XBRL privilege scope caller token unavailable")
+        deleted = (LuidAndAttributes * 2)()
+        for item, name in zip(deleted, ("SeBackupPrivilege", "SeRestorePrivilege"), strict=True):
+            if not security.LookupPrivilegeValueW(None, name, ctypes.byref(item.luid)):
+                raise InlineXbrlProcessorError("filing-XBRL bypass privilege identity unavailable")
+        # No SID restrictions or flags. Only these two privileges are removed,
+        # and only from the new token. No original token is adjusted.
+        if (
+            not security.CreateRestrictedToken(
+                original, 0, 0, None, 2, deleted, 0, None, ctypes.byref(restricted)
+            )
+            or not restricted.value
+        ):
+            raise InlineXbrlProcessorError("filing-XBRL bypass privilege restriction failed")
+        # SecurityImpersonation is required by SetThreadToken.
+        if not security.DuplicateToken(restricted, 2, ctypes.byref(scoped)) or not scoped.value:
+            raise InlineXbrlProcessorError("filing-XBRL scoped token duplication failed")
+        if not security.SetThreadToken(None, scoped):
+            raise InlineXbrlProcessorError("filing-XBRL scoped token installation failed")
+        installed = True
+        yield
+    finally:
+        restoration_failed = installed and not security.SetThreadToken(
+            None, original if had_thread_token else None
+        )
+        cleanup_failed = False
+        for handle in (scoped, restricted, original):
+            if handle.value and not kernel32.CloseHandle(handle):
+                cleanup_failed = True
+        if restoration_failed:
+            raise InlineXbrlProcessorError("filing-XBRL original thread token restoration failed")
+        if cleanup_failed:
+            raise InlineXbrlProcessorError("filing-XBRL privilege scope cleanup failed")
+
+
+@contextmanager
 def _tree_write_denial_fence(roots: Sequence[Path]) -> Generator[str, None, None]:
     """Hold exact current-user deny-write ACEs through the admitted operation."""
 
@@ -1106,14 +1214,15 @@ def _tree_write_denial_fence(roots: Sequence[Path]) -> Generator[str, None, None
     _require_no_reparse_points(powershell)
     processes: list[subprocess.Popen[str]] = []
     try:
-        for root in unique:
-            _require_no_reparse_points(root)
-            if not root.is_dir():
-                raise InlineXbrlProcessorError("filing-XBRL fenced tree is unavailable")
-            process = _start_windows_acl_fence(powershell, root)
-            processes.append(process)
-            _require_tree_nonwritable(root)
-        yield "windows-deny-write-acl"
+        with _windows_without_backup_restore_privileges():
+            for root in unique:
+                _require_no_reparse_points(root)
+                if not root.is_dir():
+                    raise InlineXbrlProcessorError("filing-XBRL fenced tree is unavailable")
+                process = _start_windows_acl_fence(powershell, root)
+                processes.append(process)
+                _require_tree_nonwritable(root)
+            yield "windows-deny-write-acl"
     finally:
         failures: list[Exception] = []
         for process in reversed(processes):
