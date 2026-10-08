@@ -625,6 +625,87 @@ def test_tree_probe_preserves_fail_closed_unknown_access_error(
         _require_tree_nonwritable_for_test(tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("failed_call", "message", "closed", "freed"),
+    [
+        ("OpenThreadToken", "caller token cannot be verified", [], []),
+        ("DuplicateToken", "caller token cannot be duplicated", [101], []),
+        ("GetNamedSecurityInfoW", "DACL cannot be verified", [201, 101], []),
+        ("AccessCheck", "access cannot be verified", [201, 101], [301]),
+        ("LocalFree", "cleanup failed", [201, 101], [301]),
+        ("CloseHandle", "cleanup failed", [201, 101], [301]),
+    ],
+)
+def test_directory_access_check_fails_closed_and_releases_resources(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failed_call: str,
+    message: str,
+    closed: list[int],
+    freed: list[int],
+) -> None:
+    observed_closed: list[int] = []
+    observed_freed: list[int] = []
+
+    def close_handle(handle: object) -> int:
+        assert isinstance(handle, wintypes.HANDLE) and isinstance(handle.value, int)
+        observed_closed.append(handle.value)
+        return int(failed_call != "CloseHandle")
+
+    def local_free(descriptor: object) -> int:
+        assert isinstance(descriptor, ctypes.c_void_p) and isinstance(descriptor.value, int)
+        observed_freed.append(descriptor.value)
+        return int(failed_call == "LocalFree")
+
+    kernel = _ProbeKernel32(lambda *_args: 0, close_handle)
+    kernel.LocalFree = _ProbeWindowsFunction(local_free)
+    security = _ProbeAdvapi32([], None, 0)
+    if failed_call not in ("LocalFree", "CloseHandle"):
+        # GetNamedSecurityInfoW returns an error code; the other calls return BOOL.
+        failure_result = 5 if failed_call == "GetNamedSecurityInfoW" else 0
+        monkeypatch.setattr(
+            security, failed_call, _ProbeWindowsFunction(lambda *_args: failure_result)
+        )
+    monkeypatch.setattr(processor_module, "_load_kernel32", lambda: kernel)
+    monkeypatch.setattr(processor_module, "_load_advapi32", lambda: security)
+    monkeypatch.setattr(processor_module, "_windows_last_error", lambda: 5)
+    with pytest.raises(InlineXbrlProcessorError, match=message):
+        _require_tree_nonwritable_for_test(tmp_path)
+    assert observed_closed == closed
+    assert observed_freed == freed
+
+
+def test_directory_access_check_uses_process_token_only_when_thread_has_no_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[str, int]] = []
+    security = _ProbeAdvapi32(calls, None, 0)
+    security.OpenThreadToken = _ProbeWindowsFunction(lambda *_args: 0)
+    process_opens: list[bool] = []
+    original_open = security.OpenProcessToken
+
+    def process_open(*args: object) -> int:
+        process_opens.append(True)
+        return original_open(*args)
+
+    security.OpenProcessToken = _ProbeWindowsFunction(process_open)
+    monkeypatch.setattr(processor_module, "_load_advapi32", lambda: security)
+    monkeypatch.setattr(
+        processor_module,
+        "_load_kernel32",
+        lambda: _ProbeKernel32(lambda *_args: 0, lambda *_args: 1),
+    )
+    monkeypatch.setattr(processor_module, "_windows_last_error", lambda: 1008)
+    _require_tree_nonwritable_for_test(tmp_path)
+    assert process_opens == [True]
+    assert [right for _path, right in calls] == [0x2, 0x4, 0x10, 0x40, 0x100]
+    process_opens.clear()
+    monkeypatch.setattr(processor_module, "_windows_last_error", lambda: 5)
+    with pytest.raises(InlineXbrlProcessorError, match="caller token cannot be verified"):
+        _require_tree_nonwritable_for_test(tmp_path)
+    assert not process_opens
+
+
 def test_windows_tree_fence_blocks_and_then_restores_runtime_writes(tmp_path: Path) -> None:
     if os.name != "nt":
         pytest.skip("Windows share-mode fence is unavailable")
@@ -633,6 +714,65 @@ def test_windows_tree_fence_blocks_and_then_restores_runtime_writes(tmp_path: Pa
 
     with _tree_write_denial_fence_for_test((runtime_root,)), pytest.raises(OSError):
         (runtime_root / "sitecustomize.py").write_text("injected")
+    (runtime_root / "restored.py").write_text("restored")
+
+
+def test_windows_tree_fence_denies_existing_and_nested_mutations_and_restores_them(
+    tmp_path: Path,
+) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows share-mode fence is unavailable")
+    runtime_root = tmp_path / "runtime"
+    nested = runtime_root / "nested"
+    nested.mkdir(parents=True)
+    members = (runtime_root / "member.py", nested / "member.py")
+    for member in members:
+        member.write_text("original")
+    with _tree_write_denial_fence_for_test((runtime_root,)):
+        for directory in (runtime_root, nested):
+            with pytest.raises(PermissionError):
+                (directory / "new.py").write_text("injected")
+            with pytest.raises(PermissionError):
+                (directory / "new-directory").mkdir()
+        for member in members:
+            with pytest.raises(PermissionError):
+                member.write_text("injected")
+            with pytest.raises(PermissionError):
+                member.unlink()
+            with pytest.raises(PermissionError):
+                member.rename(member.with_name("renamed.py"))
+            assert member.read_text() == "original"
+        with pytest.raises(PermissionError):
+            nested.rename(runtime_root / "renamed-directory")
+    for directory in (runtime_root, nested):
+        (directory / "new.py").write_text("restored")
+        (directory / "new-directory").mkdir()
+    for member in members:
+        member.write_text("restored")
+        renamed = member.rename(member.with_name("renamed.py"))
+        renamed.unlink()
+    nested.rename(runtime_root / "renamed-directory")
+
+
+def test_windows_tree_fence_restores_acl_after_admission_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if os.name != "nt":
+        pytest.skip("Windows share-mode fence is unavailable")
+    runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+
+    def refuse(_root: Path) -> None:
+        with pytest.raises(PermissionError):
+            (_root / "blocked.py").write_text("injected")
+        raise InlineXbrlProcessorError("test admission refusal")
+
+    monkeypatch.setattr(processor_module, "_require_tree_nonwritable", refuse)
+    with (
+        pytest.raises(InlineXbrlProcessorError, match="test admission refusal"),
+        _tree_write_denial_fence_for_test((runtime_root,)),
+    ):
+        pytest.fail("failed fence admission must not yield")
     (runtime_root / "restored.py").write_text("restored")
 
 
