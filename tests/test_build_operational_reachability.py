@@ -220,9 +220,22 @@ def test_actual_head_is_supported() -> None:
         )
         for line in (123, 913)
     ]
-    # Retain 149 prior test seams plus one scoped DCF reader Node child.
+    # Retain all 150 upstream test seams plus one isolated pytest lifecycle harness.
     # No production gap is admitted.
-    assert len(graph.unknown_edges) == 150
+    assert len(graph.unknown_edges) == 151
+    assert [
+        edge for edge in graph.unknown_edges if edge.source == "tests/test_pytest_temp_lifecycle.py"
+    ] == [
+        GraphEdge(
+            source="tests/test_pytest_temp_lifecycle.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=62,
+            unknown=True,
+        )
+    ]
     # Ten new acquisition/authority fixture calls preserve synthetic db globals.
     # Exact AST evidence is retained in followup-test-edge-census.json.
     new_fixture_calls = (

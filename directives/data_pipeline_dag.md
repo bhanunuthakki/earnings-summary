@@ -112,6 +112,35 @@ The current retention defaults are:
 - 90 days for bounded pipeline telemetry (`stage_transitions`, `source_calls`, and
   `ingestion_runs`).
 
+Explicitly registered, verified, completed test files expire after seven days.
+New owned test sessions use `src/operations/temp_run_retention.py`. A per-run
+`.earnings-temp-run.json` receipt starts active. Successful closure records exact
+disposable paths and their hashes after test teardown. The seven-day window starts
+at completion, not creation. Pytest stores its default fixtures in that owned run
+root on Windows and seals it through its session-finish hook. Other hosts retain
+pytest's existing fixture cleanup; tests can opt in through
+`EARNINGS_SUMMARY_MANAGED_TEST_TEMPS=1`. Failed or interrupted sessions
+remain protected. Explicit user `--basetemp` paths are not claimed by this hook.
+The existing weekly cleaner discovers these receipts in both configured state
+and runtime `.tmp` roots, plus narrowly named `earnings-summary-*` runs under
+the Windows/user temporary roots. Unknown paths are inventoried, not registered
+by filename, age, or a passing command. Lifecycle receipts remain after retirement.
+Registration in `data/operations/artifact-retention.json` names each file, its
+allowed scope, SHA-256, family, completion status and recovery pins. A supervised
+operator may use a zero-day cutoff for the owner's immediate cleanup request.
+Unclassified files, active or failed attempts, changed bytes, links, database
+sidecars and pinned recovery material stay protected. Retirement writes a durable
+plan and result receipt before removing registered bytes. Original source
+documents, financial observation history and `portfolio_gc_archive.db` remain
+outside this cleanup.
+
+Backup files retain the latest verified, completed member per source and family.
+Daily database backup defaults are one portfolio snapshot and one cumulative
+archive snapshot. Snapshot and archive verification and both required uploads
+must finish before retention starts. Failed or unfinished attempts and explicit
+recovery pins keep their bytes and the last good backup. Legacy files require
+explicit catalog registration; calendar age or a filename is insufficient.
+
 `execution/run_weekly_cleanup.py` and `execution/db_gc.py` are the executable
 allowlists and exact cutoff implementations. Their already-registered weekly jobs are
 the only cleanup writers; this lifecycle does not authorize a new operation, schedule,

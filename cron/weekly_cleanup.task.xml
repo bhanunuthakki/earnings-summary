@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
-    <Description>Weekly local cleanup (Sunday 13:00): runs the allowlisted transient-artifact cleanup, then expires stale research state. No network required. Both stages are serialized with the portfolio-db write set and are recorded by the shared job runtime.</Description>
+    <Description>Weekly local cleanup (Sunday 13:00): runs the allowlisted transient-artifact cleanup with the filesystem-maintenance lock, then expires stale research state with the portfolio-db lock. No network required. Missed starts resume when available; transient failures receive one retry after 30 minutes. Both stages are recorded by the shared job runtime.</Description>
     <URI>\earnings-summary\weekly_cleanup</URI>
   </RegistrationInfo>
   <Triggers>
@@ -27,7 +27,7 @@
     <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
     <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
     <AllowHardTerminate>true</AllowHardTerminate>
-    <StartWhenAvailable>false</StartWhenAvailable>
+    <StartWhenAvailable>true</StartWhenAvailable>
     <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
     <IdleSettings>
       <StopOnIdleEnd>false</StopOnIdleEnd>

@@ -1,5 +1,21 @@
 # Operations & Governance Surface Impact
 
+The existing daily database backup and weekly filesystem cleanup jobs own file
+retention. Backups keep the latest verified completed member per source and
+family. Snapshot, archive and required upload failures preserve the last good
+backup and unfinished attempt evidence. Retirement starts after every required
+upload succeeds. Legacy backups require explicit hash-bound catalog registration;
+the automatic filename/month-based legacy sweep is retired. Weekly cleanup
+preserves the newest job log, failed checkpoints, recovery scopes and registered
+pins. Its filesystem phase uses the filesystem-maintenance lane and resolves the
+configured product state root. See `weekly_cleanup.md` and
+`data_pipeline_dag.md` for the executable boundaries and retention windows.
+Weekly cleanup also emits read-only coverage counts for the state and runtime
+temporary roots, named test runs, operations evidence and backup recovery roots.
+Unknown or unreadable material reports incomplete coverage. Pytest session
+receipts supply automatic successful-run registration. This extends the existing
+job receipt; it adds no Operations page, database mutation, network call, or job.
+
 ## Directive contract
 
 - **Target sources:** canonical Scheduler manifest and wrappers, managed-service registry, LLM and eval registries, issuer/source policy, typed runtime receipts, bounded database observations, schema compatibility, and separately governed operator capabilities.

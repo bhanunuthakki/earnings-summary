@@ -16,7 +16,7 @@ set "LOG_FILE=%LOG_DIR%\weekly_cleanup_%TS%.log"
 
 cd /d "%PROJECT_ROOT%"
 > "%LOG_FILE%" echo === weekly cleanup ===
-call "%PROJECT_ROOT%\cron\run_python.bat" "weekly-cleanup" "portfolio-db" execution\run_weekly_cleanup.py --apply >> "%LOG_FILE%" 2>&1
+call "%PROJECT_ROOT%\cron\run_python.bat" "weekly-cleanup" "filesystem-maintenance" execution\run_weekly_cleanup.py --apply >> "%LOG_FILE%" 2>&1
 if not errorlevel 1 goto expire_research
 set "EXIT_CODE=%ERRORLEVEL%"
 goto done

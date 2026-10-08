@@ -59,7 +59,7 @@
   "suppressions": {
     ".github": 0,
     "alembic": 1,
-    "cron": 15,
+    "cron": 8,
     "evals": 0,
     "execution": 929,
     "instruction_tests": 0,
@@ -110,6 +110,6 @@
     "src/ui": 0,
     "src/user_state": 1,
     "src/viewspec": 0,
-    "tests": 958
+    "tests": 951
   }
 }

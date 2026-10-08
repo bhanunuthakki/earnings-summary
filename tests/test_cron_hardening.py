@@ -85,6 +85,10 @@ def test_project_backup_excludes_all_standard_credential_paths() -> None:
 
 
 def test_critical_wrappers_use_explicit_runtime_and_write_lock() -> None:
+    invocation = re.compile(
+        r'^call\s+"[^"\r\n]*run_python\.bat"\s+"([^"\r\n]+)"\s+"([^"\r\n]+)"',
+        re.IGNORECASE | re.MULTILINE,
+    )
     for wrapper in (
         "run_backup_db.bat",
         "run_daily_fetch_and_brief.bat",
@@ -94,8 +98,12 @@ def test_critical_wrappers_use_explicit_runtime_and_write_lock() -> None:
         "run_track_comp_metrics.bat",
     ):
         text = (CRON / wrapper).read_text(encoding="utf-8")
-        assert "run_python.bat" in text
-        assert '"portfolio-db"' in text
+        calls = invocation.findall(text)
+        assert calls, f"{wrapper} has no explicit managed-runtime invocation"
+        if wrapper == "run_backup_db.bat":
+            assert calls[0] == ("backup_db", "db-backup")
+        else:
+            assert all(lane == "portfolio-db" for _job, lane in calls)
 
 
 def test_daily_wrappers_return_the_child_exit_code_through_endlocal() -> None:
