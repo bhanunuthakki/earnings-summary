@@ -245,7 +245,7 @@ def test_actual_head_is_supported() -> None:
             kind="unknown",
             evidence="subprocess/runpy expression",
             confidence="low",
-            line=622,
+            line=728,
             unknown=True,
         )
         in graph.unknown_edges

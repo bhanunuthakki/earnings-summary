@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "generated": "2026-10-06",
-  "source": "Per-file seconds seeded from main CI run 35388990584 (push 8a0cf865, 13 test jobs). Measured files use the pytest --durations=25 'slowest 25 durations' sums from each shard's log; unmeasured files use each shard's residual (2x wall minus measured) spread evenly over its unmeasured files. The per-file 'shard' fields are the output of the deterministic 13-bin LPT pack over these durations. Added ONON test-file seconds from local pytest JUnit case-time sums on 2026-10-04; failed workbook samples were replaced by the passing final sample. Existing measured seconds and defaults are unchanged. Shards were regenerated with the existing deterministic 13-bin LPT pack. Research method/runtime measured serial synthetic JUnit totals from the independently tested 2026-10-04 snapshot are retained for tests/test_earnings_research_runtime.py, tests/test_research_method_contract.py, tests/test_research_prompt_runtime.py. Combined timings use the existing deterministic 13-bin LPT packing. Added 13 affected-module seconds from passing local serial synthetic pytest JUnit testcase time totals on 2026-10-04 (173 passing cases; retained timing-cohort-20261004.xml). All earlier per-file seconds and default_seconds are preserved. Shard pins and totals use canonical pack_test_shards. Added tests/test_reporting_document_scope.py from passing local serial pytest JUnit testcase time totals on 2026-10-05 (9 cases; reporting-test-timing.xml). All earlier seconds and default_seconds remain unchanged. Shards and totals use canonical pack_test_shards. Added two retained test-file timings from passing serial macOS pytest JUnit testcase setup/call/teardown time sums on 2026-10-06 UTC (2026-10-05 local): tests/test_retained_state_paths.py=0.360 seconds (5 passing cases), tests/test_bounded_source_reader.py=0.015 seconds (12 passing cases). The native Windows stat/file-handle case was skipped and is not measured or qualified by this sample. Source: ci-duration-repair-timing.xml, SHA-256 3c344e8843ca7738b1b5e0220e1565a317689bebe4aca77a797c1d1457df556c. All earlier seconds and default_seconds are unchanged. Pins and shard totals use canonical pack_test_shards; collection and process startup time are excluded from the per-file sums.",
+  "generated": "2026-10-08",
+  "source": "Per-file seconds seeded from main CI run 35388990584 (push 8a0cf865, 13 test jobs). Measured files use the pytest --durations=25 'slowest 25 durations' sums from each shard's log; unmeasured files use each shard's residual (2x wall minus measured) spread evenly over its unmeasured files. The per-file 'shard' fields are the output of the deterministic 13-bin LPT pack over these durations. Added ONON test-file seconds from local pytest JUnit case-time sums on 2026-10-04; failed workbook samples were replaced by the passing final sample. Existing measured seconds and defaults are unchanged. Shards were regenerated with the existing deterministic 13-bin LPT pack. Research method/runtime measured serial synthetic JUnit totals from the independently tested 2026-10-04 snapshot are retained for tests/test_earnings_research_runtime.py, tests/test_research_method_contract.py, tests/test_research_prompt_runtime.py. Combined timings use the existing deterministic 13-bin LPT packing. Added 13 affected-module seconds from passing local serial synthetic pytest JUnit testcase time totals on 2026-10-04 (173 passing cases; retained timing-cohort-20261004.xml). All earlier per-file seconds and default_seconds are preserved. Shard pins and totals use canonical pack_test_shards. Added tests/test_reporting_document_scope.py from passing local serial pytest JUnit testcase time totals on 2026-10-05 (9 cases; reporting-test-timing.xml). All earlier seconds and default_seconds remain unchanged. Shards and totals use canonical pack_test_shards. Added two retained test-file timings from passing serial macOS pytest JUnit testcase setup/call/teardown time sums on 2026-10-06 UTC (2026-10-05 local): tests/test_retained_state_paths.py=0.360 seconds (5 passing cases), tests/test_bounded_source_reader.py=0.015 seconds (12 passing cases). The native Windows stat/file-handle case was skipped and is not measured or qualified by this sample. Source: ci-duration-repair-timing.xml, SHA-256 3c344e8843ca7738b1b5e0220e1565a317689bebe4aca77a797c1d1457df556c. All earlier seconds and default_seconds are unchanged. Pins and shard totals use canonical pack_test_shards; collection and process startup time are excluded from the per-file sums. Added tests/test_earnings_generation_db_authority.py from passing serial macOS JUnit testcase time sums on 2026-10-08 UTC (10 cases, 0.594 seconds). Source: booking-db-authority-duration-final.xml, SHA-256 349db8971c0e2149a771294cd0b7b4b9e0ebdc75d134e353b52bee6ca8d4bf34. Existing timings and defaults are unchanged. Pins and totals use canonical pack_test_shards as required by the CI invariant.",
   "default_seconds": 1.6,
   "labels": [
     "1",
@@ -285,7 +285,7 @@
     },
     "tests/test_ask_proposal_approval.py": {
       "seconds": 0.58,
-      "shard": "1"
+      "shard": "3 overflow"
     },
     "tests/test_ask_proposal_approval_migration.py": {
       "seconds": 4.21,
@@ -433,7 +433,7 @@
     },
     "tests/test_bha92_report_design.py": {
       "seconds": 0.54,
-      "shard": "3 overflow"
+      "shard": "4"
     },
     "tests/test_boilerplate_classify.py": {
       "seconds": 1.4,
@@ -445,7 +445,7 @@
     },
     "tests/test_bounded_source_reader.py": {
       "seconds": 0.015,
-      "shard": "8"
+      "shard": "2"
     },
     "tests/test_brief_provenance_log.py": {
       "seconds": 1.8,
@@ -781,7 +781,7 @@
     },
     "tests/test_companyfacts_statement_continuation.py": {
       "seconds": 0.527,
-      "shard": "2 overflow"
+      "shard": "1 overflow"
     },
     "tests/test_comparable_sets.py": {
       "seconds": 1.8,
@@ -1286,6 +1286,10 @@
     "tests/test_earnings_doorway.py": {
       "seconds": 2.1,
       "shard": "8 overflow"
+    },
+    "tests/test_earnings_generation_db_authority.py": {
+      "seconds": 0.594,
+      "shard": "1"
     },
     "tests/test_earnings_readout.py": {
       "seconds": 1.3,
@@ -2613,7 +2617,7 @@
     },
     "tests/test_model_source_coverage.py": {
       "seconds": 0.091,
-      "shard": "6 overflow"
+      "shard": "6"
     },
     "tests/test_models_unit_convert.py": {
       "seconds": 1.6,
@@ -2701,7 +2705,7 @@
     },
     "tests/test_onboarding_state_authority.py": {
       "seconds": 0.006,
-      "shard": "2"
+      "shard": "8 overflow"
     },
     "tests/test_onmymind_feed.py": {
       "seconds": 3.86,
@@ -2709,19 +2713,19 @@
     },
     "tests/test_onon_explicit_routing.py": {
       "seconds": 0.026,
-      "shard": "2"
+      "shard": "8"
     },
     "tests/test_onon_inputs.py": {
       "seconds": 0.097,
-      "shard": "5"
+      "shard": "6 overflow"
     },
     "tests/test_onon_model.py": {
       "seconds": 0.067,
-      "shard": "8 overflow"
+      "shard": "2"
     },
     "tests/test_onon_provenance.py": {
       "seconds": 0.005,
-      "shard": "8"
+      "shard": "2"
     },
     "tests/test_ooxml_native_inventory.py": {
       "seconds": 2.0,
@@ -3189,7 +3193,7 @@
     },
     "tests/test_processor_installation.py": {
       "seconds": 0.069,
-      "shard": "6"
+      "shard": "8 overflow"
     },
     "tests/test_produce_issuer_fact_manifest.py": {
       "seconds": 1.5,
@@ -3281,7 +3285,7 @@
     },
     "tests/test_publish_reviewed_sec_financial_tables.py": {
       "seconds": 0.121,
-      "shard": "3"
+      "shard": "5"
     },
     "tests/test_qa_roster.py": {
       "seconds": 1.6,
@@ -3481,7 +3485,7 @@
     },
     "tests/test_research_method_contract.py": {
       "seconds": 0.264,
-      "shard": "7"
+      "shard": "3"
     },
     "tests/test_research_notify.py": {
       "seconds": 4.31,
@@ -3545,7 +3549,7 @@
     },
     "tests/test_retained_state_paths.py": {
       "seconds": 0.36,
-      "shard": "3 overflow"
+      "shard": "7"
     },
     "tests/test_review_onon_input_roles.py": {
       "seconds": 13.826,
@@ -3557,7 +3561,7 @@
     },
     "tests/test_reviewed_sec_financial_tables.py": {
       "seconds": 0.451,
-      "shard": "1 overflow"
+      "shard": "4"
     },
     "tests/test_risk_drift.py": {
       "seconds": 4.97,
@@ -3773,7 +3777,7 @@
     },
     "tests/test_sec_financial_classification.py": {
       "seconds": 0.019,
-      "shard": "2"
+      "shard": "8"
     },
     "tests/test_sec_former_ticker_bootstrap.py": {
       "seconds": 1.2,
@@ -3801,7 +3805,7 @@
     },
     "tests/test_sec_onboarding_identity.py": {
       "seconds": 0.407,
-      "shard": "4"
+      "shard": "3 overflow"
     },
     "tests/test_sec_silent_staleness.py": {
       "seconds": 1.2,
@@ -4013,7 +4017,7 @@
     },
     "tests/test_source_context_entrypoints.py": {
       "seconds": 0.532,
-      "shard": "4"
+      "shard": "2 overflow"
     },
     "tests/test_source_cost_attribution.py": {
       "seconds": 2.1,
@@ -4637,7 +4641,7 @@
     },
     "tests/test_xbrl_units.py": {
       "seconds": 0.01,
-      "shard": "2"
+      "shard": "8 overflow"
     },
     "tests/test_xbrl_value_classify.py": {
       "seconds": 2.0,
@@ -4653,18 +4657,18 @@
     }
   },
   "shard_timings_seconds": {
-    "1": 248.692,
-    "1 overflow": 248.695,
-    "2": 248.471,
-    "2 overflow": 248.767,
-    "3": 248.506,
-    "3 overflow": 248.7,
-    "4": 248.741,
-    "5": 248.494,
-    "6": 248.477,
-    "6 overflow": 248.496,
-    "7": 248.644,
-    "8": 248.47,
-    "8 overflow": 248.477
+    "1": 248.706,
+    "1 overflow": 248.771,
+    "2": 248.497,
+    "2 overflow": 248.772,
+    "3": 248.649,
+    "3 overflow": 248.787,
+    "4": 248.793,
+    "5": 248.518,
+    "6": 248.499,
+    "6 overflow": 248.502,
+    "7": 248.74,
+    "8": 248.495,
+    "8 overflow": 248.495
   }
 }

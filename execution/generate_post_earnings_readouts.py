@@ -21,11 +21,12 @@ log = logging.getLogger("generate_post_earnings_readouts")
 
 
 def main() -> int:
+    from db_paths import require_db_path, resolve_db_path
     from earnings_readout import ReadoutUnavailableError, generate_all
     from llm_client import is_hard_stop
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db-path", type=Path, default=_REPO_ROOT / "data" / "portfolio.db")
+    parser.add_argument("--db-path", type=Path, default=None)
     parser.add_argument(
         "--ticker",
         action="append",
@@ -59,10 +60,14 @@ def main() -> int:
     args = parser.parse_args()
     if (args.period_end is None) != (args.fiscal_period_type is None):
         parser.error("--period-end and --fiscal-period-type must be supplied together")
+    try:
+        database_path = require_db_path(resolve_db_path(args.db_path, configured_root=_REPO_ROOT))
+    except (RuntimeError, FileNotFoundError) as exc:
+        parser.error(str(exc))
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     try:
         tally = generate_all(
-            args.db_path,
+            database_path,
             _REPO_ROOT,
             today=args.as_of or datetime.now(UTC).date(),
             force=args.force,
