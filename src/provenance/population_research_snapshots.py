@@ -45,6 +45,7 @@ _REPORTING_FAMILIES = (
     "operating_company_periodic",
 )
 ProjectionMode = Literal["semantic", "lexical_only"]
+SourcePublicationReferenceClock = Literal["cutoff_v1", "publication_created_v2"]
 
 _RESEARCH_SELECTION_POLICY = "research-snapshot-terminal-at-k-observed-through-o.v1"
 
@@ -60,6 +61,7 @@ class ResearchSnapshotPopulationRequest(_FrozenModel):
     )
     issuer_ids: tuple[str, ...] = ()
     projection_mode: ProjectionMode = "semantic"
+    source_publication_reference_clock: SourcePublicationReferenceClock = "cutoff_v1"
     apply: bool = False
     input_commitment_sha256: str | None = None
     plan_commitment_sha256: str | None = None
@@ -203,6 +205,7 @@ def populate_research_snapshots(
 ) -> ResearchSnapshotPopulationResult:
     """Build every ready issuer snapshot and retain exact blocker codes."""
 
+    _require_source_publication_reference_clock(request.source_publication_reference_clock)
     cutoff = _utc(request.cutoff_at)
     recorded = _utc(request.operation_recorded_at)
     if recorded < cutoff:
@@ -245,6 +248,7 @@ def populate_research_snapshots(
                     cutoff,
                     observed_through=recorded,
                     projection_mode=request.projection_mode,
+                    source_publication_reference_clock=request.source_publication_reference_clock,
                 )
                 _require_unambiguous_terminal(conn, plan)
                 plans[issuer_id] = plan
@@ -278,6 +282,7 @@ def populate_research_snapshots(
             issuers,
             commitment_entries,
             projection_mode=request.projection_mode,
+            source_publication_reference_clock=request.source_publication_reference_clock,
         )
         plan_commitment = _population_plan_commitment(
             request,
@@ -338,9 +343,11 @@ def assemble_research_snapshot_request(
     *,
     observed_through: datetime | None = None,
     projection_mode: ProjectionMode = "semantic",
+    source_publication_reference_clock: SourcePublicationReferenceClock = "cutoff_v1",
 ) -> ResearchSnapshotRequest:
     """Assemble one exact issuer request or raise one stable blocker."""
 
+    _require_source_publication_reference_clock(source_publication_reference_clock)
     cutoff = _utc(cutoff_at)
     observed = cutoff if observed_through is None else _utc(observed_through)
     if observed < cutoff:
@@ -390,6 +397,8 @@ def assemble_research_snapshot_request(
     # Preserve retained semantic identities; lexical-only requests are a distinct namespace.
     if projection_mode == "lexical_only":
         identity_payload["projection_mode"] = projection_mode
+    if source_publication_reference_clock != "cutoff_v1":
+        identity_payload["source_publication_reference_clock"] = source_publication_reference_clock
     research_snapshot_id = "research-snapshot:" + _digest(identity_payload)
     return ResearchSnapshotRequest(
         research_snapshot_id=research_snapshot_id,
@@ -415,7 +424,14 @@ def assemble_research_snapshot_request(
         canonical_fact_projection_run_id=projection_id,
         cutoff_at=cutoff,
         recorded_at=observed,
+        source_publication_reference_clock=source_publication_reference_clock,
     )
+
+
+def _require_source_publication_reference_clock(mode: SourcePublicationReferenceClock) -> None:
+    # model_copy does not validate updates; reject unknown modes before any DB operation.
+    if mode not in ("cutoff_v1", "publication_created_v2"):
+        raise ValueError("unknown source publication reference clock")
 
 
 def _require_unambiguous_terminal(
@@ -579,6 +595,7 @@ def _verify_terminal_research_requests(
             knowledge,
             observed_through=observed,
             projection_mode=projection_mode,
+            source_publication_reference_clock=persisted.source_publication_reference_clock,
         )
         request_json = canonical_json(request)
         universe_json = canonical_json(
@@ -813,7 +830,7 @@ def _resolution_coordinate(
     observed = cutoff if observed_through is None else _utc(observed_through)
     rows = conn.execute(
         "SELECT header.resolution_snapshot_id,header.recorded_at,"
-        "scope_seal.sealed_at,fact_seal.sealed_at "
+        "scope_seal.sealed_at,fact_seal.recorded_at "
         "FROM canonical_fact_resolution_snapshot_scope_headers header "
         "JOIN canonical_fact_resolution_snapshot_scope_seals scope_seal "
         "ON scope_seal.resolution_snapshot_id=header.resolution_snapshot_id "
@@ -822,10 +839,10 @@ def _resolution_coordinate(
         "WHERE header.issuer_id=? AND datetime(header.cutoff_at)=datetime(?) "
         "AND datetime(header.recorded_at)<=datetime(?) "
         "AND datetime(scope_seal.sealed_at)<=datetime(?) "
-        "AND datetime(fact_seal.sealed_at)<=datetime(?) "
+        "AND datetime(fact_seal.recorded_at)<=datetime(?) "
         "ORDER BY datetime(header.recorded_at) DESC,"
         "datetime(scope_seal.sealed_at) DESC,"
-        "datetime(fact_seal.sealed_at) DESC,"
+        "datetime(fact_seal.recorded_at) DESC,"
         "header.resolution_snapshot_id DESC",
         (
             issuer_id,
@@ -1161,19 +1178,18 @@ def _population_input_commitment(
     issuer_inputs: list[dict[str, object]],
     *,
     projection_mode: ProjectionMode = "semantic",
+    source_publication_reference_clock: SourcePublicationReferenceClock = "cutoff_v1",
 ) -> str:
-    return _digest(
-        {
-            "cutoff_at": _db_time(cutoff),
-            "projection_mode": projection_mode,
-            "expected_issuer_ids": list(expected_issuer_ids),
-            "selected_issuer_ids": list(selected_issuer_ids),
-            "issuer_inputs": sorted(
-                issuer_inputs,
-                key=lambda item: str(item["issuer_id"]),
-            ),
-        }
-    )
+    payload: dict[str, object] = {
+        "cutoff_at": _db_time(cutoff),
+        "projection_mode": projection_mode,
+        "expected_issuer_ids": list(expected_issuer_ids),
+        "selected_issuer_ids": list(selected_issuer_ids),
+        "issuer_inputs": sorted(issuer_inputs, key=lambda item: str(item["issuer_id"])),
+    }
+    if source_publication_reference_clock != "cutoff_v1":
+        payload["source_publication_reference_clock"] = source_publication_reference_clock
+    return _digest(payload)
 
 
 def _population_plan_commitment(
@@ -1182,15 +1198,16 @@ def _population_plan_commitment(
     input_commitment: str,
     selected_issuer_ids: tuple[str, ...],
 ) -> str:
-    return _digest(
-        {
-            "cutoff_at": _db_time(request.cutoff_at),
-            "input_commitment_sha256": input_commitment,
-            "projection_mode": request.projection_mode,
-            "operation_recorded_at": _db_time(request.operation_recorded_at),
-            "selected_issuer_ids": list(selected_issuer_ids),
-        }
-    )
+    payload: dict[str, object] = {
+        "cutoff_at": _db_time(request.cutoff_at),
+        "input_commitment_sha256": input_commitment,
+        "projection_mode": request.projection_mode,
+        "operation_recorded_at": _db_time(request.operation_recorded_at),
+        "selected_issuer_ids": list(selected_issuer_ids),
+    }
+    if request.source_publication_reference_clock != "cutoff_v1":
+        payload["source_publication_reference_clock"] = request.source_publication_reference_clock
+    return _digest(payload)
 
 
 def _verify_commitments(

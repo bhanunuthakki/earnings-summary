@@ -12,9 +12,9 @@ from db_paths import require_db_path
 from dcf.input_evidence import SourceReadContext
 from report.artifacts import ReportArtifactRef, validate_report_artifact_path
 from research.decision_brief import (
-    MemoContextReview,
     assess_decision_brief,
     memo_reader_blocks,
+    parse_memo_context_review,
     persist_decision_brief_readiness,
 )
 from runtime.secrets import load_project_env
@@ -64,9 +64,7 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("An explicit configured portfolio database is required")
     database = require_db_path(configured)
     review = (
-        MemoContextReview.model_validate_json(args.context_review.read_bytes())
-        if args.context_review
-        else None
+        parse_memo_context_review(args.context_review.read_bytes()) if args.context_review else None
     )
     source_root = args.source_state_root or os.environ.get("DCF_SOURCE_STATE_ROOT", "").strip()
     source_context = (

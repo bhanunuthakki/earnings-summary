@@ -22,7 +22,7 @@ from dcf.cashflow_scenarios import (
     verify_analyst_cashflow_scenarios,
     verify_analyst_scenario_source,
 )
-from dcf.grade_evidence import DcfGradeEvidence, load_dcf_grade_evidence
+from dcf.grade_evidence import DcfGradeEvidence, load_dcf_verification_evidence
 from dcf.input_evidence import (
     InputEvidenceError,
     ModelInputReceipt,
@@ -116,7 +116,9 @@ def _fact_references(evidence: DcfGradeEvidence) -> tuple[dict[str, object], ...
     return tuple(
         _mapping(item)
         for statement in statements.values()
-        for item in _items(_mapping(statement).get("applied_references"))
+        for item in _items(
+            _mapping(statement).get("applied", _mapping(statement).get("applied_references"))
+        )
     )
 
 
@@ -249,7 +251,7 @@ def _assess(
     source_context: SourceReadContext | None,
     purpose: Literal["allocation", "analyst_memo"],
 ) -> ValuationReadiness:
-    evidence = load_dcf_grade_evidence(conn, ticker)
+    evidence = load_dcf_verification_evidence(conn, ticker)
     if evidence.status != "available":
         return ValuationReadiness(
             ticker=ticker,

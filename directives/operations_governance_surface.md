@@ -818,6 +818,17 @@ performs the same lineage checks. No schema, store, service, schedule, provider,
 new dashboard action is introduced. A preview is an assembly plan, not a successful
 sealed-source verification receipt.
 
+The same command accepts `--source-publication-reference-clock publication_created_v2`
+for current research that includes earlier publications.
+This mode uses the verified publication creation clock; it preserves the actual
+recorded/sealed clock and all publication graph checks. The default `cutoff_v1`
+preserves legacy identities and commitments. Repeat the exact clock mode in
+dry-run and apply; V2 has a distinct snapshot identity and bound commitments.
+Changing the clock mode does not replace a retained terminal or bypass
+`research_snapshot_terminal_scope_conflict`. Retained-header verification
+reconstructs the persisted clock mode. This adds an option to the existing
+operation, with no new database, service, schedule or write authority.
+
 ### Bounded accession capture
 
 For 10-K, 10-K/A, 10-Q, 10-Q/A, 20-F, 20-F/A, 40-F and 40-F/A, the SEC
@@ -1042,6 +1053,14 @@ population without database access. `--persist` appends a content-addressed
 readiness receipt; a successful render alone cannot receive decision-grade.
 These operations add no schedule, public disclosure, trade or publication approval.
 Local implementation does not establish installed/live availability.
+
+The same verifier accepts legacy reviews and `memo_context_review.v2`. V2 names
+independently verified supporting issuer snapshots and finite selections from a
+committed ONON model run. Primary valuation authority, source admission and
+reader parity remain required. The composed context source-population pass
+shares one source-byte budget. Model and readiness rechecks retain their
+existing independent per-call bounds and current-byte checks. There is
+no new action, CLI, service, schedule, database migration or write authority.
 
 ### Source repair disposition (2026-10-03)
 

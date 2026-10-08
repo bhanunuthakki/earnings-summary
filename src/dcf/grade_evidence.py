@@ -16,6 +16,10 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict
 
 MAX_SERIALIZED_EVIDENCE_BYTES = 100_000
+# The measured 45-input ONON run stores 114,206 JSON bytes. Verification
+# retains the exact row within this separate, fixed internal bound; display
+# projection does not determine whether a persisted receipt can be replayed.
+MAX_VERIFICATION_EVIDENCE_BYTES = 262_144
 
 
 class DcfEvidenceChecks(BaseModel):
@@ -522,7 +526,23 @@ def _market_price_consistent(
 
 
 def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEvidence:
-    """Read exactly one latest, consolidated row and fail closed on schema drift."""
+    """Read the bounded public display projection of the latest consolidated row."""
+    return _load_dcf_evidence(conn, ticker, verification=False)
+
+
+def load_dcf_verification_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEvidence:
+    """Read exact internal receipts; oversized evidence is unavailable, never truncated.
+
+    This does not grade a run. The readiness owner must still validate its
+    sources, receipt, scenario acceptance, market price and numerical replay.
+    """
+    return _load_dcf_evidence(conn, ticker, verification=True)
+
+
+def _load_dcf_evidence(
+    conn: sqlite3.Connection, ticker: str, *, verification: bool
+) -> DcfGradeEvidence:
+    """Share row selection, decoding and attribution between the two readers."""
 
     normalized_ticker = ticker.upper()
     try:
@@ -581,8 +601,37 @@ def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEv
     if row is None:
         return DcfGradeEvidence(status="missing", ticker=normalized_ticker)
 
-    snapshot, snapshot_status = _json_object(row["assumption_snapshot_json"])
-    provenance, provenance_status = _json_object(row["provenance_json"])
+    if verification:
+        # Reject oversized raw strings before JSON decoding, including scalar
+        # text. The complete returned envelope has an independent bound below.
+        raw_bytes = 0
+        for value in row:
+            if isinstance(value, str):
+                if len(value) > MAX_VERIFICATION_EVIDENCE_BYTES:
+                    return DcfGradeEvidence(
+                        status="invalid",
+                        ticker=normalized_ticker,
+                        invalid_reason="verification_evidence_byte_limit",
+                    )
+                raw_bytes += len(value.encode("utf-8"))
+        if raw_bytes > MAX_VERIFICATION_EVIDENCE_BYTES:
+            return DcfGradeEvidence(
+                status="invalid",
+                ticker=normalized_ticker,
+                invalid_reason="verification_evidence_byte_limit",
+            )
+
+    try:
+        snapshot, snapshot_status = _json_object(row["assumption_snapshot_json"])
+        provenance, provenance_status = _json_object(row["provenance_json"])
+    except (ValueError, OverflowError, RecursionError):
+        if not verification:
+            raise
+        return DcfGradeEvidence(
+            status="invalid",
+            ticker=normalized_ticker,
+            invalid_reason="verification_evidence_decode_failed",
+        )
     invalid_json = [
         f"{field}_{status}"
         for field, status in (
@@ -693,10 +742,26 @@ def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEv
             float(row["over_under_pct"]) if row["over_under_pct"] is not None else None
         ),
         sanity_flag=str(row["sanity_flag"]) if row["sanity_flag"] is not None else None,
-        assumption_snapshot=_project_snapshot(snapshot),
-        provenance=_project_provenance(provenance),
+        assumption_snapshot=snapshot if verification else _project_snapshot(snapshot),
+        provenance=provenance if verification else _project_provenance(provenance),
         checks=checks,
     )
+    if verification:
+        try:
+            serialized_bytes = _serialized_size(cast("object", evidence.model_dump(mode="json")))
+        except (ValueError, OverflowError, RecursionError):
+            return DcfGradeEvidence(
+                status="invalid",
+                ticker=normalized_ticker,
+                invalid_reason="verification_evidence_decode_failed",
+            )
+        if serialized_bytes > MAX_VERIFICATION_EVIDENCE_BYTES:
+            return DcfGradeEvidence(
+                status="invalid",
+                ticker=normalized_ticker,
+                invalid_reason="verification_evidence_byte_limit",
+            )
+        return evidence
     if _serialized_size(cast("object", evidence.model_dump(mode="json"))) >= (
         MAX_SERIALIZED_EVIDENCE_BYTES
     ):
@@ -706,7 +771,9 @@ def load_dcf_grade_evidence(conn: sqlite3.Connection, ticker: str) -> DcfGradeEv
 
 __all__ = [
     "MAX_SERIALIZED_EVIDENCE_BYTES",
+    "MAX_VERIFICATION_EVIDENCE_BYTES",
     "DcfEvidenceChecks",
     "DcfGradeEvidence",
     "load_dcf_grade_evidence",
+    "load_dcf_verification_evidence",
 ]

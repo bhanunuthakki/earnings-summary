@@ -17,12 +17,21 @@ from typing import Literal
 from urllib.parse import parse_qs, urlsplit
 
 from bs4 import BeautifulSoup, Comment, Tag
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
-from dcf.grade_evidence import load_dcf_grade_evidence
+from dcf.grade_evidence import load_dcf_verification_evidence
 from dcf.input_evidence import ModelInputReceipt, SourceReadContext, verify_source_coverage
 from dcf.readiness import load_valuation_readiness
-from provenance.immutable_artifact import canonical_text_artifact_sha256, publish_text_no_clobber
+from provenance.evidence_native_candidates import (
+    resolve_local_storage_uri,
+    select_evidence_native_candidates_by_id,
+)
+from provenance.immutable_artifact import (
+    canonical_text_artifact_sha256,
+    publish_text_no_clobber,
+    read_stable_artifact,
+)
+from provenance.issuer_registry import IssuerRegistry
 from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
 from provenance.sec_filing_xbrl_ingest import file_uri_path
 from report.artifacts import ReportArtifactRef, validate_report_artifact_path
@@ -33,6 +42,12 @@ from research.memo_claim_support import (
     financial_reader_value,
     verify_memo_numeric_population,
     verify_reported_memo_claim,
+)
+from research.memo_model_evidence import (
+    MemoModelCommitment,
+    MemoModelEvidenceError,
+    MemoModelValue,
+    load_verified_memo_model,
 )
 from sources.report_financials import (
     FinancialEvidenceReference,
@@ -72,6 +87,20 @@ class MemoCalculation(_Closed):
     displayed_value: str
     display_format: Literal["number1", "number2", "percentage1"]
     scale: Literal[1, 1000000] = 1
+
+
+class MemoScopedSupport(_Closed):
+    """Evidence from one separately admitted issuer snapshot, in passage order."""
+
+    context_id: str = Field(min_length=1)
+    evidence_node_ids: tuple[str, ...] = ()
+    financial_references: tuple[FinancialEvidenceReference, ...] = ()
+    values: tuple[MemoReportedValue, ...] = ()
+
+
+class ReviewedMemoClaimV2(ReviewedMemoClaim):
+    supporting_evidence: tuple[MemoScopedSupport, ...] = ()
+    model_values: tuple[MemoModelValue, ...] = ()
 
 
 class MemoReaderBlock(_Closed):
@@ -173,7 +202,9 @@ def memo_reader_blocks(body_html: str) -> tuple[MemoReaderBlock, ...]:
     return tuple(result)
 
 
-def verify_memo_claim_population(soup: BeautifulSoup, review: MemoContextReview) -> None:
+def verify_memo_claim_population(
+    soup: BeautifulSoup, review: MemoContextReview | MemoContextReviewV2
+) -> None:
     blocks = {item.block_id: item for item in memo_reader_blocks(str(soup))}
     claimed: set[str] = set()
     for claim in review.claims:
@@ -188,19 +219,32 @@ def verify_memo_claim_population(soup: BeautifulSoup, review: MemoContextReview)
         if claim.kind == "analyst_inference" and not block.visibly_inferred:
             raise MemoEvidenceError("memo_inference_not_distinguished_in_reader")
         if claim.kind == "calculation":
-            if claim.calculation is None:
+            model_values = claim.model_values if isinstance(claim, ReviewedMemoClaimV2) else ()
+            if claim.calculation is None and not model_values:
                 raise MemoEvidenceError("memo_calculation_reconstruction_missing")
             try:
                 verify_memo_numeric_population(
                     claim.passage,
                     (
-                        claim.calculation.displayed_value,
+                        *((claim.calculation.displayed_value,) if claim.calculation else ()),
+                        *(value.displayed_value for value in model_values),
                         *(value.displayed_value for value in claim.values),
+                        *(
+                            (
+                                value.displayed_value
+                                for support in claim.supporting_evidence
+                                for value in support.values
+                            )
+                            if isinstance(claim, ReviewedMemoClaimV2)
+                            else ()
+                        ),
                     ),
                 )
             except MemoClaimSupportError as exc:
                 raise MemoEvidenceError(exc.reason_code) from exc
-        elif claim.calculation is not None:
+        elif claim.calculation is not None or (
+            isinstance(claim, ReviewedMemoClaimV2) and claim.model_values
+        ):
             raise MemoEvidenceError("memo_calculation_kind_mismatch")
     if claimed != set(blocks):
         raise MemoEvidenceError("memo_claim_population_incomplete")
@@ -401,6 +445,159 @@ class MemoContextReview(_Closed):
     rationale: str = Field(min_length=20)
 
 
+class MemoSupportingContext(_Closed):
+    context_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    issuer_id: str = Field(min_length=1)
+    ticker: str = Field(pattern=r"^[A-Z][A-Z0-9.-]{0,31}$")
+    research_snapshot_id: str = Field(min_length=1)
+    member_set_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class MemoContextReviewV2(_Closed):
+    schema_version: Literal["memo_context_review.v2"] = "memo_context_review.v2"
+    artifact_id: str
+    body_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    research_snapshot_id: str = Field(min_length=1)
+    claims: tuple[ReviewedMemoClaimV2, ...] = Field(min_length=1)
+    reviewed_section_ids: tuple[str, ...] = Field(min_length=1)
+    reviewer: str = Field(min_length=1)
+    reviewed_at: AwareDatetime
+    rationale: str = Field(min_length=20)
+    supporting_contexts: tuple[MemoSupportingContext, ...] = Field(default=(), max_length=8)
+    model: MemoModelCommitment | None = None
+
+    @model_validator(mode="after")
+    def distinct_contexts(self) -> MemoContextReviewV2:
+        ids = tuple(context.context_id for context in self.supporting_contexts)
+        snapshots = tuple(context.research_snapshot_id for context in self.supporting_contexts)
+        if (
+            ids != tuple(sorted(set(ids)))
+            or "primary" in ids
+            or len(set(snapshots)) != len(snapshots)
+            or self.research_snapshot_id in snapshots
+            or len({context.issuer_id for context in self.supporting_contexts})
+            != len(self.supporting_contexts)
+        ):
+            raise ValueError("memo_supporting_context_membership_invalid")
+        return self
+
+
+def parse_memo_context_review(raw: str | bytes) -> MemoContextReview | MemoContextReviewV2:
+    """An absent version is legacy V1; explicit unknown versions never downgrade."""
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("memo_context_review_object_required")
+    if "schema_version" not in payload:
+        return MemoContextReview.model_validate(payload)
+    return MemoContextReviewV2.model_validate(payload)
+
+
+def verify_memo_supporting_context(
+    conn: sqlite3.Connection, context: MemoSupportingContext, cutoff: datetime
+) -> ResearchSnapshotRequest:
+    """Keep the existing single-issuer universe and exact member seal intact."""
+    admission = verify_research_snapshot(conn, context.research_snapshot_id)
+    row = conn.execute(
+        "SELECT request_json FROM research_snapshot_headers WHERE research_snapshot_id=?",
+        (context.research_snapshot_id,),
+    ).fetchone()
+    if row is None:
+        raise MemoEvidenceError("memo_supporting_snapshot_missing")
+    snapshot = ResearchSnapshotRequest.model_validate_json(str(row[0]))
+    issuer = IssuerRegistry(conn).canonicalize_recorded_issuer(
+        f"legacy-ticker:{context.ticker}", knowledge_at=cutoff
+    )
+    if snapshot.cutoff_at > cutoff or snapshot.recorded_at > cutoff:
+        raise MemoEvidenceError("memo_supporting_snapshot_after_cutoff")
+    if (
+        issuer.issuer_id != context.issuer_id
+        or snapshot.research_universe.issuer_id != context.issuer_id
+        or admission.member_set_sha256 != context.member_set_sha256
+    ):
+        raise MemoEvidenceError("memo_supporting_context_identity_or_commitment_mismatch")
+    return snapshot
+
+
+def verify_memo_context_source_bytes(
+    conn: sqlite3.Connection,
+    document_ids: tuple[str, ...],
+    source_context: SourceReadContext | None,
+) -> tuple[int, int]:
+    """Read one complete sealed context; return document count and bytes consumed."""
+    if source_context is None:
+        raise MemoEvidenceError("memo_source_read_context_missing")
+    ids = tuple(sorted(set(document_ids)))
+    if not ids or len(ids) > source_context.max_documents:
+        raise MemoEvidenceError("memo_source_document_population_limit")
+    factory = conn.row_factory
+    try:
+        conn.row_factory = sqlite3.Row
+        candidates = select_evidence_native_candidates_by_id(
+            conn, document_version_ids=ids, include_legacy=True
+        )
+    finally:
+        conn.row_factory = factory
+    if sorted(item.document_version_id for item in candidates) != list(ids):
+        raise MemoEvidenceError("memo_source_document_population_mismatch")
+    remaining = source_context.max_total_bytes
+    for candidate in candidates:
+        limit = min(source_context.max_document_bytes, remaining)
+        if limit <= 0 or candidate.byte_size > limit:
+            raise MemoEvidenceError("memo_source_byte_limit")
+        path = resolve_local_storage_uri(
+            candidate.storage_uri, allowed_roots=source_context.content_roots, follow_links=False
+        )
+        if path is None:
+            raise MemoEvidenceError("memo_source_location_unapproved")
+        root = next(root for root in source_context.content_roots if path.is_relative_to(root))
+        if path.lstat().st_nlink != 1:
+            raise MemoEvidenceError("memo_source_multiple_links")
+        source, _raw = read_stable_artifact(
+            path, max_bytes=min(limit, max(1, candidate.byte_size)), allowed_root=root
+        )
+        if (
+            path.lstat().st_nlink != 1
+            or source.file_sha256 != candidate.blob_sha256
+            or source.size_bytes != candidate.byte_size
+        ):
+            raise MemoEvidenceError("memo_source_bytes_unavailable_or_changed")
+        remaining -= source.size_bytes
+    return len(ids), source_context.max_total_bytes - remaining
+
+
+def verify_memo_composed_source_bytes(
+    conn: sqlite3.Connection,
+    document_contexts: tuple[tuple[str, ...], ...],
+    source_context: SourceReadContext | None,
+) -> int:
+    """Keep 28 documents per sealed context and one composed-population budget.
+
+    The primary context and at most eight supporting contexts are independently
+    complete. A large primary context cannot be split. Every read in this
+    composed source-population pass, including repeated documents, consumes the
+    original caller's shared total byte budget. This is not a global I/O quota:
+    model and readiness replays retain their existing independent per-call
+    source bounds and fresh byte checks. Their documents must be members of the
+    primary snapshot; supporting contexts cannot extend the DCF universe.
+    """
+    if not document_contexts or len(document_contexts) > 9:
+        raise MemoEvidenceError("memo_source_context_population_limit")
+    if source_context is None:
+        raise MemoEvidenceError("memo_source_read_context_missing")
+    remaining = source_context.max_total_bytes
+    all_ids: set[str] = set()
+    for document_ids in document_contexts:
+        if remaining <= 0:
+            raise MemoEvidenceError("memo_source_byte_limit")
+        bounded = SourceReadContext.model_validate(
+            {**source_context.model_dump(), "max_total_bytes": remaining}
+        )
+        _count, consumed = verify_memo_context_source_bytes(conn, document_ids, bounded)
+        remaining -= consumed
+        all_ids.update(document_ids)
+    return len(all_ids)
+
+
 class DecisionBriefReadiness(_Closed):
     schema_version: Literal["decision_brief_readiness.v1"] = "decision_brief_readiness.v1"
     artifact_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,191}$")
@@ -468,7 +665,7 @@ def _assess_decision_brief(
     repo_root: Path,
     artifact: ReportArtifactRef,
     as_of: datetime,
-    context_review: MemoContextReview | None = None,
+    context_review: MemoContextReview | MemoContextReviewV2 | None = None,
     source_context: SourceReadContext | None = None,
 ) -> DecisionBriefReadiness:
     """Check one immutable artifact. Missing proof stays separate and visible."""
@@ -498,13 +695,27 @@ def _assess_decision_brief(
         if reader.body_sha256 != artifact.body_sha256:
             reasons.add("memo_reader_body_parity_failed")
     soup = BeautifulSoup(raw, "html.parser")
-    references: dict[str, FinancialEvidenceReference] = {}
+    supporting_contexts = (
+        {context.context_id: context for context in context_review.supporting_contexts}
+        if isinstance(context_review, MemoContextReviewV2)
+        else {}
+    )
+    references: dict[tuple[str, str], FinancialEvidenceReference] = {}
+    used_contexts: set[str] = set()
     for anchor in soup.select('a[href*="/api/peek/canonical-financial?"]'):
         try:
             href = str(anchor.get("href", ""))
             value = parse_qs(urlsplit(href).query)["reference"][0]
             reference = FinancialEvidenceReference.model_validate_json(value)
-            if reference.ticker != artifact.ticker or reference.as_of > cutoff:
+            context_id = str(anchor.get("data-memo-evidence-context", "primary"))
+            if context_id != "primary" and context_id not in supporting_contexts:
+                raise MemoEvidenceError("memo_financial_reference_context_unknown")
+            ticker = (
+                artifact.ticker
+                if context_id == "primary"
+                else supporting_contexts[context_id].ticker
+            )
+            if reference.ticker != ticker or reference.as_of > cutoff:
                 raise MemoEvidenceError("memo_financial_reference_identity_mismatch")
             cell = _read_memo_financial_cell(conn, reference)
             if cell is None:
@@ -523,12 +734,14 @@ def _assess_decision_brief(
                 ).strip()
                 if visible != expected:
                     raise MemoEvidenceError("memo_reader_value_mismatch")
-            references[reference.model_dump_json()] = reference
+            references[(context_id, reference.model_dump_json())] = reference
+            if context_id != "primary":
+                used_contexts.add(context_id)
         except MemoEvidenceError as exc:
             reasons.add(exc.reason_code)
         except (ValueError, KeyError, IndexError, sqlite3.Error):
             reasons.add("memo_financial_reference_not_admitted")
-    if not references:
+    if not any(context_id == "primary" for context_id, _ref in references):
         reasons.add("memo_canonical_financial_references_missing")
 
     snapshot_id = context_review.research_snapshot_id if context_review is not None else None
@@ -557,17 +770,68 @@ def _assess_decision_brief(
             if snapshot.recorded_at > cutoff or snapshot.cutoff_at > cutoff:
                 raise MemoEvidenceError("memo_research_snapshot_after_cutoff")
             member_sha = admission.member_set_sha256
-            reconstructed = _raw_documents(conn, snapshot.research_universe.document_version_ids)
+            snapshots = {"primary": (snapshot, artifact.ticker)}
+            supporting_issuers: set[str] = set()
+            for context_id, context in supporting_contexts.items():
+                if (
+                    context.issuer_id == snapshot.research_universe.issuer_id
+                    or context.ticker == artifact.ticker
+                ):
+                    raise MemoEvidenceError("memo_supporting_primary_issuer_forbidden")
+                if context.issuer_id in supporting_issuers:
+                    raise MemoEvidenceError("memo_supporting_issuer_population_invalid")
+                supporting_issuers.add(context.issuer_id)
+                snapshots[context_id] = (
+                    verify_memo_supporting_context(conn, context, cutoff),
+                    context.ticker,
+                )
+            if isinstance(context_review, MemoContextReviewV2):
+                documents = tuple(
+                    context_snapshot.research_universe.document_version_ids
+                    for context_snapshot, _ticker in snapshots.values()
+                )
+                reconstructed = verify_memo_composed_source_bytes(conn, documents, source_context)
+            else:
+                reconstructed = _raw_documents(
+                    conn, snapshot.research_universe.document_version_ids
+                )
             verify_memo_claim_population(soup, context_review)
             verify_memo_section_population(soup, artifact.section_ids)
-            for reference in references.values():
-                verify_memo_snapshot_reference(conn, reference, snapshot, artifact.ticker, cutoff)
+            for (context_id, _reference_key), reference in references.items():
+                context_snapshot, context_ticker = snapshots[context_id]
+                verify_memo_snapshot_reference(
+                    conn, reference, context_snapshot, context_ticker, cutoff
+                )
+            has_model_values = any(
+                isinstance(claim, ReviewedMemoClaimV2) and claim.model_values
+                for claim in context_review.claims
+            )
+            verified_model = None
+            if isinstance(context_review, MemoContextReviewV2):
+                if has_model_values != (context_review.model is not None):
+                    raise MemoEvidenceError("memo_model_reference_population_mismatch")
+                if context_review.model is not None:
+                    verified_model = load_verified_memo_model(
+                        conn,
+                        context_review.model,
+                        primary_snapshot_id=context_review.research_snapshot_id,
+                        primary_member_sha256=member_sha,
+                        ticker=artifact.ticker,
+                        as_of=cutoff,
+                        source_context=source_context,
+                    )
             for claim in context_review.claims:
+                scoped_support = (
+                    claim.supporting_evidence if isinstance(claim, ReviewedMemoClaimV2) else ()
+                )
+                model_values = claim.model_values if isinstance(claim, ReviewedMemoClaimV2) else ()
                 if claim.kind not in {"analyst_inference", "presentation"} and not (
                     claim.evidence_node_ids
                     or claim.financial_references
                     or claim.calculation
                     or claim.values
+                    or scoped_support
+                    or model_values
                 ):
                     raise MemoEvidenceError("memo_reported_claim_support_missing")
                 for node_id in claim.evidence_node_ids:
@@ -581,22 +845,54 @@ def _assess_decision_brief(
                     verify_memo_snapshot_reference(
                         conn, reference, snapshot, artifact.ticker, cutoff
                     )
+                all_nodes = list(claim.evidence_node_ids)
+                all_values = list(claim.values)
+                for support in scoped_support:
+                    if support.context_id not in supporting_contexts:
+                        raise MemoEvidenceError("memo_claim_context_unknown")
+                    if not (
+                        support.evidence_node_ids or support.financial_references or support.values
+                    ):
+                        raise MemoEvidenceError("memo_claim_context_support_empty")
+                    used_contexts.add(support.context_id)
+                    context_snapshot, context_ticker = snapshots[support.context_id]
+                    for node_id in support.evidence_node_ids:
+                        verify_memo_snapshot_node(conn, node_id, context_snapshot, cutoff)
+                    for reference in support.financial_references + tuple(
+                        value.reference for value in support.values
+                    ):
+                        verify_memo_snapshot_reference(
+                            conn, reference, context_snapshot, context_ticker, cutoff
+                        )
+                    all_nodes.extend(support.evidence_node_ids)
+                    all_values.extend(support.values)
                 if claim.calculation is not None:
                     verify_memo_calculation(conn, claim.calculation)
+                calculated_values = (
+                    (claim.calculation.displayed_value,) if claim.calculation else ()
+                )
+                if model_values:
+                    if verified_model is None:
+                        raise MemoEvidenceError("memo_model_reference_population_mismatch")
+                    calculated_values += tuple(
+                        verified_model.display(value) for value in model_values
+                    )
                 if claim.kind in {"reported_fact", "management_claim", "calculation"}:
                     try:
                         verify_reported_memo_claim(
                             conn,
                             claim.passage,
-                            evidence_node_ids=claim.evidence_node_ids,
-                            values=claim.values,
-                            calculated_values=(
-                                (claim.calculation.displayed_value,) if claim.calculation else ()
-                            ),
+                            evidence_node_ids=tuple(all_nodes),
+                            values=tuple(all_values),
+                            calculated_values=calculated_values,
                         )
                     except MemoClaimSupportError as exc:
                         raise MemoEvidenceError(exc.reason_code) from exc
+            if used_contexts != set(supporting_contexts):
+                raise MemoEvidenceError("memo_supporting_context_population_mismatch")
         except MemoEvidenceError as exc:
+            reasons.add(exc.reason_code)
+        except MemoModelEvidenceError as exc:
             reasons.add(exc.reason_code)
         except (ValueError, RuntimeError, sqlite3.Error, OSError):
             reasons.add("memo_source_context_reconstruction_failed")
@@ -611,7 +907,7 @@ def _assess_decision_brief(
     # The memo and valuation must use one source universe. A sealed but
     # unrelated current model cannot certify this report's evidence.
     try:
-        grade = load_dcf_grade_evidence(conn, artifact.ticker)
+        grade = load_dcf_verification_evidence(conn, artifact.ticker)
         receipt_raw = (grade.provenance or {}).get("model_input_receipt")
         if receipt_raw is None:
             raise MemoEvidenceError("memo_model_input_receipt_missing")
@@ -654,7 +950,7 @@ def assess_decision_brief(
     repo_root: Path,
     artifact: ReportArtifactRef,
     as_of: datetime,
-    context_review: MemoContextReview | None = None,
+    context_review: MemoContextReview | MemoContextReviewV2 | None = None,
     source_context: SourceReadContext | None = None,
 ) -> DecisionBriefReadiness:
     """Hold one read snapshot across every gate; preserve caller transactions."""

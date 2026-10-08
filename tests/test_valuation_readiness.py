@@ -385,7 +385,7 @@ def test_onon_readiness_replays_bridge_outputs_and_explicit_review(
             else (),
         )
 
-    monkeypatch.setattr(readiness, "load_dcf_grade_evidence", load)
+    monkeypatch.setattr(readiness, "load_dcf_verification_evidence", load)
     monkeypatch.setattr(readiness.onon_inputs, "effective_numeric_inputs", numeric)
     monkeypatch.setattr(readiness.onon_inputs, "verify_onon_inputs", verify_inputs)
     monkeypatch.setattr(readiness.onon_inputs, "model_output", model)
@@ -406,3 +406,30 @@ def test_onon_readiness_replays_bridge_outputs_and_explicit_review(
     elif damage in {"market-date", "valuation-date"}:
         assert "reviewed_market_clock_mismatch" in result.reason_codes
     assert not conn.in_transaction
+
+
+def test_full_junk_above_display_cap_still_requires_real_verification_receipts() -> None:
+    conn = _db()
+    conn.execute(
+        "UPDATE dcf_runs SET assumption_snapshot_json=?",
+        (json.dumps({"irrelevant_payload": "x" * 120_000}),),
+    )
+    receipt = load_valuation_readiness(conn, "META", as_of=NOW)
+    assert not receipt.ready
+    assert "dcf_evidence_projection_incomplete" not in receipt.reason_codes
+    assert "financial_input_completeness_unverified" in receipt.reason_codes
+    conn.close()
+
+
+def test_internal_evidence_limit_is_an_explicit_readiness_failure() -> None:
+    from dcf.grade_evidence import MAX_VERIFICATION_EVIDENCE_BYTES
+
+    conn = _db()
+    conn.execute(
+        "UPDATE dcf_runs SET provenance_json=?",
+        (json.dumps({"noise": "x" * MAX_VERIFICATION_EVIDENCE_BYTES}),),
+    )
+    receipt = load_valuation_readiness(conn, "META", as_of=NOW)
+    assert not receipt.ready and receipt.status == "failed"
+    assert receipt.reason_codes == ("dcf_evidence_invalid", "verification_evidence_byte_limit")
+    conn.close()

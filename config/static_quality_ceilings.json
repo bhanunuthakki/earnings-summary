@@ -54,7 +54,7 @@
     "src/ui": 0,
     "src/user_state": 0,
     "src/viewspec": 0,
-    "tests": 1604
+    "tests": 1596
   },
   "suppressions": {
     ".github": 0,
@@ -110,6 +110,6 @@
     "src/ui": 0,
     "src/user_state": 1,
     "src/viewspec": 0,
-    "tests": 975
+    "tests": 974
   }
 }

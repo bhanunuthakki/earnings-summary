@@ -43,10 +43,10 @@ from provenance.sec_native_capture import SecNativeCaptureResult, load_captured_
 from report.artifacts import ReportArtifactRef, validate_report_artifact_path
 from research.decision_brief import (
     DecisionBriefReadiness,
-    MemoContextReview,
     MemoReaderBlock,
     assess_decision_brief,
     memo_reader_blocks,
+    parse_memo_context_review,
     persist_decision_brief_readiness,
 )
 from runtime.job_runtime import JobDeadlineExceededError, run_captured_application_child
@@ -827,7 +827,7 @@ def _prepare_decision_brief(
         context = None
         if request.context_review is not None:
             try:
-                context = MemoContextReview.model_validate_json(request.context_review.read_bytes())
+                context = parse_memo_context_review(request.context_review.read_bytes())
             except (ValueError, OSError):
                 stages.append(
                     PreparationStage(

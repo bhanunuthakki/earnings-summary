@@ -12,9 +12,11 @@ import pytest
 import dcf.grade_evidence as grade_evidence_module
 from dcf.grade_evidence import (
     MAX_SERIALIZED_EVIDENCE_BYTES,
+    MAX_VERIFICATION_EVIDENCE_BYTES,
     DcfEvidenceChecks,
     DcfGradeEvidence,
     load_dcf_grade_evidence,
+    load_dcf_verification_evidence,
 )
 
 
@@ -463,3 +465,104 @@ def test_optional_npv_schema_preserves_single_run_and_literal_ticker(has_npv_col
         assert conn.execute("SELECT count(*) FROM dcf_runs").fetchone()[0] == 5
     finally:
         conn.close()
+
+
+def _verification_db(snapshot: object, provenance: object) -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    _schema(conn)
+    conn.execute(
+        "INSERT INTO dcf_runs VALUES (1,'ONON','2026-10-01T12:00:00+00:00','2026-10-01',"
+        "'onon_economic_fcff_v1',?,?,'2026-10-01T12:00:00+00:00',40,"
+        "'2026-10-01T12:00:00+00:00',35,-0.125,NULL,?,?,1,NULL)",
+        ("a" * 64, "b" * 64, json.dumps(snapshot), json.dumps(provenance)),
+    )
+    return conn
+
+
+def test_internal_verification_keeps_exact_receipts_above_public_projection_cap() -> None:
+    receipt = {"inputs": [{"id": index, "lineage": "x" * 300} for index in range(350)]}
+    snapshot = {"model_output": {"vps": 35}, "historical_primary_fact_overlay": {"original": 1}}
+    provenance = {"model_input_receipt": receipt, "equity_bridge_receipt": {"last": "exact"}}
+    with _verification_db(snapshot, provenance) as conn:
+        original_factory = conn.row_factory
+        public = load_dcf_grade_evidence(conn, "onon")
+        exact = load_dcf_verification_evidence(conn, "onon")
+        assert public.projection_status == "bounded"
+        assert len(public.model_dump_json().encode()) < MAX_SERIALIZED_EVIDENCE_BYTES
+        assert exact.status == "available" and exact.projection_status == "complete"
+        assert exact.run_id == public.run_id == 1
+        assert exact.input_sha256 == public.input_sha256 == "a" * 64
+        assert exact.assumption_snapshot == snapshot
+        assert exact.provenance == provenance
+        assert exact.checks == public.checks
+        assert len(exact.model_dump_json().encode()) <= MAX_VERIFICATION_EVIDENCE_BYTES
+        assert conn.row_factory is original_factory
+    conn.close()
+
+
+@pytest.mark.parametrize("column", ["assumption_snapshot_json", "provenance_json", "sanity_flag"])
+def test_internal_evidence_bound_refuses_without_falling_back_to_older_run(column: str) -> None:
+    with _verification_db({}, {}) as conn:
+        conn.execute(
+            "INSERT INTO dcf_runs SELECT 2,ticker,'2026-10-02T12:00:00+00:00',valuation_date,"
+            "engine_version,input_sha256,workbook_sha256,inputs_as_of,live_price,live_price_at,"
+            "npv_per_share,over_under_pct,sanity_flag,assumption_snapshot_json,provenance_json,"
+            "is_latest,segment_name FROM dcf_runs WHERE id=1"
+        )
+        payload = "x" * MAX_VERIFICATION_EVIDENCE_BYTES
+        value = payload if column == "sanity_flag" else json.dumps({"noise": payload})
+        conn.execute(f"UPDATE dcf_runs SET {column}=? WHERE id=2", (value,))
+        public = load_dcf_grade_evidence(conn, "ONON")
+        exact = load_dcf_verification_evidence(conn, "ONON")
+        assert public.status == "available" and public.run_id == 2
+        # Public projection intentionally omits unrelated provenance fields.
+        assert public.projection_status == (
+            "complete" if column == "provenance_json" else "bounded"
+        )
+        assert exact.status == "invalid"
+        assert exact.invalid_reason == "verification_evidence_byte_limit"
+        assert exact.assumption_snapshot is None and exact.provenance is None
+    conn.close()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "not JSON",
+        '{"x":NaN}',
+        '{"x":' + "[" * 1100 + "0" + "]" * 1100 + "}",
+        '{"x":' + "[" * 300 + "0" + "]" * 300 + "}",
+        r'{"x":"\ud800"}',
+    ],
+)
+def test_internal_evidence_invalid_json_never_becomes_a_complete_receipt(value: str) -> None:
+    with _verification_db({}, {}) as conn:
+        conn.execute("UPDATE dcf_runs SET provenance_json=?", (value,))
+        exact = load_dcf_verification_evidence(conn, "ONON")
+        assert exact.status == "invalid" and exact.invalid_reason is not None
+    conn.close()
+
+
+@pytest.mark.parametrize("delta", [-1, 0, 1])
+def test_internal_exact_envelope_byte_boundary(delta: int) -> None:
+    with _verification_db({"noise": ""}, {}) as conn:
+        empty = load_dcf_verification_evidence(conn, "ONON")
+        envelope_bytes = len(
+            json.dumps(
+                empty.model_dump(mode="json"), separators=(",", ":"), ensure_ascii=False
+            ).encode("utf-8")
+        )
+        padding = "x" * (MAX_VERIFICATION_EVIDENCE_BYTES - envelope_bytes + delta)
+        conn.execute(
+            "UPDATE dcf_runs SET assumption_snapshot_json=?",
+            (json.dumps({"noise": padding}),),
+        )
+        exact = load_dcf_verification_evidence(conn, "ONON")
+        if delta <= 0:
+            assert exact.status == "available" and exact.projection_status == "complete"
+            assert exact.assumption_snapshot == {"noise": padding}
+            assert len(exact.model_dump_json().encode()) == MAX_VERIFICATION_EVIDENCE_BYTES + delta
+        else:
+            assert exact.status == "invalid"
+            assert exact.invalid_reason == "verification_evidence_byte_limit"
+    conn.close()
