@@ -399,8 +399,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "Windows-only ACL code resolves ctypes.WinDLL explicitly after the os.name guard.",
-      "fingerprint": "e1f5573a29e8eed0b6f96e91f1127e2db3ea6976b8ab3eb75a4e5af4ea53ea22",
-      "line": 84,
+      "fingerprint": "bf2bb44eaf89960029b65008dad853f49d3de1570a19b16629ad58f181a8b397",
+      "line": 99,
       "path": "src/filings/inline_xbrl_processor.py",
       "targets": [
         "ctypes.WinDLL"
@@ -409,11 +409,21 @@
     {
       "disposition": "external_adapter",
       "evidence": "Windows-only ACL verification resolves ctypes.get_last_error through a typed platform boundary.",
-      "fingerprint": "2e73d168787386331b096b8e42ca3e1ade9efdf4fcbfe3ba96f7a13b07e45102",
-      "line": 91,
+      "fingerprint": "62c32387eb50bd7fedf472ee48623bc49e5e6dd36cbccc401b0f9ede5ad4d813",
+      "line": 106,
       "path": "src/filings/inline_xbrl_processor.py",
       "targets": [
         "ctypes.get_last_error"
+      ]
+    },
+    {
+      "disposition": "external_adapter",
+      "evidence": "Windows-only directory DACL verification resolves the fixed ctypes.WinDLL adapter for advapi32; it does not change caller impersonation or privileges.",
+      "fingerprint": "97f60521698f9951219425b21b5b64f1e50da235e50159c733df6ee3dba3111f",
+      "line": 113,
+      "path": "src/filings/inline_xbrl_processor.py",
+      "targets": [
+        "ctypes.WinDLL"
       ]
     },
     {
@@ -750,7 +760,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "ae2be50964d457970ed0fb4a5cb37ce38c85c6ae15de6016fbcb3666618455b9",
+      "source_sha256": "751f5f8cf45b9e78097ff966678871daaff40640607d699c94a7a1d0edef51c5",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
