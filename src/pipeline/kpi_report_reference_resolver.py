@@ -7,7 +7,7 @@ import json
 import sqlite3
 from enum import StrEnum
 from pathlib import Path
-from typing import cast
+from typing import TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,6 +16,8 @@ from models.facts import Unit
 from pipeline.kpi_report_reference_dispositions import (
     ReportKpiReference,
     ReportKpiReferenceDisposition,
+    ReportKpiReferenceDispositionRevision,
+    ReportKpiReferenceInventory,
     ReportKpiReferenceResolutionMethod,
     ReportKpiReferenceSourceStatus,
     ReportKpiReferenceStatus,
@@ -361,6 +363,18 @@ def resolve_report_kpi_reference_binding(
     if _current_inventory_reference(repo_root, reference) is None:
         return None
     revision = current_report_kpi_reference_disposition(conn, user_id=user_id, reference=reference)
+    return _resolve_report_kpi_reference_binding(
+        conn, user_id=user_id, reference=reference, revision=revision
+    )
+
+
+def _resolve_report_kpi_reference_binding(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    reference: ReportKpiReference,
+    revision: ReportKpiReferenceDispositionRevision | None,
+) -> ResolvedReportKpiReferenceBinding | None:
     if revision is None or revision.reference != reference:
         return None
     disposition = revision.disposition
@@ -462,16 +476,34 @@ def verified_report_kpi_reference_definition(
     if _current_inventory_reference(repo_root, reference) is None:
         return None
     revision = current_report_kpi_reference_disposition(conn, user_id=user_id, reference=reference)
+    return _verified_report_kpi_reference_definition(
+        conn, user_id=user_id, reference=reference, revision=revision, repo_root=repo_root
+    )
+
+
+def _verified_report_kpi_reference_definition(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    reference: ReportKpiReference,
+    revision: ReportKpiReferenceDispositionRevision | None,
+    repo_root: Path | None = None,
+) -> VerifiedReportKpiReferenceDefinition | None:
     if revision is not None:
         if revision.reference != reference:
             return None
         if revision.disposition.status is not ReportKpiReferenceStatus.RESOLVED:
             return None
-        binding = resolve_report_kpi_reference_binding(
-            conn,
-            repo_root=repo_root,
-            user_id=user_id,
-            reference=reference,
+        # Standalone readers retain their fresh nested source/disposition read.
+        # The batch owns one inventory and the final source freshness check.
+        binding = (
+            _resolve_report_kpi_reference_binding(
+                conn, user_id=user_id, reference=reference, revision=revision
+            )
+            if repo_root is None
+            else resolve_report_kpi_reference_binding(
+                conn, repo_root=repo_root, user_id=user_id, reference=reference
+            )
         )
         if binding is None:
             return None
@@ -495,6 +527,75 @@ def verified_report_kpi_reference_definition(
     )
 
 
+_ReportReferenceRead: TypeAlias = tuple[
+    ReportKpiReference,
+    ReportKpiReferenceDispositionRevision | None,
+    VerifiedReportKpiReferenceDefinition | None,
+]
+
+
+def read_report_kpi_reference_definitions(
+    conn: sqlite3.Connection,
+    *,
+    repo_root: Path,
+    user_id: str,
+    tickers: tuple[str, ...],
+) -> tuple[ReportKpiReferenceInventory, tuple[_ReportReferenceRead, ...]]:
+    """Reconstruct one request, retaining live evidence and final source checks."""
+    inventory = load_report_kpi_reference_inventory(repo_root, tickers)
+    reads: list[_ReportReferenceRead] = []
+    for reference in inventory.references:
+        revision = current_report_kpi_reference_disposition(
+            conn, user_id=user_id, reference=reference
+        )
+        sources = [state for state in inventory.source_states if state.ticker == reference.ticker]
+        matches = [
+            item
+            for item in inventory.references
+            if item.source_path == reference.source_path
+            and item.json_pointer == reference.json_pointer
+        ]
+        verified = (
+            _verified_report_kpi_reference_definition(
+                conn, user_id=user_id, reference=reference, revision=revision
+            )
+            if len(sources) == 1
+            and sources[0].status is ReportKpiReferenceSourceStatus.VALID
+            and len(matches) == 1
+            and matches[0] == reference
+            else None
+        )
+        reads.append((reference, revision, verified))
+    current = load_report_kpi_reference_inventory(repo_root, tickers)
+    changed = {
+        ticker
+        for ticker in tickers
+        if tuple(ref for ref in inventory.references if ref.ticker == ticker)
+        != tuple(ref for ref in current.references if ref.ticker == ticker)
+        or tuple(state for state in inventory.source_states if state.ticker == ticker)
+        != tuple(state for state in current.source_states if state.ticker == ticker)
+    }
+    if changed:
+        # Use the existing invalid-source disposition. Never return a healthy
+        # census from references whose configuration changed during this read.
+        inventory = ReportKpiReferenceInventory(
+            references=tuple(ref for ref in inventory.references if ref.ticker not in changed),
+            source_states=tuple(
+                state.model_copy(
+                    update={
+                        "status": ReportKpiReferenceSourceStatus.INVALID,
+                        "reason_code": "report_configuration_changed_during_scope",
+                    }
+                )
+                if state.ticker in changed
+                else state
+                for state in inventory.source_states
+            ),
+        )
+        reads = [read for read in reads if read[0].ticker not in changed]
+    return inventory, tuple(reads)
+
+
 __all__ = [
     "POLICY_CONFIG_SHA256",
     "POLICY_NAME",
@@ -506,6 +607,7 @@ __all__ = [
     "definition_identity_sha256",
     "evidence_identity_sha256",
     "propose_report_kpi_reference_resolution",
+    "read_report_kpi_reference_definitions",
     "report_kpi_reference_at",
     "resolve_report_kpi_reference_binding",
     "verified_report_kpi_reference_definition",
