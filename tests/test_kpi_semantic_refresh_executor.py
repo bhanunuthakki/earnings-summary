@@ -17,6 +17,11 @@ from pydantic import ValidationError
 from execution import apply_kpi_semantic_refresh as refresh
 from execution import record_kpi_repair_judgment as record_judgment
 from execution.backup_restore_readiness_receipt import BackupRestoreReadinessReceipt
+from execution.build_kpi_semantic_refresh_manifest import (
+    KpiSemanticRefreshDecisionBatch,
+    ReviewedKpiSemanticDecision,
+    build_kpi_semantic_refresh_manifest,
+)
 from execution.fetch_windows_review_bundle import WindowsReviewPins
 from models.facts import Currency, FactLocator, LocatorKind, Unit
 from operations.kpi_repair_receipts import (
@@ -26,6 +31,7 @@ from operations.kpi_repair_receipts import (
     seal_attempt,
     seal_judgment,
 )
+from operations.kpi_semantic_review_export import seal_kpi_semantic_review_export
 from operations.review_bundle import (
     OperationsReviewBundle,
     ReviewIdentity,
@@ -51,6 +57,7 @@ from pipeline.kpi_semantic_dispositions import (
     apply_kpi_semantic_disposition_manifest,
     prepare_kpi_semantic_disposition_manifest,
 )
+from pipeline.kpi_semantic_review import build_quarantined_kpi_correction_review
 from pipeline.kpi_semantic_scope import ScopedKpiDefinition
 from pipeline.kpi_semantics import (
     KpiAccountingBasis,
@@ -2225,6 +2232,71 @@ def test_migrated_db_applies_quarantined_count_correction_and_rolls_back_dry_run
             .model_dump(mode="json")
         )
         conn.commit()
+        if capture_quarantine and capture_definition:
+            assert quarantined_context is not None
+            review = build_quarantined_kpi_correction_review(
+                conn,
+                repo_root=tmp_path,
+                user_id="bhanu",
+                fact_id=42175,
+                source_value_text="114.2",
+                observed_at=NOW,
+            )
+            review_export = seal_kpi_semantic_review_export(
+                review=review,
+                code_instance_sha256="d" * 64,
+                database_instance_sha256="e" * 64,
+                schema_revision=expected_head(),
+            )
+            decisions = KpiSemanticRefreshDecisionBatch(
+                schema_version="kpi_semantic_refresh_decisions.v3",
+                review_export_sha256=review_export.content_sha256,
+                review_batch_sha256=review.content_sha256,
+                reviewer="owner",
+                logical_idempotency_key=manifest.logical_idempotency_key,
+                knowledge_at=NOW,
+                review_bundle_sha256=manifest.review_bundle_sha256,
+                expected_schema_revision=expected_head(),
+                backup_restore_evidence_id=manifest.backup_restore_evidence_id,
+                decisions=(
+                    ReviewedKpiSemanticDecision(
+                        fact_id=entry.old_fact_id,
+                        action="supersede",
+                        expected_context_head_id=entry.expected_context_head_id,
+                        expected_context_revision=entry.expected_context_revision,
+                        expected_old_source_sha256=entry.expected_old_source_sha256,
+                        evidence_candidate_index=0,
+                        context=entry.context,
+                        semantic_evidence=entry.semantic_evidence,
+                        expected_definition_head_id=entry.expected_definition_head_id,
+                        expected_definition_revision=entry.expected_definition_revision,
+                        definition_revision=entry.definition_revision,
+                        comparability_revisions=(),
+                    ),
+                ),
+            )
+            manifest = build_kpi_semantic_refresh_manifest(
+                conn,
+                repo_root=tmp_path,
+                review_export=review_export,
+                decisions=decisions,
+                now=NOW,
+            )
+            entry = manifest.entries[0]
+            assert manifest.user_id == "bhanu"
+            assert entry.expected_context_head_id == quarantined_context.id
+            for owner_user_id in (None, "other"):
+                with pytest.raises(
+                    refresh.RepairBlockedError,
+                    match="quarantined_predecessor_has_semantic_context",
+                ):
+                    refresh.validate_refresh_entry(
+                        conn,
+                        entry,
+                        set(),
+                        owner_tickers=frozenset({"NU"}),
+                        owner_user_id=owner_user_id,
+                    )
         old_before = tuple(
             conn.execute(
                 "SELECT value,unit,source_doc_id,locator,source_excerpt "

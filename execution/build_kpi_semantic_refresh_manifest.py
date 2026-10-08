@@ -517,6 +517,7 @@ def build_kpi_semantic_refresh_manifest(
                 entry,
                 allowed,
                 owner_tickers=owner_ticker_set,
+                owner_user_id=review_export.user_id,
             )
         except RepairBlockedError as exc:
             raise ValueError(f"reviewed decision failed guarded validation: {exc.code}") from None
