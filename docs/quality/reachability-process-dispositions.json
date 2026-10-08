@@ -590,8 +590,8 @@
     {
       "disposition": "external_process",
       "evidence": "Windows ACL fence spawns the fixed powershell.exe fence script.",
-      "fingerprint": "8e31a3afe2b20347ce621d16e0c737800f6f029f21eb33a275793f5290d71df1",
-      "line": 1206,
+      "fingerprint": "daf592b3ddde954fdd08e31acc6901af082c104468fc81d72cee106d3ba01fa2",
+      "line": 1315,
       "path": "src/filings/inline_xbrl_processor.py",
       "targets": [
         "powershell.exe"
@@ -600,8 +600,8 @@
     {
       "disposition": "external_process",
       "evidence": "Processor runs the hash-pinned OS sandbox launcher executable.",
-      "fingerprint": "8e6d1d05d5ce832960c5dae3822937fd3bb2e09f4442bc0ff4bb4a3f03a9ae5a",
-      "line": 1608,
+      "fingerprint": "45e3f8b6c80c7f7e7a29d5f46efaa8b7c66567315e6ed0310e36f7bc24c24510",
+      "line": 1717,
       "path": "src/filings/inline_xbrl_processor.py",
       "targets": [
         "sandbox launcher"
@@ -945,7 +945,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "751f5f8cf45b9e78097ff966678871daaff40640607d699c94a7a1d0edef51c5",
+      "source_sha256": "8dd5630f6cb35e6796662e6cdc9f978f23a64d9b93a4910634df4b25b51e897d",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
