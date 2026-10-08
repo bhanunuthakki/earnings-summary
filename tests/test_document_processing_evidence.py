@@ -1815,6 +1815,122 @@ def test_member_cap_fails_before_any_publication_rows(
     )
 
 
+@pytest.mark.parametrize(
+    ("raw_text", "preflight_text", "matches"),
+    [
+        ("\nRevenue: 10  \r\nProfit: 2\t\r\n", "Revenue: 10\nProfit: 2", True),
+        ("Revenue\uff1a \uff11\uff10\u00a0\r\nProfit: \uff12 ", "Revenue: 10\nProfit: 2", True),
+        ("Revenue: 11\nProfit: 2", "Revenue: 10\nProfit: 2", False),
+        ("Revenue:  10\nProfit: 2", "Revenue: 10\nProfit: 2", False),
+    ],
+)
+def test_pdf_preflight_matches_normalized_text_but_seals_raw_output(
+    conn: sqlite3.Connection, raw_text: str, preflight_text: str, matches: bool
+) -> None:
+    from provenance.fulltext_extractor_identity import PDF_FULLTEXT_EXTRACTOR
+
+    document_id = "pdf-preflight-normalization"
+    blob_sha = _seed_document(conn, document_version_id=document_id, media_type="application/pdf")
+    nodes = _seed_run(
+        conn,
+        document_version_id=document_id,
+        blob_sha=blob_sha,
+        run_id="normalized-preflight-run",
+        extractor_name=PDF_FULLTEXT_EXTRACTOR.name,
+        extractor_code_version=PDF_FULLTEXT_EXTRACTOR.code_version,
+        extractor_config_sha256=PDF_FULLTEXT_EXTRACTOR.config_sha256,
+        children=(("pdf_page", raw_text, EvidenceLocator(source_ref=document_id, page_number=1)),),
+        legacy_ascii_output=True,
+    )
+    conn.execute(
+        "INSERT INTO ocr_document_assessments VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "native-assessment",
+            "native-assessment",
+            document_id,
+            blob_sha,
+            "pypdf-native-text-preflight",
+            "d" * 64,
+            "pypdf-native-text-preflight@2-public-access",
+            "e" * 64,
+            1,
+            "native_sufficient",
+            None,
+            T0,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO ocr_preflight_pages VALUES (?,?,?,?,?)",
+        ("native-assessment", 1, len(preflight_text), _sha(preflight_text), 0),
+    )
+    raw_output_sha = conn.execute(
+        "SELECT output_sha256 FROM evidence_extraction_runs WHERE extraction_run_id=?",
+        ("normalized-preflight-run",),
+    ).fetchone()[0]
+    if not matches:
+        with pytest.raises(
+            DocumentProcessingEvidenceMissingError, match="pdf_native_page_output_missing"
+        ):
+            publish_document_processing_evidence(
+                conn,
+                document_version_id=document_id,
+                processing_lane="pdf_text",
+                cutoff_at=T1,
+                recorded_at=T2,
+            )
+        assert (
+            conn.execute("SELECT COUNT(*) FROM document_processing_evidence_headers").fetchone()[0]
+            == 0
+        )
+        return
+    seal = publish_document_processing_evidence(
+        conn,
+        document_version_id=document_id,
+        processing_lane="pdf_text",
+        cutoff_at=T1,
+        recorded_at=T2,
+    )
+    verified = verify_document_processing_evidence(
+        conn,
+        seal.evidence_seal_id,
+        document_version_id=document_id,
+        processing_lane="pdf_text",
+        cutoff_at=T1,
+        observed_through=T2,
+    )
+    assert verified.native_output_sha256 == raw_output_sha
+    assert (
+        conn.execute(
+            "SELECT text FROM evidence_nodes WHERE node_id=?", (nodes[1].node_id,)
+        ).fetchone()[0]
+        == raw_text
+    )
+    assert conn.execute(
+        "SELECT content_sha256 FROM document_processing_evidence_members "
+        "WHERE evidence_seal_id=? AND native_id=?",
+        (seal.evidence_seal_id, nodes[1].node_id),
+    ).fetchone()[0] == _sha(raw_text)
+    # The comparison accepts formatting differences; the raw commitments do not.
+    conn.execute("DROP TRIGGER trg_evidence_nodes_append_only")
+    conn.execute("DROP TRIGGER trg_evidence_nodes_processing_evidence_frozen")
+    conn.execute(
+        "UPDATE evidence_nodes SET text=? WHERE node_id=?",
+        (raw_text + " \n", nodes[1].node_id),
+    )
+    with pytest.raises(
+        DocumentProcessingEvidenceIntegrityError,
+        match="native_extraction_output_commitment_mismatch",
+    ):
+        verify_document_processing_evidence(
+            conn,
+            seal.evidence_seal_id,
+            document_version_id=document_id,
+            processing_lane="pdf_text",
+            cutoff_at=T1,
+            observed_through=T2,
+        )
+
+
 @pytest.mark.parametrize("unapproved_field", [None, "code", "config"])
 def test_pdf_legacy_seal_replays_but_cannot_authorize_new_seal(
     conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, unapproved_field: str | None

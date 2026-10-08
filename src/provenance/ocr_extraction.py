@@ -277,7 +277,7 @@ class PypdfPDFInspector:
                     return _failed_preflight("unreadable", "invalid_pdf_permissions")
             pages: list[tuple[int, str]] = []
             for page_number, page in enumerate(reader.pages, start=1):
-                pages.append((page_number, _normalize_text(page.extract_text() or "")))
+                pages.append((page_number, normalize_extracted_text(page.extract_text() or "")))
         except Exception:
             return _failed_preflight("unreadable", "unreadable_pdf")
         if not pages:
@@ -969,7 +969,7 @@ def _evaluate_outputs(
     failure_reason: str | None = None
     for page_number in required_pages:
         output = by_page[page_number]
-        text = _normalize_text(output.text)
+        text = normalize_extracted_text(output.text)
         locator = EvidenceLocator(source_ref=source_ref, page_number=page_number)
         if not text:
             reason = "empty_ocr_output"
@@ -1379,7 +1379,8 @@ def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def _normalize_text(text: str) -> str:
+def normalize_extracted_text(text: str) -> str:
+    """Apply the shared nfkc-lines-v1 preflight and OCR text normalization."""
     normalized = unicodedata.normalize("NFKC", text).replace("\r\n", "\n").replace("\r", "\n")
     return "\n".join(line.rstrip() for line in normalized.split("\n")).strip()
 
