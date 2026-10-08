@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 from alembic.config import Config
@@ -14,11 +14,7 @@ from alembic import command
 from compute.thesis_evaluator import evaluate_ticker_thesis
 from identity import DEFAULT_USER_ID
 from models.kpis import BreachStatus
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from pipeline.kpi_report_reference_dispositions import (  # noqa: E402
+from pipeline.kpi_report_reference_dispositions import (
     ReportKpiReference,
     ReportKpiReferenceDisposition,
     ReportKpiReferenceResolutionMethod,
@@ -26,24 +22,83 @@ from pipeline.kpi_report_reference_dispositions import (  # noqa: E402
     persist_report_kpi_reference_disposition,
     report_kpi_references,
 )
-from pipeline.kpi_report_reference_resolver import (  # noqa: E402
+from pipeline.kpi_report_reference_resolver import (
     ReportKpiReferenceProposalOutcome,
     propose_report_kpi_reference_resolution,
     resolve_report_kpi_reference_binding,
     verified_report_kpi_reference_definition,
 )
-from pipeline.kpi_semantic_dispositions import (  # noqa: E402
+from pipeline.kpi_semantic_dispositions import (
     KpiSemanticDispositionManifest,
     ReportKpiReferenceDispositionEntry,
     apply_kpi_semantic_disposition_manifest,
 )
-from pipeline.kpi_semantic_scope import scoped_kpi_definitions  # noqa: E402
-from report.sections import financials as financials_module  # noqa: E402
-from report.sections import thesis as thesis_module  # noqa: E402
-from timeseries.signal_writer import (  # noqa: E402
-    _collect_metric_specs,  # pyright: ignore[reportPrivateUsage]
+from pipeline.kpi_semantic_scope import scoped_kpi_definitions
+from report.models import (
+    AnnualKpiSeries,
+    BreakRuleEvaluation,
+    KpiLedgerRow,
+    KpiSeries,
+    QuarterlyLineItem,
 )
+from report.sections import financials as financials_module
+from report.sections import thesis as thesis_module
+from timeseries import signal_writer
 
+
+class ResolvePriorities(Protocol):
+    def __call__(
+        self,
+        requested: list[str],
+        line_items: list[QuarterlyLineItem],
+        ticker: str,
+        repo_root: Path,
+        quarter_labels: list[str],
+        quarter_labels_full: list[str],
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> tuple[list[str], list[KpiSeries], list[AnnualKpiSeries], list[int]]: ...
+
+
+class BuildLedger(Protocol):
+    def __call__(
+        self,
+        ticker: str,
+        repo_root: Path,
+        holdings: dict[str, object],
+        evaluations: list[BreakRuleEvaluation],
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[KpiLedgerRow]: ...
+
+
+class MetricSpec(Protocol):
+    @property
+    def metric_name(self) -> str: ...
+
+    @property
+    def metric_kind(self) -> str: ...
+
+
+class CollectMetricSpecs(Protocol):
+    def __call__(
+        self, ticker: str, repo_root: Path, *, conn: sqlite3.Connection | None = None
+    ) -> list[MetricSpec]: ...
+
+
+# Keep the same private test seams with explicit callable types.
+_priorities_seam: object = getattr(financials_module, "_resolve_priorities")
+assert callable(_priorities_seam)
+_resolve_priorities = cast(ResolvePriorities, _priorities_seam)
+_ledger_seam: object = getattr(thesis_module, "_build_ledger")
+assert callable(_ledger_seam)
+_build_ledger = cast(BuildLedger, _ledger_seam)
+_metric_specs_seam: object = getattr(signal_writer, "_collect_metric_specs")
+assert callable(_metric_specs_seam)
+_collect_metric_specs = cast(CollectMetricSpecs, _metric_specs_seam)
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 8, 30, 12, tzinfo=UTC)
 
 
@@ -319,7 +374,7 @@ def test_financial_chart_priority_is_consumed_without_kpi_backlog(tmp_path: Path
         levels_full=[],
     )
 
-    resolved, quarterly, annual, years = financials_module._resolve_priorities(  # pyright: ignore[reportPrivateUsage]
+    resolved, quarterly, annual, years = _resolve_priorities(
         ["Revenue"], [line_item], "NU", repo, [], [], conn=conn
     )
 
@@ -346,7 +401,7 @@ def test_chart_alias_classification_matches_inventory_report_and_signal_writer(
         levels_full=[],
     )
 
-    resolved, _, _, _ = financials_module._resolve_priorities(  # pyright: ignore[reportPrivateUsage]
+    resolved, _, _, _ = _resolve_priorities(
         ["Capital expenditure", "Operating margin"],
         [capex],
         "NU",
@@ -569,9 +624,7 @@ def test_chart_priority_uses_verified_binding_and_blocks_override(
     monkeypatch.setattr(financials_module, "_kpi_series_for", fake_series)
     monkeypatch.setattr(financials_module, "reporting_cadence_for", quarterly_cadence)
 
-    financials_module._resolve_priorities(  # pyright: ignore[reportPrivateUsage]
-        ["Total customers"], [], "NU", repo, [], [], conn=conn
-    )
+    _resolve_priorities(["Total customers"], [], "NU", repo, [], [], conn=conn)
     assert calls == ["Total customers (millions)"]
 
     conn.execute(
@@ -579,9 +632,7 @@ def test_chart_priority_uses_verified_binding_and_blocks_override(
     )
     conn.commit()
     calls.clear()
-    financials_module._resolve_priorities(  # pyright: ignore[reportPrivateUsage]
-        ["Total customers"], [], "NU", repo, [], [], conn=conn
-    )
+    _resolve_priorities(["Total customers"], [], "NU", repo, [], [], conn=conn)
     assert calls == []
 
 
@@ -591,9 +642,7 @@ def test_tier_ledger_and_signal_writer_share_verified_binding(tmp_path: Path) ->
     reference, _ = _accepted_binding(conn, repo, user_id=DEFAULT_USER_ID)
     holdings: dict[str, object] = {"tier_1_kpis": [{"name": "Total customers"}]}
 
-    ledger = thesis_module._build_ledger(  # pyright: ignore[reportPrivateUsage]
-        "NU", repo, holdings, evaluations=[], conn=conn
-    )
+    ledger = _build_ledger("NU", repo, holdings, evaluations=[], conn=conn)
     specs = _collect_metric_specs("NU", repo, conn=conn)
 
     assert ledger[0].kpi_definition_id == 1
@@ -604,18 +653,14 @@ def test_tier_ledger_and_signal_writer_share_verified_binding(tmp_path: Path) ->
 
     conn.execute("UPDATE kpi_definitions SET primary_source='changed' WHERE id=1")
     conn.commit()
-    stale_ledger = thesis_module._build_ledger(  # pyright: ignore[reportPrivateUsage]
-        "NU", repo, holdings, evaluations=[], conn=conn
-    )
+    stale_ledger = _build_ledger("NU", repo, holdings, evaluations=[], conn=conn)
     stale_specs = _collect_metric_specs("NU", repo, conn=conn)
     assert stale_ledger[0].kpi_definition_id is None
     assert not any(spec.metric_kind == "kpi" for spec in stale_specs)
     conn.execute("UPDATE kpi_definitions SET primary_source='ir_doc' WHERE id=1")
     conn.execute("INSERT INTO fact_overrides VALUES ('NU','kpi','Total customers','drop','active')")
     conn.commit()
-    blocked_ledger = thesis_module._build_ledger(  # pyright: ignore[reportPrivateUsage]
-        "NU", repo, holdings, evaluations=[], conn=conn
-    )
+    blocked_ledger = _build_ledger("NU", repo, holdings, evaluations=[], conn=conn)
     blocked_specs = _collect_metric_specs("NU", repo, conn=conn)
     assert blocked_ledger[0].kpi_definition_id is None
     assert not any(spec.metric_kind == "kpi" for spec in blocked_specs)
@@ -633,9 +678,7 @@ def test_tier_ledger_and_signal_writer_share_verified_binding(tmp_path: Path) ->
         knowledge_at=NOW,
     )
     conn.commit()
-    retired_ledger = thesis_module._build_ledger(  # pyright: ignore[reportPrivateUsage]
-        "NU", repo, holdings, evaluations=[], conn=conn
-    )
+    retired_ledger = _build_ledger("NU", repo, holdings, evaluations=[], conn=conn)
     retired_specs = _collect_metric_specs("NU", repo, conn=conn)
     assert retired_ledger[0].kpi_definition_id is None
     assert not any(spec.metric_kind == "kpi" for spec in retired_specs)
@@ -981,3 +1024,205 @@ def test_downgrade_refuses_new_reference_kind_even_when_unresolved(
 
     with pytest.raises(RuntimeError, match="cannot downgrade"):
         command.downgrade(_config(path), "0034_add_investment_profile_label_reviews")
+
+
+def test_scope_reuses_request_inventory_and_each_disposition_without_changing_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pipeline.kpi_report_reference_resolver as resolver
+    import pipeline.kpi_semantic_scope as scope
+    from pipeline.kpi_report_reference_dispositions import (
+        ReportKpiReferenceDispositionRevision,
+        ReportKpiReferenceInventory,
+        current_report_kpi_reference_disposition,
+        load_report_kpi_reference_inventory,
+    )
+
+    conn = _db()
+    _apply_ready(conn)
+    repo = _repo_payload(
+        tmp_path,
+        '{"ticker":"NU","tier_1_kpis":[{"name":"Total customers"},'
+        '{"name":"Total customers (millions)"},{"name":"Not reported"}]}',
+    )
+    _accepted_binding(conn, repo)
+    # Full outputs captured from immutable f6ea4d32 source on this fixture.
+    expected = [
+        {
+            "admitted_context_count": 0,
+            "analyst_question_count": 0,
+            "comparator_count": 0,
+            "current_actual_count": 0,
+            "fact_count": 0,
+            "guidance_target_count": 0,
+            "kpi_definition_id": None,
+            "legacy_unknown_context_count": 0,
+            "management_explanation_count": 0,
+            "missing_context_count": 0,
+            "name": "Not reported",
+            "quarantined_context_count": 0,
+            "reasons": ["report"],
+            "report_reference_pointer": "/tier_1_kpis/2/name",
+            "report_reference_reason_code": None,
+            "report_reference_source_reason_code": None,
+            "report_reference_source_status": "valid",
+            "report_reference_status": None,
+            "ticker": "NU",
+        },
+        {
+            "admitted_context_count": 1,
+            "analyst_question_count": 0,
+            "comparator_count": 0,
+            "current_actual_count": 1,
+            "fact_count": 1,
+            "guidance_target_count": 0,
+            "kpi_definition_id": 1,
+            "legacy_unknown_context_count": 0,
+            "management_explanation_count": 0,
+            "missing_context_count": 0,
+            "name": "Total customers (millions)",
+            "quarantined_context_count": 0,
+            "reasons": ["report", "facts_metrics"],
+            "report_reference_pointer": None,
+            "report_reference_reason_code": None,
+            "report_reference_source_reason_code": None,
+            "report_reference_source_status": None,
+            "report_reference_status": None,
+            "ticker": "NU",
+        },
+    ]
+    inventory_reads: list[tuple[str, ...]] = []
+    disposition_reads: list[str] = []
+
+    def inventory_reader(root: Path, tickers: tuple[str, ...]) -> ReportKpiReferenceInventory:
+        inventory_reads.append(tickers)
+        return load_report_kpi_reference_inventory(root, tickers)
+
+    def disposition_reader(
+        connection: sqlite3.Connection, *, user_id: str, reference: ReportKpiReference
+    ) -> ReportKpiReferenceDispositionRevision | None:
+        disposition_reads.append(reference.json_pointer)
+        return current_report_kpi_reference_disposition(
+            connection, user_id=user_id, reference=reference
+        )
+
+    for module in (resolver, scope):
+        monkeypatch.setattr(
+            module, "load_report_kpi_reference_inventory", inventory_reader, raising=False
+        )
+        monkeypatch.setattr(
+            module, "current_report_kpi_reference_disposition", disposition_reader, raising=False
+        )
+    actual = scoped_kpi_definitions(conn, repo_root=repo, user_id="owner")
+    assert [row.model_dump(mode="json") for row in actual] == expected
+    definition = next(row for row in actual if row.kpi_definition_id == 1)
+    assert definition.reasons == ("report", "facts_metrics")
+    assert (
+        definition.fact_count
+        == definition.admitted_context_count
+        == definition.current_actual_count
+        == 1
+    )
+    assert next(row for row in actual if row.name == "Not reported").kpi_definition_id is None
+    assert inventory_reads == [("NU",), ("NU",)], (
+        "one initial and one final source read per request"
+    )
+    assert len(disposition_reads) == 3
+    assert len(set(disposition_reads)) == 3
+    conn.close()
+
+
+@pytest.mark.parametrize("change", ["label", "missing", "invalid"])
+def test_scope_fails_closed_if_report_inventory_changes_during_reconstruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    import pipeline.kpi_report_reference_resolver as resolver
+    from pipeline.kpi_report_reference_dispositions import (
+        ReportKpiReferenceDispositionRevision,
+        ReportKpiReferenceSourceStatus,
+        current_report_kpi_reference_disposition,
+    )
+
+    conn = _db()
+    _apply_ready(conn)
+    repo = _repo(tmp_path)
+    _accepted_binding(conn, repo)
+    changed = False
+
+    def disposition_reader(
+        connection: sqlite3.Connection, *, user_id: str, reference: ReportKpiReference
+    ) -> ReportKpiReferenceDispositionRevision | None:
+        nonlocal changed
+        result = current_report_kpi_reference_disposition(
+            connection, user_id=user_id, reference=reference
+        )
+        if not changed:
+            changed = True
+            path = repo / "micro_thesis/holdings/NU.json"
+            if change == "label":
+                _repo(tmp_path, "Active customers")
+            elif change == "missing":
+                path.unlink()
+            else:
+                path.write_text("{", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(resolver, "current_report_kpi_reference_disposition", disposition_reader)
+    rows = scoped_kpi_definitions(conn, repo_root=repo, user_id="owner")
+    invalid = next(row for row in rows if row.name == "<report_configuration>")
+    assert invalid.report_reference_source_status is ReportKpiReferenceSourceStatus.INVALID
+    assert (
+        invalid.report_reference_source_reason_code == "report_configuration_changed_during_scope"
+    )
+    assert all("report" not in row.reasons for row in rows)
+    conn.close()
+
+
+@pytest.mark.parametrize(
+    "mutation", ["definition", "fact", "context_successor", "override", "disposition"]
+)
+def test_scope_rechecks_evidence_on_each_request(tmp_path: Path, mutation: str) -> None:
+    conn = _db()
+    _apply_ready(conn)
+    repo = _repo(tmp_path)
+    reference, _ = _accepted_binding(conn, repo)
+    first = scoped_kpi_definitions(conn, repo_root=repo, user_id="owner")
+    assert "report" in next(row for row in first if row.kpi_definition_id == 1).reasons
+    if mutation == "definition":
+        conn.execute("UPDATE kpi_definitions SET primary_source='changed' WHERE id=1")
+    elif mutation == "fact":
+        conn.execute("UPDATE kpi_facts SET source_excerpt='changed' WHERE id=21")
+    elif mutation == "context_successor":
+        conn.execute(
+            "INSERT INTO kpi_fact_semantic_contexts VALUES "
+            "(99,21,2,31,'Total customers','2024-12-31','unknown','unclassified',"
+            "'unknown','unknown','{}','unknown',NULL,NULL,NULL,'quarantined','owner',"
+            "'2026-08-31T00:00:00Z')"
+        )
+    elif mutation == "override":
+        conn.execute(
+            "INSERT INTO fact_overrides VALUES ('NU','kpi','Total customers','replace','active')"
+        )
+    else:
+        persist_report_kpi_reference_disposition(
+            conn,
+            user_id="owner",
+            reference=reference,
+            disposition=ReportKpiReferenceDisposition(
+                status=ReportKpiReferenceStatus.UNRESOLVED,
+                reason_code="requires_new_source_review",
+            ),
+            reviewed_by="source-review:owner",
+            knowledge_at=NOW,
+        )
+    conn.commit()
+    second = scoped_kpi_definitions(conn, repo_root=repo, user_id="owner")
+    stale = next(row for row in second if row.kpi_definition_id is None)
+    assert stale.report_reference_status is ReportKpiReferenceStatus.UNRESOLVED
+    assert stale.report_reference_reason_code == (
+        "requires_new_source_review"
+        if mutation == "disposition"
+        else "stale_report_reference_binding"
+    )
+    assert "report" not in next(row for row in second if row.kpi_definition_id == 1).reasons
+    conn.close()

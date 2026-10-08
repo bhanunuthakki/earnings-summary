@@ -13,10 +13,8 @@ from pipeline.kpi_report_reference_dispositions import (
     ReportKpiReference,
     ReportKpiReferenceSourceStatus,
     ReportKpiReferenceStatus,
-    current_report_kpi_reference_disposition,
-    load_report_kpi_reference_inventory,
 )
-from pipeline.kpi_report_reference_resolver import verified_report_kpi_reference_definition
+from pipeline.kpi_report_reference_resolver import read_report_kpi_reference_definitions
 from provenance.financial_fact_resolution import canonical_fact_relation
 
 
@@ -86,8 +84,6 @@ def scoped_kpi_definitions(
     tickers = portfolio_tickers(conn, user_id=user_id)
     if not tickers or not _table_exists(conn, "kpi_definitions"):
         return ()
-    inventory = load_report_kpi_reference_inventory(repo_root, tickers)
-    references = inventory.references
     marks = ",".join("?" for _ in tickers)
     fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
     has_context = _table_exists(conn, "kpi_fact_semantic_contexts")
@@ -154,20 +150,14 @@ def scoped_kpi_definitions(
         definition_keys.setdefault((str(row[1]), str(row[2]).strip().casefold()), []).append(
             int(row[0])
         )
-    for reference in references:
-        revision = current_report_kpi_reference_disposition(
-            conn, user_id=user_id, reference=reference
-        )
+    inventory, reference_reads = read_report_kpi_reference_definitions(
+        conn, repo_root=repo_root, user_id=user_id, tickers=tickers
+    )
+    for reference, revision, verified in reference_reads:
         if revision is not None and revision.reference != reference:
             revision = None
         if revision is not None and revision.disposition.status is ReportKpiReferenceStatus.RETIRED:
             continue
-        verified = verified_report_kpi_reference_definition(
-            conn,
-            repo_root=repo_root,
-            user_id=user_id,
-            reference=reference,
-        )
         if verified is not None:
             resolved_definition_references.setdefault(verified.kpi_definition_id, []).append(
                 reference
