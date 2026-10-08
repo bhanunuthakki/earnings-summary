@@ -17,6 +17,11 @@ It adds no artifact schema, accepted threshold, acquisition route or write permi
    remarks and question-and-answer (Q&A) coverage, included/omitted ranges and
    whether the complete relevant exchange is available. Unknown coverage stays
    unknown. Preserve source/context manifests or claim-level citations.
+   Existing verified facts are the first source for every financial narrative.
+   If the requested window or claim classes lack verified evidence, flag the gap
+   before generation and agree on a bounded source/period/effort plan before new
+   collection or lower-coverage research. Honor the exact scope already approved.
+   A shorter ad hoc window lowers coverage, not the accuracy of included facts.
 3. Select the questions that could change a thesis pillar, forecast assumption,
    risk assessment or research decision. Test each against supporting evidence,
    contrary evidence and the strongest plausible alternative cause. Distinguish
@@ -155,6 +160,13 @@ needed to develop the hypothesis. Do not grant readiness, change evaluation
 level or recommend a position size from company analysis alone.
 
 ## Delivery and runtime limits
+
+Before release, check the complete output against the selected corpus. Verify
+metric, period, currency/unit/scale, scope, accounting basis and actual/forecast
+qualifiers, then replay calculations through their code owners. Keep unsupported
+claims out of final prose. Missing evidence cannot establish a negative finding.
+Retain the claim/source manifest and verification disposition. A model self-check,
+source URL, matching numerical token or warning footnote is not the release gate.
 
 Check that each material conclusion has a source/locator, an explicit inference
 when needed, a substantive counter and a public next check. Avoid filler, forced
