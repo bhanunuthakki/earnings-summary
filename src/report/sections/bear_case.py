@@ -446,23 +446,44 @@ def _last_summaries(earnings: EarningsSection, n: int) -> list[str]:
 
 
 def _financials_md(financials: FinancialsSection) -> str:
-    if financials.status == SectionStatus.MISSING_DATA:
-        return "(not yet extracted)"
-    out = StringIO()
-    out.write(
-        "| Line item | "
-        + " | ".join(financials.quarter_labels)
-        + " | QoQ | YoY | 1Y CAGR | 3Y CAGR |\n"
+    """Keep source coordinates and units from the admitted report projection.
+
+    Legacy display rows cannot establish admission. Serialize the existing
+    typed projection in the report's bounded history window so equal numbers
+    with different metric, unit, period or scope cannot lose their identity.
+    """
+    projection = financials.canonical_financial_table
+    if projection is None:
+        return "(admitted financial evidence unavailable; legacy numeric rows withheld)"
+    quarters = set(financials.quarter_labels_full or financials.quarter_labels)
+    years = {str(year) for year in financials.annual_years}
+    selected = tuple(
+        cell if cell.available else cell.model_copy(update={"provenance": None})
+        for cell in projection.cells
+        if (cell.cadence == "quarterly" and cell.display_coordinate in quarters)
+        or (cell.cadence == "annual" and cell.display_coordinate in years)
     )
-    out.write("|" + "|".join(["---"] * (len(financials.quarter_labels) + 5)) + "|\n")
-    for li in financials.line_items:
-        cells = [li.line_item] + [_fmt(v, li.digits) for v in li.values]
-        cells.extend(
-            _pct(g)
-            for g in (li.growth.qoq, li.growth.yoy, li.growth.cagr_1y_ttm, li.growth.cagr_3y_ttm)
+    bounded = projection.model_copy(update={"cells": selected})
+    return (
+        "Canonical financial evidence at the recorded cutoff. Values use the "
+        "source unit_key and currency, not an inferred display scale. Rejected "
+        "cells are unavailable; preserve period, scope, basis and source identities.\n"
+        "```json\n"
+        + bounded.model_dump_json(
+            exclude={
+                "cells": {
+                    "__all__": {
+                        "provenance": {
+                            "canonical_payload": True,
+                            "relations": True,
+                            "observation": {"evidence", "derivation"},
+                        }
+                    }
+                }
+            }
         )
-        out.write("| " + " | ".join(cells) + " |\n")
-    return out.getvalue()
+        + "\n```"
+    )
 
 
 def _segments_md(segments: SegmentsSection) -> str:
@@ -476,10 +497,19 @@ def _segments_md(segments: SegmentsSection) -> str:
         if not group:
             continue
         out.write(f"\n**{label}**\n")
-        out.write("| Segment | " + " | ".join(segments.quarter_labels) + " | YoY |\n")
-        out.write("|" + "|".join(["---"] * (len(segments.quarter_labels) + 2)) + "|\n")
+        out.write("Source labels describe extraction origin, not canonical financial admission.\n")
+        out.write(
+            "| Segment | Unit | Source status | "
+            + " | ".join(segments.quarter_labels)
+            + " | YoY |\n"
+        )
+        out.write("|" + "|".join(["---"] * (len(segments.quarter_labels) + 4)) + "|\n")
         for s in group:
-            cells = [s.segment_name] + [_fmt(v, 0) for v in s.values] + [_pct(s.growth.yoy)]
+            cells = (
+                [s.segment_name, s.unit, s.source_label]
+                + [_fmt(v, 0) for v in s.values]
+                + [_pct(s.growth.yoy)]
+            )
             out.write("| " + " | ".join(cells) + " |\n")
     return out.getvalue()
 

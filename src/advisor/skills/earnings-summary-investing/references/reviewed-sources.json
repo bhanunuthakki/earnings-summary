@@ -1,10 +1,10 @@
 {
-  "review_note": "Reviewed memo v2 issuer-separated evidence, finite committed ONON replay selectors, bounded exact internal DCF verification, and explicit publication-created clock routing. Legacy request bytes, default mode, issuer subset dry/apply commitments, source gates, terminal conflicts and public display bounds remain intact. Actual public producer fixture exposed and verified the canonical seal recorded_at query correction. This source review does not qualify a production memo or deployment.",
+  "review_note": "Reviewed merged main change 1d87985a: earnings CLIs now require the configured canonical database; readouts use the selected call date and fiscal period end while retaining evidence limits; artifact readers and reuse reject corrupt or missing output checksums without erasing historical bytes. Existing skill instructions already require exact periods, configured state, preserved cache semantics and separate financial verification. No skill prose change is needed. Reviewed memo v2 issuer-separated evidence, finite committed ONON replay selectors, bounded exact internal DCF verification, and explicit publication-created clock routing. Legacy request bytes, default mode, issuer subset dry/apply commitments, source gates, terminal conflicts and public display bounds remain intact. Actual public producer fixture exposed and verified the canonical seal recorded_at query correction. This source review does not qualify a production memo or deployment. Integrated main financial narrative instruction/template changes are preserved; current directives and memo consumers retain their separate admission and reconstruction authorities.",
   "schema_version": 1,
   "sources": [
     {
       "path": "AGENTS.md",
-      "sha256": "a060d2f118a60f2c038d5bafbb702f02a97a63d71974e2ec9b1c85f06f2a63c5"
+      "sha256": "b07df6d6f883230685362e26dd5ad2a496236d0fc9def9ecb2d0dc14b7b6b532"
     },
     {
       "path": "DEFINITIONS.md",
@@ -32,7 +32,7 @@
     },
     {
       "path": "directives/directive_manifest.json",
-      "sha256": "275e8a409b72ac0061f90f9798512af9be853b08d186929f48c5387fc30e0733"
+      "sha256": "50250dbcdcfb0a887548b073c2ab7d834ba0bd4334093ebc528af82d61733265"
     },
     {
       "path": "directives/etf_data.md",
@@ -52,7 +52,7 @@
     },
     {
       "path": "directives/llm_calls.md",
-      "sha256": "4f47ea54f4f82b1f5a4610b655e419a592571bd5b90969ea174c5e82c038f12f"
+      "sha256": "d4f2641a6d83df11197a886e9d08d3e6288a68bcf242fbfc50bd928e229fdb1c"
     },
     {
       "path": "directives/llm_evals.md",
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "65cda5c2a611ba6443ed96a3e976a5c93fd7a0c120a8d76206375065bec365c6"
+      "sha256": "5c0c245d2ec87859ee159ac95618356e7c243227f508635b30cf16cb7a6beaf8"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -92,7 +92,7 @@
     },
     {
       "path": "directives/report_comments_and_chat.md",
-      "sha256": "055fe782588e23c9455dfaa4eaadd74a12de6bd44b90f5247becd3d2138c95d1"
+      "sha256": "be8add723f9351e3ef76859cef19d68fe1d576f3c03c11f0940d3d45779d95a6"
     },
     {
       "path": "execution/apply_issuer_fact_manifest.py",
@@ -168,11 +168,11 @@
     },
     {
       "path": "execution/generate_post_earnings_readouts.py",
-      "sha256": "f4d57c4680b2dbad8b2f9deaae43121957e37ca9172672e4e485da8157c71170"
+      "sha256": "750a023e18901c78b0783e61811d050359915e7c5621ef06e0a838e6490b177e"
     },
     {
       "path": "execution/generate_pre_earnings_briefs.py",
-      "sha256": "cca92cbca27cfe5fe370bd8b99b7cff8e993b2c7870a50c6402e2ded5b7e6fb6"
+      "sha256": "ba7bb1087f176bb42de64c2c4a195e7acd04aa3166a2ff33e359ba2535e4aff2"
     },
     {
       "path": "execution/get_portfolio_risk_matrix.py",
@@ -284,7 +284,7 @@
     },
     {
       "path": "src/advisor/skills/earnings-summary-investing/references/research-method.md",
-      "sha256": "d44af8aa134850959c1ff5eae5efec7ce6ceab9cf646c320cebd0199a46ff5e5"
+      "sha256": "86b1fbaa7412a4ccda9b017ed5eccdfb300a0c01caf7e9a23857c41256db4287"
     },
     {
       "path": "src/advisor/skills/next-dollar-allocation/SKILL.md",
@@ -356,7 +356,7 @@
     },
     {
       "path": "src/earnings_readout.py",
-      "sha256": "465061e98e160fbe008159dfa2dff43974d5a00fe511817e45d1fef423c09129"
+      "sha256": "66863e116991888b99f46e4b810faad43de56a293a446a4b47a43a9b220e0b25"
     },
     {
       "path": "src/evals/capture_quality_specs.py",
@@ -392,11 +392,11 @@
     },
     {
       "path": "src/llm_artifact_store.py",
-      "sha256": "50d4c3ce69aa8cd0c37cbe0e2823dffc74d5e3bd394e29cbf398d35becc687ed"
+      "sha256": "790bdfb259a6e48e625d2b5b40e0e05e6ded697c158191af14be23c05b13bf2f"
     },
     {
       "path": "src/llm_client.py",
-      "sha256": "680843db145811d74bb67bdfd4bb7e1e988ad02c531051d252cbf093799dc524"
+      "sha256": "d0282669e53d0f59662c9d79079941b76ffbe6e603413a9af7630fb087737006"
     },
     {
       "path": "src/pipeline/kpi_report_reference_resolver.py",
@@ -440,7 +440,7 @@
     },
     {
       "path": "src/report/sections/bear_case.py",
-      "sha256": "3f5f2247f44cc0659e34dec3b59f8f632767bcc9d7a38ca5f779c1f76278b261"
+      "sha256": "1928fea0e48e1fb16fcbd3cd66d168bdac9415c6dd6252bcd19a8933f96ea453"
     },
     {
       "path": "src/report/sections/thesis.py",
