@@ -290,9 +290,9 @@ def test_actual_head_is_supported() -> None:
         ("tests/test_ui_requests.py", 69),
         ("tests/test_work_os_read_lifecycle.py", 75),
         ("tests/test_work_os_read_lifecycle.py", 110),
-        ("tests/test_workspace_dcf_read_lifecycle.py", 104),
-        ("tests/test_workspace_dcf_read_lifecycle.py", 163),
-        ("tests/test_workspace_dcf_read_lifecycle.py", 324),
+        ("tests/test_workspace_dcf_read_lifecycle.py", 134),
+        ("tests/test_workspace_dcf_read_lifecycle.py", 193),
+        ("tests/test_workspace_dcf_read_lifecycle.py", 354),
     }
     assert {
         (edge.source, edge.line)

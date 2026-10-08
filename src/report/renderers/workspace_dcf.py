@@ -198,9 +198,11 @@ JS = r"""
   var elHeatmap = control('dcf-edit-heatmap');
   var elReset = control('dcf-edit-reset');
   var elSave = control('dcf-edit-save');
-  var elRetry = control('dcf-edit-retry');
+  var elRetry = control('dcf-edit-retry'); // Older saved reports have no retry control.
+  var retryInstruction = elRetry ? 'Retry loading the model.'
+    : 'Close and reopen Edit assumptions to retry loading the model.';
   if (!TICKER || !elToggle || !elBody || !elStatus || !elControls || !elScenarios
-      || !elHeatmap || !elReset || !elSave || !elRetry) return null;
+      || !elHeatmap || !elReset || !elSave) return null;
   var loadController = null;
   var loadGeneration = 0;
   var INPUT_READ_TIMEOUT_MS = 15000;
@@ -538,7 +540,7 @@ JS = r"""
     // This report may run from a file against its configured server origin.
     // Keep the deadline active through JSON body consumption, not only headers.
     var timer = setTimeout(function () { controller.abort(); }, INPUT_READ_TIMEOUT_MS);
-    elRetry.hidden = true;
+    if (elRetry) elRetry.hidden = true;
     setStatus('Loading model…');
     return fetch(SERVER_URL + '/api/dcf/inputs/' + encodeURIComponent(TICKER), {
       headers: requestHeaders(),
@@ -551,8 +553,9 @@ JS = r"""
       }).then(function (res) {
         if (request !== loadGeneration || controller.signal.aborted || !root.isConnected || !res) return;
         if (!res.ok || !res.body || !res.body.inputs) {
-          setStatus((res.body && res.body.error) || 'Could not load the model.', 'bad');
-          elRetry.hidden = false;
+          setStatus(((res.body && res.body.error) || 'Could not load the model.')
+            + (elRetry ? '' : ' ' + retryInstruction), 'bad');
+          if (elRetry) elRetry.hidden = false;
           return;
         }
         loaded = res.body.inputs;
@@ -567,16 +570,16 @@ JS = r"""
         }
       }).catch(function () {
         if (request !== loadGeneration || !root.isConnected) return;
-        setStatus(controller.signal.aborted
-          ? 'Model loading timed out. Retry loading the model.'
-          : 'Model could not load from the research server. Retry loading the model.', 'bad');
-        elRetry.hidden = false;
+        setStatus((controller.signal.aborted
+          ? 'Model loading timed out. '
+          : 'Model could not load from the research server. ') + retryInstruction, 'bad');
+        if (elRetry) elRetry.hidden = false;
       }).finally(function () {
         clearTimeout(timer);
         if (loadController === controller) loadController = null;
       });
   }
-  listen(elRetry, 'click', load);
+  if (elRetry) listen(elRetry, 'click', load);
   listen(window, 'pagehide', cancelLoad);
 
   // --- Wave 5: KPI -> DCF driver injection ---------------------------------
