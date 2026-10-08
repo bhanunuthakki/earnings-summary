@@ -87,6 +87,7 @@ from dcf.specialized_price import (
     price_seed_source_files,
     resolve_specialized_price,
 )
+from pipeline.db_writer_gate import hold_writer_gate
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 try:  # persistence is best-effort -- the workbook builds without a DB
@@ -800,7 +801,13 @@ def persist_dcf_run(
         provenance=provenance,
         calculated_at=datetime.now(UTC),
     )
-    with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
+    with (
+        hold_writer_gate(db, owner=f"build_meli_platform_dcf:{T}"),
+        connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn,
+    ):
+        # The cross-process writer gate serializes this upsert against the
+        # daily brief driver and its sibling chain steps; it is NOT the
+        # whole-job run lock.
         if not conn.in_transaction:
             conn.execute("BEGIN IMMEDIATE")
         verify_meli_inputs(

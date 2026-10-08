@@ -45,40 +45,51 @@ from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-CODE_ROOT = Path(__file__).resolve().parents[1]
-REPO = Path(os.environ.get("DCF_REPO_ROOT") or CODE_ROOT)
-T = os.environ.get("DCF_TICKER", "NU")
-DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:  # ``python -m execution.build_nu_platform_dcf``
+    from execution._lib import PROJECT_ROOT
 
-sys.path.insert(0, str(CODE_ROOT / "src"))
-
-
-from dcf import reverse_valuation as reverse_valuation_mod  # noqa: E402
-from dcf.artifact_promotion import (  # noqa: E402
+from db_paths import configured_db_path
+from dcf import reverse_valuation as reverse_valuation_mod
+from dcf.artifact_promotion import (
     ArtifactPromotion,
     live_path_from_env,
     promotion_from_env,
 )
-from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
-from dcf.specialized_price import (  # noqa: E402
+from dcf.provenance import build_file_provenance, schema_supports_provenance
+from dcf.specialized_price import (
     SpecializedPriceObservation,
     price_seed_source_files,
     resolve_specialized_price,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from pipeline.db_writer_gate import hold_writer_gate
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 try:  # persistence is best-effort -- the workbook builds without a DB
-    from dcf import persist as persist_mod
+    from dcf import persist as _persist_module
 except ImportError:  # pragma: no cover
-    persist_mod = None  # type: ignore[assignment]
+    persist_mod = None
+else:
+    persist_mod = _persist_module
 try:  # global macro assumptions -- best-effort; degrades to in-code seed defaults
-    from dcf import global_assumptions as global_dcf
+    from dcf import global_assumptions as _global_assumptions_module
 except ImportError:  # pragma: no cover
-    global_dcf = None  # type: ignore[assignment]
+    global_dcf = None
+else:
+    global_dcf = _global_assumptions_module
 try:  # scenario emission (Monthly Red Team PR8) -- best-effort like persistence
-    from dcf import redesign as redesign_mod
+    from dcf import redesign as _redesign_module
 except ImportError:  # pragma: no cover
-    redesign_mod = None  # type: ignore[assignment]
+    redesign_mod = None
+else:
+    redesign_mod = _redesign_module
+
+# Data repo (may differ from the executing checkout): REPO is the DATA root;
+# code always imports from the executing checkout via ``_lib``.
+REPO = Path(os.environ.get("DCF_REPO_ROOT") or PROJECT_ROOT)
+T = os.environ.get("DCF_TICKER", "NU")
+DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 
 YELLOW = PatternFill("solid", fgColor="FFF2CC")
 BLUE_FONT = Font(color="1F4E79")
@@ -141,7 +152,9 @@ class Assum:
     years: int = 10
     shares: float = 4907.0  # diluted shares (M)
     price: float = 12.29
-    global_assumption_source: dict[str, object] = field(default_factory=dict, repr=False)
+    global_assumption_source: dict[str, object] = field(
+        default_factory=dict[str, object], repr=False
+    )
     price_seed_source: str = field(default="model_seed", repr=False)
     price_seed_path: str | None = field(default=None, repr=False)
 
@@ -171,7 +184,7 @@ class Row:
 
 @dataclass
 class Mirror:
-    rows: list[Row] = field(default_factory=list)
+    rows: list[Row] = field(default_factory=list[Row])
     pv_fcfe: float = 0.0
     pv_tv: float = 0.0
     value_fcfe: float = 0.0
@@ -306,7 +319,7 @@ def load_assumptions(ticker: str) -> Assum:
     # an unpinned platform name tracks the dashboard-set global while a pinned
     # tax still wins (NU pins 0.28 -- a genuinely company-specific Brazilian rate).
     global_loaded = (
-        global_dcf.load_with_provenance(db_path=REPO / "data" / "portfolio.db")
+        global_dcf.load_with_provenance(db_path=configured_db_path(REPO))
         if global_dcf is not None
         else None
     )
@@ -343,13 +356,16 @@ def load_assumptions(ticker: str) -> Assum:
     prof = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
     if prof.exists():
         try:
-            d: Any = json.loads(prof.read_text(encoding="utf-8"))
-            if isinstance(d, list):
-                d = d[0] if d else {}
-            if isinstance(d, dict) and d.get("price"):
-                s.price = float(d["price"])
-                s.price_seed_source = "fmp_profile"
-                s.price_seed_path = f"data/historical/fmp/{ticker}_profile.json"
+            raw_profile: object = json.loads(prof.read_text(encoding="utf-8"))
+            if isinstance(raw_profile, list):
+                profiles = cast("list[object]", raw_profile)
+                raw_profile = profiles[0] if profiles else {}
+            if isinstance(raw_profile, dict):
+                d = cast("dict[str, Any]", raw_profile)
+                if d.get("price"):
+                    s.price = float(d["price"])
+                    s.price_seed_source = "fmp_profile"
+                    s.price_seed_path = f"data/historical/fmp/{ticker}_profile.json"
         except (OSError, json.JSONDecodeError, ValueError, KeyError):
             pass
     return s
@@ -418,6 +434,8 @@ def scenarios_block(s: Assum, m: Mirror, holdings: dict[str, object] | None) -> 
     unchanged. Requires ``redesign_mod`` (caller gates on it)."""
     import dataclasses as _dc
 
+    if redesign_mod is None:  # pragma: no cover — callers gate on availability
+        raise RuntimeError("scenarios_block requires the dcf.redesign module")
     bull_d = redesign_mod.BULL_SEED
     bear_d = redesign_mod.thesis_bear_seed(holdings)
     provenance = "thesis" if redesign_mod.parse_thesis_bear_deltas(holdings) is not None else "seed"
@@ -501,6 +519,8 @@ def build(s: Assum, m: Mirror, dest: Path, holdings: dict[str, object] | None = 
     ``scenarios_block``."""
     wb = openpyxl.Workbook()
     dash = wb.active
+    if not isinstance(dash, Worksheet):
+        raise RuntimeError(f"{T} workbook requires an active worksheet")
     dash.title = "Dashboard"
     mod = wb.create_sheet("Model")
     val = wb.create_sheet("Valuation")
@@ -772,7 +792,7 @@ def persist_dcf_run(
     file edit can never make the sheet and the persisted snapshot disagree —
     a ticker with genuinely no holdings JSON still resolves to ``None`` either
     way, so this collapses "not passed" and "no holdings on file" safely."""
-    db = REPO / "data" / "portfolio.db"
+    db = configured_db_path(REPO)
     if persist_mod is None or not db.exists() or not m.vps:
         return False
     if holdings is None:
@@ -845,7 +865,13 @@ def persist_dcf_run(
         notes=f"workbook={live_workbook.name} (customer-driven platform DCF)",
         provenance=provenance,
     )
-    with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
+    with (
+        hold_writer_gate(db, owner=f"build_nu_platform_dcf:{T}"),
+        connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn,
+    ):
+        # The cross-process writer gate serializes this upsert against the
+        # daily brief driver and its sibling chain steps; it is NOT the
+        # whole-job run lock.
         if not schema_supports_provenance(conn):
             sys.stderr.write(
                 json.dumps(

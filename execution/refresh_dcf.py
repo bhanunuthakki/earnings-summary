@@ -52,7 +52,10 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:  # ``python -m execution.refresh_dcf``
+    from execution._lib import PROJECT_ROOT
 
 from db_paths import configured_db_path
 from dcf import assumptions_doc
@@ -66,12 +69,11 @@ from dcf import universe as universe_mod
 from dcf.input_evidence import InputEvidenceError, ModelInputRequest
 from dcf.meli_inputs import RECIPE as MELI_INPUT_RECIPE
 from dcf.provenance import DcfInputProvenance, input_clock_summary
+from pipeline.db_writer_gate import hold_writer_gate
 from runtime.python_process import managed_python_prefix
 from sources import registry as source_calls_registry
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ticker_validation import safe_ticker
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 DCF_DIR_NAME = "dcf"
 CURRENCY_DEFAULT = "USD"
@@ -457,7 +459,10 @@ def main() -> int:
         print(json.dumps({"event": "no_tickers", "detail": "nothing to refresh"}))
         return 0
 
-    db_path = configured_db_path(repo_root)
+    # The driver passes the resolved database explicitly (--db); standalone
+    # invocations fall back to the configured authority, never a bare
+    # checkout-relative guess.
+    db_path = Path(args.db).resolve() if args.db is not None else configured_db_path(repo_root)
     if not db_path.exists():
         sys.stderr.write(f"FATAL: no DB at {db_path}\n")
         return 2
@@ -512,6 +517,17 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Explicit reviewed MELI input artifact; no repo/data or DB-directory fallback.",
+    )
+    p.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help=(
+            "Explicit portfolio database. The daily brief worker passes the "
+            "resolved database so this step never derives a checkout-local "
+            "default; absent, the configured authority applies "
+            "(EARNINGS_SUMMARY_DB_PATH, else the repo-root default)."
+        ),
     )
     return p.parse_args()
 
@@ -609,13 +625,13 @@ def refresh_one(
             )
     model, suggestion = _valuation_model(repo_root, ticker)
     if model == "bank_excess_return":
-        return _refresh_bank(ticker, repo_root)
+        return _refresh_bank(ticker, repo_root, db_path=db_path)
     if model == "holdco_sotp":
-        return _refresh_holdco(ticker, repo_root)
+        return _refresh_holdco(ticker, repo_root, db_path=db_path)
     if model == "fintech_sotp":
-        return _refresh_fintech_sotp(ticker, repo_root)
+        return _refresh_fintech_sotp(ticker, repo_root, db_path=db_path)
     if model == "platform_dcf":
-        return _refresh_platform(ticker, repo_root)
+        return _refresh_platform(ticker, repo_root, db_path=db_path)
     if model == "meli_platform_sotp":
         return _refresh_meli_sotp(
             ticker, repo_root, db_path=db_path, assumptions_path=meli_assumptions_path
@@ -711,7 +727,7 @@ def _valuation_model(repo_root: Path, ticker: str) -> tuple[str, str | None]:
     return "fcff_dcf", None
 
 
-def _refresh_bank(ticker: str, repo_root: Path) -> dict[str, object]:
+def _refresh_bank(ticker: str, repo_root: Path, *, db_path: Path) -> dict[str, object]:
     """Build the equity-side bank credit model (``execution/build_bank_dcf.py``)
     to ``dcf/<T>.xlsx``. The builder computes the value-of-record and upserts
     ``dcf_runs`` itself, so this just drives it env-style like the FCFF builder."""
@@ -725,6 +741,7 @@ def _refresh_bank(ticker: str, repo_root: Path) -> dict[str, object]:
         DCF_REPO_ROOT=str(repo_root),
         DCF_DEST=str(tmp),
         DCF_PROMOTE_DEST=str(dest),
+        EARNINGS_SUMMARY_DB_PATH=str(db_path.resolve()),
     )
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_BANK_BUILDER)],
@@ -747,7 +764,7 @@ def _refresh_bank(ticker: str, repo_root: Path) -> dict[str, object]:
     return {"ticker": t, "status": "ok", "format": "bank", "workbook": str(dest), "result": line}
 
 
-def _refresh_holdco(ticker: str, repo_root: Path) -> dict[str, object]:
+def _refresh_holdco(ticker: str, repo_root: Path, *, db_path: Path) -> dict[str, object]:
     """Build the sum-of-the-parts holdco model (``execution/build_holdco_sotp.py``)
     to ``dcf/<T>.xlsx``; the builder computes the value-of-record and upserts
     ``dcf_runs`` itself, like the bank/FCFF builders."""
@@ -762,6 +779,7 @@ def _refresh_holdco(ticker: str, repo_root: Path) -> dict[str, object]:
         DCF_DEST=str(tmp),
         DCF_PROMOTE_DEST=str(dest),
         DCF_OWNER_INPUTS_DEST=str(dest),
+        EARNINGS_SUMMARY_DB_PATH=str(db_path.resolve()),
     )
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_HOLDCO_BUILDER)],
@@ -790,7 +808,7 @@ def _refresh_holdco(ticker: str, repo_root: Path) -> dict[str, object]:
     }
 
 
-def _refresh_fintech_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
+def _refresh_fintech_sotp(ticker: str, repo_root: Path, *, db_path: Path) -> dict[str, object]:
     """Build the fintech segment sum-of-the-parts model
     (``execution/build_fintech_sotp.py``) to ``dcf/<T>.xlsx`` — a hybrid that
     values a fintech's lending, fee/deposit, and tech-platform segments separately
@@ -807,6 +825,7 @@ def _refresh_fintech_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
         DCF_REPO_ROOT=str(repo_root),
         DCF_DEST=str(tmp),
         DCF_PROMOTE_DEST=str(dest),
+        EARNINGS_SUMMARY_DB_PATH=str(db_path.resolve()),
     )
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_FINTECH_BUILDER)],
@@ -835,7 +854,7 @@ def _refresh_fintech_sotp(ticker: str, repo_root: Path) -> dict[str, object]:
     }
 
 
-def _refresh_platform(ticker: str, repo_root: Path) -> dict[str, object]:
+def _refresh_platform(ticker: str, repo_root: Path, *, db_path: Path) -> dict[str, object]:
     """Build the customer-driven platform DCF (``execution/build_nu_platform_dcf.py``)
     to ``dcf/<T>.xlsx`` — values a fintech as a customer-acquisition + monetization
     platform (customers x ARPAC -> Credit/Float/Fee gross profit -> FCFE), the right
@@ -852,6 +871,7 @@ def _refresh_platform(ticker: str, repo_root: Path) -> dict[str, object]:
         DCF_REPO_ROOT=str(repo_root),
         DCF_DEST=str(tmp),
         DCF_PROMOTE_DEST=str(dest),
+        EARNINGS_SUMMARY_DB_PATH=str(db_path.resolve()),
     )
     proc = subprocess.run(
         [*managed_python_prefix(PROJECT_ROOT), str(_PLATFORM_BUILDER)],
@@ -1642,10 +1662,16 @@ def _refresh_redesign(
         assumptions_synced_at=None,
         provenance=input_provenance,
     )
-    with connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
-        # Hold the writer lock across the read-only preflight and the final
-        # upsert so a competing refresh cannot change the current run between
-        # the decision and persistence.
+    with (
+        hold_writer_gate(db_path, owner=f"refresh_dcf:{ticker}"),
+        connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn,
+    ):
+        # Hold the cross-process writer gate (and SQLite's own writer lock via
+        # BEGIN IMMEDIATE) across the read-only preflight and the final upsert
+        # so a competing refresh cannot change the current run between the
+        # decision and persistence. The gate is what serializes this window
+        # against the pool driver and the sibling chain steps when the daily
+        # brief worker overlaps tickers; it is NOT the whole-job run lock.
         conn.execute("BEGIN IMMEDIATE")
         row = dataclasses.replace(
             row,

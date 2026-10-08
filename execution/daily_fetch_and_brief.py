@@ -35,12 +35,16 @@ Tickers are independent, so their chains run on a small bounded worker pool
 (`--workers`, default 3): the wall-clock of a rebuild day is no longer the sum
 of every ticker's 4-5 process boots. The chain ORDER inside one ticker is
 unchanged — thesis evaluator → commitments → DCF → artifacts → history sweep —
-and only across-ticker work overlaps. Every parent-process database write stays
-serialized through one writer lock per database file (single-writer
-discipline), so no two writer connections are open on the same file at once;
-each step subprocess keeps its own connection and its own 600s timeout, so a
-hung ticker fails alone. The run summary still lists tickers in candidate
-order.
+and only across-ticker work overlaps. Single-writer discipline holds across
+PROCESSES, not just the driver's threads: this driver and every writer-capable
+step subprocess serialize their actual database write windows through one
+cross-process writer gate per resolved database path
+(``pipeline.db_writer_gate``), so no two writer windows on the same file are
+ever open at once. The resolved database path is handed to each child
+entrypoint explicitly (`--db` / `--db-path`) — no child falls back to deriving
+a checkout-local default. Each step subprocess keeps its own connection and
+its own 600s timeout, so a hung ticker fails alone. The run summary still
+lists tickers in candidate order.
 
 Usage:
     python execution/daily_fetch_and_brief.py                   # dirty tickers due per tier cadence
@@ -50,6 +54,11 @@ Usage:
     python execution/daily_fetch_and_brief.py --ignore-tier     # bypass tier-cadence gate (run on all dirty)
     python execution/daily_fetch_and_brief.py --workers 4       # bounded ticker-overlap pool size (default 3)
     python execution/daily_fetch_and_brief.py --eval-cadence-days 14  # tune evaluation cadence
+
+The database is resolved from the configured authority
+(``EARNINGS_SUMMARY_DB_PATH``; the repo-root default stays for the production
+host whose ``data/`` is the junctioned state root) and never guessed from this
+checkout.
 """
 
 from __future__ import annotations
@@ -73,8 +82,10 @@ except ImportError:  # ``python -m execution.daily_fetch_and_brief``
     from execution._lib import PROJECT_ROOT
 
 import db
+from db_paths import configured_db_path
 from llm_artifact_store import mark_artifacts_dirty_for_fact_change
 from models.companies import schedule_class_for_list_type
+from pipeline.db_writer_gate import hold_writer_gate
 from pipeline.tier_runner import tickers_due_for_refresh
 from provenance.selection import selected_transcripts_relation
 from runtime.python_process import ensure_managed_python_argv, managed_python_prefix
@@ -107,17 +118,18 @@ def _writer_lock_for(db_path: Path) -> threading.Lock:
 
 
 @contextmanager
-def _db_write_slot(db_path: Path) -> Generator[None]:
-    """Serialize parent-process writes onto the database file.
+def _db_write_slot(db_path: Path, *, owner: str) -> Generator[None]:
+    """Serialize the driver's own database writes onto the database file.
 
-    Ticker chains overlap on the pool, so more than one worker can want to mark
-    artifacts dirty, record a skip, or record a completed build at the same
-    time. Every such write runs inside this slot, so at most one writer
-    connection per database file is open at once (single-writer discipline).
-    Step subprocesses keep their own connections — the slot covers only the
-    driver's writes.
+    Two layers: an in-process lock per database path (so only one driver thread
+    ever contends on the file protocol below), then the cross-process writer
+    gate the chain's step subprocesses also take around their write windows.
+    A driver write can therefore never overlap a step subprocess's write
+    window on the same database file (single-writer discipline across
+    processes). Step subprocesses keep their own connections — this slot
+    covers only the driver's writes, inside the gate's bounded wait.
     """
-    with _writer_lock_for(db_path):
+    with _writer_lock_for(db_path), hold_writer_gate(db_path, owner=owner):
         yield
 
 
@@ -127,7 +139,7 @@ def main() -> int:
         sys.stderr.write(f"FATAL: --workers must be >= 1 (got {args.workers})\n")
         return 2
     repo_root = args.repo_root.resolve()
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = configured_db_path(repo_root)
     if not db_path.exists():
         sys.stderr.write(f"FATAL: no DB at {db_path}\n")
         return 2
@@ -136,7 +148,7 @@ def main() -> int:
         conn.row_factory = sqlite3.Row
         all_tickers = _resolve_tickers(conn, args)
 
-    tickers, skipped_by_tier = _apply_tier_filter(all_tickers, repo_root, args)
+    tickers, skipped_by_tier = _apply_tier_filter(all_tickers, repo_root, db_path, args)
 
     if skipped_by_tier:
         print(json.dumps({"event": "tier_skip_summary", "skipped_by_tier": skipped_by_tier}))
@@ -193,7 +205,10 @@ def _refresh_tickers(
 
 
 def _apply_tier_filter(
-    candidate_tickers: list[str], repo_root: Path, args: argparse.Namespace
+    candidate_tickers: list[str],
+    repo_root: Path,
+    db_path: Path,
+    args: argparse.Namespace,
 ) -> tuple[list[str], dict[str, int]]:
     """Intersect the candidate set with the tickers due per the daily-tier cadence.
 
@@ -218,7 +233,6 @@ def _apply_tier_filter(
     # Per-tier breakdown of what we skipped, for cron log readability.
     skipped_by_tier: dict[str, int] = {}
     if skipped:
-        db_path = repo_root / "data" / "portfolio.db"
         with connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY) as conn:
             conn.row_factory = sqlite3.Row
             placeholders = ",".join("?" * len(skipped))
@@ -459,7 +473,7 @@ def _record_skip(db_path: Path, ticker: str, current_hash: str, reason: str) -> 
     """
     now = datetime.now().isoformat(timespec="seconds")
     with (
-        _db_write_slot(db_path),
+        _db_write_slot(db_path, owner=f"daily-brief:skip:{ticker}"),
         connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn,
     ):
         conn.execute(
@@ -508,6 +522,8 @@ def _refresh_one_ticker(
                 str(PROJECT_ROOT / "execution" / "run_thesis_evaluator.py"),
                 "--ticker",
                 ticker,
+                "--db",
+                str(db_path),
             ],
             cwd=repo_root,
         )
@@ -520,6 +536,8 @@ def _refresh_one_ticker(
                 str(PROJECT_ROOT / "execution" / "match_commitments.py"),
                 "--ticker",
                 ticker,
+                "--db",
+                str(db_path),
             ],
             cwd=repo_root,
         )
@@ -534,6 +552,8 @@ def _refresh_one_ticker(
                 ticker,
                 "--repo-root",
                 str(repo_root),
+                "--db",
+                str(db_path),
             ],
             cwd=repo_root,
         )
@@ -541,9 +561,9 @@ def _refresh_one_ticker(
     # Mark fact-dependent LLM artifacts dirty so the build regenerates them
     # rather than hitting a stale cache. Cheap (one UPDATE per ticker) and
     # only matters when --enable-llm is set, but harmless otherwise. It opens
-    # its own writer connection, so it takes the same per-database writer slot
-    # as the driver's other writes.
-    with _db_write_slot(db_path):
+    # its own writer connection inside the same cross-process write slot the
+    # step subprocesses honor, so it stays serialized with them.
+    with _db_write_slot(db_path, owner=f"daily-brief:mark-dirty:{ticker}"):
         flipped = mark_artifacts_dirty_for_fact_change(
             ticker=ticker,
             reason="brief_rebuild",
@@ -568,6 +588,8 @@ def _refresh_one_ticker(
         ticker,
         "--repo-root",
         str(repo_root),
+        "--db-path",
+        str(db_path),
         "--allow-untracked",
         "--renderer",
         args.renderer,
@@ -599,7 +621,7 @@ def _refresh_one_ticker(
         # Re-compute hash AFTER build because match_commitments / refresh_dcf
         # may have written new rows that should be reflected.
         with (
-            _db_write_slot(db_path),
+            _db_write_slot(db_path, owner=f"daily-brief:record:{ticker}"),
             connect_sqlite(
                 db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True
             ) as conn,

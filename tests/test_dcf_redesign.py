@@ -18,7 +18,6 @@ Three layers:
 from __future__ import annotations
 
 import dataclasses
-import hashlib
 import json
 import os
 import shutil
@@ -37,7 +36,7 @@ from openpyxl.cell.cell import Cell
 
 from dcf import redesign
 from sources.dcf_statements import DcfStatementInputs
-from tests.fixtures.dcf_statements import seed_dcf_statements
+from tests.fixtures.dcf_fmp_payloads import write_canonical_statement_facts, write_fmp
 from tests.kpi_semantic_support import admit_all_kpi_facts
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -381,22 +380,16 @@ def _write_canonical_statement_facts(
     canonical_bindings: bool = True,
 ) -> None:
     assert _DCF_SCHEMA_TEMPLATE is not None
-    statements = {"income": income, "balance": balance, "cash_flow": cashflow}
-    digest = hashlib.sha256(
-        json.dumps([ticker, currency, canonical_bindings, statements], sort_keys=True).encode()
-    ).hexdigest()
-    cached = _DCF_SCHEMA_TEMPLATE.parent / f"{digest}.sqlite"
-    if not cached.exists():
-        shutil.copyfile(_DCF_SCHEMA_TEMPLATE, cached)
-        with sqlite3.connect(cached) as conn:
-            seed_dcf_statements(
-                conn,
-                ticker,
-                {"income": income, "balance": balance, "cash_flow": cashflow},
-                currency=currency,
-                canonical_bindings=canonical_bindings,
-            )
-    shutil.copyfile(cached, repo / "data" / "portfolio.db")
+    write_canonical_statement_facts(
+        _DCF_SCHEMA_TEMPLATE,
+        repo,
+        ticker,
+        income,
+        balance,
+        cashflow,
+        currency=currency,
+        canonical_bindings=canonical_bindings,
+    )
 
 
 def _write_fmp(
@@ -407,109 +400,15 @@ def _write_fmp(
     segments: bool = False,
     canonical_bindings: bool = True,
 ) -> None:
-    """Minimal FMP fixture: 4 full fiscal years of growing quarterlies + a profile
-    + forward estimates. Optionally a two-line product-segment file."""
-    fmp = repo / "data" / "historical" / "fmp"
-    fmp.mkdir(parents=True, exist_ok=True)
-    inc: list[dict[str, object]] = []
-    bal: list[dict[str, object]] = []
-    cf: list[dict[str, object]] = []
-    pseg: list[dict[str, object]] = []
-    rev = 250.0
-    for year in (2022, 2023, 2024, 2025):
-        for q in ("Q1", "Q2", "Q3", "Q4"):
-            rev *= 1.03
-            inc.append(
-                {
-                    "fiscalYear": year,
-                    "period": q,
-                    "reportedCurrency": currency,
-                    "date": f"{year}-03-31",
-                    "revenue": rev * 1e6,
-                    "costOfRevenue": rev * 0.50 * 1e6,
-                    "grossProfit": rev * 0.50 * 1e6,
-                    "researchAndDevelopmentExpenses": rev * 0.12 * 1e6,
-                    "sellingGeneralAndAdministrativeExpenses": rev * 0.15 * 1e6,
-                    "operatingExpenses": rev * 0.40 * 1e6,
-                    "operatingIncome": rev * 0.12 * 1e6,
-                    "netIncome": rev * 0.09 * 1e6,
-                    "weightedAverageShsOutDil": 100 * 1e6,
-                }
-            )
-            bal.append(
-                {
-                    "fiscalYear": year,
-                    "period": q,
-                    "reportedCurrency": currency,
-                    "date": f"{year}-03-31",
-                    "cashAndShortTermInvestments": rev * 0.30 * 1e6,
-                    "totalCurrentAssets": rev * 0.60 * 1e6,
-                    "propertyPlantEquipmentNet": rev * 0.50 * 1e6,
-                    "totalAssets": rev * 1.50 * 1e6,
-                    "totalCurrentLiabilities": rev * 0.30 * 1e6,
-                    "longTermDebt": rev * 0.20 * 1e6,
-                    "totalDebt": rev * 0.20 * 1e6,
-                    "financeLeaseLiability": 0,
-                    "totalStockholdersEquity": rev * 0.80 * 1e6,
-                }
-            )
-            cf.append(
-                {
-                    "fiscalYear": year,
-                    "period": q,
-                    "depreciationAndAmortization": rev * 0.08 * 1e6,
-                    "stockBasedCompensation": rev * 0.05 * 1e6,
-                    "changeInWorkingCapital": -rev * 0.01 * 1e6,
-                    "operatingCashFlow": rev * 0.15 * 1e6,
-                    "capitalExpenditure": -rev * 0.10 * 1e6,
-                    "freeCashFlow": rev * 0.05 * 1e6,
-                }
-            )
-            if segments:
-                pseg.append(
-                    {
-                        "fiscalYear": year,
-                        "period": q,
-                        "data": {"Cloud": rev * 0.6 * 1e6, "Devices": rev * 0.4 * 1e6},
-                    }
-                )
-    (fmp / f"{ticker}_income_statement_quarterly.json").write_text(
-        json.dumps(inc), encoding="utf-8"
-    )
-    (fmp / f"{ticker}_balance_sheet_quarterly.json").write_text(json.dumps(bal), encoding="utf-8")
-    (fmp / f"{ticker}_cash_flow_quarterly.json").write_text(json.dumps(cf), encoding="utf-8")
-    if segments:
-        (fmp / f"{ticker}_product_segments_quarterly.json").write_text(
-            json.dumps(pseg), encoding="utf-8"
-        )
-    (fmp / f"{ticker}_profile.json").write_text(
-        json.dumps(
-            [{"companyName": f"{ticker} Co", "beta": 1.2, "price": 50.0, "currency": "USD"}]
-        ),
-        encoding="utf-8",
-    )
-    (fmp / f"{ticker}_geo_segments_annual.json").write_text(
-        json.dumps([{"fiscalYear": 2025, "period": "FY", "data": {"United States": rev}}]),
-        encoding="utf-8",
-    )
-    # Consensus sits comfortably ABOVE the last-FY actual (~1.6bn) and grows, the
-    # realistic shape — so the model's seeded near-term growth is a smooth
-    # continuation and the value-of-record tracks the builder's mirror tightly.
-    est = [
-        {
-            "date": f"{y}-12-31",
-            "revenueAvg": 1750 * (1.08 ** (y - 2026)) * 1e6,
-            "netIncomeAvg": 210 * (1.08 ** (y - 2026)) * 1e6,
-            "ebitdaAvg": 320 * (1.08 ** (y - 2026)) * 1e6,
-            "ebitAvg": 260 * (1.08 ** (y - 2026)) * 1e6,
-            "sgaExpenseAvg": 240 * 1e6,
-            "epsAvg": 2.1 * (1.08 ** (y - 2026)),
-        }
-        for y in range(2026, 2031)
-    ]
-    (fmp / f"{ticker}_analyst_estimates_annual.json").write_text(json.dumps(est), encoding="utf-8")
-    _write_canonical_statement_facts(
-        repo, ticker, inc, bal, cf, currency=currency, canonical_bindings=canonical_bindings
+    """Delegate to the shared payload writer (tests/fixtures/dcf_fmp_payloads.py)."""
+    assert _DCF_SCHEMA_TEMPLATE is not None
+    write_fmp(
+        _DCF_SCHEMA_TEMPLATE,
+        repo,
+        ticker,
+        currency=currency,
+        segments=segments,
+        canonical_bindings=canonical_bindings,
     )
 
 

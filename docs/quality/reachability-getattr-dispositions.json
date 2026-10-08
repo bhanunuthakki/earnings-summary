@@ -3,8 +3,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only fields declared in the checked-in _SOTP_SPEC dashboard spec.",
-      "fingerprint": "a82d23aa835fd2ad8052288c1cb2938ea93769dacb997e8feb209325a1ef4987",
-      "line": 428,
+      "fingerprint": "2b0a5eb90c7aa1eece3daac832704f0bf992809c264b1616dd150c0cfe0ed8e1",
+      "line": 443,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -13,8 +13,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Sync writes only _SOTP_SPEC fields via getattr on the Sotp dataclass.",
-      "fingerprint": "eb91d94b5439a7d0dc6519c350fed257c4ef9433806034129f6d8919b9fdc9a1",
-      "line": 591,
+      "fingerprint": "b7c7baffc3abea11c8b6006be7cb837045e0089e24e529bcec9bb514a4657a80",
+      "line": 606,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -23,8 +23,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Sync reads only _SOTP_SPEC fields via getattr on the Sotp dataclass.",
-      "fingerprint": "ba5ae6ccd19b909e2e804b1ba4cd169562927e6772122e3f1674fc2a44fa9ee4",
-      "line": 593,
+      "fingerprint": "42b0f0806ff5bf9852665728d9241cb90866670cc4e6901723bc9ff6d827c8f0",
+      "line": 608,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -33,8 +33,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Dashboard build reads only _SOTP_SPEC fields via getattr.",
-      "fingerprint": "439013111792c73827bd00d06031ea25da182a270e8d1e77b95b85a4ae412c2a",
-      "line": 717,
+      "fingerprint": "bc7f689be89b7e0f4e2f2d763a17a5a5d224d06153dfa5110717d28402001236",
+      "line": 737,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -43,8 +43,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-growth scenario attribute tuple.",
-      "fingerprint": "79bd1cf7d3f4f553e98c50f05ed23fb27d9edf82f5412d7b135c7126a37eac68",
-      "line": 299,
+      "fingerprint": "578c87501b26ab365ab9e62598a2ae2fafa85d0e9594a0330c94ac01d9f0d42e",
+      "line": 300,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_near",
@@ -55,8 +55,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-growth scenario attribute tuple.",
-      "fingerprint": "f3ad888b8348eebdcf911fb470361342a7fe799eafd51a8734706295ce3db547",
-      "line": 301,
+      "fingerprint": "82f58f898cd79bf4bb398226749732e5fbc40e3f5e9944fb87b8462b495c3f27",
+      "line": 302,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_term",
@@ -67,8 +67,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-margin scenario attribute tuple.",
-      "fingerprint": "eb1a16ea0bf0c4f4bdffbcf1cffc032a95e767b0666895661ef9be207c2c189f",
-      "line": 303,
+      "fingerprint": "b8fefab87249d283a496c7242115a5374d00f81f4d24c638605c88315682a9c1",
+      "line": 304,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_near",
@@ -79,8 +79,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-margin scenario attribute tuple.",
-      "fingerprint": "48f5f648c1c8d5f31d7afeb1b395acd5a70660c6242963400719ab377e4eb8cb",
-      "line": 305,
+      "fingerprint": "c8b51e5422ce6ac4908c0d2774021482b8b0f9713580a93a1d58eb66854388c4",
+      "line": 306,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_term",
@@ -701,7 +701,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "37a04842ff94ed44c649a49cab129f20dad16fcb936e984903e3daa9fcf70ada",
+      "source_sha256": "11f4fca1b8ae28153a5254a8ea32680ea76ab225cefc6ff920646f2e7eed6f7f",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

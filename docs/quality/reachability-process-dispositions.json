@@ -85,8 +85,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_ticker_specific_extractors runs the _TICKER_SPECIFIC_EXTRACTORS fixed script via managed_python_prefix.",
-      "fingerprint": "09053a3981106ed14c5f9719aa492c96548389e26dde4e2fa92ea1c17967495e",
-      "line": 119,
+      "fingerprint": "0489584797cd9e6101344d68369d67138d7876e17456965e3558206fb55bafc0",
+      "line": 121,
       "path": "execution/build_artifacts.py",
       "targets": [
         "execution/extract_nvo_patent_timeline_state.py"
@@ -105,8 +105,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_step executes only the five fixed managed-Python stage scripts.",
-      "fingerprint": "e2557f5f509a5f07c8004189248c6959a4958c2d44e920ff2539b55c90d8b59f",
-      "line": 621,
+      "fingerprint": "8ef0be2a23df8111b2cbe314355fb36a150bfa9e2cd165b460dc9f7e5e42d4d5",
+      "line": 643,
       "path": "execution/daily_fetch_and_brief.py",
       "targets": [
         "execution/run_thesis_evaluator.py",
@@ -330,8 +330,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_bank runs the fixed _BANK_BUILDER via managed_python_prefix.",
-      "fingerprint": "9c08e7cd7ae19c3810333e4128cb6f3823879cffd856d1218efbc26a2cb2b9ad",
-      "line": 729,
+      "fingerprint": "47b82fc4f70227422349f6ad3a71d1d4b3792699b29570870283b581194dddd0",
+      "line": 746,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_bank_dcf.py"
@@ -340,8 +340,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_holdco runs the fixed _HOLDCO_BUILDER via managed_python_prefix.",
-      "fingerprint": "021d703aa04133d3fc4613ae8702710be35bb2d6532215e52b66c8ef4e3d8cb2",
-      "line": 766,
+      "fingerprint": "4a9958823d4b0cb8de7419f51cf09f0cd2f4f967ab594acdf259a0037216f7e5",
+      "line": 784,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_holdco_sotp.py"
@@ -350,8 +350,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_fintech_sotp runs the fixed _FINTECH_BUILDER via managed_python_prefix.",
-      "fingerprint": "2944eb76b5e9a9d188cd12267dc0863c837d2be5cbd1115076fb2516fb501a59",
-      "line": 811,
+      "fingerprint": "63fcb6606c213576f2c2b15ecd1d54861ae30d6bb2a8bdc44f457694f891385e",
+      "line": 830,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_fintech_sotp.py"
@@ -360,8 +360,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_platform runs the fixed _PLATFORM_BUILDER via managed_python_prefix.",
-      "fingerprint": "5c0cae3712f494bc3420c69601fcb9ac05a67556902c208f7d141e85159504a3",
-      "line": 856,
+      "fingerprint": "dea22f7d869770d66cb47ff364a4db20faa045375a6e5f27d4f6f129412397e7",
+      "line": 876,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_nu_platform_dcf.py"
@@ -370,8 +370,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_refresh_meli_sotp runs the fixed _MELI_SOTP_BUILDER via managed_python_prefix.",
-      "fingerprint": "6182f5a600c3de18cf50c1191d00cf11fad25c58f763627b3ac1f7efe4b1e1bf",
-      "line": 923,
+      "fingerprint": "877c9fdbcef836e54e3672e69f1f539d75c73852d4165717f98a1a6a68feea7d",
+      "line": 943,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_meli_platform_dcf.py"
@@ -380,8 +380,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_builder runs the fixed _BUILDER_SCRIPT via managed_python_prefix.",
-      "fingerprint": "639d5cd0ff8bce5506eec3140e7b5004f961e6d666a70a4a04dbc82d37ca294a",
-      "line": 972,
+      "fingerprint": "3bc7d84425fe63180396be3dac09bc1a68679d236f162ee7c8b07681ab3d730e",
+      "line": 992,
       "path": "execution/refresh_dcf.py",
       "targets": [
         "execution/build_redesigned_dcf.py"
@@ -912,6 +912,16 @@
       ]
     },
     {
+      "disposition": "internal_python_target",
+      "evidence": "REFRESH_DCF is the checked-in execution/refresh_dcf.py path run via managed_python_prefix.",
+      "fingerprint": "066a4411d0d567c74bbef10c4d884d8229c294b9ddfed23242bacb5bcaebb040",
+      "line": 342,
+      "path": "tests/test_daily_fetch_brief_cross_process_writers.py",
+      "targets": [
+        "execution/refresh_dcf.py"
+      ]
+    },
+    {
       "disposition": "closed_command_set",
       "evidence": "Windows-only fixture resolves cmd.exe, copies the exact cron/run_fetch_fmp_earnings_calendar.bat bytes into pytest tmp_path/cron, and invokes cmd /d /c on that copy. The copy still launches PowerShell only to read the UTC timestamp and writes temporary logs. Both calls to run_python.bat resolve to the fixture-created local stub, which records the job label and returns the parameterized exit code; no production task, provider, database, or LLM entrypoint is executed. Reviewed first/second/expected exit cases are (0,0,0), (1,0,1), (0,2,2), (1,2,1), with both stub calls required in order. The source wrapper remains an operational root with its own scanned child edges; this disposition closes only the fixed test-local command invocation.",
       "fingerprint": "893ba2158266ef9b8fe942c48f4997433b184f2f8ebc72e7f085819dbbcb59be",
@@ -945,7 +955,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "37a04842ff94ed44c649a49cab129f20dad16fcb936e984903e3daa9fcf70ada",
+      "source_sha256": "11f4fca1b8ae28153a5254a8ea32680ea76ab225cefc6ff920646f2e7eed6f7f",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

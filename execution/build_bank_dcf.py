@@ -28,7 +28,6 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import sys
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from pathlib import Path
@@ -36,38 +35,49 @@ from typing import Any, cast
 
 import openpyxl
 from openpyxl.styles import Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
-T = os.environ.get("DCF_TICKER", "NU")
-DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:  # ``python -m execution.build_bank_dcf``
+    from execution._lib import PROJECT_ROOT
 
-FMP = REPO / "data" / "historical" / "fmp"
-
-sys.path.insert(0, str(REPO / "src"))
-
-
-from dcf.artifact_promotion import (  # noqa: E402
+from db_paths import configured_db_path
+from dcf.artifact_promotion import (
     ArtifactPromotion,
     live_path_from_env,
     promotion_from_env,
 )
-from dcf.provenance import build_file_provenance, schema_supports_provenance  # noqa: E402
-from dcf.specialized_price import (  # noqa: E402
+from dcf.provenance import build_file_provenance, schema_supports_provenance
+from dcf.specialized_price import (
     SpecializedPriceObservation,
     price_seed_source_files,
     resolve_specialized_price,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from pipeline.db_writer_gate import hold_writer_gate
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 try:  # persistence is best-effort — the workbook builds without a DB
-    from dcf import persist as persist_mod
+    from dcf import persist as _persist_module
 except ImportError:  # pragma: no cover
-    persist_mod = None  # type: ignore[assignment]
+    persist_mod = None
+else:
+    persist_mod = _persist_module
 try:  # global macro assumptions — best-effort; degrades to in-code seed defaults
-    from dcf import global_assumptions as global_dcf
+    from dcf import global_assumptions as _global_assumptions_module
 except ImportError:  # pragma: no cover
-    global_dcf = None  # type: ignore[assignment]
+    global_dcf = None
+else:
+    global_dcf = _global_assumptions_module
+
+# Data repo (may differ from the executing checkout): REPO is the DATA root;
+# code always imports from the executing checkout via ``_lib``.
+REPO = Path(os.environ.get("DCF_REPO_ROOT") or PROJECT_ROOT)
+T = os.environ.get("DCF_TICKER", "NU")
+DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
+
+FMP = REPO / "data" / "historical" / "fmp"
 
 # ---- styling (mirrors the redesign Color Code: yellow=input, blue=actual) ----
 YELLOW = PatternFill("solid", fgColor="FFF2CC")
@@ -95,9 +105,9 @@ def _rows(x: Any) -> list[dict[str, Any]]:
     if isinstance(x, dict):
         for k in ("historical", "financials", "data"):
             if isinstance(x.get(k), list):
-                return x[k]
-        return [x]
-    return x
+                return cast("list[dict[str, Any]]", x[k])
+        return [cast("dict[str, Any]", x)]
+    return cast("list[dict[str, Any]]", x)
 
 
 @dataclass
@@ -134,9 +144,11 @@ def load_actuals(ticker: str, s: Assum, override: dict[str, Any] | None = None) 
     ov = override or {}
     inc = _rows(_load(f"{ticker}_income_statement_annual.json"))
     bal = _rows(_load(f"{ticker}_balance_sheet_annual.json"))
-    prof = _load(f"{ticker}_profile.json")
-    if isinstance(prof, list):
-        prof = prof[0] if prof else {}
+    raw_profile: object = _load(f"{ticker}_profile.json")
+    if isinstance(raw_profile, list):
+        profiles = cast("list[object]", raw_profile)
+        raw_profile = profiles[0] if profiles else {}
+    prof = cast("dict[str, Any]", raw_profile) if isinstance(raw_profile, dict) else {}
     i0, b0, b1 = inc[0], bal[0], bal[1]
     m = 1e6
 
@@ -158,7 +170,7 @@ def load_actuals(ticker: str, s: Assum, override: dict[str, Any] | None = None) 
     tax_paid = i0["incomeTaxExpense"] / m
     tax_rate = pick("tax_rate", (tax_paid / pretax) if pretax else 0.25)
     raw_override_price = ov.get("price")
-    raw_profile_price = prof.get("price") if isinstance(prof, dict) else None
+    raw_profile_price = prof.get("price")
     if isinstance(raw_override_price, (int, float)) and not isinstance(raw_override_price, bool):
         price_seed_source = "owner_assumptions"
         price_seed_path = f"data/bank_assumptions/{ticker}.json"
@@ -204,7 +216,7 @@ def load_kpis(ticker: str) -> dict[str, float]:
     (the same value the break rule evaluates) rather than a stray interim print.
     Quarterly KPIs keep latest-by-period_end. Falls back to the period_end rule
     when the cadence column is absent (pre-0072 DB)."""
-    db = REPO / "data" / "portfolio.db"
+    db = configured_db_path(REPO)
     if not db.exists():
         return {}
     conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
@@ -295,7 +307,9 @@ class Assum:
     # to the traded ADR price.
     fx_to_usd: float = 1.0
     adr_ratio: float = 1.0
-    global_assumption_source: dict[str, object] = field(default_factory=dict, repr=False)
+    global_assumption_source: dict[str, object] = field(
+        default_factory=dict[str, object], repr=False
+    )
 
     @property
     def ke(self) -> float:
@@ -327,7 +341,7 @@ class MirrorRow:
 
 @dataclass
 class Mirror:
-    rows: list[MirrorRow] = field(default_factory=list)
+    rows: list[MirrorRow] = field(default_factory=list[MirrorRow])
     value: float = 0.0
     vps: float = 0.0  # reporting-currency value per ordinary share
     vps_usd: float = 0.0  # USD value per traded unit (ADR)
@@ -341,7 +355,7 @@ def mirror(a: Actuals, s: Assum) -> Mirror:
     ke, n = s.ke, s.years
     book_prev, ea_prev, eq_prev = a.book, a.ea, a.equity
     reqcap_prev = s.cap_ratio * a.book
-    avg_eq0 = (a.equity + a.equity_prior) / 2  # noqa: F841 (Y0 ref only)
+    _avg_eq0 = (a.equity + a.equity_prior) / 2  # Y0 ref only
     m = Mirror()
     for t in range(1, n + 1):
         g = _interp(s.g_near, s.g_term, t, n)
@@ -476,7 +490,8 @@ def render_generic_guardrails(
     for key in ("break_rules", "business_model_rules"):
         rr = holdings.get(key)
         if isinstance(rr, list):
-            rules.extend(r for r in rr if isinstance(r, dict))
+            entries = cast("list[object]", rr)
+            rules.extend(cast("dict[str, Any]", r) for r in entries if isinstance(r, dict))
     if not rules:
         return
     _hdr(dash, "D2", "GUARDRAILS — thesis break rules vs latest KPI")
@@ -612,6 +627,8 @@ def build(
 ) -> None:
     wb = openpyxl.Workbook()
     dash = wb.active
+    if not isinstance(dash, Worksheet):
+        raise RuntimeError(f"{T} workbook requires an active worksheet")
     dash.title = "Dashboard"
     fin = wb.create_sheet("Financials")
     mod = wb.create_sheet("Model")
@@ -731,7 +748,7 @@ def build(
     last_col = col0 + n  # column for Y{n}
 
     def cl(idx: int) -> str:
-        return openpyxl.utils.get_column_letter(idx)
+        return get_column_letter(idx)
 
     # year index row
     mod.cell(row=4, column=2, value="Year").font = SUB_FONT
@@ -924,8 +941,8 @@ def load_assumptions(ticker: str) -> tuple[Assum, dict[str, Any]]:
     # wins for any field the name pins explicitly (HDB pins all three; NU pins
     # erp/tax to preserve its pre-global values). Degrades to the Assum literals
     # when the store is unavailable, so the workbook still builds bare.
-    global_loaded = (
-        global_dcf.load_with_provenance(db_path=REPO / "data" / "portfolio.db")
+    global_loaded: Any = (
+        global_dcf.load_with_provenance(db_path=configured_db_path(REPO))
         if global_dcf is not None
         else None
     )
@@ -933,7 +950,7 @@ def load_assumptions(ticker: str) -> tuple[Assum, dict[str, Any]]:
         s.rf = global_loaded.assumptions.risk_free_rate
         s.erp = global_loaded.assumptions.equity_risk_premium
         s.tax = global_loaded.assumptions.tax_rate
-        s.global_assumption_source = dict(global_loaded.source_record)
+        s.global_assumption_source = cast("dict[str, object]", dict(global_loaded.source_record))
     else:
         s.global_assumption_source = {
             "role": "global_dcf_assumptions",
@@ -974,7 +991,7 @@ def persist_dcf_run(
 ) -> bool:
     """Best-effort upsert into dcf_runs so the brief's valuation panel reads the
     bank model's value/share. No-op without the DB / persist module."""
-    db = REPO / "data" / "portfolio.db"
+    db = configured_db_path(REPO)
     if persist_mod is None or not db.exists():
         return False
     # Persist in USD so the brief's over/under compares like-for-like against the
@@ -1045,7 +1062,13 @@ def persist_dcf_run(
         notes=f"workbook={live_workbook.name} (bank credit model)",
         provenance=provenance,
     )
-    with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
+    with (
+        hold_writer_gate(db, owner=f"build_bank_dcf:{T}"),
+        connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn,
+    ):
+        # The cross-process writer gate serializes this upsert against the
+        # daily brief driver and its sibling chain steps; it is NOT the
+        # whole-job run lock.
         if not schema_supports_provenance(conn):
             row = replace(row, provenance=None)
         if artifact_promotion is None:

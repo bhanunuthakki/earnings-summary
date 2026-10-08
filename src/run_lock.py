@@ -74,6 +74,16 @@ def lock_path_for(db_path: str | os.PathLike[str]) -> Path:
     return p.with_name(p.name + LOCK_SUFFIX)
 
 
+def pid_is_alive(pid: int) -> bool:
+    """Public liveness probe shared with sibling lock modules.
+
+    Same semantics as the run lock's own stale-holder check: a negative or
+    zero pid is dead; on Windows liveness is probed via OpenProcess (never
+    ``os.kill(pid, 0)``, which terminates there); elsewhere signal-0.
+    """
+    return _pid_alive(pid)
+
+
 def _pid_alive(pid: int) -> bool:
     if pid <= 0:
         return False
