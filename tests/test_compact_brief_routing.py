@@ -85,6 +85,9 @@ assert.equal(previous.workOsBriefReader.sectionId, undefined, 'Mutated existing 
 def test_exact_lookup_rejects_wrong_identity_and_retry_retains_edition_and_section(
     wrong_identity: str,
 ) -> None:
+    disposer = "  let workOsReaderDcf = null;" + _runtime_block(
+        "  let workOsReaderDcf = null;", "  function workOsRestoreRailPreference"
+    )
     lookup = "  window.openWorkOsBriefReader = async function" + _runtime_block(
         "  window.openWorkOsBriefReader = async function", "\n  window.openFullBriefCanvas"
     )
@@ -117,11 +120,16 @@ async function workOsFetch(url,options){
   return new Promise((resolve,reject) => pending.push({url,options,resolve,reject}));
 }
 """
+        + disposer
         + lookup
         + r"""
 (async()=>{
+  let disposed = 0;
+  workOsReaderDcf = {destroy(){disposed++;}};
   const options = Object.freeze({fromHistory:true,artifactId:'report_NU_fixed',sectionId:'sources',factRef:'fact-exact'});
   const initial = window.openWorkOsBriefReader('NU', options);
+  assert.equal(disposed, 1, 'Exact lookup retained the previous DCF editor');
+  assert.equal(workOsReaderDcf, null);
   assert.equal(pending[0].url, '/api/work-os/briefs/report_NU_fixed');
   pending[0].resolve(new Response(JSON.stringify("""
         + wrong_identity
@@ -130,7 +138,10 @@ async function workOsFetch(url,options){
   assert.equal(accepted.length, 0, 'Admitted an artifact from another company or edition');
   assert.match(body.innerHTML, /data-work-os-brief-lookup-retry/);
   assert.equal(typeof retry, 'function');
+  workOsReaderDcf = {destroy(){disposed++;}};
   retry();
+  assert.equal(disposed, 2, 'Retry retained the previous DCF editor');
+  assert.equal(workOsReaderDcf, null);
   await new Promise(setImmediate);
   assert.equal(pending[1].url, '/api/work-os/briefs/report_NU_fixed', 'Retry fell back to latest edition');
   assert.equal(pending[1].options.signal.aborted, false);

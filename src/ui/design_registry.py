@@ -1098,7 +1098,8 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/source_viewers.py": "2fa6149b5c3e81709c2fb6e3199b236c32b5ea951ef5a328ee414c6c80bcdab5",  # pragma: allowlist secret
         "pipeline/work_os_copilot.py": "46a2dc3469b3e57e8365049f250e60da96ba9ed8780043be11e8c4044eb1bf1d",  # pragma: allowlist secret
         "pipeline/provenance_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
-        "pipeline/work_os_shell.py": "7449e57db7d43c7cf29d0c76f132667ff189f1170be72fe73aa2a350c56c346e",  # pragma: allowlist secret
+        # The shared reader mounts the current DCF owner; persisted scripts stay inert.
+        "pipeline/work_os_shell.py": "9b6cd0bf67b15f98683ade459c5051154ca92c85aeaf49d6ab1df5b384b1d622",  # pragma: allowlist secret
         "pipeline/work_os_runtime.js": "9f130216532bb0e7da89aec20d6a804eacb74799e5d74b4f2ce01ed03216ba83",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "dc8c2615add4455efea1095cb501f00b0fcbdcc29e0171a8abda4ea234c6a14a",  # pragma: allowlist secret
         # Growth suffixes compose the existing source chip; no new style writer.

@@ -11,11 +11,110 @@ import pytest
 from report.renderers.workspace_dcf import JS
 
 
+def test_shared_reader_scopes_dcf_controls_and_cleans_up_without_canceling_save() -> None:
+    node = shutil.which("node")
+    assert node is not None, "Node is required for shared-reader DCF behavior evidence"
+    harness = r"""
+const assert=require('node:assert/strict');
+require('node:events').setMaxListeners(0);
+const requests=[];const timers=new Map();let timerId=0;
+function element(){
+  const e={hidden:false,isConnected:true,value:'',dataset:{},children:[],events:new Map(),attributes:{},
+    classList:{add(){},remove(){}},appendChild(child){this.children.push(child);},
+    addEventListener(name,callback,options){
+      if(!this.events.has(name))this.events.set(name,new Set());this.events.get(name).add(callback);
+      if(options && options.signal)options.signal.addEventListener('abort',()=>this.events.get(name).delete(callback));
+    },
+    fire(name,event={}){for(const callback of this.events.get(name)||[])callback(event);},
+    setAttribute(key,value){this.attributes[key]=value;},getAttribute(key){return this.attributes[key]||null;},
+    scrollIntoView(){}};
+  let text='';Object.defineProperty(e,'textContent',{get(){return text;},set(v){text=v;this.children=[];}});
+  return e;
+}
+const names=['toggle','body','status','controls','scenarios','heatmap','reset','save','retry'];
+function editor(prefix){
+  const root=element();root.attributes['data-dcf-ticker']='WRONG';
+  const controls=new Map(names.map(name=>['dcf-edit-'+name,element()]));
+  for(const [id,control] of controls)control.attributes.id=prefix+id;
+  controls.get('dcf-edit-body').hidden=true;
+  root.querySelector=selector=>{
+    const exact=selector.match(/id="([^"]+)"/)[1];
+    const suffix=selector.match(/id\$="([^"]+)"/)[1];
+    return [...controls.values()].find(control=>control.attributes.id===exact || control.attributes.id.endsWith(suffix))||null;
+  };
+  root.querySelectorAll=()=>[];
+  root.attributes.id=prefix+'dcf-edit';
+  return {root,controls,scope:element()};
+}
+global.document={getElementById(){return null;},createElement:element};
+global.window={location:{protocol:'https:',origin:'https://fixture.ts.net'},addEventListener(){}};
+global.CCAction={busy(){},release(){},receipt(){}};
+global.setTimeout=(callback,ms)=>{const id=++timerId;timers.set(id,{callback,ms});return id;};
+global.clearTimeout=id=>timers.delete(id);
+global.fetch=(url,options)=>new Promise((resolve,reject)=>{
+  requests.push({url,options,resolve,reject});
+  if(options.signal)options.signal.addEventListener('abort',()=>reject(new Error('aborted')));
+});
+const base={segments:['Synthetic'],base_revenue_by_segment:{Synthetic:1000},
+  near_growth_by_segment:{Synthetic:0.1},terminal_growth_by_segment:{Synthetic:0.03},
+  wacc:0.11,beta:1.2,risk_free_rate:0.04,equity_risk_premium:0.05,country_risk_premium:0.02,
+  cost_of_debt:0.05,tax_rate:0.24,near_op_margin:0.2,terminal_op_margin:0.25,
+  terminal_method:'Exit multiple',exit_multiple:12,terminal_growth_g:0.03};
+eval(SCRIPT);
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
+const latest=()=>requests[requests.length-1];
+async function respond(request,payload){request.resolve({ok:true,status:200,json:()=>Promise.resolve(payload)});await tick();}
+const preview={wacc:0.11,current_price:50,fair_value_per_share_usd:70,scenarios:{base:70,bull:80,bear:60},sensitivity:null};
+(async()=>{
+  assert.equal(typeof window.initDcfEditor,'function','trusted current renderer exposes its initializer');
+  const first=editor('reader-0123456789ab-');
+  const options={scope:first.scope,ticker:'TEST',mutationHeaders:()=>({'Content-Type':'application/json','X-Fixture':'present'})};
+  const mounted=window.initDcfEditor(first.root,options);
+  assert.equal(window.initDcfEditor(first.root,options),mounted,'one mount owns each editor');
+  first.controls.get('dcf-edit-toggle').fire('click');
+  assert.equal(first.controls.get('dcf-edit-body').hidden,false,'namespaced toggle opens');
+  const load=latest();assert.equal(load.url,'https://fixture.ts.net/api/dcf/inputs/TEST');
+  assert.equal(load.options.headers['X-Fixture'],'present');
+  mounted.destroy();assert.equal(load.options.signal.aborted,true,'reader close aborts its input read');
+  await respond(load,{inputs:base});
+  assert.equal(requests.length,1,'late load cannot start preview');
+  first.controls.get('dcf-edit-toggle').fire('click');assert.equal(requests.length,1,'disposed listener removed');
+  const second=editor('reader-abcdef012345-');
+  const secondMount=window.initDcfEditor(second.root,{scope:second.scope,ticker:'NEXT'});
+  second.controls.get('dcf-edit-toggle').fire('click');await respond(latest(),{inputs:base});
+  const pendingPreview=latest();assert.match(pendingPreview.url,/\/recompute$/);
+  second.controls.get('dcf-edit-save').fire('click');const save=latest();
+  assert.equal(pendingPreview.options.signal.aborted,true,'save cancels only pure preview');
+  assert.equal(save.options.signal,undefined,'durable save is never canceled');
+  assert.equal(JSON.parse(save.options.body).ticker,'NEXT','trusted artifact owns the ticker');
+  secondMount.destroy();assert.equal(save.options.signal,undefined);
+  await respond(save,{saved:true,inputs:base,...preview});
+  assert.doesNotMatch(second.controls.get('dcf-edit-status').textContent,/Saved to model/,'disposed editor ignores late save presentation');
+  const third=editor('reader-111111111111-');
+  const thirdMount=window.initDcfEditor(third.root,{scope:third.scope,ticker:'THIRD'});
+  third.controls.get('dcf-edit-toggle').fire('click');await respond(latest(),{inputs:base});await respond(latest(),preview);
+  const inject=element();inject.attributes={'data-dcf-inject':'beta','data-dcf-value':'1.8','data-dcf-label':'Synthetic beta'};
+  third.scope.fire('click',{target:{closest(){return inject;}},preventDefault(){}});
+  assert.ok([...timers.values()].some(timer=>timer.ms===280),'scoped injection queues preview');
+  thirdMount.destroy();
+  assert.equal([...timers.values()].some(timer=>timer.ms===280),false,'reader close clears debounce');
+  assert.equal(timers.size,0,'reader close also clears presentation timers');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+""".replace("SCRIPT", json.dumps(JS))
+    result = subprocess.run(
+        [node, "-"], input=harness, text=True, capture_output=True, check=False, timeout=10
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_dcf_read_deadline_covers_body_and_cancellation_preserves_retry() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is required for standalone DCF request lifecycle evidence")
-    script = JS.replace("})();", "globalThis.loadDcf=load; globalThis.cancelDcf=cancelLoad;})();")
+    script = JS.replace(
+        "var handle = {destroy: destroy, setDriver: setDriver};",
+        "globalThis.loadDcf=load; globalThis.cancelDcf=cancelLoad; var handle = {destroy: destroy, setDriver: setDriver};",
+    )
     harness = r"""
 const assert=require('node:assert/strict');
 const timers=new Map(); let nextTimer=0; const reads=[]; const nodes=new Map();
@@ -25,6 +124,7 @@ for (const id of ['dcf-edit','dcf-edit-toggle','dcf-edit-body','dcf-edit-status'
   'dcf-edit-scenarios','dcf-edit-heatmap','dcf-edit-reset','dcf-edit-save','dcf-edit-retry']) nodes.set(id,node());
 nodes.set('workspace-boot',{textContent:JSON.stringify({server_url:'http://fixture-authority.invalid:7421',ticker:'TEST'})});
 global.document={getElementById(id){return nodes.get(id);},addEventListener(){}};
+nodes.get('dcf-edit').querySelector=selector=>nodes.get(selector.match(/id="([^"]+)"/)[1]);
 global.window={location:{protocol:'file:'},addEventListener(){}};
 global.setTimeout=(callback,ms)=>{const id=++nextTimer;timers.set(id,{callback,ms});return id;};
 global.clearTimeout=id=>timers.delete(id);
@@ -70,7 +170,10 @@ def test_dcf_edit_intent_and_latest_preview_save_lifecycle() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is required for DCF editor interaction evidence")
-    script = JS.replace("})();", "globalThis.loadDcf=load;})();")
+    script = JS.replace(
+        "var handle = {destroy: destroy, setDriver: setDriver};",
+        "globalThis.loadDcf=load; var handle = {destroy: destroy, setDriver: setDriver};",
+    )
     harness = r"""
 const assert=require('node:assert/strict');
 const timers=new Map(); let nextTimer=0; const requests=[]; const nodes=new Map();
@@ -87,6 +190,7 @@ for(const id of ['dcf-edit','dcf-edit-toggle','dcf-edit-body','dcf-edit-status',
 nodes.get('dcf-edit-body').hidden=true;
 nodes.set('workspace-boot',{textContent:JSON.stringify({server_url:'http://fixture-authority.invalid:7421',ticker:'TEST'})});
 global.document={getElementById(id){return nodes.get(id);},createElement:element,addEventListener(){}};
+nodes.get('dcf-edit').querySelector=selector=>nodes.get(selector.match(/id="([^"]+)"/)[1]);
 global.window={location:{protocol:'file:'},addEventListener(){},__workspaceMutationHeaders:{'Content-Type':'application/json','X-Fixture':'present'}};
 global.CCAction={busy(){},release(){},receipt(){}};
 global.setTimeout=(callback,ms)=>{const id=++nextTimer;timers.set(id,{callback,ms});return id;};
