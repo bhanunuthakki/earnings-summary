@@ -588,20 +588,31 @@ def pre_call_baseline(conn: sqlite3.Connection, quarter: ReportedQuarter) -> dic
 
 
 def _surprise_text(conn: sqlite3.Connection, quarter: ReportedQuarter) -> str:
+    # This table has an earnings-event date, but no fiscal-period identity.
+    # Use only the selected transcript's exact event; a nearby release can
+    # belong to the next quarter. Unmatched or ambiguous evidence stays absent.
+    if quarter.call_date is None:
+        return ""
     try:
-        row = conn.execute(
+        call_date = date.fromisoformat(quarter.call_date)
+        period_end = date.fromisoformat(quarter.period_end)
+    except ValueError:
+        return ""
+    if call_date < period_end:
+        return ""
+    try:
+        rows = conn.execute(
             "SELECT release_date, eps_estimate, eps_actual, eps_surprise_pct, "
             "revenue_estimate, revenue_actual, revenue_surprise_pct "
             "FROM earnings_surprises WHERE UPPER(ticker) = ? "
-            "AND date(release_date) >= date(?) "
-            "AND date(release_date) <= date(?, '+120 days') "
-            "ORDER BY release_date LIMIT 1",
-            (quarter.ticker, quarter.period_end, quarter.period_end),
-        ).fetchone()
+            "AND date(release_date) = date(?) LIMIT 2",
+            (quarter.ticker, call_date.isoformat()),
+        ).fetchall()
     except sqlite3.Error:
         return ""
-    if row is None:
+    if len(rows) != 1:
         return ""
+    row = rows[0]
     labels = (
         "release_date",
         "eps_estimate",
@@ -636,7 +647,7 @@ def _context_blocks(
         transcript = transcript_context(conn, quarter)
         baseline = pre_call_baseline(conn, quarter)
         surprise = _surprise_text(conn, quarter)
-        kpis = kpi_text(conn, quarter.ticker, today)
+        kpis = kpi_text(conn, quarter.ticker, date.fromisoformat(quarter.period_end))
         valuation = valuation_text(conn, quarter.ticker)
     finally:
         if conn is not None:
@@ -665,7 +676,7 @@ def _context_blocks(
         ),
         ContextBlock(
             "tracked_kpi_moves",
-            "Current context: tracked KPI moves (not a known-at-call baseline)",
+            "Selected-period KPI moves (current admitted revisions, not a known-at-call baseline)",
             kpis,
             ContextSource(
                 "kpi_facts",
@@ -723,12 +734,13 @@ def _context_blocks(
             "Call evidence and current-context limits",
             f"Mutable context loaded on {datetime.now(UTC).date().isoformat()} UTC; "
             f"request as-of date is {today.isoformat()}. "
-            "The legacy estimate/result selector uses period end plus a 120-day window; "
+            "The estimate/result selector requires the selected call event date; "
             "source identity and exact-quarter comparability are unavailable. Do not claim "
             "sourced consensus, an established beat, or an exact-quarter comparison. "
             "The selected transcript is call evidence. The dated saved brief is owner preparation, "
             "not automatically management guidance or sourced consensus. Current mutable KPI, thesis, "
             "notes, language alerts and valuation are current context, not proven known at the call. "
+            "KPI periods stop at the selected fiscal period end; revisions use current admission. "
             "Historical knowledge cutoff is not enforced for those blocks. Transcript source "
             "acquisition/extraction and complete material Q&A coverage are unknown. Do not classify "
             "an unanswered component as avoidance, not addressed, or a dropped topic; use insufficient "

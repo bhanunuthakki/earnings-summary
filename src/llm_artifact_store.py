@@ -4,7 +4,7 @@ Pattern:
   - ``read_current(ticker, purpose, fiscal_period=None, scope='ticker')`` â†’
     the most recent non-superseded artifact, or None.
   - ``upsert(...)`` â†’ idempotent insert. When the existing row's input_sha256
-    matches the new one, returns the existing row's id without inserting
+    matches the new one and its output is verified and reusable, returns its id without inserting
     (cache hit). When it differs, marks the prior superseded and inserts a
     new row, preserving history. Returns the new row's id.
   - ``mark_dirty(ticker, purposes, reason)`` â†’ flips dirty=1 on a set of
@@ -110,6 +110,41 @@ def compute_input_sha256(*, prompt_version: str, cache_inputs: list[bytes | str]
     return h.hexdigest()
 
 
+def _compute_output_sha256(content_md: str | None, content_json: str | None) -> str | None:
+    """Hash the stored Markdown, or exact JSON bytes when Markdown is empty."""
+    output = content_md or content_json
+    return hashlib.sha256(output.encode("utf-8")).hexdigest() if output else None
+
+
+def _output_integrity_reason(row: sqlite3.Row) -> str | None:
+    if not row["output_sha256"]:
+        reason = "output_checksum_missing"
+    elif row["output_sha256"] != _compute_output_sha256(row["content_md"], row["content_json"]):
+        reason = "output_checksum_mismatch"
+    else:
+        return None
+    log.warning(
+        {"event": "artifact_output_unverified", "artifact_id": int(row["id"]), "reason": reason}
+    )
+    return reason
+
+
+def _readable_artifact(row: sqlite3.Row, *, for_regeneration: bool = False) -> Artifact | None:
+    reason = _output_integrity_reason(row)
+    if reason == "output_checksum_mismatch" and not for_regeneration:
+        return None
+    artifact = _row_to_artifact(row)
+    if reason is not None:
+        # Missing historical checksums stay visible but cannot be reused.
+        # Queue readers retain identity so regeneration can supersede the row.
+        artifact.dirty = True
+        artifact.dirty_reason = reason
+        if reason == "output_checksum_mismatch":
+            artifact.content_md = None
+            artifact.content_json = None
+    return artifact
+
+
 def _row_to_artifact(row: sqlite3.Row) -> Artifact:
     raw_src = row["source_doc_ids"]
     raw_par = row["parent_artifact_ids"]
@@ -199,7 +234,7 @@ def artifact_is_fresh(artifact: Artifact, *, now: datetime | None = None) -> boo
     can label those states. Context-building callers use this predicate to keep
     stale recommendations out of a new model prompt.
     """
-    return _cache_state_is_reusable(
+    return bool(artifact.output_sha256) and _cache_state_is_reusable(
         dirty=artifact.dirty,
         expires_at=artifact.expires_at,
         now=now,
@@ -219,7 +254,7 @@ def artifact_is_reusable(
     this rule here prevents individual prompt builders from accidentally
     treating hash equality alone as freshness.
     """
-    return _cache_state_is_reusable(
+    return bool(artifact.output_sha256) and _cache_state_is_reusable(
         dirty=artifact.dirty,
         expires_at=artifact.expires_at,
         current_input_sha256=artifact.input_sha256,
@@ -239,7 +274,9 @@ def read_current(
 ) -> Artifact | None:
     """Read the most recent non-superseded artifact for the scope tuple.
     Returns None when no artifact exists (e.g. first-run for this ticker)
-    or when DB / table is unavailable."""
+    or when DB / table is unavailable or the stored output checksum differs.
+    Legacy rows without a checksum remain visible as dirty, unverified rows.
+    """
     db_conn = conn or _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     if db_conn is None:
         return None
@@ -257,7 +294,7 @@ def read_current(
             """,
             (ticker, scope, purpose, fiscal_period),
         ).fetchone()
-        return _row_to_artifact(row) if row else None
+        return _readable_artifact(row) if row else None
     except sqlite3.Error as exc:
         # Best-effort read: _open() already guards a missing table, but a table
         # that exists with a *drifted* schema (a legacy DB predating a column
@@ -276,7 +313,7 @@ def read_artifact(
     *,
     db_path: Path | str | None = None,
 ) -> Artifact | None:
-    """Read one historical artifact by stable id, including superseded rows."""
+    """Read by stable id, including superseded rows; reject checksum mismatches."""
     conn = _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     if conn is None:
         return None
@@ -286,7 +323,7 @@ def read_artifact(
             "SELECT * FROM llm_artifacts WHERE id = ?",
             (artifact_id,),
         ).fetchone()
-        return _row_to_artifact(row) if row else None
+        return _readable_artifact(row) if row else None
     except sqlite3.Error as exc:
         log.warning(
             {
@@ -352,7 +389,7 @@ def upsert(
     """Idempotent upsert.
 
     Returns (artifact_id, was_cache_hit):
-      - was_cache_hit=True  â†’ existing row's input_sha256 matches; existing id
+      - was_cache_hit=True  â†’ inputs match and verified output is reusable; existing id
                               returned, no new row inserted.
       - was_cache_hit=False â†’ either no prior row (insert) or prior input_sha256
                               differs (supersede + insert). New id returned.
@@ -372,7 +409,8 @@ def upsert(
 
         existing = conn.execute(
             """
-            SELECT id, input_sha256, dirty, expires_at FROM llm_artifacts
+            SELECT id, input_sha256, dirty, expires_at,
+                   content_md, content_json, output_sha256 FROM llm_artifacts
             WHERE COALESCE(ticker,'') = COALESCE(?, '')
               AND scope = ? AND purpose = ?
               AND COALESCE(fiscal_period, '') = COALESCE(?, '')
@@ -395,6 +433,7 @@ def upsert(
         if (
             not req.force_new_version
             and existing is not None
+            and _output_integrity_reason(existing) is None
             and _cache_state_is_reusable(
                 dirty=bool(existing["dirty"]),
                 expires_at=existing_expires,
@@ -407,6 +446,7 @@ def upsert(
             conn.commit()
             return (existing_id, True)
 
+        # Missing/corrupt output also requires a new version; retain prior bytes.
         # Either no existing row, hash drift, or dirty â€” insert a new row and
         # supersede any prior current row.
         content_json_str = (
@@ -414,11 +454,7 @@ def upsert(
             if req.content_json is not None
             else None
         )
-        output_sha = (
-            hashlib.sha256((req.content_md or content_json_str or "").encode("utf-8")).hexdigest()
-            if (req.content_md or content_json_str)
-            else None
-        )
+        output_sha = _compute_output_sha256(req.content_md, content_json_str)
         effective_expires_at = req.expires_at or default_expires_at(req.purpose)
         cur = conn.execute(
             """
@@ -730,7 +766,8 @@ def drain_dirty(
     generator + upsert; dirty=0 + a fresh expires_at are written on the new
     row. Optional callers retain best-effort empty results; operational
     drains set ``strict`` so unavailable or drifted queue and roster state
-    fails closed.
+    fails closed. Corrupt queued payloads are cleared from returned objects,
+    while their identities remain available for append/supersede recovery.
     """
     conn = _open(db_path, role=SQLiteConnectionRole.READ_ONLY)
     if conn is None:
@@ -772,7 +809,11 @@ def drain_dirty(
             """,
             (now_iso, int(limit)),
         ).fetchall()
-        return [_row_to_artifact(r) for r in rows]
+        return [
+            artifact
+            for row in rows
+            if (artifact := _readable_artifact(row, for_regeneration=True)) is not None
+        ]
     except sqlite3.Error as exc:
         if strict:
             raise DirtyQueueReadError("dirty queue query failed") from exc
@@ -815,7 +856,7 @@ def history(
             """,
             (ticker, scope, purpose, fiscal_period, int(limit)),
         ).fetchall()
-        return [_row_to_artifact(r) for r in rows]
+        return [artifact for row in rows if (artifact := _readable_artifact(row)) is not None]
     except sqlite3.Error as exc:
         # Best-effort: a drifted schema degrades to empty history rather than
         # crashing the query surface (see read_current for rationale).
@@ -856,7 +897,7 @@ def quarter_index(
             """,
             (ticker, scope, purpose, int(limit)),
         ).fetchall()
-        return [_row_to_artifact(row) for row in rows]
+        return [artifact for row in rows if (artifact := _readable_artifact(row)) is not None]
     except sqlite3.Error as exc:
         log.warning({"event": "artifact_quarter_index_failed", "error": str(exc)})
         return []

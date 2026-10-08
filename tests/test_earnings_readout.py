@@ -485,6 +485,112 @@ def test_exact_target_uses_requested_quarter_not_latest_and_has_own_cache(
     assert manifest["grounding_status"] == "partial"
 
 
+@pytest.mark.parametrize("ticker", ["WIX", "NU"])
+@pytest.mark.parametrize("period_end", ["2026-06-30", "2026-09-30"])
+def test_readout_kpi_context_stays_in_selected_period(
+    db: Path, monkeypatch: pytest.MonkeyPatch, ticker: str, period_end: str
+) -> None:
+    import earnings_readout
+    from llm_artifact_store import read_current
+
+    if period_end == "2026-09-30":
+        with sqlite3.connect(db) as conn:
+            _seed_quarter(
+                conn,
+                ticker=ticker,
+                list_type="portfolio" if ticker == "WIX" else "evaluation",
+                transcript_id=3,
+                document_id=103,
+                period_end=period_end,
+                fpt="Q3",
+            )
+            conn.execute("UPDATE transcripts SET call_date='2026-10-20' WHERE id=3")
+
+    def period_kpis(_conn: sqlite3.Connection, _ticker: str, cutoff: date) -> str:
+        return "Q3 KPI evidence" if cutoff >= date(2026, 9, 30) else "Q2 KPI evidence"
+
+    prompts: list[str] = []
+
+    def capture_llm(prompt: str, **_kwargs: object) -> str:
+        prompts.append(prompt)
+        return _readout_text()
+
+    monkeypatch.setattr(earnings_readout, "kpi_text", period_kpis)
+    monkeypatch.setattr(earnings_readout, "call_llm", capture_llm)
+    monkeypatch.setattr(earnings_readout, "should_skip_for_budget", _no_budget_skip)
+    outcome = earnings_readout.generate_for_ticker(
+        db,
+        db.parent,
+        ticker,
+        today=date(2026, 11, 15),
+        period_end=period_end,
+        fiscal_period_type="Q2" if period_end == "2026-06-30" else "Q3",
+    )
+    expected = "Q2 KPI evidence" if period_end == "2026-06-30" else "Q3 KPI evidence"
+    assert expected in prompts[0]
+    assert ("Q3 KPI evidence" if expected.startswith("Q2") else "Q2 KPI evidence") not in prompts[0]
+    artifact = read_current(
+        ticker=ticker,
+        purpose=earnings_readout.PURPOSE,
+        fiscal_period=outcome.fiscal_period,
+        db_path=db,
+    )
+    assert artifact is not None
+    manifest = cast(dict[str, object], artifact.content_json)
+    blocks = cast(list[dict[str, object]], manifest["blocks"])
+    assert next(b["content"] for b in blocks if b["kind"] == "tracked_kpi_moves") == expected
+
+
+@pytest.mark.parametrize("ticker", ["WIX", "NU"])
+def test_readout_does_not_borrow_next_quarter_consensus(db: Path, ticker: str) -> None:
+    import earnings_readout
+
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM earnings_surprises WHERE ticker=?", (ticker,))
+        conn.execute(
+            "INSERT INTO earnings_surprises(ticker,release_date,eps_actual) "
+            "VALUES (?,'2026-10-20',9.9)",
+            (ticker,),
+        )
+    quarter = earnings_readout.latest_reported_quarter(db, ticker, today=date(2026, 11, 15))
+    assert quarter is not None
+    sections = earnings_readout.assemble_context(db, db.parent, quarter, today=date(2026, 11, 15))
+    assert not any("Unverified supplied estimates and actuals" in section for section in sections)
+
+
+@pytest.mark.parametrize("call_date", [None, "2026-06-01", "invalid"])
+def test_readout_consensus_requires_valid_matching_event(db: Path, call_date: str | None) -> None:
+    from dataclasses import replace
+
+    import earnings_readout
+
+    quarter = earnings_readout.latest_reported_quarter(db, "WIX", today=date(2026, 11, 15))
+    assert quarter is not None
+    sections = earnings_readout.assemble_context(
+        db, db.parent, replace(quarter, call_date=call_date), today=date(2026, 11, 15)
+    )
+    assert not any("Unverified supplied estimates and actuals" in section for section in sections)
+
+
+def test_readout_consensus_preserves_exact_event_and_rejects_ambiguity(db: Path) -> None:
+    import earnings_readout
+
+    quarter = earnings_readout.latest_reported_quarter(db, "WIX", today=date(2026, 11, 15))
+    assert quarter is not None
+    sections = earnings_readout.assemble_context(db, db.parent, quarter, today=date(2026, 11, 15))
+    text = next(
+        section for section in sections if "Unverified supplied estimates and actuals" in section
+    )
+    assert "release_date: 2026-08-04" in text and "eps_actual: 1.2" in text
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO earnings_surprises(ticker,release_date,eps_actual) "
+            "VALUES ('WIX','2026-08-04',7.7)"
+        )
+    sections = earnings_readout.assemble_context(db, db.parent, quarter, today=date(2026, 11, 15))
+    assert not any("Unverified supplied estimates and actuals" in section for section in sections)
+
+
 @pytest.mark.parametrize(
     ("period_end", "fiscal_period_type"),
     [
