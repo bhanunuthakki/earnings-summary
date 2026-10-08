@@ -204,9 +204,25 @@ def test_actual_head_is_supported() -> None:
         )
         for line in (201, 289, 330)
     ]
-    # Retain 141 prior test seams, three bounded-source lookups, and three process harnesses.
+    # The native fence tests read a fixed GenericMapping field tuple and select
+    # GetCurrentProcess or GetCurrentThread for read-only token observation.
+    assert [
+        edge for edge in graph.unknown_edges if edge.source == "tests/test_inline_xbrl_processor.py"
+    ] == [
+        GraphEdge(
+            source="tests/test_inline_xbrl_processor.py",
+            target="<dynamic attribute>",
+            kind="getattr",
+            evidence="dynamic getattr expression",
+            confidence="low",
+            line=line,
+            unknown=True,
+        )
+        for line in (123, 913)
+    ]
+    # Retain 147 prior test seams plus the two exact fence test lookups above.
     # No production gap is admitted.
-    assert len(graph.unknown_edges) == 147
+    assert len(graph.unknown_edges) == 149
     # Ten new acquisition/authority fixture calls preserve synthetic db globals.
     # Exact AST evidence is retained in followup-test-edge-census.json.
     new_fixture_calls = (
