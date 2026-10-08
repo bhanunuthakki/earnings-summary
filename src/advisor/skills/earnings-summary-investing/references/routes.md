@@ -36,14 +36,14 @@ route is not authority to run it on production.
 | --- | --- | --- |
 | Portfolio/evaluation roster and evaluation level | `GET /api/work-os/portfolio`; `GET /api/work-os/evaluation`; `src/pipeline/work_os_evaluation.py` | Onboarding: `execution/onboard_ticker.py`; use current owner-approved scope |
 | Company research / initiating coverage / memo | [New-company flow](analysis-paths.md#earnings-and-new-company-evaluation); existing `output/research/<TICKER>/`; `src/report/builder.py`; `src/report/sections/` | Advance source/fact stages and retain preliminary coverage; `execution/build_artifacts.py --db-path <explicit> --ticker <TICKER>`; `src/report/renderers/workspace_html.py` |
-| Pre-earnings preview | Current roster eligibility, event date, exact fiscal identity and current brief | `execution/generate_pre_earnings_briefs.py --db-path <explicit> --ticker <TICKER> --as-of <date>`; implementation `src/earnings_brief.py` |
+| Pre-earnings preview | Current roster eligibility, event date, exact fiscal identity and current brief | `execution/generate_pre_earnings_briefs.py --db-path <explicit> --ticker <TICKER> --as-of <date>`; implementation `src/earnings_brief.py`. No exact-quarter selector or original-knowledge-cutoff enforcement; historical work needs cutoff-qualified evidence and explicit limits |
 | Post-earnings readout | Selected transcript's fiscal period and complete package | `execution/generate_post_earnings_readouts.py --db-path <explicit> --ticker <TICKER>`; `src/earnings_readout.py`; evaluation names: `POST /api/earnings-readout/generate` |
 | Thesis monitoring / threshold check | Holdings JSON; `src/compute/thesis_evaluator.py`; `src/report/sections/thesis.py` | The evaluator CLI writes run accounting even with `--dry-run`; use only when that write is authorized. For observation-only assessment, use the no-write evaluator function with an explicit read-only connection and canonical holdings directory; it supports the current cutoff only, not historical replay |
 | Counter-case / prove-or-kill research | Approved thesis and annual filings, risk factors and transcripts | Source-backed analyst counter-case through admitted readers. Legacy `execution/pressure_test_thesis.py` is unavailable for this skill: it forces a checkout-local DB, reads legacy facts and writes diligence |
 | Thesis revision from notes / analysis / article | Approved narrative and rule versions; supplied claims; [revision path](analysis-paths.md#thesis-revision-from-notes-or-an-article) | Prepare a cited before/after proposal. Governed Ask diff and decision: `src/research/proposal_approval.py`; ledger drafts: `src/research/thesis_artifact.py`; explicit amendment approval remains required |
 | Valuation / comps / scenarios / model update | `execution/valuation_preflight.py --db-path <explicit> --ticker <TICKER>`; `src/dcf/readiness.py`; current `dcf/` workbook | `execution/refresh_dcf.py`; `execution/dcf_sheets.py`; preserve owner assumptions and applicable business-model route |
 | Investment decision card | `src/research/investment_decision_card.py`; current artifact and input hash | `execution/build_investment_decision_card.py --db-path <explicit> --ticker <TICKER>`; `POST /api/research/card/<ticker>/refresh`; disposition is a separate owner action |
-| ETF diligence / exposures | Existing ETF workup; `src/etf_sources/`; ETF-specific source coverage | `execution/build_etf_workup.py --db-path <explicit> --ticker <TICKER>`; `execution/fetch_etf_data.py`; `execution/fetch_etf_published_data.py` |
+| ETF diligence / exposures | [ETF comparison path](analysis-paths.md#etf-comparison-and-overlap); existing ETF workup; `src/etf_sources/`; ETF-specific source coverage | `execution/build_etf_workup.py --db-path <explicit> --ticker <TICKER>`; `execution/fetch_etf_data.py`; `execution/fetch_etf_published_data.py` |
 | Portfolio risk / concentration / overlap | `execution/get_portfolio_risk_matrix.py`; `src/allocation/book_risk.py`; `src/allocation/what_if.py`; snapshot as-of and coverage; full holdings/account readers in the allocation skill | `execution/refresh_portfolio_risk_snapshot.py` for authorized snapshot refresh |
 | Next-dollar allocation / taxes / sizing | `src/advisor/skills/next-dollar-allocation/SKILL.md`; its `references/interfaces.md` | Follow that skill; use full holdings/accounts, owner context and recorded intent; no trade execution |
 | Research conversation / meeting preparation | Existing artifact, sources and typed context | `POST /api/ask/stream`; `execution/comments_server_research_routes.py`; can invoke LLM and retain conversation |
@@ -70,6 +70,13 @@ route is not authority to run it on production.
   the latest quarter; the pre-earnings CLI has no exact fiscal selector.
   `--as-of` changes the run date. Never relabel a body or change live transcript
   selection to fit a requested period.
+- The earnings CLIs resolve an explicit or configured database and refuse a missing
+  authority. Continue to pass the approved path. Readout KPI periods stop at the
+  selected fiscal period end, but revisions use current admission. Exact call-date
+  matching does not prove sourced consensus or historical knowledge. Keep those
+  limits visible. Artifact readers reject output-checksum mismatches; historical
+  rows without checksums remain dirty and cannot be reused. Matching input hashes
+  alone do not prove verified, fresh output.
 - `execution/capture_issuer_document_inventory.py` supports the original v1
   exact-URL route and the explicit `issuer_document_inventory_request.v2_alias`
   route. The alias route verifies retained bytes, selected issuer and reporting
