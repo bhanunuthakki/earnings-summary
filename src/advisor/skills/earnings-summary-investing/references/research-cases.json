@@ -102,6 +102,36 @@
       ]
     },
     {
+      "id": "etf-pairwise-incomplete-snapshot",
+      "request": "Compare SYNFUND_A and SYNFUND_B for overlapping holdings. Does the workup prove that half their portfolios overlap?",
+      "evidence": [
+        "Synthetic issuer holdings A1, 2026-09-30: complete long-only snapshot, fractional weights X 0.40, Y 0.30, Z 0.30. All security identities match explicitly.",
+        "Synthetic issuer holdings B1, 2026-09-30: top-holdings excerpt only, X 0.20 and Y 0.50. Remaining 0.30 is undisclosed. No other snapshot is available.",
+        "Synthetic direct-book workup W1: the book owns X only; direct_overlap_pct for SYNFUND_A is 0.40. No full-account snapshot is available."
+      ],
+      "expected": [
+        "Select ETF comparison and distinguish pairwise weighted overlap from fund-versus-direct-book membership overlap and return correlation.",
+        "Using cited fractional weights, sum min(0.40,0.20) + min(0.30,0.50) = 0.50 observed matched weight. Label it a lower bound with 0.30 of B undisclosed, not exact total overlap. Do not renormalize the excerpt.",
+        "The 0.40 workup metric is a different fund-versus-book calculation. Do not infer personal-book concentration or sizing without full-account context."
+      ],
+      "held_out_request": "How much exposure do these two funds share, and what can their incomplete holdings actually establish?"
+    },
+    {
+      "id": "historical-preview-original-cutoff",
+      "request": "Prepare a historical fiscal Q3 preview for SYNISSUER using only evidence available before its 2025-11-05 earnings call.",
+      "evidence": [
+        "Synthetic prior guidance G1 dated 2025-08-05 is available with fiscal identity and source locators. No saved original pre-call brief exists.",
+        "Synthetic captured context includes a 2025-11-05 results transcript and a 2026 model revision, both after the requested cutoff.",
+        "The released pre-earnings CLI accepts --as-of but has no exact-quarter selector or original-knowledge-cutoff enforcement."
+      ],
+      "expected": [
+        "Preserve the requested historical preview and resolve its exact fiscal identity and pre-call cutoff; do not substitute a current readout.",
+        "Exclude later transcript/model material from an original-cutoff assessment. A bounded cited preview can use qualified prior guidance; say that the saved owner baseline is absent.",
+        "Do not treat --as-of as cutoff enforcement, relabel an unrelated generated artifact, change live transcript selection or claim a verified reconstruction from mixed context."
+      ],
+      "held_out_request": "Recreate the questions we could have asked before that Q3 call, without using what we learned afterward."
+    },
+    {
       "id": "simple-definition-negative-control",
       "request": "What does operating margin mean? One sentence, please.",
       "evidence": [],
