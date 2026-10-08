@@ -20,6 +20,14 @@ Task-owned unfinished source was preserved in verified checkpoints and a recover
 | BHA-156 | Retain actual thesis and fact context for historical checks | Larger capability; inactive backlog |
 | BHA-157 | Keep proposed MELI scenarios separate from accepted inputs | Larger capability; inactive backlog |
 | BHA-158 | Separate present fair-value upside from forward annual returns | Larger capability; inactive backlog |
+| BHA-159 | Preserve Windows job ownership and checked cleanup | Retained repair; backlog |
+| BHA-160 | Retain exact investment-card evidence and historical context | Larger capability; inactive backlog |
+| BHA-161 | Validate and resume selected SEC accession requests | Larger capability; inactive backlog |
+| BHA-162 | Honor hidden state in shared research controls | Narrow repair; backlog |
+| BHA-163 | Recognize Python launchers at executable-token boundaries | Narrow repair; backlog |
+| BHA-164 | Return structured errors for invalid valuation source roots | Narrow repair; backlog |
+
+The final open-PR inventory added six follow-ups beyond the initial checkpoint review. Superseded task PRs are retired with exact source heads preserved. The earlier MELI child-request identity refusal is already present in main; it is not queued again.
 
 The bounded source reader is already on main. Do not reimplement it from the older candidate. Some residual differences in the mixed recovery snapshot remove newer protections. Compare retained changes with current main before selecting a feature; do not replay whole branches.
 
