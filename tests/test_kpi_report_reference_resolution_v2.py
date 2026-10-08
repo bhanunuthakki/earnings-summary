@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -1127,8 +1128,118 @@ def test_scope_reuses_request_inventory_and_each_disposition_without_changing_ro
     assert inventory_reads == [("NU",), ("NU",)], (
         "one initial and one final source read per request"
     )
-    assert len(disposition_reads) == 3
+    assert disposition_reads == [
+        "/tier_1_kpis/0/name",
+        "/tier_1_kpis/1/name",
+        "/tier_1_kpis/2/name",
+        "/tier_1_kpis/1/name",
+        "/tier_1_kpis/2/name",
+    ], "reviewed state once; unreviewed state again before exposure"
     assert len(set(disposition_reads)) == 3
+    conn.close()
+
+
+def test_batch_exact_names_preserve_sqlite_matching_and_bound_definition_reads(
+    tmp_path: Path,
+) -> None:
+    from pipeline.kpi_report_reference_resolver import read_report_kpi_reference_definitions
+
+    conn = _db()
+    conn.execute("UPDATE kpi_definitions SET name=' Revenue ' WHERE id=1")
+    for identity, name in (
+        (2, "Ämetric"),
+        (3, "ämetric"),
+        (4, "Dup"),
+        (5, "dup"),
+        (6, "\tTabMetric\t"),
+    ):
+        _seed_definition(conn, identity)
+        conn.execute("UPDATE kpi_definitions SET name=? WHERE id=?", (name, identity))
+    labels = ["REVENUE", "Ämetric", "ämetric", "\tRevenue\t", "TabMetric", "Dup", "Absent"]
+    repo = _repo_payload(
+        tmp_path,
+        json.dumps({"ticker": "NU", "tier_1_kpis": [{"name": name} for name in labels]}),
+    )
+    references = report_kpi_references(repo, ("NU",))
+    expected = [
+        verified_report_kpi_reference_definition(
+            conn, repo_root=repo, user_id="owner", reference=reference
+        )
+        for reference in references
+    ]
+    assert [None if row is None else row.kpi_definition_id for row in expected] == [
+        1,
+        2,
+        3,
+        1,
+        None,
+        None,
+        None,
+    ]
+    queries: list[str] = []
+    conn.set_trace_callback(queries.append)
+    _, reads = read_report_kpi_reference_definitions(
+        conn, repo_root=repo, user_id="owner", tickers=("NU",)
+    )
+    conn.set_trace_callback(None)
+    assert [verified for _, _, verified in reads] == expected
+    assert len([query for query in queries if "FROM kpi_definitions" in query]) <= 2
+    conn.close()
+
+
+def test_batch_rejects_unreviewed_definition_changed_during_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pipeline.kpi_report_reference_resolver as resolver
+
+    conn = _db()
+    repo = _repo(tmp_path, "Total customers (millions)")
+
+    def change_definition(
+        connection: sqlite3.Connection, reference: ReportKpiReference, definition_name: str
+    ) -> bool:
+        connection.execute("UPDATE kpi_definitions SET name='Changed' WHERE id=1")
+        return False
+
+    monkeypatch.setattr(resolver, "_active_override_blocks", change_definition)
+    _, reads = resolver.read_report_kpi_reference_definitions(
+        conn, repo_root=repo, user_id="owner", tickers=("NU",)
+    )
+    assert len(reads) == 1
+    assert reads[0][2] is None
+    conn.close()
+
+
+def test_batch_rejects_review_history_created_during_unreviewed_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pipeline.kpi_report_reference_resolver as resolver
+
+    conn = _db()
+    repo = _repo(tmp_path, "Total customers (millions)")
+
+    def add_review_history(
+        connection: sqlite3.Connection, reference: ReportKpiReference, definition_name: str
+    ) -> bool:
+        persist_report_kpi_reference_disposition(
+            connection,
+            user_id="owner",
+            reference=reference,
+            disposition=ReportKpiReferenceDisposition(
+                status=ReportKpiReferenceStatus.UNRESOLVED,
+                reason_code="review_required",
+            ),
+            reviewed_by="source-review:owner",
+            knowledge_at=NOW,
+        )
+        return False
+
+    monkeypatch.setattr(resolver, "_active_override_blocks", add_review_history)
+    _, reads = resolver.read_report_kpi_reference_definitions(
+        conn, repo_root=repo, user_id="owner", tickers=("NU",)
+    )
+    assert len(reads) == 1
+    assert reads[0][2] is None
     conn.close()
 
 

@@ -19,6 +19,7 @@ from pipeline.kpi_report_reference_dispositions import (
     ReportKpiReferenceDispositionRevision,
     ReportKpiReferenceInventory,
     ReportKpiReferenceResolutionMethod,
+    ReportKpiReferenceSourceState,
     ReportKpiReferenceSourceStatus,
     ReportKpiReferenceStatus,
     current_report_kpi_reference_disposition,
@@ -488,6 +489,7 @@ def _verified_report_kpi_reference_definition(
     reference: ReportKpiReference,
     revision: ReportKpiReferenceDispositionRevision | None,
     repo_root: Path | None = None,
+    exact_definition_rows: tuple[tuple[int, str], ...] | None = None,
 ) -> VerifiedReportKpiReferenceDefinition | None:
     if revision is not None:
         if revision.reference != reference:
@@ -512,11 +514,16 @@ def _verified_report_kpi_reference_definition(
             definition_name=binding.definition_name,
             resolution_id=binding.resolution_id,
         )
-    rows = conn.execute(
-        "SELECT id,name FROM kpi_definitions WHERE UPPER(ticker)=UPPER(?) "
-        "AND LOWER(TRIM(name))=LOWER(TRIM(?)) ORDER BY id",
-        (reference.ticker, reference.requested_label),
-    ).fetchall()
+    rows = exact_definition_rows
+    if rows is None:
+        rows = tuple(
+            (int(row[0]), str(row[1]))
+            for row in conn.execute(
+                "SELECT id,name FROM kpi_definitions WHERE UPPER(ticker)=UPPER(?) "
+                "AND LOWER(TRIM(name))=LOWER(TRIM(?)) ORDER BY id",
+                (reference.ticker, reference.requested_label),
+            )
+        )
     if len(rows) != 1:
         return None
     if _active_override_blocks(conn, reference, str(rows[0][1])):
@@ -525,6 +532,54 @@ def _verified_report_kpi_reference_definition(
         kpi_definition_id=int(rows[0][0]),
         definition_name=str(rows[0][1]),
     )
+
+
+def _exact_definition_rows_for_references(
+    conn: sqlite3.Connection, references: tuple[ReportKpiReference, ...]
+) -> tuple[tuple[tuple[int, str], ...], ...]:
+    """Read one batch projection; SQLite owns both comparison-key transforms.
+
+    This projection is local to this call, not an all-request database snapshot.
+    Reviewed bindings still reconstruct their current heads and evidence.
+    """
+    if not references:
+        return ()
+    variable_limit = conn.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER)
+    chunk_size = min(250, variable_limit // 2)
+    if chunk_size < 1:
+        raise ValueError("SQLite variable limit cannot bind report reference keys")
+    keys: list[tuple[str, str] | None] = [None] * len(references)
+    for start in range(0, len(references), chunk_size):
+        chunk = references[start : start + chunk_size]
+        params: list[object] = []
+        for reference in chunk:
+            params.extend((reference.ticker, reference.requested_label))
+        marks = ",".join(f"({ordinal},?,?)" for ordinal in range(start, start + len(chunk)))
+        rows = conn.execute(
+            "WITH requested(ordinal,ticker,label) AS (VALUES "  # nosec B608 -- bound values only
+            + marks
+            + ") SELECT ordinal,UPPER(ticker),LOWER(TRIM(label)) FROM requested ORDER BY ordinal",
+            tuple(params),
+        )
+        for row in rows:
+            if row[1] is not None and row[2] is not None:
+                keys[int(row[0])] = (str(row[1]), str(row[2]))
+    tickers = tuple(dict.fromkeys(key[0] for key in keys if key is not None))
+    definitions: dict[tuple[str, str], list[tuple[int, str]]] = {}
+    for start in range(0, len(tickers), chunk_size):
+        chunk_tickers = tickers[start : start + chunk_size]
+        marks = ",".join("?" for _ in chunk_tickers)
+        rows = conn.execute(
+            "SELECT id,name,UPPER(ticker),LOWER(TRIM(name)) FROM kpi_definitions "
+            f"WHERE UPPER(ticker) IN ({marks}) ORDER BY id",  # nosec B608 -- bound values only
+            chunk_tickers,
+        )
+        for row in rows:
+            if row[2] is not None and row[3] is not None:
+                definitions.setdefault((str(row[2]), str(row[3])), []).append(
+                    (int(row[0]), str(row[1]))
+                )
+    return tuple(() if key is None else tuple(definitions.get(key, ())) for key in keys)
 
 
 _ReportReferenceRead: TypeAlias = tuple[
@@ -543,21 +598,47 @@ def read_report_kpi_reference_definitions(
 ) -> tuple[ReportKpiReferenceInventory, tuple[_ReportReferenceRead, ...]]:
     """Reconstruct one request, retaining live evidence and final source checks."""
     inventory = load_report_kpi_reference_inventory(repo_root, tickers)
-    reads: list[_ReportReferenceRead] = []
+    sources_by_ticker: dict[str, list[ReportKpiReferenceSourceState]] = {}
+    references_by_pointer: dict[tuple[str, str], list[ReportKpiReference]] = {}
+    for source in inventory.source_states:
+        sources_by_ticker.setdefault(source.ticker, []).append(source)
     for reference in inventory.references:
-        revision = current_report_kpi_reference_disposition(
-            conn, user_id=user_id, reference=reference
+        references_by_pointer.setdefault(
+            (reference.source_path, reference.json_pointer), []
+        ).append(reference)
+    reference_revisions = tuple(
+        (
+            reference,
+            current_report_kpi_reference_disposition(conn, user_id=user_id, reference=reference),
         )
-        sources = [state for state in inventory.source_states if state.ticker == reference.ticker]
-        matches = [
-            item
-            for item in inventory.references
-            if item.source_path == reference.source_path
-            and item.json_pointer == reference.json_pointer
-        ]
+        for reference in inventory.references
+    )
+    unreviewed_references = tuple(
+        reference
+        for reference, revision in reference_revisions
+        if revision is None
+        and len(sources_by_ticker.get(reference.ticker, [])) == 1
+        and sources_by_ticker[reference.ticker][0].status is ReportKpiReferenceSourceStatus.VALID
+        and len(references_by_pointer[(reference.source_path, reference.json_pointer)]) == 1
+    )
+    exact_rows = _exact_definition_rows_for_references(conn, unreviewed_references)
+    definitions_by_pointer = {
+        (reference.source_path, reference.json_pointer): rows
+        for reference, rows in zip(unreviewed_references, exact_rows, strict=True)
+    }
+    reads: list[_ReportReferenceRead] = []
+    for reference, revision in reference_revisions:
+        sources = sources_by_ticker.get(reference.ticker, [])
+        matches = references_by_pointer[(reference.source_path, reference.json_pointer)]
         verified = (
             _verified_report_kpi_reference_definition(
-                conn, user_id=user_id, reference=reference, revision=revision
+                conn,
+                user_id=user_id,
+                reference=reference,
+                revision=revision,
+                exact_definition_rows=definitions_by_pointer.get(
+                    (reference.source_path, reference.json_pointer)
+                ),
             )
             if len(sources) == 1
             and sources[0].status is ReportKpiReferenceSourceStatus.VALID
@@ -566,6 +647,35 @@ def read_report_kpi_reference_definitions(
             else None
         )
         reads.append((reference, revision, verified))
+    current_exact_rows = _exact_definition_rows_for_references(conn, unreviewed_references)
+    current_unreviewed_revisions = tuple(
+        current_report_kpi_reference_disposition(conn, user_id=user_id, reference=reference)
+        for reference in unreviewed_references
+    )
+    changed_unreviewed_pointers = {
+        (reference.source_path, reference.json_pointer)
+        for reference, initial_rows, current_rows, current_revision in zip(
+            unreviewed_references,
+            exact_rows,
+            current_exact_rows,
+            current_unreviewed_revisions,
+            strict=True,
+        )
+        if initial_rows != current_rows or current_revision is not None
+    }
+    if changed_unreviewed_pointers:
+        # Invalidate changed unreviewed reads; never bind new definitions or history.
+        reads = [
+            (
+                reference,
+                revision,
+                None
+                if revision is None
+                and (reference.source_path, reference.json_pointer) in changed_unreviewed_pointers
+                else verified,
+            )
+            for reference, revision, verified in reads
+        ]
     current = load_report_kpi_reference_inventory(repo_root, tickers)
     changed = {
         ticker
