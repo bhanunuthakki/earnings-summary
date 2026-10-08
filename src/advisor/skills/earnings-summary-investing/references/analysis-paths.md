@@ -90,6 +90,30 @@ from the no-write assessment function.
 The evaluator CLI's dry run still writes operational logs. The legacy pressure-test
 CLI is excluded by the route map; the analyst can still form a cited counter-case.
 
+## ETF comparison and overlap
+
+Resolve whether the request compares funds, a fund with direct holdings, or the
+full account book. Start with the existing ETF workups and `directives/etf_data.md`.
+Compare mandate, benchmark, fees, concentration and relevant country, sector,
+currency and style exposure. Retain each field's source date and evidence limits.
+An ETF comparison does not require a corporate DCF or portfolio sizing.
+
+Read holdings through `src/instrument_store.py` with an explicit read-only
+connection. Preserve snapshot dates, sources, security identities and fractional
+weights. The latest date or a top-holdings list does not prove a complete,
+source-coherent snapshot. Check duplicate or unmatched identities, missing
+weights and covered weight before calculating overlap. Do not rescale partial
+holdings to imply full coverage.
+
+`src/etf_overlap.py` sums one fund's weights in names held directly by the book.
+It does not calculate symmetric fund-to-fund weighted overlap. For comparable
+long-only fund snapshots, a separately labeled analyst calculation can sum
+`min(weight_A, weight_B)` across matched security identities. Calculate with code
+and retain the input rows and formula. With incomplete holdings, report only
+observed matched weight and the unknown remainder; do not claim total overlap.
+Holdings overlap is different from return correlation. A personal-book exposure
+or allocation conclusion also needs the full-account allocation path.
+
 ## Portfolio risk
 
 1. Resolve the requested book, accounts and date. Use full holdings/account readers

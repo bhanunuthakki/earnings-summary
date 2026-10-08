@@ -1,5 +1,5 @@
 {
-  "review_note": "Reviewed merged main change 1d87985a: earnings CLIs now require the configured canonical database; readouts use the selected call date and fiscal period end while retaining evidence limits; artifact readers and reuse reject corrupt or missing output checksums without erasing historical bytes. Existing skill instructions already require exact periods, configured state, preserved cache semantics and separate financial verification. No skill prose change is needed.",
+  "review_note": "Reviewed merged main change 1d87985a: earnings CLIs now require the configured canonical database; readouts use the selected call date and fiscal period end while retaining evidence limits; artifact readers and reuse reject corrupt or missing output checksums without erasing historical bytes. Existing skill instructions already require exact periods, configured state, preserved cache semantics and separate financial verification. No skill prose change is needed. Preserved the released financial narrative contract and its source commitments from f0c0162f. Reviewed released earnings fix 1d87985a: pre/post CLIs resolve approved explicit or configured database; readout KPI periods stop at selected fiscal end while revisions remain current; exact call-event matching does not establish sourced consensus or historical cutoff; artifact reads and reuse verify stored output checksums. Reviewed ETF holdings reader snapshot-date/source/weight limits and direct-book membership overlap; added bounded ETF comparison guidance without a new application capability or write authority. Preserved all prior reviewed source commitments.",
   "schema_version": 1,
   "sources": [
     {
@@ -359,6 +359,10 @@
       "sha256": "66863e116991888b99f46e4b810faad43de56a293a446a4b47a43a9b220e0b25"
     },
     {
+      "path": "src/etf_overlap.py",
+      "sha256": "5a19ad404188d21d8055b2e9213a41336555ee96b383d3b7101fd696b080b53f"
+    },
+    {
       "path": "src/evals/capture_quality_specs.py",
       "sha256": "37e7dfa3bc90097125b0f3bab44f95b370bcd50a3a0fef397d843da1bed13d1e"
     },
@@ -369,6 +373,10 @@
     {
       "path": "src/filings/xbrl_units.py",
       "sha256": "b9f2fc5fbac15f9d7ac2fdef339b36783479aa8730a1adedf10ec6f5c9a2281c"
+    },
+    {
+      "path": "src/instrument_store.py",
+      "sha256": "a0da2f87bbbd6075aa33649ba34ab829fa776c5994d5db47a673f2f6f738c278"
     },
     {
       "path": "src/integrations/portfolio_allocation.py",
