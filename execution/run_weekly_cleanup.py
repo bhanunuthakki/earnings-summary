@@ -10,19 +10,30 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import stat
 import sys
 from collections.abc import Callable, Iterator
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Literal, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.operations.artifact_retention import (
+    CATALOG_RELATIVE_PATH,
+    ArtifactCatalog,
+    load_catalog,
+    retained_scope_roots,
+    run_retention,
+)
+from src.operations.temp_coverage import TempCoverage, inventory_temp_coverage
+from src.operations.temp_run_retention import discover_temp_runs
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-POLICY_VERSION = "weekly-cleanup-v2"
+POLICY_VERSION = "weekly-cleanup-v4"
 DEFAULT_DISPOSABLE_RETENTION_DAYS = 30
 DEFAULT_CACHE_RETENTION_DAYS = 7
 Collector: TypeAlias = Callable[[Path, datetime, "_Counts"], list["Candidate"]]
@@ -48,7 +59,7 @@ class CleanupSummary(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    policy_version: Literal["weekly-cleanup-v2"]
+    policy_version: Literal["weekly-cleanup-v4"]
     idempotency_key: str = Field(min_length=1)
     mode: Literal["dry_run", "apply"]
     files_scanned: int = Field(ge=0)
@@ -57,12 +68,16 @@ class CleanupSummary(BaseModel):
     bytes: int = Field(ge=0)
     skipped_invalid: int = Field(ge=0)
     policies: dict[str, PolicySummary]
+    coverage: TempCoverage = Field(default_factory=TempCoverage)
 
 
 @dataclass(frozen=True)
 class Candidate:
     path: Path
     size: int
+    inode: int
+    device: int
+    mtime_ns: int
 
 
 @dataclass
@@ -75,9 +90,30 @@ class _Counts:
     skipped_unsafe: int = 0
     skipped_qa_unverified: int = 0
     skipped_error: int = 0
+    protected_roots: tuple[Path, ...] = ()
+    _scope_source: tuple[Path, ...] | None = field(default=None, init=False, repr=False)
+    _scope_set: frozenset[Path] = field(default=frozenset[Path](), init=False, repr=False)
+
+    def protects(self, path: Path) -> bool:
+        # Catalog refresh replaces the tuple. Rebuild only its containment index;
+        # file, checkpoint and catalog validation still run before each unlink.
+        if self._scope_source is not self.protected_roots:
+            self._scope_set = frozenset(self.protected_roots)
+            self._scope_source = self.protected_roots
+        return _within_protected_scope(path, self._scope_set)
 
     def summary(self) -> PolicySummary:
-        return PolicySummary.model_validate(self.__dict__)
+        return PolicySummary.model_validate(
+            {
+                key: value
+                for key, value in self.__dict__.items()
+                if key not in {"protected_roots", "_scope_source", "_scope_set"}
+            }
+        )
+
+
+def _within_protected_scope(path: PurePath, scopes: frozenset[PurePath]) -> bool:
+    return path in scopes or any(parent in scopes for parent in path.parents)
 
 
 def _event(event: str, **fields: object) -> None:
@@ -101,18 +137,156 @@ def _is_protected_name(path: Path) -> bool:
     return "job_locks" in path.parts
 
 
-def _iter_regular_files(root: Path, counts: _Counts) -> Iterator[Path]:
+_PROTECTED_TMP_DIRECTORIES = frozenset(
+    {
+        "data",
+        "output",
+        "transcripts",
+        "ir_documents",
+        "src",
+        "execution",
+        "tests",
+        "scripts",
+        "cron",
+        "alembic",
+        "migrations",
+        "directives",
+        "secrets",
+        ".secrets",
+        "credentials",
+        "tokens",
+        "keys",
+        "certificates",
+        "certs",
+        ".ssh",
+    }
+)
+_PROTECTED_TMP_SUFFIXES = frozenset(
+    {
+        ".py",
+        ".pyi",
+        ".js",
+        ".mjs",
+        ".cjs",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".ps1",
+        ".cmd",
+        ".bat",
+        ".c",
+        ".h",
+        ".cpp",
+        ".rs",
+        ".go",
+        ".java",
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".pem",
+        ".key",
+        ".crt",
+        ".cer",
+        ".p12",
+        ".pfx",
+        ".jks",
+        ".keystore",
+        ".der",
+        ".csr",
+        ".sql",
+        ".dll",
+        ".reg",
+        ".patch",
+        ".diff",
+        ".csv",
+        ".tsv",
+        ".b64",
+        ".html",
+        ".htm",
+        ".jsonl",
+        ".css",
+        ".md",
+    }
+)
+_SENSITIVE_TMP_FILENAME = re.compile(
+    r"(?:^|[._-])(?:credentials?|tokens?|secrets?|passwords?|api[_-]?key|private[_-]?key|client[_-]?secret)(?:$|[._-])",
+    re.IGNORECASE,
+)
+
+
+def _is_protected_tmp_material(path: Path, tmp_root: Path | None) -> bool:
+    """Apply source and credential exclusions only within the named temporary root."""
+    if tmp_root is None:
+        return False
+    try:
+        parts = path.relative_to(tmp_root).parts
+    except ValueError:
+        return False
+    name = path.name.lower()
+    return (
+        any(part.lower() in _PROTECTED_TMP_DIRECTORIES for part in parts)
+        or any(suffix.lower() in _PROTECTED_TMP_SUFFIXES for suffix in path.suffixes)
+        or name == ".env"
+        or name.startswith(".env.")
+        or name in {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"}
+        or _SENSITIVE_TMP_FILENAME.search(name) is not None
+    )
+
+
+def _within_tmp_source_checkout(directory: Path, tmp_root: Path | None) -> bool:
+    """Hold temporary checkout ancestors without following their Git metadata."""
+    if tmp_root is None:
+        return False
+    for parent in (directory, *directory.parents):
+        if parent != tmp_root and tmp_root not in parent.parents:
+            break
+        try:
+            (parent / ".git").lstat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            # Unknown ownership is not deletion permission.
+            return True
+        return True
+    return False
+
+
+def _iter_regular_files(
+    root: Path, counts: _Counts, tmp_root: Path | None = None
+) -> Iterator[Path]:
     """Yield real files below one known-safe root without traversing links."""
     if not root.is_dir():
         return
     if _is_reparse_or_symlink(root):
         counts.skipped_unsafe += 1
         return
+    if (
+        _is_protected_tmp_material(root, tmp_root)
+        or counts.protects(root)
+        or _within_tmp_source_checkout(root, tmp_root)
+    ):
+        return
     for base, dirs, names in os.walk(root, topdown=True, followlinks=False):
         base_path = Path(base)
+        # Hold the whole checkout. A worktree's .git file is ownership metadata;
+        # its target is never opened or followed by cleanup.
+        if tmp_root is not None and any(name.casefold() == ".git" for name in (*dirs, *names)):
+            dirs[:] = []
+            continue
         kept_dirs: list[str] = []
         for name in sorted(dirs):
             child = base_path / name
+            if (
+                _is_protected_tmp_material(child, tmp_root)
+                or name in {".git", ".claude", "venv", ".venv", "node_modules", "job_locks"}
+                or counts.protects(child)
+            ):
+                continue
             if _is_reparse_or_symlink(child):
                 counts.skipped_unsafe += 1
                 _event("cleanup_skipped", reason="unsafe_path", path=str(child))
@@ -121,7 +295,7 @@ def _iter_regular_files(root: Path, counts: _Counts) -> Iterator[Path]:
         dirs[:] = kept_dirs
         for name in sorted(names):
             path = base_path / name
-            if _is_protected_name(path):
+            if _is_protected_name(path) or _is_protected_tmp_material(path, tmp_root):
                 continue
             if _is_reparse_or_symlink(path):
                 counts.skipped_unsafe += 1
@@ -143,7 +317,13 @@ def _older_than(path: Path, cutoff: datetime) -> Candidate | None:
     modified = datetime.fromtimestamp(file_stat.st_mtime, tz=UTC)
     if modified >= cutoff:
         return None
-    return Candidate(path=path, size=file_stat.st_size)
+    return Candidate(
+        path=path,
+        size=file_stat.st_size,
+        inode=file_stat.st_ino,
+        device=file_stat.st_dev,
+        mtime_ns=file_stat.st_mtime_ns,
+    )
 
 
 def _cached_at(path: Path) -> datetime | None:
@@ -177,10 +357,12 @@ def _collect_by_age(root: Path, cutoff: datetime, counts: _Counts) -> list[Candi
 
 def _collect_news_cache(root: Path, cutoff: datetime, counts: _Counts) -> list[Candidate]:
     candidates: list[Candidate] = []
-    for path in _iter_regular_files(root, counts):
+    for path in _iter_regular_files(root, counts, root.parent):
         if path.suffix.lower() != ".json":
             continue
-        if _is_recovery_material(path) or _checkpoint_is_active(path, root.parent, counts):
+        if _is_recovery_material(path, root.parent) or _checkpoint_is_active(
+            path, root.parent, counts
+        ):
             continue
         counts.files_scanned += 1
         cached_at = _cached_at(path)
@@ -191,7 +373,16 @@ def _collect_news_cache(root: Path, cutoff: datetime, counts: _Counts) -> list[C
         if cached_at >= cutoff:
             continue
         try:
-            candidates.append(Candidate(path=path, size=path.stat().st_size))
+            file_stat = path.stat()
+            candidates.append(
+                Candidate(
+                    path=path,
+                    size=file_stat.st_size,
+                    inode=file_stat.st_ino,
+                    device=file_stat.st_dev,
+                    mtime_ns=file_stat.st_mtime_ns,
+                )
+            )
         except OSError:
             counts.skipped_error += 1
     return candidates
@@ -233,7 +424,24 @@ def _collect_main_caches(repo_root: Path, cutoff: datetime, counts: _Counts) -> 
 
 
 _OWNED_TMP_ROOTS = frozenset({"cron_logs", "cron_runs", "news_cache", "pdf_pages"})
-_RECOVERY_SUFFIXES = frozenset({".db", ".bak", ".gz", ".enc"})
+_RECOVERY_SUFFIXES = frozenset(
+    {
+        ".db",
+        ".sqlite",
+        ".sqlite3",
+        ".bak",
+        ".gz",
+        ".enc",
+        ".tar",
+        ".zip",
+        ".zst",
+        ".tgz",
+        ".bz2",
+        ".xz",
+        ".7z",
+        ".rar",
+    }
+)
 _RECOVERY_NAME_MARKERS = (
     "backup",
     "snapshot",
@@ -262,8 +470,16 @@ def _checkpoint_is_active(path: Path, tmp_root: Path, counts: _Counts) -> bool:
     """
     parent = path.parent
     while parent == tmp_root or tmp_root in parent.parents:
+        # A lifecycle receipt owns the entire run, including undeclared siblings.
+        # Its entries can retire only through digest-bound explicit retention.
+        manifest = parent / ".earnings-temp-run.json"
+        if manifest.exists() or manifest.is_symlink():
+            return True
         state_path = parent / "state.json"
-        if state_path.is_file():
+        if state_path.exists() or state_path.is_symlink():
+            if _is_reparse_or_symlink(state_path):
+                counts.skipped_unsafe += 1
+                return True
             try:
                 payload_raw: object = json.loads(state_path.read_text(encoding="utf-8"))
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
@@ -276,34 +492,51 @@ def _checkpoint_is_active(path: Path, tmp_root: Path, counts: _Counts) -> bool:
                 return True
             payload = cast("dict[str, object]", payload_raw)
             status = payload.get("status")
-            return not (
+            if not (
                 isinstance(status, str) and status.strip().lower() in _COMPLETED_CHECKPOINT_STATUSES
-            )
+            ):
+                return True
         if parent == tmp_root:
             break
         parent = parent.parent
     return False
 
 
-def _is_recovery_material(path: Path) -> bool:
+def _is_recovery_material(path: Path, root: Path | None = None) -> bool:
     lower_name = path.name.lower()
+    relative = path.relative_to(root).parts if root is not None else (path.name,)
     return (
-        path.suffix.lower() in _RECOVERY_SUFFIXES
+        any(suffix.lower() in _RECOVERY_SUFFIXES for suffix in path.suffixes)
         or lower_name.endswith((".db-wal", ".db-shm"))
-        or any(marker in lower_name for marker in _RECOVERY_NAME_MARKERS)
+        or any(
+            marker in component.lower()
+            for component in relative
+            for marker in _RECOVERY_NAME_MARKERS
+        )
     )
 
 
 def _collect_tmp_unclassified(tmp_root: Path, cutoff: datetime, counts: _Counts) -> list[Candidate]:
     """Collect generic disposable files while preserving owned and recovery state."""
     candidates: list[Candidate] = []
-    for path in _iter_regular_files(tmp_root, counts):
+    recovery_trees = {
+        os.path.normcase(path.relative_to(tmp_root).parts[0])
+        # Recovery discovery also sees protected data/source children. This is
+        # read-only: excluding them here would hide a DB and expose its siblings.
+        for path in _iter_regular_files(tmp_root, counts)
+        if any(suffix.lower() in _RECOVERY_SUFFIXES for suffix in path.suffixes)
+        and len(path.relative_to(tmp_root).parts) > 1
+        and path.relative_to(tmp_root).parts[0] not in _OWNED_TMP_ROOTS
+    }
+    for path in _iter_regular_files(tmp_root, counts, tmp_root):
         relative = path.relative_to(tmp_root)
+        if relative.parts and os.path.normcase(relative.parts[0]) in recovery_trees:
+            continue
         if relative.parts and relative.parts[0] in _OWNED_TMP_ROOTS:
             continue
         if path.name.startswith("temp_audio_"):
             continue
-        if _is_recovery_material(path) or _checkpoint_is_active(path, tmp_root, counts):
+        if _is_recovery_material(path, tmp_root) or _checkpoint_is_active(path, tmp_root, counts):
             continue
         counts.files_scanned += 1
         candidate = _older_than(path, cutoff)
@@ -316,16 +549,94 @@ def _collect_tmp_owned_by_age(root: Path, cutoff: datetime, counts: _Counts) -> 
     """Apply age retention to an owned `.tmp` root without breaking checkpoints."""
     candidates: list[Candidate] = []
     tmp_root = root.parent
-    for path in _iter_regular_files(root, counts):
+    paths = list(_iter_regular_files(root, counts, tmp_root))
+    latest_logs: dict[str, tuple[datetime, Path]] = {}
+    if root.name == "cron_logs":
+        for path in paths:
+            identity = _timestamped_log_identity(path)
+            if identity is not None:
+                family, timestamp = identity
+                previous = latest_logs.get(family)
+                if previous is None or (timestamp, str(path)) > (previous[0], str(previous[1])):
+                    latest_logs[family] = (timestamp, path)
+    for path in paths:
         if path.name.startswith("temp_audio_"):
             continue
-        if _is_recovery_material(path) or _checkpoint_is_active(path, tmp_root, counts):
+        recovery_path = (
+            path.parent if root.name == "cron_logs" and path.suffix.lower() == ".log" else path
+        )
+        if _is_recovery_material(recovery_path, tmp_root) or _checkpoint_is_active(
+            path, tmp_root, counts
+        ):
             continue
+        if root.name == "cron_logs":
+            identity = _timestamped_log_identity(path)
+            latest = latest_logs.get(identity[0]) if identity is not None else None
+            if latest is not None and path == latest[1]:
+                continue
+            if _log_has_failure(path):
+                continue
         counts.files_scanned += 1
         candidate = _older_than(path, cutoff)
         if candidate is not None:
             candidates.append(candidate)
     return candidates
+
+
+_TIMESTAMPED_LOG = re.compile(
+    r"^(?P<family>.+?)[_-](?P<stamp>\d{8}(?:T\d{6}Z|_\d{6}))\.log$", re.IGNORECASE
+)
+
+
+def _timestamped_log_identity(path: Path) -> tuple[str, datetime] | None:
+    match = _TIMESTAMPED_LOG.fullmatch(path.name)
+    if match is None:
+        return None
+    stamp = match.group("stamp")
+    try:
+        timestamp = datetime.strptime(
+            stamp, "%Y%m%dT%H%M%SZ" if "T" in stamp.upper() else "%Y%m%d_%H%M%S"
+        )
+    except ValueError:
+        return None
+    return match.group("family").casefold(), timestamp.replace(tzinfo=UTC)
+
+
+_LOG_RESULT_FIELD = re.compile(
+    r"""(?<!\w)["']?(?P<field>status|exit_code|skipped_error)["']?\s*[:=]\s*"""
+    r"""(?P<value>"[^"\r\n]*"|'[^'\r\n]*'|[^,}\s]*)""",
+    re.IGNORECASE,
+)
+_SUCCESS_LOG_STATUSES = frozenset({"ok", "success", "succeeded", "complete", "completed", "done"})
+
+
+def _log_has_failure(path: Path) -> bool:
+    """Keep complete failure evidence, including invalid operational result fields."""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                lowered = line.casefold()
+                if any(
+                    marker in lowered
+                    for marker in ("traceback", "error:", "unlink_error", "cleanup_error", "failed")
+                ):
+                    return True
+                matches = list(_LOG_RESULT_FIELD.finditer(line))
+                if matches and line.lstrip().startswith("{"):
+                    try:
+                        json.loads(line)
+                    except ValueError:
+                        return True
+                for match in matches:
+                    value = match.group("value")
+                    if match.group("field").casefold() == "status":
+                        if value.strip("\"'").casefold() not in _SUCCESS_LOG_STATUSES:
+                            return True
+                    elif value != "0":
+                        return True
+        return False
+    except OSError:
+        return True
 
 
 def _collect_temp_audio(root: Path, counts: _Counts) -> None:
@@ -349,22 +660,48 @@ def _collect_temp_audio(root: Path, counts: _Counts) -> None:
             counts.skipped_error += 1
 
 
-def _delete_empty_dirs(root: Path) -> None:
+def _delete_empty_dirs(
+    root: Path, protected_roots: tuple[Path, ...] = (), tmp_root: Path | None = None
+) -> None:
     """Remove empty directories only inside a policy root, never linked dirs."""
-    if not root.is_dir() or _is_reparse_or_symlink(root):
+    scopes = frozenset(protected_roots)
+    if (
+        not root.is_dir()
+        or _is_reparse_or_symlink(root)
+        or _is_protected_tmp_material(root, tmp_root)
+        or _within_protected_scope(root, scopes)
+        or _within_tmp_source_checkout(root, tmp_root)
+    ):
         return
-    for base, dirs, _ in os.walk(root, topdown=False, followlinks=False):
-        for name in sorted(dirs):
-            path = Path(base) / name
-            if _is_reparse_or_symlink(path):
-                continue
-            with suppress(OSError):
-                path.rmdir()
-    with suppress(OSError):
-        root.rmdir()
+    directories = [root]
+    for base, dirs, names in os.walk(root, topdown=True, followlinks=False):
+        base_path = Path(base)
+        if tmp_root is not None and any(name.casefold() == ".git" for name in (*dirs, *names)):
+            dirs[:] = []
+            continue
+        dirs[:] = [
+            name
+            for name in dirs
+            if name not in {".git", ".claude", "venv", ".venv", "node_modules", "job_locks"}
+            and not _is_protected_tmp_material(base_path / name, tmp_root)
+            and not _is_reparse_or_symlink(base_path / name)
+            and not _within_protected_scope(base_path / name, scopes)
+        ]
+        directories.extend(base_path / name for name in dirs)
+    for directory in reversed(directories):
+        if (
+            _is_protected_tmp_material(directory, tmp_root)
+            or _within_tmp_source_checkout(directory, tmp_root)
+        ) or (
+            tmp_root is not None
+            and _checkpoint_is_active(directory / ".cleanup-directory", tmp_root, _Counts())
+        ):
+            continue
+        with suppress(OSError):
+            directory.rmdir()
 
 
-def _delete_main_cache_dirs(repo_root: Path) -> None:
+def _delete_main_cache_dirs(repo_root: Path, protected_roots: tuple[Path, ...] = ()) -> None:
     """Prune empty cache directories beneath the same fixed main-checkout roots."""
     cache_dirs: list[Path] = []
     for root in _main_cache_search_roots(repo_root):
@@ -372,17 +709,97 @@ def _delete_main_cache_dirs(repo_root: Path) -> None:
             continue
         for base, dirs, _ in os.walk(root, topdown=True, followlinks=False):
             base_path = Path(base)
-            dirs[:] = [name for name in dirs if not _is_reparse_or_symlink(base_path / name)]
+            dirs[:] = [
+                name
+                for name in dirs
+                if name not in {".git", ".claude", "venv", ".venv", "node_modules"}
+                and not _is_reparse_or_symlink(base_path / name)
+            ]
             if base_path.name in {"__pycache__", ".pytest_cache", ".ruff_cache"}:
                 cache_dirs.append(base_path)
     for cache_dir in sorted(cache_dirs, key=lambda path: len(path.parts), reverse=True):
-        _delete_empty_dirs(cache_dir)
+        _delete_empty_dirs(cache_dir, protected_roots)
+
+
+def _candidate_still_disposable(candidate: Candidate, repo_root: Path, counts: _Counts) -> bool:
+    path = candidate.path
+    if any(_is_reparse_or_symlink(part) for part in (path, *path.parents)):
+        return False
+    if counts.protects(path):
+        return False
+    try:
+        metadata = path.stat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            return False
+        if getattr(metadata, "st_file_attributes", 0) & getattr(
+            stat, "FILE_ATTRIBUTE_READONLY", 0x1
+        ):
+            return False
+        if (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns) != (
+            candidate.device,
+            candidate.inode,
+            candidate.size,
+            candidate.mtime_ns,
+        ):
+            return False
+    except OSError:
+        return False
+    tmp_root = repo_root / ".tmp"
+    if tmp_root in path.parents:
+        if _is_protected_tmp_material(path, tmp_root) or _within_tmp_source_checkout(
+            path.parent, tmp_root
+        ):
+            return False
+        recovery_path = (
+            path.parent
+            if (tmp_root / "cron_logs") in path.parents and path.suffix.lower() == ".log"
+            else path
+        )
+        if _is_recovery_material(recovery_path, tmp_root) or _checkpoint_is_active(
+            path, tmp_root, counts
+        ):
+            return False
+        if (tmp_root / "cron_logs") in path.parents and _log_has_failure(path):
+            return False
+    return True
 
 
 def _apply_candidates(
-    policy: str, candidates: list[Candidate], counts: _Counts, apply: bool
+    policy: str,
+    candidates: list[Candidate],
+    counts: _Counts,
+    apply: bool,
+    repo_root: Path,
+    *,
+    catalog_roots: tuple[Path, ...] = (),
 ) -> None:
+    catalog_signatures: dict[Path, tuple[int, int, int, int] | None] = {}
     for candidate in candidates:
+        for catalog_root in catalog_roots or (repo_root,):
+            catalog_path = catalog_root / CATALOG_RELATIVE_PATH
+            try:
+                catalog_stat = catalog_path.stat()
+                current_signature = (
+                    catalog_stat.st_dev,
+                    catalog_stat.st_ino,
+                    catalog_stat.st_size,
+                    catalog_stat.st_mtime_ns,
+                )
+            except FileNotFoundError:
+                current_signature = None
+            if current_signature != catalog_signatures.get(catalog_root):
+                registered = retained_scope_roots(load_catalog(catalog_root))
+                counts.protected_roots = tuple(set(counts.protected_roots) | registered)
+                catalog_signatures[catalog_root] = current_signature
+        if not _candidate_still_disposable(candidate, repo_root, counts):
+            counts.skipped_unsafe += 1
+            _event(
+                "cleanup_skipped",
+                policy=policy,
+                reason="candidate_changed_or_protected",
+                path=str(candidate.path),
+            )
+            continue
         if not apply:
             counts.would_delete += 1
             counts.bytes += candidate.size
@@ -414,21 +831,122 @@ def _parse_now(value: str | None) -> datetime:
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
 
+def _lexical_alias_target(value: str, parent: Path) -> str:
+    """Normalize link metadata without resolving or opening its descendants."""
+    for prefix in ("\\\\?\\", "\\??\\"):
+        if value.startswith(prefix):
+            value = value[len(prefix) :]
+            break
+    if not os.path.isabs(value):
+        value = os.path.join(parent, value)
+    return os.path.normcase(os.path.abspath(value))
+
+
+def catalog_authority_roots(repo_root: Path, code_root: Path) -> tuple[Path, ...]:
+    """Use state authority for the exact approved runtime data directory alias."""
+    roots = tuple(dict.fromkeys((code_root, repo_root)))
+    if code_root == repo_root:
+        return roots
+    alias = code_root / "data"
+    try:
+        metadata = alias.lstat()
+    except FileNotFoundError:
+        return roots
+    except OSError as exc:
+        raise ValueError("runtime data alias metadata is unavailable") from exc
+    linked = stat.S_ISLNK(metadata.st_mode) or bool(
+        getattr(metadata, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    )
+    if not linked:
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise ValueError("runtime data alias boundary must be a directory")
+        return roots
+    expected = repo_root / "data"
+    try:
+        target = _lexical_alias_target(os.readlink(alias), alias.parent)
+    except OSError as exc:
+        raise ValueError("runtime data alias target is unavailable") from exc
+    if target != os.path.normcase(os.path.abspath(expected)):
+        raise ValueError("runtime data alias does not target configured state data")
+    if any(_is_reparse_or_symlink(part) for part in (expected, *expected.parents)):
+        raise ValueError("configured state data alias target must not traverse links")
+    if not expected.is_dir():
+        raise ValueError("configured state data alias target must exist")
+    return (repo_root,)
+
+
 def run(argv: list[str] | None = None) -> CleanupSummary:
     parser = argparse.ArgumentParser(description="Dry-run-first allowlist-only weekly cleanup.")
     parser.add_argument(
         "--apply", action="store_true", help="Delete eligible files (default only reports)."
     )
     parser.add_argument(
-        "--repo-root", type=Path, default=PROJECT_ROOT, help="Repository root to inspect."
+        "--repo-root", type=Path, default=None, help="Configured product state root to inspect."
+    )
+    parser.add_argument(
+        "--code-root", type=Path, default=None, help="Runtime source root; also inspect its .tmp."
+    )
+    parser.add_argument(
+        "--completed-test-retention-days",
+        type=int,
+        default=7,
+        help="Age window for explicitly verified completed test files.",
     )
     parser.add_argument("--now", help="ISO-8601 timestamp, injectable for deterministic tests.")
     args = parser.parse_args(argv)
-    repo_root = args.repo_root.resolve()
+    root_arg = args.repo_root
+    if root_arg is None:
+        configured_root = os.environ.get("EARNINGS_SUMMARY_REPO_ROOT", "").strip()
+        if configured_root:
+            root_arg = Path(configured_root)
+        else:
+            from src.operations.paths import configured_product_state_root
+
+            root_arg = configured_product_state_root(PROJECT_ROOT)
+    repo_root = root_arg.resolve()
     if not repo_root.is_dir():
         raise ValueError(f"--repo-root must be an existing directory: {repo_root}")
+    code_root = (
+        args.code_root.resolve()
+        if args.code_root is not None
+        else repo_root
+        if args.repo_root is not None
+        else PROJECT_ROOT
+    )
+    if not code_root.is_dir():
+        raise ValueError(f"--code-root must be an existing directory: {code_root}")
     now = _parse_now(args.now)
     mode: Literal["dry_run", "apply"] = "apply" if args.apply else "dry_run"
+
+    catalog_roots = catalog_authority_roots(repo_root, code_root)
+    legacy_catalogs = [load_catalog(root) for root in catalog_roots]
+    discovery = discover_temp_runs(repo_root, code_root=code_root, now=now)
+    artifacts = {os.path.normcase(str(item.path)): item for item in discovery.catalog.artifacts}
+    # Legacy operator registrations have priority over producer registrations.
+    # A second manifest must not remove a legacy recovery hold or pin.
+    for legacy_catalog in legacy_catalogs:
+        for item in legacy_catalog.artifacts if legacy_catalog is not None else []:
+            artifacts[os.path.normcase(str(item.path))] = item
+    catalog = ArtifactCatalog(schema_version=1, artifacts=list(artifacts.values()))
+    lifecycle_roots = {
+        Path(report.root)
+        for report in discovery.reports
+        if report.scope == "run"
+        and (
+            (Path(report.root) / ".earnings-temp-run.json").exists()
+            or (Path(report.root) / ".earnings-temp-run.json").is_symlink()
+        )
+    }
+    protected_scopes = tuple(retained_scope_roots(catalog) | lifecycle_roots)
+    retirement = run_retention(
+        repo_root,
+        now=now,
+        apply=args.apply,
+        catalog=catalog,
+        test_retention_days=args.completed_test_retention_days,
+        catalog_roots=catalog_roots,
+    )
 
     policies = {
         "cron_logs_30d": _Counts(),
@@ -438,57 +956,112 @@ def run(argv: list[str] | None = None) -> CleanupSummary:
         "main_python_caches_7d": _Counts(),
         "tmp_unclassified_30d": _Counts(),
         "temp_audio_qa_guard": _Counts(),
+        "registered_artifact_retention": _Counts(
+            files_scanned=len(retirement.decisions),
+            would_delete=retirement.would_delete,
+            deleted=retirement.deleted,
+            bytes=retirement.bytes,
+            skipped_error=retirement.errors,
+        ),
     }
-    targets: list[tuple[str, Path, Collector, datetime]] = [
+    policy_specs: list[tuple[str, Path, Collector, int]] = [
         (
             "cron_logs_30d",
-            repo_root / ".tmp" / "cron_logs",
+            Path(".tmp/cron_logs"),
             _collect_tmp_owned_by_age,
-            now - timedelta(days=DEFAULT_DISPOSABLE_RETENTION_DAYS),
+            DEFAULT_DISPOSABLE_RETENTION_DAYS,
         ),
         (
             "cron_runs_30d",
-            repo_root / ".tmp" / "cron_runs",
+            Path(".tmp/cron_runs"),
             _collect_tmp_owned_by_age,
-            now - timedelta(days=DEFAULT_DISPOSABLE_RETENTION_DAYS),
+            DEFAULT_DISPOSABLE_RETENTION_DAYS,
         ),
         (
             "news_cache_7d",
-            repo_root / ".tmp" / "news_cache",
+            Path(".tmp/news_cache"),
             _collect_news_cache,
-            now - timedelta(days=DEFAULT_CACHE_RETENTION_DAYS),
+            DEFAULT_CACHE_RETENTION_DAYS,
         ),
         (
             "pdf_pages_30d",
-            repo_root / ".tmp" / "pdf_pages",
+            Path(".tmp/pdf_pages"),
             _collect_tmp_owned_by_age,
-            now - timedelta(days=DEFAULT_DISPOSABLE_RETENTION_DAYS),
+            DEFAULT_DISPOSABLE_RETENTION_DAYS,
         ),
-        (
-            "main_python_caches_7d",
-            repo_root,
-            _collect_main_caches,
-            now - timedelta(days=DEFAULT_CACHE_RETENTION_DAYS),
-        ),
+        ("main_python_caches_7d", Path("."), _collect_main_caches, DEFAULT_CACHE_RETENTION_DAYS),
         (
             "tmp_unclassified_30d",
-            repo_root / ".tmp",
+            Path(".tmp"),
             _collect_tmp_unclassified,
-            now - timedelta(days=DEFAULT_DISPOSABLE_RETENTION_DAYS),
+            DEFAULT_DISPOSABLE_RETENTION_DAYS,
         ),
     ]
-    roots_to_prune: list[Path] = []
-    for name, root, collector, cutoff in targets:
-        _apply_candidates(name, collector(root, cutoff, policies[name]), policies[name], args.apply)
-        if root not in (repo_root, repo_root / ".tmp"):
-            roots_to_prune.append(root)
-    _collect_temp_audio(repo_root / ".tmp", policies["temp_audio_qa_guard"])
+    targets: list[tuple[str, Path, Path, Collector, datetime]] = []
+    owners = [("", repo_root)]
+    if code_root != repo_root:
+        owners.append(("runtime_", code_root))
+    for prefix, owner in owners:
+        for name, relative, collector, days in policy_specs:
+            policy = prefix + name
+            policies.setdefault(policy, _Counts())
+            targets.append((policy, owner, owner / relative, collector, now - timedelta(days=days)))
+        policies.setdefault(prefix + "temp_audio_qa_guard", _Counts())
+    for counts in policies.values():
+        counts.protected_roots = protected_scopes
+    for decision in retirement.decisions:
+        _event("artifact_retention", **decision.model_dump())
+    roots_to_prune: list[tuple[Path, Path]] = []
+    for name, owner, root, collector, cutoff in targets:
+        _apply_candidates(
+            name,
+            collector(root, cutoff, policies[name]),
+            policies[name],
+            args.apply,
+            owner,
+            catalog_roots=catalog_roots,
+        )
+        if root not in (owner, owner / ".tmp"):
+            roots_to_prune.append((root, owner / ".tmp"))
+    for prefix, owner in owners:
+        _collect_temp_audio(owner / ".tmp", policies[prefix + "temp_audio_qa_guard"])
     if args.apply:
-        for root in roots_to_prune:
-            _delete_empty_dirs(root)
-        _delete_main_cache_dirs(repo_root)
+        # A catalog added during collection protects the same roots during pruning.
+        prune_scopes = tuple(
+            set(protected_scopes).union(*(counts.protected_roots for counts in policies.values()))
+        )
+        for root, tmp_root in roots_to_prune:
+            _delete_empty_dirs(root, prune_scopes, tmp_root)
+        for _, owner in owners:
+            _delete_main_cache_dirs(owner, prune_scopes)
 
     summaries = {name: counts.summary() for name, counts in policies.items()}
+    coverage = inventory_temp_coverage(
+        [
+            (repo_root / ".tmp", "unclassified"),
+            (code_root / ".tmp", "unclassified"),
+            (repo_root / "data" / "operations", "recovery"),
+            (repo_root / "data" / "backups", "recovery"),
+            *((scope, "unclassified") for scope in protected_scopes),
+            *(
+                (Path(report.root), "unclassified")
+                for report in discovery.reports
+                if report.scope == "run"
+            ),
+        ],
+        now=now,
+        decisions=retirement.decisions,
+        run_statuses={
+            Path(report.root): report.status
+            for report in discovery.reports
+            if Path(report.root) in lifecycle_roots
+        },
+    )
+    for report in discovery.reports:
+        _event("temp_run_retention", **report.model_dump(mode="json"))
+        if report.problems:
+            coverage.status = "incomplete"
+    _event("cleanup_coverage", **coverage.model_dump(mode="json"))
     return CleanupSummary(
         policy_version=POLICY_VERSION,
         idempotency_key=f"weekly_cleanup:{now.strftime('%G-W%V')}:{POLICY_VERSION}",
@@ -499,6 +1072,7 @@ def run(argv: list[str] | None = None) -> CleanupSummary:
         bytes=sum(item.bytes for item in summaries.values()),
         skipped_invalid=sum(item.skipped_invalid for item in summaries.values()),
         policies=summaries,
+        coverage=coverage,
     )
 
 

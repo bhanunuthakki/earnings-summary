@@ -433,7 +433,7 @@ def test_operations_runtime_collector_scheduler_lane_is_preserved() -> None:
 def test_every_cron_portfolio_db_job_has_an_explicit_reviewed_classification() -> None:
     observed: set[str] = set()
     invocation = re.compile(
-        r'run_python\.bat"\s+"([^"]+)"\s+"portfolio-db"',
+        r'run_python\.bat"\s+"([^"]+)"\s+"(portfolio-db|filesystem-maintenance)"',
         re.IGNORECASE,
     )
     for wrapper in (PROJECT_ROOT / "cron").glob("*.bat"):
@@ -442,7 +442,10 @@ def test_every_cron_portfolio_db_job_has_an_explicit_reviewed_classification() -
                 continue
             match = invocation.search(line)
             if match is not None:
-                observed.add(match.group(1))
+                job_name, requested_lane = match.groups()
+                if requested_lane != "portfolio-db":
+                    assert _PORTFOLIO_DB_POLICY.get(job_name) == requested_lane
+                observed.add(job_name)
 
     assert observed == set(_PORTFOLIO_DB_POLICY) - {"refresh_fmp"}
 

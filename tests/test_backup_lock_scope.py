@@ -19,11 +19,11 @@ from pathlib import Path
 
 import pytest
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from runtime.job_runtime import JobAlreadyRunningError, JobLock
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
-
 BACKUP_WRAPPER = PROJECT_ROOT / "cron" / "run_backup_db.bat"
 
 
@@ -71,69 +71,33 @@ def test_scheduler_wrapper_declares_the_backup_write_set() -> None:
     assert '"portfolio-db"' not in invocation, invocation
 
 
-def test_scheduler_backup_requires_encrypted_receipt_before_file_gc_apply() -> None:
-    """File retention belongs to the existing daily backup chain.
-
-    A zero exit alone is insufficient because the backup's idempotency guard can
-    suppress an invocation. The wrapper must prove that this invocation emitted
-    an encrypted snapshot receipt, prove the referenced file exists, and only
-    then run destructive file retention. Its exit code must remain the final
-    scheduled-task result.
-    """
-    text = BACKUP_WRAPPER.read_text(encoding="utf-8", errors="replace")
-    lowered = text.lower()
-
-    backup_index = lowered.index("cron\\backup_db.py")
-    receipt_index = lowered.index("ok backup ->")
-    existence_index = lowered.index("test-path -literalpath")
-    gc_index = lowered.index("execution\\backup_file_gc.py")
-    assert backup_index < receipt_index < existence_index < gc_index
-    assert ".gz.enc" in lowered[receipt_index:gc_index]
-    assert "^|" not in text, "quoted PowerShell pipelines must not receive CMD caret escapes"
-
-    gc_invocation = next(
-        line
-        for line in text.splitlines()
-        if "run_python.bat" in line and "backup_file_gc.py" in line
-    )
-    assert '"backup-file-gc"' in gc_invocation
-    assert "--apply" in gc_invocation
-    assert text.rstrip().endswith("endlocal & exit /b %RC%")
+def test_scheduler_backup_requires_structured_receipt_before_upload() -> None:
+    text = BACKUP_WRAPPER.read_text(encoding="utf-8").lower()
+    assert text.index("cron\\backup_db.py") < text.index("backup-retention-v1")
+    assert "convertfrom-json" in text
+    assert "test-path -literalpath $r.backup_dir" in text
+    assert "^|" not in text
+    assert "find_existing_receipt" not in text
+    assert "execution\\backup_file_gc.py" not in text
+    assert text.rstrip().endswith("endlocal & exit /b %rc%")
 
 
-def test_scheduler_backup_publishes_encrypted_artifacts_headlessly() -> None:
-    text = BACKUP_WRAPPER.read_text(encoding="utf-8", errors="replace")
+def test_scheduler_uploads_every_family_before_retirement() -> None:
+    text = BACKUP_WRAPPER.read_text(encoding="utf-8").lower()
+    calls = [line for line in text.splitlines() if "execution\\upload_drive_backups.py" in line]
+    assert len(calls) == 4
+    assert all("--defer-retention" in line for line in calls[:2])
+    assert all("--finalize-only" in line for line in calls[2:])
+    assert '--backup-set "portfolio-db"' in calls[0]
+    assert '--backup-set "portfolio-gc-archive"' in calls[1]
+    assert 'if not defined es_db_backup_retain set "es_db_backup_retain=1"' in text
+    assert 'if not defined es_archive_backup_retain set "es_archive_backup_retain=1"' in text
+    assert 'if not "%rc%"=="0" goto done' in text
 
-    assert "execution\\upload_drive_backups.py" in text
-    assert 'if "%BACKUP_DIR:~-1%"=="\\" set "BACKUP_DIR=%BACKUP_DIR:~0,-1%"' in text
-    assert '--pattern "portfolio.db.*.gz.enc"' in text
-    assert '--backup-set "portfolio-db" --retain 14 --latest-only' in text
-    assert '--backup-set "portfolio-gc-archive" --retain 6 --allow-empty --latest-only' in text
-    assert text.index("execution\\upload_drive_backups.py") < text.index(
-        "execution\\backup_file_gc.py"
-    )
 
-
-def test_scheduler_backup_retries_upload_after_completed_idempotent_snapshot() -> None:
-    """A completed same-day invocation repairs upload but must not trigger GC.
-
-    ``backup_db.py`` emits a stable ``already_done`` JSON receipt and exits
-    zero when run accounting deduplicates a completed backup. Task Scheduler
-    retries must locate the prior encrypted receipt and retry Drive publication
-    without pretending a new snapshot was created or authorizing file GC.
-    """
-    text = BACKUP_WRAPPER.read_text(encoding="utf-8", errors="replace").lower()
-
-    backup_index = text.index("cron\\backup_db.py")
-    already_done_index = text.index("already_done")
-    recovery_index = text.index("\n:find_existing_receipt")
-    receipt_index = text.index("ok backup ->", recovery_index)
-    upload_index = text.index("\n:upload")
-    gc_index = text.index("execution\\backup_file_gc.py")
-    assert (
-        backup_index < already_done_index < recovery_index < receipt_index < upload_index < gc_index
-    )
-    assert (
-        "if not errorlevel 1 goto find_existing_receipt" in text[already_done_index:recovery_index]
-    )
-    assert "if not defined allow_file_gc goto done" in text[upload_index:gc_index]
+def test_unchanged_and_idempotent_runs_share_deterministic_receipt() -> None:
+    text = BACKUP_WRAPPER.read_text(encoding="utf-8").lower()
+    assert "skipped_unchanged" in text and "already_done" in text
+    assert "get-childitem" not in text
+    assert "ok backup ->" not in text
+    assert "backup-retention-v1" in text
