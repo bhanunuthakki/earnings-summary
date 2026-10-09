@@ -659,24 +659,23 @@ class ReportingEntityRegistry:
         *,
         knowledge_at: datetime,
     ) -> CanonicalEvidenceSubject:
-        row = self._conn.execute(
+        rows = self._conn.execute(
             """
             SELECT binding_revision_id, recorded_issuer_id, issuer_id,
-                   reporting_entity_id, security_id, material_dissent
+                   reporting_entity_id, security_id, material_dissent,
+                   revision, outcome, knowledge_at
             FROM recorded_subject_binding_revisions AS binding
             WHERE binding.recorded_issuer_id = ?
-              AND binding.outcome = 'selected'
-              AND binding.knowledge_at <= ?
-              AND NOT EXISTS (
-                  SELECT 1 FROM recorded_subject_binding_revisions AS newer
-                  WHERE newer.recorded_issuer_id = binding.recorded_issuer_id
-                    AND newer.knowledge_at <= ?
-                    AND newer.revision > binding.revision
-              )
             """,
-            (recorded_issuer_id, knowledge_at, knowledge_at),
-        ).fetchone()
-        if row is None:
+            (recorded_issuer_id,),
+        ).fetchall()
+        cutoff = _timeline(knowledge_at)
+        row = max(
+            (row for row in rows if _parse_datetime(row[8]) <= cutoff),
+            key=lambda row: int(row[6]),
+            default=None,
+        )
+        if row is None or row[7] != "selected":
             raise LookupError("recorded evidence subject has no selected resolution")
         return CanonicalEvidenceSubject.model_validate(
             {

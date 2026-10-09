@@ -27,6 +27,7 @@ from pydantic import (
 )
 
 from models.facts import Unit
+from provenance.reporting_entity_registry import ReportingEntityRegistry
 
 
 class KpiPeriodRole(StrEnum):
@@ -342,6 +343,7 @@ def _validate_definition_binding(
     definition_revision_id: str,
     context: KpiSemanticContext,
     knowledge_at: datetime,
+    recorded_at: datetime,
 ) -> None:
     if not _table_exists(conn, "kpi_definition_revisions"):
         raise ValueError("KPI definition revision table is unavailable")
@@ -443,6 +445,26 @@ def _validate_definition_binding(
     if str(definition_row["currency_disposition"]) != expected_disposition:
         raise ValueError("KPI definition revision currency disposition does not match the fact")
     fact_issuer = _fact_source_issuer(conn, source_doc_id=int(str(fact_row["source_doc_id"])))
+    if fact_issuer is not None and fact_issuer != str(definition_row["issuer_id"]):
+        try:
+            subject = ReportingEntityRegistry(conn).canonicalize_recorded_subject(
+                fact_issuer, knowledge_at=knowledge_at.astimezone(UTC)
+            )
+        except LookupError as exc:
+            raise ValueError("KPI definition revision and fact source issuer must agree") from exc
+        if (
+            subject.issuer_id != str(definition_row["issuer_id"])
+            or subject.reporting_entity_id != str(definition_row["reporting_entity_id"])
+            or subject.material_dissent
+        ):
+            raise ValueError("KPI definition revision and fact source issuer must agree")
+        binding = conn.execute(
+            "SELECT recorded_at FROM recorded_subject_binding_revisions WHERE binding_revision_id=?",
+            (subject.binding_revision_id,),
+        ).fetchone()
+        if binding is None or _database_datetime(binding[0]) > recorded_at:
+            raise ValueError("KPI semantic context predates its recorded subject binding")
+        fact_issuer = subject.issuer_id
     if fact_issuer is None or fact_issuer != str(definition_row["issuer_id"]):
         raise ValueError("KPI definition revision and fact source issuer must agree")
 
@@ -667,6 +689,19 @@ def persist_kpi_semantic_context(
         if isinstance(kpi_definition_revision_id, _DefinitionBindingUnspecified)
         else kpi_definition_revision_id
     )
+    replay = (
+        current is not None
+        and current.context == context
+        and current.kpi_definition_revision_id == desired_definition_revision_id
+    )
+    # Use the exact stored recording clock for validation, including an unchanged replay.
+    created_at = datetime.now(UTC)
+    if replay and current is not None and "created_at" in columns:
+        created_at = _database_datetime(
+            conn.execute(
+                "SELECT created_at FROM kpi_fact_semantic_contexts WHERE id=?", (current.id,)
+            ).fetchone()[0]
+        )
     if desired_definition_revision_id is not None:
         _validate_definition_binding(
             conn,
@@ -674,12 +709,9 @@ def persist_kpi_semantic_context(
             definition_revision_id=desired_definition_revision_id,
             context=context,
             knowledge_at=observed,
+            recorded_at=created_at,
         )
-    if (
-        current is not None
-        and current.context == context
-        and current.kpi_definition_revision_id == desired_definition_revision_id
-    ):
+    if replay and current is not None:
         return current.id
     if not has_revisions and current is not None:
         raise ValueError("KPI fact semantic context conflicts with immutable persisted context")
@@ -733,6 +765,9 @@ def persist_kpi_semantic_context(
     if "knowledge_at" in columns:
         insert_fields.append("knowledge_at")
         values.append(observed.astimezone(UTC).isoformat().replace("+00:00", "Z"))
+    if "created_at" in columns:
+        insert_fields.append("created_at")
+        values.append(created_at.astimezone(UTC).isoformat().replace("+00:00", "Z"))
     if has_definition_binding:
         insert_fields.append("kpi_definition_revision_id")
         values.append(desired_definition_revision_id)

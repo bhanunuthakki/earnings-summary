@@ -25,6 +25,7 @@ from pipeline.kpi_semantics import (
     KpiUnitScale,
     validate_admitted_unit_scale,
 )
+from provenance.reporting_entity_registry import ReportingEntityRegistry
 
 
 class KpiDefinitionStatus(StrEnum):
@@ -579,13 +580,35 @@ def _validate_source_evidence(
         "SELECT issuer_id FROM reporting_entities WHERE reporting_entity_id=?",
         (reporting_entity_id,),
     ).fetchone()
-    if entity is None or str(entity[0]) != str(evidence["issuer_id"]):
+    if entity is None:
         raise ValueError("definition evidence and reporting entity issuer must agree")
+    evidence_issuer = str(evidence["issuer_id"])
+    if evidence_issuer != str(entity[0]):
+        try:
+            subject = ReportingEntityRegistry(conn).canonicalize_recorded_subject(
+                evidence_issuer, knowledge_at=knowledge_at.astimezone(UTC)
+            )
+        except LookupError as exc:
+            raise ValueError("definition evidence and reporting entity issuer must agree") from exc
+        if (
+            subject.issuer_id != str(entity[0])
+            or subject.reporting_entity_id != reporting_entity_id
+            or subject.material_dissent
+        ):
+            raise ValueError("definition evidence and reporting entity issuer must agree")
+        binding = conn.execute(
+            "SELECT recorded_at FROM recorded_subject_binding_revisions "
+            "WHERE binding_revision_id=?",
+            (subject.binding_revision_id,),
+        ).fetchone()
+        if binding is None or _db_datetime(binding[0]) > recorded_at:
+            raise ValueError("definition recording predates its subject binding")
+        evidence_issuer = subject.issuer_id
     if scope_security_id is not None:
         security = conn.execute(
             "SELECT issuer_id FROM securities WHERE security_id=?", (scope_security_id,)
         ).fetchone()
-        if security is None or str(security[0]) != str(evidence["issuer_id"]):
+        if security is None or str(security[0]) != evidence_issuer:
             raise ValueError("definition scope security must belong to the evidence issuer")
     retrieved_at = _db_datetime(evidence["retrieved_at"])
     document_recorded_at = _db_datetime(evidence["document_recorded_at"])
@@ -594,7 +617,7 @@ def _validate_source_evidence(
         raise ValueError("definition knowledge predates source retrieval")
     if document_recorded_at > recorded_at or node_recorded_at > recorded_at:
         raise ValueError("definition recording predates its evidence")
-    return str(evidence["issuer_id"])
+    return evidence_issuer
 
 
 def validate_kpi_definition_revision_candidate(
