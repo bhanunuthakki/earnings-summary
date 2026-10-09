@@ -24,16 +24,22 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.operations.artifact_retention import (
     CATALOG_RELATIVE_PATH,
+    Artifact,
     ArtifactCatalog,
     load_catalog,
+    merge_operator_artifact,
     retained_scope_roots,
     run_retention,
+)
+from src.operations.operational_backup_retention import (
+    OperationalBackupReport,
+    discover_operational_backups,
 )
 from src.operations.temp_coverage import TempCoverage, inventory_temp_coverage
 from src.operations.temp_run_retention import discover_temp_runs
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-POLICY_VERSION = "weekly-cleanup-v4"
+POLICY_VERSION = "weekly-cleanup-v5"
 DEFAULT_DISPOSABLE_RETENTION_DAYS = 30
 DEFAULT_CACHE_RETENTION_DAYS = 7
 Collector: TypeAlias = Callable[[Path, datetime, "_Counts"], list["Candidate"]]
@@ -59,7 +65,7 @@ class CleanupSummary(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    policy_version: Literal["weekly-cleanup-v4"]
+    policy_version: Literal["weekly-cleanup-v5"]
     idempotency_key: str = Field(min_length=1)
     mode: Literal["dry_run", "apply"]
     files_scanned: int = Field(ge=0)
@@ -69,6 +75,9 @@ class CleanupSummary(BaseModel):
     skipped_invalid: int = Field(ge=0)
     policies: dict[str, PolicySummary]
     coverage: TempCoverage = Field(default_factory=TempCoverage)
+    operational_backups: list[OperationalBackupReport] = Field(
+        default_factory=lambda: list[OperationalBackupReport]()
+    )
 
 
 @dataclass(frozen=True)
@@ -842,6 +851,51 @@ def _lexical_alias_target(value: str, parent: Path) -> str:
     return os.path.normcase(os.path.abspath(value))
 
 
+def operator_backup_families(
+    discovered: ArtifactCatalog, operators: list[ArtifactCatalog | None]
+) -> list[Artifact]:
+    """Extend exact operator family declarations without changing their holds.
+
+    A legacy registration of the same verified bytes supplies the family name
+    for future producer backups. Conflicting family names require review.
+    """
+    declared = {
+        os.path.normcase(str(item.path)): item
+        for catalog in operators
+        if catalog is not None
+        for item in catalog.artifacts
+    }
+    aliases: dict[str, set[str]] = {}
+    for item in discovered.artifacts:
+        operator = declared.get(os.path.normcase(str(item.path)))
+        if (
+            operator is not None
+            and operator.kind == "backup"
+            and operator.verified
+            and operator.sha256 == item.sha256
+            and operator.size == item.size
+        ):
+            aliases.setdefault(item.family, set()).add(operator.family)
+    result: list[Artifact] = []
+    reverse_aliases: dict[str, set[str]] = {}
+    for producer_family, families in aliases.items():
+        for family in families:
+            reverse_aliases.setdefault(family, set()).add(producer_family)
+    for item in discovered.artifacts:
+        families = aliases.get(item.family, set())
+        conflicting = len(families) > 1 or any(
+            len(reverse_aliases[family]) > 1 for family in families
+        )
+        if conflicting:
+            item = item.model_copy(
+                update={"pins": [*item.pins, "ambiguous_operator_backup_family"]}
+            )
+        elif len(families) == 1:
+            item = item.model_copy(update={"family": next(iter(families))})
+        result.append(item)
+    return result
+
+
 def catalog_authority_roots(repo_root: Path, code_root: Path) -> tuple[Path, ...]:
     """Use state authority for the exact approved runtime data directory alias."""
     roots = tuple(dict.fromkeys((code_root, repo_root)))
@@ -874,6 +928,21 @@ def catalog_authority_roots(repo_root: Path, code_root: Path) -> tuple[Path, ...
     if not expected.is_dir():
         raise ValueError("configured state data alias target must exist")
     return (repo_root,)
+
+
+def external_temp_coverage_roots() -> list[tuple[Path, str]]:
+    """Count legacy tests and deployment backups without deletion authority."""
+    if os.name != "nt":
+        return []
+    roots = [(Path("C:/tmp"), "unclassified")]
+    deployments = Path("C:/ProgramData/BhanuOperations/deployments")
+    try:
+        if any(_is_reparse_or_symlink(part) for part in (deployments, *deployments.parents)):
+            return [*roots, (deployments, "unclassified")]
+        roots.extend((path, "unclassified") for path in deployments.glob("earnings-summary-*"))
+    except FileNotFoundError:
+        pass
+    return roots
 
 
 def run(argv: list[str] | None = None) -> CleanupSummary:
@@ -922,12 +991,46 @@ def run(argv: list[str] | None = None) -> CleanupSummary:
     catalog_roots = catalog_authority_roots(repo_root, code_root)
     legacy_catalogs = [load_catalog(root) for root in catalog_roots]
     discovery = discover_temp_runs(repo_root, code_root=code_root, now=now)
+    backup_discovery = discover_operational_backups(repo_root)
     artifacts = {os.path.normcase(str(item.path)): item for item in discovery.catalog.artifacts}
+    operational_artifacts = operator_backup_families(backup_discovery.catalog, legacy_catalogs)
+    operational_by_path = {os.path.normcase(str(item.path)): item for item in operational_artifacts}
+    for report in backup_discovery.reports:
+        declared = operational_by_path.get(os.path.normcase(str(report.path)))
+        if declared is not None:
+            report.family = declared.family
+            report.pins = declared.pins
+            if "ambiguous_operator_backup_family" in declared.pins:
+                report.status = "unclassified"
+                report.reason = "ambiguous_operator_backup_family"
+    for item in operational_artifacts:
+        artifacts.setdefault(os.path.normcase(str(item.path)), item)
     # Legacy operator registrations have priority over producer registrations.
     # A second manifest must not remove a legacy recovery hold or pin.
     for legacy_catalog in legacy_catalogs:
         for item in legacy_catalog.artifacts if legacy_catalog is not None else []:
-            artifacts[os.path.normcase(str(item.path))] = item
+            name = os.path.normcase(str(item.path))
+            artifacts[name] = merge_operator_artifact(item, artifacts.get(name))
+    for report in backup_discovery.reports:
+        name = os.path.normcase(str(report.path))
+        if report.status not in {"failed", "unclassified"}:
+            continue
+        held_names = [name] if name in artifacts else []
+        if report.path == report.root == repo_root / "data/backups":
+            held_names = [
+                key
+                for key, item in artifacts.items()
+                if item.kind == "backup" and report.root in item.path.parents
+            ]
+        for held_name in held_names:
+            item = artifacts[held_name]
+            artifacts[held_name] = item.model_copy(
+                update={
+                    "pins": [*item.pins, "producer_operation_unresolved"],
+                    "status": "failed" if report.status == "failed" else "active",
+                    "verified": False,
+                }
+            )
     catalog = ArtifactCatalog(schema_version=1, artifacts=list(artifacts.values()))
     lifecycle_roots = {
         Path(report.root)
@@ -1042,6 +1145,7 @@ def run(argv: list[str] | None = None) -> CleanupSummary:
             (code_root / ".tmp", "unclassified"),
             (repo_root / "data" / "operations", "recovery"),
             (repo_root / "data" / "backups", "recovery"),
+            *external_temp_coverage_roots(),
             *((scope, "unclassified") for scope in protected_scopes),
             *(
                 (Path(report.root), "unclassified")
@@ -1061,6 +1165,10 @@ def run(argv: list[str] | None = None) -> CleanupSummary:
         _event("temp_run_retention", **report.model_dump(mode="json"))
         if report.problems:
             coverage.status = "incomplete"
+    for report in backup_discovery.reports:
+        _event("operational_backup_retention", **report.model_dump(mode="json"))
+        if report.status == "unclassified":
+            coverage.status = "incomplete"
     _event("cleanup_coverage", **coverage.model_dump(mode="json"))
     return CleanupSummary(
         policy_version=POLICY_VERSION,
@@ -1073,6 +1181,7 @@ def run(argv: list[str] | None = None) -> CleanupSummary:
         skipped_invalid=sum(item.skipped_invalid for item in summaries.values()),
         policies=summaries,
         coverage=coverage,
+        operational_backups=backup_discovery.reports,
     )
 
 

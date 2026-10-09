@@ -21,6 +21,38 @@ CATALOG_RELATIVE_PATH = Path("data/operations/artifact-retention.json")
 RECEIPT_RELATIVE_ROOT = Path("data/operations/artifact-retention-receipts")
 
 
+class RetirementProof(BaseModel):
+    """Immutable operation-closure or verification evidence bound to an artifact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    path: Path
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @field_validator("path")
+    @classmethod
+    def absolute_path(cls, value: Path) -> Path:
+        if not value.is_absolute() or ".." in value.parts:
+            raise ValueError("proof paths must be absolute without parent traversal")
+        return value
+
+
+class RetirementEvidenceSet(BaseModel):
+    """A current operation directory, including absence and new publications."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    path: Path
+    sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+    @field_validator("path")
+    @classmethod
+    def absolute_path(cls, value: Path) -> Path:
+        if not value.is_absolute() or ".." in value.parts:
+            raise ValueError("evidence directories must be absolute without parent traversal")
+        return value
+
+
 class Artifact(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -36,6 +68,8 @@ class Artifact(BaseModel):
     pins: list[str] = Field(default_factory=list)
     lifecycle_manifest: Path | None = None
     lifecycle_manifest_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    retirement_proofs: tuple[RetirementProof, ...] = ()
+    retirement_evidence_sets: tuple[RetirementEvidenceSet, ...] = ()
 
     @model_validator(mode="after")
     def lifecycle_binding(self) -> Artifact:
@@ -136,6 +170,32 @@ def retained_scope_roots(catalog: ArtifactCatalog | None) -> set[Path]:
     return {item.allowed_root for item in catalog.artifacts} if catalog else set()
 
 
+def merge_operator_artifact(operator: Artifact, producer: Artifact | None) -> Artifact:
+    """Operator declarations retain authority; producer evidence can add holds."""
+    if producer is None:
+        return operator
+    holds = list(dict.fromkeys([*operator.pins, *producer.pins]))
+    if producer.status != "completed":
+        holds.append("producer_operation_unfinished")
+    if not producer.verified:
+        holds.append("producer_artifact_unverified")
+    return operator.model_copy(
+        update={
+            "status": producer.status if operator.status == "completed" else operator.status,
+            "verified": operator.verified and producer.verified,
+            "pins": list(dict.fromkeys(holds)),
+            "retirement_proofs": tuple(
+                dict.fromkeys((*operator.retirement_proofs, *producer.retirement_proofs))
+            ),
+            "retirement_evidence_sets": tuple(
+                dict.fromkeys(
+                    (*operator.retirement_evidence_sets, *producer.retirement_evidence_sets)
+                )
+            ),
+        }
+    )
+
+
 def _approved_root(root: Path, repo_root: Path) -> bool:
     local_roots = (repo_root / ".tmp", repo_root / "data" / "backups")
     if any(root == scope or scope in root.parents for scope in local_roots):
@@ -163,6 +223,53 @@ def _hash(path: Path) -> str:
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
+    return digest.hexdigest()
+
+
+def evidence_set_digest(directory: Path) -> str | None:
+    """Hash bounded direct JSON members without following links or opening a DB."""
+    for component in reversed((directory, *directory.parents)):
+        try:
+            if _link_like(component):
+                raise ValueError("linked operation evidence directory")
+        except FileNotFoundError:
+            return None
+    if not directory.is_dir():
+        raise ValueError("operation evidence boundary is not a directory")
+    with os.scandir(directory) as entries:
+        members: list[Path] = []
+        for entry in entries:
+            if entry.name.casefold().endswith(".json"):
+                members.append(Path(entry.path))
+                if len(members) > 4096:
+                    raise ValueError("operation evidence count limit")
+    digest = hashlib.sha256()
+    total_bytes = 0
+    for path in sorted(members):
+        before = path.lstat()
+        if (
+            _link_like(path)
+            or not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_size > 2 * 1024 * 1024
+        ):
+            raise ValueError("unsafe operation evidence member")
+        total_bytes += before.st_size
+        if total_bytes > 64 * 1024 * 1024:
+            raise ValueError("operation evidence byte limit")
+        with path.open("rb") as stream:
+            raw = stream.read(2 * 1024 * 1024 + 1)
+        after = path.lstat()
+        if len(raw) != before.st_size or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise ValueError("operation evidence changed during observation")
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(hashlib.sha256(raw).digest())
     return digest.hexdigest()
 
 
@@ -213,6 +320,27 @@ def _ancestor_lifecycle(path: Path, parent: Path) -> tuple[str | None, str | Non
         return "unverified_lifecycle_manifest", None
 
 
+def _validate_proofs(item: Artifact) -> str | None:
+    for evidence in item.retirement_evidence_sets:
+        try:
+            if evidence_set_digest(evidence.path) != evidence.sha256:
+                return "retirement_evidence_set_changed"
+        except (OSError, ValueError):
+            return "retirement_evidence_set_unavailable"
+    for proof in item.retirement_proofs:
+        try:
+            if not _safe_ancestors(proof.path):
+                return "linked_retirement_proof"
+            metadata = proof.path.lstat()
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 2 * 1024 * 1024:
+                return "invalid_retirement_proof"
+            if _hash(proof.path) != proof.sha256:
+                return "retirement_proof_changed"
+        except OSError:
+            return "retirement_proof_unavailable"
+    return None
+
+
 def _validate_file(item: Artifact, repo_root: Path, live_db: Path | None) -> str | None:
     """A preservation reason, or None when the named file still matches proof."""
     if not _approved_root(item.allowed_root, repo_root):
@@ -246,6 +374,8 @@ def _validate_file(item: Artifact, repo_root: Path, live_db: Path | None) -> str
     try:
         if not _safe_ancestors(item.path):
             return "linked_path"
+        if reason := _validate_proofs(item):
+            return reason
         if item.lifecycle_manifest is not None:
             if not _safe_ancestors(item.lifecycle_manifest):
                 return "linked_lifecycle_manifest"
@@ -335,6 +465,8 @@ def _validate_file(item: Artifact, repo_root: Path, live_db: Path | None) -> str
             or _hash(item.lifecycle_manifest) != item.lifecycle_manifest_sha256
         ):
             return "lifecycle_manifest_changed"
+        if reason := _validate_proofs(item):
+            return reason
         if any(
             not _safe_ancestors(path) or _hash(path) != digest for path, digest in lifecycle_guards
         ):
@@ -395,7 +527,9 @@ def run_retention(
     )
     for current, _digest in sources.values():
         if current is not None:
-            artifacts.update({os.path.normcase(str(item.path)): item for item in current.artifacts})
+            for item in current.artifacts:
+                name = os.path.normcase(str(item.path))
+                artifacts[name] = merge_operator_artifact(item, artifacts.get(name))
     if catalog is None and all(current is None for current, _digest in sources.values()):
         return RetirementResult()
     catalog = ArtifactCatalog(schema_version=1, artifacts=list(artifacts.values()))

@@ -138,8 +138,27 @@ Backup files retain the latest verified, completed member per source and family.
 Daily database backup defaults are one portfolio snapshot and one cumulative
 archive snapshot. Snapshot and archive verification and both required uploads
 must finish before retention starts. Failed or unfinished attempts and explicit
-recovery pins keep their bytes and the last good backup. Legacy files require
-explicit catalog registration; calendar age or a filename is insufficient.
+recovery pins keep their bytes and the last good backup. The weekly cleaner also
+discovers operational SQLite backups in state `data/backups`. A valid snapshot
+manifest, a sealed restore-readiness receipt, and a matching successful apply
+receipt must bind the exact bytes, canonical source and completed operation.
+Snapshot creation and a passed dry run do not establish operation completion.
+KPI repair and disposition purposes retain separate backup families per source.
+Failed attempts remain held until a later successful attempt proves recovery
+with the same backup, logical operation, manifest, review and executor bindings.
+Each cleanup run reads the current evidence again. It rechecks all evidence
+digests before retirement and before relying on a surviving backup. Operator
+catalog pins and holds take priority. Other legacy files require explicit catalog
+registration; calendar age or a filename is insufficient.
+
+Legacy temporary trees without ownership and completion evidence have no expiry
+date. The coverage receipt must keep their sizes and holds visible. A supervised
+review must classify their exact disposable files before registering them; active
+work, source clones and unresolved recovery copies must not become disposable
+because they are old. Registered completed test files clear on the first weekly
+pass after their seven-day completion window. Ordinary eligible files clear on
+the first pass after their 30-day window. These windows are not deadlines for
+unclassified files, source evidence or recovery holds.
 
 `execution/run_weekly_cleanup.py` and `execution/db_gc.py` are the executable
 allowlists and exact cutoff implementations. Their already-registered weekly jobs are

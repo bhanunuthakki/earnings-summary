@@ -4,8 +4,13 @@ The existing daily database backup and weekly filesystem cleanup jobs own file
 retention. Backups keep the latest verified completed member per source and
 family. Snapshot, archive and required upload failures preserve the last good
 backup and unfinished attempt evidence. Retirement starts after every required
-upload succeeds. Legacy backups require explicit hash-bound catalog registration;
-the automatic filename/month-based legacy sweep is retired. Weekly cleanup
+upload succeeds. Operational KPI backups can enter the weekly retention engine
+through exact snapshot, restore-readiness and sealed successful-apply evidence.
+The cleaner discovers this evidence on each pass, keeps the latest good copy per
+source and purpose, and holds failed or incomplete operations. Compatible later
+success can resolve a hold. Other legacy backups require explicit hash-bound
+catalog registration; the automatic filename/month-based legacy sweep is retired.
+Weekly cleanup
 preserves the newest job log, failed checkpoints, recovery scopes and registered
 pins. Its filesystem phase uses the filesystem-maintenance lane and resolves the
 configured product state root. See `weekly_cleanup.md` and
@@ -15,6 +20,12 @@ temporary roots, named test runs, operations evidence and backup recovery roots.
 Unknown or unreadable material reports incomplete coverage. Pytest session
 receipts supply automatic successful-run registration. This extends the existing
 job receipt; it adds no Operations page, database mutation, network call, or job.
+Operational backup discovery adds typed hold reports to that same cleanup receipt.
+Unknown or invalid producer evidence prevents complete coverage. This is a
+deliberate extension of existing maintenance evidence, with no new UI surface.
+Legacy temp trees without completion evidence have no automatic expiry date.
+Windows coverage now includes unnamed legacy trees under `C:\tmp` as read-only
+inventory. The cleanup does not infer ownership or deletion rights from that count.
 
 ## Directive contract
 
