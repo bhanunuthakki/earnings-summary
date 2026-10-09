@@ -356,6 +356,44 @@ def test_reviewed_reextraction_accepts_legacy_and_offset_equivalent_run_clocks(
 
 
 @pytest.mark.parametrize("reviewed", [True], indirect=True)
+def test_reviewed_reextraction_accepts_a_legacy_naive_node_clock(
+    reviewed: tuple[sqlite3.Connection, str, int, KpiSemanticContext],
+) -> None:
+    conn, legacy, _, _ = reviewed
+    for trigger in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='evidence_nodes'"
+    ).fetchall():
+        conn.execute('DROP TRIGGER "' + str(trigger[0]).replace('"', '""') + '"')
+    recorded_at = STAMP.replace(tzinfo=None).isoformat(sep=" ")
+    conn.execute(
+        "UPDATE evidence_nodes SET recorded_at=? WHERE node_id='node-money'", (recorded_at,)
+    )
+    original = tuple(
+        conn.execute(
+            "SELECT * FROM reported_observations WHERE observation_id=?", (legacy,)
+        ).fetchone()
+    )
+    proposed = request(conn, legacy)
+    assert proposed.reviewed_kpi_projections[0].source_node_recorded_at == STAMP
+    result = apply(conn, proposed)
+    assert result.eligible_count == 1 and result.last_extraction_run_id == "run-nu-q4-fulltext"
+    assert (
+        conn.execute(
+            "SELECT recorded_at FROM evidence_nodes WHERE node_id='node-money'"
+        ).fetchone()[0]
+        == recorded_at
+    )
+    assert (
+        tuple(
+            conn.execute(
+                "SELECT * FROM reported_observations WHERE observation_id=?", (legacy,)
+            ).fetchone()
+        )
+        == original
+    )
+
+
+@pytest.mark.parametrize("reviewed", [True], indirect=True)
 @pytest.mark.parametrize(
     "run_id,field,value",
     [
