@@ -234,18 +234,47 @@ def prepare_reviewed_kpi_native_projection(
             raise ValueError("reviewed native KPI value differs from its immutable capture")
         node = conn.execute(
             "SELECT node.text,node.locator_json,node.locator_sha256,run.document_version_id,"
-            "version.legacy_document_id,version.blob_sha256,node.recorded_at,run.input_sha256,run.extraction_run_id "
+            "version.legacy_document_id,version.blob_sha256,node.recorded_at,run.input_sha256,run.extraction_run_id,run.outcome,run.completed_at "
             "FROM evidence_nodes node JOIN evidence_extraction_runs run "
             "ON run.extraction_run_id=node.extraction_run_id JOIN evidence_document_versions version "
             "ON version.document_version_id=run.document_version_id WHERE node.node_id=?",
             (source_evidence_node_id,),
         ).fetchone()
-        if node is None or (
-            str(node["extraction_run_id"]) != str(row["captured_run_id"])
-            or int(node["legacy_document_id"]) != int(row["source_doc_id"])
-            or str(node["blob_sha256"]) != str(row["source_sha256"])
-            or str(node["input_sha256"]) != str(row["source_sha256"])
-            or _datetime(node["recorded_at"], field="node.recorded_at") > knowledge_cutoff
+        # Read validation-only coordinates separately: the original row is a
+        # historical raw-fact commitment and must retain its exact hash shape.
+        captured_run = conn.execute(
+            "SELECT document_version_id,input_sha256,outcome,completed_at "
+            "FROM evidence_extraction_runs WHERE extraction_run_id=?",
+            (row["captured_run_id"],),
+        ).fetchone()
+        if (
+            node is None
+            or captured_run is None
+            or (
+                str(node["document_version_id"]) != str(captured_run["document_version_id"])
+                or str(captured_run["input_sha256"]) != str(row["source_sha256"])
+                or str(captured_run["outcome"]) != "succeeded"
+                or str(node["outcome"]) != "succeeded"
+                or captured_run["completed_at"] is None
+                or node["completed_at"] is None
+                or _utc_instant(
+                    _datetime(captured_run["completed_at"], field="capture.completed_at")
+                )
+                > _utc_instant(knowledge_cutoff)
+                or _utc_instant(_datetime(node["completed_at"], field="source.completed_at"))
+                > _utc_instant(knowledge_cutoff)
+                or (
+                    str(node["extraction_run_id"]) != str(row["captured_run_id"])
+                    and (
+                        definition.source_evidence_node_id != source_evidence_node_id
+                        or definition.source_document_version_id != str(node["document_version_id"])
+                    )
+                )
+                or int(node["legacy_document_id"]) != int(row["source_doc_id"])
+                or str(node["blob_sha256"]) != str(row["source_sha256"])
+                or str(node["input_sha256"]) != str(row["source_sha256"])
+                or _datetime(node["recorded_at"], field="node.recorded_at") > knowledge_cutoff
+            )
         ):
             raise ValueError("reviewed native KPI evidence identity changed")
         from models.facts import FactLocator

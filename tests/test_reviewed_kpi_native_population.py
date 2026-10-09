@@ -55,7 +55,7 @@ RECORDED = STAMP + timedelta(hours=2)
 
 @pytest.fixture
 def reviewed(
-    migrated_db: Callable[..., Path], tmp_path: Path
+    migrated_db: Callable[..., Path], tmp_path: Path, request: pytest.FixtureRequest
 ) -> Generator[tuple[sqlite3.Connection, str, int, KpiSemanticContext], None, None]:
     conn = open_db(migrated_db(tmp_path / "native.db"))
     clock = sqlite3.connect(":memory:")
@@ -104,6 +104,20 @@ def reviewed(
         ),
     )
     locator = EvidenceLocator(source_ref="ir_documents/NU/q4.pdf", page_number=1)
+    source_run = "run-nu-q4"
+    if getattr(request, "param", False):
+        source_run = "run-nu-q4-fulltext"
+        conn.execute(
+            "INSERT INTO evidence_extraction_runs "
+            "(extraction_run_id,idempotency_key,document_version_id,input_sha256,"
+            "extractor_name,extractor_config_sha256,extractor_code_version,output_sha256,"
+            "started_at,completed_at,outcome) "
+            "SELECT ?,?,document_version_id,input_sha256,'fulltext-parser',"
+            "extractor_config_sha256,extractor_code_version,output_sha256,"
+            "started_at,completed_at,outcome FROM evidence_extraction_runs "
+            "WHERE extraction_run_id='run-nu-q4'",
+            (source_run, source_run),
+        )
     wording = (
         "Q4 2024 | Figures in USD millions | Adjusted EBITDA | 1088 | approximately | Year Ended"
     )
@@ -113,8 +127,8 @@ def reviewed(
             "node-money",
             "node:money",
             1,
-            "run-nu-q4",
-            "root-nu-q4",
+            source_run,
+            "root-nu-q4" if source_run == "run-nu-q4" else None,
             None,
             "pdf_page",
             wording,
@@ -226,6 +240,7 @@ def apply(
     )
 
 
+@pytest.mark.parametrize("reviewed", [False, True], indirect=True)
 def test_reviewed_projection_preserves_v1_and_publishes_exactly_one_native_observation(
     reviewed: tuple[sqlite3.Connection, str, int, KpiSemanticContext],
 ) -> None:
@@ -245,12 +260,34 @@ def test_reviewed_projection_preserves_v1_and_publishes_exactly_one_native_obser
     dry = populate_source_fact_plane(conn, proposed)
     assert dry.policy_version == "6" and dry.expected_count == dry.eligible_count == 1
     assert conn.execute("SELECT COUNT(*) FROM fact_observations_v2").fetchone()[0] == 0
-    apply(conn, proposed)
+    applied = apply(conn, proposed)
     native = native_source_observation_id(legacy)
     cell_id = conn.execute(
         "SELECT fact_cell_id FROM fact_observations_v2 WHERE observation_id=?", (native,)
     ).fetchone()[0]
     graph = FactPlaneV2(conn).as_reported(cell_id)
+    source_run = conn.execute(
+        "SELECT extraction_run_id FROM evidence_nodes WHERE node_id='node-money'"
+    ).fetchone()[0]
+    assert applied.last_extraction_run_id == source_run
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM fact_extraction_run_completeness_seals_v2 "
+            "WHERE extraction_run_id=?",
+            (source_run,),
+        ).fetchone()[0]
+        == 1
+    )
+    seal_nodes = conn.execute(
+        "SELECT expected_node_count FROM fact_extraction_run_completeness_seals_v2 "
+        "WHERE extraction_run_id=?",
+        (source_run,),
+    ).fetchone()[0]
+    assert seal_nodes == (2 if source_run == "run-nu-q4" else 1)
+    assert (
+        conn.execute("SELECT COUNT(*) FROM fact_extraction_run_completeness_seals_v2").fetchone()[0]
+        == 1
+    )
     assert graph.cell.currency == "USD"
     assert graph.cell.fiscal_period == "Q4" and graph.cell.fiscal_year == 2024
     assert graph.cell.period_start == datetime(2024, 10, 1, tzinfo=UTC)
@@ -268,6 +305,165 @@ def test_reviewed_projection_preserves_v1_and_publishes_exactly_one_native_obser
     replay = apply(conn, proposed)
     assert replay.exact_replay_run_count == 1
     assert conn.execute("SELECT COUNT(*) FROM fact_observations_v2").fetchone()[0] == 1
+
+
+def test_same_run_commitments_match_the_previous_source_baseline(
+    reviewed: tuple[sqlite3.Connection, str, int, KpiSemanticContext],
+) -> None:
+    conn, legacy, _, _ = reviewed
+    proposed = request(conn, legacy)
+    proof = proposed.reviewed_kpi_projections[0]
+    dry = populate_source_fact_plane(conn, proposed)
+    # Synthetic fixture digests captured and compared with the unchanged e542 baseline.
+    assert (
+        proof.raw_fact_sha256
+        == "896d307a398c18411ce964c9278ec5abdf6109f8e537a2d006fa2cb28c8f019f"  # pragma: allowlist secret -- public synthetic fixture digest
+    )
+    assert (
+        proof.source_entry_sha256
+        == "4b2f59f11de6edb7f8a7019422ff3dfe0ca7eed178cfd871f180a987e199a787"  # pragma: allowlist secret -- public synthetic fixture digest
+    )
+    assert (
+        dry.input_commitment_sha256
+        == "b1ba841a15bac47a84c170037ad7671e3bb8c7f9753cac75dc9f6e698ee9de09"  # pragma: allowlist secret -- public synthetic fixture digest
+    )
+    assert (
+        dry.planned_output_commitment_sha256
+        == "ccb3d3767f3c595c3eba37679450a26794bdac48117df78ec157789c59fa2370"  # pragma: allowlist secret -- public synthetic fixture digest
+    )
+
+
+@pytest.mark.parametrize("reviewed", [True], indirect=True)
+def test_reviewed_reextraction_accepts_legacy_and_offset_equivalent_run_clocks(
+    reviewed: tuple[sqlite3.Connection, str, int, KpiSemanticContext],
+) -> None:
+    conn, legacy, _, _ = reviewed
+    for trigger in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' "
+        "AND tbl_name='evidence_extraction_runs'"
+    ).fetchall():
+        conn.execute('DROP TRIGGER "' + str(trigger[0]).replace('"', '""') + '"')
+    conn.execute(
+        "UPDATE evidence_extraction_runs SET completed_at='2026-10-04 12:00:00' "
+        "WHERE extraction_run_id='run-nu-q4'"
+    )
+    conn.execute(
+        "UPDATE evidence_extraction_runs SET completed_at='2026-10-04 08:00:00-04:00' "
+        "WHERE extraction_run_id='run-nu-q4-fulltext'"
+    )
+    result = apply(conn, request(conn, legacy))
+    assert result.eligible_count == 1 and result.last_extraction_run_id == "run-nu-q4-fulltext"
+
+
+@pytest.mark.parametrize("reviewed", [True], indirect=True)
+@pytest.mark.parametrize(
+    "run_id,field,value",
+    [
+        ("run-nu-q4", "input_sha256", "b" * 64),
+        ("run-nu-q4-fulltext", "input_sha256", "b" * 64),
+        ("run-nu-q4", "outcome", "failed"),
+        ("run-nu-q4-fulltext", "outcome", "failed"),
+        ("run-nu-q4-fulltext", "completed_at", (CUTOFF + timedelta(seconds=1)).isoformat()),
+    ],
+)
+def test_reviewed_reextraction_requires_successful_exact_input_before_cutoff(
+    reviewed: tuple[sqlite3.Connection, str, int, KpiSemanticContext],
+    run_id: str,
+    field: str,
+    value: str,
+) -> None:
+    conn, legacy, _, _ = reviewed
+    # Deliberately corrupt this disposable ledger after its approved review.
+    for trigger in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' "
+        "AND tbl_name='evidence_extraction_runs'"
+    ).fetchall():
+        conn.execute('DROP TRIGGER "' + str(trigger[0]).replace('"', '""') + '"')
+    assert field in {"input_sha256", "outcome", "completed_at"}
+    conn.execute(
+        f"UPDATE evidence_extraction_runs SET {field}=? WHERE extraction_run_id=?",
+        (value, run_id),
+    )
+    with pytest.raises(ValueError, match="evidence identity"):
+        request(conn, legacy)
+    assert conn.execute("SELECT COUNT(*) FROM fact_observations_v2").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("reviewed", [True], indirect=True)
+def test_reviewed_reextraction_rejects_another_version_with_equal_raw_bytes(
+    reviewed: tuple[sqlite3.Connection, str, int, KpiSemanticContext],
+) -> None:
+    conn, legacy, _, _ = reviewed
+    conn.execute(
+        "INSERT INTO evidence_document_versions "
+        "(document_version_id,document_key,version_sequence,observation_id,blob_sha256,"
+        "issuer_id,ticker,document_type,form_type,period_end,language,legacy_document_id,recorded_at) "
+        "SELECT 'document-nu-q4-second','document:nu:q4:other',2,observation_id,blob_sha256,"
+        "issuer_id,ticker,document_type,form_type,period_end,language,NULL,"
+        "recorded_at FROM evidence_document_versions WHERE document_version_id='document-nu-q4'"
+    )
+    for trigger in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' "
+        "AND tbl_name='evidence_extraction_runs'"
+    ).fetchall():
+        conn.execute('DROP TRIGGER "' + str(trigger[0]).replace('"', '""') + '"')
+    conn.execute(
+        "UPDATE evidence_extraction_runs SET document_version_id='document-nu-q4-second' "
+        "WHERE extraction_run_id='run-nu-q4-fulltext'"
+    )
+    with pytest.raises(ValueError, match="evidence identity"):
+        request(conn, legacy)
+
+
+@pytest.mark.parametrize("reviewed", [True], indirect=True)
+def test_reviewed_reextraction_requires_the_explicit_definition_node(
+    reviewed: tuple[sqlite3.Connection, str, int, KpiSemanticContext],
+) -> None:
+    conn, legacy, _, _ = reviewed
+    conn.execute(
+        "INSERT INTO evidence_nodes SELECT 'node-money-unreviewed','node:money:unreviewed',"
+        "revision,extraction_run_id,parent_node_id,supersedes_node_id,node_kind,text,"
+        "locator_json,locator_sha256,recorded_at FROM evidence_nodes WHERE node_id='node-money'"
+    )
+    with pytest.raises(ValueError, match="evidence identity"):
+        prepare_reviewed_kpi_native_projection(
+            conn,
+            observation_id=legacy,
+            source_evidence_node_id="node-money-unreviewed",
+            knowledge_cutoff=CUTOFF,
+        )
+
+
+@pytest.mark.parametrize("reviewed", [True], indirect=True)
+def test_reviewed_reextraction_rejects_a_future_node_on_apply(
+    reviewed: tuple[sqlite3.Connection, str, int, KpiSemanticContext],
+) -> None:
+    conn, legacy, _, _ = reviewed
+    proposed = request(conn, legacy)
+    for trigger in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND tbl_name='evidence_nodes'"
+    ).fetchall():
+        conn.execute('DROP TRIGGER "' + str(trigger[0]).replace('"', '""') + '"')
+    conn.execute(
+        "UPDATE evidence_nodes SET recorded_at=? WHERE node_id='node-money'",
+        ((CUTOFF + timedelta(seconds=1)).isoformat(),),
+    )
+    with pytest.raises(ValueError, match="evidence identity"):
+        apply(conn, proposed)
+    assert conn.execute("SELECT COUNT(*) FROM fact_observations_v2").fetchone()[0] == 0
+
+
+def test_original_metadata_node_cannot_replace_reviewed_page_wording(
+    reviewed: tuple[sqlite3.Connection, str, int, KpiSemanticContext],
+) -> None:
+    conn, legacy, _, _ = reviewed
+    with pytest.raises(ValueError):
+        prepare_reviewed_kpi_native_projection(
+            conn,
+            observation_id=legacy,
+            source_evidence_node_id="root-nu-q4",
+            knowledge_cutoff=CUTOFF,
+        )
 
 
 @pytest.mark.parametrize("change", [{"source_precision": None}, {"reported_period_start": None}])

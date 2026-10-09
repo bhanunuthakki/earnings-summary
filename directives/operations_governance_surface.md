@@ -162,6 +162,13 @@ A tested `no surface change` disposition must state which canonical owner and vi
 
 ### Current no-surface-change dispositions
 
+Reviewed KPI re-extraction preserves the existing source-fact population owner,
+explicit dry/apply boundary, immutable capture identity and completeness seals.
+The admitted definition selects evidence from the same immutable document version
+and raw bytes; population seals that selected run. Dry/apply/replay and rejection
+tests cover these boundaries. No operator action, registry entry, scheduler,
+service, schema or source authority changes.
+
 Application read-performance changes preserve the existing Operations registry,
 Jobs, Sources, Data, Actions, and README approval boundaries. Independent panel
 loading, bounded reads, cache-busy responses, and retry controls change delivery

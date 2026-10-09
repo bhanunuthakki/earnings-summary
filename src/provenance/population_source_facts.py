@@ -1030,6 +1030,33 @@ def _source_rows(
           AND datetime(source_observation.observed_at)<=datetime(?)
           AND datetime(source_observation.retrieved_at)<=datetime(?)
         """
+    # A reviewed re-extraction supplies the publication run and its completeness
+    # seal. Keep the captured observation fields and same-run row bytes unchanged.
+    bridge_cases: list[str] = []
+    bridge_params: list[object] = []
+    for projection in request.reviewed_kpi_projections:
+        runs = conn.execute(
+            "SELECT original.extraction_run_id,selected.extraction_run_id "
+            "FROM reported_observations observation "
+            "JOIN evidence_nodes original ON original.node_id=observation.evidence_node_id "
+            "JOIN evidence_nodes selected ON selected.node_id=? "
+            "WHERE observation.observation_id=?",
+            (projection.source_evidence_node_id, projection.legacy_observation_id),
+        ).fetchone()
+        if runs is not None and runs[0] != runs[1]:
+            bridge_cases.append("WHEN ? THEN ?")
+            bridge_params.extend(
+                (projection.legacy_observation_id, projection.source_evidence_node_id)
+            )
+    if bridge_cases:
+        effective_node = (
+            "CASE observation.observation_id "
+            + " ".join(bridge_cases)
+            + " ELSE observation.evidence_node_id END"
+        )
+        query = query.replace(
+            "node.node_id=observation.evidence_node_id", "node.node_id=" + effective_node
+        )  # nosec B608 -- fixed CASE shape; observation and node IDs remain bound
     query += filters  # nosec B608 -- fixed equality clauses; values remain bound
     query += """
         ORDER BY revision.fact_table,revision.fact_row_id,
@@ -1038,6 +1065,7 @@ def _source_rows(
     return conn.execute(
         query,
         (
+            *bridge_params,
             _db_time(request.data_cutoff_at),
             _db_time(request.operation_recorded_at),
             *(_db_time(request.operation_recorded_at) for _ in range(4)),
