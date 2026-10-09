@@ -29,6 +29,11 @@ from provenance.metric_ontology import MetricOntology
 from provenance.source_fact_publication import verify_source_fact_publication
 from provenance.source_fact_stream import verify_resolution_snapshot_watermark
 from provenance.verifier_identity import verifier_source_artifact_sha256
+from search.request_verification import (
+    NOT_VERIFIED,
+    PROJECTION_GENERATION_ADMISSION,
+    RequestVerificationCache,
+)
 
 DIGEST_BUCKET_COUNT = 4096
 DEFAULT_BATCH_FACTS = 1_000
@@ -582,6 +587,7 @@ def search_canonical_facts(
     query_text: str,
     limit: int,
     reporting_entity_id: str | None = None,
+    verification: RequestVerificationCache | None = None,
 ) -> tuple[CanonicalFactHit, ...]:
     """Bounded SQL lexical candidate stage over a sealed generation chain."""
 
@@ -599,7 +605,7 @@ def search_canonical_facts(
         raise CanonicalFactProjectionError(
             "projection_generation_missing", generation_id=generation_id
         )
-    admit_canonical_projection_for_read(conn, generation_id)
+    admit_canonical_projection_for_read(conn, generation_id, verification)
     plan = plan_canonical_fact_query(query_text)
     tokens = plan.metric_terms
     score_sql = " + ".join(
@@ -712,10 +718,21 @@ def plan_canonical_fact_query(query_text: str) -> CanonicalFactQueryPlan:
 
 
 def admit_canonical_projection_for_read(
-    conn: sqlite3.Connection, generation_id: str
+    conn: sqlite3.Connection,
+    generation_id: str,
+    verification: RequestVerificationCache | None = None,
 ) -> VerifiedCanonicalProjectionGeneration:
-    """Bounded read admission using the immutable strict-audit receipt."""
+    """Bounded read admission using the immutable strict-audit receipt.
 
+    The admission runs at most once per projection generation per request;
+    later admissions inside the same request reuse the verified receipt,
+    bounded by the connection's ``PRAGMA data_version`` token."""
+
+    if verification is not None:
+        verification.ensure_bound(conn)
+        memoized = verification.verified(PROJECTION_GENERATION_ADMISSION, (generation_id,))
+        if memoized is not NOT_VERIFIED:
+            return cast(VerifiedCanonicalProjectionGeneration, memoized)
     header = _row(
         conn,
         "SELECT * FROM canonical_fact_projection_generations WHERE generation_id=?",
@@ -754,7 +771,7 @@ def admit_canonical_projection_for_read(
         raise CanonicalFactProjectionError(
             "projection_strict_audit_receipt_tampered", generation_id=generation_id
         )
-    return VerifiedCanonicalProjectionGeneration(
+    verified = VerifiedCanonicalProjectionGeneration(
         generation_id=generation_id,
         projection_seal_id=str(seal["projection_seal_id"]),
         projection_seal_sha256=str(seal["projection_seal_sha256"]),
@@ -778,6 +795,9 @@ def admit_canonical_projection_for_read(
         generation_sha256=str(header["generation_sha256"]),
         ordered_entry_set_sha256=str(seal["ordered_entry_set_sha256"]),
     )
+    if verification is not None:
+        verification.record(PROJECTION_GENERATION_ADMISSION, (generation_id,), verified)
+    return verified
 
 
 def _verify_projected_hit_for_read(

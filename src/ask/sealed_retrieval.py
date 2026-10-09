@@ -14,7 +14,10 @@ from urllib.parse import quote
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ask.audit_store import canonical_json, digest_text, retrieval_query_sha256
-from provenance.population_completeness import PopulationCompletenessLedger
+from provenance.population_completeness import (
+    PopulationCompletenessLedger,
+    PopulationCutoverReceipt,
+)
 from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
 from provenance.scope_identity import (
     RetrievalScope,
@@ -23,7 +26,6 @@ from provenance.scope_identity import (
     validate_source_scope_revision_id,
 )
 from search.embedding_promotion import LocalVectorRuntimeConfig
-from search.exact_semantic import ExactSemanticRuntime
 from search.heterogeneous_retrieval import (
     HeterogeneousRetrievalError,
     HeterogeneousRetrievalReceipt,
@@ -31,7 +33,15 @@ from search.heterogeneous_retrieval import (
     NarrativeBundle,
     RetrievalFilters,
     retrieve_heterogeneous,
+    semantic_runtime_for_bundle,
     verify_heterogeneous_retrieval_trace,
+)
+from search.request_verification import (
+    NOT_VERIFIED,
+    POPULATION_CUTOVER_CURRENT,
+    POPULATION_RECEIPT,
+    PROMOTION_COORDINATES,
+    RequestVerificationCache,
 )
 
 ReadinessOutcome = Literal["ready", "coverage_incomplete", "unavailable"]
@@ -364,6 +374,7 @@ def _admit_population_cutover(
     *,
     promotion: RetrievalPromotion,
     require_current: bool,
+    verification: RequestVerificationCache | None = None,
 ) -> None:
     """Verify the exact population seal bound into an Ask promotion."""
 
@@ -396,7 +407,7 @@ def _admit_population_cutover(
             "population cutover coordinates differ from the retrieval promotion",
         )
     try:
-        verified = PopulationCompletenessLedger(conn).verify(promotion.population_run_id)
+        verified = _verified_population_receipt(conn, promotion.population_run_id, verification)
     except (sqlite3.Error, ValueError) as exc:
         raise PromotionVerificationError(
             "population_cutover_invalid",
@@ -447,12 +458,34 @@ def _admit_population_cutover(
         )
 
 
+def _verified_population_receipt(
+    conn: sqlite3.Connection,
+    population_run_id: str,
+    verification: RequestVerificationCache | None,
+) -> PopulationCutoverReceipt:
+    """Run the exact population ledger verification once per run per request."""
+
+    coordinate = (population_run_id,)
+    if verification is not None:
+        verification.ensure_bound(conn)
+        memoized = verification.verified(POPULATION_RECEIPT, coordinate)
+        if memoized is not NOT_VERIFIED:
+            return cast(PopulationCutoverReceipt, memoized)
+    verified = PopulationCompletenessLedger(conn).verify(population_run_id)
+    if verification is not None:
+        verification.record(POPULATION_RECEIPT, coordinate, verified)
+    return verified
+
+
 def _admit_current_population_cutover(
     conn: sqlite3.Connection,
     *,
     promotion: RetrievalPromotion,
+    verification: RequestVerificationCache | None = None,
 ) -> None:
-    _admit_population_cutover(conn, promotion=promotion, require_current=True)
+    _admit_population_cutover(
+        conn, promotion=promotion, require_current=True, verification=verification
+    )
 
 
 def _population_coordinate(
@@ -470,20 +503,39 @@ def _admit_common_current_population_cutover(
     conn: sqlite3.Connection,
     *,
     promotions: tuple[RetrievalPromotion, ...],
+    verification: RequestVerificationCache | None = None,
 ) -> None:
+    """Admit the request's one common current population cutover.
+
+    The whole common admission runs at most once per immutable population
+    coordinate per request; later admissions inside the same request reuse the
+    memoized result, bounded by the connection's ``PRAGMA data_version``
+    token."""
+
     if not promotions:
         raise PromotionVerificationError(
             "population_cutover_missing",
             "no retrieval promotion supplied a population cutover coordinate",
         )
-    if len({_population_coordinate(promotion) for promotion in promotions}) != 1:
+    coordinates = {_population_coordinate(promotion) for promotion in promotions}
+    if len(coordinates) != 1:
         raise PromotionVerificationError(
             "population_cutover_stale",
             "multi-issuer Ask requires one exact common population cutover "
             "(run, receipt, knowledge cutoff, observed through)",
         )
+    coordinate = tuple(str(part) for part in next(iter(coordinates)))
+    if verification is not None:
+        verification.ensure_bound(conn)
+        if verification.verified(POPULATION_CUTOVER_CURRENT, coordinate) is not NOT_VERIFIED:
+            return
     for promotion in promotions:
-        _admit_current_population_cutover(conn, promotion=promotion)
+        if verification is None:
+            _admit_current_population_cutover(conn, promotion=promotion)
+        else:
+            _admit_current_population_cutover(conn, promotion=promotion, verification=verification)
+    if verification is not None:
+        verification.record(POPULATION_CUTOVER_CURRENT, coordinate, None)
 
 
 def derive_production_scope_registry(
@@ -840,9 +892,64 @@ def verify_retrieval_promotion(
     promotion: RetrievalPromotion,
     *,
     runtime: LocalVectorRuntimeConfig | None = None,
+    verification: RequestVerificationCache | None = None,
 ) -> None:
-    """Strictly verify a promotion's immutable coordinates and current coverage."""
+    """Strictly verify a promotion's immutable coordinates and current coverage.
 
+    The verification runs at most once per immutable promotion coordinate per
+    request; later verifications inside the same request reuse the memoized
+    result, bounded by the connection's ``PRAGMA data_version`` token."""
+
+    coordinate = _promotion_coordinate(promotion, runtime)
+    if verification is not None:
+        verification.ensure_bound(conn)
+        if verification.verified(PROMOTION_COORDINATES, coordinate) is not NOT_VERIFIED:
+            return
+    _derive_retrieval_promotion(conn, promotion, runtime=runtime, verification=verification)
+    if verification is not None:
+        verification.record(PROMOTION_COORDINATES, coordinate, None)
+
+
+def _verify_current_promotion(
+    conn: sqlite3.Connection,
+    promotion: RetrievalPromotion,
+    *,
+    runtime: LocalVectorRuntimeConfig | None,
+    verification: RequestVerificationCache | None,
+) -> None:
+    """Verify one promotion through the request's verification channel.
+
+    The pinned call shape (positional conn + promotion, keyword runtime only)
+    stays byte-identical for callers and test doubles that verify without an
+    in-request cache; the cache threads through only when one is in play."""
+
+    if verification is None:
+        verify_retrieval_promotion(conn, promotion, runtime=runtime)
+        return
+    verify_retrieval_promotion(conn, promotion, runtime=runtime, verification=verification)
+
+
+def _promotion_coordinate(
+    promotion: RetrievalPromotion,
+    runtime: LocalVectorRuntimeConfig | None,
+) -> tuple[str, ...]:
+    runtime_identity = (
+        "environment" if runtime is None else (str(runtime.index_root), str(runtime.runtime_root))
+    )
+    return (
+        promotion.promotion_id,
+        digest_text(canonical_json(promotion.model_dump(mode="json"))),
+        *runtime_identity,
+    )
+
+
+def _derive_retrieval_promotion(
+    conn: sqlite3.Connection,
+    promotion: RetrievalPromotion,
+    *,
+    runtime: LocalVectorRuntimeConfig | None,
+    verification: RequestVerificationCache | None,
+) -> None:
     source_scopes = conn.execute(
         "SELECT scope_revision_id FROM v_issuer_reporting_scope_current "
         "WHERE scope_key=? AND issuer_id=? AND inclusion_state='core'",
@@ -869,6 +976,7 @@ def verify_retrieval_promotion(
         conn,
         promotion=promotion,
         require_current=False,
+        verification=verification,
     )
 
     try:
@@ -973,11 +1081,12 @@ def verify_retrieval_promotion(
                 vector_index_run_id=bundle.vector_index_run_id,
                 configured_root=runtime_config.index_root,
             )
-            ExactSemanticRuntime.from_local_ledger(
+            semantic_runtime_for_bundle(
                 conn,
-                vector_index_run_id=bundle.vector_index_run_id,
-                embedding_promotion_id=bundle.embedding_promotion_id,
-                runtime_root=runtime_config.runtime_root,
+                bundle,
+                trace_id=f"ask-promotion:{promotion.promotion_id}",
+                local_vector_runtime=runtime_config,
+                verification=verification,
             )
         except Exception as exc:
             raise PromotionVerificationError(
@@ -1077,9 +1186,12 @@ def assess_retrieval_readiness(
     scopes: tuple[RetrievalScope, ...],
     *,
     runtime: LocalVectorRuntimeConfig | None = None,
+    verification: RequestVerificationCache | None = None,
 ) -> RetrievalReadiness:
     """Return ready only when every requested issuer is exactly covered."""
 
+    if verification is not None:
+        verification.ensure_bound(conn)
     if not scopes:
         return RetrievalReadiness(
             outcome="unavailable",
@@ -1132,7 +1244,7 @@ def assess_retrieval_readiness(
                 details=f"retrieval promotion is withdrawn for {scope.scope_id}",
             )
         try:
-            verify_retrieval_promotion(conn, promotion, runtime=runtime)
+            _verify_current_promotion(conn, promotion, runtime=runtime, verification=verification)
         except PromotionVerificationError as exc:
             outcome: ReadinessOutcome = (
                 "coverage_incomplete"
@@ -1163,6 +1275,7 @@ def assess_retrieval_readiness(
         _admit_common_current_population_cutover(
             conn,
             promotions=tuple(item.promotion for item in ready),
+            verification=verification,
         )
     except PromotionVerificationError as exc:
         return RetrievalReadiness(
@@ -1238,15 +1351,19 @@ def execute_sealed_retrieval_plan(
     plan: SealedRetrievalPlan,
     *,
     local_vector_runtime: LocalVectorRuntimeConfig | None = None,
+    verification: RequestVerificationCache | None = None,
 ) -> SealedRetrievalExecution:
     """Execute every issuer trace atomically; one failure yields no partial trace set."""
 
+    if verification is not None:
+        verification.ensure_bound(conn)
     receipts: list[HeterogeneousRetrievalReceipt] = []
     with _savepoint(conn, "execute_sealed_ask_retrieval"):
         conn.row_factory = sqlite3.Row
         _admit_common_current_population_cutover(
             conn,
             promotions=tuple(scope.promotion for scope in plan.scopes),
+            verification=verification,
         )
         for planned_scope, request in zip(plan.scopes, plan.requests, strict=True):
             current_row = conn.execute(
@@ -1270,21 +1387,24 @@ def execute_sealed_retrieval_plan(
                     "promotion_stale",
                     f"retrieval promotion changed for {planned_scope.scope.scope_id}",
                 )
-            verify_retrieval_promotion(
+            _verify_current_promotion(
                 conn,
                 current,
                 runtime=local_vector_runtime,
+                verification=verification,
             )
             try:
                 receipt = retrieve_heterogeneous(
                     conn,
                     request,
                     local_vector_runtime=local_vector_runtime,
+                    verification=verification,
                 )
                 verified = verify_heterogeneous_retrieval_trace(
                     conn,
                     receipt.trace_id,
                     local_vector_runtime=local_vector_runtime,
+                    verification=verification,
                 )
             except (HeterogeneousRetrievalError, ValueError) as exc:
                 raise PromotionVerificationError(
@@ -1306,6 +1426,7 @@ def load_verified_trace_evidence(
     *,
     start_number: int = 1,
     local_vector_runtime: LocalVectorRuntimeConfig | None = None,
+    verification: RequestVerificationCache | None = None,
 ) -> tuple[SealedEvidenceItem, ...]:
     """Load prompt/UI DTOs only after strict verification of the persisted trace."""
 
@@ -1313,6 +1434,7 @@ def load_verified_trace_evidence(
         conn,
         trace_id,
         local_vector_runtime=local_vector_runtime,
+        verification=verification,
     )
     conn.row_factory = sqlite3.Row
     header = conn.execute(
