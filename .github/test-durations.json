@@ -4015,6 +4015,10 @@
       "seconds": 1.5,
       "shard": "6 overflow"
     },
+    "tests/test_strict_streaming_event_order.py": {
+      "seconds": 0.4,
+      "shard": "8"
+    },
     "tests/test_structured_fact_search_projection_migration.py": {
       "seconds": 2.1,
       "shard": "1 overflow"
