@@ -28,7 +28,6 @@ from provenance.metric_ontology import (
     MappingRevision,
     MetricOntology,
     SourceTaxonomyComponent,
-    _utc,
     canonical_json,
 )
 from provenance.source_fact_repository import (
@@ -445,7 +444,12 @@ def bind_reviewed_financial_observation(
     ).fetchone()
     if registry is None:
         raise ValueError("financial binding reporting entity registry record is absent")
-    parent_created_at = _utc(datetime.fromisoformat(str(registry[0])))
+    parent_created_at = datetime.fromisoformat(str(registry[0]))
+    parent_created_at = (
+        parent_created_at.replace(tzinfo=UTC)
+        if parent_created_at.tzinfo is None
+        else parent_created_at.astimezone(UTC)
+    )
     if parent_created_at > review.knowledge_cutoff:
         raise ValueError(
             "financial binding reporting entity registry clock is unavailable at cutoff"
