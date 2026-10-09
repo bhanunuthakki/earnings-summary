@@ -731,6 +731,10 @@
       "seconds": 1.5,
       "shard": "8 overflow"
     },
+    "tests/test_comments_server_split_contract.py": {
+      "seconds": 0.25,
+      "shard": "4"
+    },
     "tests/test_comments_server_startup.py": {
       "seconds": 2.0,
       "shard": "1 overflow"

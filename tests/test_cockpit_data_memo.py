@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "execution"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import comments_server
+import comments_server_context
 import comments_server_panel_cache as panel_cache_module
 from comments_server_cockpit_memo import (
     CockpitDataBusy,
@@ -51,6 +52,9 @@ from comments_server_cockpit_memo import (
     cockpit_data_memo_key,
 )
 from comments_server_panel_cache import PanelCacheEntry, PanelResponseCache
+
+from pipeline.research_cockpit import build_cockpit_rows
+from tests.comments_server_seams import patch_server_seam
 
 PAINT_CYCLE_PATHS = (
     "/api/panel/overview",
@@ -76,13 +80,13 @@ def client(app: Flask) -> FlaskClient:
 def build_calls(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     """Count ``build_cockpit_rows`` invocations through the server's name."""
     calls: list[int] = []
-    real_build = comments_server.build_cockpit_rows
+    real_build = build_cockpit_rows
 
     def counting_build(conn: sqlite3.Connection, repo_root: Path) -> dict[str, list[Any]]:
         calls.append(1)
         return real_build(conn, repo_root)
 
-    monkeypatch.setattr(comments_server, "build_cockpit_rows", counting_build)
+    patch_server_seam(monkeypatch, "build_cockpit_rows", counting_build)
     return calls
 
 
@@ -138,7 +142,7 @@ def test_memo_serves_the_same_rows_a_fresh_build_would(
     db_path = tmp_path / "data" / "portfolio.db"
     conn = sqlite3.connect(db_path)
     try:
-        fresh = comments_server.build_cockpit_rows(conn, tmp_path)
+        fresh = build_cockpit_rows(conn, tmp_path)
     finally:
         conn.close()
     memo_rows = {role: list(rows) for role, rows in lookup.entry.rows.items()}
@@ -357,17 +361,17 @@ def test_build_failure_never_poisons_the_memo(
 ) -> None:
     """A raising build propagates (unchanged semantics) and leaves the memo
     empty; the next request rebuilds and publishes."""
-    real_build = comments_server.build_cockpit_rows
+    real_build = comments_server_context.build_cockpit_rows
 
     def exploding_build(conn: sqlite3.Connection, repo_root: Path) -> dict[str, list[Any]]:
         build_calls.append(1)
         raise RuntimeError("builder exploded")
 
-    monkeypatch.setattr(comments_server, "build_cockpit_rows", exploding_build)
+    patch_server_seam(monkeypatch, "build_cockpit_rows", exploding_build)
     assert client.get("/api/panel/overview").status_code == 500
     assert _memo_of(client.application).entry_count() == 0
 
-    monkeypatch.setattr(comments_server, "build_cockpit_rows", real_build)
+    patch_server_seam(monkeypatch, "build_cockpit_rows", real_build)
     ok = client.get("/api/panel/overview")
     assert ok.status_code == 200
     assert len(build_calls) == 2

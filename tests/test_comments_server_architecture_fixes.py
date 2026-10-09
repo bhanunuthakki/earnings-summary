@@ -15,6 +15,8 @@ from comments_server_panel_cache import (
     PanelResponseCache,
 )
 
+from tests.comments_server_seams import patch_server_seam
+
 
 def test_request_read_connection_uses_injected_database_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -39,8 +41,8 @@ def test_request_read_connection_uses_injected_database_path(
         marker = str(conn.execute("SELECT value FROM marker").fetchone()[0])
         return {marker: []}
 
-    monkeypatch.setattr(comments_server, "connect_sqlite", connect)
-    monkeypatch.setattr(comments_server, "build_dashboard_rows", rows)
+    patch_server_seam(monkeypatch, "connect_sqlite", connect)
+    patch_server_seam(monkeypatch, "build_dashboard_rows", rows)
 
     client = comments_server.create_app(repo_root, db_path=injected_db).test_client()
     response = client.get("/api/dashboard")

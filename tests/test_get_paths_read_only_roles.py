@@ -35,6 +35,7 @@ import position_lifecycle
 from pipeline import ticker_command_center, you_said
 from sqlite_runtime import SQLiteConnectionRole
 from sqlite_runtime import connect_sqlite as real_connect_sqlite
+from tests.comments_server_seams import patch_server_seam
 
 DEAD_TRACKER_URL = "http://127.0.0.1:9"
 
@@ -105,9 +106,7 @@ def test_app_level_get_paths_open_only_read_only_connections(
 ) -> None:
     """Every DB connection the named hydration/desk GETs acquire is READ_ONLY."""
     roles: list[tuple[str, SQLiteConnectionRole]] = []
-    monkeypatch.setattr(
-        comments_server, "connect_sqlite", _recording_connect(comments_server, roles)
-    )
+    patch_server_seam(monkeypatch, "connect_sqlite", _recording_connect(comments_server, roles))
 
     with app.test_client() as client:
         for path in APP_LEVEL_GET_PATHS:

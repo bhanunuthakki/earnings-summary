@@ -20,6 +20,7 @@ from comments_server_panel_cache import (
 )
 
 import runtime.portfolio_tracker as portfolio_tracker_runtime
+from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_v1 import HealthV1, V1Fetch
 from operations.attention import (
     EvidenceIdentity,
@@ -29,6 +30,7 @@ from operations.attention import (
 )
 from operations.kpi_semantic_review_export import (
     KpiSemanticReviewExport,
+    KpiSemanticReviewExportError,
     KpiSemanticReviewTickerManifest,
 )
 from operations.models import OperationsRegistry, OperationsSnapshot
@@ -47,6 +49,8 @@ from runtime.portfolio_tracker import (
     RuntimeReceipt,
     write_runtime_receipt,
 )
+from sqlite_runtime import SQLiteConnectionRole
+from tests.comments_server_seams import patch_server_seam
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -169,7 +173,7 @@ def test_operations_attention_action_applies_closed_suppression_actions(
         assert conn.execute(
             "SELECT actor,lifecycle FROM operations_attention_action_receipts "
             "JOIN operations_attention_findings USING(finding_id)"
-        ).fetchone() == (comments_server.DEFAULT_USER_ID, f"{action}d")
+        ).fetchone() == (DEFAULT_USER_ID, f"{action}d")
 
 
 def test_operations_attention_action_resolves_only_through_writer(attention_db_path: Path) -> None:
@@ -222,7 +226,7 @@ def test_operations_attention_action_preserves_replay_conflict_and_targeted_cach
     attention_db_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     panel_cache = Mock()
-    monkeypatch.setattr(comments_server, "PanelResponseCache", Mock(return_value=panel_cache))
+    patch_server_seam(monkeypatch, "PanelResponseCache", Mock(return_value=panel_cache))
     client = comments_server.create_app(
         attention_db_path.parent, db_path=attention_db_path
     ).test_client()
@@ -287,10 +291,10 @@ def test_operations_panel_route_is_get_only_app_cached_and_one_connection_per_mi
         connection_options.append(kwargs)
         return conn
 
-    monkeypatch.setattr(comments_server, "build_operations_registry", build_registry)
-    monkeypatch.setattr(comments_server, "collect_operations_snapshot", collect_snapshot)
-    monkeypatch.setattr(comments_server, "render_operations_panel", render_panel)
-    monkeypatch.setattr(comments_server, "connect_sqlite", connect)
+    patch_server_seam(monkeypatch, "build_operations_registry", build_registry)
+    patch_server_seam(monkeypatch, "collect_operations_snapshot", collect_snapshot)
+    patch_server_seam(monkeypatch, "render_operations_panel", render_panel)
+    patch_server_seam(monkeypatch, "connect_sqlite", connect)
 
     client = comments_server.create_app(tmp_path).test_client()
     first = client.get("/api/panel/operations")
@@ -307,7 +311,7 @@ def test_operations_panel_route_is_get_only_app_cached_and_one_connection_per_mi
     assert render_panel.call_count == 1
     assert len(connections) == 1
     assert connection_options == [
-        {"role": comments_server.SQLiteConnectionRole.READ_ONLY, "schema_preflight": False}
+        {"role": SQLiteConnectionRole.READ_ONLY, "schema_preflight": False}
     ]
 
 
@@ -320,7 +324,7 @@ def test_operations_registry_comes_from_code_root_not_minimal_runtime_root(
     code_root.mkdir()
     registry = build_operations_registry(PROJECT_ROOT)
     build_registry = Mock(return_value=registry)
-    monkeypatch.setattr(comments_server, "build_operations_registry", build_registry)
+    patch_server_seam(monkeypatch, "build_operations_registry", build_registry)
 
     app = comments_server.create_app(runtime_root, code_root=code_root)
 
@@ -329,9 +333,11 @@ def test_operations_registry_comes_from_code_root_not_minimal_runtime_root(
 
 
 def test_operations_review_bundle_loads_kpi_repair_from_state_root() -> None:
-    source = (PROJECT_ROOT / "execution" / "comments_server.py").read_text(encoding="utf-8")
+    source = (PROJECT_ROOT / "execution" / "comments_server_ops_routes.py").read_text(
+        encoding="utf-8"
+    )
     route = source.split("def operations_review_bundle_api():", maxsplit=1)[1].split(
-        '@app.route("/api/panel/<name>"', maxsplit=1
+        '@app.route("/api/operations/kpi-semantic-review/<ticker>"', maxsplit=1
     )[0]
 
     repair_call = route.split("kpi_repair=load_kpi_repair_review(", maxsplit=1)[1].split(
@@ -385,7 +391,7 @@ def test_start_tracker_route_uses_separate_state_root_activation_receipt(
                 ),
             )
 
-    monkeypatch.setattr(comments_server, "PortfolioTrackerRuntimeManager", _Manager)
+    patch_server_seam(monkeypatch, "PortfolioTrackerRuntimeManager", _Manager)
     monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:8123")
     client = comments_server.create_app(tmp_path).test_client()
     response = client.post("/actions/start-tracker")
@@ -396,7 +402,7 @@ def test_start_tracker_route_uses_separate_state_root_activation_receipt(
     assert config.idempotency_key.startswith("portfolio-tracker-activation:")
     assert captured["ensure_running_kwargs"] == {
         "receipt_path": portfolio_tracker_activation_receipt_path(tmp_path),
-        "receipt_writer": comments_server.write_tracker_activation_receipt,
+        "receipt_writer": portfolio_tracker_runtime.write_tracker_activation_receipt,
     }
     assert not portfolio_tracker_receipt_path(tmp_path).exists()
 
@@ -441,7 +447,7 @@ def test_start_tracker_route_rejects_injected_success_with_nonpositive_pid(
                 ),
             )
 
-    monkeypatch.setattr(comments_server, "PortfolioTrackerRuntimeManager", _Manager)
+    patch_server_seam(monkeypatch, "PortfolioTrackerRuntimeManager", _Manager)
 
     response = comments_server.create_app(tmp_path).test_client().post("/actions/start-tracker")
 
@@ -467,9 +473,9 @@ def test_start_tracker_route_persists_safe_scheduler_failure_without_overwriting
     def fail_scheduler_start() -> None:
         raise portfolio_tracker_runtime.SchedulerActivationError("scheduler_start_nonzero")
 
-    monkeypatch.setattr(comments_server, "TrackerV1Client", _Client)
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(monkeypatch, "TrackerV1Client", _Client)
+    patch_server_seam(
+        monkeypatch,
         "start_portfolio_tracker_scheduler_task",
         fail_scheduler_start,
     )
@@ -513,8 +519,8 @@ def test_start_tracker_route_rejects_non_loopback_bind_from_parser(
     def unsafe_parser(_api_url: str) -> tuple[str, int]:
         return "0.0.0.0", 8123
 
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "parse_tracker_bind_url",
         unsafe_parser,
     )
@@ -568,8 +574,8 @@ def test_start_tracker_route_rejects_healthy_listener_without_matching_registry_
             pytest.fail("unrelated healthy listener must not start a tracker job")
 
     monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:8123")
-    monkeypatch.setattr(comments_server, "TrackerV1Client", _Client)
-    monkeypatch.setattr(comments_server, "Registry", _Registry)
+    patch_server_seam(monkeypatch, "TrackerV1Client", _Client)
+    patch_server_seam(monkeypatch, "Registry", _Registry)
 
     response = comments_server.create_app(tmp_path).test_client().post("/actions/start-tracker")
 
@@ -655,8 +661,10 @@ def test_start_tracker_route_accepts_fresh_supervisor_owned_listener(
 
     receipt_reads: list[Path] = []
     lease_paths: list[Path] = []
-    real_read_supervisor_listener_ownership = comments_server.read_supervisor_listener_ownership
-    real_atomic_file_lease = comments_server.AtomicFileLease
+    real_read_supervisor_listener_ownership = (
+        portfolio_tracker_runtime.read_supervisor_listener_ownership
+    )
+    real_atomic_file_lease = portfolio_tracker_runtime.AtomicFileLease
 
     def read_supervisor_listener_ownership(
         receipt_path: Path,
@@ -679,17 +687,17 @@ def test_start_tracker_route_accepts_fresh_supervisor_owned_listener(
         lease_paths.append(path)
         return real_atomic_file_lease(path)
 
-    monkeypatch.setattr(comments_server, "TrackerV1Client", _Client)
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(monkeypatch, "TrackerV1Client", _Client)
+    patch_server_seam(
+        monkeypatch,
         "read_supervisor_listener_ownership",
         read_supervisor_listener_ownership,
     )
-    monkeypatch.setattr(comments_server, "AtomicFileLease", atomic_file_lease)
+    patch_server_seam(monkeypatch, "AtomicFileLease", atomic_file_lease)
     monkeypatch.setattr(
         portfolio_tracker_runtime, "endpoint_owner_matches_pid", endpoint_owner_matches
     )
-    monkeypatch.setattr(comments_server, "Registry", _Registry)
+    patch_server_seam(monkeypatch, "Registry", _Registry)
     response = (
         comments_server.create_app(
             state_root,
@@ -772,8 +780,8 @@ def test_start_tracker_route_rejects_exited_popen_even_when_registry_job_says_ru
             pytest.fail("an exited Popen cannot prove a live listener")
 
     monkeypatch.setenv("PORTFOLIO_TRACKER_API_URL", "http://127.0.0.1:8123")
-    monkeypatch.setattr(comments_server, "TrackerV1Client", _Client)
-    monkeypatch.setattr(comments_server, "Registry", _Registry)
+    patch_server_seam(monkeypatch, "TrackerV1Client", _Client)
+    patch_server_seam(monkeypatch, "Registry", _Registry)
 
     response = comments_server.create_app(tmp_path).test_client().post("/actions/start-tracker")
 
@@ -812,12 +820,12 @@ def test_operations_route_uses_runtime_root_canonical_receipts(
             service_receipt_path=service_receipt_path,
         )
 
-    monkeypatch.setattr(comments_server, "collect_operations_snapshot", collect)
+    patch_server_seam(monkeypatch, "collect_operations_snapshot", collect)
 
     def connect(_path: Path, **_kwargs: object) -> sqlite3.Connection:
         return sqlite3.connect(":memory:")
 
-    monkeypatch.setattr(comments_server, "connect_sqlite", connect)
+    patch_server_seam(monkeypatch, "connect_sqlite", connect)
     client = comments_server.create_app(tmp_path, operations_registry=registry).test_client()
 
     response = client.get("/api/panel/operations")
@@ -865,18 +873,18 @@ def test_operations_review_bundle_uses_configured_private_origin(
     def snapshot(*_: object, **__: object) -> Mock:
         return Mock()
 
-    monkeypatch.setattr(comments_server, "private_mobile_origin", configured_private_origin)
-    monkeypatch.setattr(comments_server, "connect_sqlite", connect)
-    monkeypatch.setattr(comments_server, "scoped_kpi_definitions", semantic_rows)
-    monkeypatch.setattr(comments_server, "database_lineage_identity", no_database_lineage)
-    monkeypatch.setattr(comments_server, "load_kpi_repair_review", no_repair_review)
-    monkeypatch.setattr(comments_server, "collect_operations_snapshot", snapshot)
+    patch_server_seam(monkeypatch, "private_mobile_origin", configured_private_origin)
+    patch_server_seam(monkeypatch, "connect_sqlite", connect)
+    patch_server_seam(monkeypatch, "scoped_kpi_definitions", semantic_rows)
+    patch_server_seam(monkeypatch, "database_lineage_identity", no_database_lineage)
+    patch_server_seam(monkeypatch, "load_kpi_repair_review", no_repair_review)
+    patch_server_seam(monkeypatch, "collect_operations_snapshot", snapshot)
 
     def build_bundle(**kwargs: object) -> _Bundle:
         captured.update(kwargs)
         return _Bundle()
 
-    monkeypatch.setattr(comments_server, "build_operations_review_bundle", build_bundle)
+    patch_server_seam(monkeypatch, "build_operations_review_bundle", build_bundle)
     response = (
         comments_server.create_app(tmp_path)
         .test_client()
@@ -912,7 +920,7 @@ def test_operations_review_bundle_fails_closed_for_loopback_http_origin(
     def loopback_private_origin(**_: object) -> str:
         return "http://127.0.0.1:7421"
 
-    monkeypatch.setattr(comments_server, "private_mobile_origin", loopback_private_origin)
+    patch_server_seam(monkeypatch, "private_mobile_origin", loopback_private_origin)
     response = (
         comments_server.create_app(tmp_path)
         .test_client()
@@ -943,9 +951,9 @@ def test_kpi_semantic_review_route_serves_only_precomputed_current_artifact(
     def bounded_code_identity(_: Path) -> str:
         return "bounded-code-authority"
 
-    monkeypatch.setattr(comments_server, "review_code_identity", bounded_code_identity)
-    monkeypatch.setattr(
-        comments_server, "load_current_kpi_semantic_review_ticker_manifest", load_manifest
+    patch_server_seam(monkeypatch, "review_code_identity", bounded_code_identity)
+    patch_server_seam(
+        monkeypatch, "load_current_kpi_semantic_review_ticker_manifest", load_manifest
     )
     app = comments_server.create_app(tmp_path, db_path=database, code_root=PROJECT_ROOT)
     response = app.test_client().get(
@@ -978,9 +986,7 @@ def test_kpi_semantic_review_route_fails_closed_without_current_portfolio_artifa
     def unavailable(**_: object):
         raise KpiSemanticReviewExportError("ticker is outside the current portfolio export")
 
-    monkeypatch.setattr(
-        comments_server, "load_current_kpi_semantic_review_ticker_manifest", unavailable
-    )
+    patch_server_seam(monkeypatch, "load_current_kpi_semantic_review_ticker_manifest", unavailable)
     response = (
         comments_server.create_app(tmp_path)
         .test_client()
@@ -1015,14 +1021,12 @@ def test_kpi_semantic_review_partition_route_serves_only_current_index_reference
     def code_identity(_: Path) -> str:
         return "bounded-code-authority"
 
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "review_code_identity",
         code_identity,
     )
-    monkeypatch.setattr(
-        comments_server, "load_current_kpi_semantic_review_partition", load_partition
-    )
+    patch_server_seam(monkeypatch, "load_current_kpi_semantic_review_partition", load_partition)
     app = comments_server.create_app(tmp_path, db_path=database, code_root=PROJECT_ROOT)
     response = app.test_client().get(
         f"/api/operations/kpi-semantic-review/NU/partitions/{content_sha256}",
@@ -1038,11 +1042,11 @@ def test_kpi_semantic_review_partition_route_serves_only_current_index_reference
     assert captured["root"] == (state_root / "data" / "operations" / "kpi_semantic_reviews")
 
     def not_current(**_: object):
-        raise comments_server.KpiSemanticReviewExportError(
+        raise KpiSemanticReviewExportError(
             "semantic review partition is not referenced by the current ticker manifest"
         )
 
-    monkeypatch.setattr(comments_server, "load_current_kpi_semantic_review_partition", not_current)
+    patch_server_seam(monkeypatch, "load_current_kpi_semantic_review_partition", not_current)
     rejected = app.test_client().get(
         f"/api/operations/kpi-semantic-review/NU/partitions/{content_sha256}",
         base_url="http://localhost",
@@ -1103,7 +1107,7 @@ def test_operations_route_projects_cached_scheduler_receipt_states(
     def connect(_path: Path, **_kwargs: object) -> sqlite3.Connection:
         return sqlite3.connect(":memory:")
 
-    monkeypatch.setattr(comments_server, "connect_sqlite", connect)
+    patch_server_seam(monkeypatch, "connect_sqlite", connect)
     client = comments_server.create_app(tmp_path, operations_registry=registry).test_client()
 
     response = client.get("/api/panel/operations")
@@ -1132,7 +1136,7 @@ def test_readme_update_action_dispatches_preview_and_exact_approved_apply(
     def fake_managed_python_argv(*args: object) -> list[str]:
         return [str(arg) for arg in args]
 
-    monkeypatch.setattr(comments_server, "managed_python_argv", fake_managed_python_argv)
+    patch_server_seam(monkeypatch, "managed_python_argv", fake_managed_python_argv)
 
     app = comments_server.create_app(
         runtime_root,
@@ -1153,8 +1157,8 @@ def test_readme_update_action_dispatches_preview_and_exact_approved_apply(
     assert "--apply-run" not in preview_call.kwargs["argv"]
 
     run_id = "d" * 32
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "collect_readme_governance_status",
         Mock(return_value=Mock(state="approved_preview", run_id=run_id, can_apply=True)),
     )
@@ -1173,8 +1177,8 @@ def test_readme_apply_route_rejects_unknown_or_stale_receipt(
 ) -> None:
     registry = build_operations_registry(PROJECT_ROOT)
     jobs = Mock()
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "collect_readme_governance_status",
         Mock(return_value=Mock(state="stale", run_id="e" * 32, can_apply=False)),
     )

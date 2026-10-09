@@ -626,7 +626,7 @@ _BHA_89_TO_92_ADDITIONAL_EMITTERS = (
     "dashboard/_card.py",
     "dashboard/evidence_drawer.py",
     "dashboard/feed.py",
-    "execution/comments_server.py",
+    "execution/comments_server_work_os_routes.py",
     "pipeline/annual_letter_panel.py",
     "pipeline/analysis_styles.py",
     "pipeline/calibration_receipt.py",

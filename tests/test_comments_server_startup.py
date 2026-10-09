@@ -9,6 +9,8 @@ from pathlib import Path
 import comments_server
 import pytest
 
+from tests.comments_server_seams import patch_server_seam
+
 
 class _StartupApp:
     def __init__(self) -> None:
@@ -40,9 +42,9 @@ def test_main_starts_server_without_internal_requests(
         return app
 
     monkeypatch.setattr(sys, "argv", ["comments_server.py", "--repo-root", str(tmp_path)])
-    monkeypatch.setattr(comments_server, "configure_logging", lambda: None)
-    monkeypatch.setattr(comments_server, "configure_runtime_db", _configure_runtime_db)
-    monkeypatch.setattr(comments_server, "create_app", _create_app)
+    patch_server_seam(monkeypatch, "configure_logging", lambda: None)
+    patch_server_seam(monkeypatch, "configure_runtime_db", _configure_runtime_db)
+    patch_server_seam(monkeypatch, "create_app", _create_app)
 
     assert comments_server.main() == 0
     assert app.run_args == ("127.0.0.1", 7421, False, True)

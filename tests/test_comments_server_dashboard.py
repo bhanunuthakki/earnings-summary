@@ -28,6 +28,7 @@ from integrations.portfolio_allocation import (
 )
 from integrations.portfolio_offline_snapshot import OfflinePortfolioSnapshot
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
+from tests.comments_server_seams import patch_server_seam
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
@@ -429,8 +430,8 @@ def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
         """
     )
     conn.close()
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "fetch_live_portfolio",
         lambda: LivePortfolio(
             available=True,
@@ -450,8 +451,8 @@ def test_work_os_portfolio_api_hydrates_only_portfolio_companies(
             ],
         ),
     )
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "fetch_portfolio_allocation",
         _available_allocation,
     )
@@ -556,7 +557,7 @@ def test_work_os_portfolio_api_caches_its_degraded_tracker_payload(
         tracker_calls["count"] += 1
         return LivePortfolio(available=False, api_url="http://tracker.test", error="tracker down")
 
-    monkeypatch.setattr(comments_server, "fetch_live_portfolio", down_tracker)
+    patch_server_seam(monkeypatch, "fetch_live_portfolio", down_tracker)
     local_client = comments_server.create_app(app_repo).test_client()
 
     first = local_client.get("/api/work-os/portfolio")
@@ -663,8 +664,8 @@ def test_investment_profile_review_is_fingerprint_bound_and_append_only(
     def fake_evaluation(*_args: object, **_kwargs: object) -> WorkOsEvaluationHydration:
         return hydration
 
-    monkeypatch.setattr(comments_server, "build_cockpit_rows", fake_cockpit_rows)
-    monkeypatch.setattr(comments_server, "build_work_os_evaluation", fake_evaluation)
+    patch_server_seam(monkeypatch, "build_cockpit_rows", fake_cockpit_rows)
+    patch_server_seam(monkeypatch, "build_work_os_evaluation", fake_evaluation)
     client = comments_server.create_app(app_repo).test_client()
 
     stale = client.post(
@@ -738,8 +739,8 @@ def test_etf_profile_review_uses_the_same_append_only_contract(
     def fake_evaluation(*_args: object, **_kwargs: object) -> WorkOsEvaluationHydration:
         return hydration
 
-    monkeypatch.setattr(comments_server, "build_cockpit_rows", fake_cockpit_rows)
-    monkeypatch.setattr(comments_server, "build_work_os_evaluation", fake_evaluation)
+    patch_server_seam(monkeypatch, "build_cockpit_rows", fake_cockpit_rows)
+    patch_server_seam(monkeypatch, "build_work_os_evaluation", fake_evaluation)
     client = comments_server.create_app(app_repo).test_client()
 
     recorded = client.post(
@@ -772,14 +773,14 @@ def test_work_os_portfolio_api_uses_governed_snapshot_only_after_tracker_failure
             envelope_warnings=["portfolio_offline_snapshot"],
         ),
     )
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "fetch_live_portfolio",
         lambda: LivePortfolio(available=False, api_url="http://tracker.test", error="account 1234"),
     )
-    monkeypatch.setattr(comments_server, "fetch_portfolio_allocation", _available_allocation)
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(monkeypatch, "fetch_portfolio_allocation", _available_allocation)
+    patch_server_seam(
+        monkeypatch,
         "read_configured_offline_portfolio_snapshot",
         lambda: snapshot,
     )
@@ -830,8 +831,8 @@ def test_work_os_portfolio_api_includes_latest_persisted_earnings_readout(
     app_repo: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "fetch_portfolio_allocation",
         lambda: unavailable_portfolio_allocation("positions_unavailable"),
     )
@@ -875,13 +876,13 @@ def test_work_os_portfolio_api_keeps_research_rows_when_allocation_is_unavailabl
     app_repo: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "fetch_live_portfolio",
         lambda: LivePortfolio(available=True, api_url="http://tracker.test"),
     )
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "fetch_portfolio_allocation",
         lambda: unavailable_portfolio_allocation("securities_unavailable"),
     )

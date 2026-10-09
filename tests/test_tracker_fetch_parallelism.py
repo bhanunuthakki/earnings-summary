@@ -45,6 +45,7 @@ from integrations.portfolio_tracker_v1 import (
     SecuritiesV1Result,
     V1Fetch,
 )
+from tests.comments_server_seams import patch_server_seam
 from tests.test_comments_server_dashboard import create_dashboard_test_schema
 
 _V1_FIXTURES = Path(__file__).parent / "fixtures" / "tracker_v1"
@@ -184,8 +185,8 @@ def test_portfolio_route_overlaps_both_tracker_groups_when_degraded(
         overlapped["allocation"] = started["live"].wait(timeout=_BARRIER_WAIT_SECONDS)
         return unavailable_portfolio_allocation("health_unavailable")
 
-    monkeypatch.setattr(comments_server, "fetch_live_portfolio", fake_live)
-    monkeypatch.setattr(comments_server, "fetch_portfolio_allocation", fake_allocation)
+    patch_server_seam(monkeypatch, "fetch_live_portfolio", fake_live)
+    patch_server_seam(monkeypatch, "fetch_portfolio_allocation", fake_allocation)
     client = comments_server.create_app(tracker_app_repo).test_client()
 
     response = client.get("/api/work-os/portfolio")
@@ -224,8 +225,8 @@ def test_portfolio_route_overlaps_both_tracker_groups_and_serves_both_halves(
         overlapped["allocation"] = started["live"].wait(timeout=_BARRIER_WAIT_SECONDS)
         return _available_allocation()
 
-    monkeypatch.setattr(comments_server, "fetch_live_portfolio", fake_live)
-    monkeypatch.setattr(comments_server, "fetch_portfolio_allocation", fake_allocation)
+    patch_server_seam(monkeypatch, "fetch_live_portfolio", fake_live)
+    patch_server_seam(monkeypatch, "fetch_portfolio_allocation", fake_allocation)
     client = comments_server.create_app(tracker_app_repo).test_client()
 
     response = client.get("/api/work-os/portfolio")
@@ -256,8 +257,8 @@ def test_portfolio_route_deadline_is_the_slowest_group_not_the_sum(
         time.sleep(_GROUP_WINDOW_SECONDS)
         return unavailable_portfolio_allocation("health_unavailable")
 
-    monkeypatch.setattr(comments_server, "fetch_live_portfolio", slow_live)
-    monkeypatch.setattr(comments_server, "fetch_portfolio_allocation", slow_allocation)
+    patch_server_seam(monkeypatch, "fetch_live_portfolio", slow_live)
+    patch_server_seam(monkeypatch, "fetch_portfolio_allocation", slow_allocation)
     client = comments_server.create_app(tracker_app_repo).test_client()
 
     started = time.monotonic()
@@ -299,8 +300,8 @@ def test_portfolio_route_partial_failure_keeps_the_surviving_group(
             return unavailable_portfolio_allocation("securities_unavailable")
         return _available_allocation()
 
-    monkeypatch.setattr(comments_server, "fetch_live_portfolio", live_value)
-    monkeypatch.setattr(comments_server, "fetch_portfolio_allocation", allocation_value)
+    patch_server_seam(monkeypatch, "fetch_live_portfolio", live_value)
+    patch_server_seam(monkeypatch, "fetch_portfolio_allocation", allocation_value)
     client = comments_server.create_app(tracker_app_repo).test_client()
 
     response = client.get("/api/work-os/portfolio")
@@ -562,8 +563,8 @@ def test_desk_route_overlaps_probe_with_live_fetch_and_issues_one_probe(
         overlapped["fetch"] = started["probe"].wait(timeout=_BARRIER_WAIT_SECONDS)
         return _healthy_live()
 
-    monkeypatch.setattr(comments_server, "probe_tracker", fake_probe)
-    monkeypatch.setattr(comments_server, "fetch_live_portfolio", fake_fetch)
+    patch_server_seam(monkeypatch, "probe_tracker", fake_probe)
+    patch_server_seam(monkeypatch, "fetch_live_portfolio", fake_fetch)
     client = comments_server.create_app(tracker_app_repo).test_client()
 
     response = client.get("/api/work-os/companies/NU/desk")
@@ -595,8 +596,8 @@ def test_desk_route_probe_failure_is_prompt_and_discards_the_inflight_fetch(
         time.sleep(0.6)
         return _healthy_live()
 
-    monkeypatch.setattr(comments_server, "probe_tracker", fake_probe)
-    monkeypatch.setattr(comments_server, "fetch_live_portfolio", fake_fetch)
+    patch_server_seam(monkeypatch, "probe_tracker", fake_probe)
+    patch_server_seam(monkeypatch, "fetch_live_portfolio", fake_fetch)
     client = comments_server.create_app(tracker_app_repo).test_client()
 
     started = time.monotonic()

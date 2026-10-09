@@ -262,8 +262,9 @@ def _entrypoints(
 def _extract_records(root: Path, name: str, artifacts: list[str]) -> list[EvidenceRecord]:
     records: list[EvidenceRecord] = []
     if name == "flask_url_method_endpoint_map":
-        relative = "execution/comments_server.py"
-        if (root / relative).exists():
+        for relative in artifacts:
+            if not relative.startswith("execution/comments_server"):
+                continue
             try:
                 tree = ast.parse(_read_text(root, relative))
                 for node in ast.walk(tree):
@@ -441,7 +442,7 @@ def capture_compatibility_evidence(
         _category(
             repo_root,
             "flask_url_method_endpoint_map",
-            ("execution/comments_server.py", "tests/test_comments_server*.py"),
+            ("execution/comments_server*.py", "tests/test_comments_server*.py"),
         ),
         _category(
             repo_root,

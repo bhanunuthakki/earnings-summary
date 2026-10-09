@@ -17,6 +17,7 @@ from report.models import (
     SectionStatus,
     ThesisSection,
 )
+from tests.comments_server_seams import patch_server_seam
 from tests.test_comments_server_dashboard import comments_server, create_dashboard_test_schema
 
 
@@ -45,13 +46,13 @@ def _work_os_app_repo(tmp_path: Path) -> Path:
 
 @pytest.fixture(name="work_os_client")
 def _work_os_client(work_os_app_repo: Path, monkeypatch: pytest.MonkeyPatch) -> FlaskClient:
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "probe_tracker",
         lambda: (True, "http://tracker.test"),
     )
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "fetch_live_portfolio",
         lambda: LivePortfolio(
             available=False,
@@ -920,8 +921,8 @@ def test_company_desk_api_fetches_one_canonical_tracker_snapshot(
             ],
         )
 
-    monkeypatch.setattr(comments_server, "probe_tracker", lambda: (True, "http://tracker.test"))
-    monkeypatch.setattr(comments_server, "fetch_live_portfolio", fetch)
+    patch_server_seam(monkeypatch, "probe_tracker", lambda: (True, "http://tracker.test"))
+    patch_server_seam(monkeypatch, "fetch_live_portfolio", fetch)
     client = comments_server.create_app(work_os_app_repo).test_client()
 
     response = client.get("/api/work-os/companies/nu/desk")
@@ -938,8 +939,8 @@ def test_company_desk_api_probe_down_returns_promptly_without_tracker_fetch(
     work_os_app_repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _seed_company_state(work_os_app_repo)
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "probe_tracker",
         lambda: (False, "http://127.0.0.1:8000"),
     )
@@ -948,7 +949,7 @@ def test_company_desk_api_probe_down_returns_promptly_without_tracker_fetch(
         time.sleep(1.0)
         return LivePortfolio(available=True, api_url="http://127.0.0.1:8000")
 
-    monkeypatch.setattr(comments_server, "fetch_live_portfolio", fetch)
+    patch_server_seam(monkeypatch, "fetch_live_portfolio", fetch)
     client = comments_server.create_app(work_os_app_repo).test_client()
 
     started = time.monotonic()

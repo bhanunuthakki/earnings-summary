@@ -43,6 +43,8 @@ from comments_server_panel_cache import (
     PanelResponseCache,
 )
 
+from tests.comments_server_seams import patch_server_seam
+
 OVERVIEW_PATH = "/api/panel/overview"
 # Comfortably above the 500ms telemetry threshold so a slow host cannot flake
 # the record's presence, and far below pytest's own timeouts.
@@ -129,7 +131,7 @@ def test_builder_slow_request_emits_exactly_one_record_as_miss(
         time.sleep(SLOW_SECONDS)
         return '<section class="panel">overview</section>'
 
-    monkeypatch.setattr(comments_server, "render_overview_panel", slow_overview)
+    patch_server_seam(monkeypatch, "render_overview_panel", slow_overview)
 
     with app.test_client() as client:
         # A fast non-panel request must not emit anything yet.
@@ -161,7 +163,7 @@ def test_cache_served_slow_request_reports_hit(app: Flask, monkeypatch: pytest.M
     def fast_overview(*_args: object, **_kwargs: object) -> str:
         return '<section class="panel">overview</section>'
 
-    monkeypatch.setattr(comments_server, "render_overview_panel", fast_overview)
+    patch_server_seam(monkeypatch, "render_overview_panel", fast_overview)
 
     with app.test_client() as client:
         first = client.get(OVERVIEW_PATH)
@@ -202,7 +204,7 @@ def test_slow_500_response_carries_server_timing_and_one_record(
         time.sleep(SLOW_SECONDS)
         raise RuntimeError("synthetic builder failure")
 
-    monkeypatch.setattr(comments_server, "render_overview_panel", broken_overview)
+    patch_server_seam(monkeypatch, "render_overview_panel", broken_overview)
 
     dur_ms = _server_timing_dur_ms(app, 500)
     assert dur_ms >= 500.0
