@@ -1133,6 +1133,71 @@ def test_financial_binding_replay_requires_full_review_commitment(
     assert database.total_changes == before
 
 
+def test_financial_binding_replay_keeps_exact_mapping_after_later_quarter(
+    database: sqlite3.Connection,
+) -> None:
+    from provenance.financial_derivations import (
+        FinancialMetricBindingReview,
+        MonetaryScaleRequest,
+        bind_reviewed_financial_observation,
+        publish_monetary_scale,
+    )
+    from provenance.population_metric_ontology import admit_exact_source_observations
+
+    facts = seed_table(
+        database,
+        [
+            ("AdjustedEBITDA", "2025-01-01", "2025-03-31", "Q1", "1088", "millions"),
+            ("AdjustedEBITDA", "2025-04-01", "2025-06-30", "Q2", "2110", "millions"),
+        ],
+        concept_namespace="native:kpi",
+        populate=False,
+    )
+    admit_exact_source_observations(database, _exact_source_request(database, facts))
+    reviews: list[FinancialMetricBindingReview] = []
+    targets: list[str] = []
+    for index, fact in enumerate(facts):
+        scaled, _ = publish_monetary_scale(
+            database,
+            MonetaryScaleRequest(
+                source_observation_id=fact.observation.observation_id,
+                source_scale="millions",
+                knowledge_cutoff=STAMP,
+                recorded_at=STAMP,
+            ),
+        )
+        review = FinancialMetricBindingReview(
+            observation_id=scaled.observation.observation_id,
+            metric_id="financial:adjusted_ebitda",
+            canonical_name="adjusted_ebitda",
+            definition_text="Reviewed USD adjusted EBITDA",
+            reviewer_identity="synthetic-reviewer",
+            review_evidence={"quarter": index + 1},
+            knowledge_cutoff=STAMP,
+            recorded_at=STAMP,
+        )
+        reviews.append(review)
+        targets.append(bind_reviewed_financial_observation(database, review))
+
+    ontology = MetricOntology(database)
+    first = ontology.binding_as_known(reviews[0].observation_id, STAMP)
+    second = ontology.binding_as_known(reviews[1].observation_id, STAMP)
+    assert first is not None and second is not None
+    assert first.source_component_id == second.source_component_id
+    assert first.source_component_id is not None
+    assert first.mapping_revision_id != second.mapping_revision_id
+    newest = ontology.mapping_as_known(first.source_component_id, STAMP)
+    assert newest is not None and newest.mapping_revision_id == second.mapping_revision_id
+    before = database.total_changes
+    assert bind_reviewed_financial_observation(database, reviews[0]) == targets[0]
+    assert database.total_changes == before
+    with pytest.raises(ValueError, match="binding head changed"):
+        bind_reviewed_financial_observation(
+            database, reviews[0].model_copy(update={"review_evidence": {"quarter": "changed"}})
+        )
+    assert database.total_changes == before
+
+
 @pytest.mark.parametrize("corruption", ["commitment", "publication_member"])
 def test_selected_source_corruption_preserves_precise_admission_failure(
     database: sqlite3.Connection, corruption: str
