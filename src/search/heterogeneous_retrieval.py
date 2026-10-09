@@ -39,6 +39,7 @@ from search.exact_semantic import (
     backend_receipt_json,
     evidence_from_json,
 )
+from search.lexical_query import kpi_alias_expansions, plan_lexical_query
 from search.local_vector import LanceVectorIndex, LocalVectorCapabilityError
 from search.request_verification import (
     NOT_VERIFIED,
@@ -1343,13 +1344,10 @@ def _lexical_candidates(
     *,
     reporting_entity_id: str | None = None,
 ) -> list[dict[str, object]]:
-    expression = " OR ".join(
-        f'"{token.replace(chr(34), chr(34) * 2)}"' for token in query_text.split() if token.strip()
-    )
-    if not expression:
+    plan = plan_lexical_query(query_text, aliases=kpi_alias_expansions(conn))
+    if plan is None:
         return []
-    rows = _rows(
-        conn,
+    sql = (
         "SELECT chunk.chunk_id,chunk.content_sha256,chunk.evidence_node_id,"
         "chunk.char_start,chunk.char_end,chunk.manifest_id,"
         "node.extraction_run_id,run.document_version_id,"
@@ -1363,15 +1361,17 @@ def _lexical_candidates(
         "ON document.document_version_id=run.document_version_id "
         "WHERE search_lexical_chunks MATCH ? AND chunk.manifest_id=? "
         "AND (? IS NULL OR document.reporting_entity_id=?) "
-        "ORDER BY lexical_rank,chunk.chunk_id LIMIT ?",
-        (
-            expression,
-            bundle.corpus_manifest_id,
-            reporting_entity_id,
-            reporting_entity_id,
-            limit,
-        ),
+        "ORDER BY lexical_rank,chunk.chunk_id LIMIT ?"
     )
+    filter_params = (bundle.corpus_manifest_id, reporting_entity_id, reporting_entity_id, limit)
+    # AND-biased first; the OR fallback only runs on an empty result so recall
+    # never drops below the pre-planner OR-of-all-tokens behavior. The plan is
+    # a pure function of (query, alias map), so the trace verifier re-runs the
+    # same expressions on the same committed question and reproduces the exact
+    # candidates and bm25 scores.
+    rows = _rows(conn, sql, (plan.match_all, *filter_params))
+    if not rows:
+        rows = _rows(conn, sql, (plan.match_any, *filter_params))
     return [
         {
             "candidate_id": str(row["chunk_id"]),

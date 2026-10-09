@@ -2203,6 +2203,10 @@
       "seconds": 2.0,
       "shard": "5"
     },
+    "tests/test_lexical_query_quality.py": {
+      "seconds": 0.5,
+      "shard": "6 overflow"
+    },
     "tests/test_list_type_reconcile.py": {
       "seconds": 1.2,
       "shard": "8 overflow"

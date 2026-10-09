@@ -29,6 +29,7 @@ from provenance.metric_ontology import MetricOntology
 from provenance.source_fact_publication import verify_source_fact_publication
 from provenance.source_fact_stream import verify_resolution_snapshot_watermark
 from provenance.verifier_identity import verifier_source_artifact_sha256
+from search.lexical_query import fact_alias_terms, kpi_alias_expansions
 from search.request_verification import (
     NOT_VERIFIED,
     PROJECTION_GENERATION_ADMISSION,
@@ -607,7 +608,12 @@ def search_canonical_facts(
         )
     admit_canonical_projection_for_read(conn, generation_id, verification)
     plan = plan_canonical_fact_query(query_text)
-    tokens = plan.metric_terms
+    # KPI alias expansion: the sealed search text carries the metric's own
+    # definition aliases, but an alias recorded only in the legacy kpi_aliases
+    # authority (present in pre-0002 deployments and hermetic fixtures; absent
+    # at the current head, where the reader resolves an empty map) still has to
+    # bridge a query phrased with it to the canonical fact.
+    tokens = (*plan.metric_terms, *fact_alias_terms(plan.metric_terms, kpi_alias_expansions(conn)))
     score_sql = " + ".join(
         "CASE WHEN instr(lower(entry.canonical_search_text),?)>0 THEN 1 ELSE 0 END" for _ in tokens
     )
