@@ -18,6 +18,11 @@ CRON_DIR = ROOT / "cron"
 TASK_NS = {"task": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
 
 
+@pytest.fixture(autouse=True)
+def isolated_external_inventory(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cleanup, "external_temp_coverage_roots", lambda: list[tuple[Path, str]]())
+
+
 def _task_text(name: str) -> str:
     return ET.parse(CRON_DIR / "weekly_cleanup.task.xml").findtext(name, namespaces=TASK_NS) or ""
 

@@ -40,6 +40,15 @@ allowlist and execution mechanics, not a second retention policy or schedule.
   `C:\tmp` and the user temporary directory. Verified declared test files expire
   seven days after successful closure. Active, failed, pinned, malformed, changed
   and undeclared files remain. Pytest produces these receipts automatically.
+- Operational SQLite backups in state `data/backups`: discover exact snapshot
+  manifests and join them to sealed KPI repair/disposition attempt and backup
+  restore-readiness receipts in the matching state operation directories.
+  Successful apply closure, canonical source identity and verified bytes are
+  required. Keep the latest completed verified backup per source and purpose.
+  Failed, unfinished, unknown and pinned backups remain visible as held. A later
+  compatible success can resolve a failed attempt on the next pass. No database
+  is opened for this discovery. Deployment snapshots and other unsupported
+  producers still require an explicit operator catalog.
 - State and runtime roots receive the same owned policies: logs, run outputs,
   news caches, PDF page images, and Python tool caches. Runtime ordinary temporary
   files also receive the existing 30-day window. Both roots retain source documents,
@@ -79,6 +88,12 @@ Pydantic-validated JSON object to stdout:
   `data/operations` and `data/backups` recovery roots. It reports `incomplete`
   when unknown or unreadable paths remain. File modification age does not establish
   session activity or grant deletion authority.
+  On Windows it also counts all `C:\tmp` legacy test trees, including names that
+  lack producer ownership receipts. This extends visibility only; it does not
+  add those trees to the deletion sweep.
+- `operational_backups`: classified backup discovery and hold reports. Unknown,
+  invalid or incomplete evidence prevents a complete coverage claim. Missing
+  retired bytes are not counted as reclaimed space.
 
 Any eligible file that cannot be deleted produces `skipped_error` and a nonzero
 exit. A filesystem-cleanup failure prevents the research-expiry stage.
@@ -137,12 +152,34 @@ Never delete through the ordinary age sweep:
 - active checkpoints, indexes, lock guard files, or unverified temporary audio
 
 Output archive retention is outside this task. Backup retirement requires an
-explicit hash-bound catalog. The owner's October 7, 2026 cleanup request authorizes
+explicit hash-bound catalog or supported producer evidence that creates an
+equivalent exact-file declaration. The owner's October 7, 2026 cleanup request authorizes
 classified old test copies and superseded backup files, with the latest verified
 backup per family and unresolved failure recovery retained. This authority does
 not cover raw source evidence or application state. The existing weekly job
 applies the catalog through `src/operations/artifact_retention.py` on its existing
 filesystem-maintenance lane. Research expiry keeps the portfolio-db lane.
+
+`src/operations/operational_backup_retention.py` discovers supported closed
+operations on every pass. It does not alter the operator catalog. Exact snapshot,
+readiness and immutable attempt digests accompany each declaration. Changed or
+missing evidence holds both retirement targets and surviving copies. Unknown
+legacy backups never become eligible from their filename or modification time.
+The operation-directory membership and JSON byte digests are bound before and
+after discovery, then checked again before deletion. New failed records or a
+changed `latest.json` require replanning. Producer failure holds are preserved
+when operator registrations overlay a plan. Exact existing registrations can
+supply a legacy family name for future copies; conflicting mappings between
+source/purpose families stay held.
+The same job retries transient deletion failures with its existing bounded retry;
+the next invocation replans from current evidence and preserves prior receipts.
+
+The cleanup has no automatic clearing date for unclassified legacy temporary
+trees. Review coverage by decreasing byte size. Establish the operation owner,
+completion and recovery needs before registering exact disposable files. Keep
+small closure, failure and retirement receipts after clearing large data copies.
+Completed managed test files clear on the first Sunday pass more than seven days
+after completion. Ordinary eligible temporary files use their 30-day cutoff.
 
 The cleanup resolves the configured product state root. A code checkout is not
 the production artifact root. If runtime `data/` is a junction or symlink whose

@@ -54,6 +54,120 @@ def catalog(*items: Artifact) -> ArtifactCatalog:
     return ArtifactCatalog(schema_version=1, artifacts=list(items))
 
 
+@pytest.mark.parametrize("change_survivor", [False, True])
+def test_backup_closure_proof_change_prevents_retirement(
+    tmp_path: Path, change_survivor: bool
+) -> None:
+    proof = tmp_path / ".tmp/closed-rehearsal/closure.json"
+    older = artifact(tmp_path, "old-proof.db", days=40)
+    latest = artifact(tmp_path, "latest-proof.db", days=20)
+    proof.write_text('{"status":"completed"}')
+    bound = (latest if change_survivor else older).model_dump()
+    bound["retirement_proofs"] = [
+        {"path": proof, "sha256": hashlib.sha256(proof.read_bytes()).hexdigest()}
+    ]
+    protected = Artifact.model_validate(bound)
+    if change_survivor:
+        latest = protected
+    else:
+        older = protected
+    proof.write_text('{"status":"failed"}')
+
+    result = run_retention(tmp_path, now=NOW, apply=True, catalog=catalog(older, latest))
+
+    assert result.deleted == 0
+    assert older.path.exists() and latest.path.exists()
+    assert any(item.reason == "retirement_proof_changed" for item in result.decisions)
+
+
+def test_backup_closure_proof_is_rechecked_after_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    older = artifact(tmp_path, "old-race.db", days=40)
+    latest = artifact(tmp_path, "latest-race.db", days=20)
+    proof = older.allowed_root / "closure.json"
+    proof.write_bytes(b"closed")
+    payload = older.model_dump()
+    payload["retirement_proofs"] = [
+        {"path": proof, "sha256": hashlib.sha256(proof.read_bytes()).hexdigest()}
+    ]
+    older = Artifact.model_validate(payload)
+    writer: Callable[[Path, dict[str, object]], None] = getattr(
+        artifact_retention, "_write_receipt"
+    )
+
+    def change_proof(path: Path, receipt: dict[str, object]) -> None:
+        writer(path, receipt)
+        proof.write_bytes(b"recovery required")
+
+    monkeypatch.setattr(artifact_retention, "_write_receipt", change_proof)
+    result = run_retention(tmp_path, now=NOW, apply=True, catalog=catalog(older, latest))
+
+    assert result.deleted == 0 and result.errors == 1
+    assert result.decisions[0].reason == "retirement_proof_changed"
+    assert older.path.exists() and latest.path.exists()
+
+
+def test_missing_closure_proof_is_a_hold_not_a_missing_backup(tmp_path: Path) -> None:
+    older = artifact(tmp_path, "old-missing-proof.db", days=40)
+    latest = artifact(tmp_path, "latest-missing-proof.db", days=20)
+    payload = older.model_dump()
+    payload["retirement_proofs"] = [
+        {"path": older.allowed_root / "missing-closure.json", "sha256": "0" * 64}
+    ]
+    older = Artifact.model_validate(payload)
+
+    result = run_retention(tmp_path, now=NOW, apply=True, catalog=catalog(older, latest))
+
+    assert result.deleted == 0
+    assert result.decisions[0].action == "keep"
+    assert result.decisions[0].reason == "retirement_proof_unavailable"
+    assert older.path.exists() and latest.path.exists()
+
+
+@pytest.mark.parametrize("hold", ["pin", "failed", "unverified"])
+def test_operator_catalog_cannot_remove_current_producer_hold(tmp_path: Path, hold: str) -> None:
+    older = artifact(tmp_path, "operator-old.db", days=40)
+    latest = artifact(tmp_path, "operator-latest.db", days=20)
+    registered = tmp_path / CATALOG_RELATIVE_PATH
+    registered.parent.mkdir(parents=True)
+    original = catalog(older).model_dump_json()
+    registered.write_text(original)
+    updates: dict[str, object] = (
+        {"pins": ["current failure"]}
+        if hold == "pin"
+        else {"status": "failed"}
+        if hold == "failed"
+        else {"verified": False}
+    )
+    producer = older.model_copy(update=updates)
+
+    result = run_retention(tmp_path, now=NOW, apply=True, catalog=catalog(producer, latest))
+
+    assert result.deleted == 0
+    assert older.path.exists() and latest.path.exists()
+    assert result.decisions[0].reason == "pinned"
+    assert registered.read_text() == original
+
+
+def test_newest_failed_registration_cannot_replace_last_good_survivor(tmp_path: Path) -> None:
+    good = artifact(tmp_path, "last-good.db", days=40)
+    failed = artifact(tmp_path, "newest-failed.db", days=20)
+    registered = tmp_path / CATALOG_RELATIVE_PATH
+    registered.parent.mkdir(parents=True)
+    registered.write_text(catalog(good, failed).model_dump_json())
+    producer = failed.model_copy(update={"status": "failed", "verified": False})
+
+    result = run_retention(tmp_path, now=NOW, apply=True, catalog=catalog(producer))
+
+    assert result.deleted == 0
+    assert good.path.exists() and failed.path.exists()
+    assert any(
+        item.path == str(good.path) and item.reason == "latest_verified"
+        for item in result.decisions
+    )
+
+
 @pytest.mark.parametrize(
     ("state", "reason"),
     [

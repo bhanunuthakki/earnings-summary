@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import stat
@@ -17,8 +18,170 @@ from _pytest.capture import CaptureFixture
 
 from execution import run_weekly_cleanup as cleanup
 from src.operations import temp_run_retention
+from src.operations.artifact_retention import Artifact, ArtifactCatalog
+from src.operations.operational_backup_retention import (
+    OperationalBackupDiscovery,
+    OperationalBackupReport,
+)
+from tests.test_operational_backup_retention import backup, source_env
 
 NOW = datetime(2026, 7, 27, 20, 0, tzinfo=UTC)
+
+
+def _declared_backup(tmp_path: Path, name: str, family: str) -> Artifact:
+    return Artifact(
+        path=tmp_path / "data/backups" / name,
+        allowed_root=tmp_path / "data/backups",
+        family=family,
+        created_at=NOW,
+        sha256="1" * 64,
+        size=100,
+        kind="backup",
+        status="completed",
+        verified=True,
+    )
+
+
+def test_discovered_backups_extend_exact_legacy_operator_family(tmp_path: Path) -> None:
+    known = _declared_backup(tmp_path, "known.db", "derived-source-purpose")
+    future = _declared_backup(tmp_path, "future.db", "derived-source-purpose")
+    operator = known.model_copy(update={"family": "legacy-reviewed-family", "pins": ["recovery"]})
+
+    merged = cleanup.operator_backup_families(
+        ArtifactCatalog(schema_version=1, artifacts=[known, future]),
+        [None, ArtifactCatalog(schema_version=1, artifacts=[operator])],
+    )
+
+    assert {item.family for item in merged} == {"legacy-reviewed-family"}
+    assert operator.pins == ["recovery"]
+    assert operator.status == "completed"
+
+
+def test_conflicting_legacy_families_hold_discovered_backups(tmp_path: Path) -> None:
+    a = _declared_backup(tmp_path, "a.db", "derived-source-purpose")
+    b = _declared_backup(tmp_path, "b.db", "derived-source-purpose")
+    operators = ArtifactCatalog(
+        schema_version=1,
+        artifacts=[
+            a.model_copy(update={"family": "family-a"}),
+            b.model_copy(update={"family": "family-b"}),
+        ],
+    )
+
+    merged = cleanup.operator_backup_families(
+        ArtifactCatalog(schema_version=1, artifacts=[a, b]), [operators]
+    )
+
+    assert all("ambiguous_operator_backup_family" in item.pins for item in merged)
+    assert [item.family for item in operators.artifacts] == ["family-a", "family-b"]
+
+
+def test_changed_registered_bytes_cannot_supply_discovered_family(tmp_path: Path) -> None:
+    discovered = _declared_backup(tmp_path, "changed.db", "derived-source-purpose")
+    operator = discovered.model_copy(update={"sha256": "2" * 64, "family": "legacy-family"})
+
+    merged = cleanup.operator_backup_families(
+        ArtifactCatalog(schema_version=1, artifacts=[discovered]),
+        [ArtifactCatalog(schema_version=1, artifacts=[operator])],
+    )
+
+    assert merged[0].family == "derived-source-purpose"
+
+
+def test_legacy_alias_cannot_combine_distinct_producer_purposes(tmp_path: Path) -> None:
+    repair = _declared_backup(tmp_path, "repair.db", "source-repair")
+    disposition = _declared_backup(tmp_path, "disposition.db", "semantic-disposition")
+    operators = ArtifactCatalog(
+        schema_version=1,
+        artifacts=[
+            item.model_copy(update={"family": "legacy-shared"}) for item in (repair, disposition)
+        ],
+    )
+
+    merged = cleanup.operator_backup_families(
+        ArtifactCatalog(schema_version=1, artifacts=[repair, disposition]), [operators]
+    )
+
+    assert {item.family for item in merged} == {"source-repair", "semantic-disposition"}
+    assert all("ambiguous_operator_backup_family" in item.pins for item in merged)
+
+
+def test_weekly_new_failure_holds_previously_registered_completed_backup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_env(tmp_path, monkeypatch)
+    failed, *_ = backup(tmp_path, "prior.db", state="failed")
+    latest, *_ = backup(tmp_path, "latest.db", days=10)
+    registrations: list[Artifact] = []
+    for days, path in ((20, failed), (10, latest)):
+        registrations.append(
+            Artifact(
+                path=path,
+                allowed_root=path.parent,
+                family="legacy-reviewed-family",
+                created_at=NOW - timedelta(days=days),
+                sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                size=path.stat().st_size,
+                kind="backup",
+                status="completed",
+                verified=True,
+            )
+        )
+    catalog = tmp_path / "data/operations/artifact-retention.json"
+    original = ArtifactCatalog(schema_version=1, artifacts=registrations).model_dump_json()
+    catalog.write_text(original)
+
+    summary = _run(tmp_path, "--apply")
+
+    assert summary.policies["registered_artifact_retention"].deleted == 0
+    assert failed.exists() and latest.exists()
+    assert any(
+        report.path == failed and report.status == "failed"
+        for report in summary.operational_backups
+    )
+    assert catalog.read_text() == original
+
+
+def test_unavailable_operation_evidence_holds_registered_backup_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_env(tmp_path, monkeypatch)
+    old, *_ = backup(tmp_path, "prior.db")
+    latest, *_ = backup(tmp_path, "latest.db", days=10)
+    registrations = [
+        _declared_backup(tmp_path, path.name, "legacy-family").model_copy(
+            update={
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "size": path.stat().st_size,
+                "created_at": NOW - timedelta(days=days),
+            }
+        )
+        for days, path in ((20, old), (10, latest))
+    ]
+    catalog = tmp_path / "data/operations/artifact-retention.json"
+    catalog.write_text(ArtifactCatalog(schema_version=1, artifacts=registrations).model_dump_json())
+    root = tmp_path / "data/backups"
+
+    def unavailable(_root: Path) -> OperationalBackupDiscovery:
+        return OperationalBackupDiscovery(
+            catalog=ArtifactCatalog(schema_version=1, artifacts=[]),
+            reports=[
+                OperationalBackupReport(
+                    root=root,
+                    path=root,
+                    status="unclassified",
+                    reason="operation_evidence_set_unavailable",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(cleanup, "discover_operational_backups", unavailable)
+
+    summary = _run(tmp_path, "--apply")
+
+    assert summary.policies["registered_artifact_retention"].deleted == 0
+    assert old.exists() and latest.exists()
+    assert summary.coverage.status == "incomplete"
 
 
 def test_managed_help_without_pythonpath(tmp_path: Path) -> None:
@@ -134,6 +297,7 @@ def isolated_user_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Never inspect the controller's or another session's real temporary root."""
     root = tmp_path / "user-system-temp"
     root.mkdir()
+    monkeypatch.setattr(cleanup, "external_temp_coverage_roots", lambda: list[tuple[Path, str]]())
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(root))
     search_roots: Callable[[Path, Path | None], list[tuple[Path, bool]]] = getattr(
         temp_run_retention, "_search_roots"
@@ -640,6 +804,32 @@ def test_coverage_counts_excluded_environments_and_unknown_database_siblings(
     assert summary.coverage.groups[0].age_bucket == "31-60d"
 
 
+def test_coverage_includes_unregistered_legacy_windows_temp_without_deletion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    external = tmp_path / "windows-temp"
+    clone = external / "legacy-rehearsal"
+    clone.mkdir(parents=True)
+    database = clone / "failed-candidate.db"
+    source = clone / ".git"
+    database.write_bytes(b"preserve recovery")
+    source.write_bytes(b"preserve source")
+    for path in (database, source):
+        _age(path, 90)
+    monkeypatch.setattr(
+        cleanup, "external_temp_coverage_roots", lambda: [(external, "unclassified")]
+    )
+
+    summary = _run(tmp_path, "--apply")
+
+    assert summary.deleted == 0
+    assert database.read_bytes() == b"preserve recovery"
+    assert source.read_bytes() == b"preserve source"
+    assert summary.coverage.bytes == database.stat().st_size + source.stat().st_size
+    assert any(group.root == str(external) for group in summary.coverage.groups)
+    assert summary.coverage.status == "incomplete"
+
+
 def test_runtime_temp_is_covered_without_deleting_runtime_recovery(tmp_path: Path) -> None:
     state = tmp_path / "state"
     runtime = tmp_path / "runtime"
@@ -716,7 +906,7 @@ def test_dry_run_is_allowlist_only_and_reports_jsonl(
     assert checkpoint.exists()
     assert lock.exists()
     assert summary.mode == "dry_run"
-    assert summary.idempotency_key == "weekly_cleanup:2026-W31:weekly-cleanup-v4"
+    assert summary.idempotency_key == "weekly_cleanup:2026-W31:weekly-cleanup-v5"
     assert summary.would_delete == 1
     assert summary.deleted == 0
     assert summary.bytes == len("old")
