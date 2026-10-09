@@ -449,15 +449,44 @@ def test_positive_capex_needs_explicit_sign_transform(database: sqlite3.Connecti
         )
 
 
+@pytest.mark.parametrize("source_before_registry", [False, True])
 def test_reviewed_kpi_money_binding_and_scale_use_one_reported_observation(
     database: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    source_before_registry: bool,
 ) -> None:
+    from provenance.fact_plane_v2 import FactCellV2, ReportedFactObservationV2
+    from provenance.fact_read_model import FactReadModel
     from provenance.financial_derivations import (
         FinancialMetricBindingReview,
         MonetaryScaleRequest,
         bind_reviewed_financial_observation,
         publish_monetary_scale,
     )
+    from tests import test_source_fact_repository as foundation
+
+    source_time = STAMP - timedelta(days=1) if source_before_registry else STAMP
+    original_cell = foundation.make_cell
+    original_report = foundation.make_report
+
+    def historical_cell(suffix: str = "1", *, period_end: datetime = STAMP) -> FactCellV2:
+        return original_cell(suffix, period_end=period_end).model_copy(
+            update={"effective_at": source_time}
+        )
+
+    def historical_report(
+        cell: FactCellV2,
+        suffix: str = "1",
+        *,
+        numeric_value: str = "100",
+        at: datetime = STAMP,
+    ) -> ReportedFactObservationV2:
+        return original_report(cell, suffix, numeric_value=numeric_value, at=at).model_copy(
+            update={"effective_at": source_time}
+        )
+
+    monkeypatch.setattr(foundation, "make_cell", historical_cell)
+    monkeypatch.setattr(foundation, "make_report", historical_report)
 
     facts = seed_table(
         database,
@@ -476,6 +505,9 @@ def test_reviewed_kpi_money_binding_and_scale_use_one_reported_observation(
             recorded_at=STAMP,
         ),
     )
+    before_binding = FactReadModel(database).provenance_bundle(
+        scaled.observation.observation_id, cutoff=STAMP
+    )
     review = FinancialMetricBindingReview(
         observation_id=scaled.observation.observation_id,
         metric_id="financial:adjusted_ebitda",
@@ -488,6 +520,30 @@ def test_reviewed_kpi_money_binding_and_scale_use_one_reported_observation(
     )
     target = bind_reviewed_financial_observation(database, review)
     assert bind_reviewed_financial_observation(database, review) == target
+    ontology_clocks = database.execute(
+        "SELECT component.effective_at,mapping.effective_at,binding.effective_at,"
+        "target.effective_at FROM fact_cell_canonical_binding_revisions binding "
+        "JOIN source_taxonomy_components component ON component.component_id=binding.source_component_id "
+        "JOIN metric_mapping_revisions mapping ON mapping.mapping_revision_id=binding.mapping_revision_id "
+        "JOIN canonical_metric_cells target ON target.canonical_metric_cell_id=binding.canonical_metric_cell_id "
+        "WHERE binding.source_observation_id=? AND binding.canonical_metric_cell_id=?",
+        (scaled.observation.observation_id, target),
+    ).fetchone()
+    assert ontology_clocks is not None
+    assert all(
+        datetime.fromisoformat(str(clock)) == STAMP.replace(tzinfo=None)
+        for clock in ontology_clocks
+    )
+    retained = FactReadModel(database).provenance_bundle(
+        scaled.observation.observation_id, cutoff=STAMP
+    )
+    assert retained.cell.effective_at == retained.observation.effective_at == source_time
+    assert retained.cell.period_start == facts[0].cell.period_start
+    assert retained.cell.period_end == facts[0].cell.period_end
+    assert retained.derivation is not None
+    assert retained.cell == before_binding.cell
+    assert retained.observation == before_binding.observation
+    assert retained.derivation == before_binding.derivation
     CanonicalFactResolutionEngine(database).resolve(
         target, STAMP, ResolutionPolicy(name="fixture", version="2", config={}), recorded_at=STAMP
     )

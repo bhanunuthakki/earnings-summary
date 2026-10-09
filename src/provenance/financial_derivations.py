@@ -28,6 +28,7 @@ from provenance.metric_ontology import (
     MappingRevision,
     MetricOntology,
     SourceTaxonomyComponent,
+    _utc,
     canonical_json,
 )
 from provenance.source_fact_repository import (
@@ -438,6 +439,17 @@ def bind_reviewed_financial_observation(
         or cell.scope_security_id is not None
     ):
         raise ValueError("financial binding requires a numeric unsegmented monetary observation")
+    registry = conn.execute(
+        "SELECT created_at FROM reporting_entities WHERE reporting_entity_id=?",
+        (cell.reporting_entity_id,),
+    ).fetchone()
+    if registry is None:
+        raise ValueError("financial binding reporting entity registry record is absent")
+    parent_created_at = _utc(datetime.fromisoformat(str(registry[0])))
+    if parent_created_at > review.knowledge_cutoff:
+        raise ValueError(
+            "financial binding reporting entity registry clock is unavailable at cutoff"
+        )
     ontology = MetricOntology(conn)
     prior = ontology.binding_as_known(review.observation_id, review.knowledge_cutoff)
     if prior is not None and prior.binding_status == "quarantined":
@@ -511,7 +523,7 @@ def bind_reviewed_financial_observation(
         raise ValueError("financial source binding head changed")
     if cell.taxonomy_version is None:
         raise ValueError("financial source requires an exact taxonomy version")
-    effective = min(cell.effective_at, bundle.observation.effective_at)
+    effective = max(min(cell.effective_at, bundle.observation.effective_at), parent_created_at)
     clock: _ReviewClock = {
         "effective_at": effective,
         "knowledge_at": review.knowledge_cutoff,
