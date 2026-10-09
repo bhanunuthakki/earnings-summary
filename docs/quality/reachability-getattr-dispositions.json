@@ -659,6 +659,17 @@
     },
     {
       "disposition": "closed_literal_set",
+      "evidence": "Offline-mode verification reads only the two fixed fastembed attribute spellings in the adjacent literal tuple.",
+      "fingerprint": "30da5ad69eef5f316316d096cdfd6b2557be4fd6ce61e514b3a21f9ca119edfb",
+      "line": 591,
+      "path": "src/search/local_vector.py",
+      "targets": [
+        "local_files_only",
+        "_local_files_only"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
       "evidence": "The missing-evidence census reads only the six literal fields on validated SourceAttemptMeasurement records.",
       "fingerprint": "02402ceed9ad3e90aedf437e58f0f41943825f1a9c5eaf40c2465bbbc3208405",
       "line": 329,
@@ -701,7 +712,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "b3a59b11ae0ccbb91aed22cae13d780e13708110130b6e16f103c52fe06926c6",
+      "source_sha256": "3fc1495cea5fab4903f66d23ebdef0b40d5b8ebe1540a7b0e61e53e74dc2fb81",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
