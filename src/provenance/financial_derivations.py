@@ -483,9 +483,9 @@ def bind_reviewed_financial_observation(
                 replay_id = f"financial-binding:{_digest([prior.canonical_metric_cell_id, review.model_dump(mode='json')])}"
                 mapping = (
                     None
-                    if prior.source_component_id is None
-                    else ontology.mapping_as_known(
-                        prior.source_component_id, review.knowledge_cutoff
+                    if prior.mapping_revision_id is None
+                    else ontology.mapping_revision_as_known(
+                        prior.mapping_revision_id, review.knowledge_cutoff
                     )
                 )
                 formula = (
@@ -512,6 +512,7 @@ def bind_reviewed_financial_observation(
                     }
                     and mapping is not None
                     and mapping.mapping_revision_id == prior.mapping_revision_id
+                    and mapping.source_component_id == prior.source_component_id
                     and mapping.policy_name == "reviewed_financial_metric"
                     and mapping.metric_id == review.metric_id
                     and mapping.reviewer_identity == review.reviewer_identity

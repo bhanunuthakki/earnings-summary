@@ -1554,6 +1554,17 @@ class MetricOntology:
         )
         return None if row is None else self._mapping_from_row(row)
 
+    def mapping_revision_as_known(
+        self, mapping_revision_id: str, cutoff_at: datetime
+    ) -> MappingRevision | None:
+        row = self._as_known_row(
+            "metric_mapping_revisions",
+            "mapping_revision_id",
+            mapping_revision_id,
+            cutoff_at,
+        )
+        return None if row is None else self._mapping_from_row(row)
+
     def dimension_mapping_as_known(
         self, source_component_id: str, cutoff_at: datetime
     ) -> SourceDimensionMappingRevision | None:
