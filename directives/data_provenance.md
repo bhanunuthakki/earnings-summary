@@ -564,10 +564,13 @@ derivatives; retained v1 receipts still reconstruct under their original policy.
 Source-fact population request v2 names at most 100 exact immutable observation
 IDs and their document SHA scopes. A reviewed KPI native projection commits the
 current raw head, admitted semantic context, effective definition, source node,
-explicit currency, precision and duration. Its source node must belong to the same
-successful extraction run as the original capture. It preserves the original
-observation and its stable native ID. An incompatible native publication blocks
-apply. Cumulative periods remain cumulative; generic GAAP without its explicit
+explicit currency, precision and duration. Its source node and original capture
+must belong to successful extraction runs on the exact same immutable document
+version and raw input SHA. A different run requires the admitted definition to
+name that exact source node and document version. Both runs must complete by
+the knowledge cutoff. Population seals the selected evidence run and preserves
+the original capture, historical same-run commitments and stable native ID.
+An incompatible native publication blocks apply. Cumulative periods remain cumulative; generic GAAP without its explicit
 accounting standard and unsupported fiscal calendars remain unavailable. Request
 v1 and its historical cell policy keep their original serialized form.
 
