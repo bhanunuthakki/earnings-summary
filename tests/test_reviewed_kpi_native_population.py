@@ -316,19 +316,20 @@ def test_same_run_commitments_match_the_previous_source_baseline(
     dry = populate_source_fact_plane(conn, proposed)
     # Synthetic fixture digests captured and compared with the unchanged e542 baseline.
     assert (
-        proof.raw_fact_sha256 == "896d307a398c18411ce964c9278ec5abdf6109f8e537a2d006fa2cb28c8f019f"
+        proof.raw_fact_sha256
+        == "896d307a398c18411ce964c9278ec5abdf6109f8e537a2d006fa2cb28c8f019f"  # pragma: allowlist secret -- public synthetic fixture digest
     )
     assert (
         proof.source_entry_sha256
-        == "4b2f59f11de6edb7f8a7019422ff3dfe0ca7eed178cfd871f180a987e199a787"
+        == "4b2f59f11de6edb7f8a7019422ff3dfe0ca7eed178cfd871f180a987e199a787"  # pragma: allowlist secret -- public synthetic fixture digest
     )
     assert (
         dry.input_commitment_sha256
-        == "b1ba841a15bac47a84c170037ad7671e3bb8c7f9753cac75dc9f6e698ee9de09"
+        == "b1ba841a15bac47a84c170037ad7671e3bb8c7f9753cac75dc9f6e698ee9de09"  # pragma: allowlist secret -- public synthetic fixture digest
     )
     assert (
         dry.planned_output_commitment_sha256
-        == "ccb3d3767f3c595c3eba37679450a26794bdac48117df78ec157789c59fa2370"
+        == "ccb3d3767f3c595c3eba37679450a26794bdac48117df78ec157789c59fa2370"  # pragma: allowlist secret -- public synthetic fixture digest
     )
 
 
