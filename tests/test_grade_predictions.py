@@ -13,7 +13,10 @@ import pytest
 import predictions_store
 from execution import grade_predictions
 from tests.fixtures.kpi_revision_setup import NOW
+from tests.fixtures.kpi_revision_setup import semantic_recording_clock as semantic_recording_clock
 from tests.fixtures.prediction_grading import admit_prediction_facts, prediction_database
+
+pytestmark = pytest.mark.usefixtures("semantic_recording_clock")
 
 # ---------------------------------------------------------------------------
 # Pure comparator logic

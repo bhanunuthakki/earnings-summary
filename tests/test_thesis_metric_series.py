@@ -30,7 +30,10 @@ from tests.fixtures.kpi_revision_setup import (
     revision_database,
     semantic_fixture,
 )
+from tests.fixtures.kpi_revision_setup import semantic_recording_clock as semantic_recording_clock
 from tests.test_report_canonical_financials import seed_table
+
+pytestmark = pytest.mark.usefixtures("semantic_recording_clock")
 
 
 @pytest.fixture
