@@ -530,8 +530,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "_run_target executes the operator-supplied script or -m module path.",
-      "fingerprint": "ba6a1f5a8d84be4a3493fbd707fc5fb3ae298e70b2525df9df74fb60e4492fd7",
-      "line": 95,
+      "fingerprint": "624b7c9258e3a9196318c5a5f064ad143e46f557aee8fe021d9fa784e48c09bd",
+      "line": 96,
       "path": "execution/sqlite_bootstrap.py",
       "targets": [
         "operator-supplied Python target"
@@ -945,7 +945,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "b6c91e7737422ceda6112c5690ace8bc684f6f0751f5cebcb1895d3be906c917",
+      "source_sha256": "ddfbf380c4fbde2b7bec4d9afa089ad4431fa5a8618bfacc20adec6ef809212f",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

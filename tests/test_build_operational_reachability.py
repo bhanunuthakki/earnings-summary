@@ -220,9 +220,27 @@ def test_actual_head_is_supported() -> None:
         )
         for line in (123, 913)
     ]
-    # Retain all 150 upstream test seams plus one isolated pytest lifecycle harness.
+    # Two managed-startup regressions add fresh subprocess seams. Keep the
+    # existing native bootstrap seam and reject any other additions in these files.
+    for source, lines in (
+        ("tests/test_sqlite_bootstrap.py", (32, 108)),
+        ("tests/test_weekly_cleanup.py", (27,)),
+    ):
+        assert [edge for edge in graph.unknown_edges if edge.source == source] == [
+            GraphEdge(
+                source=source,
+                target="<dynamic process entrypoint>",
+                kind="unknown",
+                evidence="subprocess/runpy expression",
+                confidence="low",
+                line=line,
+                unknown=True,
+            )
+            for line in lines
+        ]
+    # Retain all 151 prior test seams plus the two managed-startup regressions.
     # No production gap is admitted.
-    assert len(graph.unknown_edges) == 151
+    assert len(graph.unknown_edges) == 153
     assert [
         edge for edge in graph.unknown_edges if edge.source == "tests/test_pytest_temp_lifecycle.py"
     ] == [

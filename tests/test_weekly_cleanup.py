@@ -6,6 +6,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -18,6 +19,30 @@ from execution import run_weekly_cleanup as cleanup
 from src.operations import temp_run_retention
 
 NOW = datetime(2026, 7, 27, 20, 0, tzinfo=UTC)
+
+
+def test_managed_help_without_pythonpath(tmp_path: Path) -> None:
+    environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    before = sorted(tmp_path.rglob("*"))
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(cleanup.PROJECT_ROOT / "execution/sqlite_bootstrap.py"),
+            str(Path(cleanup.__file__).resolve()),
+            "--help",
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "--apply" in result.stdout
+    assert "--code-root" in result.stdout
+    assert sorted(tmp_path.rglob("*")) == before
 
 
 @pytest.mark.parametrize("apply", [False, True])
