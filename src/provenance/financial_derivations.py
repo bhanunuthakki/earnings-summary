@@ -438,6 +438,22 @@ def bind_reviewed_financial_observation(
         or cell.scope_security_id is not None
     ):
         raise ValueError("financial binding requires a numeric unsegmented monetary observation")
+    registry = conn.execute(
+        "SELECT created_at FROM reporting_entities WHERE reporting_entity_id=?",
+        (cell.reporting_entity_id,),
+    ).fetchone()
+    if registry is None:
+        raise ValueError("financial binding reporting entity registry record is absent")
+    parent_created_at = datetime.fromisoformat(str(registry[0]))
+    parent_created_at = (
+        parent_created_at.replace(tzinfo=UTC)
+        if parent_created_at.tzinfo is None
+        else parent_created_at.astimezone(UTC)
+    )
+    if parent_created_at > review.knowledge_cutoff:
+        raise ValueError(
+            "financial binding reporting entity registry clock is unavailable at cutoff"
+        )
     ontology = MetricOntology(conn)
     prior = ontology.binding_as_known(review.observation_id, review.knowledge_cutoff)
     if prior is not None and prior.binding_status == "quarantined":
@@ -467,9 +483,9 @@ def bind_reviewed_financial_observation(
                 replay_id = f"financial-binding:{_digest([prior.canonical_metric_cell_id, review.model_dump(mode='json')])}"
                 mapping = (
                     None
-                    if prior.source_component_id is None
-                    else ontology.mapping_as_known(
-                        prior.source_component_id, review.knowledge_cutoff
+                    if prior.mapping_revision_id is None
+                    else ontology.mapping_revision_as_known(
+                        prior.mapping_revision_id, review.knowledge_cutoff
                     )
                 )
                 formula = (
@@ -496,6 +512,7 @@ def bind_reviewed_financial_observation(
                     }
                     and mapping is not None
                     and mapping.mapping_revision_id == prior.mapping_revision_id
+                    and mapping.source_component_id == prior.source_component_id
                     and mapping.policy_name == "reviewed_financial_metric"
                     and mapping.metric_id == review.metric_id
                     and mapping.reviewer_identity == review.reviewer_identity
@@ -511,7 +528,7 @@ def bind_reviewed_financial_observation(
         raise ValueError("financial source binding head changed")
     if cell.taxonomy_version is None:
         raise ValueError("financial source requires an exact taxonomy version")
-    effective = min(cell.effective_at, bundle.observation.effective_at)
+    effective = max(min(cell.effective_at, bundle.observation.effective_at), parent_created_at)
     clock: _ReviewClock = {
         "effective_at": effective,
         "knowledge_at": review.knowledge_cutoff,
