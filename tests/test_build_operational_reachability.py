@@ -224,7 +224,7 @@ def test_actual_head_is_supported() -> None:
     # existing native bootstrap seam and reject any other additions in these files.
     for source, lines in (
         ("tests/test_sqlite_bootstrap.py", (32, 108)),
-        ("tests/test_weekly_cleanup.py", (27,)),
+        ("tests/test_weekly_cleanup.py", (190,)),
     ):
         assert [edge for edge in graph.unknown_edges if edge.source == source] == [
             GraphEdge(
