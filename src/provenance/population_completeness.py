@@ -802,6 +802,37 @@ class PopulationCompletenessLedger:
         self._record_audit(audit)
         return self._seal_verified(run.population_run_id, sealed_at=sealed_at)
 
+    def record_and_verify_fresh_cutover(
+        self,
+        *,
+        run: PopulationRun,
+        planes: tuple[PopulationPlaneReceipt, ...],
+        parity: PopulationParityReceipt,
+        audit: PopulationAuditReceipt,
+        sealed_at: datetime,
+    ) -> PopulationCutoverReceipt:
+        """Persist and replay a verified cutover within one rollback-safe savepoint."""
+
+        with self._savepoint("evaluate_population_cutover"):
+            cutover = self._record_verified_cutover(
+                run=run,
+                planes=planes,
+                parity=parity,
+                audit=audit,
+                sealed_at=sealed_at,
+                authority=_CUTOVER_WRITE_AUTHORITY,
+            )
+            replay = self._verify_fresh_cutover(
+                run=run,
+                planes=planes,
+                parity=parity,
+                audit=audit,
+                authority=_CUTOVER_WRITE_AUTHORITY,
+            )
+            if replay != cutover:
+                raise RuntimeError("fresh population replay differs from its new cutover seal")
+        return cutover
+
     def _record_plane(self, receipt: PopulationPlaneReceipt) -> bool:
         self._require_run_scope(
             receipt.population_run_id,

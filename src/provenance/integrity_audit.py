@@ -27,7 +27,6 @@ from pydantic import (
     model_validator,
 )
 
-from ask.grounded_retrieval import GroundedAskItem, ask_item_bundle_sha256
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
 from provenance.document_processing_evidence import (
     verify_document_processing_evidence,
@@ -275,6 +274,44 @@ _ASK_TRACE_TABLES = (
     "ask_retrieval_trace_items",
     "ask_answer_groundings",
 )
+
+
+class GroundedAskItem(BaseModel):
+    """Historical Ask trace item shape used to verify persisted bundle digests."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rank: int = Field(gt=0)
+    manifest_id: str
+    chunk_id: str
+    score: float
+    text: str
+    node_id: str
+    node_kind: str
+    locator: dict[str, object] | None
+    document_version_id: str
+    issuer_id: str
+    ticker: str | None
+    form_type: str
+    source_url: str
+    filing_at: datetime | None
+    observed_at: datetime
+    retrieved_at: datetime
+
+
+def ask_item_bundle_sha256(item: GroundedAskItem) -> str:
+    """Recompute the legacy Ask bundle digest without retaining its dead retriever."""
+
+    payload = json.dumps(
+        item.model_dump(mode="json"),
+        default=lambda value: value.isoformat() if isinstance(value, datetime) else str(value),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 _EMBEDDING_PROMOTION_TABLES = ("search_embedding_model_promotions",)
 _EXPECTATION_LIFECYCLE_TABLES = ("expected_document_lifecycle_revisions",)
 _FACT_RESOLUTION_CUTOVER_TABLES = (
