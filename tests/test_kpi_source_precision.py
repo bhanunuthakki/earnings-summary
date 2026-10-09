@@ -12,7 +12,10 @@ from pipeline.kpi_semantics import (
     persist_kpi_semantic_context,
 )
 from tests.fixtures.kpi_revision_setup import NOW, semantic_fixture
+from tests.fixtures.kpi_revision_setup import semantic_recording_clock as semantic_recording_clock
 from tests.test_thesis_metric_series import kpi_database_fixture
+
+pytestmark = pytest.mark.usefixtures("semantic_recording_clock")
 
 
 @pytest.mark.parametrize("kind", ["approximate", "lower_bound", "upper_bound", "range"])

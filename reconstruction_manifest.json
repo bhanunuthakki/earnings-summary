@@ -23,6 +23,7 @@
         "src/sqlite_runtime.py",
         "src/db.py",
         "alembic/versions/0054_filing_xbrl_unit_protocol.py",
+        "alembic/versions/0055_kpi_definition_subject_bindings.py",
         "src/pipeline/kpi_legacy_disposition_capture.py",
         "src/pipeline/kpi_semantics.py",
         "src/provenance/financial_derivations.py",

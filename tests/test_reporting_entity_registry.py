@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 from provenance.evidence_ledger import (
     ContentBlob,
@@ -39,6 +41,69 @@ from provenance.reporting_entity_registry import (
 HEAD = "0230_evidence_subject_bindings"
 STAMP = datetime(2026, 7, 27, 21, 0, tzinfo=UTC)
 SHA = "a" * 64
+
+
+@pytest.mark.parametrize("outcome", ["selected", "unresolved", "retired"])
+@pytest.mark.parametrize("future", [False, True])
+def test_recorded_subject_selection_compares_exact_instants(
+    tmp_path: Path, migrated_db: Callable[..., Path], outcome: str, future: bool
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    issuer = IssuerEntity(
+        issuer_id="issuer-clock",
+        idempotency_key="issuer-clock",
+        entity_kind="operating_company",
+        created_at=STAMP,
+    )
+    IssuerRegistry(conn).persist(issuer)
+    registry = ReportingEntityRegistry(conn)
+    registry.persist(
+        ReportingEntity(
+            reporting_entity_id="entity-clock",
+            idempotency_key="entity-clock",
+            issuer_id=issuer.issuer_id,
+            reporting_entity_kind="legal_registrant",
+            display_name="Clock fixture",
+            created_at=STAMP,
+        )
+    )
+    for revision in (1, 2):
+        clock = STAMP.astimezone(timezone(timedelta(hours=7)))
+        if revision == 2 and future:
+            clock += timedelta(microseconds=100)
+        registry.persist(
+            EvidenceSubjectBindingRevision.model_validate(
+                {
+                    "binding_revision_id": f"binding-clock-{revision}",
+                    "idempotency_key": f"binding-clock-{revision}",
+                    "recorded_issuer_id": "legacy-ticker:CLOCK",
+                    "revision": revision,
+                    "issuer_id": issuer.issuer_id
+                    if revision == 1 or outcome == "selected"
+                    else None,
+                    "reporting_entity_id": "entity-clock"
+                    if revision == 1 or outcome == "selected"
+                    else None,
+                    "outcome": "selected" if revision == 1 else outcome,
+                    "decision_kind": "manual",
+                    "material_dissent": False,
+                    "reason_code": "synthetic_clock_boundary",
+                    "reason_details": (("test", "synthetic"),),
+                    "effective_at": STAMP,
+                    "knowledge_at": clock,
+                    "recorded_at": clock,
+                    "supersedes_binding_revision_id": "binding-clock-1" if revision == 2 else None,
+                }
+            )
+        )
+    if not future and outcome != "selected":
+        with pytest.raises(LookupError, match="no selected resolution"):
+            registry.canonicalize_recorded_subject("legacy-ticker:CLOCK", knowledge_at=STAMP)
+    else:
+        subject = registry.canonicalize_recorded_subject("legacy-ticker:CLOCK", knowledge_at=STAMP)
+        assert subject.binding_revision_id == ("binding-clock-1" if future else "binding-clock-2")
+        assert subject.reporting_entity_id == "entity-clock"
+    conn.close()
 
 
 def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:

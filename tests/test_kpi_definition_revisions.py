@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
@@ -11,6 +11,7 @@ import pytest
 from pydantic import ValidationError
 
 import compute.kpi_resolver as kpi_resolver_module
+import pipeline.kpi_semantics as semantics_module
 import pipeline.kpi_source_review as source_review_module
 from compute.kpi_resolver import (
     KpiRevisionSeriesExclusionReason,
@@ -37,6 +38,7 @@ from pipeline.kpi_definition_revisions import (
     kpi_definition_revision_as_known,
     persist_kpi_definition_comparability_revision,
     persist_kpi_definition_revision,
+    validate_kpi_definition_revision_candidate,
 )
 from pipeline.kpi_semantics import (
     KpiAccountingBasis,
@@ -49,10 +51,17 @@ from pipeline.kpi_source_review import (
     bind_source_reviewed_kpi_definition,
     insert_source_reviewed_kpi_supersession,
 )
+from pipeline.queries import open_db
 from provenance.financial_fact_resolution import (
     HistoricalFactAuthorityUnavailableError,
     canonical_fact_row_ids_as_known,
     canonical_fact_selections_as_known,
+)
+from provenance.issuer_registry import IssuerEntity, IssuerRegistry
+from provenance.reporting_entity_registry import (
+    EvidenceSubjectBindingRevision,
+    ReportingEntity,
+    ReportingEntityRegistry,
 )
 from tests.fixtures.kpi_revision_setup import (
     NOW,
@@ -76,6 +85,106 @@ from tests.fixtures.kpi_revision_setup import (
 
 def _no_effect(*_: object, **__: object) -> None:
     return None
+
+
+@pytest.fixture
+def semantic_recording_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the historical fixture's recording clock explicit."""
+
+    class FixtureDatetime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            return NOW.astimezone(tz)
+
+    monkeypatch.setattr(semantics_module, "datetime", FixtureDatetime)
+
+
+@pytest.mark.parametrize(
+    ("binding_case", "accepted"),
+    [
+        ("selected", True),
+        ("selected_offset", True),
+        ("future_retirement", True),
+        ("missing", False),
+        ("future_selection", False),
+        ("future_recording", False),
+        ("unresolved", False),
+        ("retired", False),
+        ("wrong_issuer", False),
+        ("wrong_entity", False),
+        ("dissent", False),
+        ("wrong_security_issuer", False),
+    ],
+)
+def test_definition_evidence_uses_as_known_recorded_subject(
+    binding_case: str, *, accepted: bool
+) -> None:
+    conn = _database()
+    conn.execute(
+        "UPDATE evidence_document_versions SET issuer_id='legacy-ticker:NU' "
+        "WHERE document_version_id='document-v1'"
+    )
+    conn.execute(
+        "CREATE TABLE recorded_subject_binding_revisions("
+        "binding_revision_id TEXT PRIMARY KEY,recorded_issuer_id TEXT NOT NULL,"
+        "issuer_id TEXT,reporting_entity_id TEXT,security_id TEXT,"
+        "material_dissent INTEGER NOT NULL,outcome TEXT NOT NULL,"
+        "knowledge_at TEXT NOT NULL,recorded_at TEXT NOT NULL,revision INTEGER NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO securities VALUES ('security-nu',?)",
+        ("issuer-other" if binding_case == "wrong_security_issuer" else "issuer-nu",),
+    )
+    if binding_case != "missing":
+        conn.execute(
+            "INSERT INTO recorded_subject_binding_revisions VALUES "
+            "('binding-r1','legacy-ticker:NU',?,?,'security-nu',?,'selected',?,?,1)",
+            (
+                "issuer-other" if binding_case == "wrong_issuer" else "issuer-nu",
+                "entity-other" if binding_case == "wrong_entity" else "entity-nu",
+                int(binding_case == "dissent"),
+                NOW + timedelta(hours=1) if binding_case == "future_selection" else NOW,
+                NOW + timedelta(hours=1) if binding_case == "future_recording" else NOW,
+            ),
+        )
+    if binding_case in {"unresolved", "retired", "future_retirement"}:
+        conn.execute(
+            "INSERT INTO recorded_subject_binding_revisions VALUES "
+            "('binding-r2','legacy-ticker:NU',NULL,NULL,NULL,0,?,?,?,2)",
+            (
+                "retired" if binding_case == "future_retirement" else binding_case,
+                NOW + timedelta(hours=1) if binding_case == "future_retirement" else NOW,
+                NOW + timedelta(hours=1) if binding_case == "future_retirement" else NOW,
+            ),
+        )
+    revision = _definition(
+        scope_security_id="security-nu",
+        knowledge_at=NOW.astimezone(timezone(timedelta(hours=-7)))
+        if binding_case == "selected_offset"
+        else NOW,
+    )
+    if accepted:
+        validate_kpi_definition_revision_candidate(
+            conn,
+            revision,
+            expected_definition_head_id=None,
+            expected_definition_revision=0,
+        )
+    else:
+        with pytest.raises(ValueError, match=r"issuer must agree|scope security|subject binding"):
+            validate_kpi_definition_revision_candidate(
+                conn,
+                revision,
+                expected_definition_head_id=None,
+                expected_definition_revision=0,
+            )
+    assert conn.execute("SELECT COUNT(*) FROM kpi_definition_revisions").fetchone()[0] == 0
+    assert (
+        conn.execute(
+            "SELECT issuer_id FROM evidence_document_versions WHERE document_version_id='document-v1'"
+        ).fetchone()[0]
+        == "legacy-ticker:NU"
+    )
 
 
 def test_definition_replay_is_exact_and_sibling_branch_is_rejected() -> None:
@@ -112,6 +221,205 @@ def test_definition_replay_is_exact_and_sibling_branch_is_rejected() -> None:
                 recorded_at=NOW.replace(hour=20),
             ),
         )
+
+
+def test_migrated_definition_persistence_preserves_recorded_legacy_subject(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    database = migrated_db(tmp_path / "definition-legacy-subject.db")
+    conn = open_db(database)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        IssuerRegistry(conn).persist(
+            IssuerEntity(
+                issuer_id="issuer-nu",
+                idempotency_key="issuer-nu",
+                entity_kind="operating_company",
+                created_at=NOW,
+            )
+        )
+        registry = ReportingEntityRegistry(conn)
+        registry.persist(
+            ReportingEntity(
+                reporting_entity_id="entity-nu",
+                idempotency_key="entity-nu",
+                issuer_id="issuer-nu",
+                reporting_entity_kind="legal_registrant",
+                display_name="Nu Holdings Ltd.",
+                created_at=NOW,
+            )
+        )
+        registry.persist(
+            EvidenceSubjectBindingRevision(
+                binding_revision_id="binding-legacy-nu-r1",
+                idempotency_key="binding-legacy-nu-r1",
+                recorded_issuer_id="legacy-ticker:NU",
+                revision=1,
+                issuer_id="issuer-nu",
+                reporting_entity_id="entity-nu",
+                outcome="selected",
+                decision_kind="manual",
+                reason_code="reviewed_legacy_subject",
+                reason_details=(("source_document_version_id", "document-v1"),),
+                material_dissent=False,
+                effective_at=NOW,
+                knowledge_at=NOW,
+                recorded_at=NOW,
+            )
+        )
+        definition_cursor = conn.execute(
+            "INSERT INTO kpi_definitions(ticker,name,unit,primary_source) "
+            "VALUES ('NU','Legacy subject regression ARPAC','actual','ir_doc')"
+        )
+        assert definition_cursor.lastrowid is not None
+        definition_id = int(definition_cursor.lastrowid)
+        first = _definition(kpi_definition_id=definition_id)
+        document_cursor = conn.execute(
+            "INSERT INTO documents(ticker,source_type,doc_type,period_end,file_path,sha256,"
+            "fetched_at,fetch_status,raw_bytes_size,source_quality_tier) "
+            "VALUES ('NU','ir_doc','ir_transcript','2024-12-31',"
+            "'ir_documents/NU/synthetic.pdf',?,?,'ok',1,'issuer_reported')",
+            ("a" * 64, NOW.isoformat()),
+        )
+        assert document_cursor.lastrowid is not None
+        source_doc_id = int(document_cursor.lastrowid)
+        conn.execute(
+            "INSERT INTO evidence_content_blobs VALUES (?,?,?,?,?)",
+            ("a" * 64, 1, "application/pdf", "https://example.invalid/nu", NOW.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO evidence_source_observations "
+            "(observation_id,idempotency_key,source_kind,source_url,blob_sha256,"
+            "observed_at,retrieved_at,retrieval_config_sha256,collector_code_version) "
+            "VALUES ('observation-1','observation-1','ir_document',"
+            "'https://example.invalid/nu',?,?,?,?,?)",
+            ("a" * 64, NOW.isoformat(), NOW.isoformat(), "b" * 64, "test-v1"),
+        )
+        conn.execute(
+            "INSERT INTO evidence_document_versions "
+            "(document_version_id,document_key,version_sequence,observation_id,blob_sha256,"
+            "issuer_id,ticker,document_type,form_type,language,legacy_document_id,recorded_at) "
+            "VALUES ('document-v1','document-v1',1,'observation-1',?,"
+            "'legacy-ticker:NU','NU','earnings_release','earnings_release','en',?,?)",
+            ("a" * 64, source_doc_id, NOW.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO evidence_extraction_runs VALUES "
+            "('run-1','run-1','document-v1',?,'test',?,'test-v1',?,?,?,'succeeded')",
+            ("a" * 64, "b" * 64, "c" * 64, NOW.isoformat(), NOW.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO evidence_nodes VALUES "
+            "('node-1','node-1',1,'run-1',NULL,NULL,'pdf_page',?,?,?,?)",
+            (
+                first.reported_definition_text,
+                first.source_locator_json,
+                first.source_locator_sha256,
+                NOW.isoformat(),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO evidence_nodes VALUES "
+            "('root-1','root-1',1,'run-1',NULL,NULL,'document','Synthetic source',?,?,?)",
+            (first.source_locator_json, first.source_locator_sha256, NOW.isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO legacy_document_evidence_binding_revisions VALUES "
+            "('legacy-binding-1','legacy-binding-1',?,1,'document-v1','root-1',?,?,?,?,?,?,NULL)",
+            (
+                source_doc_id,
+                first.source_locator_json,
+                first.source_locator_sha256,
+                "a" * 64,
+                NOW.isoformat(),
+                NOW.isoformat(),
+                NOW.isoformat(),
+            ),
+        )
+        document_before = tuple(
+            conn.execute(
+                "SELECT * FROM evidence_document_versions WHERE document_version_id='document-v1'"
+            ).fetchone()
+        )
+        assert persist_kpi_definition_revision(conn, first) == first
+        second = _definition(
+            kpi_definition_id=definition_id,
+            kpi_definition_revision_id="definition-r2",
+            idempotency_key="definition-key-r2",
+            revision=2,
+            supersedes_definition_revision_id=first.kpi_definition_revision_id,
+            knowledge_at=NOW + timedelta(hours=1),
+            recorded_at=NOW + timedelta(hours=1),
+        )
+        assert persist_kpi_definition_revision(conn, second) == second
+        assert current_kpi_definition_revision(conn, kpi_definition_id=definition_id) == second
+        assert conn.execute("SELECT COUNT(*) FROM kpi_definition_revisions").fetchone()[0] == 2
+        relation = _relation(
+            first.kpi_definition_revision_id,
+            second.kpi_definition_revision_id,
+            knowledge_at=second.knowledge_at,
+            recorded_at=second.recorded_at,
+        )
+        assert persist_kpi_definition_comparability_revision(conn, relation) == relation
+        fact_cursor = conn.execute(
+            "INSERT INTO kpi_facts(ticker,period_end,fiscal_period_type,kpi_definition_id,"
+            "value,unit,currency,source_doc_id,confidence,extracted_by,locator,source_excerpt) "
+            "VALUES ('NU','2024-12-31','Q4',?,'12.5','actual','USD',?,1.0,'manual',?,?)",
+            (
+                definition_id,
+                source_doc_id,
+                first.source_locator_json,
+                first.reported_definition_text,
+            ),
+        )
+        assert fact_cursor.lastrowid is not None
+        fact_id = int(fact_cursor.lastrowid)
+        context = _context()
+        context_id = persist_kpi_semantic_context(
+            conn,
+            kpi_fact_id=fact_id,
+            context=context,
+            knowledge_at=second.knowledge_at,
+            kpi_definition_revision_id=second.kpi_definition_revision_id,
+        )
+        assert context_id is not None
+        created_at = conn.execute(
+            "SELECT created_at FROM kpi_fact_semantic_contexts WHERE id=?", (context_id,)
+        ).fetchone()[0]
+        assert (
+            persist_kpi_semantic_context(
+                conn,
+                kpi_fact_id=fact_id,
+                context=context,
+                knowledge_at=second.knowledge_at,
+                kpi_definition_revision_id=second.kpi_definition_revision_id,
+            )
+            == context_id
+        )
+        assert (
+            conn.execute(
+                "SELECT created_at FROM kpi_fact_semantic_contexts WHERE id=?", (context_id,)
+            ).fetchone()[0]
+            == created_at
+        )
+        assert (
+            tuple(
+                conn.execute(
+                    "SELECT * FROM evidence_document_versions WHERE document_version_id='document-v1'"
+                ).fetchone()
+            )
+            == document_before
+        )
+        assert (
+            conn.execute(
+                "SELECT issuer_id FROM evidence_document_versions WHERE document_version_id='document-v1'"
+            ).fetchone()[0]
+            == "legacy-ticker:NU"
+        )
+    finally:
+        conn.close()
 
 
 def test_effective_selection_handles_future_revision_and_later_historical_correction() -> None:
@@ -383,6 +691,7 @@ def test_semantic_binding_requires_exact_effective_definition_as_known() -> None
     assert bound_id is not None
 
 
+@pytest.mark.usefixtures("semantic_recording_clock")
 def test_semantic_binding_is_exact_and_unbound_rows_stay_visible_in_shadow_counts() -> None:
     conn = _database()
     definition = persist_kpi_definition_revision(conn, _definition())
@@ -432,6 +741,7 @@ def test_semantic_binding_is_exact_and_unbound_rows_stay_visible_in_shadow_count
         )
 
 
+@pytest.mark.usefixtures("semantic_recording_clock")
 def test_semantic_binding_and_shadow_heads_respect_recorded_and_knowledge_cutoffs() -> None:
     conn = _database()
     later = NOW.replace(day=7)
@@ -485,6 +795,7 @@ def test_semantic_binding_and_shadow_heads_respect_recorded_and_knowledge_cutoff
     assert current.exclusions[0].reason is KpiRevisionSeriesExclusionReason.LEGACY_UNBOUND
 
 
+@pytest.mark.usefixtures("semantic_recording_clock")
 def test_semantic_heads_require_knowledge_and_created_clocks() -> None:
     conn = _database()
     definition = persist_kpi_definition_revision(conn, _definition())
@@ -554,6 +865,7 @@ def test_semantic_heads_require_knowledge_and_created_clocks() -> None:
     }
 
 
+@pytest.mark.usefixtures("semantic_recording_clock")
 def test_shadow_resolver_reconstructs_fact_resolution_as_known() -> None:
     conn = _database()
     definition = persist_kpi_definition_revision(conn, _definition())
@@ -748,6 +1060,7 @@ def test_canonical_fact_selections_fail_closed_on_partial_authority_and_fact_dri
         )
 
 
+@pytest.mark.usefixtures("semantic_recording_clock")
 def test_shadow_resolver_holds_one_wal_snapshot_across_fact_proof_and_use(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1309,6 +1622,7 @@ def test_second_source_review_entry_failure_allows_manifest_rollback(
     assert conn.execute("SELECT COUNT(*) FROM kpi_definition_revisions").fetchone()[0] == 0
 
 
+@pytest.mark.usefixtures("semantic_recording_clock")
 def test_shadow_census_is_deterministic_and_never_authorizes_reader_activation() -> None:
     conn = _database()
     definition = persist_kpi_definition_revision(conn, _definition())
@@ -1395,6 +1709,7 @@ def test_shadow_census_derives_complete_portfolio_population_and_attributes_each
     assert second.blocking_reasons == ("legacy_unbound",)
 
 
+@pytest.mark.usefixtures("semantic_recording_clock")
 def test_shadow_census_retains_exact_lineage_for_no_comparability_exclusion() -> None:
     conn = _database()
     first = persist_kpi_definition_revision(conn, _definition())
@@ -1480,6 +1795,7 @@ def test_shadow_census_retains_exact_lineage_for_definition_context_mismatch() -
     assert disposition.semantic_context_revision == 1
 
 
+@pytest.mark.usefixtures("semantic_recording_clock")
 def test_shadow_census_lineage_uses_semantic_head_as_known() -> None:
     conn = _database()
     definition = persist_kpi_definition_revision(conn, _definition())
@@ -1572,6 +1888,7 @@ def test_shadow_census_blocks_invalid_active_portfolio_fact_ownership(
     assert result.invalid_in_scope_facts[0].reason == expected_reason
 
 
+@pytest.mark.usefixtures("semantic_recording_clock")
 def test_shadow_census_does_not_mislabel_historical_current_delta_as_comparability() -> None:
     conn = _database()
     definition = persist_kpi_definition_revision(conn, _definition())
@@ -1620,6 +1937,7 @@ def test_shadow_census_does_not_mislabel_historical_current_delta_as_comparabili
     assert "unexplained_revision_only" in series.blocking_reasons
 
 
+@pytest.mark.usefixtures("semantic_recording_clock")
 def test_shadow_census_retains_direct_comparability_and_break_identities() -> None:
     conn = _database()
     conn.execute("INSERT INTO kpi_definitions VALUES (2,'NU','Monthly ARPAC renamed','actual')")
