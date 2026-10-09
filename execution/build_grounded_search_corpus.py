@@ -12,7 +12,6 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import datetime
 from pathlib import Path
 
 try:
@@ -27,6 +26,7 @@ from provenance.immutable_artifact import (
     read_stable_artifact,
     require_canonical_text_artifact,
 )
+from runtime.deterministic import parse_iso8601_cli as _parse_datetime
 from runtime.job_runtime import JobAlreadyRunningError, JobLock
 from search.corpus_builder import (
     ChunkerConfig,
@@ -41,13 +41,6 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 def _event(event: str, **fields: object) -> None:
     sys.stderr.write(json.dumps({"event": event, **fields}, sort_keys=True) + "\n")
-
-
-def _parse_datetime(value: str) -> datetime:
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as error:
-        raise argparse.ArgumentTypeError("must be an ISO-8601 datetime") from error
 
 
 def main(argv: list[str] | None = None) -> int:

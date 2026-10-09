@@ -9,7 +9,6 @@ use without turning an unscoped scheduled sweep into implicit authorization.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import sqlite3
 import tempfile
@@ -37,6 +36,8 @@ from provenance.data_backbone_rehearsal import (
     database_storage_identity,
     require_sidecar_free_database,
 )
+from runtime.deterministic import canonical_json_ascii as _canonical_json
+from runtime.deterministic import content_sha256_ascii as _digest
 from schema_compat import expected_head
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -98,14 +99,6 @@ _CAPTURED_COVERAGE = ("captured", "extracted", "indexed")
 
 class SnapshotSafetyError(ValueError):
     """The planner input is not a closed, immutable SQLite snapshot."""
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-
-
-def _digest(value: object) -> str:
-    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
 def _database_sha256(path: Path) -> str:

@@ -42,7 +42,6 @@ Structured JSON events go to stderr; stdout is one JSON report.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sqlite3
 import sys
@@ -60,6 +59,7 @@ import db_gc
 
 from clock import now_naive_utc
 from run_lock import RunLock, RunLockHeldError, acquire_run_lock
+from runtime.deterministic import sha256_file as _sha256
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 DEFAULT_DB = Path(__file__).resolve().parents[1] / "data" / "portfolio.db"
@@ -112,14 +112,6 @@ def _preservation_only_error(tables: list[str]) -> db_gc.GcAbortedError:
         "not mutate or bulk-reinsert them. Preserve the sidecar and use a sealed "
         "read-only archive generation for historical access"
     )
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def inspect_preservation_archive(archive_path: Path) -> PreservationArchiveReport:

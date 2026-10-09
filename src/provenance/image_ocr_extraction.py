@@ -35,6 +35,8 @@ from provenance.evidence_native_candidates import (
     resolve_local_storage_uri,
     select_evidence_native_candidates_by_id,
 )
+from runtime.deterministic import canonical_json as _canonical_json
+from runtime.deterministic import parse_iso8601_named as _datetime
 
 IMAGE_OCR_EXTRACTOR_NAME = "governed-image-ocr"
 IMAGE_OCR_EXTRACTOR_CODE_VERSION = "governed-image-ocr@1"
@@ -1272,10 +1274,6 @@ def _stable_token(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
 def _canonical_sha256(value: object) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
@@ -1353,14 +1351,3 @@ def _nonnegative_integer(value: object, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise RuntimeError(f"{name} must be a non-negative integer")
     return value
-
-
-def _datetime(value: object, name: str) -> datetime:
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError as error:
-            raise RuntimeError(f"{name} must be ISO-8601") from error
-    raise RuntimeError(f"{name} must be a datetime")

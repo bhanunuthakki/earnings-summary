@@ -38,6 +38,7 @@ from provenance.sec_companyfacts_capture import (
     parse_companyfacts_body,
     supported_companyfacts_accessions,
 )
+from runtime.deterministic import as_utc as _utc
 
 _Mode = Literal["dry_run", "apply"]
 _MINIMUM_SEC_INTERVAL_SECONDS = 0.15
@@ -640,7 +641,3 @@ def _write_checkpoint(
         temporary = Path(temporary_name)
         if temporary.exists():
             temporary.unlink()
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)

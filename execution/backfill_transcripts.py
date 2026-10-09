@@ -44,7 +44,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sqlite3
 import subprocess
@@ -112,6 +111,7 @@ except ImportError:
     )
 
 import db
+from runtime.deterministic import sha256_file as _sha256
 
 _RAW_DIR = PROJECT_ROOT / "transcripts" / "raw"
 _PROCESSED_DIR = PROJECT_ROOT / "transcripts" / "processed"
@@ -231,14 +231,6 @@ class TranscriptEvidence:
 
 def _qlabel(year: int, quarter: int) -> str:
     return f"Q{quarter}_{year}"
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _canonical_processed_path_conflicts(identity: FetchedTranscriptIdentity) -> bool:

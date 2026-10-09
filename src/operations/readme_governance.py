@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import stat
@@ -27,6 +26,7 @@ from readme_updater import (
     prior_feedback_for_attempt,
     prompt_identities,
 )
+from runtime.deterministic import sha256_bytes as _sha256
 
 ReadmeGovernanceState = Literal[
     "not_run", "approved_preview", "applied", "rejected", "stale", "invalid"
@@ -54,10 +54,6 @@ class ReadmeGovernanceStatus(BaseModel):
     candidate_sha256: str | None
     can_apply: bool
     recorded_at: datetime | None
-
-
-def _sha256(payload: bytes) -> str:
-    return hashlib.sha256(payload).hexdigest()
 
 
 def _read_regular_file(path: Path, *, limit: int) -> bytes:

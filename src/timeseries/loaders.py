@@ -59,6 +59,7 @@ from provenance.overrides import (
     qualify_note,
 )
 from provenance.verifier_identity import verifier_source_artifact_sha256
+from runtime.deterministic import table_exists_or_false as _has_table
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from timeseries.kpi_revision_shadow import (
     KpiReaderShadowComparison,
@@ -422,18 +423,6 @@ def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
     except sqlite3.Error:
         return False
     return any(str(r["name"]) == column for r in rows)
-
-
-def _has_table(conn: sqlite3.Connection, table: str) -> bool:
-    """True iff `table` exists. Returns False on any sqlite error."""
-    try:
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-            (table,),
-        ).fetchone()
-    except sqlite3.Error:
-        return False
-    return row is not None
 
 
 # `latest_in_chain` lives in src/pipeline/restatement_detector.py — the

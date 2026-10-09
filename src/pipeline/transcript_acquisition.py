@@ -9,7 +9,6 @@ staged bytes after revalidating both the receipt and stored identity.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import sqlite3
@@ -36,6 +35,7 @@ from pipeline.source_policy import (
     reported_quarter_is_in_window,
 )
 from provenance.source_regime import SourceRegime, contract_for, receipt_identity
+from runtime.deterministic import canonical_json_ascii as _canonical_json
 from transcripts.acquisition_semantics import (
     TRANSCRIPT_ACQUISITION_POLICY_VERSION,
     ExistingArtifactBehavior,
@@ -354,10 +354,6 @@ def read_authorized_transcript(
         expected_sha256=expected_sha256,
         expected_size_bytes=expected_size_bytes,
     )
-
-
-def _canonical_json(payload: object) -> str:
-    return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
 
 def _durable_artifact_json(artifact: AuthorizedTranscriptArtifact) -> str:

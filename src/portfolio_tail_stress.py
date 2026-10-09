@@ -25,11 +25,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 from dcf.latest import latest_dcf_rows_from_db
 from dcf.scenario_reward import parse_scenario_fair_values
+from runtime.deterministic import parse_date_text_or_none as _parse_date
 
 __all__ = [
     "COVERAGE_BAD_PCT",
@@ -85,18 +86,6 @@ class TailStress:
     names_with_bear: int
     names_total: int
     notes: list[str] = field(default_factory=list[str])
-
-
-def _parse_date(raw: object) -> date | None:
-    if not isinstance(raw, str) or not raw:
-        return None
-    try:
-        return datetime.fromisoformat(raw).date()
-    except ValueError:
-        try:
-            return date.fromisoformat(raw[:10])
-        except ValueError:
-            return None
 
 
 @dataclass(slots=True)

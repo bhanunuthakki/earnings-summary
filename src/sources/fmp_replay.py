@@ -15,6 +15,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from runtime.deterministic import sha256_file as _sha256
 from sources.adapters import (
     CorporateActionAdjustment,
     FmpProviderAdapter,
@@ -142,14 +143,6 @@ def select_replay_inputs(corpus_root: Path) -> tuple[_ReplayInput, ...]:
             )
         )
     return tuple(selected)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def corpus_manifest_sha256(corpus_root: Path, inputs: tuple[_ReplayInput, ...]) -> tuple[str, int]:

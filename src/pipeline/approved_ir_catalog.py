@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import date
 from enum import StrEnum
 from typing import Annotated
@@ -17,6 +16,7 @@ from pipeline.source_policy import (
     canonical_https_url,
     ir_url_is_authorized,
 )
+from runtime import deterministic
 
 Sha256Hex = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 
@@ -80,12 +80,7 @@ class ApprovedIrCatalog(BaseModel):
     entries: tuple[IrCatalogEntry, ...]
 
     def canonical_json(self) -> str:
-        return json.dumps(
-            self.model_dump(mode="json", exclude_none=False),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-        )
+        return deterministic.canonical_json_ascii(self.model_dump(mode="json", exclude_none=False))
 
     @property
     def catalog_sha256(self) -> str:

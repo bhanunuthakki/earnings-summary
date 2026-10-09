@@ -10,7 +10,6 @@ verifies the selected subject binding and exact extraction/evidence chain.
 from __future__ import annotations
 
 import hashlib
-import json
 from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal
@@ -43,6 +42,8 @@ from provenance.source_fact_repository import (
     ReportedSourceFact,
     SourceFactPublication,
 )
+from runtime.deterministic import canonical_json_model as _canonical_json
+from runtime.deterministic import content_sha256_model as _digest
 
 DimensionApplication = Literal["explicit", "defaulted"]
 DimensionMemberKind = Literal["explicit", "typed"]
@@ -64,21 +65,6 @@ _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 
 class _FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-def _canonical_json(value: object) -> str:
-    if isinstance(value, BaseModel):
-        value = value.model_dump(mode="json")
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-
-
-def _digest(value: object) -> str:
-    return hashlib.sha256(_canonical_json(value).encode()).hexdigest()
 
 
 def _validate_sha256(value: str) -> str:

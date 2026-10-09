@@ -34,7 +34,6 @@ so one stuck ticker doesn't break the fan-out.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import re
@@ -72,6 +71,8 @@ from llm_artifact_store import (
     upsert,
 )
 from provenance.selection import selected_transcripts_relation
+from runtime.deterministic import sha256_text as _sha256_text
+from runtime.deterministic import table_exists_or_false as _has_table
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from triggers.base import (
     AlertDraft,
@@ -179,18 +180,6 @@ def _governed_structured_call(prompt: str, *, purpose: str, ticker: str) -> obje
 # Existing tests inject raw provider responses here to exercise retry behavior.
 # In production this always resolves to the shared governed structured wrapper.
 call_llm: Callable[..., object] = _governed_structured_call
-
-
-def _has_table(conn: sqlite3.Connection, table: str) -> bool:
-    """True iff ``table`` exists. Returns False on any sqlite error."""
-    try:
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-            (table,),
-        ).fetchone()
-    except sqlite3.Error:
-        return False
-    return row is not None
 
 
 def _format_threshold(threshold: datetime) -> str:
@@ -441,11 +430,6 @@ def _render_prompt(
         ),
         prior_transcripts=spotlit_priors,
     )
-
-
-def _sha256_text(text: str) -> str:
-    """Deterministic sha256 over UTF-8 bytes."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _build_cache_inputs(

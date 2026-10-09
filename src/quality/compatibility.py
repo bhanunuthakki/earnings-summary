@@ -16,6 +16,7 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict, Field
 
 from quality.git_env import clean_local_git_env
+from runtime.deterministic import sha256_bytes as _sha256
 
 
 class CompatibilityEvidenceError(RuntimeError):
@@ -159,10 +160,6 @@ def _artifact_path(root: Path, relative: str) -> Path:
             f"compatibility artifact escapes the repository: {relative}"
         )
     return candidate
-
-
-def _sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def _aggregate(items: list[tuple[str, bytes]]) -> str:

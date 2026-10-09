@@ -61,7 +61,6 @@ LLM call, so the alert body is stable and cheap.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import sqlite3
@@ -92,6 +91,8 @@ from llm_artifact_store import (
     read_current,
     upsert,
 )
+from runtime.deterministic import sha256_text as _sha256_text
+from runtime.deterministic import table_exists_or_false as _has_table
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from triggers.base import (
     AlertDraft,
@@ -264,18 +265,6 @@ class _Score:
 # --------------------------------------------------------------------------
 # DB helpers
 # --------------------------------------------------------------------------
-
-
-def _has_table(conn: sqlite3.Connection, table: str) -> bool:
-    """True iff ``table`` exists. Returns False on any sqlite error."""
-    try:
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-            (table,),
-        ).fetchone()
-    except sqlite3.Error:
-        return False
-    return row is not None
 
 
 def _conn_db_path(conn: sqlite3.Connection) -> Path | None:
@@ -695,11 +684,6 @@ def _dedup_by_event(
 # --------------------------------------------------------------------------
 # Cache key + misc helpers
 # --------------------------------------------------------------------------
-
-
-def _sha256_text(text: str) -> str:
-    """Deterministic sha256 over UTF-8 bytes."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _classification_cache_inputs(

@@ -6,6 +6,7 @@ import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Literal, Self, cast
 
@@ -50,6 +51,8 @@ from provenance.population_research_snapshots import verify_research_snapshots
 from provenance.population_retrieval_runtime import verify_retrieval_runtime
 from provenance.population_source_facts import verify_source_fact_ontology
 from provenance.verifier_identity import verifier_source_artifact_sha256
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import require_sha256_exact
 from search.canonical_fact_projection import admit_canonical_projection_for_read
 
 _SOURCE_ROOT = Path(__file__).resolve().parents[1]
@@ -126,14 +129,7 @@ class _FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-def _sha256(value: str) -> str:
-    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
-        raise ValueError("must be a lowercase SHA-256 hex digest")
-    return value
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+_sha256 = partial(require_sha256_exact, message="must be a lowercase SHA-256 hex digest")
 
 
 def _timestamp(value: datetime) -> str:

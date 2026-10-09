@@ -543,6 +543,10 @@
       "seconds": 1.74,
       "shard": "8"
     },
+    "tests/test_canonical_helpers_equivalence.py": {
+      "seconds": 0.3,
+      "shard": "5"
+    },
     "tests/test_canonical_narrative_s1.py": {
       "seconds": 1.6,
       "shard": "2 overflow"

@@ -34,6 +34,7 @@ from pathlib import Path
 
 from db_paths import resolve_db_path
 from pipeline.db_writer_gate import WriterGateHeldError
+from runtime.deterministic import table_exists as _table_exists
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -186,17 +187,6 @@ def _has_on_exceed(conn: sqlite3.Connection) -> bool:
     except sqlite3.Error:
         return False
     return "on_exceed" in cols
-
-
-def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
-    """Return whether a table exists, propagating unreadable-store errors."""
-    return (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            (table,),
-        ).fetchone()
-        is not None
-    )
 
 
 def _row_on_exceed(row: sqlite3.Row, *, has_mode: bool, hard_block: bool) -> str:

@@ -6,16 +6,16 @@ distinct; selecting a period does not admit facts or waive processing lanes.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import sqlite3
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from provenance.source_coverage import ExpectedDocument
 from provenance.source_inventory_seal import InventoryComponent, component_digest
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import content_sha256_ascii as _sha
 
 _PERIODIC = frozenset({"10-K", "10-Q", "20-F", "40-F"})
 _CURRENT = frozenset({"8-K", "6-K"})
@@ -123,16 +123,6 @@ class AnalysisDocumentCoverage(_Frozen):
     role: AnalysisDocumentRole
     coverage_status: str
     document_version_id: str | None
-
-
-def _sha(value: object) -> str:
-    return hashlib.sha256(
-        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _clock(value: object) -> datetime:

@@ -24,6 +24,7 @@ from provenance.fulltext_extractor_identity import (
 from provenance.image_ocr_extraction import IMAGE_OCR_EXTRACTOR_NAME
 from provenance.search_index_lineage import IndexKind, sealed_index_lineage
 from provenance.source_coverage import CoverageAssessment, SourceCoverageLedger
+from runtime.deterministic import parse_iso8601_named as _datetime
 
 _POLICY_NAME = "evidence-lineage-coverage-promotion"
 _POLICY_VERSION = "2"
@@ -739,17 +740,6 @@ def _integer(value: object, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise RuntimeError(f"{name} must be a positive integer")
     return value
-
-
-def _datetime(value: object, name: str) -> datetime:
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError as error:
-            raise RuntimeError(f"{name} must be ISO-8601") from error
-    raise RuntimeError(f"{name} must be a datetime")
 
 
 def _timeline(value: datetime) -> datetime:

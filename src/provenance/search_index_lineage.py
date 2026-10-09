@@ -16,6 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from runtime.deterministic import parse_iso8601_named as _datetime
 from search.corpus_builder import lexical_index_config_sha256
 
 IndexKind = Literal["lexical", "vector"]
@@ -370,17 +371,6 @@ def _index_kind(value: object) -> IndexKind:
     if value == "vector":
         return "vector"
     raise RuntimeError("index_kind must be lexical or vector")
-
-
-def _datetime(value: object, name: str) -> datetime:
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
-        try:
-            return datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError as error:
-            raise RuntimeError(f"{name} must be ISO-8601") from error
-    raise RuntimeError(f"{name} must be a datetime")
 
 
 def _digest_rows(rows: list[tuple[object, ...]]) -> str:

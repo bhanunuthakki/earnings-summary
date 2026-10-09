@@ -8,7 +8,6 @@ and never cross the persistence boundary.
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import stat
 from collections.abc import Mapping, Sequence
@@ -16,6 +15,8 @@ from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from runtime import deterministic
 
 ArtifactRole = Literal["model", "tokenizer", "config", "runtime"]
 ConfigValue = str | int | bool
@@ -129,12 +130,7 @@ class EmbeddingRuntimeArtifact(BaseModel):
         return self
 
     def canonical_json(self) -> str:
-        return json.dumps(
-            self.model_dump(mode="json"),
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        return deterministic.canonical_json_ascii(self.model_dump(mode="json"))
 
     def sha256(self) -> str:
         return hashlib.sha256(self.canonical_json().encode("utf-8")).hexdigest()

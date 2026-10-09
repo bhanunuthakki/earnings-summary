@@ -25,7 +25,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 from statistics import median
 
@@ -33,6 +33,7 @@ from allocation.book_risk import BookRisk, build_book_risk
 from dcf.latest import latest_dcf_rows_from_db
 from dcf.scenario_reward import scenario_reward
 from identity import DEFAULT_USER_ID
+from runtime.deterministic import parse_date_text_or_none as _parse_date
 from sources.market_price_policy import PRICE_STALE_DAYS as PRICE_STALE_DAYS
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -238,18 +239,6 @@ def build_gap_rows(
 # --------------------------------------------------------------------------- #
 # Input assembly (DB + price cache)
 # --------------------------------------------------------------------------- #
-
-
-def _parse_date(raw: object) -> date | None:
-    if not isinstance(raw, str) or not raw:
-        return None
-    try:
-        return datetime.fromisoformat(raw).date()
-    except ValueError:
-        try:
-            return date.fromisoformat(raw[:10])
-        except ValueError:
-            return None
 
 
 def _dcf_reward_legs(db_path: Path, tickers: Sequence[str], today: date) -> dict[str, Reward]:

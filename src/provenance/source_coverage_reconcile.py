@@ -43,6 +43,7 @@ from provenance.source_inventory_seal import (
     SourceInventorySealStore,
     component_digest,
 )
+from runtime.deterministic import table_exists as _table_exists
 
 _Mode = Literal["dry_run", "apply"]
 _ExplicitStatus = Literal[
@@ -1005,16 +1006,6 @@ def _authority_identifier(issuer_id: str) -> tuple[IdentifierType, str] | None:
     if prefix in {"sedar-profile", "sedar_profile"}:
         return "sedar_profile", value
     return None
-
-
-def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (table_name,),
-        ).fetchone()
-        is not None
-    )
 
 
 def _successful_extraction(conn: sqlite3.Connection, document_version_id: str) -> str | None:

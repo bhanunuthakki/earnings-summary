@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import datetime
 from pathlib import Path
 
 try:
@@ -23,15 +22,9 @@ from provenance.population_research_snapshots import (
     ResearchSnapshotPopulationRequest,
     populate_research_snapshots,
 )
+from runtime.deterministic import parse_iso8601_cli as _datetime
 from runtime.job_runtime import JobAlreadyRunningError, JobLock
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
-
-
-def _datetime(value: str) -> datetime:
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("must be an ISO-8601 datetime") from exc
 
 
 def _run(args: argparse.Namespace) -> int:

@@ -29,8 +29,8 @@ from provenance.immutable_artifact import (
     require_no_reparse_points,
     validate_population_database_target,
 )
+from provenance.population_cli_harness import parse_timezone_aware_datetime as _datetime
 from provenance.population_cli_harness import (
-    parse_timezone_aware_datetime,
     validate_protected_receipt_path,
 )
 from provenance.population_document_processing import (
@@ -54,10 +54,6 @@ from runtime.job_runtime import (
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 DocumentPhase = Literal["obligations", "dispositions", "snapshots", "all"]
-
-
-def _datetime(value: str) -> datetime:
-    return parse_timezone_aware_datetime(value)
 
 
 def build_parser() -> argparse.ArgumentParser:

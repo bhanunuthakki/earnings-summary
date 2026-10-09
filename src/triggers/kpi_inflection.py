@@ -34,7 +34,6 @@ failure — the deterministic memo is the contract.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import sqlite3
@@ -61,6 +60,7 @@ from llm_artifact_store import (
     upsert,
 )
 from llm_client import call_llm
+from runtime.deterministic import sha256_text as _sha256_text
 from timeseries import (
     Observation,
     detect_inflection,
@@ -392,11 +392,6 @@ def _as_float(value: object) -> float:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     raise TypeError(f"expected numeric evidence value, got {type(value).__name__}")
-
-
-def _sha256_text(text: str) -> str:
-    """Deterministic sha256 over UTF-8 bytes."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _context_cache_inputs(

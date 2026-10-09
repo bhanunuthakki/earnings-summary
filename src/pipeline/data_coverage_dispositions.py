@@ -7,7 +7,6 @@ completeness.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from calendar import monthrange
@@ -27,6 +26,8 @@ from pydantic import (
 )
 
 from operations.context import current as current_operation_context
+from runtime.deterministic import canonical_json_ascii as _canonical_json
+from runtime.deterministic import sha256_text as _sha256
 from schema_compat import require_current_for_write
 
 _STRICT_FROZEN = ConfigDict(extra="forbid", frozen=True, strict=True)
@@ -144,14 +145,6 @@ class DataCoverageDisposition(BaseModel):
     revision: int = Field(gt=0)
     supersedes_disposition_id: _Sha256 | None = None
     recorded_at: AwareDatetime
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
-
-
-def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def policy_config_sha256(

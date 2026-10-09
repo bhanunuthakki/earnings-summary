@@ -17,6 +17,7 @@ from typing import Protocol, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from runtime import deterministic
 from search.grounded import SearchFilter, VectorCandidate
 
 PURPOSE = "evidence_vector_retrieval"
@@ -157,12 +158,7 @@ class EmbeddingRecommendationArtifact(BaseModel):
         return self
 
     def canonical_json(self) -> str:
-        return json.dumps(
-            self.model_dump(mode="json"),
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        return deterministic.canonical_json_ascii(self.model_dump(mode="json"))
 
 
 class VectorRetriever(Protocol):

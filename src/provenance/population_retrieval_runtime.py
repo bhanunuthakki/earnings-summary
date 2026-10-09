@@ -13,7 +13,7 @@ import hashlib
 import json
 import re
 import sqlite3
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, Self
 
@@ -37,6 +37,7 @@ from provenance.search_index_lineage import (
     load_projection_seal,
     verify_ledger_projection_seal,
 )
+from runtime.deterministic import as_utc as _utc
 from search.corpus_builder import (
     ChunkerConfig,
     CorpusBuildRequest,
@@ -1279,10 +1280,6 @@ def _canary_query(text: str) -> str:
     if not tokens:
         raise ValueError("retrieval canary source chunk contains no searchable token")
     return " ".join(tokens)
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _db_time(value: datetime) -> str:

@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from pipeline.issuer_document_coverage import IssuerDocumentCoverageReceipt
 from provenance.source_coverage import IssuerFactCoverageReceiptRecord
+from runtime.deterministic import canonical_json as _canonical_json
 
 
 class DocumentCompletenessStatus(StrEnum):
@@ -41,10 +42,6 @@ class DocumentCompleteness(BaseModel):
     status: DocumentCompletenessStatus
     reason: DocumentCompletenessReason
     receipt_group_key: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def _receipt_envelope(row: sqlite3.Row) -> dict[str, object]:

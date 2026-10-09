@@ -6,10 +6,12 @@ import hashlib
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+
+from runtime.deterministic import as_utc as _utc
 
 REQUIRED_POPULATION_PLANES = (
     "identity_scope",
@@ -109,10 +111,6 @@ def _validate_sha256(value: str) -> str:
     if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
         raise ValueError("must be a lowercase SHA-256 hex digest")
     return value
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _timestamp(value: datetime) -> str:

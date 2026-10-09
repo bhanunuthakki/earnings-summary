@@ -98,6 +98,7 @@ from provenance.sec_companyfacts_capture import (
     record_companyfacts_unchanged_observation,
     supported_companyfacts_accessions,
 )
+from runtime.deterministic import table_exists as _has_table
 from sec_identity import sec_user_agent
 
 log = logging.getLogger(__name__)
@@ -1738,16 +1739,6 @@ def insert_facts_from_companyfacts(
         timing_sink=timing_sink,
         timing_phase_started=timing_phase_started,
         monotonic_ns=monotonic_ns,
-    )
-
-
-def _has_table(conn: sqlite3.Connection, table: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (table,),
-        ).fetchone()
-        is not None
     )
 
 

@@ -39,6 +39,7 @@ from provenance.source_inventory_seal import (
     InventoryManifestLink,
     SourceInventorySealStore,
 )
+from runtime.deterministic import sha256_text as _sha256_text
 from search.grounded import (
     CorpusDocumentMembership,
     CorpusManifest,
@@ -1774,10 +1775,6 @@ def _result(
         chunker_config_sha256=plan.chunker_config_sha256,
         planned_chunks=plan.chunks,
     )
-
-
-def _sha256_text(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _sha256_json(value: object) -> str:

@@ -41,6 +41,7 @@ from evals.run_registry import (
 )
 from llm.calibration import VersionSummary, summarize_by_prompt_version
 from pipeline.operations_styles import EVALS_STYLE as _PANEL_CSS
+from runtime.deterministic import table_exists as _has_table
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 from ui.controls import prov_case, prov_drawer
@@ -112,15 +113,6 @@ class CallHealthRow:
     @property
     def fallback_rate(self) -> float:
         return self.fallbacks / self.calls if self.calls else 0.0
-
-
-def _has_table(conn: sqlite3.Connection, name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", (name,)
-        ).fetchone()
-        is not None
-    )
 
 
 def load_latest_runs(conn: sqlite3.Connection) -> list[LatestRunRow]:

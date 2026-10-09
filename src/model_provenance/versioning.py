@@ -26,12 +26,8 @@ always travel as bound parameters.
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
 
-
-def _now_iso() -> str:
-    """Naive-UTC ISO 8601 — matches the schema's canonical TEXT-timestamp format."""
-    return datetime.now(UTC).replace(tzinfo=None).isoformat()
+from clock import now_iso as _now_iso
 
 
 def supersede_current(

@@ -8,7 +8,6 @@ and immutable action receipt as one SQLite transaction.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import sqlite3
@@ -30,6 +29,7 @@ from operations.attention import (
     OperationsAttentionFinding,
     apply_attention_action,
 )
+from runtime.deterministic import sha256_text as _sha256
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -62,10 +62,6 @@ class ActionFailureCode(StrEnum):
     INVALID_EXPIRY = "invalid_expiry"
     VALIDATION_FAILED = "validation_failed"
     CONFLICT = "conflict"
-
-
-def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _canonical_sha256(value: dict[str, str | None]) -> str:

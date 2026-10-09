@@ -6,7 +6,6 @@ It deliberately cannot grant performance admission.
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import math
@@ -42,6 +41,7 @@ from quality.performance_experiment_models import (
     RuntimeBootstrapIdentity,
     SourceArmIdentity,
 )
+from runtime.deterministic import sha256_bytes as _sha256
 
 ADMISSION_HOLD_REASON = "performance admission remains deferred (BHA-122 HOLD)"
 BOOTSTRAP_REPLICATES = 2_000
@@ -90,10 +90,6 @@ RuntimeBootstrapPolicy = Literal["alias_cache_redirect_v1"]
 
 class PerformanceExperimentError(Exception):
     """The paired protocol could not produce complete trustworthy evidence."""
-
-
-def _sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
 
 
 def _safe_relative_path(value: str, *, kind: str) -> str:

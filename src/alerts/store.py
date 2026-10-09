@@ -35,7 +35,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from clock import now_iso
+from clock import now_iso as _now_iso
 from db_paths import resolve_db_path
 from identity import DEFAULT_USER_ID
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -806,14 +806,6 @@ def _open(
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
-
-
-def _now_iso() -> str:
-    # Naive-UTC, matching ``alerts.fired_at`` (written by triggers as
-    # ``datetime.now(UTC).replace(tzinfo=None)``) and the repo-wide
-    # convention. An aware offset here is the landmine that crashes any
-    # consumer comparing a store stamp against a naive datetime.
-    return now_iso()
 
 
 def _parse_dt(raw: object) -> datetime:

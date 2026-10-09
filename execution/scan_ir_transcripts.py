@@ -44,7 +44,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import subprocess
 import sys
@@ -104,14 +103,6 @@ def due_for_scan(last_earnings: date | None, today: date, window_days: int) -> b
 
 def _transcript_name(ticker: str, year: int, quarter: int) -> str:
     return f"{ticker.upper()}_Q{quarter}_{year}.txt"
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _recorded_evidence_path(repo_root: Path, recorded: str) -> Path | None:

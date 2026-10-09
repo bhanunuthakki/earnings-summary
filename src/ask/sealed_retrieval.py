@@ -6,7 +6,8 @@ import hashlib
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Literal, Self, cast
 from urllib.parse import quote
@@ -25,6 +26,9 @@ from provenance.scope_identity import (
     validate_retrieval_scope_identity,
     validate_source_scope_revision_id,
 )
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import parse_iso8601_utc as _datetime
+from runtime.deterministic import require_sha256
 from search.embedding_promotion import LocalVectorRuntimeConfig
 from search.heterogeneous_retrieval import (
     HeterogeneousRetrievalError,
@@ -137,24 +141,11 @@ def current_verifier_identity() -> tuple[str, str, str, str, str]:
     )
 
 
-def _sha(value: str) -> str:
-    normalized = value.lower()
-    if len(normalized) != 64 or any(char not in "0123456789abcdef" for char in normalized):
-        raise ValueError("must be a lowercase SHA-256 digest")
-    return normalized
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+_sha = partial(require_sha256, message="must be a lowercase SHA-256 digest")
 
 
 def _db_time(value: datetime) -> str:
     return _utc(value).replace(tzinfo=None).isoformat(sep=" ")
-
-
-def _datetime(value: object) -> datetime:
-    parsed = datetime.fromisoformat(str(value))
-    return _utc(parsed)
 
 
 def _integer(value: object) -> int:

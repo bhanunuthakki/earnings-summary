@@ -43,6 +43,7 @@ from provenance.legacy_document_evidence import (
     LegacyDocumentScopeLocator,
 )
 from provenance.selection import selected_filing_sections_relation, selected_transcripts_relation
+from runtime.deterministic import table_exists as _has_table
 
 _BACKFILL_VERSION = "evidence-backfill@1"
 _CONFIG_SHA256 = hashlib.sha256(b"legacy-evidence-backfill-config-v1").hexdigest()
@@ -815,15 +816,6 @@ def _require_table(conn: sqlite3.Connection, table: str) -> None:
         raise RuntimeError(
             f"Required table {table!r} is unavailable; apply evidence-ledger migrations through 0218"
         )
-
-
-def _has_table(conn: sqlite3.Connection, table: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
-        ).fetchone()
-        is not None
-    )
 
 
 def _require_columns(conn: sqlite3.Connection, table: str, required: set[str]) -> None:

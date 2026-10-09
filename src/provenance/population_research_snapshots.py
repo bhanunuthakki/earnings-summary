@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal, Self, cast
 
 from pydantic import (
@@ -35,6 +34,8 @@ from provenance.research_snapshot import (
     build_research_snapshot,
     verify_research_snapshot,
 )
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import content_sha256 as _digest
 from search.embedding_promotion import PURPOSE
 
 _REPORTING_FAMILIES = (
@@ -1387,20 +1388,6 @@ def _output_commitment(
 def _blocker(exc: Exception) -> str:
     text = str(exc).strip()
     return (text or type(exc).__name__)[:256]
-
-
-def _digest(value: object) -> str:
-    payload = json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(payload.encode()).hexdigest()
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _db_time(value: datetime) -> str:

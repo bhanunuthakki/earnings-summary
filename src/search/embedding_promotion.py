@@ -17,6 +17,7 @@ from provenance.search_index_lineage import (
     load_projection_seal,
     verify_ledger_projection_seal,
 )
+from runtime import deterministic
 from search.embedding_eval import (
     CandidateMetrics,
     EmbeddingRecommendationArtifact,
@@ -69,12 +70,7 @@ class EmbeddingApprovalReceipt(BaseModel):
         return value
 
     def canonical_json(self) -> str:
-        return json.dumps(
-            self.model_dump(mode="json"),
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        return deterministic.canonical_json_ascii(self.model_dump(mode="json"))
 
     def sha256(self) -> str:
         return hashlib.sha256(self.canonical_json().encode()).hexdigest()

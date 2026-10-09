@@ -8,7 +8,6 @@ binding or infer continuity from a label.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from contextlib import contextmanager
@@ -25,6 +24,8 @@ from pipeline.kpi_semantics import (
     KpiUnitScale,
     validate_admitted_unit_scale,
 )
+from runtime.deterministic import canonical_json_ascii_default_str as _canonical_json
+from runtime.deterministic import sha256_text as _sha256
 
 
 class KpiDefinitionStatus(StrEnum):
@@ -100,14 +101,6 @@ _UNIT_FAMILY_BY_UNIT: dict[Unit, KpiUnitFamily] = {
     Unit.RATIO: KpiUnitFamily.RATIO,
     Unit.BPS: KpiUnitFamily.BASIS_POINTS,
 }
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
-
-
-def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _utc_text(value: datetime) -> str:

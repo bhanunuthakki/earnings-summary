@@ -45,6 +45,7 @@ from provenance.secure_file_install import (
     cleanup_owned_file,
     install_bytes_no_clobber,
 )
+from runtime.deterministic import content_sha256 as _sha
 from runtime.job_runtime import JobLock, current_lock_claim
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -53,10 +54,6 @@ _OPERATION = "managed_issuer_document_publication.v1"
 
 def _json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-
-
-def _sha(value: object) -> str:
-    return hashlib.sha256(_json(value).encode()).hexdigest()
 
 
 def _document_set(receipt: IssuerDocumentStagingReceipt) -> str:

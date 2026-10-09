@@ -49,6 +49,7 @@ from provenance.reporting_entity_registry import (
     reporting_identifier_candidate_digest,
     security_identifier_candidate_digest,
 )
+from runtime.deterministic import parse_instant as _parse_datetime
 
 SEC_COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 SEC_MUTUAL_FUND_TICKERS_URL = "https://www.sec.gov/files/company_tickers_mf.json"
@@ -3152,8 +3153,3 @@ def _record_id(prefix: str, *parts: str) -> str:
 
 def _digest(namespace: str, payload: str) -> str:
     return hashlib.sha256(f"{namespace}\0{payload}".encode()).hexdigest()
-
-
-def _parse_datetime(value: object) -> datetime:
-    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
-    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)

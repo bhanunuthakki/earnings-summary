@@ -40,11 +40,12 @@ import sqlite3
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
 from calibration_guard import wilson_interval
+from clock import now_iso as _now_iso
+from runtime.deterministic import table_exists as _has_table
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -178,19 +179,6 @@ def edits_from_json(raw: str) -> tuple[PromptEdit, ...]:
 
 def edits_to_json(edits: tuple[PromptEdit, ...]) -> str:
     return json.dumps([{"find": e.find, "replace": e.replace} for e in edits], ensure_ascii=False)
-
-
-def _has_table(conn: sqlite3.Connection, name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", (name,)
-        ).fetchone()
-        is not None
-    )
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).replace(tzinfo=None).isoformat()
 
 
 # ---------------------------------------------------------------------------

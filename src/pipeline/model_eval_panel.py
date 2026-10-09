@@ -45,6 +45,7 @@ from typing import cast
 from llm.eval_scopes import EVAL_SCOPES
 from llm.model_ladder import estimated_call_usd, model_rank
 from pipeline.operations_styles import MODEL_EVAL_STYLE as _PANEL_CSS
+from runtime.deterministic import table_exists as _has_table
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # The eval-machinery scopes — traffic these tables account for that is NOT real
@@ -228,15 +229,6 @@ class ExperimentRow:
     latest_recommendation: str | None
     runs: int
     override_active: bool
-
-
-def _has_table(conn: sqlite3.Connection, name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", (name,)
-        ).fetchone()
-        is not None
-    )
 
 
 def _window_start(window_days: int) -> str:

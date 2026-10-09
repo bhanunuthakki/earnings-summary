@@ -61,6 +61,7 @@ from typing import Final, cast
 
 from alerts.store import compute_signature_sha, find_by_signature, fire_alert
 from identity import DEFAULT_USER_ID
+from runtime.deterministic import table_exists_or_false as _has_table
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -176,16 +177,6 @@ def _open(
     except sqlite3.Error as exc:
         log.debug({"event": "risk_drift_open_failed", "error": str(exc)})
         return None
-
-
-def _has_table(conn: sqlite3.Connection, table: str) -> bool:
-    try:
-        row = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
-        ).fetchone()
-    except sqlite3.Error:
-        return False
-    return row is not None
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:

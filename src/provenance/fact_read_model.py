@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Literal, cast
 
@@ -24,14 +24,9 @@ from provenance.source_fact_publication import (
     PublicationVerificationError,
     verify_source_fact_publication,
 )
+from runtime.deterministic import as_utc as _utc
 
 AdmissionDisposition = Literal["missing_provenance", "quarantined"]
-
-
-def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 class FactAdmissionError(RuntimeError):

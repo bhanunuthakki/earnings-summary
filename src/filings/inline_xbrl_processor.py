@@ -9,7 +9,6 @@ digest and exact coordinates are verified before any output is admitted.
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
 import os
 import shutil
@@ -24,6 +23,8 @@ from typing import BinaryIO, Literal, Protocol, Self, cast
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+
+from runtime.deterministic import sha256_bytes as _sha
 
 _SHA256 = r"^[0-9a-f]{64}$"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -1458,7 +1459,3 @@ def _present_locator_field(locator: Mapping[str, JsonValue], field: str) -> bool
     if field == "filing_ordinal":
         return isinstance(value, int) and not isinstance(value, bool) and value >= 0
     return isinstance(value, str) and bool(value.strip())
-
-
-def _sha(value: bytes) -> str:
-    return hashlib.sha256(value).hexdigest()

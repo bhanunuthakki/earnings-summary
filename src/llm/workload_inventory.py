@@ -32,6 +32,7 @@ from evals.coverage import META_PURPOSES, eval_coverage
 from llm.cli import DEFAULT_MODEL, LLM_MODELS
 from llm.eval_scopes import EVAL_SCOPES
 from llm.model_ladder import cheaper_candidates, model_cost
+from runtime.deterministic import table_exists as _has_table
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 WINDOW_DAYS = 30
@@ -97,15 +98,6 @@ class _RawRow:
     distinct_prompts: int
     avg_prompt_chars: float
     web_scoped: bool
-
-
-def _has_table(conn: sqlite3.Connection, name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", (name,)
-        ).fetchone()
-        is not None
-    )
 
 
 def _window_start(window_days: int) -> str:

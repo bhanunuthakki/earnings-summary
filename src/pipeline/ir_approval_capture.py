@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -48,6 +47,7 @@ from provenance.evidence_links import (
     DocumentObservationLink,
     EvidenceLinkLedger,
 )
+from runtime.deterministic import sha256_joined_nul as _digest
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _COLLECTOR = "approved-exact-ir-capture@1"
@@ -428,10 +428,6 @@ def _persist_evidence(
 
 def _naive_utc(value: datetime) -> datetime:
     return value if value.tzinfo is None else value.astimezone(UTC).replace(tzinfo=None)
-
-
-def _digest(*parts: str) -> str:
-    return hashlib.sha256("\0".join(parts).encode()).hexdigest()
 
 
 __all__ = [

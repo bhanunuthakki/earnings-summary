@@ -57,6 +57,7 @@ from provenance.source_fact_stream import (
     verify_resolution_snapshot_watermark,
 )
 from provenance.source_inventory_seal import InventoryComponent, component_digest
+from runtime.deterministic import canonical_json
 from search.canonical_fact_projection import verify_canonical_projection_generation
 from search.embedding_promotion import EmbeddingPromotion
 from search.heterogeneous_retrieval import verify_heterogeneous_retrieval_trace
@@ -750,14 +751,6 @@ def _audit_filing_xbrl_processor_closure(
         ),
     )
     digest_mismatches: list[str] = []
-
-    def canonical_json(value: object) -> str:
-        return json.dumps(
-            value,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
 
     for artifact in conn.execute(
         "SELECT processor_artifact_id,bundle_name,arelle_version,edgar_version,"

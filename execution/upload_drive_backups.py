@@ -23,6 +23,7 @@ from integrations.gsheets import (
     media_file_upload,
 )
 from log_redact import redact
+from runtime.deterministic import sha256_file as _sha256
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
 BACKUP_OWNER = "earnings-summary-headless-backup"
@@ -77,14 +78,6 @@ def ensure_folder_path(drive: Any, parts: Iterable[str]) -> str:
             raise ValueError(f"invalid Drive folder segment: {raw_part!r}")
         parent_id = _ensure_folder(drive, parent_id, part)
     return parent_id
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _md5(path: Path) -> str:

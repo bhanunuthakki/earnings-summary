@@ -8,10 +8,9 @@ does not resolve to exactly one legal registrant.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
@@ -28,6 +27,9 @@ from provenance.reporting_entity_registry import (
     EvidenceSubjectBindingRevision,
     ReportingEntityRegistry,
 )
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import canonical_json as _canonical_json
+from runtime.deterministic import sha256_joined_unit_sep as _digest
 
 _POLICY_NAME = "recorded_document_subject_identity_closure"
 _POLICY_VERSION = "2"
@@ -77,14 +79,6 @@ class PopulationIdentityResult(_FrozenModel):
     input_commitment_sha256: str = Field(min_length=64, max_length=64)
     output_commitment_sha256: str = Field(min_length=64, max_length=64)
     items: tuple[PopulationIdentityItem, ...]
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-def _digest(*parts: str) -> str:
-    return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
 
 
 def _record_id(*parts: str) -> str:
@@ -669,10 +663,6 @@ def _plane_verification(
         artifact_sets=(artifact_set,),
         details=details,
     )
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _db_time(value: datetime) -> str:

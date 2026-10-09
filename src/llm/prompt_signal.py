@@ -29,6 +29,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+from runtime.deterministic import table_exists as _has_table
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 WINDOW_DAYS = 60
@@ -76,15 +77,6 @@ def _cutoff(days: int) -> str:
     """Naive-UTC cutoff — stored stamps are naive-UTC (repo convention); an
     aware stamp compares lexicographically WRONG against them."""
     return (datetime.now(UTC) - timedelta(days=days)).replace(tzinfo=None).isoformat()
-
-
-def _has_table(conn: sqlite3.Connection, name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", (name,)
-        ).fetchone()
-        is not None
-    )
 
 
 # An eval row whose JUDGE crashed is an INFRA fact, not a prompt-quality fact.

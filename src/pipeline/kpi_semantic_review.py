@@ -27,6 +27,7 @@ from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definition
 from provenance.evidence_ledger import EvidenceLocator, OfficeObjectKind
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.fulltext_extractor_identity import resolve_fulltext_extractor_identity
+from runtime.deterministic import table_or_view_exists as _table_exists
 
 MAX_KPI_SEMANTIC_REVIEW_ITEMS = 5_000
 MAX_EVIDENCE_CANDIDATES_PER_FACT = 8
@@ -337,15 +338,6 @@ class KpiSemanticReviewBatch(BaseModel):
         if self.content_sha256 != _payload_sha256(payload):
             raise ValueError("content_sha256 does not match the review payload")
         return self
-
-
-def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name=?", (name,)
-        ).fetchone()
-        is not None
-    )
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> frozenset[str]:

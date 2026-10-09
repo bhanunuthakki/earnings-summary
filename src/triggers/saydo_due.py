@@ -51,7 +51,6 @@ the thesis anchor.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import sqlite3
@@ -79,6 +78,7 @@ from llm_artifact_store import (
 )
 from llm_client import call_llm
 from report.sections.p3_data import SayDoVerdictRow, load_saydo_verdicts
+from runtime.deterministic import sha256_text as _sha256_text
 from triggers.base import (
     AlertDraft,
     Cadence,
@@ -281,11 +281,6 @@ def _as_float(value: object) -> float:
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return float(value)
     raise TypeError(f"expected numeric evidence value, got {type(value).__name__}")
-
-
-def _sha256_text(text: str) -> str:
-    """Deterministic sha256 over UTF-8 bytes."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _factual_memo(ticker: str, evidence: Mapping[str, object]) -> str:

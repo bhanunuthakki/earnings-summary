@@ -8,12 +8,15 @@ import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal, Protocol, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from provenance.analysis_scope import AnalysisEvidenceScope, require_analysis_documents
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import canonical_json_model as canonical_json
+from runtime.deterministic import content_sha256_model as _digest
 
 ProcessingLane = Literal[
     "html_native_hierarchy",
@@ -56,22 +59,8 @@ _LANES: tuple[ProcessingLane, ...] = (
 )
 
 
-def canonical_json(value: object) -> str:
-    if isinstance(value, BaseModel):
-        value = value.model_dump(mode="json")
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
 def _digest_text(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
-
-
-def _digest(value: object) -> str:
-    return _digest_text(canonical_json(value))
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _db_time(value: datetime) -> str:

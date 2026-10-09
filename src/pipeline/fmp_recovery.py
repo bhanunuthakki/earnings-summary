@@ -25,6 +25,7 @@ from pipeline.source_policy import (
     CollectionSource,
     decision_for,
 )
+from runtime.deterministic import canonical_json_ascii as _canonical_json
 
 PROVIDER = "fmp"
 SCREENING_ENDPOINT_KEYS: frozenset[str] = frozenset(
@@ -147,10 +148,6 @@ def _validate_naive_utc(value: datetime) -> datetime:
 
 def _validate_optional_naive_utc(value: datetime | None) -> datetime | None:
     return _validate_naive_utc(value) if value is not None else None
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
 def _sha256_json(value: object) -> str:

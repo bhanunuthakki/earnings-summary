@@ -34,7 +34,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from clock import now_iso
+from clock import now_iso as _now_iso
 
 
 class DeferredStatus(StrEnum):
@@ -62,10 +62,6 @@ class DeferredFmpTask(BaseModel):
 
     def dedupe_key(self) -> tuple[str, str, str]:
         return (self.area, self.task, self.ticker or "")
-
-
-def _now_iso() -> str:
-    return now_iso()
 
 
 _DEFAULT_REL = Path("data") / "deferred_fmp" / "deferred_fmp.jsonl"

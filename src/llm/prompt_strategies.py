@@ -40,6 +40,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
+from runtime.deterministic import table_exists as _has_table
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # Beta(1,1) — uniform. A brand-new strategy is treated as a coin flip, which is
@@ -199,15 +200,6 @@ class StrategyStat:
     @property
     def beta(self) -> float:
         return PRIOR_BETA + self.keeps
-
-
-def _has_table(conn: sqlite3.Connection, name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", (name,)
-        ).fetchone()
-        is not None
-    )
 
 
 def load_strategy_stats(db_path: Path) -> dict[str, StrategyStat]:

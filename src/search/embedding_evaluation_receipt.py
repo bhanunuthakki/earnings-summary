@@ -3,24 +3,20 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import sqlite3
 from datetime import datetime
+from functools import partial
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from runtime.deterministic import canonical_json_ascii as _canonical_json
+from runtime.deterministic import require_sha256_exact
 from search.embedding_eval import PURPOSE, EmbeddingRecommendationArtifact
 from search.embedding_runtime_registration import register_embedding_governance_functions
 
-
-def _sha256(value: str) -> str:
-    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
-        raise ValueError("evaluation receipt hashes must be lowercase SHA-256")
-    return value
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+_sha256 = partial(
+    require_sha256_exact, message="evaluation receipt hashes must be lowercase SHA-256"
+)
 
 
 class EmbeddingEvaluationReceipt(BaseModel):

@@ -40,6 +40,7 @@ from provenance.legacy_document_evidence import (
     LegacyDocumentEvidenceBindingRevision,
     LegacyDocumentScopeLocator,
 )
+from runtime.deterministic import parse_iso8601_utc as _datetime
 
 _COLLECTOR_VERSION = "sec-companyfacts-capture@1"
 _DOCUMENT_EXTRACTOR = "sec-companyfacts-document-anchor"
@@ -739,11 +740,6 @@ def _write_verified_blob(path: Path, body: bytes, digest: str) -> None:
 
 def _stable_digest(*parts: str) -> str:
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()
-
-
-def _datetime(value: object) -> datetime:
-    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
-    return _timeline(parsed)
 
 
 def _account(created_now: bool, created: int, replayed: int) -> tuple[int, int]:

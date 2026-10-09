@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal, Self, cast
 
 from pydantic import (
@@ -51,6 +51,8 @@ from provenance.research_snapshot import (
     seal_disposition,
     seal_processing_snapshot,
 )
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import sha256_joined_unit_sep as _digest
 
 _POLICY = DocumentProcessingPolicy(
     policy_name="complete_reporting_document_processing",
@@ -2470,10 +2472,6 @@ def _sha_rows(rows: list[sqlite3.Row]) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _digest(*parts: str) -> str:
-    return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
-
-
 def _sql_sha256(value: object) -> str:
     return hashlib.sha256(str(value).encode()).hexdigest()
 
@@ -2491,10 +2489,6 @@ def _reason(exc: Exception) -> str:
     ):
         return candidate
     return "document_processing_obligation_failed"
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _parse_time(value: object) -> datetime:

@@ -48,6 +48,7 @@ from pipeline.ir_approval_store import (
 from pipeline.source_policy import AdapterKey, issuer_policy
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 from provenance.evidence_links import BlobLocationObservation, EvidenceLinkLedger
+from runtime.deterministic import sha256_joined_nul as _digest
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _MAX_BUNDLE_BYTES = 50_000_000
@@ -695,10 +696,6 @@ def _public_plan_payload(plan: IrCandidatePlan) -> dict[str, object]:
 
 def _artifact_observation_id(artifact: SealedObservationArtifact) -> str:
     return f"ir-artifact:{_digest(artifact.artifact_id, artifact.sha256)}"
-
-
-def _digest(*parts: str) -> str:
-    return hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()
 
 
 __all__ = [

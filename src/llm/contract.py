@@ -6,7 +6,6 @@ The canonical CLI and structured decoder retain those responsibilities.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import time
 from collections.abc import Callable
@@ -32,6 +31,7 @@ from llm.structured import (
     call_llm_structured_with_raw,
 )
 from log_redact import redact
+from runtime.deterministic import sha256_text as _sha
 
 T = TypeVar("T")
 _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
@@ -40,10 +40,6 @@ _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 def schema_version(schema: TypeAdapter[T]) -> str:
     """Content identity of the application schema, independent of model choice."""
     return _sha(json.dumps(schema.json_schema(), sort_keys=True, separators=(",", ":")))
-
-
-def _sha(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)

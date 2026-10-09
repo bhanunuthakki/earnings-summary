@@ -14,11 +14,13 @@ import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from provenance.issuer_registry import evidence_document_relation
+from runtime.deterministic import require_sha256
 from search.lexical_query import kpi_alias_expansions, plan_lexical_query
 
 _SHA_LEN = 64
@@ -28,11 +30,7 @@ Outcome = Literal["succeeded", "failed"]
 IndexKind = Literal["lexical", "vector"]
 
 
-def _sha(value: str) -> str:
-    value = value.lower()
-    if len(value) != _SHA_LEN or any(char not in "0123456789abcdef" for char in value):
-        raise ValueError("must be a lowercase SHA-256 digest")
-    return value
+_sha = partial(require_sha256, message="must be a lowercase SHA-256 digest")
 
 
 def _optional_sha(value: str | None) -> str | None:

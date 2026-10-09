@@ -13,11 +13,13 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from typing import Literal, Self, TypeAlias, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from provenance.issuer_registry import evidence_document_relation
+from runtime.deterministic import require_sha256
 
 InventorySourceKind: TypeAlias = Literal["sec_submissions", "ir_crawl", "earnings_events"]
 InventoryOutcome: TypeAlias = Literal["succeeded", "partial", "failed"]
@@ -39,11 +41,7 @@ DecisionKind: TypeAlias = Literal["deterministic", "manual", "imported"]
 _SHA_LENGTH = 64
 
 
-def _sha256(value: str) -> str:
-    normalized = value.lower()
-    if len(normalized) != _SHA_LENGTH or any(char not in "0123456789abcdef" for char in normalized):
-        raise ValueError("must be a lowercase SHA-256 digest")
-    return normalized
+_sha256 = partial(require_sha256, message="must be a lowercase SHA-256 digest")
 
 
 def _timeline(value: datetime) -> datetime:

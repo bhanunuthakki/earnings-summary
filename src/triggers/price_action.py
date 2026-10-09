@@ -7,7 +7,6 @@ derive a missing rung, fetch a quote, queue an action, or place a trade.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -29,6 +28,7 @@ from research.owner_decision_checkpoint import (
     SizingIntentSpec,
     payload_sha256,
 )
+from runtime.deterministic import sha256_text as _sha
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from triggers.base import Cadence, StatefulTriggerResult
 
@@ -503,10 +503,6 @@ def _record_event(
             now.isoformat(),
         ),
     )
-
-
-def _sha(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _phase(value: str) -> Phase:

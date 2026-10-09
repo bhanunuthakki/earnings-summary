@@ -71,6 +71,7 @@ from research.investment_profile import (
     MoatEvidenceCoverage,
     MoatLevel,
 )
+from runtime.deterministic import content_sha256_ascii_default_str as _sha
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 __all__ = [
@@ -261,11 +262,6 @@ class CardResult:
 # --------------------------------------------------------------------------- #
 # Deterministic input gathering
 # --------------------------------------------------------------------------- #
-
-
-def _sha(payload: object) -> str:
-    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def _ro_conn(db_path: Path) -> sqlite3.Connection | None:
