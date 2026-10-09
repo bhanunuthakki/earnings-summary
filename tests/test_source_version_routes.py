@@ -1,4 +1,4 @@
-"""VAL-SEARCH-002/003: sealed citation hrefs resolve to their provenance chain.
+"""VAL-SEARCH-002/003/017: sealed citations resolve to their provenance chain.
 
 Everything here is hermetic and synthetic. The fixture corpus defines the
 documents, observations, evidence nodes, search chunks, canonical fact
@@ -6,9 +6,10 @@ projection entries, and the persisted claim-to-citation mapping; the cockpit
 route ``/source/version/<document_version_id>?node=<node_id>`` must resolve each
 fixture citation to HTTP 200 and expose the issuer, fiscal period, source
 document identity, cited locator, observation version, and reported fact value
-matching the fixture's immutable observation version. An unknown document
-version, an unknown node, or a node from a different document version must 404
-honestly.
+matching the fixture's immutable observation version. The real fact emitter
+also runs against that migrated projection schema, including a fact generation
+that inherits its entry from an ancestor. An unknown document version, an
+unknown node, or a node from a different document version must 404 honestly.
 
 No live sealed Ask turn, real Claude call, SEC/source request, portfolio or bench
 database access, or sealed-retrieval reachability claim is made. Setting
@@ -27,6 +28,7 @@ import sqlite3
 import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from html import unescape
 from pathlib import Path
 from typing import cast
@@ -34,6 +36,10 @@ from typing import cast
 import comments_server
 import pytest
 from flask.testing import FlaskClient
+
+import ask.sealed_retrieval as sealed_retrieval
+from search.embedding_promotion import LocalVectorRuntimeConfig
+from search.heterogeneous_retrieval import HeterogeneousRetrievalReceipt
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SEALED_RETRIEVAL_SOURCE = PROJECT_ROOT / "src" / "ask" / "sealed_retrieval.py"
@@ -88,6 +94,7 @@ _FACT_NODE_TEXT = "Total revenue 1,234.5"
 _FACT_CHUNK_ID = "chunk-acme-total-revenue"
 _FACT_LOCATOR = {"page": 42, "table": "Consolidated Statements of Operations", "cell": "B7"}
 _METRIC_CELL_ID = "cell-acme-total-revenue-fy2025"
+_FACT_EMISSION_GENERATION_ID = "generation-acme-head"
 _METRIC_NAME = "Total revenue"
 _METRIC_VALUE = "1234.5"
 _METRIC_UNIT = "USD_millions"
@@ -855,6 +862,233 @@ def test_cited_fact_claim_reconciles_to_the_immutable_observation(
                     "matched": True,
                 }
             ],
+        },
+    )
+
+
+def test_fact_emitter_reconciles_to_its_source_version_route(
+    client: FlaskClient,
+    fixture_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real fact branch queries the migrated schema and resolves inherited entries."""
+    conn = sqlite3.connect(str(fixture_db))
+    conn.row_factory = sqlite3.Row
+    try:
+        entry_columns = {
+            str(row["name"])
+            for row in conn.execute(
+                "PRAGMA table_info(canonical_fact_projection_entries)"
+            ).fetchall()
+        }
+        assert "recorded_at" not in entry_columns
+        projection_entry = conn.execute(
+            "SELECT generation_id,entry_ordinal,canonical_metric_name,canonical_value,"
+            "unit_key,currency,period_end,evidence_document_version_id,evidence_node_id,"
+            "evidence_locator_json FROM canonical_fact_projection_entries "
+            "WHERE generation_id=? AND canonical_metric_cell_id=? AND entry_sha256=?",
+            (_GENERATION_ID, _METRIC_CELL_ID, "d" * 64),
+        ).fetchone()
+        assert projection_entry is not None
+        entry_coordinate = {
+            "generation_id": str(projection_entry["generation_id"]),
+            "entry_ordinal": int(projection_entry["entry_ordinal"]),
+        }
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_generations "
+            "(generation_id,idempotency_key,generation_kind,parent_generation_id,"
+            "delta_depth,resolution_snapshot_id,resolution_snapshot_sha256,"
+            "resolution_watermark_sha256,ontology_snapshot_id,ontology_snapshot_sha256,"
+            "cutoff_at,config_json,config_sha256,digest_bucket_count,max_batch_facts,"
+            "max_batch_bytes,max_batch_milliseconds,generation_json,generation_sha256,"
+            "recorded_at) "
+            "SELECT ?,?,'delta',generation_id,1,resolution_snapshot_id,"
+            "resolution_snapshot_sha256,resolution_watermark_sha256,ontology_snapshot_id,"
+            "ontology_snapshot_sha256,cutoff_at,config_json,config_sha256,digest_bucket_count,"
+            "max_batch_facts,max_batch_bytes,max_batch_milliseconds,generation_json,"
+            "generation_sha256,recorded_at FROM canonical_fact_projection_generations "
+            "WHERE generation_id=?",
+            (_FACT_EMISSION_GENERATION_ID, "idem-generation-acme-head", _GENERATION_ID),
+        )
+        trace_id = "trace-fixture-emission"
+        receipt = HeterogeneousRetrievalReceipt(
+            trace_id=trace_id,
+            trace_sha256="e" * 64,
+            research_snapshot_id="snapshot-fixture-emission",
+            research_snapshot_sha256="f" * 64,
+            fact_generation_id=_FACT_EMISSION_GENERATION_ID,
+            fact_projection_seal_sha256="1" * 64,
+            candidate_count=1,
+            result_count=1,
+            ordered_results=({"result_ordinal": 0, "final_score": "1"},),
+            recorded_at=datetime(2026, 1, 15, 14, 5, tzinfo=UTC),
+        )
+
+        def verify_fixture_trace(
+            _conn: sqlite3.Connection,
+            requested_trace_id: str,
+            *,
+            local_vector_runtime: LocalVectorRuntimeConfig | None = None,
+        ) -> HeterogeneousRetrievalReceipt:
+            assert requested_trace_id == trace_id
+            assert local_vector_runtime is None
+            return receipt
+
+        monkeypatch.setattr(
+            sealed_retrieval,
+            "verify_heterogeneous_retrieval_trace",
+            verify_fixture_trace,
+        )
+        cutoff_at = "2026-01-15 14:05:00"
+        conn.execute(
+            "INSERT INTO heterogeneous_retrieval_trace_headers "
+            "(trace_id,idempotency_key,research_snapshot_id,research_snapshot_sha256,"
+            "fact_generation_id,fact_projection_seal_sha256,narrative_commitments_json,"
+            "narrative_commitments_sha256,semantic_receipts_json,semantic_receipts_sha256,"
+            "query_sha256,query_json,ranker_json,ranker_sha256,filters_json,filters_sha256,"
+            "candidate_limit,result_limit,cutoff_at,recorded_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                trace_id,
+                "idem-trace-fixture-emission",
+                receipt.research_snapshot_id,
+                receipt.research_snapshot_sha256,
+                receipt.fact_generation_id,
+                receipt.fact_projection_seal_sha256,
+                "[]",
+                "2" * 64,
+                "[]",
+                "3" * 64,
+                "4" * 64,
+                "{}",
+                "{}",
+                "5" * 64,
+                "{}",
+                "6" * 64,
+                1,
+                1,
+                cutoff_at,
+                cutoff_at,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO heterogeneous_retrieval_trace_candidates "
+            "(trace_id,candidate_ordinal,candidate_kind,candidate_id,"
+            "source_commitment_sha256,lexical_score,semantic_score,normalized_score,"
+            "ranker_name,filter_outcome,filter_reason,evidence_locator_json,lineage_json,"
+            "lineage_sha256,candidate_json,candidate_sha256) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                trace_id,
+                0,
+                "fact",
+                _METRIC_CELL_ID,
+                "d" * 64,
+                None,
+                None,
+                "1",
+                "fixture-ranker",
+                "included",
+                None,
+                json.dumps(_FACT_LOCATOR, sort_keys=True),
+                "{}",
+                "7" * 64,
+                "{}",
+                "8" * 64,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO heterogeneous_retrieval_trace_results "
+            "(trace_id,result_ordinal,candidate_ordinal,final_score,result_json,result_sha256) "
+            "VALUES (?,?,?,?,?,?)",
+            (trace_id, 0, 0, "1", '{"result_ordinal":0,"final_score":"1"}', "9" * 64),
+        )
+        items = sealed_retrieval.load_verified_trace_evidence(conn, trace_id)
+        repeated_items = sealed_retrieval.load_verified_trace_evidence(conn, trace_id)
+        assert len(items) == len(repeated_items) == 1
+        emitted = items[0]
+        repeated = repeated_items[0]
+    finally:
+        conn.close()
+
+    assert emitted == repeated
+    assert emitted.kind == "fact"
+    assert emitted.label == f"{_TICKER} · {_METRIC_NAME} · {_PERIOD_END}"
+    assert emitted.text == f"{_METRIC_NAME}: {_CITATION_VALUE} ({_PERIOD_END})"
+    assert emitted.value == _CITATION_VALUE
+    assert emitted.period == _PERIOD_END
+    assert emitted.locator == _FACT_LOCATOR
+    assert emitted.document_version_id == _DOCUMENT_VERSION_ID
+    assert emitted.evidence_node_id == _FACT_NODE_ID
+    assert emitted.href == _sealed_source_version_href(_DOCUMENT_VERSION_ID, _FACT_NODE_ID)
+    assert emitted.citation_payload()["source_commitment_sha256"] == "d" * 64
+
+    response = client.get(emitted.href)
+    assert response.status_code == 200
+    parsed = _parse_provenance(response.get_data(as_text=True))
+    fact_rows = parsed.fact_rows
+    assert len(fact_rows) == 1
+    root = parsed.root
+    fact_row = fact_rows[0]
+    assert root["issuer-id"] == _ISSUER_ID
+    assert root["ticker"] == _TICKER
+    assert root["document-version-id"] == emitted.document_version_id
+    assert root["observation-id"] == _OBSERVATION_ID
+    assert root["period-end"] == emitted.period
+    assert fact_row["fact-node-id"] == emitted.evidence_node_id
+    assert fact_row["fact-metric"] == _METRIC_NAME
+    assert fact_row["fact-value"] == _METRIC_VALUE
+    assert fact_row["fact-unit"] == _METRIC_UNIT
+    assert fact_row["fact-currency"] == _METRIC_CURRENCY
+    assert fact_row["fact-period-end"] == emitted.period
+    assert json.loads(fact_row["fact-locator"]) == emitted.locator
+    assert f"{fact_row['fact-value']} {fact_row['fact-currency']}" == emitted.value
+
+    _record_artifact(
+        "sealed-fact-citation-val-search-017-reconciliation.json",
+        {
+            "assertion": "VAL-SEARCH-017",
+            "feature": "sealed-fact-citation-emitter",
+            "scope_note": (
+                "Hermetic migrated fixture only: no bench DB, live retrieval, real trace "
+                "verification or reseal, promotion, corpus, schema/migration change, or "
+                "production claim."
+            ),
+            "selection": {
+                "fact_generation_id": receipt.fact_generation_id,
+                "entry_coordinate": entry_coordinate,
+                "entry_is_inherited_from_ancestor": (
+                    entry_coordinate["generation_id"] != receipt.fact_generation_id
+                ),
+                "repeated_emission_equal": emitted == repeated,
+            },
+            "emitted": {
+                "href": emitted.href,
+                "metric": _METRIC_NAME,
+                "value": emitted.value,
+                "unit": _METRIC_UNIT,
+                "currency": _METRIC_CURRENCY,
+                "period": emitted.period,
+                "locator": emitted.locator,
+                "document_version_id": emitted.document_version_id,
+                "evidence_node_id": emitted.evidence_node_id,
+                "source_commitment_sha256": emitted.source_commitment_sha256,
+            },
+            "route": {
+                "status": response.status_code,
+                "issuer_id": root["issuer-id"],
+                "ticker": root["ticker"],
+                "document_version_id": root["document-version-id"],
+                "observation_id": root["observation-id"],
+                "period_end": root["period-end"],
+                "fact_metric": fact_row["fact-metric"],
+                "fact_value": fact_row["fact-value"],
+                "fact_unit": fact_row["fact-unit"],
+                "fact_currency": fact_row["fact-currency"],
+                "fact_node_id": fact_row["fact-node-id"],
+                "fact_locator": json.loads(fact_row["fact-locator"]),
+            },
+            "matched": True,
         },
     )
 
