@@ -185,6 +185,27 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             mimetype="text/html",
         )
 
+    @app.route("/source/version/<document_version_id>", methods=["GET"])
+    def source_version_viewer(document_version_id: str):
+        """Resolve one sealed evidence citation to its provenance chain.
+
+        The sealed Ask lane cites ``/source/version/<document_version_id>?node=…``
+        (``src/ask/sealed_retrieval.py``); this is that destination. An unknown
+        document version, or a ``node`` that is not part of it, 404s honestly
+        rather than rendering a fabricated chain.
+        """
+        from pipeline.source_viewers import render_document_version_page
+
+        html = render_document_version_page(
+            db_path,
+            document_version_id,
+            node_id=request.args.get("node"),
+            fragment=request.args.get("fragment") == "1",
+        )
+        if html is None:
+            abort(404)
+        return Response(html, mimetype="text/html")
+
     @app.route("/source/<int:doc_id>/page/<int:page>.png", methods=["GET"])
     def source_pdf_page_image(doc_id: int, page: int):
         """Serve one lazily rendered, content-addressed PDF page image."""

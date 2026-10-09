@@ -203,7 +203,10 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # -2 retired score/fit presentation peeks.
     # +1 read-only degraded earnings draft peek.
     # +1 read-only cached host-runtime evidence projection.
-    assert len(rules) == 176
+    # +1 sealed evidence citation source-version viewer (2026-10-08 search
+    # milestone): the destination for the sealed Ask lane's
+    # /source/version/<document_version_id>?node=… citations.
+    assert len(rules) == 177
     assert rules["operations_host_runtime_api"] == "/api/operations/host-runtime"
     host_rule = next(
         rule
@@ -240,6 +243,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
         endpoint: rules[endpoint]
         for endpoint in (
             "source_viewer",
+            "source_version_viewer",
             "source_pdf_page_image",
             "vendored_font_file",
             "peek_alert",
@@ -283,6 +287,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
         )
     } == {
         "source_viewer": "/source/<int:doc_id>",
+        "source_version_viewer": "/source/version/<document_version_id>",
         "source_pdf_page_image": "/source/<int:doc_id>/page/<int:page>.png",
         "vendored_font_file": "/src/ui/vendor/fonts/<filename>",
         "peek_alert": "/api/peek/alert/<int:alert_id>",
