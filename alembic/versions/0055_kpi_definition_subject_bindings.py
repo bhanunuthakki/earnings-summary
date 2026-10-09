@@ -23,8 +23,8 @@ depends_on = None
 _REWRITES = (
     (
         "trg_kpi_definition_revisions_source",
-        "ca618effac64bb91789e1896f5589e2bf137e43d368416080653823a58607d9f",
-        "305f6c6985fe642f9973ef4bbea7affb954977230d22596e30c54f51d6154b86",
+        "ca618effac64bb91789e1896f5589e2bf137e43d368416080653823a58607d9f",  # pragma: allowlist secret -- deterministic SQLite trigger digest, not a credential
+        "305f6c6985fe642f9973ef4bbea7affb954977230d22596e30c54f51d6154b86",  # pragma: allowlist secret -- deterministic SQLite trigger digest, not a credential
         (
             (
                 "entity.issuer_id=document.issuer_id",
@@ -167,8 +167,8 @@ _REWRITES = (
     ),
     (
         "trg_kpi_definition_comparability_source",
-        "9c7fd389ab3361027d23f49a29a0115b2f3a50908300f88a6f804be2e91c8cef",
-        "4ba1a63aa838ae4f64c05b919da75eff668ad42dfb57f0a3161127ed3738a28b",
+        "9c7fd389ab3361027d23f49a29a0115b2f3a50908300f88a6f804be2e91c8cef",  # pragma: allowlist secret -- deterministic SQLite trigger digest, not a credential
+        "4ba1a63aa838ae4f64c05b919da75eff668ad42dfb57f0a3161127ed3738a28b",  # pragma: allowlist secret -- deterministic SQLite trigger digest, not a credential
         (
             (
                 "document.issuer_id=predecessor_entity.issuer_id",
@@ -310,8 +310,8 @@ _REWRITES = (
     ),
     (
         "trg_kpi_fact_semantic_definition_exact",
-        "703a3b1ac5f96c7e9b815bc9cac7e56dd3884df87af43f7130dd799cfc8ddd0e",
-        "d2a5abb63f2ad13fb34e8be656f73f95484e42f1123654c217b423af30c039a2",
+        "703a3b1ac5f96c7e9b815bc9cac7e56dd3884df87af43f7130dd799cfc8ddd0e",  # pragma: allowlist secret -- deterministic SQLite trigger digest, not a credential
+        "d2a5abb63f2ad13fb34e8be656f73f95484e42f1123654c217b423af30c039a2",  # pragma: allowlist secret -- deterministic SQLite trigger digest, not a credential
         (
             (
                 "entity.issuer_id=COALESCE(\n"
