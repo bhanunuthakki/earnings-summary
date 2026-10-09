@@ -91,6 +91,9 @@ Pydantic-validated JSON object to stdout:
   On Windows it also counts all `C:\tmp` legacy test trees, including names that
   lack producer ownership receipts. This extends visibility only; it does not
   add those trees to the deletion sweep.
+  Earnings Summary deployment folders under the existing Windows operational
+  deployment root are also inventoried. New unregistered deployment backups stay
+  visible until their producer supplies an exact reviewed completion declaration.
 - `operational_backups`: classified backup discovery and hold reports. Unknown,
   invalid or incomplete evidence prevents a complete coverage claim. Missing
   retired bytes are not counted as reclaimed space.

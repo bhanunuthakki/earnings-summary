@@ -931,8 +931,18 @@ def catalog_authority_roots(repo_root: Path, code_root: Path) -> tuple[Path, ...
 
 
 def external_temp_coverage_roots() -> list[tuple[Path, str]]:
-    """Count legacy Windows test trees without expanding deletion authority."""
-    return [(Path("C:/tmp"), "unclassified")] if os.name == "nt" else []
+    """Count legacy tests and deployment backups without deletion authority."""
+    if os.name != "nt":
+        return []
+    roots = [(Path("C:/tmp"), "unclassified")]
+    deployments = Path("C:/ProgramData/BhanuOperations/deployments")
+    try:
+        if any(_is_reparse_or_symlink(part) for part in (deployments, *deployments.parents)):
+            return [*roots, (deployments, "unclassified")]
+        roots.extend((path, "unclassified") for path in deployments.glob("earnings-summary-*"))
+    except FileNotFoundError:
+        pass
+    return roots
 
 
 def run(argv: list[str] | None = None) -> CleanupSummary:

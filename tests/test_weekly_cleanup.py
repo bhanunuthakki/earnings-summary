@@ -812,12 +812,18 @@ def test_coverage_includes_unregistered_legacy_windows_temp_without_deletion(
     clone.mkdir(parents=True)
     database = clone / "failed-candidate.db"
     source = clone / ".git"
+    deployment = tmp_path / "deployments/earnings-summary-new"
+    deployed_backup = deployment / "database/portfolio.phase0.db"
+    deployed_backup.parent.mkdir(parents=True)
+    deployed_backup.write_bytes(b"unclassified deployment recovery")
     database.write_bytes(b"preserve recovery")
     source.write_bytes(b"preserve source")
     for path in (database, source):
         _age(path, 90)
     monkeypatch.setattr(
-        cleanup, "external_temp_coverage_roots", lambda: [(external, "unclassified")]
+        cleanup,
+        "external_temp_coverage_roots",
+        lambda: [(external, "unclassified"), (deployment, "unclassified")],
     )
 
     summary = _run(tmp_path, "--apply")
@@ -825,8 +831,13 @@ def test_coverage_includes_unregistered_legacy_windows_temp_without_deletion(
     assert summary.deleted == 0
     assert database.read_bytes() == b"preserve recovery"
     assert source.read_bytes() == b"preserve source"
-    assert summary.coverage.bytes == database.stat().st_size + source.stat().st_size
+    assert deployed_backup.read_bytes() == b"unclassified deployment recovery"
+    assert (
+        summary.coverage.bytes
+        == database.stat().st_size + source.stat().st_size + deployed_backup.stat().st_size
+    )
     assert any(group.root == str(external) for group in summary.coverage.groups)
+    assert any(group.root == str(deployment) for group in summary.coverage.groups)
     assert summary.coverage.status == "incomplete"
 
 
