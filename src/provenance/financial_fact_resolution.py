@@ -273,7 +273,8 @@ def prepare_reviewed_kpi_native_projection(
                 or int(node["legacy_document_id"]) != int(row["source_doc_id"])
                 or str(node["blob_sha256"]) != str(row["source_sha256"])
                 or str(node["input_sha256"]) != str(row["source_sha256"])
-                or _datetime(node["recorded_at"], field="node.recorded_at") > knowledge_cutoff
+                or _utc_instant(_datetime(node["recorded_at"], field="node.recorded_at"))
+                > _utc_instant(knowledge_cutoff)
             )
         ):
             raise ValueError("reviewed native KPI evidence identity changed")
@@ -322,6 +323,9 @@ def prepare_reviewed_kpi_native_projection(
                 sort_keys=True,
             ).encode()
         ).hexdigest()
+        source_node_recorded_at = _datetime(node["recorded_at"], field="node.recorded_at")
+        if source_node_recorded_at.tzinfo is None:
+            source_node_recorded_at = _utc_instant(source_node_recorded_at)
         return ReviewedKpiNativeProjection(
             legacy_observation_id=observation_id,
             fact_id=int(row["id"]),
@@ -331,7 +335,7 @@ def prepare_reviewed_kpi_native_projection(
             context=context,
             definition=definition,
             review_knowledge_at=current.knowledge_at,
-            source_node_recorded_at=_datetime(node["recorded_at"], field="node.recorded_at"),
+            source_node_recorded_at=source_node_recorded_at,
             expected_definition_head_id=head.kpi_definition_revision_id,
             source_document_id=int(row["source_doc_id"]),
             source_document_sha256=str(row["source_sha256"]),
