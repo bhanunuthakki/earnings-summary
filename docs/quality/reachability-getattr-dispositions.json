@@ -660,8 +660,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Offline-mode verification reads only the two fixed fastembed attribute spellings in the adjacent literal tuple.",
-      "fingerprint": "30da5ad69eef5f316316d096cdfd6b2557be4fd6ce61e514b3a21f9ca119edfb",
-      "line": 591,
+      "fingerprint": "165ba4e418d125ea1679713dffe0165793c91679bb4b155a16cd709b569f0458",
+      "line": 596,
       "path": "src/search/local_vector.py",
       "targets": [
         "local_files_only",
@@ -712,7 +712,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "3fc1495cea5fab4903f66d23ebdef0b40d5b8ebe1540a7b0e61e53e74dc2fb81",
+      "source_sha256": "c2b7736e2d6eb871c03acd99dbebeca1db511f53be9eb540051f2349e47a8c32",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

@@ -214,6 +214,47 @@ def test_production_encoder_guard_accepts_the_installed_fastembed_signature(
     assert _recursive_listing(runtime_root) == before
 
 
+def test_fastembed_encoder_accepts_the_installed_runtimes_output_dtype() -> None:
+    """The production encoder must accept the values the installed fastembed
+    0.9.0 actually yields (discovered by the M4 runtime comparison's offline
+    probe): numpy float32 scalar rows, not Python floats."""
+    import numpy as np
+
+    from search.local_vector import FastEmbedEncoder
+
+    class _InstalledOutputModel:
+        def query_embed(self, texts: list[str]) -> Iterator[object]:
+            for text in texts:
+                yield np.array([0.25, -0.5, float(len(text))], dtype=np.float32)
+
+        def passage_embed(self, texts: list[str]) -> Iterator[object]:
+            for text in texts:
+                yield np.array([float(len(text)), 1.0, 0.125], dtype=np.float32)
+
+    encoder = FastEmbedEncoder(_InstalledOutputModel())
+    assert encoder.encode_queries(["q"]) == [[0.25, -0.5, 1.0]]
+    assert encoder.encode_passages(["doc"]) == [[3.0, 1.0, 0.125]]
+
+
+def test_fastembed_encoder_still_fails_closed_on_non_numeric_values() -> None:
+    """Accepting the installed runtime's numeric dtype must not weaken the
+    fail-closed contract: bools and non-numeric values are still rejected."""
+    from search.local_vector import FastEmbedEncoder, LocalVectorCapabilityError
+
+    class _BogusModel:
+        def query_embed(self, texts: list[str]) -> Iterator[object]:
+            yield ["not-a-number", 1.0]
+
+        def passage_embed(self, texts: list[str]) -> Iterator[object]:
+            yield [True, 1.0]
+
+    encoder = FastEmbedEncoder(_BogusModel())
+    with pytest.raises(LocalVectorCapabilityError, match="non-numeric"):
+        encoder.encode_queries(["q"])
+    with pytest.raises(LocalVectorCapabilityError, match="non-numeric"):
+        encoder.encode_passages(["doc"])
+
+
 def test_installed_lancedb_round_trips_the_production_index(
     probe_directory: Path,
 ) -> None:

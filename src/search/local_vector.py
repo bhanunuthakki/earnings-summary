@@ -20,6 +20,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from datetime import UTC, datetime
 from importlib import metadata
+from numbers import Real
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -572,7 +573,11 @@ def _embedding_rows(raw: object) -> list[list[float]]:
             ) from exc
         numeric_values: list[float] = []
         for value in values:
-            if isinstance(value, bool) or not isinstance(value, int | float):
+            # fastembed 0.9.0 yields numpy scalar rows (float32 for the approved
+            # BGE models), not Python floats, so every real numeric scalar is
+            # accepted and converted; bools and non-numeric values still fail
+            # closed. Discovered by the M4 offline runtime comparison probe.
+            if isinstance(value, bool) or not isinstance(value, Real):
                 raise LocalVectorCapabilityError("FastEmbed returned a non-numeric embedding value")
             numeric_values.append(float(value))
         result.append(numeric_values)
