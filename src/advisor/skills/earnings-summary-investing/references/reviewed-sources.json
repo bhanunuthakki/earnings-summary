@@ -1,5 +1,5 @@
 {
-  "review_note": "Reviewed merged preflight source refusal: invalid explicit roots produce a bounded unavailable response before database access. This preserves all later validation and grants no collection or production authority. The existing bounded lock filename review remains applicable.",
+  "review_note": "Reviewed opt-in CI failure receipts: unchanged enforcement call AST, ceilings, and exit semantics; bounded hashed diagnostic projection and safe process markers verified by 35 synthetic tests and independent review. No research route or application operation changes.",
   "schema_version": 1,
   "sources": [
     {
@@ -436,7 +436,7 @@
     },
     {
       "path": "src/quality/static_quality_gate.py",
-      "sha256": "d12eefbde09371ef2f24c39c1f2196f3bd59d07118677f873ef2d5a428c2a1d9"
+      "sha256": "60b47ca12c2e3ce2cbca785d85d628a20001eea846926b2c2b76f68593d56b24"
     },
     {
       "path": "src/report/builder.py",
