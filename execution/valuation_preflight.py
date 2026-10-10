@@ -25,9 +25,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ticker", required=True)
     parser.add_argument("--state-root", type=Path)
     args = parser.parse_args(argv)
-    source_context = (
-        SourceReadContext.for_sec_state_root(args.state_root) if args.state_root else None
-    )
+    try:
+        source_context = (
+            SourceReadContext.for_sec_state_root(args.state_root) if args.state_root else None
+        )
+    except ValueError:
+        print(json.dumps({"status": "unavailable", "reason_code": "source_authority_unavailable"}))
+        return 3
     try:
         db_path = require_db_path(args.db_path)
     except (RuntimeError, FileNotFoundError):
