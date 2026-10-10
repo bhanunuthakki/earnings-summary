@@ -578,14 +578,17 @@
       "entrypoints": [
         "Makefile",
         "pyproject.toml",
-        "src/quality/static_quality_gate.py"
+        "src/quality/static_quality_gate.py",
+        "src/quality/function_lifecycle.py",
+        "execution/inventory_function_lifecycle.py"
       ],
       "dependencies": [
         "requirements.lock"
       ],
       "test_commands": [
         "pytest tests/test_calendar_end_to_end.py -q",
-        "pytest tests/test_static_quality_gate.py tests/test_inventory_static_quality.py -q"
+        "pytest tests/test_static_quality_gate.py tests/test_inventory_static_quality.py -q",
+        "pytest tests/test_function_lifecycle.py -q"
       ],
       "documentation": [
         "AGENTS.md"

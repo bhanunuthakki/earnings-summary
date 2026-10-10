@@ -1,5 +1,5 @@
 {
-  "review_note": "Reviewed unchanged bounded MELI H1 displayed-statement operation and reconstruction on provisional UI candidate 2f8aadd4 over replica candidate afa49e77. The seven product/test/fixture blobs remain exact. Explicit database/content roots, dry-run default, captured/native-qualified prerequisites and 18-member source-only population remain. No acquisition, scheduler, canonical/valuation admission or executed publication authority. All inherited lock/valuation source review hashes are retained; actual squash-main qualification remains pending.",
+  "review_note": "Reviewed lifecycle verification registration and exact no-operational-surface-change suffix on pending statements candidate a2340592. Statements source population and its registration/authority remain intact; lifecycle remains read-only static source evidence with no deletion, admission, operator, scheduler, service or database authority. Three lifecycle feature blobs and inherited statement sources are exact. Base reviewed-source hashes are preserved except the explicitly reviewed combined governance/reconstruction documents. Actual statements squash-main acceptance remains pending.",
   "schema_version": 1,
   "sources": [
     {
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "dd2f44b0c3ba0e8d43e8cf6fa51f8cff682df2b621e5941f7ab45222e38b1dc0"
+      "sha256": "704068e7812d9ffd74161cd08dc981b8a169ce223654c9f0432a4bc68e807f53"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -276,7 +276,7 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "68b58e56d3c3c962d436d8334ba9b2b629fcb381891f3b50ed1ffa398b732ee6"
+      "sha256": "ad956fb78a8b7c0bfb617e0ecc59e90fe213c4ce39f9ca6ec8fd5bce86a66a41"
     },
     {
       "path": "scripts/check_investing_skill.py",
