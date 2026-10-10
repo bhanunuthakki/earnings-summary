@@ -22,23 +22,22 @@ import argparse
 import json
 import logging
 import sys
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:  # direct script invocation
+    from _lib import add_database_argument, command_parser, require_db_path
+except ImportError:  # pragma: no cover - package import fallback
+    from execution._lib import add_database_argument, command_parser, require_db_path
 
-import db  # noqa: E402
-from filings import store  # noqa: E402
-from filings.models import FilingForm, HardStopError  # noqa: E402
+import db
+from filings import store
+from filings.models import FilingForm, HardStopError
 
 _EXIT_HARD_STOP = 1
 _EXIT_BAD_ARGS = 2
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    parser = command_parser(__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--ticker", type=str, required=True)
     parser.add_argument("--form", type=str, default=None, help="e.g. 10-K")
     parser.add_argument(
@@ -48,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Cross-form concept (e.g. risk_factors, mdna) to list chronologically",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of text")
-    parser.add_argument("--db-path", type=str, default=None)
+    add_database_argument(parser, flag="--db-path", help_text="", metavar=None)
     args = parser.parse_args(argv)
 
     logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s")
@@ -62,8 +61,13 @@ def main(argv: list[str] | None = None) -> int:
             log.error("unknown form %r; valid: %s", args.form, [f.value for f in FilingForm])
             return _EXIT_BAD_ARGS
 
-    if args.db_path:
-        db.set_db_path(args.db_path)
+    try:
+        db_path = require_db_path(args.db_path)
+    except (RuntimeError, FileNotFoundError) as exc:
+        log.error("refusing to run: %s", exc)
+        return _EXIT_BAD_ARGS
+
+    db.set_db_path(db_path)
     conn = db.get_connection()
     ticker = args.ticker.strip().upper()
 

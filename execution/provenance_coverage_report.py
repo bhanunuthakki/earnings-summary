@@ -25,18 +25,17 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
 import json
 import sqlite3
 import sys
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:  # direct script invocation
+    from _lib import add_database_argument, command_parser, require_db_path
+except ImportError:  # pragma: no cover - package import fallback
+    from execution._lib import add_database_argument, command_parser, require_db_path
 
-
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _TABLES: tuple[str, ...] = ("financial_facts", "kpi_facts", "fact_overrides")
 
@@ -167,8 +166,8 @@ def format_report(coverages: list[TableCoverage]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db-path", type=Path, default=PROJECT_ROOT / "data" / "portfolio.db")
+    parser = command_parser(__doc__)
+    add_database_argument(parser, flag="--db-path", help_text="", metavar=None)
     parser.add_argument("--ticker", help="Restrict the audit to one ticker.")
     parser.add_argument("--table", choices=_TABLES, help="Restrict to one table (default: both).")
     parser.add_argument(
@@ -176,15 +175,14 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    if not args.db_path.exists():
-        print(
-            json.dumps({"event": "db_not_found", "path": str(args.db_path)}),
-            file=sys.stderr,
-        )
-        return 1
+    try:
+        db_path = require_db_path(args.db_path)
+    except (RuntimeError, FileNotFoundError) as exc:
+        sys.stderr.write(f"refusing to run: {exc}\n")
+        return 2
 
     tables = [args.table] if args.table else list(_TABLES)
-    conn = connect_sqlite(args.db_path, role=SQLiteConnectionRole.READ_ONLY)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         coverages = [
             cov for t in tables if (cov := audit_table(conn, t, ticker=args.ticker)) is not None
