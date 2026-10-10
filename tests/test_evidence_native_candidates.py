@@ -10,7 +10,9 @@ from pathlib import Path
 import pytest
 
 from provenance.evidence_native_candidates import (
+    LocalEvidenceReadError,
     has_evidence_native_after,
+    read_verified_local_evidence_bytes,
     resolve_local_storage_uri,
     select_evidence_native_candidates,
     select_evidence_native_candidates_by_id,
@@ -191,3 +193,243 @@ def test_no_follow_resolution_preserves_lexical_path_for_reader_refusal(tmp_path
     )
     with pytest.raises(ImmutableArtifactConflictError, match="reparse point"):
         read_stable_artifact(link, max_bytes=5, allowed_root=root)
+
+
+def test_verified_replica_reader_refuses_tampered_and_wrong_size_replicas(tmp_path: Path) -> None:
+    conn = _connection(tmp_path)
+    try:
+        expected = b"first"
+        digest = hashlib.sha256(expected).hexdigest()
+        primary = tmp_path / "blobs" / digest[:2] / digest
+        primary.write_bytes(b"third")
+        stale = tmp_path / "blobs" / "stale"
+        stale.write_bytes(b"stale")
+        wrong_size = tmp_path / "blobs" / "wrong-size"
+        wrong_size.write_bytes(expected)
+        conn.execute(
+            "INSERT INTO evidence_blob_location_observations VALUES "
+            "('stale', ?, ?, 'local', 'present', ?, ?, '2026-07-26')",
+            (digest, stale.as_uri(), digest, len(expected)),
+        )
+        conn.execute(
+            "INSERT INTO evidence_blob_location_observations VALUES "
+            "('wrong-size', ?, ?, 'local', 'present', ?, ?, '2026-07-26')",
+            (digest, wrong_size.as_uri(), digest, len(expected) + 1),
+        )
+        conn.commit()
+
+        with pytest.raises(LocalEvidenceReadError, match="sha256_mismatch"):
+            read_verified_local_evidence_bytes(
+                conn,
+                storage_uri=primary.as_uri(),
+                expected_sha256=digest,
+                expected_byte_size=len(expected),
+                allowed_roots=(tmp_path / "blobs",),
+                document_version_id="version-1",
+            )
+    finally:
+        conn.close()
+
+
+def test_verified_replica_reader_rejects_outside_root_and_unregistered_files(
+    tmp_path: Path,
+) -> None:
+    conn = _connection(tmp_path)
+    try:
+        expected = b"first"
+        digest = hashlib.sha256(expected).hexdigest()
+        primary = tmp_path / "blobs" / digest[:2] / digest
+        primary.write_bytes(b"third")
+        unregistered = tmp_path / "blobs" / "unregistered-exact-copy"
+        unregistered.write_bytes(expected)
+        outside = tmp_path / "outside" / "exact-copy"
+        outside.parent.mkdir()
+        outside.write_bytes(expected)
+        conn.execute(
+            "INSERT INTO evidence_blob_location_observations VALUES "
+            "('outside', ?, ?, 'local', 'present', ?, ?, '2026-07-26')",
+            (digest, outside.as_uri(), digest, len(expected)),
+        )
+        conn.commit()
+
+        with pytest.raises(LocalEvidenceReadError, match="sha256_mismatch"):
+            read_verified_local_evidence_bytes(
+                conn,
+                storage_uri=primary.as_uri(),
+                expected_sha256=digest,
+                expected_byte_size=len(expected),
+                allowed_roots=(tmp_path / "blobs",),
+                document_version_id="version-1",
+            )
+    finally:
+        conn.close()
+
+
+def test_verified_replica_reader_wraps_filesystem_errors_as_typed_degradation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conn = _connection(tmp_path)
+    try:
+        expected = b"first"
+        digest = hashlib.sha256(expected).hexdigest()
+        primary = tmp_path / "blobs" / digest[:2] / digest
+
+        def fail_lstat(_path: Path) -> os.stat_result:
+            raise OSError("simulated inaccessible filesystem")
+
+        monkeypatch.setattr(Path, "lstat", fail_lstat)
+        with pytest.raises(LocalEvidenceReadError, match="content_unreadable"):
+            read_verified_local_evidence_bytes(
+                conn,
+                storage_uri=primary.as_uri(),
+                expected_sha256=digest,
+                expected_byte_size=len(expected),
+                allowed_roots=(tmp_path / "blobs",),
+            )
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    "identity", [{"document_version_id": "version-1"}, {"legacy_document_id": 42}]
+)
+@pytest.mark.parametrize("primary_state", ["missing", "tampered"])
+def test_verified_reader_recovers_only_registered_exact_bytes(
+    tmp_path: Path, identity: dict[str, str | int], primary_state: str
+) -> None:
+    conn = _connection(tmp_path)
+    try:
+        expected = b"first"
+        digest = hashlib.sha256(expected).hexdigest()
+        primary = tmp_path / "blobs" / digest[:2] / digest
+        if primary_state == "missing":
+            primary.unlink()
+        else:
+            primary.write_bytes(b"third")
+        replica = tmp_path / "blobs" / "exact-copy"
+        replica.write_bytes(expected)
+        conn.execute(
+            "INSERT INTO evidence_blob_location_observations VALUES "
+            "('exact-copy', ?, ?, 'local', 'present', ?, ?, '2026-07-26')",
+            (digest, replica.as_uri(), digest, len(expected)),
+        )
+        conn.commit()
+        result = read_verified_local_evidence_bytes(
+            conn,
+            storage_uri=primary.as_uri(),
+            expected_sha256=digest,
+            expected_byte_size=len(expected),
+            allowed_roots=(tmp_path / "blobs",),
+            legacy_document_id=42 if "legacy_document_id" in identity else None,
+            document_version_id="version-1" if "document_version_id" in identity else None,
+        )
+        assert result.raw_bytes == expected
+        assert result.path == replica
+        assert result.storage_uri == replica.as_uri()
+        assert result.location_observation_id == "exact-copy"
+        assert result.used_replica
+        assert (
+            conn.execute("SELECT COUNT(*) FROM evidence_blob_location_observations").fetchone()[0]
+            == 3
+        )
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("state", ["missing", "unverified", "remote", "different-document"])
+def test_verified_reader_refuses_nonadmitted_locations(tmp_path: Path, state: str) -> None:
+    conn = _connection(tmp_path)
+    try:
+        expected = b"first"
+        digest = hashlib.sha256(expected).hexdigest()
+        primary = tmp_path / "blobs" / digest[:2] / digest
+        primary.unlink()
+        copy = tmp_path / "blobs" / "copy"
+        copy.write_bytes(expected)
+        conn.execute(
+            "INSERT INTO evidence_blob_location_observations VALUES "
+            "('copy', ?, ?, ?, ?, ?, ?, '2026-07-26')",
+            (
+                digest,
+                copy.as_uri(),
+                "remote" if state == "remote" else "local",
+                "missing" if state == "missing" else "present",
+                None if state == "unverified" else digest,
+                len(expected),
+            ),
+        )
+        conn.commit()
+        with pytest.raises(LocalEvidenceReadError, match="content_missing"):
+            read_verified_local_evidence_bytes(
+                conn,
+                storage_uri=primary.as_uri(),
+                expected_sha256=digest,
+                expected_byte_size=len(expected),
+                allowed_roots=(tmp_path / "blobs",),
+                document_version_id="version-2" if state == "different-document" else "version-1",
+            )
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink fixture")
+def test_verified_reader_refuses_registered_symlink_replica(tmp_path: Path) -> None:
+    conn = _connection(tmp_path)
+    try:
+        expected = b"first"
+        digest = hashlib.sha256(expected).hexdigest()
+        primary = tmp_path / "blobs" / digest[:2] / digest
+        primary.unlink()
+        target = tmp_path / "blobs" / "target"
+        target.write_bytes(expected)
+        link = tmp_path / "blobs" / "link"
+        link.symlink_to(target)
+        conn.execute(
+            "INSERT INTO evidence_blob_location_observations VALUES "
+            "('link', ?, ?, 'local', 'present', ?, ?, '2026-07-26')",
+            (digest, link.as_uri(), digest, len(expected)),
+        )
+        conn.commit()
+        with pytest.raises(LocalEvidenceReadError, match="content_missing"):
+            read_verified_local_evidence_bytes(
+                conn,
+                storage_uri=primary.as_uri(),
+                expected_sha256=digest,
+                expected_byte_size=len(expected),
+                allowed_roots=(tmp_path / "blobs",),
+                document_version_id="version-1",
+            )
+    finally:
+        conn.close()
+
+
+def test_verified_reader_handles_empty_bytes_without_a_zero_byte_limit(tmp_path: Path) -> None:
+    path = tmp_path / "empty"
+    path.write_bytes(b"")
+    with sqlite3.connect(":memory:") as conn:
+        result = read_verified_local_evidence_bytes(
+            conn,
+            storage_uri=path.as_uri(),
+            expected_sha256=hashlib.sha256(b"").hexdigest(),
+            expected_byte_size=0,
+            allowed_roots=(tmp_path,),
+        )
+        assert result.raw_bytes == b""
+        assert not result.used_replica
+
+
+@pytest.mark.parametrize("content", [b"four", b"sixsix"])
+def test_verified_reader_rejects_wrong_physical_size(tmp_path: Path, content: bytes) -> None:
+    path = tmp_path / "content"
+    path.write_bytes(content)
+    with (
+        sqlite3.connect(":memory:") as conn,
+        pytest.raises(LocalEvidenceReadError, match="byte_size_mismatch"),
+    ):
+        read_verified_local_evidence_bytes(
+            conn,
+            storage_uri=path.as_uri(),
+            expected_sha256=hashlib.sha256(content).hexdigest(),
+            expected_byte_size=5,
+            allowed_roots=(tmp_path,),
+        )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -14,6 +15,7 @@ import pytest
 from alembic.config import Config
 
 from alembic import command
+from provenance import evidence_native_candidates as native_candidates_module
 from provenance.evidence_backfill import (
     BackfillRequest,
     backfill_legacy_evidence,
@@ -21,6 +23,7 @@ from provenance.evidence_backfill import (
 )
 from provenance.evidence_ledger import ContentBlob, EvidenceLedger, SourceObservation
 from provenance.evidence_links import BlobLocationObservation, EvidenceLinkLedger
+from provenance.immutable_artifact import ImmutableArtifactSnapshot
 from provenance.integrity_audit import AuditOptions, audit_connection
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -192,6 +195,34 @@ def _seed_legacy_file_observation(
             collector_code_version="evidence-backfill@1",
         )
     )
+    conn.commit()
+
+
+def _register_exact_replica(conn: sqlite3.Connection, *, document_id: int, path: Path) -> None:
+    row = conn.execute(
+        "SELECT sha256, raw_bytes_size, fetched_at FROM documents WHERE id=?", (document_id,)
+    ).fetchone()
+    assert row is not None
+    digest = str(row[0])
+    verified_at = datetime.fromisoformat(str(row[2]))
+    location_id = "replica:" + hashlib.sha256(path.as_uri().encode()).hexdigest()
+    created = EvidenceLinkLedger(conn).persist_location(
+        BlobLocationObservation(
+            location_observation_id=location_id,
+            idempotency_key=location_id,
+            blob_sha256=digest,
+            storage_uri=path.as_uri(),
+            location_kind="local",
+            availability_state="present",
+            location_sequence=1,
+            verified_at=verified_at,
+            verified_byte_size=int(row[1]),
+            verified_sha256=digest,
+            supersedes_location_observation_id=None,
+            recorded_at=verified_at,
+        )
+    )
+    assert created.created
     conn.commit()
 
 
@@ -550,25 +581,123 @@ def test_hash_mismatch_is_quarantined_without_evidence_writes(tmp_path: Path) ->
         conn.close()
 
 
+def test_legacy_capture_uses_admitted_exact_replica_without_rewriting_source_identity(
+    tmp_path: Path,
+) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    try:
+        original = repo_root / "data" / "ACME_10q.html"
+        first = backfill_legacy_evidence(conn, _request(repo_root, apply=True))
+        assert first.documents_backfilled == 1
+        original_bytes = original.read_bytes()
+        replica = repo_root / "data" / "historical" / "ACME_10q.html"
+        replica.parent.mkdir()
+        replica.write_bytes(original_bytes)
+        _register_exact_replica(conn, document_id=1, path=replica)
+        second_bytes = b"<html>second historical observation</html>"
+        original.write_bytes(second_bytes)
+        conn.execute(
+            "INSERT INTO documents VALUES (2, 'ACME', 'sec_edgar', '10-Q', NULL, NULL, ?, ?, "
+            "'2026-08-20 12:00:00', 'ok', ?, 'https://sec.example/acme-10q-v2', NULL)",
+            ("data/ACME_10q.html", hashlib.sha256(second_bytes).hexdigest(), len(second_bytes)),
+        )
+        conn.commit()
+        assert (
+            ensure_legacy_document_evidence(
+                conn, repo_root=repo_root, document_id=2
+            ).documents_backfilled
+            == 1
+        )
+        second_replica = repo_root / "data" / "historical" / "ACME_10q-v2.html"
+        second_replica.write_bytes(second_bytes)
+        _register_exact_replica(conn, document_id=2, path=second_replica)
+        original.write_bytes(b"new bytes under the reused mutable alias")
+
+        replay = ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=1)
+        second_replay = ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=2)
+
+        assert replay.documents_backfilled == 1
+        assert replay.finding_counts == {
+            "issuer_identity_legacy_ticker": 1,
+            "language_und": 1,
+            "verified_local_replica_fallback": 1,
+        }
+        assert second_replay.finding_counts == {
+            "issuer_identity_legacy_ticker": 1,
+            "language_und": 1,
+            "verified_local_replica_fallback": 1,
+        }
+        assert conn.execute("SELECT file_path FROM documents WHERE id=1").fetchone()[0] == (
+            "data/ACME_10q.html"
+        )
+        assert conn.execute("SELECT COUNT(*) FROM evidence_document_versions").fetchone()[0] == 2
+        assert (
+            conn.execute(
+                "SELECT source_url FROM evidence_source_observations WHERE observation_id='legacy-obs-1'"
+            ).fetchone()[0]
+            == "https://sec.example/acme-10q"
+        )
+        document_locator = json.loads(
+            conn.execute(
+                "SELECT locator_json FROM evidence_nodes WHERE node_id='legacy-node-doc-1'"
+            ).fetchone()[0]
+        )
+        assert document_locator["source_ref"] == "data/ACME_10q.html"
+    finally:
+        conn.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX declared-junction fixture")
+def test_capture_preserves_declared_data_boundary_without_following_nested_links(
+    tmp_path: Path,
+) -> None:
+    conn, _, repo_root = _connection(tmp_path)
+    try:
+        retained_data = tmp_path / "declared-data"
+        (repo_root / "data").rename(retained_data)
+        (repo_root / "data").symlink_to(retained_data, target_is_directory=True)
+        result = backfill_legacy_evidence(conn, _request(repo_root, apply=True))
+        assert result.documents_backfilled == 1
+        assert conn.execute("SELECT file_path FROM documents WHERE id=1").fetchone()[0] == (
+            "data/ACME_10q.html"
+        )
+        source = retained_data / "ACME_10q.html"
+        nested_link = retained_data / "nested-link.html"
+        nested_link.symlink_to(source)
+        conn.execute(
+            "INSERT INTO documents SELECT 2,ticker,source_type,doc_type,period_start,period_end,"
+            "'data/nested-link.html',sha256,fetched_at,fetch_status,raw_bytes_size,source_url,accession_number "
+            "FROM documents WHERE id=1"
+        )
+        conn.commit()
+        with pytest.raises(ValueError, match="evidence capture failed: content_unreadable"):
+            ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=2)
+        assert conn.execute("SELECT COUNT(*) FROM evidence_document_versions").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
 @pytest.mark.parametrize("batch", [False, True])
 def test_changed_bytes_between_verification_and_persistence_fail_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, batch: bool
 ) -> None:
     conn, _, repo_root = _connection(tmp_path)
     raw_path = repo_root / "data" / "ACME_10q.html"
-    original_read = Path.read_bytes
+    original_read = native_candidates_module.read_stable_artifact
     reads = 0
 
-    def replace_after_read(path: Path) -> bytes:
+    def replace_after_read(
+        path: Path, *, max_bytes: int | None = None, allowed_root: Path | None = None
+    ) -> tuple[ImmutableArtifactSnapshot, bytes]:
         nonlocal reads
-        payload = original_read(path)
+        snapshot, payload = original_read(path, max_bytes=max_bytes, allowed_root=allowed_root)
         if path == raw_path:
             reads += 1
             if reads == 1:
                 path.write_bytes(payload.replace(b"official", b"tampered"))
-        return payload
+        return snapshot, payload
 
-    monkeypatch.setattr(Path, "read_bytes", replace_after_read)
+    monkeypatch.setattr(native_candidates_module, "read_stable_artifact", replace_after_read)
     try:
         with pytest.raises(ValueError, match="legacy document 1 changed during evidence capture"):
             if batch:
@@ -814,14 +943,16 @@ def test_inaccessible_source_is_quarantined(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     conn, _, repo_root = _connection(tmp_path)
-    original_read = Path.read_bytes
+    original_read = native_candidates_module.read_stable_artifact
 
-    def inaccessible(path: Path) -> bytes:
+    def inaccessible(
+        path: Path, *, max_bytes: int | None = None, allowed_root: Path | None = None
+    ) -> tuple[ImmutableArtifactSnapshot, bytes]:
         if path.name == "ACME_10q.html":
             raise PermissionError("unavailable source")
-        return original_read(path)
+        return original_read(path, max_bytes=max_bytes, allowed_root=allowed_root)
 
-    monkeypatch.setattr(Path, "read_bytes", inaccessible)
+    monkeypatch.setattr(native_candidates_module, "read_stable_artifact", inaccessible)
     try:
         result = backfill_legacy_evidence(conn, _request(repo_root, apply=True))
         assert result.documents_quarantined == 1
