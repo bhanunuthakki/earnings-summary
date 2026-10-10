@@ -28,6 +28,15 @@
       "mode": "allocation"
     },
     {
+      "id": "P2H",
+      "prompt": "Would adding to this holding or trimming it improve the portfolio after taxes?",
+      "expected_investing_skills": [
+        "next-dollar-allocation",
+        "earnings-summary-investing"
+      ],
+      "mode": "position sizing held-out paraphrase"
+    },
+    {
       "id": "P4",
       "prompt": "Explain what a price-to-earnings ratio means in one sentence; no company analysis.",
       "expected_investing_skills": [],
