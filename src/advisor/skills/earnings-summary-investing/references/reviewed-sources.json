@@ -1,5 +1,5 @@
 {
-  "review_note": "Reviewed merged main change 1d87985a: earnings CLIs now require the configured canonical database; readouts use the selected call date and fiscal period end while retaining evidence limits; artifact readers and reuse reject corrupt or missing output checksums without erasing historical bytes. Existing skill instructions already require exact periods, configured state, preserved cache semantics and separate financial verification. No skill prose change is needed. Preserved the released financial narrative contract and its source commitments from f0c0162f. Reviewed released earnings fix 1d87985a: pre/post CLIs resolve approved explicit or configured database; readout KPI periods stop at selected fiscal end while revisions remain current; exact call-event matching does not establish sourced consensus or historical cutoff; artifact reads and reuse verify stored output checksums. Reviewed ETF holdings reader snapshot-date/source/weight limits and direct-book membership overlap; added bounded ETF comparison guidance without a new application capability or write authority. Preserved all prior reviewed source commitments. Reviewed current main 8b86e7b6 on 2026-10-09 before integrating the retained position-sizing routing clarification. Reviewed protected artifact retention, versioned research publication clocks and same-document KPI re-extraction; these retain their existing source/operation owners and do not grant skill write authority. Reviewed bounded fail-closed KPI batch reads, exact internal DCF verification evidence, and legacy/v2 decision-brief parsers with separately sealed supporting issuers, finite model replay, source-byte bounds, primary valuation authority and reader parity. Existing routes require current owner arguments, authorized state and complete provenance/readiness; no additional skill-body change is needed. Added explicit increase/reduce/hold description and P2H synthetic invocation case only. Advisory catalog routing selected allocation for the affected prompt and fresh paraphrase, and research for an earnings/thesis negative control. Host invocation reliability and financial analysis quality were not measured. Preserved all prior reviewed source commitments.",
+  "review_note": "Reviewed the bounded lock filename change: ordinary names and complete logical identity remain stable; hashing only overlong derived filenames adds no operational action or source authority. Mixed-version rollout remains governed by the existing single-writer boundary.",
   "schema_version": 1,
   "sources": [
     {
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "d3b3112a6a2890c99a373930667d63b7a19213b503a3ec469ddcd469a7f55ad8"
+      "sha256": "e041e1d9888c5d3c69d0c1da6c7cf7ec359b9409abfa8e33dd422a1b4e54d3c4"
     },
     {
       "path": "directives/post_earnings_readout.md",
