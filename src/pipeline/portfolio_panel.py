@@ -133,6 +133,7 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from thesis_collision import CachedReport, read_cached_report
 from ui import living_grid as lg
 from ui.controls import chip_tone_class, k_empty, read_request_js, thesis_status_tone, ticker_label
+from ui.panel import panel_empty, panel_section
 from ui.time import stamp_html
 from ui.tokens import CHART_SERIES
 
@@ -299,9 +300,11 @@ def compose_portfolio_page(
         if live.available:
             first_error = next(iter(analytics.errors.values()), "no analytics payloads")
             parts.append(
-                '<section class="panel"><h2>Portfolio analytics</h2>'
-                '<p class="muted">The tracker is reachable but its analytics endpoints aren\'t — '
-                f"{escape(first_error)}.</p></section>"
+                panel_empty(
+                    "The tracker is reachable but its analytics endpoints aren't — "
+                    f"{escape(first_error)}.",
+                    title="Portfolio analytics",
+                )
             )
     # Live positions render at the bottom only when the tracker answered (the
     # offline state is the top banner, not a second panel down here).
@@ -707,13 +710,14 @@ def _performance_section(
         "Each benchmark is a synthetic book receiving the same dated external cash flows; "
         f"net external inflow {_money(perf.net_external_cashflow_in)} over the window."
     )
-    head = (
-        '<section class="panel"><div class="pf-perf-head">'
+    # The head band (panel div + titled h2 with hover note + window bar) has no
+    # plain <h2> — the band owns the label — so the shell takes it as body.
+    perf_h2 = (
         f"<h2>{escape(title)}"
         f'<span class="pf-info" tabindex="0" role="note" aria-label="{escape(note)}">i'
         f'<span class="pf-info-pop">{escape(note)}</span></span></h2>'
-        f"{_window_bar(window, refresh_endpoint=refresh_endpoint, refresh_target_selector=refresh_target_selector)}</div>"
     )
+    window_bar = f"{_window_bar(window, refresh_endpoint=refresh_endpoint, refresh_target_selector=refresh_target_selector)}</div>"
     chart_points = perf.points if perf.calculation_status == "available" else []
     if not chart_points:
         provenance = _analytics_provenance(perf.provenance)
@@ -722,7 +726,14 @@ def _performance_section(
             if perf.calculation_status == "unavailable"
             else k_empty("Tracker returned no performance history for the window.")
         )
-        return f"{head}{performance_empty}{provenance}{_policy_line(policy)}</section>"
+        return panel_section(
+            '<div class="pf-perf-head">',
+            perf_h2,
+            window_bar,
+            performance_empty,
+            provenance,
+            _policy_line(policy),
+        )
 
     finals: dict[str, float | None] = {
         label: next((v for p in reversed(chart_points) if (v := get(p)) is not None), None)
@@ -738,14 +749,16 @@ def _performance_section(
     ]
     warn = backfill_warning(perf)
     provenance = _analytics_provenance(perf.provenance)
-    return (
-        f"{head}"
-        f'<div class="kpi-strip">{"".join(cards)}</div>'
-        f"{provenance}"
-        f"{_chart_legend(chart_points)}"
-        f"{_benchmark_chart(chart_points)}"
-        f"{_policy_line(policy)}"
-        f"{warn}</section>"
+    return panel_section(
+        '<div class="pf-perf-head">',
+        perf_h2,
+        window_bar,
+        f'<div class="kpi-strip">{"".join(cards)}</div>',
+        provenance,
+        _chart_legend(chart_points),
+        _benchmark_chart(chart_points),
+        _policy_line(policy),
+        warn,
     )
 
 
@@ -1036,8 +1049,7 @@ def _risk_section(b: BetaStats) -> str:
     bench = b.benchmark or "SPY"
     rf = f" · risk-free {_pct_frac(b.risk_free_annual)}" if b.risk_free_annual is not None else ""
     samples = f" · {b.sample_size} daily samples" if b.sample_size is not None else ""
-    intro = (
-        '<section class="panel"><h2>Risk &amp; efficiency</h2>'
+    sub = (
         f'<p class="sub">Daily-return regression vs {escape(bench)} from the tracker · '
         f"{escape(b.start_date or '?')} → {escape(b.end_date or '?')}{samples}{rf}.</p>"
     )
@@ -1051,7 +1063,12 @@ def _risk_section(b: BetaStats) -> str:
             ", ".join(labels[code] for code in b.calculation_reason_codes if code in labels)
             or "the tracker could not validate the risk calculation"
         )
-        return f"{intro}{k_empty(f'Risk metrics unavailable: {detail}.')}{provenance}</section>"
+        return panel_section(
+            sub,
+            k_empty(f"Risk metrics unavailable: {detail}."),
+            provenance,
+            title="Risk &amp; efficiency",
+        )
     cards = [
         _kpi_card(f"Beta vs {bench}", _ratio(b.beta)),
         _kpi_card(
@@ -1071,7 +1088,13 @@ def _risk_section(b: BetaStats) -> str:
         _kpi_card("R²", _ratio(b.r_squared)),
     ]
     notes = f'<p class="muted">{escape("; ".join(b.notes))}</p>' if b.notes else ""
-    return f'{intro}<div class="kpi-strip">{"".join(cards)}</div>{notes}{provenance}</section>'
+    return panel_section(
+        sub,
+        f'<div class="kpi-strip">{"".join(cards)}</div>',
+        notes,
+        provenance,
+        title="Risk &amp; efficiency",
+    )
 
 
 def _positioning_section(pos: Positioning) -> str:
@@ -1112,11 +1135,12 @@ def _positioning_section(pos: Positioning) -> str:
     )
     strip = f'<div class="kpi-strip">{"".join(cards)}</div>' if cards else ""
     grid = f'<div class="pf-alloc-grid">{blocks}</div>' if blocks else ""
-    return (
-        '<section class="panel"><h2>Positioning &amp; concentration</h2>'
+    return panel_section(
         f'<p class="sub">Snapshot {escape(pos.snapshot_date or "?")} · '
-        f"book {_money(pos.total_value)} · weights from the tracker's classification.</p>"
-        f"{strip}{grid}</section>"
+        f"book {_money(pos.total_value)} · weights from the tracker's classification.</p>",
+        strip,
+        grid,
+        title="Positioning &amp; concentration",
     )
 
 
@@ -1140,8 +1164,7 @@ def _alloc_block(title: str, buckets: list[AllocationBucket]) -> str:
 
 
 def _alpha_section(pa: PositionAlpha) -> str:
-    head = (
-        '<section class="panel"><h2>Per-position alpha</h2>'
+    sub = (
         f'<p class="sub">{escape(pa.start_date or "?")} → {escape(pa.end_date or "?")} · '
         "dollar alpha vs a counterfactual that routes each position's exact buys/sells into "
         f"the benchmark on the same days ({_ALPHA} = actual P&amp;L - benchmark P&amp;L). "
@@ -1151,13 +1174,18 @@ def _alpha_section(pa: PositionAlpha) -> str:
     )
     provenance = _analytics_provenance(pa.provenance)
     if pa.calculation_status != "available":
-        return (
-            f"{head}{_position_calculation_notice(pa, window_aligned=True)}{provenance}</section>"
+        return panel_section(
+            sub,
+            _position_calculation_notice(pa, window_aligned=True),
+            provenance,
+            title="Per-position alpha",
         )
     if not pa.rows:
-        return (
-            f'{head}<p class="muted">Tracker returned no positions for the window.</p>'
-            f"{provenance}</section>"
+        return panel_section(
+            sub,
+            '<p class="muted">Tracker returned no positions for the window.</p>',
+            provenance,
+            title="Per-position alpha",
         )
     matched = pa.matched_returns
     summary_cards: list[str] = []
@@ -1248,19 +1276,19 @@ def _alpha_section(pa: PositionAlpha) -> str:
         + qqq_th
         + policy_th
     )
-    return (
-        head
-        + (f'<div class="kpi-strip">{"".join(summary_cards)}</div>' if summary_cards else "")
-        + provenance
-        + lg.grid_open()
+    return panel_section(
+        sub,
+        f'<div class="kpi-strip">{"".join(summary_cards)}</div>' if summary_cards else "",
+        provenance,
+        lg.grid_open()
         + lg.filter_bar(len(pa.rows), noun="positions")
         + '<table class="alpha-table"><thead><tr>'
         + headers
         + "</tr></thead><tbody>"
         + "".join(rows)
         + f"</tbody><tfoot>{totals}</tfoot></table>"
-        + lg.grid_close()
-        + "</section>"
+        + lg.grid_close(),
+        title="Per-position alpha",
     )
 
 
@@ -1399,14 +1427,15 @@ def _synthesis_memo_doorway(content_md: str | None) -> str:
     if not content_md:
         return ""
     headline = _synthesis_memo_headline(content_md)
-    return (
-        '<section class="panel synthesis-panel"><div class="panel-head">'
+    return panel_section(
+        '<div class="panel-head">'
         "<h2>Portfolio synthesis</h2>"
         '<p class="sub">Cross-ticker patterns · the full memo lives in Record → Memos.</p>'
         '</div><div class="panel-body">'
         f'<p class="pf-syn-headline">{escape(headline)}</p>'
         '<p><a class="k-chip k-chip-btn" href="#advisor_memos">full memo →</a></p>'
-        "</div></section>"
+        "</div>",
+        cls="synthesis-panel",
     )
 
 
@@ -1502,11 +1531,10 @@ def _thesis_rollup_panel(db_path: Path, *, conn: sqlite3.Connection | None = Non
         for t, s in flagged
     )
     summary = f"{ok_n} OK · {len(flagged)} flagged" if flagged else f"all {ok_n} OK"
-    return (
-        '<section class="panel"><h2>Thesis health</h2>'
-        f'<p class="sub">Latest evaluation across the portfolio — {escape(summary)}.</p>'
-        + (f'<div class="pf-th-chips">{chips}</div>' if chips else "")
-        + "</section>"
+    return panel_section(
+        f'<p class="sub">Latest evaluation across the portfolio — {escape(summary)}.</p>',
+        f'<div class="pf-th-chips">{chips}</div>' if chips else "",
+        title="Thesis health",
     )
 
 
@@ -1576,10 +1604,10 @@ def _exposure_panel(
         "</div>"
         for sector, share in top
     )
-    return (
-        '<section class="panel"><h2>Exposure</h2>'
-        f'<p class="sub">By FMP sector · {escape(mode)}.</p>'
-        f'<div class="pf-exp">{rows}</div></section>'
+    return panel_section(
+        f'<p class="sub">By FMP sector · {escape(mode)}.</p>',
+        f'<div class="pf-exp">{rows}</div>',
+        title="Exposure",
     )
 
 
@@ -2057,20 +2085,24 @@ def _implicit_bets_section(
                 )
             )
 
-    head = (
-        '<section class="panel pfr-bets"><h2>What am I positioned for?</h2>'
+    sub = (
         '<p class="sub">The statement your holdings make about the world — the book\'s '
         "implicit bets, ranked by how much rides on each. The sections below carry "
         "the evidence.</p>"
     )
     if not bets:
         # D4: nothing derivable yet → one line naming what unlocks the read.
-        return (
-            head + '<p class="muted">Not derivable yet — a risk snapshot (morning '
-            "pipeline) and materialized weights unlock this read.</p></section>"
+        return panel_section(
+            sub,
+            '<p class="muted">Not derivable yet — a risk snapshot (morning '
+            "pipeline) and materialized weights unlock this read.</p>",
+            title="What am I positioned for?",
+            cls="pfr-bets",
         )
     items = "".join(f"<li>{line}</li>" for _, line in sorted(bets, key=lambda b: -b[0]))
-    return f"{head}<ol>{items}</ol></section>"
+    return panel_section(
+        sub, f"<ol>{items}</ol>", title="What am I positioned for?", cls="pfr-bets"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -2097,7 +2129,7 @@ HEALTH_FRAGMENTS: tuple[str, ...] = (
 
 
 def _quiet_note(text: str) -> str:
-    return f'<section class="panel"><p class="muted">{escape(text)}</p></section>'
+    return panel_empty(escape(text))
 
 
 def _weights_source_note(repo_root: Path | None) -> str:
@@ -2415,12 +2447,12 @@ def _cached_risk_section(snap: RiskSnapshot) -> str:
     if snap.top5_weight_pct is not None:
         cards.append(_kpi_card("Top 5", _pct(snap.top5_weight_pct), sub="of book"))
     strip = f'<div class="kpi-strip">{"".join(cards)}</div>' if cards else ""
-    return (
-        '<section class="panel"><h2>Risk &amp; drawdown</h2>'
+    return panel_section(
         '<p class="sub">Live risk analytics are unavailable right now — showing the last-known '
         f"snapshot ({stamp}). These are cached values, not live; reconnect the tracker for live "
-        "drawdown, factor, and benchmark-risk reads.</p>"
-        f"{strip}</section>"
+        "drawdown, factor, and benchmark-risk reads.</p>",
+        strip,
+        title="Risk &amp; drawdown",
     )
 
 
@@ -2504,11 +2536,11 @@ def _risk_offline_note(analytics: PortfolioAnalytics) -> str:
     """Tracker down → drawdown / benchmark-risk / factor exposure can't be read
     live. (L5 PR2 swaps this for the last-known cached snapshot, stamped.)"""
     reason = _offline_reason(next(iter(analytics.errors.values()), None))
-    return (
-        '<section class="panel"><h2>Risk &amp; drawdown</h2>'
+    return panel_section(
         '<p class="sub">Drawdown, benchmark-risk stats, and factor exposure come from the '
-        "live portfolio tracker.</p>"
-        f'<p class="muted">{escape(reason)}</p></section>'
+        "live portfolio tracker.</p>",
+        f'<p class="muted">{escape(reason)}</p>',
+        title="Risk &amp; drawdown",
     )
 
 
@@ -2519,13 +2551,16 @@ def _dd_window(dd: DrawdownStats) -> str:
 
 
 def _drawdown_section(dd: DrawdownStats | None) -> str:
-    head = (
-        '<section class="panel"><h2>Drawdown</h2>'
+    sub = (
         '<p class="sub">Peak-to-trough decline of the book\'s time-weighted return over the '
         "tracker's window — the worst loss ridden, and whether it has recovered.</p>"
     )
     if dd is None:
-        return f'{head}<p class="muted">No daily return series available for a drawdown read.</p></section>'
+        return panel_section(
+            sub,
+            '<p class="muted">No daily return series available for a drawdown read.</p>',
+            title="Drawdown",
+        )
     never_fell = dd.trough_date is None
     cards = [
         _kpi_card(
@@ -2548,10 +2583,11 @@ def _drawdown_section(dd: DrawdownStats | None) -> str:
         cards.append(_kpi_card("Time to recovery", rec, sub="trough → new high", tone="pos"))
     else:
         cards.append(_kpi_card("Recovery", "underwater", sub="not yet recovered", tone="neg"))
-    return (
-        f"{head}"
-        f'<div class="kpi-strip">{"".join(cards)}</div>'
-        f"{_underwater_chart(dd.underwater)}</section>"
+    return panel_section(
+        sub,
+        f'<div class="kpi-strip">{"".join(cards)}</div>',
+        _underwater_chart(dd.underwater),
+        title="Drawdown",
     )
 
 
@@ -2620,8 +2656,7 @@ def _underwater_chart(points: list[DrawdownPoint]) -> str:
 
 
 def _factor_exposure_section(factor: FactorRollup) -> str:
-    head = (
-        '<section class="panel"><h2>Factor &amp; style exposure</h2>'
+    sub = (
         '<p class="sub">Book value-weighted loadings from the per-holding correlation/beta '
         "table — where the book crowds into market, growth, and rate sensitivity.</p>"
     )
@@ -2643,9 +2678,9 @@ def _factor_exposure_section(factor: FactorRollup) -> str:
             )
         )
     if factor.rate_evidence:
-        head += '<p class="muted">' + _provenance_html(" · ".join(factor.rate_evidence)) + "</p>"
+        sub += '<p class="muted">' + _provenance_html(" · ".join(factor.rate_evidence)) + "</p>"
     else:
-        head += '<p class="muted">Rate sensitivity unavailable: legacy or stale estimates are quarantined.</p>'
+        sub += '<p class="muted">Rate sensitivity unavailable: legacy or stale estimates are quarantined.</p>'
     cov = f"{factor.names_priced} of {factor.names_total} names priced"
     note = (
         f'<p class="muted pfr-top">{escape(cov)}. Value / size / momentum load from local '
@@ -2658,7 +2693,13 @@ def _factor_exposure_section(factor: FactorRollup) -> str:
         f"{_factor_top_line('Most crowded (corr SPY)', factor.top_crowding)}"
         "</div>"
     )
-    return f'{head}<div class="kpi-strip">{"".join(cards)}</div>{note}{tops}</section>'
+    return panel_section(
+        sub,
+        f'<div class="kpi-strip">{"".join(cards)}</div>',
+        note,
+        tops,
+        title="Factor &amp; style exposure",
+    )
 
 
 def _factor_top_line(label: str, names: list[CrowdedName]) -> str:
@@ -2681,19 +2722,19 @@ def _style_factor_section(style: StyleFactorRollup | None) -> str:
     command instead of a hidden section, mirroring ``_macro_stress_section``'s
     always-render pattern so the surface is discoverable before its first
     data arrives."""
-    head = (
-        '<section class="panel"><h2>Style factor loadings</h2>'
+    sub = (
         '<p class="sub">Value / size / momentum betas of the book — each holding\'s daily '
         "returns regressed on a free ETF-proxy return spread (univariate OLS, the "
         "macro-sensitivity idiom), value-weighted over the names with an estimate. "
         "Local data only; renders with the tracker down.</p>"
     )
     if style is None:
-        return (
-            f"{head}"
+        return panel_section(
+            sub,
             '<p class="muted">No proxy series (or weights cache) on file yet — run '
             "<code>python execution/fetch_factor_proxies.py</code> (morning-pipeline "
-            "stage 0g keeps it fresh).</p></section>"
+            "stage 0g keeps it fresh).</p>",
+            title="Style factor loadings",
         )
     cards: list[str] = []
     for leg in style.legs:
@@ -2719,7 +2760,14 @@ def _style_factor_section(style: StyleFactorRollup | None) -> str:
         _factor_top_line(f"Largest {leg.label.lower()} tilt", leg.top) for leg in style.legs
     )
     strip = f'<div class="kpi-strip">{"".join(cards)}</div>' if cards else ""
-    return f'{head}{strip}{note}{missing}<div class="pfr-tops">{tops}</div></section>'
+    return panel_section(
+        sub,
+        strip,
+        note,
+        missing,
+        f'<div class="pfr-tops">{tops}</div>',
+        title="Style factor loadings",
+    )
 
 
 def _corr_cell_class(v: float, *, diagonal: bool) -> str:
@@ -2741,18 +2789,18 @@ def _correlation_section(read: CorrelationRead | None) -> str:
     """Holdings pairwise correlation + crowding clusters, from the local price
     cache. Renders in the offline branch too (same always-render pattern as the
     style-factor section); ``None`` gets the empty state, not a hidden section."""
-    head = (
-        '<section class="panel"><h2>Holdings correlation &amp; crowding</h2>'
+    sub = (
         '<p class="sub">Pairwise correlation of the holdings\' daily returns over their common '
         "trading window (local price cache — renders with the tracker down), and the clusters "
         "that trade as one bet: names linked at corr &ge; "
         f"{CLUSTER_CORR:.2f} grouped, with their combined share of book.</p>"
     )
     if read is None:
-        return (
-            f"{head}"
+        return panel_section(
+            sub,
             '<p class="muted">Not enough daily price history across the holdings for a pairwise '
-            "read (needs two or more names with an overlapping window).</p></section>"
+            "read (needs two or more names with an overlapping window).</p>",
+            title="Holdings correlation &amp; crowding",
         )
     cards: list[str] = []
     if read.avg_pairwise_corr is not None:
@@ -2815,7 +2863,15 @@ def _correlation_section(read: CorrelationRead | None) -> str:
         if read.dropped
         else ""
     )
-    return f"{head}{strip}{clusters_html}{table}{note}{dropped}</section>"
+    return panel_section(
+        sub,
+        strip,
+        clusters_html,
+        table,
+        note,
+        dropped,
+        title="Holdings correlation &amp; crowding",
+    )
 
 
 def _tail_stress_row(r: TailStressRow) -> str:
@@ -2882,18 +2938,18 @@ def _tail_stress_section(stress: TailStress | None) -> str:
     headline number's tone is stripped (never colored green/red as if it were
     a confident, whole-book read) — the design principle the 2026-07
     adversarial review named: 42%-modeled must not render healthy."""
-    head = (
-        '<section class="panel"><h2>Scenario-tail stress</h2>'
+    sub = (
         '<p class="sub">If every holding fell to its DCF bear-case fair value tomorrow: the '
         "book-level drawdown implied by summing each name's weight &times; bear-case return "
         "(not a probability-weighted expectation — the joint-tail floor the scenario ranges "
         "imply). Local <code>dcf_runs</code> only; renders with the tracker down.</p>"
     )
     if stress is None:
-        return (
-            f"{head}"
+        return panel_section(
+            sub,
             '<p class="muted">No weighted holdings to stress yet (needs the tracker or a '
-            "materialized weights cache).</p></section>"
+            "materialized weights cache).</p>",
+            title="Scenario-tail stress",
         )
     coverage_warn = _coverage_warning_html(stress.modeled_weight_pct)
     drawdown_sub = (
@@ -2935,7 +2991,14 @@ def _tail_stress_section(stress: TailStress | None) -> str:
         f"</tr></thead><tbody>{rows_html}</tbody></table>"
     )
     notes = "".join(f'<p class="muted pfr-top">{escape(n)}</p>' for n in stress.notes)
-    return f"{head}{coverage_warn}{strip}{table}{notes}</section>"
+    return panel_section(
+        sub,
+        coverage_warn,
+        strip,
+        table,
+        notes,
+        title="Scenario-tail stress",
+    )
 
 
 _BEAR_LINT_STATUS_LABEL: dict[str, str] = {
@@ -2987,8 +3050,7 @@ def _bear_lint_section(report: BearLintReport | None) -> str:
     adversarial review's #3 failure mode: fake ``BEAR_SEED`` bears sitting AT/
     ABOVE the live price for several names meant every scenario-reward
     consumer silently read "no downside" for half the book."""
-    head = (
-        '<section class="panel"><h2>Bear-realism lint</h2>'
+    sub = (
         '<p class="sub">Every held name\'s latest top-level DCF bear scenario, checked against '
         "the live price: a bear case AT or ABOVE price isn't downside at all, and one less than "
         f"{SHALLOW_BEAR_FLOOR_PCT:.0f}% below price reads as ordinary volatility, not a "
@@ -2997,10 +3059,11 @@ def _bear_lint_section(report: BearLintReport | None) -> str:
         "workbook edit. Local <code>dcf_runs</code> only; renders with the tracker down.</p>"
     )
     if report is None or not report.findings:
-        return (
-            f"{head}"
+        return panel_section(
+            sub,
             '<p class="muted">No weighted holdings to lint yet (needs the tracker or a '
-            "materialized weights cache).</p></section>"
+            "materialized weights cache).</p>",
+            title="Bear-realism lint",
         )
     flagged = report.flagged
     counts: dict[str, int] = {}
@@ -3020,8 +3083,11 @@ def _bear_lint_section(report: BearLintReport | None) -> str:
             cards.append(_kpi_card(_BEAR_LINT_STATUS_LABEL[status].title(), str(n)))
     strip = f'<div class="kpi-strip">{"".join(cards)}</div>'
     if not flagged:
-        return (
-            f'{head}{strip}<p class="muted pfr-top">Every held name clears the lint.</p></section>'
+        return panel_section(
+            sub,
+            strip,
+            '<p class="muted pfr-top">Every held name clears the lint.</p>',
+            title="Bear-realism lint",
         )
     rows_html = "".join(_bear_lint_row(f) for f in flagged)
     table = (
@@ -3032,7 +3098,7 @@ def _bear_lint_section(report: BearLintReport | None) -> str:
         "<th>Provenance</th><th>Reason</th>"
         f"</tr></thead><tbody>{rows_html}</tbody></table>"
     )
-    return f"{head}{strip}{table}</section>"
+    return panel_section(sub, strip, table, title="Bear-realism lint")
 
 
 # ---------------------------------------------------------------------------
@@ -3165,8 +3231,7 @@ def _position_guard_section(cache: PositionGuardCacheModel | None) -> str:
     never folded into the violations chips/table/pill above (Bull-side
     symmetry, PR9: missing downside is a violation, missing upside is a
     nudge)."""
-    head = (
-        '<section class="panel"><h2>Naked-position gate</h2>'
+    sub = (
         '<p class="sub">Every held name above 0.5% of book needs all three on file: a '
         "downside exit rule the platform can enforce (a sizing-intent price rung or "
         "holdings-JSON break rules), a realistic persisted DCF bear case (the bear-realism "
@@ -3176,19 +3241,23 @@ def _position_guard_section(cache: PositionGuardCacheModel | None) -> str:
         "close (<code>directives/monthly_red_team.md</code> Phase 1).</p>"
     )
     if cache is None or not cache.rows:
-        return (
-            f"{head}{_naked_position_summary_pill(None)}"
+        return panel_section(
+            sub,
+            _naked_position_summary_pill(None),
             '<p class="muted pfr-top">No weighted holdings to gate yet (needs the morning '
-            "pipeline to have run stage 0h at least once).</p></section>"
+            "pipeline to have run stage 0h at least once).</p>",
+            title="Naked-position gate",
         )
     violations = cache.violations
     pill = _naked_position_summary_pill(cache)
     advisory = _add_trigger_advisory_block(cache)
     if not violations:
-        return (
-            f"{head}{pill}"
+        return panel_section(
+            sub,
+            pill,
             '<p class="muted pfr-top">Every held name clears the naked-position gate.'
-            f"</p>{advisory}</section>"
+            f"</p>{advisory}",
+            title="Naked-position gate",
         )
     chips = "".join(_violation_chip(r) for r in violations)
     rows_html = "".join(_position_guard_table_row(r) for r in violations)
@@ -3199,7 +3268,14 @@ def _position_guard_section(cache: PositionGuardCacheModel | None) -> str:
         "<th>Realistic bear</th><th>Thesis freshness</th>"
         f"</tr></thead><tbody>{rows_html}</tbody></table>"
     )
-    return f'{head}{pill}<div class="pfr-naked-chips">{chips}</div>{table}{advisory}</section>'
+    return panel_section(
+        sub,
+        pill,
+        f'<div class="pfr-naked-chips">{chips}</div>',
+        table,
+        advisory,
+        title="Naked-position gate",
+    )
 
 
 def _mc_prob_row(label: str, normal: DistributionRead, student_t: DistributionRead) -> str:
@@ -3246,8 +3322,7 @@ def _monte_carlo_section(mc: MonteCarloRead | None, joint_latam: EventStressResu
     beside its companion joint-LatAm event-correlation stress. Local price
     cache + local ``dcf_runs`` only; renders with the tracker down, same as
     the correlation/style/tail-stress sections above it."""
-    head = (
-        '<section class="panel"><h2>Tail risk (Monte Carlo)</h2>'
+    sub = (
         f'<p class="sub">{DEFAULT_N_PATHS:,}-path simulation of the book\'s ANNUAL return '
         "from the local price cache's aligned daily covariance (normal vs Student-t, "
         f"df={DEFAULT_T_DF} &mdash; one shared crash-mixing chi-square draw per path so the "
@@ -3256,10 +3331,11 @@ def _monte_carlo_section(mc: MonteCarloRead | None, joint_latam: EventStressResu
         "with the tracker down.</p>"
     )
     if mc is None:
-        return (
-            f"{head}"
+        return panel_section(
+            sub,
             '<p class="muted">Not enough daily price history across two or more modeled '
-            "holdings for a book simulation yet.</p></section>"
+            "holdings for a book simulation yet.</p>",
+            title="Tail risk (Monte Carlo)",
         )
     # The normal model's vol is the well-behaved covariance-implied number (the
     # CMA comparison point — directives/monthly_red_team.md Phase 3's "~22-27%
@@ -3319,26 +3395,35 @@ def _monte_carlo_section(mc: MonteCarloRead | None, joint_latam: EventStressResu
         else ""
     )
     latam_html = _joint_latam_block(joint_latam)
-    return f"{head}{strip}{cma_chip}{table}{note}{dropped}{latam_html}</section>"
+    return panel_section(
+        sub,
+        strip,
+        cma_chip,
+        table,
+        note,
+        dropped,
+        latam_html,
+        title="Tail risk (Monte Carlo)",
+    )
 
 
 def _thesis_collision_section(cached: CachedReport | None) -> str:
     """Whole-book thesis-collision audit: shared-driver clusters + contradictory
     theses, from the cached LLM finding (never generated on the render path).
     ``None`` gets the empty state naming the refresh command."""
-    head = (
-        '<section class="panel"><h2>Thesis collisions</h2>'
+    sub = (
         '<p class="sub">Names that look independent on price stats but really share '
         "one underlying driver, and theses that make directly contradictory bets — a "
         "governed LLM read over every holding's thesis + tier-1 break-rule drivers. "
         "Cached; regenerated on demand, not on every page load.</p>"
     )
     if cached is None:
-        return (
-            f"{head}"
+        return panel_section(
+            sub,
             '<p class="muted">No audit on file yet — run '
             "<code>python execution/run_thesis_collision.py</code> "
-            "(re-running is free once the thesis set is unchanged).</p></section>"
+            "(re-running is free once the thesis set is unchanged).</p>",
+            title="Thesis collisions",
         )
     report = cached.report
     stamp = stamp_html(cached.generated_at, mode="date", prefix="as of ")
@@ -3351,10 +3436,12 @@ def _thesis_collision_section(cached: CachedReport | None) -> str:
         else ""
     )
     if not report.clusters and not report.contradictions:
-        return (
-            f"{head}{stale_note}"
+        return panel_section(
+            sub,
+            stale_note,
             f'<p class="muted">No shared-driver clusters or contradictions found across '
-            f"{n} names ({stamp}).</p></section>"
+            f"{n} names ({stamp}).</p>",
+            title="Thesis collisions",
         )
     findings: list[str] = []
     for c in report.clusters:
@@ -3375,7 +3462,13 @@ def _thesis_collision_section(cached: CachedReport | None) -> str:
         f'<p class="muted pfr-top">{n} names analyzed · {len(report.clusters)} shared-driver '
         f"clusters · {len(report.contradictions)} contradictions · {stamp}.</p>"
     )
-    return f'{head}{stale_note}<div class="ptc-findings">{"".join(findings)}</div>{note}</section>'
+    return panel_section(
+        sub,
+        stale_note,
+        f'<div class="ptc-findings">{"".join(findings)}</div>',
+        note,
+        title="Thesis collisions",
+    )
 
 
 def _provenance_html(text: str) -> str:
@@ -3416,22 +3509,21 @@ def business_factor_section(factors: BookFactorVector | None) -> str:
         else:
             cov_pill = '<span class="k-pill k-pill-bad">Unavailable</span>'
 
-    head = (
-        f'<section class="panel"><h2>Business-factor exposure {cov_pill}</h2>'
+    sub = (
         '<p class="sub">What the book is actually a bet on, independent of ticker or '
         "sector — LLM loadings onto a small controlled taxonomy, grounded in each "
         "holding's disclosed revenue mix or thesis. Cached; regenerated on demand, "
         "not on every page load.</p>"
     )
     if factors is not None:
-        head += (
+        sub += (
             f'<p class="muted">Source as of {escape(factors.source_as_of or "unavailable")} · '
             f"effective as of {escape(factors.effective_as_of or 'unavailable')} · "
             f"input {_provenance_html(factors.input_sha or 'unavailable')} · registry {escape(factors.registry_version)} · "
             f"excluded {escape(', '.join(factors.excluded_tickers) or 'none')}</p>"
         )
         if factors.freshness_reasons:
-            head += f'<p class="muted">{escape("; ".join(factors.freshness_reasons))}</p>'
+            sub += f'<p class="muted">{escape("; ".join(factors.freshness_reasons))}</p>'
     if factors is None or not factors.vector:
         reason = "No business-factor exposures on file yet"
         if factors is not None and factors.availability == "missing_table":
@@ -3440,11 +3532,12 @@ def business_factor_section(factors: BookFactorVector | None) -> str:
             reason = "Factor evidence is stale; current exposure is unavailable"
         elif factors is not None and factors.availability == "empty_table":
             reason = "business_factor_exposures table is empty (0 holdings populated)"
-        return (
-            f"{head}"
+        return panel_section(
+            sub,
             f'<p class="muted">{reason} — run '
             "<code>python execution/<wbr>refresh_business_factors.py</code> "
-            "(re-running is free once no holding's mix/thesis has changed).</p></section>"
+            "(re-running is free once no holding's mix/thesis has changed).</p>",
+            title=f"Business-factor exposure {cov_pill}",
         )
     top = sorted(factors.vector.items(), key=lambda kv: kv[1], reverse=True)
     rows: list[str] = []
@@ -3470,14 +3563,18 @@ def business_factor_section(factors: BookFactorVector | None) -> str:
         )
         excluded_note = f'<p class="muted pf-excluded-note">Unmapped / excluded holdings ({len(factors.excluded_tickers)}): {ex_chips}</p>'
 
-    return f'{head}<div class="pf-exp">{"".join(rows)}</div>{excluded_note}</section>'
+    return panel_section(
+        sub,
+        f'<div class="pf-exp">{"".join(rows)}</div>',
+        excluded_note,
+        title=f"Business-factor exposure {cov_pill}",
+    )
 
 
 def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
     """L7 risk-budget allocator: the risk-vs-reward-vs-conviction parity table.
     Uses the S1 control kit (.p-table / .k-chip / .k-pill) — no raw hex."""
-    head = (
-        '<section class="panel"><h2>Risk vs reward vs conviction</h2>'
+    sub = (
         '<p class="sub">Each position\'s share of total book risk (marginal contribution off the '
         "Ledoit-Wolf covariance) set against its share of the book's expected reward "
         "(probability-weighted bull/base/bear DCF on the live price) and your recorded "
@@ -3486,14 +3583,17 @@ def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
         "low-confidence and shown but not scored.</p>"
     )
     if gap.hidden_reason is not None:
-        return (
-            f'{head}<p class="muted">Risk-parity gap unavailable — '
-            f"{escape(gap.hidden_reason)}.</p></section>"
+        return panel_section(
+            sub,
+            f'<p class="muted">Risk-parity gap unavailable — {escape(gap.hidden_reason)}.</p>',
+            title="Risk vs reward vs conviction",
         )
     if not gap.rows:
-        return (
-            f'{head}<p class="muted">No positions with the daily price history needed to model '
-            "risk contribution.</p></section>"
+        return panel_section(
+            sub,
+            '<p class="muted">No positions with the daily price history needed to model '
+            "risk contribution.</p>",
+            title="Risk vs reward vs conviction",
         )
     bits = [f"{gap.weights_source}-weighted"]
     if gap.portfolio_vol_ann is not None:
@@ -3505,7 +3605,7 @@ def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
     if gap.prices_through is not None:
         bits.append(f"prices through {gap.prices_through.isoformat()}")
     bits.append(f"{gap.valued_names}/{len(gap.rows)} priced by a current DCF")
-    sub = f'<p class="sub">{escape(" · ".join(bits))}.</p>'
+    stats_sub = f'<p class="sub">{escape(" · ".join(bits))}.</p>'
     # Coverage gate (Monthly Red Team Phase 1 guard 1): the reward leg is a
     # book-level scenario-reward rollup too — a majority-unscored reward share
     # must not read as a quiet footnote fraction, same bar as tail stress.
@@ -3522,7 +3622,14 @@ def _risk_reward_gap_section(gap: RiskRewardGap) -> str:
         "<th>Mismatch</th>"
         f"</tr></thead><tbody>{rows_html}</tbody></table>"
     )
-    return f"{head}{coverage_warn}{sub}{table}{notes}</section>"
+    return panel_section(
+        sub,
+        coverage_warn,
+        stats_sub,
+        table,
+        notes,
+        title="Risk vs reward vs conviction",
+    )
 
 
 def _rrg_row(r: RiskRewardGapRow) -> str:
@@ -3587,11 +3694,10 @@ def _macro_stress_section(scenarios: list[tuple[str, str]], digest: str) -> str:
         or '<p class="muted">No stress digest cached yet — pick a scenario and run it to '
         "generate the per-holding beta x shock read-through.</p>"
     )
-    return (
-        '<section class="panel"><h2>Whole-book macro stress</h2>'
+    return panel_section(
         "<p class=\"sub\">Apply a named scenario's shocks to each holding's betas — the "
         "cross-name read-through, hedge clusters, and capital-allocation actions. Cached; "
-        "re-running a scenario is free.</p>"
+        "re-running a scenario is free.</p>",
         '<div class="pfr-run">'
         '<label class="k-label" for="pfr-scenario">Scenario</label>'
         f'<select id="pfr-scenario">{options}</select>'
@@ -3599,10 +3705,10 @@ def _macro_stress_section(scenarios: list[tuple[str, str]], digest: str) -> str:
         "Run scenario</button>"
         '<span class="muted" id="pfr-run-msg"></span>'
         "</div>"
-        '<pre id="pfr-run-log" class="cli-hint pfr-log"></pre>'
-        f"{body}"
-        f"<script>{read_request_js()}</script><script>{_RUN_SCENARIO_JS}</script>"
-        "</section>"
+        '<pre id="pfr-run-log" class="cli-hint pfr-log"></pre>',
+        body,
+        f"<script>{read_request_js()}</script><script>{_RUN_SCENARIO_JS}</script>",
+        title="Whole-book macro stress",
     )
 
 
@@ -3622,23 +3728,21 @@ def _tracker_offline_banner(
         if refresh_target_selector
         else ""
     )
-    return (
+    return panel_section(
         # Class hooks, not ids (Phase-5 verifier): this banner renders in BOTH
         # the Health console (Synthesis) and the Allocation console
         # (Performance); duplicate ids left the second instance's Start button
         # dead. _START_TRACKER_JS wires every unwired .pf-live-offline subtree.
-        '<section class="panel pf-tracker-banner pf-live-offline" '
-        f'data-refresh-endpoint="{escape(refresh_endpoint, quote=True)}"{target_attr}>'
-        "<h2>Portfolio tracker</h2>"
+        "<h2>Portfolio tracker</h2>",
         '<p class="sub">This whole page reads from the companion portfolio-tracker — '
         "live positions, performance vs benchmarks, risk, and allocation. It isn't "
-        "running yet, so there's nothing to show until it starts.</p>"
-        f'<p class="muted">{escape(_offline_reason(live.error))}</p>'
+        "running yet, so there's nothing to show until it starts.</p>",
+        f'<p class="muted">{escape(_offline_reason(live.error))}</p>',
         '<div class="pf-tracker-actions">'
         '<button type="button" class="pf-start-tracker k-btn k-btn-primary">'
         "Start tracker</button>"
         '<span class="pf-start-msg muted">starting automatically…</span>'
-        "</div>"
+        "</div>",
         '<details class="offline-tech"><summary>Activation recovery · technical detail</summary>'
         '<pre class="cli-hint">The listener is owned only by Windows Task Scheduler. '
         "Use Start tracker; if it fails, inspect "
@@ -3646,9 +3750,10 @@ def _tracker_offline_banner(
         "Do not launch uvicorn directly.</pre>"
         f'<p class="muted">API endpoint: <code>{escape(live.api_url)}</code>'
         f"{f' — {escape(live.error)}' if live.error else ''}</p>"
-        "</details>"
-        f"<script>{read_request_js()}</script><script>{_START_TRACKER_JS}</script>"
-        "</section>"
+        "</details>",
+        f"<script>{read_request_js()}</script><script>{_START_TRACKER_JS}</script>",
+        cls="pf-tracker-banner pf-live-offline",
+        attrs=f' data-refresh-endpoint="{escape(refresh_endpoint, quote=True)}"{target_attr}',
     )
 
 
@@ -3660,19 +3765,19 @@ def render_live_portfolio_section(live: LivePortfolio) -> str:
     if not live.available:
         return _tracker_offline_banner(live)
     if not live.positions:
-        return (
-            '<section class="panel"><h2>Live portfolio</h2>'
-            '<p class="muted">Tracker reachable, but it reports no current holdings.</p></section>'
+        return panel_empty(
+            "Tracker reachable, but it reports no current holdings.", title="Live portfolio"
         )
 
-    out: list[str] = [
-        '<section class="panel"><h2>Live portfolio</h2>',
-        '<p class="sub">Live positions from the companion portfolio-tracker · '
-        "% of book and taxable status derived per account.</p>",
-        _summary_strip(live),
-        _positions_table(live),
+    out = [
+        panel_section(
+            '<p class="sub">Live positions from the companion portfolio-tracker · '
+            "% of book and taxable status derived per account.</p>",
+            _summary_strip(live),
+            _positions_table(live),
+            title="Live portfolio",
+        )
     ]
-    out.append("</section>")
     out.append(_transactions_section(live))
     return "".join(out)
 
@@ -3791,18 +3896,17 @@ def _transactions_section(live: LivePortfolio) -> str:
         + lg.th("Amount", "amount", "num")
         + lg.th("Account", "account", "text", num=False)
     )
-    return (
-        '<section class="panel"><h2>Latest transactions</h2>'
-        '<p class="sub">Most recent trades + cashflows across all linked accounts.</p>'
-        + lg.grid_open()
+    return panel_section(
+        '<p class="sub">Most recent trades + cashflows across all linked accounts.</p>',
+        lg.grid_open()
         + lg.filter_bar(len(live.transactions), noun="transactions")
         + '<table class="txn-table"><thead><tr>'
         + headers
         + "</tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table>"
-        + lg.grid_close()
-        + "</section>"
+        + lg.grid_close(),
+        title="Latest transactions",
     )
 
 

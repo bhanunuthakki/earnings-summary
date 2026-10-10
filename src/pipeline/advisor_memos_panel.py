@@ -48,6 +48,7 @@ from pipeline.portfolio_styles import memos_css, page_css
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 from ui.controls import controls_css, controls_js, ticker_label
+from ui.panel import panel_section
 from ui.prose import render_prose
 from ui.tokens import FAVICON_LINK, palette_css
 
@@ -149,36 +150,38 @@ def _run_bar(holdings: list[str]) -> str:
 def _socratic_flow_section() -> str:
     """The think-through flow's empty shell — the JS drives it (questions form,
     then the saved memo). Shared verbatim with the standalone /socratic page."""
-    return (
-        '<section class="panel" id="soc-flow" hidden><h2>Socratic think-through</h2>'
+    return panel_section(
         '<p class="sub">3-5 pointed questions first — your read, your horizon, what would '
         "make you wrong — then a one-page decision memo (bull / bear / what-would-change-"
         "my-mind / stance-if-forced) saved to the record and scheduled for outcome "
-        'scoring.</p><div id="soc-body"></div></section>'
+        "scoring.</p>",
+        '<div id="soc-body"></div>',
+        title="Socratic think-through",
+        attrs=' id="soc-flow" hidden',
     )
 
 
 def _screen_section(
     screen: list[SwapCandidate], *, margin_pp: float, implausible: list[str]
 ) -> str:
-    head = (
-        '<section class="panel"><h2>Swap-discipline screen</h2>'
+    sub = (
         f'<p class="sub">Deterministic, LLM-free: each holding\'s DCF upside vs the best '
         f"fresh external alternative (watchlist + evaluation, breached theses excluded). "
         f"A swap memo is only considered when the margin clears {margin_pp:.0f}pp — wide "
         "enough to survive tax drag and DCF asymmetry.</p>"
     )
     if implausible:
-        head += (
+        sub += (
             '<p class="muted am-note">Excluded as implausible (DCF upside &gt; '
             f"+{IMPLAUSIBLE_UPSIDE_PCT:.0f}% — more likely a mis-modeled run than an "
             f"opportunity): {escape(', '.join(implausible))}.</p>"
         )
     if not screen:
-        return (
-            f"{head}"
+        return panel_section(
+            sub,
             '<p class="muted">No screen rows — needs holdings and external names with '
-            "usable DCF runs.</p></section>"
+            "usable DCF runs.</p>",
+            title="Swap-discipline screen",
         )
     # The "best alternative" is a single portfolio-wide winner (the highest-upside
     # eligible external name), so it is identical on every row — owner feedback
@@ -205,9 +208,10 @@ def _screen_section(
         "</tr>"
         for s in screen
     )
-    return (
-        f"{head}{caption}"
-        + lg.grid_open()
+    return panel_section(
+        sub,
+        caption,
+        lg.grid_open()
         + lg.filter_bar(len(screen), noun="rows", placeholder="Filter by holding…")
         + '<table class="am-screen"><thead><tr>'
         + lg.th("Holding", "holding", "text", num=False)
@@ -216,8 +220,8 @@ def _screen_section(
         + "<th>Bar</th>"
         + "</tr></thead><tbody>"
         + f"{rows}</tbody></table>"
-        + lg.grid_close()
-        + "</section>"
+        + lg.grid_close(),
+        title="Swap-discipline screen",
     )
 
 
@@ -237,20 +241,24 @@ def _bar_cell(s: SwapCandidate) -> str:
 
 
 def _memos_section(memos: list[AdvisorMemoRow], scores: dict[int, StanceScoreRow]) -> str:
-    head = (
-        '<section class="panel"><h2>Memo record</h2>'
+    sub = (
         '<p class="sub">Every advisor memo, newest first — each also wrote an analyst note '
         "(and, when ticker-scoped, a decisions-timeline entry). Matured stances are graded "
         "weekly against subsequent price (SPY-relative when the tracker is up).</p>"
     )
     if not memos:
-        return (
-            f"{head}"
-            '<p class="muted">No memos yet — generate the first next-dollar memo above.</p>'
-            "</section>"
+        return panel_section(
+            sub,
+            '<p class="muted">No memos yet — generate the first next-dollar memo above.</p>',
+            title="Memo record",
         )
     cards = "".join(_memo_card(m, scores.get(m.id)) for m in memos)
-    return f"{head}{_track_record_strip(scores)}{cards}</section>"
+    return panel_section(
+        sub,
+        _track_record_strip(scores),
+        cards,
+        title="Memo record",
+    )
 
 
 def _track_record_strip(scores: dict[int, StanceScoreRow]) -> str:
@@ -646,15 +654,17 @@ def render_socratic_page(ticker: str) -> str:
         '<p class="muted">The only path to a stance: your read first, then the memo. '
         f'Saved memos render under <a class="soc-record-link" href="/#portfolio_record">'
         "Portfolio &rarr; Record</a>.</p>"
-        f'<section class="panel" id="soc-flow" data-autostart-ticker="{t}">'
-        "<h2>Think it through</h2>"
-        '<p class="sub">3-5 pointed questions first — your read, your horizon, what would '
-        "make you wrong — then a one-page decision memo (bull / bear / "
-        "what-would-change-my-mind / stance-if-forced), saved and scheduled for outcome "
-        "scoring.</p>"
-        '<div id="soc-body"></div></section>'
+        + panel_section(
+            '<p class="sub">3-5 pointed questions first — your read, your horizon, what would '
+            "make you wrong — then a one-page decision memo (bull / bear / "
+            "what-would-change-my-mind / stance-if-forced), saved and scheduled for outcome "
+            "scoring.</p>",
+            '<div id="soc-body"></div>',
+            title="Think it through",
+            attrs=f' id="soc-flow" data-autostart-ticker="{t}"',
+        )
         # Standalone document (not the shell): the CCAction primitive rides
         # along explicitly, same as palette + controls.
-        f"</main><script>{CC_ACTION_JS}</script><script>{_SOCRATIC_JS}</script>"
+        + f"</main><script>{CC_ACTION_JS}</script><script>{_SOCRATIC_JS}</script>"
         f"<script data-k-select-runtime>{controls_js()}</script></body></html>"
     )

@@ -27,6 +27,7 @@ from sources.registry import (
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
+from ui.panel import panel_section
 
 _PANEL_STYLE = RESEARCH_PANEL_STYLE
 
@@ -38,26 +39,24 @@ def render_source_calls_panel(db_path: Path) -> str:
     ov = cache_effectiveness_overview(db_path=db_path)
     action_usage = render_action_usage_section(db_path)
     if ov.total_calls == 0:
-        return (
-            _PANEL_STYLE + '<section class="panel"><h2>Data fetch cache</h2>'
+        return panel_section(
             '<p class="muted">No source-call rows yet. Adapters in <code>src/sources/</code> '
             "log to <code>source_calls</code> on every fetch attempt; the table fills as the "
-            "daily jobs run.</p></section>" + _PANEL_LATENCY_SECTION + action_usage
+            "daily jobs run.</p>",
+            title="Data fetch cache",
+            style=_PANEL_STYLE,
+            tail=_PANEL_LATENCY_SECTION + action_usage,
         )
-    return "".join(
-        [
-            _PANEL_STYLE,
-            '<section class="panel"><h2>Data fetch cache</h2>',
-            '<p class="sub">How much external-fetch work the cache avoided across every '
-            "FMP / SEC / market-data adapter. A high <strong>skip rate</strong> means most "
-            "requests were served from cache instead of hitting the network.</p>",
-            _kpi_strip(ov),
-            _source_table(ov.by_source),
-            _note(ov),
-            "</section>",
-            _PANEL_LATENCY_SECTION,
-            action_usage,
-        ]
+    return panel_section(
+        '<p class="sub">How much external-fetch work the cache avoided across every '
+        "FMP / SEC / market-data adapter. A high <strong>skip rate</strong> means most "
+        "requests were served from cache instead of hitting the network.</p>",
+        _kpi_strip(ov),
+        _source_table(ov.by_source),
+        _note(ov),
+        title="Data fetch cache",
+        style=_PANEL_STYLE,
+        tail=_PANEL_LATENCY_SECTION + action_usage,
     )
 
 
@@ -66,7 +65,10 @@ def render_source_calls_panel(db_path: Path) -> str:
 # section reads the GET aggregate back. Client-rendered by the fragment's own
 # script (re-executed on every injection — the shell's injectHtml recreates
 # script tags), so the section needs no server-side plumbing beyond the route.
-_PANEL_LATENCY_SECTION = """<section class="panel" id="sc-panel-latency">
+# Byte-stability note: the historical literal keeps newlines between the
+# section tag, the <h2> and the body (the client-rendered script needs its
+# own lines), so the body blob carries the heading rather than title=.
+_PANEL_LATENCY_BODY = """
 <h2>Panel latency</h2>
 <p class="sub">What tab activations actually cost, as measured by the shell loader:
 <code>cold</code> = first build over the network, <code>swr</code> /
@@ -106,7 +108,9 @@ resets with the server.</p>
   });
 })();
 </script>
-</section>"""
+"""
+
+_PANEL_LATENCY_SECTION = panel_section(_PANEL_LATENCY_BODY, attrs=' id="sc-panel-latency"')
 
 
 def _pct(x: float) -> str:
@@ -275,10 +279,10 @@ def _read_action_usage(db_path: Path) -> list[ActionUsageRow]:
     return out
 
 
-_ACTION_USAGE_EMPTY = (
-    '<section class="panel"><h2>Ledger action usage (30d)</h2>'
+_ACTION_USAGE_EMPTY = panel_section(
     '<div class="k-well"><p class="muted">No Ledger actions recorded in the last 30 days — '
-    "the counters fill as you work the feed.</p></div></section>"
+    "the counters fill as you work the feed.</p></div>",
+    title="Ledger action usage (30d)",
 )
 
 
@@ -297,17 +301,14 @@ def render_action_usage_section(db_path: Path) -> str:
     ordered = sorted(families, key=lambda f: (-fam_totals[f], f))
     grand_total = sum(fam_totals.values())
 
-    return "".join(
-        [
-            '<section class="panel"><h2>Ledger action usage (30d)</h2>',
-            '<p class="sub">How often each Ledger action was actually fired over the last '
-            "30 days — the read-side of the instrument-first ruling. "
-            f"<strong>{grand_total:,}</strong> actions across "
-            f"<strong>{len(families)}</strong> families.</p>",
-            _family_strip(ordered, fam_totals),
-            _action_table(ordered, families, len(rows)),
-            "</section>",
-        ]
+    return panel_section(
+        '<p class="sub">How often each Ledger action was actually fired over the last '
+        "30 days — the read-side of the instrument-first ruling. "
+        f"<strong>{grand_total:,}</strong> actions across "
+        f"<strong>{len(families)}</strong> families.</p>",
+        _family_strip(ordered, fam_totals),
+        _action_table(ordered, families, len(rows)),
+        title="Ledger action usage (30d)",
     )
 
 

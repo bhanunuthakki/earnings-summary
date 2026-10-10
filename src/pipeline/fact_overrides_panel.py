@@ -23,6 +23,7 @@ from typing import cast
 from pipeline.operations_styles import FACT_OVERRIDES_STYLE as _PANEL_STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
+from ui.panel import panel_empty, panel_section
 
 
 @dataclass(slots=True)
@@ -170,35 +171,32 @@ def render_fact_overrides_panel(db_path: Path) -> str:
     """The Overrides sub-panel: KPI strip + a row per active override."""
     rows = collect_rows(db_path)
     if not rows:
-        return (
-            '<section class="panel"><h2>Overrides</h2>'
-            '<p class="muted">No active company-doc overrides. Record one with '
+        return panel_empty(
+            "No active company-doc overrides. Record one with "
             "<code>python execution/record_fact_override.py</code> or auto-extract from an "
-            "8-K with <code>python execution/extract_8k_overrides.py --apply</code>.</p></section>"
+            "8-K with <code>python execution/extract_8k_overrides.py --apply</code>.",
+            title="Overrides",
         )
     table_rows = "".join(_row_html(r) for r in rows)
-    return "".join(
-        [
-            _PANEL_STYLE,
-            '<section class="panel"><h2>Overrides</h2>',
-            '<p class="sub">Durable company-document overrides that supersede FMP at '
-            "read/resolve time (segments, KPIs, line items). Each cites the filing that "
-            "justifies it. See <code>directives/provenance_override_2026_06.md</code>.</p>",
-            _kpi_strip(rows),
-            lg.grid_open(),
-            lg.filter_bar(len(rows), noun="overrides", placeholder="Filter by ticker / key…"),
-            '<table class="p-table"><thead><tr>'
-            + lg.th("Ticker", "ticker", "text", num=False)
-            + lg.th("Period", "period", "text", num=False)
-            + lg.th("Kind", "kind", "text", num=False)
-            + lg.th("Key", "key", "text", num=False)
-            + lg.th("Action", "action", "text", num=False)
-            + "<th>Value</th><th>Source</th>"
-            + lg.th("By", "by", "text", num=False)
-            + "</tr></thead><tbody>",
-            table_rows,
-            "</tbody></table>",
-            lg.grid_close(),
-            "</section>",
-        ]
+    return panel_section(
+        '<p class="sub">Durable company-document overrides that supersede FMP at '
+        "read/resolve time (segments, KPIs, line items). Each cites the filing that "
+        "justifies it. See <code>directives/provenance_override_2026_06.md</code>.</p>",
+        _kpi_strip(rows),
+        lg.grid_open(),
+        lg.filter_bar(len(rows), noun="overrides", placeholder="Filter by ticker / key…"),
+        '<table class="p-table"><thead><tr>'
+        + lg.th("Ticker", "ticker", "text", num=False)
+        + lg.th("Period", "period", "text", num=False)
+        + lg.th("Kind", "kind", "text", num=False)
+        + lg.th("Key", "key", "text", num=False)
+        + lg.th("Action", "action", "text", num=False)
+        + "<th>Value</th><th>Source</th>"
+        + lg.th("By", "by", "text", num=False)
+        + "</tr></thead><tbody>",
+        table_rows,
+        "</tbody></table>",
+        lg.grid_close(),
+        title="Overrides",
+        style=_PANEL_STYLE,
     )

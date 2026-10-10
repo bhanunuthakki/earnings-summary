@@ -25,40 +25,39 @@ from credibility.priors import MeasuredPriors, build_measured_priors
 from pipeline.confidence import TIER_BASE, UNKNOWN_TIER_BASE
 from pipeline.operations_styles import CREDIBILITY_STYLE as _PANEL_STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from ui.panel import panel_empty, panel_section
 
 
 def render_credibility_panel(db_path: Path, *, user_id: str = "bhanu") -> str:
     """The Credibility tab fragment: reliability table + Brier over the ledger."""
     table, priors = _load(db_path, user_id=user_id)
     if table is None:
-        return (
-            '<section class="panel"><h2>Credibility</h2>'
-            '<p class="muted">No confidence-observation ledger in this DB — run '
+        return panel_empty(
+            "No confidence-observation ledger in this DB — run "
             "<code>alembic upgrade head</code> (0106) then "
-            "<code>python execution/build_confidence_observations.py --apply</code>.</p></section>"
+            "<code>python execution/build_confidence_observations.py --apply</code>.",
+            title="Credibility",
         )
     if table.total_n == 0:
-        return (
-            _PANEL_STYLE + '<section class="panel"><h2>Credibility</h2>'
+        return panel_section(
             '<p class="sub">Is the stored confidence number calibrated? This scores it '
-            "against what later happened to each fact.</p>"
+            "against what later happened to each fact.</p>",
             '<div class="cred-note k-well">No graded observations yet. The ledger fills as later '
             "filings restate already-reported numbers and cross-source disagreements get "
-            "resolved.</div></section>"
+            "resolved.</div>",
+            title="Credibility",
+            style=_PANEL_STYLE,
         )
-    return "".join(
-        [
-            _PANEL_STYLE,
-            '<section class="panel"><h2>Credibility</h2>',
-            '<p class="sub">Stored confidence (the <em>predicted</em> prior) scored against '
-            "the <em>observed</em> hold-rate of each fact a later filing revisited or a "
-            "cross-source disagreement contested. A gap is miscalibration.</p>",
-            _kpi_strip(table),
-            _reliability_table(table),
-            _tier_table(table, priors),
-            _footnote(table),
-            "</section>",
-        ]
+    return panel_section(
+        '<p class="sub">Stored confidence (the <em>predicted</em> prior) scored against '
+        "the <em>observed</em> hold-rate of each fact a later filing revisited or a "
+        "cross-source disagreement contested. A gap is miscalibration.</p>",
+        _kpi_strip(table),
+        _reliability_table(table),
+        _tier_table(table, priors),
+        _footnote(table),
+        title="Credibility",
+        style=_PANEL_STYLE,
     )
 
 

@@ -36,6 +36,7 @@ from pipeline.console_scaffold import ConsoleSection, render_console
 from pipeline.portfolio_styles import console_css
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui.controls import read_request_js
+from ui.panel import panel_empty
 
 # The D1 tile grid + Band-1 brief. Tokens only (design_language §2): auto-fit
 # tiles ≥460px so a wide desktop viewport gets 2-3 columns and a narrow one
@@ -548,4 +549,4 @@ def _render_triggers(db_path: Path) -> str:
         list_types=("portfolio", "evaluation"),
     )
     fragment = render_panel_fragment(dash, "holdings")
-    return fragment or '<section class="panel"><p class="muted">No triggers.</p></section>'
+    return fragment or panel_empty("No triggers.")

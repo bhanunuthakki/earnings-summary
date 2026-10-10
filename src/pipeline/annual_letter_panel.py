@@ -12,6 +12,7 @@ from html import escape
 from pathlib import Path
 
 from ui.controls import panel_toolbar
+from ui.panel import panel_section
 from ui.prose import render_prose
 
 _DIR_NAME = "annual_letters"
@@ -33,23 +34,24 @@ def render_annual_letter_section(repo_root: Path | str) -> str:
     toolbar = panel_toolbar("Letter to self")
     path = latest_letter_path(repo_root)
     if path is None:
-        return (
-            '<section class="panel">'
-            f"{toolbar}"
+        return panel_section(
+            toolbar,
             '<p class="muted">No annual letter drafted yet — run '
             "<code>execution/draft_annual_letter.py</code> each January to draft the prior "
             "year's letter-to-self from the ledger, position changes, Red Team responses, "
-            "and calibration/Brier trajectory.</p></section>"
+            "and calibration/Brier trajectory.</p>",
         )
     try:
         body_md = path.read_text(encoding="utf-8")
     except OSError:
-        return (
-            '<section class="panel">'
-            f"{toolbar}"
-            f'<p class="muted">Failed to read {escape(path.name)} — see logs.</p></section>'
+        return panel_section(
+            toolbar,
+            f'<p class="muted">Failed to read {escape(path.name)} — see logs.</p>',
         )
-    return f'<section class="panel">{toolbar}<div class="prose">{render_prose(body_md)}</div></section>'
+    return panel_section(
+        toolbar,
+        f'<div class="prose">{render_prose(body_md)}</div>',
+    )
 
 
 __all__ = ["latest_letter_path", "render_annual_letter_section"]

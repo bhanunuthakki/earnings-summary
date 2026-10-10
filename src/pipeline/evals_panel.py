@@ -44,6 +44,7 @@ from pipeline.operations_styles import EVALS_STYLE as _PANEL_CSS
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 from ui.controls import prov_case, prov_drawer
+from ui.panel import panel_section
 
 # The registry owns the operator-facing order. Keep the core view separate
 # only so capture audits can remain grouped in the run bar.
@@ -337,18 +338,17 @@ def _mode_pill(mode: str) -> str:
 
 
 def _runs_section(runs: list[LatestRunRow], failed: dict[str, list[FailedCaseRow]]) -> str:
-    head = (
-        '<section class="panel"><h2>Latest eval runs</h2>'
+    sub = (
         '<p class="sub">One row per evaluated purpose — the most recent run, with its real '
         "cost and call count joined from the llm_calls ledger by run_id. Failed cases open "
         "below the row.</p>"
     )
     if not runs:
-        return (
-            f"{head}"
+        return panel_section(
+            sub,
             '<p class="muted">No eval runs recorded yet — run one from the bar above '
-            "(or <code>python execution/run_llm_evals.py --purpose viewspec_compile</code>).</p>"
-            "</section>"
+            "(or <code>python execution/run_llm_evals.py --purpose viewspec_compile</code>).</p>",
+            title="Latest eval runs",
         )
     rows_html: list[str] = []
     for r in runs:
@@ -371,13 +371,14 @@ def _runs_section(runs: list[LatestRunRow], failed: dict[str, list[FailedCaseRow
             rows_html.append(
                 '<tr class="ev-drawer-row"><td colspan="7">' + _failed_drawer(cases) + "</td></tr>"
             )
-    return (
-        f"{head}"
+    return panel_section(
+        sub,
         '<table class="p-table"><thead><tr>'
         '<th>Purpose</th><th>Avg score</th><th class="num">Pass</th><th>Mode</th>'
         '<th>Prompt</th><th class="num">Run cost</th><th>When</th>'
-        "</tr></thead><tbody>"
-        f"{''.join(rows_html)}</tbody></table></section>"
+        "</tr></thead><tbody>",
+        f"{''.join(rows_html)}</tbody></table>",
+        title="Latest eval runs",
     )
 
 
@@ -404,14 +405,15 @@ def _failed_drawer(cases: list[FailedCaseRow]) -> str:
 
 
 def _versions_section(versions: list[VersionSummary]) -> str:
-    head = (
-        '<section class="panel"><h2>Score by prompt version</h2>'
+    sub = (
         '<p class="sub">The A/B dimension: every eval/grader score keyed to '
         "(purpose, prompt_version) — bump the registry, re-run the eval, and the rewrite "
         "is a comparable number instead of a vibe.</p>"
     )
     if not versions:
-        return f'{head}<p class="muted">No calibration scores yet.</p></section>'
+        return panel_section(
+            sub, '<p class="muted">No calibration scores yet.</p>', title="Score by prompt version"
+        )
     by_purpose: dict[str, list[VersionSummary]] = {}
     for v in versions:
         by_purpose.setdefault(v.purpose, []).append(v)
@@ -425,18 +427,23 @@ def _versions_section(versions: list[VersionSummary]) -> str:
             for v in sorted(by_purpose[purpose], key=lambda s: s.prompt_version)
         )
         rows.append(f'<tr><td class="ev-purpose">{escape(purpose)}</td><td>{chips}</td></tr>')
-    return f'{head}<table class="ev-versions"><tbody>{"".join(rows)}</tbody></table></section>'
+    return panel_section(
+        sub,
+        f'<table class="ev-versions"><tbody>{"".join(rows)}</tbody></table>',
+        title="Score by prompt version",
+    )
 
 
 def _health_section(health: list[CallHealthRow]) -> str:
-    head = (
-        '<section class="panel"><h2>Call health (30d)</h2>'
+    sub = (
         '<p class="sub">Per-purpose error and fallback rates over the llm_calls ledger — '
         "a purpose silently degrading (errors swallowed at section scope, or quietly "
         "running on the Gemini fallback) surfaces here as a number.</p>"
     )
     if not health:
-        return f'{head}<p class="muted">No LLM calls in the window.</p></section>'
+        return panel_section(
+            sub, '<p class="muted">No LLM calls in the window.</p>', title="Call health (30d)"
+        )
     rows = "".join(
         f"<tr{_health_data(h)}>"
         f'<td class="ev-purpose">{escape(h.purpose)}</td>'
@@ -450,9 +457,9 @@ def _health_section(health: list[CallHealthRow]) -> str:
         "</tr>"
         for h in health
     )
-    return (
-        f"{head}"
-        + lg.grid_open()
+    return panel_section(
+        sub,
+        lg.grid_open()
         + lg.filter_bar(len(health), noun="purposes", placeholder="Filter by purpose…")
         + '<table class="p-table"><thead><tr>'
         + lg.th("Purpose", "purpose", "text", num=False)
@@ -463,8 +470,8 @@ def _health_section(health: list[CallHealthRow]) -> str:
         + lg.th("Avg ms", "ms", "num")
         + "</tr></thead><tbody>"
         + f"{rows}</tbody></table>"
-        + lg.grid_close()
-        + "</section>"
+        + lg.grid_close(),
+        title="Call health (30d)",
     )
 
 

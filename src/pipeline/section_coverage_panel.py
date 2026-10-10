@@ -40,6 +40,7 @@ from industry_classifier import (
 from pipeline.operations_styles import SECTION_COVERAGE_STYLE as _PANEL_STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
+from ui.panel import panel_section
 
 # Column order of the matrix: (key, short label). Sidecar-fed sections first,
 # then the DB-probed render-time panels.
@@ -245,17 +246,18 @@ def render_section_coverage_panel(
 ) -> str:
     """The Governance → Coverage tab fragment."""
     rows = load_section_coverage(db_path=db_path, repo_root=repo_root, user_id=user_id)
-    parts: list[str] = [_PANEL_STYLE, '<section class="panel"><h2>Section coverage</h2>']
     if not rows:
-        parts.append(
+        return panel_section(
             '<p class="sc-note">No tracked names found — the coverage matrix '
-            "fills in once companies are onboarded and reports are built.</p></section>"
+            "fills in once companies are onboarded and reports are built.</p>",
+            title="Section coverage",
+            style=_PANEL_STYLE,
         )
-        return "".join(parts)
 
     built = sum(1 for r in rows if r.report_date is not None)
     total_gaps = sum(r.gap_count for r in rows)
     fully = sum(1 for r in rows if r.report_date is not None and r.gap_count == 0)
+    parts: list[str] = []
     parts.append(
         '<div class="kpi-strip">'
         '<div class="kpi-card"><div class="kpi-label">Tracked names</div>'
@@ -312,6 +314,6 @@ def render_section_coverage_panel(
         "(P4.2 hide-don't-stub) — this matrix is where those gaps stay "
         "visible. Spec sections read each name's latest sections sidecar; "
         "verdict/decision/macro/target/concentration/lease columns are live "
-        "row counts.</p></section>"
+        "row counts.</p>"
     )
-    return "".join(parts)
+    return panel_section(*parts, title="Section coverage", style=_PANEL_STYLE)

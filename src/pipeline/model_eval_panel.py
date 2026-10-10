@@ -46,6 +46,7 @@ from llm.eval_scopes import EVAL_SCOPES
 from llm.model_ladder import estimated_call_usd, model_rank
 from pipeline.operations_styles import MODEL_EVAL_STYLE as _PANEL_CSS
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from ui.panel import panel_section
 
 # The eval-machinery scopes — traffic these tables account for that is NOT real
 # production spend. Unified onto the canonical llm.eval_scopes.EVAL_SCOPES
@@ -661,22 +662,22 @@ def _usd(amount: float, *, places: int = 2) -> str:
 
 
 def _alarm_section(anon: list[AnonCostRow]) -> str:
-    head = (
-        '<section class="panel"><h2>Anonymous-purpose alarm</h2>'
+    sub = (
         '<p class="sub">Any <code>purpose=NULL</code> or unregistered-purpose LLM spend over '
         f"{_usd(ANON_COST_FLOOR_USD, places=0)}/30d — the tripwire for an ungoverned call. "
         "A <code>purpose=NULL</code> bypass ran ~21% of monthly cost for ~5 weeks before it "
         "was noticed (the SayDo leak); this makes that leak a red flag, not a surprise.</p>"
     )
     if not anon:
-        return (
-            f"{head}"
+        return panel_section(
+            sub,
             '<div class="k-well k-well-ok me-alarm">'
             '<span class="k-prov-sev"><span class="k-dot k-dot-ok"></span>'
             '<span class="k-label">clear</span></span>'
             "<span>No anonymous or unregistered LLM spend over "
             f"{_usd(ANON_COST_FLOOR_USD, places=0)} in the last {WINDOW_DAYS} days.</span>"
-            "</div></section>"
+            "</div>",
+            title="Anonymous-purpose alarm",
         )
     chips = "".join(
         '<span class="k-chip k-chip-bad me-alarm-chip" '
@@ -688,28 +689,31 @@ def _alarm_section(anon: list[AnonCostRow]) -> str:
     )
     total = sum(a.cost_usd for a in anon)
     n = len(anon)
-    return (
-        f"{head}"
+    return panel_section(
+        sub,
         '<div class="k-well k-well-bad me-alarm">'
         '<span class="k-prov-sev"><span class="k-dot k-dot-bad"></span>'
         '<span class="k-label">alarm</span></span>'
         f"<span>{n} anonymous/unregistered line{'s' if n != 1 else ''} · "
         f"{_usd(total)}/30d ungoverned</span></div>"
-        f'<div class="me-alarm-chips">{chips}</div>'
-        "</section>"
+        f'<div class="me-alarm-chips">{chips}</div>',
+        title="Anonymous-purpose alarm",
     )
 
 
 def _steering_section(health: SteeringHealth | None, nominations: list[NominationRow]) -> str:
     """The self-steering loop's posture: freshness, meta-cost, pending feed."""
-    head = (
-        '<section class="panel"><h2>Optimizer steering</h2>'
+    sub = (
         '<p class="sub">The monthly nominator + frontier research feed the sweep '
         "(meta_eval_governance.md §1/§10.1). A steering loop that stops steering is a "
         "red flag, not a silent decay.</p>"
     )
     if health is None:
-        return f'{head}<p class="muted">No DB — steering state unavailable.</p></section>'
+        return panel_section(
+            sub,
+            '<p class="muted">No DB — steering state unavailable.</p>',
+            title="Optimizer steering",
+        )
     chips: list[str] = []
     if health.nomination_stale:
         chips.append(
@@ -757,28 +761,30 @@ def _steering_section(health: SteeringHealth | None, nominations: list[Nominatio
             "<th>Kind · tier</th><th>Candidates</th><th>Why</th><th>Source</th>"
             f"</tr></thead><tbody>{rows_html}</tbody></table>"
         )
-    return (
-        f"{head}"
-        f'<div class="me-alarm-chips">{"".join(chips)}</div>'
-        f'<p class="me-rollup muted">{facts}</p>'
-        f"{body}</section>"
+    return panel_section(
+        sub,
+        f'<div class="me-alarm-chips">{"".join(chips)}</div>',
+        f'<p class="me-rollup muted">{facts}</p>',
+        body,
+        title="Optimizer steering",
     )
 
 
 def _experiments_section(experiments: list[ExperimentRow]) -> str:
     """Prompt-A/B experiments + the Q1 auto-apply posture."""
-    head = (
-        '<section class="panel"><h2>Prompt experiments (A/B)</h2>'
+    sub = (
         '<p class="sub">Deterministic edit-splice variants judged brand-blind against the '
         "baseline (§4). A promoted experiment drives an ACTIVE <code>prompt_pin_overrides</code> "
         "row applied to production traffic (owner decision Q1) — reversible, auto-demoted on a "
         "KEEP_BASELINE run; <code>reason_json.edits</code> is the git-reconciliation diff.</p>"
     )
     if not experiments:
-        return (
-            f'{head}<p class="muted">No experiments yet — propose one with '
+        return panel_section(
+            sub,
+            '<p class="muted">No experiments yet — propose one with '
             "<code>execution/run_prompt_ab.py --propose</code> or wait for a "
-            "<code>prompt_experiment</code> nomination.</p></section>"
+            "<code>prompt_experiment</code> nomination.</p>",
+            title="Prompt experiments (A/B)",
         )
     live_pill = '<span class="k-pill k-pill-ok">override live</span>'
     rows_html = "".join(
@@ -795,28 +801,29 @@ def _experiments_section(experiments: list[ExperimentRow]) -> str:
         "</tr>"
         for e in experiments
     )
-    return (
-        f"{head}"
+    return panel_section(
+        sub,
         '<table class="p-table"><thead><tr><th>Id</th><th>Purpose</th><th>Status</th>'
-        "<th>Latest verdict</th><th>Hypothesis</th></tr></thead>"
-        f"<tbody>{rows_html}</tbody></table></section>"
+        "<th>Latest verdict</th><th>Hypothesis</th></tr></thead>",
+        f"<tbody>{rows_html}</tbody></table>",
+        title="Prompt experiments (A/B)",
     )
 
 
 def _overrides_section(overrides: list[OverrideRow]) -> str:
-    head = (
-        '<section class="panel"><h2>Active model-pin overrides</h2>'
+    sub = (
         '<p class="sub">Purposes the loop switched down to a cheaper model (reversible, '
         "DB-backed — read by <code>cli._model_for</code> before the code pin). Realized "
         "savings = the incumbent-vs-override price delta applied to the purpose's real 30d "
         "production token volume.</p>"
     )
     if not overrides:
-        return (
-            f"{head}"
+        return panel_section(
+            sub,
             '<p class="muted">No active overrides — every purpose is on its code pin. '
             "The weekly sweep writes one here when a cheaper model clears the switch bar "
-            "(<code>execution/apply_model_switches.py</code>).</p></section>"
+            "(<code>execution/apply_model_switches.py</code>).</p>",
+            title="Active model-pin overrides",
         )
     priced = [o.monthly_savings_usd for o in overrides if o.monthly_savings_usd is not None]
     rollup_total = sum(priced)
@@ -847,13 +854,15 @@ def _overrides_section(overrides: list[OverrideRow]) -> str:
             f'<td class="me-loc muted">{escape(o.set_at)}</td>'
             "</tr>"
         )
-    return (
-        f"{head}{rollup}"
+    return panel_section(
+        sub,
+        rollup,
         '<table class="p-table"><thead><tr>'
         "<th>Purpose</th><th>Incumbent → override</th><th>Est. savings</th>"
         '<th class="num">30d prod tokens</th><th>Set by</th><th>Since</th>'
-        "</tr></thead><tbody>"
-        f"{''.join(rows_html)}</tbody></table></section>"
+        "</tr></thead><tbody>",
+        f"{''.join(rows_html)}</tbody></table>",
+        title="Active model-pin overrides",
     )
 
 
@@ -892,8 +901,7 @@ def _candidate_chip(hist: CandidateHistory) -> str:
 
 
 def _verdicts_section(histories: list[CandidateHistory]) -> str:
-    head = (
-        '<section class="panel"><h2>Downgrade verdicts</h2>'
+    sub = (
         '<p class="sub">The brand-blind pairwise judge\'s recent verdict per (purpose, '
         "candidate) from the weekly sweep. <code>switch ↓</code> = a cheaper model held "
         "parity; <code>keep</code> = incumbent won; <code>hold</code> = judges split. "
@@ -901,11 +909,12 @@ def _verdicts_section(histories: list[CandidateHistory]) -> str:
         "on ≥ 50% of cases) — not a quality result.</p>"
     )
     if not histories:
-        return (
-            f"{head}"
+        return panel_section(
+            sub,
             '<p class="muted">No sweep verdicts recorded yet — the weekly '
             "<code>run_weekly_model_eval.py</code> rung populates "
-            "<code>model_eval_verdicts</code>.</p></section>"
+            "<code>model_eval_verdicts</code>.</p>",
+            title="Downgrade verdicts",
         )
     by_purpose: dict[str, list[CandidateHistory]] = {}
     for h in histories:
@@ -920,19 +929,24 @@ def _verdicts_section(histories: list[CandidateHistory]) -> str:
             f'<span class="muted me-vs"> vs {escape(incumbent)}</span></td>'
             f"<td>{chips}</td></tr>"
         )
-    return f'{head}<table class="me-verdicts"><tbody>{"".join(rows)}</tbody></table></section>'
+    return panel_section(
+        sub,
+        f'<table class="me-verdicts"><tbody>{"".join(rows)}</tbody></table>',
+        title="Downgrade verdicts",
+    )
 
 
 def _costs_section(costs: list[PurposeCostRow]) -> str:
-    head = (
-        '<section class="panel"><h2>Per-purpose cost (30d)</h2>'
+    sub = (
         '<p class="sub">Spend per purpose over the llm_calls ledger, split into production '
         "traffic and the eval machinery that measures it (the model-eval sweep, the pairwise "
         "judge, the golden/rubric harness). The fat production lines are the optimizer's "
         "candidates for a downgrade sweep.</p>"
     )
     if not costs:
-        return f'{head}<p class="muted">No LLM calls in the window.</p></section>'
+        return panel_section(
+            sub, '<p class="muted">No LLM calls in the window.</p>', title="Per-purpose cost (30d)"
+        )
     rows = "".join(
         "<tr>"
         f'<td class="me-purpose">{escape(c.purpose)}</td>'
@@ -946,18 +960,19 @@ def _costs_section(costs: list[PurposeCostRow]) -> str:
     )
     total_prod = sum(c.prod_cost_usd for c in costs)
     total_eval = sum(c.eval_cost_usd for c in costs)
-    return (
-        f"{head}"
+    return panel_section(
+        sub,
         '<table class="p-table"><thead><tr>'
         '<th>Purpose</th><th class="num">Prod $ · calls</th>'
         '<th class="num">Eval $ · calls</th><th class="num">Total</th>'
-        "</tr></thead><tbody>"
-        f"{rows}"
+        "</tr></thead><tbody>",
+        rows,
         '<tr class="me-cost-total"><td class="me-purpose">all purposes</td>'
         f'<td class="num">{_usd(total_prod)}</td>'
         f'<td class="num muted">{_usd(total_eval)}</td>'
         f'<td class="num me-total">{_usd(total_prod + total_eval)}</td></tr>'
-        "</tbody></table></section>"
+        "</tbody></table>",
+        title="Per-purpose cost (30d)",
     )
 
 

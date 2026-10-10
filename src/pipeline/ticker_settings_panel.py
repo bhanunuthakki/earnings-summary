@@ -16,6 +16,7 @@ from html import escape
 from pathlib import Path
 
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from ui.panel import panel_empty, panel_section
 
 _SCRIPT = """<script>
 (function () {
@@ -87,10 +88,9 @@ def render_ticker_settings_panel(db_path: Path) -> str:
     """Drawer fragment: existing per-ticker settings rows + a set-form."""
     rows = _load_rows(db_path)
     if rows is None:
-        return (
-            '<section class="panel"><h2>Ticker settings</h2>'
-            '<p class="muted">No <code>ticker_settings</code> table — '
-            "run <code>alembic upgrade head</code>.</p></section>"
+        return panel_empty(
+            "No <code>ticker_settings</code> table — run <code>alembic upgrade head</code>.",
+            title="Ticker settings",
         )
     body = "".join(
         "<tr>"
@@ -111,12 +111,11 @@ def render_ticker_settings_panel(db_path: Path) -> str:
         if rows
         else '<p class="muted">No per-ticker overrides set.</p>'
     )
-    return (
-        '<section class="panel"><h2>Ticker settings</h2>'
+    return panel_section(
         '<p class="sub">Persistent per-ticker overrides. <strong>Bypass budget</strong> '
         "makes every LLM build for the ticker ignore the per-purpose budget caps "
-        "(the one-shot bypass lives on the per-ticker Refresh panel).</p>"
-        f"{table}"
+        "(the one-shot bypass lives on the per-ticker Refresh panel).</p>",
+        table,
         '<div class="ts-add-row">'
         '<input id="ts-add-ticker" class="ts-add-ticker" placeholder="TICKER" '
         'aria-label="Ticker symbol">'
@@ -124,8 +123,9 @@ def render_ticker_settings_panel(db_path: Path) -> str:
         "bypass budget</label>"
         '<button id="ts-add-btn" type="button" class="k-btn k-btn-primary">Save</button>'
         '<span id="ts-add-note" class="muted ts-add-note"></span>'
-        "</div>"
-        "</section>" + _SCRIPT
+        "</div>",
+        title="Ticker settings",
+        tail=_SCRIPT,
     )
 
 
