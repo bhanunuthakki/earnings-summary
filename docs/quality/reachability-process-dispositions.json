@@ -761,6 +761,16 @@
       ]
     },
     {
+      "disposition": "closed_command_set",
+      "evidence": "The collector runner executes only fixed read-only Git ls-files, rev-parse HEAD and status probes. The command vectors are internal literals, use a checked repository root and clean_local_git_env; no operator-selected executable or shell is used.",
+      "fingerprint": "5bd212a6475ce4ddd33c7a73f604246b2c424d2426452048e074ef6ce398b026",
+      "line": 120,
+      "path": "src/quality/function_lifecycle.py",
+      "targets": [
+        "git"
+      ]
+    },
+    {
       "disposition": "operator_supplied_process",
       "evidence": "run_benchmark_subprocess executes the operator-supplied benchmark argv.",
       "fingerprint": "a7a00b6582c387dc4d33143e851594d42e8d782d0fbaf51ffb5932e9b4f618cc",
