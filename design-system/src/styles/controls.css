@@ -39,6 +39,10 @@
   color: var(--accent);
 }
 
+/* Native hidden state must take precedence over the kit's layout rules.
+   Keep until-found content available to browser search and fragment navigation. */
+[hidden]:not([hidden="until-found" i]) { display: none !important; }
+
 /* ---- form-control baseline (kit): kill the native look everywhere ---- */
 select, textarea, input[type="text"], input[type="search"], input[type="number"],
 input[type="date"], input[type="email"], input[type="url"], input[type="password"],
