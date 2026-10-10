@@ -1350,3 +1350,18 @@ periodic-filing XBRL disposition seal or satisfy the current full-inventory
 corpus/processing contract. Model-scope qualification and restoration of the
 held native XBRL lane remain unresolved prerequisites. This operation is not a
 route around their applicability, corpus or completeness guards.
+
+
+### Function lifecycle collector — no operational surface change
+
+The internal `execution/inventory_function_lifecycle.py` command collects
+Git-tracked source references and conservative function dispositions. It does
+not execute scanned source, delete code, admit a quality score, or change a
+supported operator workflow. `quality.lifecycle` remains the module-level
+lifecycle owner. The Operations registry, snapshot, and visible panel retain
+their current contracts. No job, service, schema, provider, live-state writer,
+or operator action is added. `tests/test_function_lifecycle.py` checks source
+non-execution and preservation, incomplete-scan refusal, current source identity,
+and protected receipt output. The reconstruction manifest registers this
+collector under `test_and_verification_suite`; no historical measurement is
+registered as current evidence.
