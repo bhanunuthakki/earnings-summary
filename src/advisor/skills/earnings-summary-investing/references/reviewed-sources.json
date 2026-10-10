@@ -1,5 +1,5 @@
 {
-  "review_note": "Reviewed the bounded lock filename change: ordinary names and complete logical identity remain stable; hashing only overlong derived filenames adds no operational action or source authority. Mixed-version rollout remains governed by the existing single-writer boundary.",
+  "review_note": "Reviewed merged preflight source refusal: invalid explicit roots produce a bounded unavailable response before database access. This preserves all later validation and grants no collection or production authority. The existing bounded lock filename review remains applicable.",
   "schema_version": 1,
   "sources": [
     {
@@ -264,7 +264,7 @@
     },
     {
       "path": "execution/valuation_preflight.py",
-      "sha256": "7c33ec2e96a46e49ee3725c0fc832ba34037125d643f6250e86871c4f18adfd6"
+      "sha256": "c5837335c6912c5e23f70de5e9c5b9ab13d75101268fa1a0bd3c22ca3a05287f"
     },
     {
       "path": "execution/verify_decision_brief.py",
