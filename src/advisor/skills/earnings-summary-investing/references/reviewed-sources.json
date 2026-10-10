@@ -1,5 +1,5 @@
 {
-  "review_note": "Reviewed lifecycle verification registration and exact no-operational-surface-change suffix on pending statements candidate a2340592. Statements source population and its registration/authority remain intact; lifecycle remains read-only static source evidence with no deletion, admission, operator, scheduler, service or database authority. Three lifecycle feature blobs and inherited statement sources are exact. Base reviewed-source hashes are preserved except the explicitly reviewed combined governance/reconstruction documents. Actual statements squash-main acceptance remains pending.",
+  "review_note": "Reviewed unchanged pure SEC selector and its registration on pending lifecycle candidate 1adcf0e6. Four feature/full-test blobs, seven clock function ASTs and eleven assertions remain exact. Combined statements/lifecycle governance and registration remain intact; own selector documentation retains explicit read-only database and immutable no-clobber receipt, selection_only_not_model_ready, and separate collection/current-consumer/financial-admission/readiness authority. All inherited source review hashes are preserved except the two reviewed combined governance/reconstruction documents. Actual lifecycle squash-main acceptance remains pending.",
   "schema_version": 1,
   "sources": [
     {
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "704068e7812d9ffd74161cd08dc981b8a169ce223654c9f0432a4bc68e807f53"
+      "sha256": "71b78e621ea8b7c7603d4cb4030c81ef904eeb1f62b0abc6d9df93b6da9d2fd9"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -276,7 +276,7 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "ad956fb78a8b7c0bfb617e0ecc59e90fe213c4ce39f9ca6ec8fd5bce86a66a41"
+      "sha256": "3ae1efdf156a79873d6b0b7b6949a14932031d70b6a96dc33a63eb5af42867a7"
     },
     {
       "path": "scripts/check_investing_skill.py",
