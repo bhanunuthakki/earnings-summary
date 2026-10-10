@@ -1,5 +1,5 @@
 {
-  "review_note": "Reviewed unchanged pure SEC selector and its registration on pending lifecycle candidate 1adcf0e6. Four feature/full-test blobs, seven clock function ASTs and eleven assertions remain exact. Combined statements/lifecycle governance and registration remain intact; own selector documentation retains explicit read-only database and immutable no-clobber receipt, selection_only_not_model_ready, and separate collection/current-consumer/financial-admission/readiness authority. All inherited source review hashes are preserved except the two reviewed combined governance/reconstruction documents. Actual lifecycle squash-main acceptance remains pending.",
+  "review_note": "Reviewed exact declared-selection governance suffix and reconstruction registration on pending lifecycle57d9bc92. Full current base main4c/scanner/statement/lifecycle source hashes and authorities are inherited. Four selector executable/full test blobs and seven-clock/eleven-predicate protections remain exact. Selection remains read-only and selection_only_not_model_ready; no consumer, collection, financial admission, readiness, scheduler or operation authority changes. Only combined governance/reconstruction hashes are updated. Actual LIFE squash-base acceptance remains pending.",
   "schema_version": 1,
   "sources": [
     {
