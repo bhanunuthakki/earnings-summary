@@ -1,5 +1,5 @@
 {
-  "review_note": "Reviewed exact declared-selection governance suffix and reconstruction registration on pending lifecycle57d9bc92. Full current base main4c/scanner/statement/lifecycle source hashes and authorities are inherited. Four selector executable/full test blobs and seven-clock/eleven-predicate protections remain exact. Selection remains read-only and selection_only_not_model_ready; no consumer, collection, financial admission, readiness, scheduler or operation authority changes. Only combined governance/reconstruction hashes are updated. Actual LIFE squash-base acceptance remains pending.",
+  "review_note": "Reviewed exact preview governance suffix and reconstruction registrations on qualified pending selector988088ef. All current main4c/scanner/statement/LIFE/selector reviewed sources,186 semantic rows and authorities remain inherited. Six full feature/test blobs,27 inherited ASTs,eight input functions,13 scenario test functions58assertions remain exact. Previews remain incomplete or unaccepted,model_ready=False,allocation_eligible=False; no collection,financial/model writes,consumer adoption,scenario or operational acceptance. Only combined governance/reconstruction source hashes are updated. Actual selector squash-base acceptance remains pending.",
   "schema_version": 1,
   "sources": [
     {
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "71b78e621ea8b7c7603d4cb4030c81ef904eeb1f62b0abc6d9df93b6da9d2fd9"
+      "sha256": "55b4b86c155627f8237b8f66cf279370a8856a2aa1cb1b00fcdc841edcec22f7"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -276,7 +276,7 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "3ae1efdf156a79873d6b0b7b6949a14932031d70b6a96dc33a63eb5af42867a7"
+      "sha256": "68bd603631c496aa7d7b1cebb6c8b981857f56fb296f9108af6587e141b0be0c"
     },
     {
       "path": "scripts/check_investing_skill.py",

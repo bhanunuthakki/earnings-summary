@@ -1384,3 +1384,36 @@ readiness. Existing research and narrative consumers keep their current corpus
 selection. This integration adds no collection action, scheduler, dashboard
 control, or production operation. Consumer adoption requires a separate current
 source-clock and financial acceptance integration.
+
+### MELI reported-input and explicit-vector previews — 2026-10-10
+
+Disposition: **no Operations surface change**. The bounded CLI
+`execution/preview_meli_inputs.py` requires an explicit database, source state
+root, sealed snapshot identity, fiscal period end, aware cutoff and new output
+artifact. Invalid source roots refuse before database access. It opens the
+selected database read-only. Exact role, dimensions, period, unit, currency,
+basis, issuer and binding checks use the current fact and model-input readers.
+Complete selections recheck present raw bytes within the explicit source roots.
+Missing or ambiguous inputs emit no usable fact bindings. The deterministic
+artifact preserves financial commitments; fresh physical-read witnesses remain
+in the invocation result. Exact output replay preserves bytes. A different
+existing artifact refuses replacement. The command writes only its new output
+artifact and task lock; it creates no financial or readiness rows.
+
+`src/dcf/meli_scenario_preview.py` performs pure calculations from a supplied
+verified input receipt and explicit numerical case vectors, probabilities and
+quote. It checks the base replay commitment, fixed reported values and bridge,
+common forecast horizon, exact probability population and finite outputs.
+It does not choose priors or forecasts, reverify current source bytes, or persist
+or accept a scenario. Results remain `calculated_unaccepted` or `incomplete`.
+Both previews keep `model_ready=False`. Scenario previews also keep
+`allocation_eligible=False` and leave forward return unavailable. These commands
+add no scheduler, acquisition, role writer, research population consumer or
+production execution authority.
+
+Evidence: current migrated synthetic input fixtures, read-only selection,
+missing/ambiguous roles, raw-byte refusal, invalid-root refusal before connection,
+immutable artifact replay/conflict, and explicit scenario replay and refusal cases.
+Source-inventory/research coverage is mocked in these fixtures; this evidence
+does not establish native package qualification, production readiness or
+financial/scenario acceptance.
