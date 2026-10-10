@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import sys
@@ -36,6 +37,10 @@ from provenance.evidence_links import (
     BlobLocationObservation,
     DocumentObservationLink,
     EvidenceLinkLedger,
+)
+from provenance.evidence_native_candidates import (
+    LocalEvidenceReadError,
+    read_verified_local_evidence_bytes,
 )
 from provenance.legacy_document_evidence import (
     LegacyDocumentEvidenceBindingLedger,
@@ -311,19 +316,6 @@ def _prepare_document_chain(
 ) -> _DocumentChain | None:
     document_id = _integer(document, "id")
     path_value = _required_text(document, "file_path")
-    try:
-        resolved_path = _resolve_legacy_path(root, path_value)
-        if resolved_path is None:
-            _quarantine(summary, "path_outside_repo", document_id)
-            return None
-        if not resolved_path.is_file():
-            _quarantine(summary, "content_missing", document_id)
-            return None
-        raw_bytes = resolved_path.read_bytes()
-    except OSError:
-        _quarantine(summary, "content_unreadable", document_id)
-        return None
-    actual_sha = hashlib.sha256(raw_bytes).hexdigest()
     recorded_sha = _required_text(document, "sha256").lower()
     accession = re.fullmatch(r"accn=(\d{10}-\d{2}-\d{6})", path_value.partition("#")[2])
     if (
@@ -335,13 +327,27 @@ def _prepare_document_chain(
         # The SEC CompanyFacts binding backfill owns their scoped reconciliation.
         _quarantine(summary, "legacy_sec_accession_identity", document_id)
         return None
-    if actual_sha != recorded_sha:
-        _quarantine(summary, "sha256_mismatch", document_id)
-        return None
     raw_size = _optional_integer(document, "raw_bytes_size")
-    if raw_size is not None and raw_size != len(raw_bytes):
-        _quarantine(summary, "byte_size_mismatch", document_id)
+    try:
+        physical_bytes = read_verified_local_evidence_bytes(
+            conn,
+            storage_uri=str(_resolve_legacy_path(root, path_value) or path_value),
+            expected_sha256=recorded_sha,
+            expected_byte_size=raw_size,
+            allowed_roots=(root, (root / "data").resolve()),
+            legacy_document_id=document_id,
+        )
+    except LocalEvidenceReadError as error:
+        _quarantine(
+            summary,
+            "path_outside_repo"
+            if error.reason == "storage_uri_not_allowed_local_file"
+            else error.reason,
+            document_id,
+        )
         return None
+    if physical_bytes.used_replica:
+        _note(summary, "verified_local_replica_fallback")
     _required_datetime(document, "fetched_at")
     _required_text(document, "ticker")
     _required_text(document, "source_type")
@@ -378,16 +384,25 @@ def _persist_document_chain(
     summary: BackfillSummary,
 ) -> None:
     document_id = chain.legacy_document_id
-    path = _resolve_legacy_path(root, _required_text(document, "file_path"))
-    if path is None:
-        raise RuntimeError("verified legacy path unexpectedly became invalid")
-    raw_bytes = path.read_bytes()
-    blob_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    path_value = _required_text(document, "file_path")
+    recorded_sha = _required_text(document, "sha256").lower()
     recorded_size = _optional_integer(document, "raw_bytes_size")
-    if blob_sha256 != _required_text(document, "sha256").lower() or (
-        recorded_size is not None and recorded_size != len(raw_bytes)
-    ):
-        raise ValueError(f"legacy document {document_id} changed during evidence capture")
+    try:
+        physical_bytes = read_verified_local_evidence_bytes(
+            conn,
+            storage_uri=str(_resolve_legacy_path(root, path_value) or path_value),
+            expected_sha256=recorded_sha,
+            expected_byte_size=recorded_size,
+            allowed_roots=(root, (root / "data").resolve()),
+            legacy_document_id=document_id,
+        )
+    except LocalEvidenceReadError as error:
+        raise ValueError(
+            f"legacy document {document_id} changed during evidence capture"
+        ) from error
+    raw_bytes = physical_bytes.raw_bytes
+    path = physical_bytes.path
+    blob_sha256 = recorded_sha
     fetched_at = _required_datetime(document, "fetched_at")
     ticker = _required_text(document, "ticker")
     source_type = _required_text(document, "source_type")
@@ -468,7 +483,7 @@ def _persist_document_chain(
     for record in records:
         _persist(record, ledger, summary)
     link_ledger = EvidenceLinkLedger(conn)
-    location_uri = path.as_uri()
+    location_uri = physical_bytes.storage_uri
     location_identity = hashlib.sha256(f"{blob_sha256}\0{location_uri}".encode()).hexdigest()
     current_location = conn.execute(
         "SELECT location_observation_id, availability_state, location_sequence "
@@ -838,12 +853,20 @@ def _require_columns(conn: sqlite3.Connection, table: str, required: set[str]) -
 def _resolve_legacy_path(root: Path, stored_path: str) -> Path | None:
     path_without_fragment, _, _ = stored_path.partition("#")
     candidate = Path(path_without_fragment)
-    resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+    resolved = Path(os.path.abspath(candidate if candidate.is_absolute() else root / candidate))
     # The production runtime is an immutable checkout whose ``data`` directory
     # is an explicit junction to the live state directory.  Resolving that
     # junction legitimately leaves ``root``; allow only that declared data
     # boundary, never an arbitrary sibling path.
     allowed_roots = (root, (root / "data").resolve())
+    # Map only the declared data boundary. Keep nested links lexical so the
+    # stable reader can refuse reparse points instead of following them.
+    try:
+        data_relative = resolved.relative_to(root / "data")
+    except ValueError:
+        pass
+    else:
+        resolved = allowed_roots[1] / data_relative
     for allowed_root in allowed_roots:
         try:
             resolved.relative_to(allowed_root)
