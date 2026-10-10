@@ -1,5 +1,5 @@
 {
-  "review_note": "Reviewed opt-in CI failure receipts: unchanged enforcement call AST, ceilings, and exit semantics; bounded hashed diagnostic projection and safe process markers verified by 35 synthetic tests and independent review. No research route or application operation changes.",
+  "review_note": "Reviewed unchanged bounded MELI H1 displayed-statement operation and reconstruction on provisional UI candidate 2f8aadd4 over replica candidate afa49e77. The seven product/test/fixture blobs remain exact. Explicit database/content roots, dry-run default, captured/native-qualified prerequisites and 18-member source-only population remain. No acquisition, scheduler, canonical/valuation admission or executed publication authority. All inherited lock/valuation source review hashes are retained; actual squash-main qualification remains pending.",
   "schema_version": 1,
   "sources": [
     {
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "e041e1d9888c5d3c69d0c1da6c7cf7ec359b9409abfa8e33dd422a1b4e54d3c4"
+      "sha256": "dd2f44b0c3ba0e8d43e8cf6fa51f8cff682df2b621e5941f7ab45222e38b1dc0"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -276,7 +276,7 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "a13c153ba632d9a6b139d4474a5a096914c333d2e9c1bd4a201854398930aaf0"
+      "sha256": "68b58e56d3c3c962d436d8334ba9b2b629fcb381891f3b50ed1ffa398b732ee6"
     },
     {
       "path": "scripts/check_investing_skill.py",

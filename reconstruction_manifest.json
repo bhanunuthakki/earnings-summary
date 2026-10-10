@@ -92,7 +92,8 @@
         "execution/refresh_dispatch.py",
         "execution/dcf_sheets.py",
         "execution/run_advisor_memos.py",
-        "execution/run_socratic_questions.py"
+        "execution/run_socratic_questions.py",
+        "execution/publish_meli_reported_statements.py"
       ],
       "dependencies": [
         "core_data_layer"
@@ -100,7 +101,8 @@
       "test_commands": [
         "pytest tests/test_pipeline*.py -q",
         "pytest tests/test_onboard_sec_fallback.py tests/test_sec_onboarding_identity.py tests/test_onboarding_state_authority.py tests/test_runtime_state_authority.py tests/test_decision_brief_workflow.py -q",
-        "pytest tests/test_source_context_entrypoints.py tests/test_refresh_dispatch.py -q"
+        "pytest tests/test_source_context_entrypoints.py tests/test_refresh_dispatch.py -q",
+        "pytest tests/test_meli_reported_statements.py -q"
       ],
       "documentation": [
         "AGENTS.md",
