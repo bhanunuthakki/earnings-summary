@@ -20,6 +20,7 @@ from report.models import SectionStatus, SignalRow, SignalsSection
 from report.renderers import workspace_html
 from report.renderers.workspace_styles import CSS as WORKSPACE_CSS
 from ui.conformance_scan import scan_surface_evidence
+from ui.controls import controls_css
 
 
 def _private_call(name: str, *args: object, **kwargs: object) -> object:
@@ -95,6 +96,68 @@ CANONICAL_CSS = """
 .k-well { border-radius: var(--radius); }
 .k-overlay { border-radius: var(--radius); border: var(--bw-thin) solid currentColor; }
 """
+
+
+@pytest.mark.parametrize("viewport", [(1440, 900), (390, 844)])
+def test_shared_controls_honor_hidden_without_disabling_until_found(
+    viewport: tuple[int, int],
+) -> None:
+    """Hidden actions omit layout and focus; browser fragments reveal until-found."""
+    _require_playwright()
+    playwright_api = importlib.import_module("playwright.sync_api")
+    html = f"""<!doctype html><style>{controls_css()}</style>
+    <button id="before" class="k-btn">Before</button>
+    <button id="action" class="k-btn k-btn-primary" hidden>Unavailable action</button>
+    <section id="panel" class="k-card k-card-stack" hidden="">
+      <button id="nested" class="k-btn">Nested action</button>
+    </section>
+    <section id="grid" class="k-band" hidden="hidden">
+      <button id="grid-nested" class="k-btn">Grid action</button>
+    </section>
+    <button id="invalid" class="k-btn" hidden="invalid">Invalid hidden value</button>
+    <button id="after" class="k-btn">After</button>
+    <section id="discoverable" class="k-card k-card-stack" hidden="until-found">
+      <button id="found-child" class="k-btn">Searchable content</button>
+    </section>
+    <section id="mixed-case" class="k-band" hidden="UnTiL-FoUnD">
+      <button id="mixed-child" class="k-btn">Mixed-case searchable content</button>
+    </section>
+    <a id="find-link" href="#found-child">Find hidden content</a>
+    <a id="mixed-link" href="#mixed-child">Find mixed-case hidden content</a>"""
+    hidden_selectors = ("#action", "#panel", "#nested", "#grid", "#grid-nested", "#invalid")
+    with playwright_api.sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        try:
+            page = browser.new_page(viewport={"width": viewport[0], "height": viewport[1]})
+            _load_route_canary(page, html)
+            for selector in hidden_selectors:
+                assert not page.locator(selector).is_visible()
+                assert page.locator(selector).bounding_box() is None
+            page.locator("#before").focus()
+            page.keyboard.press("Tab")
+            assert page.locator("#after").evaluate("node => document.activeElement === node")
+            for selector in ("#action", "#panel", "#grid"):
+                page.locator(selector).evaluate("node => node.hidden = false")
+                assert page.locator(selector).is_visible()
+                page.locator(selector).evaluate("node => node.hidden = true")
+                assert not page.locator(selector).is_visible()
+            for selector, link, child, display in (
+                ("#discoverable", "#find-link", "#found-child", "flex"),
+                ("#mixed-case", "#mixed-link", "#mixed-child", "grid"),
+            ):
+                discoverable = page.locator(selector)
+                assert discoverable.evaluate("node => getComputedStyle(node).display") == display
+                assert (
+                    discoverable.evaluate("node => getComputedStyle(node).contentVisibility")
+                    == "hidden"
+                )
+                assert not page.locator(child).is_visible()
+                page.locator(link).click()
+                discoverable.wait_for(state="visible")
+                assert discoverable.get_attribute("hidden") is None
+                assert page.locator(child).is_visible()
+        finally:
+            browser.close()
 
 
 def test_workspace_signal_disclosure_is_keyboard_reachable_at_both_widths() -> None:

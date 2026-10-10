@@ -238,9 +238,21 @@ def test_actual_head_is_supported() -> None:
             )
             for line in lines
         ]
-    # Retain all 153 current test seams plus the lock-inheritance child harness.
+    # Retain all 154 lock-base test seams plus the hidden-control browser probe.
     # No production gap is admitted.
-    assert len(graph.unknown_edges) == 154
+    assert len(graph.unknown_edges) == 155
+    assert (
+        GraphEdge(
+            source="tests/test_design_computed_canary.py",
+            target="playwright.sync_api",
+            kind="dynamic_import",
+            evidence="dynamic import expression (target unresolved)",
+            confidence="low",
+            line=107,
+            unknown=True,
+        )
+        in graph.unknown_edges
+    )
     assert [
         edge
         for edge in graph.unknown_edges
