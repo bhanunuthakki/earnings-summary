@@ -38,7 +38,7 @@ from ui.tokens import (
     RAIL_TOKENS as _RAIL_TOKENS,
 )
 
-REGISTRY_VERSION = "1.12.2"
+REGISTRY_VERSION = "1.13.0"
 
 # The canonical token module owns mutable dictionaries for generation and
 # composition. This registry exposes read-only views so its public import
@@ -615,6 +615,7 @@ _BHA_92_SURFACES = frozenset(
         "ui/conformance_scan.py",
         "ui/controls.py",
         "ui/living_grid.py",
+        "ui/panel.py",
         "ui/source_chip.py",
         "ui/tokens.py",
         "viewspec/render.py",
@@ -1080,7 +1081,12 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "dashboard/feed.py": "11a36cf4d3d850906aa5bbec059ba7f7b9d132cb1398269ed4c0cf8f9fa5820a",  # pragma: allowlist secret
         "execution/build_earnings_calendar.py": "6177205661002d8572d7b790e97f4e3bbf6b43d8d07589d37b774be632b9200b",  # pragma: allowlist secret
         "execution/comments_server_alert_routes.py": "d8d2e88171b61d42b5b2fb3a8317869ac6c575409b3e151cbbe41f62d5267a33",  # pragma: allowlist secret
-        "pipeline/advisor_memos_panel.py": "6da18ec002ff87180a71cfe500e1b4634f2687c2f9907fce5ad082b5f9e18485",  # pragma: allowlist secret
+        # M5 panel-shell consolidation: the Socratic page's inline
+        # <section class="panel"> composition moved behind ui/panel.py's
+        # registered master, so the dynamic-visual recipe shrank to the
+        # panel_section call. Rendered bytes are unchanged (VAL-DEDUP-004
+        # panel capture: zero diff).
+        "pipeline/advisor_memos_panel.py": "e0eab65a8729ce3215ea8fc8dc04a6b0571651398d3f425e07ed96b829f882d0",  # pragma: allowlist secret
         "pipeline/allocation_decisions_panel.py": "d6d9f74f8d6282f475b9250a1949ead4bb7a5a9966ad1fd3bf3772f1f562fc4b",  # pragma: allowlist secret
         "pipeline/analytical_dashboard_html.py": "9777e9c61dad855011479eecf7760f7bfd7d2269155f9d5fb708cf616bade37b",  # pragma: allowlist secret
         "pipeline/calibration_scorecard_panel.py": "1edfbfb1291c38be645133eaab45f78343920da72bf42b3e96c1a36e60a91eac",  # pragma: allowlist secret

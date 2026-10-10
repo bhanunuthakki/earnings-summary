@@ -20,6 +20,7 @@ from pathlib import Path
 from ir_fetch_status import IrCoverageRow, briefed_roster, coverage_rows
 from pipeline.operations_styles import IR_STYLE as _PANEL_STYLE
 from ui import living_grid as lg
+from ui.panel import panel_empty, panel_section
 
 
 def render_ir_coverage_panel(db_path: Path) -> str:
@@ -27,26 +28,23 @@ def render_ir_coverage_panel(db_path: Path) -> str:
     portfolio/evaluation name's auto-fetch status, plus the manual-pull how-to."""
     rows = coverage_rows(db_path, briefed_roster(db_path))
     if not rows:
-        return (
-            '<section class="panel"><h2>IR document coverage</h2>'
-            '<p class="muted">No portfolio or evaluation names are tracked yet.</p></section>'
+        return panel_empty(
+            "No portfolio or evaluation names are tracked yet.",
+            title="IR document coverage",
         )
     gaps = [r for r in rows if not r.has_docs]
     covered = len(rows) - len(gaps)
     total_docs = sum(r.doc_count for r in rows)
-    return "".join(
-        [
-            _PANEL_STYLE,
-            '<section class="panel"><h2>IR document coverage</h2>',
-            '<p class="sub">Headless auto-fetch of investor-relations documents across the '
-            "portfolio + evaluation list. A <strong>gap</strong> is a name with zero "
-            "auto-fetched IR docs — pull it manually (see below). Coverage is live from the "
-            "document store; failing names are retried automatically each week.</p>",
-            _kpi_strip(covered, len(gaps), total_docs),
-            _coverage_table(rows),
-            _manual_note(),
-            "</section>",
-        ]
+    return panel_section(
+        '<p class="sub">Headless auto-fetch of investor-relations documents across the '
+        "portfolio + evaluation list. A <strong>gap</strong> is a name with zero "
+        "auto-fetched IR docs — pull it manually (see below). Coverage is live from the "
+        "document store; failing names are retried automatically each week.</p>",
+        _kpi_strip(covered, len(gaps), total_docs),
+        _coverage_table(rows),
+        _manual_note(),
+        title="IR document coverage",
+        style=_PANEL_STYLE,
     )
 
 

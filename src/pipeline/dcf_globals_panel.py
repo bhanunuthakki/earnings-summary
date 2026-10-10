@@ -20,6 +20,7 @@ from typing import cast
 
 from dcf import global_assumptions as ga
 from pipeline.operations_styles import DCF_GLOBALS_STYLE
+from ui.panel import panel_section
 
 # Field → (human label, "= X%" example). Order is the render order.
 _FIELDS: tuple[tuple[str, str], ...] = (
@@ -188,24 +189,25 @@ def render_dcf_globals_panel(db_path: Path) -> str:
         _row_html(field, label, float(values.get(field, 0.0)), overrides.get(field, []))
         for field, label in _FIELDS
     )
-    return (
-        DCF_GLOBALS_STYLE + '<section class="panel"><h2>Global DCF assumptions</h2>'
+    return panel_section(
         '<p class="sub">One editable default for the macro inputs shared across every DCF model. '
         "Saving updates the default used by the next build; a per-ticker value still wins where set "
         "(listed under each field). Values are decimal ratios "
-        "(<code>0.043</code> = 4.3%).</p>"
-        f"{rows}"
+        "(<code>0.043</code> = 4.3%).</p>",
+        rows,
         '<p class="muted dcfg-reach">'
         "Reach: risk-free &amp; ERP drive the discount rate for the FCFF and bank (CAPM) models, "
         "and tax drives NOPAT there and in the NU platform model. The fintech SOTP and NU platform "
         "models use an explicit cost of equity, so risk-free/ERP reach them only via their opt-in "
-        "CAPM setting; the holdco NAV model is multiples-based, so these are informational for it.</p>"
+        "CAPM setting; the holdco NAV model is multiples-based, so these are informational for it.</p>",
         '<div class="dcfg-controls dcfg-rebuild-controls">'
         '<button type="button" id="dcfg-rebuild" class="k-btn k-btn-primary" '
         'title="Re-run every DCF model so a global change propagates into the workbooks and dcf_runs">'
         "Rebuild affected models</button>"
         '<span id="dcfg-rebuild-msg" class="muted dcfg-rebuild-msg"></span>'
         "</div>"
-        '<pre id="dcfg-rebuild-log" class="dcfg-rebuild-log" hidden></pre>'
-        "</section>" + _SCRIPT
+        '<pre id="dcfg-rebuild-log" class="dcfg-rebuild-log" hidden></pre>',
+        title="Global DCF assumptions",
+        style=DCF_GLOBALS_STYLE,
+        tail=_SCRIPT,
     )

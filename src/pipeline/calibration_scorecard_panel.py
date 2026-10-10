@@ -26,6 +26,7 @@ from html import escape
 
 from calibration_coach import CalibrationScorecard, NamedBias
 from pipeline.operations_styles import CALIBRATION_SCORECARD_STYLE as SCORECARD_CSS
+from ui.panel import panel_section
 
 
 def render_scorecard_section(card: CalibrationScorecard | None, *, n_graded: int = 0) -> str:
@@ -39,14 +40,14 @@ def render_scorecard_section(card: CalibrationScorecard | None, *, n_graded: int
     # Allocation carries the Positioning coach, Record this one. Inner labels
     # ("Coach's read: …") keep their wording.
     if card is None:
-        return (
-            '<section class="panel cs-stub"><h2>Calibration coach</h2>'
+        return panel_section(
             '<p class="muted cs-caption">Coach&rsquo;s read: no scorecard yet — generated '
             "monthly once graded decisions accrue (currently "
-            f"{int(n_graded)} graded).</p></section>"
+            f"{int(n_graded)} graded).</p>",
+            title="Calibration coach",
+            cls="cs-stub",
         )
-    head = (
-        '<section class="panel"><h2>Calibration coach</h2>'
+    sub = (
         '<p class="sub">The monthly calibration scorecard — named recurring biases drawn from '
         "your own graded history, and one falsifiable behavioural experiment for the period. "
         "LLM-composed and eval-gated against the <code>calibration_coach</code> rubric before "
@@ -55,7 +56,7 @@ def render_scorecard_section(card: CalibrationScorecard | None, *, n_graded: int
     )
     body = _coach_body(card)
     notes = "".join(f'<p class="muted cs-note">{escape(n)}</p>' for n in card.notes)
-    return f"{head}{body}{notes}</section>"
+    return panel_section(sub, body, notes, title="Calibration coach")
 
 
 def _coach_body(card: CalibrationScorecard) -> str:

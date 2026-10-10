@@ -78,6 +78,7 @@ from pipeline.research_cockpit import latest_dcf_runs, latest_dcf_scenarios
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 from ui.controls import chip_tone_class, pill_tone_class, thesis_status_tone, ticker_label
+from ui.panel import panel_empty, panel_section
 from ui.prose import render_prose
 from user_state.ledger import list_recent_entries
 from user_state.notes import list_notes
@@ -567,10 +568,7 @@ def _annual_letter_html(db_path: Path) -> str:
         repo_root = db_path.resolve().parent.parent
         return render_annual_letter_section(repo_root)
     except Exception:  # pragma: no cover - this section must never break the page
-        return (
-            '<section class="panel"><h2>Letter to self</h2>'
-            '<p class="muted">Letter to self unavailable — see logs.</p></section>'
-        )
+        return panel_empty("Letter to self unavailable — see logs.", title="Letter to self")
 
 
 def _redteam_pnl_html(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
@@ -587,9 +585,8 @@ def _redteam_pnl_html(db_path: Path, *, user_id: str = DEFAULT_USER_ID) -> str:
         section = render_redteam_pnl_section(report, scorecard)
         return f"<style>{REDTEAM_PNL_CSS}</style>{section}"
     except Exception:  # pragma: no cover - this section must never break the page
-        return (
-            '<section class="panel"><h2>Decision P&amp;L (Red Team)</h2>'
-            '<p class="muted">Decision P&amp;L unavailable — see logs.</p></section>'
+        return panel_empty(
+            "Decision P&amp;L unavailable — see logs.", title="Decision P&amp;L (Red Team)"
         )
 
 
@@ -609,9 +606,8 @@ def _scorecard_html(db_path: Path, *, n_graded: int = 0) -> str:
         section = render_scorecard_section(card, n_graded=n_graded)
         return f"<style>{SCORECARD_CSS}</style>{section}"
     except Exception:  # pragma: no cover - coaching must never break the page
-        return (
-            '<section class="panel"><h2>Calibration coach</h2>'
-            '<p class="muted">Coach&rsquo;s read: failed to load — see logs.</p></section>'
+        return panel_empty(
+            "Coach&rsquo;s read: failed to load — see logs.", title="Calibration coach"
         )
 
 
@@ -853,8 +849,7 @@ def render_coach_pnl_section(
             changed=0,
             candidate=0,
         )
-    head = (
-        '<section class="panel cpnl"><h2>Coach P&amp;L</h2>'
+    sub = (
         '<p class="sub">The guard\'s public scoreboard — every position review it has ever run, '
         "whether it ever overrode a call, and how those calls graded. All-zero is the honest "
         "answer until the guard has actually been exercised.</p>"
@@ -903,7 +898,15 @@ def render_coach_pnl_section(
         if pnl.reviews_run
         else ""
     )
-    return f"{head}{review_line}{target_line}{candidate_line}{doorway}</section>"
+    return panel_section(
+        sub,
+        review_line,
+        target_line,
+        candidate_line,
+        doorway,
+        title="Coach P&amp;L",
+        cls="cpnl",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -957,16 +960,19 @@ def render_coach_pings_section(
     finally:
         if owned:
             db_conn.close()
-    head = (
-        '<section class="panel"><h2>Coach pings (this month)</h2>'
+    sub = (
         '<p class="sub">Every initiation moment the governor considered this month — '
         "the falsifier-breach / retro-annotation / intent-followup nudges, whether they "
         "sent, waited in the digest, or were dismissed.</p>"
     )
     if not rows:
-        return f'{head}<p class="muted">No pings this month.</p></section>'
+        return panel_section(
+            sub, '<p class="muted">No pings this month.</p>', title="Coach pings (this month)"
+        )
     lines = "".join(_ping_line(r) for r in rows)
-    return f'{head}<div class="cpnl-list">{lines}</div></section>'
+    return panel_section(
+        sub, f'<div class="cpnl-list">{lines}</div>', title="Coach pings (this month)"
+    )
 
 
 def _ping_line(r: sqlite3.Row) -> str:
@@ -996,13 +1002,14 @@ def render_coach_mutes_section(db_path: Path, *, conn: sqlite3.Connection | None
     finally:
         if owned:
             db_conn.close()
-    head = (
-        '<section class="panel cpnl-mutes"><h2>Active mutes</h2>'
+    sub = (
         '<p class="sub">A class the owner dismissed three times in a row mutes itself until '
         "cleared here — dismissals train the coach; it never argues.</p>"
     )
     if not rows:
-        return f'{head}<p class="muted">No active mutes.</p></section>'
+        return panel_section(
+            sub, '<p class="muted">No active mutes.</p>', title="Active mutes", cls="cpnl-mutes"
+        )
     lines = "".join(
         '<p class="cpnl-line" data-mute-row data-class="'
         f'{escape(str(r["class_"]))}">{escape(str(r["class_"]))} &mdash; muted since '
@@ -1012,7 +1019,13 @@ def render_coach_mutes_section(db_path: Path, *, conn: sqlite3.Connection | None
         f'data-class="{escape(str(r["class_"]))}">unmute</button></p>'
         for r in rows
     )
-    return f'{head}<div class="cpnl-list">{lines}</div>{_UNMUTE_JS}</section>'
+    return panel_section(
+        sub,
+        f'<div class="cpnl-list">{lines}</div>',
+        _UNMUTE_JS,
+        title="Active mutes",
+        cls="cpnl-mutes",
+    )
 
 
 def render_coach_digest_section(db_path: Path) -> str:
@@ -1027,16 +1040,15 @@ def render_coach_digest_section(db_path: Path) -> str:
         rows = digest_pings(db_path, limit=20)
     except Exception:  # pragma: no cover - the digest must never break the page
         rows = []
-    head = (
-        '<section class="panel"><h2>Digest queue</h2>'
+    sub = (
         '<p class="sub">Nudges that hit the daily/weekly frequency cap or failed to send — '
         "surfaced quietly here instead of vanishing silently.</p>"
     )
     if not rows:
-        return f'{head}<p class="muted">Digest is empty.</p></section>'
+        return panel_section(sub, '<p class="muted">Digest is empty.</p>', title="Digest queue")
     ticker_and_age = _digest_tickers_and_ages(db_path, [pid for pid, _cls, _body in rows])
     lines = "".join(_digest_line(pid, cls, ticker_and_age.get(pid)) for pid, cls, _body in rows)
-    return f'{head}<div class="cpnl-list">{lines}</div></section>'
+    return panel_section(sub, f'<div class="cpnl-list">{lines}</div>', title="Digest queue")
 
 
 def _digest_tickers_and_ages(
@@ -1126,8 +1138,7 @@ def render_decision_journal_section(
         if owned:
             db_conn.close()
     advisor_count = int(advisor_count_rows[0]["n"]) if advisor_count_rows else 0
-    head = (
-        '<section class="panel"><h2>Owner Decision journal</h2>'
+    sub = (
         '<p class="sub">Owner Decisions are the learning unit: what you decided, '
         "the advice available beforehand, and how process and outcome graded. "
         "Unadopted advisor views stay outside this default.</p>"
@@ -1141,9 +1152,19 @@ def render_decision_journal_section(
         else ""
     )
     if not rows:
-        return f'{head}{preserved}<p class="muted">No Owner Decisions recorded yet.</p></section>'
+        return panel_section(
+            sub,
+            preserved,
+            '<p class="muted">No Owner Decisions recorded yet.</p>',
+            title="Owner Decision journal",
+        )
     lines = "".join(_journal_row(r) for r in rows)
-    return f'{head}{preserved}<div class="cpnl-list">{lines}</div></section>'
+    return panel_section(
+        sub,
+        preserved,
+        f'<div class="cpnl-list">{lines}</div>',
+        title="Owner Decision journal",
+    )
 
 
 def _journal_advice_chips(r: sqlite3.Row) -> str:
@@ -1289,18 +1310,18 @@ def compose_decisions_page(
 def _audit_section(
     audit: list[SizingAuditRow], live: LivePortfolio, alpha: PositionAlpha | None
 ) -> str:
-    head = (
-        '<section class="panel"><h2>Sizing audit</h2>'
+    sub = (
         '<p class="sub">Stated posture (conviction · target, from your recorded sizing '
         "intents) vs the live book (weight · window alpha from the tracker) vs the model "
         "(thesis verdict · DCF gap). Tension is scored to rank attention — every point "
         "renders its reason; nothing here is a directive.</p>"
     )
     if not audit:
-        return (
-            f"{head}"
+        return panel_section(
+            sub,
             '<p class="muted">No research portfolio holdings found '
-            "(tracked_companies has no portfolio rows).</p></section>"
+            "(tracked_companies has no portfolio rows).</p>",
+            title="Sizing audit",
         )
     notes: list[str] = []
     if not live.available:
@@ -1327,17 +1348,19 @@ def _audit_section(
         )
     note_html = "".join(f'<p class="muted ad-note">{n}</p>' for n in notes)
     rows = "".join(_audit_row(r) for r in audit)
-    return (
-        f"{head}{note_html}"
+    return panel_section(
+        sub,
+        note_html,
         '<table class="ad-table"><thead><tr>'
         "<th>Ticker</th><th>Thesis</th>"
         '<th class="num">Conviction</th><th class="num">Target</th>'
         '<th class="num">Weight</th><th class="num">vs DCF FV</th>'
         f'<th class="num">{chr(0x03B1)} vs SPY</th>'
         "<th>Mismatch</th><th></th>"
-        "</tr></thead><tbody>"
-        f"{rows}"
-        "</tbody></table></section>"
+        "</tr></thead><tbody>",
+        rows,
+        "</tbody></table>",
+        title="Sizing audit",
     )
 
 
@@ -1582,19 +1605,19 @@ def _calibration_section(stats: CalibrationStats) -> str:
     """The decisions-history analysis (S15 PR2): hit rate by conviction,
     action mix + reversal track record, time-to-outcome. Deterministic
     aggregates only — the sub-line states the denominator rule."""
-    head = (
-        '<section class="panel"><h2>Decision calibration</h2>'
+    sub = (
         '<p class="sub">How the recorded recommendations actually graded — by stated '
         "conviction, by your response to them, and by how long a call takes to resolve. "
         "Hit rate = correct &divide; graded (correct + wrong + mixed); pending and "
         "unfalsifiable calls are shown but never scored.</p>"
     )
     if stats.total == 0:
-        return (
-            f"{head}"
+        return panel_section(
+            sub,
             '<p class="muted">No decisions recorded yet. The morning pipeline\'s stage 0b '
             "extracts ADD/TRIM/HOLD/SELL verdicts from five-minute rereads and Socratic "
-            "memos into the ledger; grading accrues via the outcome rung.</p></section>"
+            "memos into the ledger; grading accrues via the outcome rung.</p>",
+            title="Decision calibration",
         )
 
     kpis = _calibration_kpi_html(stats)
@@ -1667,9 +1690,19 @@ def _calibration_section(stats: CalibrationStats) -> str:
 
     trend_block = _cohort_trend_block(stats)
     omission_block = _omission_block(stats)
-    return (
-        f"{head}{kpis}{trend_block}{conviction_table}{brier_line}{expectancy_line}"
-        f"{process_block}{mix_line}{timing_line}{omission_block}{reversal_table}</section>"
+    return panel_section(
+        sub,
+        kpis,
+        trend_block,
+        conviction_table,
+        brier_line,
+        expectancy_line,
+        process_block,
+        mix_line,
+        timing_line,
+        omission_block,
+        reversal_table,
+        title="Decision calibration",
     )
 
 
@@ -1815,8 +1848,7 @@ def render_skill_decomposition_section(d: SkillDecomposition, beta: BetaStats | 
         else "the tracker window"
     )
     basis_short = "your policy benchmark" if d.benchmark_basis == "policy" else "SPY"
-    head = (
-        '<section class="panel"><h2>Skill decomposition</h2>'
+    sub = (
         '<p class="sub">Is the alpha repeatable — and which decision produces it? '
         f"Realized dollar alpha over {window} vs {basis_short}, split into "
         '<b title="which names, size-neutral">selection</b> / '
@@ -1882,7 +1914,15 @@ def render_skill_decomposition_section(d: SkillDecomposition, beta: BetaStats | 
     else:
         conv_table = ""
     notes = "".join(f'<p class="muted ad-note">{escape(n)}</p>' for n in d.notes)
-    return f"{head}{verdict}{kpis}{read}{conv_table}{notes}</section>"
+    return panel_section(
+        sub,
+        verdict,
+        kpis,
+        read,
+        conv_table,
+        notes,
+        title="Skill decomposition",
+    )
 
 
 def _verdict_line(d: SkillDecomposition, beta: BetaStats | None) -> str:
@@ -2003,21 +2043,21 @@ def _timeline_row(e: TimelineEvent) -> str:
 
 
 def _timeline_section(timeline: list[TimelineEvent]) -> str:
-    head = (
-        '<section class="panel"><h2>Decisions timeline</h2>'
+    sub = (
         '<p class="sub">The durable record of allocation decisions — accepted thesis edits '
         "(ledger), stated sizing intents, and decision notes — merged newest-first.</p>"
     )
     if not timeline:
-        return (
-            f"{head}"
+        return panel_section(
+            sub,
             '<p class="muted">Nothing recorded yet. Approving an alert action, recording a '
-            "sizing intent above, or capturing a decision note all land here.</p></section>"
+            "sizing intent above, or capturing a decision note all land here.</p>",
+            title="Decisions timeline",
         )
     rows = "".join(_timeline_row(e) for e in timeline)
-    return (
-        f"{head}"
-        + lg.grid_open()
+    return panel_section(
+        sub,
+        lg.grid_open()
         + lg.filter_bar(
             len(timeline), noun="decisions", placeholder="Filter by ticker / kind / text…"
         )
@@ -2028,8 +2068,8 @@ def _timeline_section(timeline: list[TimelineEvent]) -> str:
         + "<th>Decision</th>"
         + "</tr></thead><tbody>"
         + f"{rows}</tbody></table>"
-        + lg.grid_close()
-        + "</section>"
+        + lg.grid_close(),
+        title="Decisions timeline",
     )
 
 

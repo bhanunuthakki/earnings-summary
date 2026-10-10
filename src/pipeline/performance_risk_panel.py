@@ -24,6 +24,7 @@ from pipeline.console_scaffold import render_console
 from pipeline.portfolio_decision_support import render_portfolio_posture_section
 from pipeline.portfolio_panel import render_portfolio_panel
 from pipeline.portfolio_styles import portfolio_css
+from ui.panel import panel_empty, panel_section
 
 _POLICY_TICKERS: tuple[str, ...] = ("QQQ", "SGOV", "VTI", "VWO")
 
@@ -277,10 +278,13 @@ def _row(label: str, bucket: PortfolioAllocationBucket) -> str:
 
 def render_allocation_card(allocation: PortfolioAllocationProjection) -> str:
     """Render typed allocation truth without silently filling unavailable data."""
-    head = '<section class="panel pr-allocation"><h2>Portfolio Allocation</h2>'
     if allocation.state == "unavailable":
         reasons = ", ".join(allocation.reason_codes) or "allocation source unavailable"
-        return f'{head}<p class="muted">Allocation unavailable — {escape(reasons)}.</p></section>'
+        return panel_empty(
+            f"Allocation unavailable — {escape(reasons)}.",
+            title="Portfolio Allocation",
+            cls="pr-allocation",
+        )
     b: PortfolioAllocationBuckets = allocation.buckets
     us_etf = b.us_etf
     international_etf = b.international_etf
@@ -357,19 +361,25 @@ def render_allocation_card(allocation: PortfolioAllocationProjection) -> str:
         if allocation.state == "incomplete"
         else ""
     )
-    return (
-        f'{head}<p class="sub">{escape(status)} · {escape(allocation.source_identity)} · '
-        f"{escape(as_of)} · {escape(reconciliation)}.</p>"
-        f'<div class="pr-allocation-rows">{rows}</div>{reasons}{option_details}</section>'
+    return panel_section(
+        f'<p class="sub">{escape(status)} · {escape(allocation.source_identity)} · '
+        f"{escape(as_of)} · {escape(reconciliation)}.</p>",
+        f'<div class="pr-allocation-rows">{rows}</div>',
+        reasons,
+        option_details,
+        title="Portfolio Allocation",
+        cls="pr-allocation",
     )
 
 
 def _policy_editor(policy: PolicyMix | None) -> str:
     """Render only provider-confirmed policy weights; never invent a mix."""
     if policy is None:
-        return (
-            '<section class="panel pr-policy-editor" data-policy-editor><h2>Policy mix</h2>'
-            '<p class="muted">Policy mix unavailable from the tracker.</p></section>'
+        return panel_empty(
+            "Policy mix unavailable from the tracker.",
+            title="Policy mix",
+            cls="pr-policy-editor",
+            attrs=" data-policy-editor",
         )
     confirmed = {weight.ticker.upper(): weight for weight in policy.weights}
     supported = all(
@@ -401,17 +411,19 @@ def _policy_editor(policy: PolicyMix | None) -> str:
     recomputation = policy.recomputation_status or "unavailable"
     disabled = "" if ready else " disabled"
     status = "Policy mix is current." if ready else reason
-    return (
-        '<section class="panel pr-policy-editor" data-policy-editor '
-        f'data-policy-revision="{escape(revision, quote=True)}" '
-        f'data-recomputation-status="{escape(recomputation, quote=True)}"><h2>Policy mix</h2>'
+    return panel_section(
         '<p class="sub">Provider-confirmed targets only · revision '
-        f"{escape(revision or 'unavailable')} · recomputation {escape(recomputation)}.</p>"
+        f"{escape(revision or 'unavailable')} · recomputation {escape(recomputation)}.</p>",
         f'<form data-policy-form data-write-ready="{str(ready).lower()}" data-revision="{escape(revision, quote=True)}">'
         f'<div class="pr-policy-grid">{rows}</div>'
         f'<div class="pr-policy-actions"><button type="submit" class="k-btn k-btn-primary"{disabled}>Apply mix</button>'
-        f'<p class="pr-policy-status" data-policy-status role="status">{escape(status)}</p></div></form></section>'
-        + _POLICY_EDITOR_JS
+        f'<p class="pr-policy-status" data-policy-status role="status">{escape(status)}</p></div></form>',
+        title="Policy mix",
+        cls="pr-policy-editor",
+        attrs=" data-policy-editor "
+        f'data-policy-revision="{escape(revision, quote=True)}" '
+        f'data-recomputation-status="{escape(recomputation, quote=True)}"',
+        tail=_POLICY_EDITOR_JS,
     )
 
 
@@ -428,10 +440,13 @@ def _risk_explorer() -> str:
         f'{"" if key == "correlation" else " hidden"}><p class="muted" role="status">Loading…</p></div>'
         for key, _label, fragment in _TABS
     )
-    return (
-        '<section class="panel pr-risk" data-performance-risk-tabs><h2>Risk Explorer</h2>'
-        '<div class="k-chip-tabs" role="tablist" aria-label="Risk Explorer views">'
-        f"{tabs}</div>{panels}</section>{_TABS_JS}"
+    return panel_section(
+        '<div class="k-chip-tabs" role="tablist" aria-label="Risk Explorer views">',
+        f"{tabs}</div>{panels}",
+        title="Risk Explorer",
+        cls="pr-risk",
+        attrs=" data-performance-risk-tabs",
+        tail=_TABS_JS,
     )
 
 
