@@ -251,58 +251,86 @@ def test_detect_secrets_filter_drops_only_known_metadata_hashes(
     )
 
 
-MELI_SOURCE_FIXTURE = "tests/fixtures/meli_reported_tables/provenance.json"
+MELI_SOURCE_FIXTURES = (
+    "tests/fixtures/meli_reported_tables/provenance.json",
+    "tests/fixtures/meli_reported_statements/provenance.json",
+)
 SCANNER_FIELD_NAME = "api_" + "key"
 
 
 @pytest.mark.parametrize("key", ("source_sha256", "snippet_sha256", "sha256"))
 @pytest.mark.parametrize("delimiter", (":", "="))
+@pytest.mark.parametrize("filename", MELI_SOURCE_FIXTURES)
 def test_meli_public_source_fixture_accepts_only_exact_digest_members(
-    key: str, delimiter: str
+    key: str, delimiter: str, filename: str
 ) -> None:
     digest = hashlib.sha256(b"public SEC filing evidence").hexdigest()
-    assert FILTER.is_quality_evidence_hash(
-        MELI_SOURCE_FIXTURE, f'  "{key}" {delimiter} "{digest}",'
-    )
+    assert FILTER.is_quality_evidence_hash(filename, f'  "{key}" {delimiter} "{digest}",')
 
 
 @pytest.mark.parametrize(
-    ("filename", "line"),
+    ("path_prefix", "line"),
     (
-        ("other/" + MELI_SOURCE_FIXTURE, f'"sha256": "{"a" * 64}"'),
-        (MELI_SOURCE_FIXTURE, f'"source_manifest_sha256": "{"a" * 64}"'),
-        (MELI_SOURCE_FIXTURE, f'"sha256": "{"A" * 64}"'),
-        (MELI_SOURCE_FIXTURE, f'"sha256": "{"a" * 63}"'),
-        (MELI_SOURCE_FIXTURE, f'"sha256": "{"a" * 64}x"'),
-        (MELI_SOURCE_FIXTURE, f'"{SCANNER_FIELD_NAME}": "ghp_{"a" * 36}"'),
+        ("other/", f'"sha256": "{"a" * 64}"'),
+        ("./", f'"sha256": "{"a" * 64}"'),
+        ("", f'"source_manifest_sha256": "{"a" * 64}"'),
+        ("", f'"sha256": "{"A" * 64}"'),
+        ("", f'"sha256": "{"a" * 63}"'),
+        ("", f'"sha256": "{"a" * 64}x"'),
+        ("", f'"{SCANNER_FIELD_NAME}": "ghp_{"a" * 36}"'),
         (
-            MELI_SOURCE_FIXTURE,
+            "",
             '"private_key": "-----BEGIN '
             "PRIVATE KEY----- synthetic-fixture -----END "
             'PRIVATE KEY-----"',
         ),
-        (MELI_SOURCE_FIXTURE, f'"sha256": "{"a" * 64}", "token": "secret"'),
+        ("", f'"sha256": "{"a" * 64}", "token": "secret"'),
     ),
 )
+@pytest.mark.parametrize("filename", MELI_SOURCE_FIXTURES)
 def test_meli_public_source_fixture_rejects_other_paths_and_secret_shapes(
-    filename: str, line: str
+    filename: str, path_prefix: str, line: str
 ) -> None:
-    assert not FILTER.is_quality_evidence_hash(filename, line)
+    assert not FILTER.is_quality_evidence_hash(path_prefix + filename, line)
 
 
+@pytest.mark.parametrize("filename", MELI_SOURCE_FIXTURES)
 def test_detect_secrets_scans_meli_fixture_without_masking_actual_secrets(
     tmp_path: Path,
+    filename: str,
 ) -> None:
-    fixture = tmp_path / MELI_SOURCE_FIXTURE
+    fixture = tmp_path / filename
     fixture.parent.mkdir(parents=True)
-    original = (ROOT / MELI_SOURCE_FIXTURE).read_text(encoding="utf-8")
+    original = (ROOT / filename).read_text(encoding="utf-8")
     fixture.write_text(original, encoding="utf-8")
-    assert _run_detect_secrets(tmp_path, MELI_SOURCE_FIXTURE, filtered=False).returncode == 1
-    assert _run_detect_secrets(tmp_path, MELI_SOURCE_FIXTURE, filtered=True).returncode == 0
+    assert _run_detect_secrets(tmp_path, filename, filtered=False).returncode == 1
+    assert _run_detect_secrets(tmp_path, filename, filtered=True).returncode == 0
     with_secret = json.loads(original)
     with_secret[SCANNER_FIELD_NAME] = "ghp_" + "a" * 36
     fixture.write_text(json.dumps(with_secret, indent=2) + "\n", encoding="utf-8")
-    assert _run_detect_secrets(tmp_path, MELI_SOURCE_FIXTURE, filtered=True).returncode == 1
+    assert _run_detect_secrets(tmp_path, filename, filtered=True).returncode == 1
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_returncode"),
+    (("annotated", 0), ("without_annotation", 1), ("extra_credential", 1)),
+)
+def test_native_public_digest_annotation_keeps_other_credentials_detectable(
+    tmp_path: Path, case: str, expected_returncode: int
+) -> None:
+    filename = "tests/test_meli_reported_statements.py"
+    source = (ROOT / filename).read_text(encoding="utf-8")
+    annotation = "  # pragma: allowlist secret"
+    assert source.count(annotation) == 1
+    if case == "without_annotation":
+        source = source.replace(annotation, "")
+    elif case == "extra_credential":
+        source += f'\n{SCANNER_FIELD_NAME} = "ghp_{"a" * 36}"\n'
+    fixture = tmp_path / filename
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(source, encoding="utf-8")
+    returncode = _run_detect_secrets(tmp_path, filename, filtered=True).returncode
+    assert returncode == expected_returncode
 
 
 INVESTING_REVIEW_BASELINE = (

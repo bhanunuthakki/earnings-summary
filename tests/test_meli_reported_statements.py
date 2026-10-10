@@ -40,9 +40,10 @@ def test_fixture_commitment() -> None:
     manifest = json.loads((FIXTURES / "provenance.json").read_text())
     assert hashlib.sha256(_raw()).hexdigest() == manifest["snippet_sha256"]
     assert manifest["source_url"] == URL
+    # This fixed public SEC source SHA also appears in the retained table provenance.
     assert (
         manifest["source_sha256"]
-        == "b605310e398baa79b50ea488075c32d6522d8966438135cf25e8fa9f2a448924"
+        == "b605310e398baa79b50ea488075c32d6522d8966438135cf25e8fa9f2a448924"  # pragma: allowlist secret
     )
     assert len(manifest["fragments"]) == 81
     line_hashes = {hashlib.sha256(line).hexdigest() for line in _raw().splitlines()}
