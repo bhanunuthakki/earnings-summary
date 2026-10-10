@@ -238,9 +238,24 @@ def test_actual_head_is_supported() -> None:
             )
             for line in lines
         ]
-    # Retain all 151 prior test seams plus the two managed-startup regressions.
+    # Retain all 153 current test seams plus the lock-inheritance child harness.
     # No production gap is admitted.
-    assert len(graph.unknown_edges) == 153
+    assert len(graph.unknown_edges) == 154
+    assert [
+        edge
+        for edge in graph.unknown_edges
+        if edge.source == "tests/test_job_runtime_lock_filenames.py"
+    ] == [
+        GraphEdge(
+            source="tests/test_job_runtime_lock_filenames.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=73,
+            unknown=True,
+        )
+    ]
     assert [
         edge for edge in graph.unknown_edges if edge.source == "tests/test_pytest_temp_lifecycle.py"
     ] == [
