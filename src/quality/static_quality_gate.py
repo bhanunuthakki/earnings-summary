@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -11,8 +12,9 @@ import sys
 import tempfile
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from pathlib import Path, PurePosixPath
-from typing import cast
+from typing import Literal, cast
 
 from quality.changed_suppressions import ChangedSuppressionError, suppression_findings
 from quality.git_env import clean_local_git_env
@@ -32,6 +34,24 @@ _NON_RETAINED_PREFIXES = (
 
 class StaticQualityGateError(RuntimeError):
     """The gate could not establish complete, trustworthy evidence."""
+
+
+class PyrightProcessError(StaticQualityGateError):
+    """Retain bounded process evidence without retaining subprocess stderr."""
+
+    def __init__(self, stage: Literal["main", "hidden"], returncode: int, stderr: str) -> None:
+        super().__init__(f"Pyright failed before reporting diagnostics ({returncode})")
+        self.stage = stage
+        self.returncode = returncode
+        markers = {
+            "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory",
+            "FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory",
+        }
+        self.reason: Literal["node_heap_exhaustion_marker", "unclassified"] = (
+            "node_heap_exhaustion_marker"
+            if any(line.strip() in markers for line in stderr.splitlines())
+            else "unclassified"
+        )
 
 
 def subsystem(path: str) -> str:
@@ -207,6 +227,141 @@ def parse_pyright_payload(
     return dict(counts)
 
 
+def _diagnostic_position(value: object) -> dict[str, int]:
+    if not isinstance(value, dict):
+        raise StaticQualityGateError("diagnostic position unavailable")
+    position = cast(dict[str, object], value)
+    line, character = position.get("line"), position.get("character")
+    if (
+        not isinstance(line, int)
+        or isinstance(line, bool)
+        or line < 0
+        or not isinstance(character, int)
+        or isinstance(character, bool)
+        or character < 0
+    ):
+        raise StaticQualityGateError("diagnostic position unavailable")
+    return {"line": line, "character": character}
+
+
+def failure_diagnostics_receipt(
+    root: Path,
+    payload: object,
+    retained: Sequence[str],
+    aliases: Mapping[str, str],
+    config_path: Path,
+) -> dict[str, object]:
+    """Build a count-replayable receipt; never publish untrusted diagnostic text."""
+    parse_pyright_payload(root, payload, retained, aliases)
+    if not isinstance(payload, dict):
+        raise StaticQualityGateError("diagnostic payload unavailable")
+    payload_map = cast(dict[str, object], payload)
+    raw_rows = payload_map["generalDiagnostics"]
+    if not isinstance(raw_rows, list):
+        raise StaticQualityGateError("diagnostic rows unavailable")
+    rows: list[dict[str, object]] = []
+    for raw in cast(list[object], raw_rows):
+        if not isinstance(raw, dict):
+            raise StaticQualityGateError("diagnostic row unavailable")
+        row = cast(dict[str, object], raw)
+        relative = _relative_diagnostic_path(root, row.get("file"))
+        relative = aliases.get(relative, relative)
+        path = PurePosixPath(relative)
+        if path.is_absolute() or ".." in path.parts or any(ord(c) < 32 for c in relative):
+            raise StaticQualityGateError("diagnostic path unavailable")
+        severity, rule, message = row.get("severity"), row.get("rule"), row.get("message")
+        if not isinstance(severity, str) or severity not in {"error", "warning", "information"}:
+            raise StaticQualityGateError("diagnostic severity unavailable")
+        if rule is not None and not isinstance(rule, str):
+            raise StaticQualityGateError("diagnostic rule unavailable")
+        message_sha256 = row.get("message_sha256")
+        if isinstance(message, str):
+            message_sha256 = hashlib.sha256(message.encode("utf-8")).hexdigest()
+        elif not isinstance(message_sha256, str) or not re.fullmatch(
+            r"[0-9a-f]{64}", message_sha256
+        ):
+            raise StaticQualityGateError("diagnostic message unavailable")
+        raw_range = row.get("range")
+        safe_range: dict[str, dict[str, int]] | None = None
+        if raw_range is not None:
+            if not isinstance(raw_range, dict):
+                raise StaticQualityGateError("diagnostic range unavailable")
+            diagnostic_range = cast(dict[str, object], raw_range)
+            start = _diagnostic_position(diagnostic_range.get("start"))
+            end = _diagnostic_position(diagnostic_range.get("end"))
+            if (end["line"], end["character"]) < (start["line"], start["character"]):
+                raise StaticQualityGateError("diagnostic range unavailable")
+            safe_range = {"start": start, "end": end}
+        rule_sha256 = row.get("rule_sha256")
+        if isinstance(rule, str):
+            # A replayed receipt already has its rule identity, not the original text.
+            if (
+                rule != "hashed"
+                or not isinstance(rule_sha256, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", rule_sha256)
+            ):
+                rule_sha256 = hashlib.sha256(rule.encode("utf-8")).hexdigest()
+        else:
+            rule_sha256 = None
+        rows.append(
+            {
+                "file": relative,
+                "severity": severity,
+                "rule": "hashed" if rule is not None else None,
+                "rule_sha256": rule_sha256,
+                "range": safe_range,
+                "message_sha256": message_sha256,
+            }
+        )
+    source_hashes = {"ceilings": hashlib.sha256(config_path.read_bytes()).hexdigest()}
+    for label, source in (("gate", Path(__file__)), ("pyproject", root / "pyproject.toml")):
+        if source.is_file():
+            source_hashes[label] = hashlib.sha256(source.read_bytes()).hexdigest()
+    return {
+        "schema_version": "static-quality-failure-diagnostics.v1",
+        "summary": {"filesAnalyzed": len(retained)},
+        "generalDiagnostics": rows,
+        "metadata": {
+            "source_sha256": source_hashes,
+            "retained_population_sha256": hashlib.sha256(
+                json.dumps(sorted(retained), separators=(",", ":")).encode("utf-8")
+            ).hexdigest(),
+        },
+    }
+
+
+def _emit_failure_diagnostics(
+    root: Path,
+    payload: object,
+    retained: Sequence[str],
+    aliases: Mapping[str, str],
+    config_path: Path,
+    failure: Exception | None = None,
+) -> None:
+    try:
+        if isinstance(failure, PyrightProcessError):
+            print(
+                "static-quality process diagnostic: "
+                + json.dumps(
+                    {
+                        "stage": failure.stage,
+                        "returncode": failure.returncode,
+                        "reason": failure.reason,
+                    }
+                ),
+                file=sys.stderr,
+            )
+        receipt = failure_diagnostics_receipt(root, payload, retained, aliases, config_path)
+        serialized = json.dumps(receipt, ensure_ascii=True, indent=2)
+        print("static-quality diagnostics: BEGIN", file=sys.stderr)
+        print(serialized, file=sys.stderr)
+        print("static-quality diagnostics: END", file=sys.stderr)
+    except Exception:
+        # Reporting must neither expose exception payloads nor replace a failed gate result.
+        with suppress(Exception):
+            print("static-quality diagnostics unavailable", file=sys.stderr)
+
+
 def compare_exact(
     retained: Sequence[str],
     expected_pyright: Mapping[str, int],
@@ -266,9 +421,7 @@ def _run_pyright(
     except (OSError, UnicodeError) as exc:
         raise StaticQualityGateError("unable to run Pyright") from exc
     if main_result.returncode not in (0, 1):
-        raise StaticQualityGateError(
-            f"Pyright failed before reporting diagnostics ({main_result.returncode})"
-        )
+        raise PyrightProcessError("main", main_result.returncode, main_result.stderr)
     try:
         payloads: list[object] = [json.loads(main_result.stdout)]
     except json.JSONDecodeError as exc:
@@ -292,9 +445,7 @@ def _run_pyright(
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
     if hidden_result.returncode not in (0, 1):
-        raise StaticQualityGateError(
-            f"Pyright failed before reporting diagnostics ({hidden_result.returncode})"
-        )
+        raise PyrightProcessError("hidden", hidden_result.returncode, hidden_result.stderr)
     try:
         payloads.append(json.loads(hidden_result.stdout))
     except json.JSONDecodeError as exc:
@@ -328,9 +479,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--pythonpath", default=sys.executable)
     parser.add_argument("--base", default="origin/main")
     parser.add_argument("--pyright-json", type=Path)
+    parser.add_argument("--failure-diagnostics", action="store_true")
     args = parser.parse_args(argv)
     root = args.repo_root.resolve()
     config_path = args.config if args.config.is_absolute() else root / args.config
+    retained: list[str] = []
+    payload: object = None
+    aliases: dict[str, str] = {}
+    population_validated = False
     try:
         retained = _retained_python_files(root)
         expected_pyright, expected_suppressions = load_ceilings(config_path)
@@ -341,10 +497,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         if args.pyright_json:
             payload = json.loads(args.pyright_json.read_text(encoding="utf-8"))
-            aliases: dict[str, str] = {}
         else:
             payload, aliases = _run_pyright(root, args.pythonpath, retained)
         actual_pyright = parse_pyright_payload(root, payload, retained, aliases)
+        population_validated = True
         findings = suppression_findings(root, retained)
         actual_suppressions = Counter(subsystem(finding.path) for finding in findings)
         violations.extend(
@@ -363,11 +519,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         UnicodeDecodeError,
         json.JSONDecodeError,
     ) as exc:
-        print(f"static-quality gate failed closed: {exc}", file=sys.stderr)
+        if args.failure_diagnostics:
+            print("static-quality gate failed closed: evidence unavailable", file=sys.stderr)
+            _emit_failure_diagnostics(
+                root, payload if population_validated else None, retained, aliases, config_path, exc
+            )
+        else:
+            print(f"static-quality gate failed closed: {exc}", file=sys.stderr)
         return 2
     if violations:
         for violation in violations:
             print(violation, file=sys.stderr)
+        if args.failure_diagnostics:
+            _emit_failure_diagnostics(root, payload, retained, aliases, config_path)
         return 1
     print(
         "static-quality ceilings exact: "
