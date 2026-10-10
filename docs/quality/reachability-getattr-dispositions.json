@@ -519,6 +519,31 @@
     },
     {
       "disposition": "closed_literal_set",
+      "evidence": "Analysis coverage compares only this fixed tuple of ExpectedDocument identity fields; no callable or dispatch target is selected.",
+      "fingerprint": "9f9e9e19676fb26ca0829cb61b7961b2d82330e2f17874670b867878825fc05d",
+      "line": 450,
+      "path": "src/provenance/analysis_scope.py",
+      "targets": [
+        "issuer_id",
+        "document_type",
+        "form_type",
+        "accession_number",
+        "source_url"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Analysis coverage compares only this fixed tuple of ExpectedDocument identity fields; no callable or dispatch target is selected.",
+      "fingerprint": "0a72df9f575cedbd860b3e28c22f863733d7edc593d202175b02ba65b8080186",
+      "line": 453,
+      "path": "src/provenance/analysis_scope.py",
+      "targets": [
+        "period_start",
+        "period_end"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
       "evidence": "getattr projects only _DISPOSITION_COLUMNS fields.",
       "fingerprint": "dedf20b2e0c84ce6b6486f8c8b65f89c4321adf4b8188cc24c03bd45b6c204c1",
       "line": 220,
@@ -558,6 +583,18 @@
         "dimensions",
         "unit_key",
         "currency"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "POSIX bounded-source preflight reads only os constants O_NOFOLLOW, O_DIRECTORY and O_NONBLOCK from the literal generator tuple. A missing or zero constant refuses opening; this lookup dispatches no callable and has no input-selected attribute name.",
+      "fingerprint": "b94506cefc3145fb3176c77d94476f17ab5450323dc1143e3f124dff49e69df4",
+      "line": 56,
+      "path": "src/provenance/immutable_artifact.py",
+      "targets": [
+        "O_NOFOLLOW",
+        "O_DIRECTORY",
+        "O_NONBLOCK"
       ]
     },
     {
@@ -740,18 +777,6 @@
         "DATA_DIR",
         "FMP_DIR",
         "STATE_ROOT"
-      ]
-    },
-    {
-      "disposition": "closed_literal_set",
-      "evidence": "POSIX bounded-source preflight reads only os constants O_NOFOLLOW, O_DIRECTORY and O_NONBLOCK from the literal generator tuple. A missing or zero constant refuses opening; this lookup dispatches no callable and has no input-selected attribute name.",
-      "fingerprint": "b94506cefc3145fb3176c77d94476f17ab5450323dc1143e3f124dff49e69df4",
-      "line": 56,
-      "path": "src/provenance/immutable_artifact.py",
-      "targets": [
-        "O_NOFOLLOW",
-        "O_DIRECTORY",
-        "O_NONBLOCK"
       ]
     }
   ],

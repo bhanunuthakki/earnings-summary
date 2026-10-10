@@ -1365,3 +1365,22 @@ non-execution and preservation, incomplete-scan refusal, current source identity
 and protected receipt output. The reconstruction manifest registers this
 collector under `test_and_verification_suite`; no historical measurement is
 registered as current evidence.
+
+### Declared SEC analysis selection
+
+`execution/plan_analysis_evidence_scope.py` requires an explicit database, a typed
+request, and an immutable output receipt. It reads a complete authoritative issuer
+inventory and selects declared reporting periods plus explicitly justified related
+accessions. The receipt retains outside-scope documents, package dependencies,
+publication and observation clocks, inventory identity, and a content commitment.
+It refuses incomplete inventories, ambiguous periods, missing source identity,
+stale or fabricated commitments, and receipt paths that replace the request or
+database. The database connection is read-only. Receipt creation uses the existing
+artifact writer lock and immutable no-clobber owner.
+
+The CLI returns `selection_only_not_model_ready`. Selection does not establish
+archive acquisition, extraction completeness, financial admission, or research
+readiness. Existing research and narrative consumers keep their current corpus
+selection. This integration adds no collection action, scheduler, dashboard
+control, or production operation. Consumer adoption requires a separate current
+source-clock and financial acceptance integration.
