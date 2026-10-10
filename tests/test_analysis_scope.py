@@ -56,7 +56,7 @@ def add_expected(
     period: datetime | None = datetime(2025, 12, 31, tzinfo=UTC),
     form: str = "10-K",
     document_type: str = "filing",
-    filing_at: datetime = datetime(2026, 2, 10, tzinfo=UTC),
+    filing_at: datetime | None = datetime(2026, 2, 10, tzinfo=UTC),
     recorded_at: datetime = STAMP,
 ) -> ExpectedDocument:
     document = ExpectedDocument(
@@ -875,3 +875,18 @@ def test_analysis_clocks_require_explicit_time_zone(field: str, as_json: bool) -
             AnalysisScopeRequest.model_validate_json(json.dumps(values))
         else:
             AnalysisScopeRequest.model_validate(values)
+
+
+def test_unselected_old_primary_without_publication_time_refuses_selection(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn, _scope = scope_db(tmp_path, migrated_db)
+    add_expected(
+        conn,
+        "old-without-publication-time",
+        "0000000001-24-000001",
+        period=datetime(2023, 12, 31, tzinfo=UTC),
+        filing_at=None,
+    )
+    with pytest.raises(ValueError, match="unknown publication time"):
+        build_analysis_scope(conn, scope_request())
