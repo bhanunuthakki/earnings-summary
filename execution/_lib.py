@@ -16,11 +16,15 @@ from typing import cast
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = PROJECT_ROOT / "src"
-if str(SRC_ROOT) not in sys.path:
-    sys.path.insert(0, str(SRC_ROOT))
 
-from db_paths import resolve_db_path  # noqa: E402
-from log_redact import redact  # noqa: E402
+try:  # execution/ is on sys.path for direct invocation; src/ may not be yet
+    from db_paths import require_db_path, resolve_db_path
+    from log_redact import redact
+except ImportError:  # pragma: no cover - add the src root and retry once
+    if str(SRC_ROOT) not in sys.path:
+        sys.path.insert(0, str(SRC_ROOT))
+    from db_paths import require_db_path, resolve_db_path
+    from log_redact import redact
 
 
 def _safe_log_value(value: object) -> object:
@@ -44,9 +48,18 @@ def log_event(event: str, **fields: object) -> None:
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")), file=sys.stderr)
 
 
-def command_parser(description: str | None) -> argparse.ArgumentParser:
-    """Create the shared execution CLI parser shell."""
-    return argparse.ArgumentParser(description=description)
+def command_parser(
+    description: str | None,
+    *,
+    formatter_class: type[argparse.HelpFormatter] = argparse.HelpFormatter,
+) -> argparse.ArgumentParser:
+    """Create the shared execution CLI parser shell.
+
+    ``formatter_class`` lets a migrating command keep its existing help layout
+    (e.g. ``argparse.RawDescriptionHelpFormatter``) so ``--help`` stays
+    byte-identical.
+    """
+    return argparse.ArgumentParser(description=description, formatter_class=formatter_class)
 
 
 def add_database_argument(
@@ -54,21 +67,26 @@ def add_database_argument(
     *,
     flag: str = "--db-path",
     default: Path | None = None,
+    help_text: str | None = None,
+    metavar: str | None = "PATH",
 ) -> None:
     """Attach a typed database path while leaving path policy with the command.
 
     The default is deliberately ``None``. Legacy commands that historically
     used a checkout-relative database must opt into that default explicitly;
     new commands should resolve an authorized database at their own boundary.
+
+    ``help_text`` and ``metavar`` let a migrating command reproduce its existing
+    ``--help`` byte-for-byte: pass ``help_text=""`` to render no help line for
+    the flag and ``metavar=None`` to restore argparse's ``DEST``-derived metavar.
     """
-    default_hint = f" (default: {default})" if default is not None else ""
-    parser.add_argument(
-        flag,
-        type=Path,
-        default=default,
-        metavar="PATH",
-        help=f"Path to the SQLite database{default_hint}",
-    )
+    if help_text is None:
+        default_hint = f" (default: {default})" if default is not None else ""
+        help_text = f"Path to the SQLite database{default_hint}"
+    if metavar is None:
+        parser.add_argument(flag, type=Path, default=default, help=help_text)
+    else:
+        parser.add_argument(flag, type=Path, default=default, metavar=metavar, help=help_text)
 
 
 __all__ = [
@@ -77,5 +95,6 @@ __all__ = [
     "add_database_argument",
     "command_parser",
     "log_event",
+    "require_db_path",
     "resolve_db_path",
 ]
