@@ -1,5 +1,5 @@
 {
-  "review_note": "Reviewed merged main change 1d87985a: earnings CLIs now require the configured canonical database; readouts use the selected call date and fiscal period end while retaining evidence limits; artifact readers and reuse reject corrupt or missing output checksums without erasing historical bytes. Existing skill instructions already require exact periods, configured state, preserved cache semantics and separate financial verification. No skill prose change is needed. Preserved the released financial narrative contract and its source commitments from f0c0162f. Reviewed released earnings fix 1d87985a: pre/post CLIs resolve approved explicit or configured database; readout KPI periods stop at selected fiscal end while revisions remain current; exact call-event matching does not establish sourced consensus or historical cutoff; artifact reads and reuse verify stored output checksums. Reviewed ETF holdings reader snapshot-date/source/weight limits and direct-book membership overlap; added bounded ETF comparison guidance without a new application capability or write authority. Preserved all prior reviewed source commitments.",
+  "review_note": "Reviewed merged main change 1d87985a: earnings CLIs now require the configured canonical database; readouts use the selected call date and fiscal period end while retaining evidence limits; artifact readers and reuse reject corrupt or missing output checksums without erasing historical bytes. Existing skill instructions already require exact periods, configured state, preserved cache semantics and separate financial verification. No skill prose change is needed. Preserved the released financial narrative contract and its source commitments from f0c0162f. Reviewed released earnings fix 1d87985a: pre/post CLIs resolve approved explicit or configured database; readout KPI periods stop at selected fiscal end while revisions remain current; exact call-event matching does not establish sourced consensus or historical cutoff; artifact reads and reuse verify stored output checksums. Reviewed ETF holdings reader snapshot-date/source/weight limits and direct-book membership overlap; added bounded ETF comparison guidance without a new application capability or write authority. Preserved all prior reviewed source commitments. Reviewed current main 8b86e7b6 on 2026-10-09 before integrating the retained position-sizing routing clarification. Reviewed protected artifact retention, versioned research publication clocks and same-document KPI re-extraction; these retain their existing source/operation owners and do not grant skill write authority. Reviewed bounded fail-closed KPI batch reads, exact internal DCF verification evidence, and legacy/v2 decision-brief parsers with separately sealed supporting issuers, finite model replay, source-byte bounds, primary valuation authority and reader parity. Existing routes require current owner arguments, authorized state and complete provenance/readiness; no additional skill-body change is needed. Added explicit increase/reduce/hold description and P2H synthetic invocation case only. Advisory catalog routing selected allocation for the affected prompt and fresh paraphrase, and research for an earnings/thesis negative control. Host invocation reliability and financial analysis quality were not measured. Preserved all prior reviewed source commitments.",
   "schema_version": 1,
   "sources": [
     {
@@ -20,11 +20,11 @@
     },
     {
       "path": "directives/data_pipeline_dag.md",
-      "sha256": "cef764c3b26951ba529f1ea2b0ebb47c63a995d206e377c25a54611d9e8cc69d"
+      "sha256": "bf84f51443bf63204574c378cc207d22b76f7374f258a86e6af8b9723adcd44e"
     },
     {
       "path": "directives/data_provenance.md",
-      "sha256": "6b39ca437ca7622a615cb16d86c9e1d85a35d5b5579638e783931dc128bdb23c"
+      "sha256": "52c4fe893f7e7c1d0e9e9f2f4dda19a5e4a7b203e6e020097e7b927f2b7dbc3f"
     },
     {
       "path": "directives/dcf_gsheets_setup.md",
@@ -80,7 +80,7 @@
     },
     {
       "path": "directives/operations_governance_surface.md",
-      "sha256": "4fe9742bb314d2b44e41b5d23b002a31f58e417ec4dc347f0275caf07cfbf06c"
+      "sha256": "d3b3112a6a2890c99a373930667d63b7a19213b503a3ec469ddcd469a7f55ad8"
     },
     {
       "path": "directives/post_earnings_readout.md",
@@ -204,7 +204,7 @@
     },
     {
       "path": "execution/populate_research_snapshots.py",
-      "sha256": "6414cdbe20454a672fbf3cff614e7dfc3af9c5d9063a7ed003f1661280975e5d"
+      "sha256": "0f94c4e4fcd51f24a45395e71892494d98de2dca43a34516b9e11322835b6795"
     },
     {
       "path": "execution/populate_source_fact_plane.py",
@@ -252,7 +252,7 @@
     },
     {
       "path": "execution/sqlite_bootstrap.py",
-      "sha256": "0c7635b01828e3d4bd611fe28a2f97c8ab6831b2419423507411c85054c4eb66"
+      "sha256": "29fe2f4ee524e2eb1719735a33356d7f8a2e03d7ef9a7eefd968cd7cc4ca4a10"
     },
     {
       "path": "execution/sync_sec_filing_inventory.py",
@@ -268,7 +268,7 @@
     },
     {
       "path": "execution/verify_decision_brief.py",
-      "sha256": "a3d93db6586ae0ed2a98112dc2c781401fe3d28450a8e7939b223ef41b918e48"
+      "sha256": "83846f6ee5a55650e7c15ff5c5758f7321833199bea911f413496440af022256"
     },
     {
       "path": "execution/verify_reconstruction_inventory.py",
@@ -276,7 +276,7 @@
     },
     {
       "path": "reconstruction_manifest.json",
-      "sha256": "def037a564b1dbc779b61cfe0b1a1d0d114ef22ad8c20b39ca3290223aa8d6ed"
+      "sha256": "a13c153ba632d9a6b139d4474a5a096914c333d2e9c1bd4a201854398930aaf0"
     },
     {
       "path": "scripts/check_investing_skill.py",
@@ -288,7 +288,7 @@
     },
     {
       "path": "src/advisor/skills/next-dollar-allocation/SKILL.md",
-      "sha256": "12d515b14c6d8e008860e9fd2180bc1799ee3e6347151f0f43036941267d3697"
+      "sha256": "44337af89fe434b8e2d846bfa694dc1b05b2ee3d129d79e2024319f21b7e74d6"
     },
     {
       "path": "src/advisor/skills/next-dollar-allocation/references/interfaces.md",
@@ -340,7 +340,7 @@
     },
     {
       "path": "src/dcf/grade_evidence.py",
-      "sha256": "60fbae023148ab10b14f21d7401c7a0097faa226df40dde94ec5f509f19c52d0"
+      "sha256": "f9a1bf6b5ebac70a54e28d6c8cc23662d0c3195765933eb18bc9f1987cd7effa"
     },
     {
       "path": "src/dcf/input_recipes.py",
@@ -348,7 +348,7 @@
     },
     {
       "path": "src/dcf/readiness.py",
-      "sha256": "1cec8af61cc099dde4681b36f4a37f717a415e54fc3638cf892ede8983682d43"
+      "sha256": "5b740363847764ae89bb847f702b0c5bcfbbab6d6cfcc701554890d6d9908ed0"
     },
     {
       "path": "src/earnings_brief.py",
@@ -408,7 +408,7 @@
     },
     {
       "path": "src/pipeline/kpi_report_reference_resolver.py",
-      "sha256": "b55ce31efe9863201ea456e3f4e5b00014075901a5ca54a42b5b884e11816727"
+      "sha256": "54935b31e0ce7c943e54378c4f7224f9e7b44f79f785501d2172429bde74a215"
     },
     {
       "path": "src/pipeline/research_cockpit.py",
@@ -428,11 +428,11 @@
     },
     {
       "path": "src/provenance/population_research_snapshots.py",
-      "sha256": "55a1aea8c240d46215114ecb867043dbfa4325fd7af425962e7ee17a98420a20"
+      "sha256": "aeebd8c9c040f11224ded96503b03247fc0461b8be875d8695292ac437d8b2ea"
     },
     {
       "path": "src/provenance/research_snapshot.py",
-      "sha256": "e9cf7dd2a385ae970c8b92f1a3c965ffc2b693657c79aa1c9df9f80e16e04b6d"
+      "sha256": "338312fca8fc597a346ac353e7cb6def056e115cf3b34f4887f81605e6ec5a8b"
     },
     {
       "path": "src/quality/static_quality_gate.py",
@@ -456,11 +456,11 @@
     },
     {
       "path": "src/research/decision_brief.py",
-      "sha256": "471255e694f2f55e29c668f71c786f191612794777b272c993b827861bdf1dfd"
+      "sha256": "a05ca193b9a93e0ddc165ee7e5e481d77e335b08374bfb6a6b756864ce9ee39b"
     },
     {
       "path": "src/research/decision_brief_workflow.py",
-      "sha256": "f09fd084e10339811737d0f8a0a319b81b09d18995b1eea2d87f484d951005be"
+      "sha256": "81b542c4135d8563d029d80e82ec20bc09033001c9c247bb849b9c586bbaabd6"
     },
     {
       "path": "src/research/investment_decision_card.py",
