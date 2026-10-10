@@ -95,7 +95,8 @@
         "execution/run_socratic_questions.py",
         "execution/publish_meli_reported_statements.py",
         "execution/plan_analysis_evidence_scope.py",
-        "src/provenance/analysis_scope.py"
+        "src/provenance/analysis_scope.py",
+        "execution/preview_meli_inputs.py"
       ],
       "dependencies": [
         "core_data_layer"
@@ -105,7 +106,8 @@
         "pytest tests/test_onboard_sec_fallback.py tests/test_sec_onboarding_identity.py tests/test_onboarding_state_authority.py tests/test_runtime_state_authority.py tests/test_decision_brief_workflow.py -q",
         "pytest tests/test_source_context_entrypoints.py tests/test_refresh_dispatch.py -q",
         "pytest tests/test_meli_reported_statements.py -q",
-        "pytest tests/test_analysis_scope.py tests/test_analysis_scope_cli.py -q"
+        "pytest tests/test_analysis_scope.py tests/test_analysis_scope_cli.py -q",
+        "pytest tests/test_meli_input_evidence.py -q"
       ],
       "documentation": [
         "AGENTS.md",
@@ -231,7 +233,9 @@
         "execution/review_onon_input_roles.py",
         "src/dcf/input_evidence.py",
         "src/dcf/grade_evidence.py",
-        "src/dcf/readiness.py"
+        "src/dcf/readiness.py",
+        "src/dcf/meli_input_preview.py",
+        "src/dcf/meli_scenario_preview.py"
       ],
       "dependencies": [
         "core_data_layer"
@@ -242,7 +246,8 @@
         "pytest tests/test_cashflow_input_evidence.py tests/test_cashflow_scenarios.py tests/test_valuation_readiness.py -q",
         "pytest tests/test_onon_model.py tests/test_onon_inputs.py tests/test_build_onon_dcf.py tests/test_scenario_acceptance.py -q",
         "pytest tests/test_reviewed_input_roles.py tests/test_review_onon_input_roles.py -q",
-        "pytest tests/test_model_source_bytes.py tests/test_source_context_entrypoints.py tests/test_meli_input_evidence.py tests/test_onon_explicit_routing.py -q"
+        "pytest tests/test_model_source_bytes.py tests/test_source_context_entrypoints.py tests/test_meli_input_evidence.py tests/test_onon_explicit_routing.py -q",
+        "pytest tests/test_meli_scenario_preview.py -q"
       ],
       "documentation": [
         "directives/data_provenance.md"
