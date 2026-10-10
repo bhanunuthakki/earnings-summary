@@ -40,6 +40,7 @@ from research.proposals import (
 )
 from synthesis.insights import InsightRow, list_insights
 from ui.controls import ticker_label
+from ui.panel import panel_section
 from ui.prose import render_prose
 from ui.time import stamp_html
 from user_state.notes import AnalystNoteRow, list_notes
@@ -2482,18 +2483,19 @@ def render_ledger_panel(
         "</summary>"
         '<div class="ledger-queues-body">' + queues_body + "</div></details>"
     )
-    return (
-        _PANEL_STYLE
-        + RESEARCH_PANEL_STYLE
-        + f'<section class="panel">{h2}'
-        + panel_sub
-        + ("" if embedded else render_ledger_jump_toolbar(counts, onmymind_on=bool(onmymind)))
-        + f'<div id="ledger-jump-capture">{_capture_box()}</div>'
+    return panel_section(
+        # The <h2> is fully pre-rendered here (three variants: suppressed when
+        # the nav band already names the feed, plain when the empty-state copy
+        # leads, titled when the feed is the page's own entry point).
+        h2,
+        panel_sub,
+        ("" if embedded else render_ledger_jump_toolbar(counts, onmymind_on=bool(onmymind))),
+        f'<div id="ledger-jump-capture">{_capture_box()}</div>',
         # The bounded packet walk (Phase C) leads the feed: a finite "N need
         # you" session with completion semantics, before the open-ended stream.
-        + render_ledger_packet(db_path)
-        + f'<div id="ledger-jump-onmymind">{onmymind}</div>'
-        + f'<div id="ledger-jump-musings">{musings_block}</div>'
-        + queues
-        + "</section>"
+        render_ledger_packet(db_path),
+        f'<div id="ledger-jump-onmymind">{onmymind}</div>',
+        f'<div id="ledger-jump-musings">{musings_block}</div>',
+        queues,
+        style=_PANEL_STYLE + RESEARCH_PANEL_STYLE,
     )

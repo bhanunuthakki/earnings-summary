@@ -24,6 +24,7 @@ from pipeline.operations_styles import VALIDATION_STYLE as _PANEL_STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 from ui.controls import prov_row, prov_severity_tick
+from ui.panel import panel_empty, panel_section
 
 _DETAIL_LIMIT = 50
 
@@ -128,10 +129,10 @@ def render_validation_panel(db_path: Path) -> str:
     """The Validation tab fragment: data-quality state across the whole book."""
     ov = load_validation_overview(db_path)
     if ov is None:
-        return (
-            '<section class="panel"><h2>Validation</h2>'
-            '<p class="muted">No <code>validation_issues</code> table in this DB — '
-            "run <code>alembic upgrade head</code>.</p></section>"
+        return panel_empty(
+            "No <code>validation_issues</code> table in this DB — "
+            "run <code>alembic upgrade head</code>.",
+            title="Validation",
         )
     if ov.open_total == 0:
         resolved = (
@@ -139,29 +140,27 @@ def render_validation_panel(db_path: Path) -> str:
             if ov.resolved_total
             else ""
         )
-        return (
-            _PANEL_STYLE + '<section class="panel"><h2>Validation</h2>'
+        return panel_section(
             '<p class="sub">Data-quality issues raised by the validation engine and the '
             "persist-time sanity checks (plausible ranges, magnitude jumps, source "
-            "disagreement, unit mismatches).</p>"
+            "disagreement, unit mismatches).</p>",
             f'<div class="vi-note k-well">No open issues.{escape(resolved)} Sweep the book with '
             "<code>python execution/run_validation_engine.py</code> after big ingests "
-            "to keep this honest.</div></section>"
+            "to keep this honest.</div>",
+            title="Validation",
+            style=_PANEL_STYLE,
         )
-    return "".join(
-        [
-            _PANEL_STYLE,
-            '<section class="panel"><h2>Validation</h2>',
-            '<p class="sub">Open data-quality issues across every fact table — range '
-            "violations, magnitude jumps, cross-source disagreement, unit mismatches. "
-            "<strong>halt</strong> severity means a value is wildly implausible and "
-            "should be fixed before it feeds analysis.</p>",
-            _kpi_strip(ov),
-            _rule_table(ov),
-            _detail_section(ov),
-            "</section>",
-            _RESOLVE_SCRIPT,
-        ]
+    return panel_section(
+        '<p class="sub">Open data-quality issues across every fact table — range '
+        "violations, magnitude jumps, cross-source disagreement, unit mismatches. "
+        "<strong>halt</strong> severity means a value is wildly implausible and "
+        "should be fixed before it feeds analysis.</p>",
+        _kpi_strip(ov),
+        _rule_table(ov),
+        _detail_section(ov),
+        title="Validation",
+        style=_PANEL_STYLE,
+        tail=_RESOLVE_SCRIPT,
     )
 
 

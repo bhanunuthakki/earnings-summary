@@ -40,6 +40,7 @@ from pipeline.operations_styles import DCF_STYLE as _PANEL_STYLE
 from pipeline.queries import ANALYZED_LIST_TYPE_VALUES, BRIEFED_LIST_TYPE_VALUES
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
+from ui.panel import panel_empty, panel_section
 
 FRESH_DAYS = 7  # refreshed within a week = fresh
 STALE_DAYS = 30  # older than a month = loudly stale
@@ -486,11 +487,11 @@ def render_dcf_coverage_panel(db_path: Path, repo_root: Path) -> str:
     today = date.today()
     rows, stale_copies = collect_rows(db_path, repo_root)
     if not rows:
-        return (
-            '<section class="panel"><h2>DCF coverage</h2>'
-            '<p class="muted">No DCF artifacts found — no briefed names, '
+        return panel_empty(
+            "No DCF artifacts found — no briefed names, "
             "<code>dcf/*.xlsx</code> workbooks, <code>dcf_runs</code> rows or "
-            "assumptions JSONs under this repo root.</p></section>"
+            "assumptions JSONs under this repo root.",
+            title="DCF coverage",
         )
 
     table_rows = "".join(_row_html(r, today) for r in rows)
@@ -506,33 +507,30 @@ def render_dcf_coverage_panel(db_path: Path, repo_root: Path) -> str:
             f"{escape(', '.join(stale_copies))}</div>"
         )
 
-    return "".join(
-        [
-            _PANEL_STYLE,
-            '<section class="panel"><h2>DCF coverage</h2>',
-            '<p class="sub">Every DCF artifact accounted for: the actively '
-            "maintained names (portfolio · watchlist · evaluation, plus legacy "
-            "wacc seeds) unioned with <code>dcf/*.xlsx</code>, "
-            "<code>dcf_runs</code> and <code>data/dcf_assumptions/</code>. "
-            "Refresh a name with "
-            "<code>python execution/refresh_dcf.py --ticker T</code>.</p>",
-            _kpi_strip(rows, today),
-            lg.grid_open(),
-            lg.filter_bar(len(rows), noun="names", placeholder="Filter by ticker / model / note…"),
-            '<table class="p-table"><thead><tr>'
-            + lg.th("Ticker", "ticker", "text", num=False)
-            + lg.th("List", "list", "text", num=False)
-            + lg.th("Model", "model", "text", num=False)
-            + "<th>Workbook</th>"
-            + lg.th("Last valued", "valued", "num", num=False)
-            + lg.th("Priced", "priced", "num", num=False)
-            + lg.th("Assumptions", "assumptions", "text", num=False)
-            + "<th>JSON sync</th><th>Note</th>"
-            + "</tr></thead><tbody>",
-            table_rows,
-            "</tbody></table>",
-            lg.grid_close(),
-            stale_note,
-            "</section>",
-        ]
+    return panel_section(
+        '<p class="sub">Every DCF artifact accounted for: the actively '
+        "maintained names (portfolio · watchlist · evaluation, plus legacy "
+        "wacc seeds) unioned with <code>dcf/*.xlsx</code>, "
+        "<code>dcf_runs</code> and <code>data/dcf_assumptions/</code>. "
+        "Refresh a name with "
+        "<code>python execution/refresh_dcf.py --ticker T</code>.</p>",
+        _kpi_strip(rows, today),
+        lg.grid_open(),
+        lg.filter_bar(len(rows), noun="names", placeholder="Filter by ticker / model / note…"),
+        '<table class="p-table"><thead><tr>'
+        + lg.th("Ticker", "ticker", "text", num=False)
+        + lg.th("List", "list", "text", num=False)
+        + lg.th("Model", "model", "text", num=False)
+        + "<th>Workbook</th>"
+        + lg.th("Last valued", "valued", "num", num=False)
+        + lg.th("Priced", "priced", "num", num=False)
+        + lg.th("Assumptions", "assumptions", "text", num=False)
+        + "<th>JSON sync</th><th>Note</th>"
+        + "</tr></thead><tbody>",
+        table_rows,
+        "</tbody></table>",
+        lg.grid_close(),
+        stale_note,
+        title="DCF coverage",
+        style=_PANEL_STYLE,
     )

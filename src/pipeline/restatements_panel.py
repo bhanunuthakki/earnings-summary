@@ -19,6 +19,7 @@ from pathlib import Path
 from pipeline.operations_styles import RESTATEMENTS_STYLE as _PANEL_STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
+from ui.panel import panel_empty, panel_section
 
 _LIMIT = 50
 
@@ -137,30 +138,28 @@ def render_restatements_panel(db_path: Path) -> str:
     """The Restatements tab fragment: was → now across every supersede chain."""
     ov = load_restatements(db_path)
     if ov is None:
-        return (
-            '<section class="panel"><h2>Restatements</h2>'
-            '<p class="muted">No restatement chains in this DB — '
-            "run <code>alembic upgrade head</code> (0054 adds supersedes_id).</p></section>"
+        return panel_empty(
+            "No restatement chains in this DB — "
+            "run <code>alembic upgrade head</code> (0054 adds supersedes_id).",
+            title="Restatements",
         )
     if ov.chains_total == 0:
-        return (
-            _PANEL_STYLE + '<section class="panel"><h2>Restatements</h2>'
+        return panel_section(
             '<p class="sub">"was X, now Y" — every place a later filing changed an '
-            "already-reported number.</p>"
+            "already-reported number.</p>",
             '<div class="rs-note">No supersede chains yet. The restatement detector links '
-            "them as later filings re-report existing periods.</div></section>"
+            "them as later filings re-report existing periods.</div>",
+            title="Restatements",
+            style=_PANEL_STYLE,
         )
-    return "".join(
-        [
-            _PANEL_STYLE,
-            '<section class="panel"><h2>Restatements</h2>',
-            '<p class="sub">"was X, now Y" — every place a later filing changed an '
-            "already-reported number. Same-value re-reports (a 10-K confirming a 10-Q) "
-            "are chained but not listed.</p>",
-            _kpi_strip(ov),
-            _rows_table(ov),
-            "</section>",
-        ]
+    return panel_section(
+        '<p class="sub">"was X, now Y" — every place a later filing changed an '
+        "already-reported number. Same-value re-reports (a 10-K confirming a 10-Q) "
+        "are chained but not listed.</p>",
+        _kpi_strip(ov),
+        _rows_table(ov),
+        title="Restatements",
+        style=_PANEL_STYLE,
     )
 
 

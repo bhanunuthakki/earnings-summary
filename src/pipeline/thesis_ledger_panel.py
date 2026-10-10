@@ -22,6 +22,7 @@ from pathlib import Path
 
 from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
 from ui import living_grid as lg
+from ui.panel import panel_empty, panel_section
 from ui.prose import render_prose
 from user_state.ledger import ThesisLedgerEntryRow, list_recent_entries
 
@@ -51,23 +52,20 @@ def render_thesis_ledger_panel(db_path: Path, *, user_id: str) -> str:
     empty / absent."""
     entries = list_recent_entries(user_id=user_id, limit=200, db_path=db_path)
     if not entries:
-        return (
-            '<section class="panel"><h2>Thesis ledger</h2>'
-            '<p class="muted">No accepted thesis changes yet. Approving a queued action from '
+        return panel_empty(
+            "No accepted thesis changes yet. Approving a queued action from "
             "an alert appends a durable entry here (a thesis update or bear-case append). "
-            "Open earnings questions live in analyst notes.</p></section>"
+            "Open earnings questions live in analyst notes.",
+            title="Thesis ledger",
         )
-    return "".join(
-        [
-            _PANEL_STYLE,
-            '<section class="panel"><h2>Thesis ledger</h2>',
-            '<p class="sub">The append-only history of every accepted, alert-driven thesis '
-            "edit — the decisions you actually committed via the alert &rarr; queued-action "
-            "&rarr; approve loop.</p>",
-            _kpi_strip(entries),
-            _ledger_table(entries),
-            "</section>",
-        ]
+    return panel_section(
+        '<p class="sub">The append-only history of every accepted, alert-driven thesis '
+        "edit — the decisions you actually committed via the alert &rarr; queued-action "
+        "&rarr; approve loop.</p>",
+        _kpi_strip(entries),
+        _ledger_table(entries),
+        title="Thesis ledger",
+        style=_PANEL_STYLE,
     )
 
 

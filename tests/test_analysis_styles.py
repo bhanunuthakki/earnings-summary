@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 from pipeline.analysis_styles import ANALYSIS_STYLE
@@ -17,6 +18,15 @@ CONSUMERS = (
     "src/redteam/brief.py",
 )
 
+# Inline style ATTRIBUTES in markup literals (style="..." / style='...').
+# Scoped to the attribute shapes on purpose: the M5 panel-shell contract
+# (ui.panel.panel_section) carries this module's master stylesheet through its
+# registered ``style=`` keyword (attribution_panel.py passes
+# ``style=ANALYSIS_STYLE``), so a bare ``style=`` scan would flag the
+# sanctioned seam. Consumer-owned <style> blocks stay banned by the assertion
+# below, which still catches every literal CSS payload.
+_INLINE_STYLE_ATTR = re.compile(r"style=[\"']")
+
 
 def test_analysis_family_owns_css_in_one_token_clean_stylesheet() -> None:
     assert ANALYSIS_STYLE.startswith("<style>")
@@ -25,4 +35,6 @@ def test_analysis_family_owns_css_in_one_token_clean_stylesheet() -> None:
         assert selector in ANALYSIS_STYLE
     assert "#" not in ANALYSIS_STYLE
     assert not any("<style>" in (ROOT / path).read_text(encoding="utf-8") for path in CONSUMERS)
-    assert not any("style=" in (ROOT / path).read_text(encoding="utf-8") for path in CONSUMERS)
+    assert not any(
+        _INLINE_STYLE_ATTR.search((ROOT / path).read_text(encoding="utf-8")) for path in CONSUMERS
+    )

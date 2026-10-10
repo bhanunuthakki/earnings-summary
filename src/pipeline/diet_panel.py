@@ -51,6 +51,7 @@ from signals.store import (
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ui import living_grid as lg
 from ui.controls import ticker_label
+from ui.panel import panel_section
 
 # Names on the book lead the reading lane (owner feedback 2026-07-14: "no
 # priority for portfolio and eval list"). portfolio first, then evaluation,
@@ -117,26 +118,23 @@ def render_diet_panel(
     list_types = _load_list_types(db_path, conn=conn)
     # Stable sort (recency preserved within tier): book names float to the top.
     stream.sort(key=lambda r: _BOOK_PRIORITY.get(list_types.get(r.ticker, ""), 9))
-    return "".join(
-        [
-            DIET_PANEL_STYLE,
-            '<section class="panel"><h2 title="Pull lane — what to READ on your names, '
-            "separate from the inbox's push lane (what needs action). Nothing here decays "
-            "or fires an alert; a thesis breach still reaches the inbox. General-news "
-            'headlines are deliberately excluded — the readouts are the reading lane.">'
-            "Information diet</h2>",
-            _readouts_section(db_path, list_types, today, conn=conn),
-            _stream_section(stream, list_types),
-            _agenda_section(
-                list(agenda.rows),
-                today,
-                unavailable=agenda.unavailable,
-                freshness=agenda.freshness,
-                coverage_as_of=agenda.coverage_as_of,
-            ),
-            _scaffold_note(),
-            "</section>",
-        ]
+    return panel_section(
+        _readouts_section(db_path, list_types, today, conn=conn),
+        _stream_section(stream, list_types),
+        _agenda_section(
+            list(agenda.rows),
+            today,
+            unavailable=agenda.unavailable,
+            freshness=agenda.freshness,
+            coverage_as_of=agenda.coverage_as_of,
+        ),
+        _scaffold_note(),
+        title="Information diet",
+        title_attrs=' title="Pull lane — what to READ on your names, '
+        "separate from the inbox's push lane (what needs action). Nothing here decays "
+        "or fires an alert; a thesis breach still reaches the inbox. General-news "
+        'headlines are deliberately excluded — the readouts are the reading lane."',
+        style=DIET_PANEL_STYLE,
     )
 
 

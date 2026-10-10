@@ -38,6 +38,7 @@ from pipeline.operational_health import (
 )
 from pipeline.operations_styles import CRON_HEALTH_STYLE as _PANEL_STYLE
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from ui.panel import panel_section
 
 log = logging.getLogger(__name__)
 
@@ -363,31 +364,28 @@ def render_cron_health_panel(db_path: Path, *, conn: sqlite3.Connection | None =
     wrapper is connected and visible, so today's verdict remains current as the
     morning pipeline runs. Degrades cleanly with JS off — the body is
     server-rendered, the poll is pure enhancement."""
-    return "".join(
-        [
-            _PANEL_STYLE,
-            '<section class="panel"><h2>Cron health</h2>',
-            '<p class="sub">Last 7 days of pipeline run history from '
-            "<code>ingestion_runs</code>. "
-            "Green = OK · Red = failed · Grey = no run recorded. "
-            "</p>",
-            '<div id="cc-cron-live" '
-            'data-cron-fragment-url="/api/panel/cron_health?fragment=live" '
-            'data-refresh-ms="60000">',
-            render_cron_health_live_body(db_path, conn=conn),
-            "</div>",
-            '<p class="muted" data-cron-status aria-live="polite">'
-            "Auto-refreshes every 60 seconds while visible.</p>",
-            '<button type="button" class="k-btn k-btn-quiet k-btn-sm" '
-            "data-cron-retry>Refresh now</button>",
-            '<div class="ch-note">Run '
-            "<code>python execution/verify_cron_registration.py</code> to audit "
-            "the Windows Task Scheduler registration, or "
-            "<code>python execution/verify_daily_chain.py</code> to check "
-            "whether today's morning pipeline completed successfully.</div>",
-            "</section>",
-            f"<script>{_CRON_REFRESH_JS}</script>",
-        ]
+    return panel_section(
+        '<p class="sub">Last 7 days of pipeline run history from '
+        "<code>ingestion_runs</code>. "
+        "Green = OK · Red = failed · Grey = no run recorded. "
+        "</p>",
+        '<div id="cc-cron-live" '
+        'data-cron-fragment-url="/api/panel/cron_health?fragment=live" '
+        'data-refresh-ms="60000">',
+        render_cron_health_live_body(db_path, conn=conn),
+        "</div>",
+        '<p class="muted" data-cron-status aria-live="polite">'
+        "Auto-refreshes every 60 seconds while visible.</p>",
+        '<button type="button" class="k-btn k-btn-quiet k-btn-sm" '
+        "data-cron-retry>Refresh now</button>",
+        '<div class="ch-note">Run '
+        "<code>python execution/verify_cron_registration.py</code> to audit "
+        "the Windows Task Scheduler registration, or "
+        "<code>python execution/verify_daily_chain.py</code> to check "
+        "whether today's morning pipeline completed successfully.</div>",
+        title="Cron health",
+        style=_PANEL_STYLE,
+        tail=f"<script>{_CRON_REFRESH_JS}</script>",
     )
 
 

@@ -30,6 +30,7 @@ from positioning.encode import ProposedProfile
 from positioning.profile import SLEEVE_KEYS, PositioningProfile, SectorTarget
 from positioning.store import PositioningIntentRow, latest_intent, list_intents
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+from ui.panel import panel_section
 
 _PANEL_STYLE = positioning_css()
 
@@ -484,36 +485,34 @@ def render_positioning_panel(db_path: Path, repo_root: Path) -> str:
     ``render_active_target_card`` itself is unchanged (still the fragment
     ``/api/positioning/approve`` swaps back in by id on save) — only its
     wrapper here changed."""
-    return "".join(
-        [
-            _PANEL_STYLE,
-            '<section class="panel"><h2>Positioning</h2>',
-            # D7: the subtitle states the question the section answers, in one
-            # line — the old five-line mechanics paragraph is exactly the
-            # "unnecessary detail" the walkthrough flagged.
-            '<p class="sub">Should the target book change? — durable targets the '
-            "fit math scores against; nothing persists until you approve.</p>",
-            '<div class="pos-grid">',
-            '<details class="pos-span"><summary>Advanced — active target detail</summary>',
-            render_active_target_card(db_path, repo_root),
-            "</details>",
-            f'<div class="pos-span">{_history_well(db_path)}</div>',
-            # "Positioning coach" (wave B B6) — disambiguates from Record's
-            # Calibration coach; a bare "Coach" read as the same product twice.
-            '<div class="k-well pos-span"><h3 class="k-well-title">Positioning coach</h3>',
-            '<div class="pos-chat-log" id="pos-chat-log"></div>',
-            '<form class="pos-chat-form" id="pos-chat-form">',
-            '<textarea id="pos-chat-input" placeholder="e.g. I want more international ',
-            "small-cap value exposure and less mega-cap growth — kid on the way, thinking "
-            'about lowering volatility…"></textarea>',
-            '<button type="submit" class="k-btn k-btn-primary">Send</button></form>',
-            '<div class="pos-actions">',
-            '<button type="button" class="k-btn k-btn-quiet" id="pos-propose">',
-            "Propose targets from this conversation</button>",
-            "</div>",
-            '<div id="pos-approval"></div>',
-            "</div>",
-            "</div></section>",
-            _COACH_JS,
-        ]
+    return panel_section(
+        # D7: the subtitle states the question the section answers, in one
+        # line — the old five-line mechanics paragraph is exactly the
+        # "unnecessary detail" the walkthrough flagged.
+        '<p class="sub">Should the target book change? — durable targets the '
+        "fit math scores against; nothing persists until you approve.</p>",
+        '<div class="pos-grid">',
+        '<details class="pos-span"><summary>Advanced — active target detail</summary>',
+        render_active_target_card(db_path, repo_root),
+        "</details>",
+        f'<div class="pos-span">{_history_well(db_path)}</div>',
+        # "Positioning coach" (wave B B6) — disambiguates from Record's
+        # Calibration coach; a bare "Coach" read as the same product twice.
+        '<div class="k-well pos-span"><h3 class="k-well-title">Positioning coach</h3>',
+        '<div class="pos-chat-log" id="pos-chat-log"></div>',
+        '<form class="pos-chat-form" id="pos-chat-form">',
+        '<textarea id="pos-chat-input" placeholder="e.g. I want more international ',
+        "small-cap value exposure and less mega-cap growth — kid on the way, thinking "
+        'about lowering volatility…"></textarea>',
+        '<button type="submit" class="k-btn k-btn-primary">Send</button></form>',
+        '<div class="pos-actions">',
+        '<button type="button" class="k-btn k-btn-quiet" id="pos-propose">',
+        "Propose targets from this conversation</button>",
+        "</div>",
+        '<div id="pos-approval"></div>',
+        "</div>",
+        "</div>",
+        title="Positioning",
+        style=_PANEL_STYLE,
+        tail=_COACH_JS,
     )

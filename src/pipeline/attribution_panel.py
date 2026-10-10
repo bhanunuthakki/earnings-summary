@@ -25,6 +25,7 @@ from attribution import PositionAttribution, build_position_attribution
 from identity import DEFAULT_USER_ID
 from integrations.portfolio_tracker_client import PositionAlphaRow, fetch_portfolio_analytics
 from pipeline.analysis_styles import ANALYSIS_STYLE
+from ui.panel import panel_section
 
 
 def _alpha_chip(a: PositionAttribution) -> str:
@@ -79,14 +80,13 @@ def render_attribution_section(
         window_end=window_end,
         user_id=user_id,
     )
-    return (
-        f"{ANALYSIS_STYLE}"
-        '<section class="panel"><h2>Attribution</h2>'
+    return panel_section(
         '<p class="atr-sub">What drove this position\'s window performance — tracker '
         "dollar alpha vs SPY, the entry posture, and the thesis/alert/decision events "
-        "inside the window. Deterministic: every clause traces to a row.</p>"
-        f"{_card(attribution, show_ticker=False)}"
-        "</section>"
+        "inside the window. Deterministic: every clause traces to a row.</p>",
+        _card(attribution, show_ticker=False),
+        title="Attribution",
+        style=ANALYSIS_STYLE,
     )
 
 
@@ -96,13 +96,12 @@ def render_book_attribution_section(attributions: list[PositionAttribution]) -> 
     if not attributions:
         return ""
     cards = "".join(_card(a, show_ticker=True) for a in attributions)
-    return (
-        f"{ANALYSIS_STYLE}"
-        '<section class="panel"><h2>Attribution narratives</h2>'
+    return panel_section(
         '<p class="atr-sub">Per research position (open lifecycle row): window dollar '
         "alpha vs the SPY counterfactual + the thesis events behind it, biggest moves "
         "first. Tracker-only holdings (index funds, cash) have no thesis to attribute "
-        "and are not listed.</p>"
-        f"{cards}"
-        "</section>"
+        "and are not listed.</p>",
+        cards,
+        title="Attribution narratives",
+        style=ANALYSIS_STYLE,
     )

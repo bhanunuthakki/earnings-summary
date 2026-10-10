@@ -23,6 +23,7 @@ from typing import cast
 
 from pipeline.portfolio_styles import lifecycle_css
 from position_lifecycle import OUTCOME_VOCAB, PositionEntry, list_entries
+from ui.panel import panel_section
 
 _PANEL_STYLE = lifecycle_css()
 
@@ -97,9 +98,10 @@ def render_position_lifecycle_section(db_path: Path, ticker: str, *, user_id: st
             + "</ul>"
             + _PANEL_SCRIPT
         )
-    return (
-        f'<section class="panel" data-plc-root data-plc-ticker="{escape(t, quote=True)}">'
-        f"<h2>Position lifecycle</h2>{inner}</section>"
+    return panel_section(
+        inner,
+        title="Position lifecycle",
+        attrs=f' data-plc-root data-plc-ticker="{escape(t, quote=True)}"',
     )
 
 

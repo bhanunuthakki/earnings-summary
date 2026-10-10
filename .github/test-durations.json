@@ -285,7 +285,7 @@
     },
     "tests/test_ask_proposal_approval.py": {
       "seconds": 0.58,
-      "shard": "6"
+      "shard": "3"
     },
     "tests/test_ask_proposal_approval_migration.py": {
       "seconds": 4.21,
@@ -433,7 +433,7 @@
     },
     "tests/test_bha92_report_design.py": {
       "seconds": 0.54,
-      "shard": "3"
+      "shard": "8"
     },
     "tests/test_boilerplate_classify.py": {
       "seconds": 1.4,
@@ -545,7 +545,7 @@
     },
     "tests/test_canonical_helpers_equivalence.py": {
       "seconds": 0.3,
-      "shard": "5"
+      "shard": "3 overflow"
     },
     "tests/test_canonical_narrative_s1.py": {
       "seconds": 1.6,
@@ -565,7 +565,7 @@
     },
     "tests/test_capture_compatibility_evidence.py": {
       "seconds": 1.15,
-      "shard": "4"
+      "shard": "5"
     },
     "tests/test_capture_coverage.py": {
       "seconds": 1.4,
@@ -641,7 +641,7 @@
     },
     "tests/test_classify_operational_lifecycle.py": {
       "seconds": 1.17,
-      "shard": "2 overflow"
+      "shard": "4"
     },
     "tests/test_claude_tool_isolation.py": {
       "seconds": 1.6,
@@ -1849,7 +1849,7 @@
     },
     "tests/test_inbox_rank.py": {
       "seconds": 0.87,
-      "shard": "3"
+      "shard": "6"
     },
     "tests/test_inbox_schema_drift.py": {
       "seconds": 1.4,
@@ -1989,7 +1989,7 @@
     },
     "tests/test_ir_home_authority.py": {
       "seconds": 0.75,
-      "shard": "6"
+      "shard": "7"
     },
     "tests/test_ir_home_authority_registry.py": {
       "seconds": 1.6,
@@ -2049,7 +2049,7 @@
     },
     "tests/test_job_runtime.py": {
       "seconds": 0.66,
-      "shard": "7"
+      "shard": "1 overflow"
     },
     "tests/test_job_runtime_process_tree.py": {
       "seconds": 1.8,
@@ -2245,7 +2245,7 @@
     },
     "tests/test_llm_capture.py": {
       "seconds": 0.98,
-      "shard": "6 overflow"
+      "shard": "8"
     },
     "tests/test_llm_circuit_breaker_migration.py": {
       "seconds": 2.4,
@@ -2493,7 +2493,7 @@
     },
     "tests/test_migration_0073_tenant_identity.py": {
       "seconds": 0.64,
-      "shard": "1 overflow"
+      "shard": "7"
     },
     "tests/test_migration_0076_over_under_check.py": {
       "seconds": 2.19,
@@ -2537,7 +2537,7 @@
     },
     "tests/test_migration_0181_fact_overrides_locator.py": {
       "seconds": 0.64,
-      "shard": "7"
+      "shard": "6"
     },
     "tests/test_migration_0208_0209_transcripts_source_unique.py": {
       "seconds": 1.6,
@@ -3005,7 +3005,7 @@
     },
     "tests/test_portfolio_svg_contract.py": {
       "seconds": 1.05,
-      "shard": "5"
+      "shard": "6 overflow"
     },
     "tests/test_portfolio_tail_stress.py": {
       "seconds": 1.4,
@@ -3253,7 +3253,7 @@
     },
     "tests/test_reconcile_quality_baseline.py": {
       "seconds": 1.18,
-      "shard": "1"
+      "shard": "2 overflow"
     },
     "tests/test_reconstruction_manifest.py": {
       "seconds": 2.1,
@@ -3781,7 +3781,7 @@
     },
     "tests/test_semantic_tension.py": {
       "seconds": 0.97,
-      "shard": "8"
+      "shard": "3"
     },
     "tests/test_senior_partner_brief_budget_migration.py": {
       "seconds": 1.8,
@@ -4025,7 +4025,7 @@
     },
     "tests/test_strict_streaming_event_order.py": {
       "seconds": 0.4,
-      "shard": "8"
+      "shard": "5"
     },
     "tests/test_structured_fact_search_projection_migration.py": {
       "seconds": 2.1,
@@ -4271,13 +4271,17 @@
       "seconds": 1.2,
       "shard": "1"
     },
+    "tests/test_ui_panel_shell.py": {
+      "seconds": 1.2,
+      "shard": "2 overflow"
+    },
     "tests/test_ui_prose_boundary.py": {
       "seconds": 1.6,
       "shard": "6 overflow"
     },
     "tests/test_ui_prose_citations.py": {
       "seconds": 1.2,
-      "shard": "2 overflow"
+      "shard": "4"
     },
     "tests/test_ui_tokens.py": {
       "seconds": 1.5,
@@ -4309,7 +4313,7 @@
     },
     "tests/test_valuation_basis_resilience.py": {
       "seconds": 1.2,
-      "shard": "4"
+      "shard": "5"
     },
     "tests/test_valuation_dirty_refresh.py": {
       "seconds": 1.7,
@@ -4333,7 +4337,7 @@
     },
     "tests/test_verify_ir_home_authorities.py": {
       "seconds": 1.2,
-      "shard": "5"
+      "shard": "6 overflow"
     },
     "tests/test_view_artifact.py": {
       "seconds": 1.6,
@@ -4341,7 +4345,7 @@
     },
     "tests/test_view_wiring.py": {
       "seconds": 1.2,
-      "shard": "6 overflow"
+      "shard": "8"
     },
     "tests/test_viewspec.py": {
       "seconds": 1.5,
@@ -4373,7 +4377,7 @@
     },
     "tests/test_wealth_context_snapshot.py": {
       "seconds": 1.2,
-      "shard": "8"
+      "shard": "3"
     },
     "tests/test_wealthplan_capacity.py": {
       "seconds": 1.7,
@@ -4397,7 +4401,7 @@
     },
     "tests/test_weekly_packet.py": {
       "seconds": 1.2,
-      "shard": "3"
+      "shard": "6"
     },
     "tests/test_weekly_packet_profile_facts.py": {
       "seconds": 26.81,
@@ -4405,7 +4409,7 @@
     },
     "tests/test_what_if.py": {
       "seconds": 1.2,
-      "shard": "6"
+      "shard": "7"
     },
     "tests/test_wix_avdv_checkpoint_repair.py": {
       "seconds": 1.5,
@@ -4437,7 +4441,7 @@
     },
     "tests/test_work_os_portfolio.py": {
       "seconds": 1.2,
-      "shard": "7"
+      "shard": "1 overflow"
     },
     "tests/test_work_os_route_contract.py": {
       "seconds": 1.7,
@@ -4461,7 +4465,7 @@
     },
     "tests/test_workspace_comments_drafts.py": {
       "seconds": 1.2,
-      "shard": "1 overflow"
+      "shard": "3 overflow"
     },
     "tests/test_workspace_comments_health.py": {
       "seconds": 1.6,
@@ -4469,7 +4473,7 @@
     },
     "tests/test_workspace_comments_outbox.py": {
       "seconds": 1.2,
-      "shard": "3 overflow"
+      "shard": "8 overflow"
     },
     "tests/test_workspace_cross_links.py": {
       "seconds": 1.5,
@@ -4501,7 +4505,7 @@
     },
     "tests/test_workspace_tab_groups.py": {
       "seconds": 1.2,
-      "shard": "8 overflow"
+      "shard": "2"
     },
     "tests/test_workspace_verdict_and_coaching.py": {
       "seconds": 1.7,
@@ -4525,7 +4529,7 @@
     },
     "tests/test_you_said.py": {
       "seconds": 1.2,
-      "shard": "2"
+      "shard": "1"
     },
     "tests/test_zz_atomic_data_cutover.py": {
       "seconds": 1.6,

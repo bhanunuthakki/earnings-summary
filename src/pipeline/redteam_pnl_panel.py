@@ -20,6 +20,7 @@ from html import escape
 from pipeline.analysis_styles import REDTEAM_PNL_CSS
 from redteam.decision_pnl import DecisionPnlReport, DecisionPnlRow, ScorecardNumber, YearlyScorecard
 from ui.controls import panel_toolbar, ticker_label
+from ui.panel import panel_section
 
 # ---------------------------------------------------------------------------
 # Self-registered style module (design_language / tests/test_ui_controls.py):
@@ -70,9 +71,7 @@ def render_redteam_pnl_section(
     scorecard panel's REQ-6 posture: a missing report/scorecard is itself an
     honest state, not a silent absence."""
     toolbar = panel_toolbar("Decision P&L (Red Team)")
-    head = (
-        '<section class="panel rtp">'
-        f"{toolbar}"
+    sub = (
         '<p class="sub">Every REFUTE/ACCEPT/DEFER from the monthly Red Team, scored '
         f"{'' if report is None else report.min_quarters} quarters later against what the "
         "price actually did — a simple, legible price-move read, not a full weight-adjusted "
@@ -112,7 +111,7 @@ def render_redteam_pnl_section(
             + _scorecard_number_html(scorecard.rule_execution_fidelity)
             + "</div>"
         )
-    return f"{head}{body}{sc_html}</section>"
+    return panel_section(toolbar, sub, body, sc_html, cls="rtp")
 
 
 __all__ = ["REDTEAM_PNL_CSS", "render_redteam_pnl_section"]
