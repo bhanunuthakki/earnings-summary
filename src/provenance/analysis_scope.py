@@ -483,7 +483,7 @@ def require_analysis_documents(
     *,
     require_current_inventory: bool = True,
 ) -> tuple[str, ...]:
-    """Require every selected dependency; return only admitted research documents."""
+    """Require every dependency; return capture-complete selected primary document versions."""
     coverage = resolve_analysis_coverage(
         conn,
         scope,

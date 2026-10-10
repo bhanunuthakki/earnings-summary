@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+from pydantic import ValidationError
+
 try:
     from _lib import PROJECT_ROOT, command_parser
 except ImportError:
@@ -37,7 +39,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     with JobLock(PROJECT_ROOT, "plan-analysis-evidence-scope", [f"artifact:{output}"]):
         snapshot, payload = read_stable_artifact(args.request)
-        request = AnalysisScopeRequest.model_validate_json(payload)
+        try:
+            request = AnalysisScopeRequest.model_validate_json(payload)
+        except ValidationError:
+            raise ValueError("analysis scope request is invalid") from None
         conn = connect_sqlite(args.db, role=SQLiteConnectionRole.READ_ONLY)
         try:
             conn.execute("BEGIN")
