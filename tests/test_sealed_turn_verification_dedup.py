@@ -67,6 +67,13 @@ from provenance.search_index_lineage import (
     persist_projection_seal,
     vector_artifact_commitment,
 )
+from search.canonical_fact_projection import (
+    AUDIT_VERIFIER_CODE_SHA256,
+    AUDIT_VERIFIER_NAME,
+    AUDIT_VERIFIER_VERSION,
+    admit_canonical_projection_for_read,
+    projection_audit_payload,
+)
 from search.embedding_promotion import EmbeddingPromotion, LocalVectorRuntimeConfig
 from search.embedding_runtime_artifact import (
     EmbeddingRuntimeArtifact,
@@ -79,6 +86,7 @@ from search.request_verification import (
     NOT_VERIFIED,
     POPULATION_CUTOVER_CURRENT,
     POPULATION_RECEIPT,
+    PROJECTION_GENERATION_ADMISSION,
     PROMOTION_COORDINATES,
     RESEARCH_COORDINATES,
     RETRIEVAL_TRACE,
@@ -1359,5 +1367,216 @@ def test_unacknowledged_same_connection_mutation_invalidates_cache(
             local_vector_runtime=runtime,
             verification=cache,
         )
+
+    conn.close()
+
+
+def test_savepoint_rollback_invalidates_cached_trace_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When a savepoint rolls back, cached trace receipts recorded within it are invalidated."""
+    storage_root = tmp_path / "storage"
+    root = tmp_path / "run"
+    db_path, runtime, records = _build_fixture(root, storage_root)
+    probe = _Probe()
+    _install_doubles(monkeypatch, probe, records=records, runtime=runtime, enabled=True)
+    _install_turn_seams(monkeypatch, probe, runtime=runtime)
+
+    list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME"]),
+            ContextPack(scope="portfolio", default_tickers=["ACME"], system_context="ctx"),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+    assert len(probe.packages) == 1
+    trace_id = probe.packages[0].record.retrieval_assembly[0].trace_id
+
+    conn = sqlite3.connect(db_path)
+    # Save genuine trace rows
+    header_rows = conn.execute(
+        "SELECT * FROM heterogeneous_retrieval_trace_headers WHERE trace_id=?", (trace_id,)
+    ).fetchall()
+    seal_rows = conn.execute(
+        "SELECT * FROM heterogeneous_retrieval_trace_seals WHERE trace_id=?", (trace_id,)
+    ).fetchall()
+    cand_rows = conn.execute(
+        "SELECT * FROM heterogeneous_retrieval_trace_candidates WHERE trace_id=?", (trace_id,)
+    ).fetchall()
+    result_rows = conn.execute(
+        "SELECT * FROM heterogeneous_retrieval_trace_results WHERE trace_id=?", (trace_id,)
+    ).fetchall()
+
+    # Remove trace from DB so it does not exist before the savepoint
+    conn.execute("DELETE FROM heterogeneous_retrieval_trace_headers WHERE trace_id=?", (trace_id,))
+    conn.execute("DELETE FROM heterogeneous_retrieval_trace_seals WHERE trace_id=?", (trace_id,))
+    conn.execute(
+        "DELETE FROM heterogeneous_retrieval_trace_candidates WHERE trace_id=?", (trace_id,)
+    )
+    conn.execute("DELETE FROM heterogeneous_retrieval_trace_results WHERE trace_id=?", (trace_id,))
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+
+    # Insert inside savepoint, verify (memoized into cache), then simulate failure & rollback
+    with (
+        pytest.raises(RuntimeError, match="simulated rollback after trace creation"),
+        cache.savepoint("create_tx"),
+    ):
+        conn.executemany(
+            "INSERT INTO heterogeneous_retrieval_trace_headers VALUES ("
+            + ",".join("?" for _ in header_rows[0])
+            + ")",
+            header_rows,
+        )
+        conn.executemany(
+            "INSERT INTO heterogeneous_retrieval_trace_seals VALUES ("
+            + ",".join("?" for _ in seal_rows[0])
+            + ")",
+            seal_rows,
+        )
+        conn.executemany(
+            "INSERT INTO heterogeneous_retrieval_trace_candidates VALUES ("
+            + ",".join("?" for _ in cand_rows[0])
+            + ")",
+            cand_rows,
+        )
+        conn.executemany(
+            "INSERT INTO heterogeneous_retrieval_trace_results VALUES ("
+            + ",".join("?" for _ in result_rows[0])
+            + ")",
+            result_rows,
+        )
+        verified = retrieval_module.verify_heterogeneous_retrieval_trace(
+            conn,
+            trace_id,
+            local_vector_runtime=runtime,
+            verification=cache,
+        )
+        assert verified.trace_id == trace_id
+        raise RuntimeError("simulated rollback after trace creation")
+
+    # The savepoint rolled back. The inserted rows are removed from the database.
+    # Verification with the same cache MUST fail because the trace no longer exists in DB!
+    with pytest.raises(
+        retrieval_module.HeterogeneousRetrievalError, match="retrieval_trace_not_fully_sealed"
+    ):
+        retrieval_module.verify_heterogeneous_retrieval_trace(
+            conn,
+            trace_id,
+            local_vector_runtime=runtime,
+            verification=cache,
+        )
+
+    conn.close()
+
+
+def test_canonical_fact_projection_generation_admission_deduplication() -> None:
+    """admit_canonical_projection_for_read deduplicates admission through PROJECTION_GENERATION_ADMISSION."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """CREATE TABLE canonical_fact_projection_generations (
+        generation_id TEXT PRIMARY KEY, generation_kind TEXT, parent_generation_id TEXT,
+        resolution_snapshot_id TEXT, resolution_snapshot_sha256 TEXT,
+        resolution_watermark_sha256 TEXT, ontology_snapshot_id TEXT, ontology_snapshot_sha256 TEXT,
+        cutoff_at TEXT, recorded_at TEXT, generation_sha256 TEXT, config_json TEXT
+    )"""
+    )
+    conn.execute(
+        """CREATE TABLE canonical_fact_projection_seals (
+        generation_id TEXT PRIMARY KEY, projection_seal_id TEXT, projection_seal_sha256 TEXT,
+        change_count INTEGER, upsert_count INTEGER, tombstone_count INTEGER,
+        effective_entry_count INTEGER, batch_count INTEGER, ordered_entry_set_sha256 TEXT
+    )"""
+    )
+    conn.execute(
+        """CREATE TABLE canonical_fact_projection_scope_bindings (
+        generation_id TEXT PRIMARY KEY, resolution_scope_sha256 TEXT, resolution_snapshot_commitment_sha256 TEXT
+    )"""
+    )
+    conn.execute(
+        """CREATE TABLE canonical_fact_projection_audit_receipts (
+        generation_id TEXT PRIMARY KEY, projection_seal_sha256 TEXT, verifier_name TEXT,
+        verifier_version TEXT, verifier_code_sha256 TEXT, verifier_config_sha256 TEXT,
+        audit_payload_json TEXT, audit_payload_sha256 TEXT
+    )"""
+    )
+
+    gen_id = "gen-admission-dedup"
+    config_json = "{}"
+    header: dict[str, object] = {
+        "generation_id": gen_id,
+        "generation_kind": "checkpoint",
+        "parent_generation_id": None,
+        "resolution_snapshot_id": "res-1",
+        "resolution_snapshot_sha256": "1" * 64,
+        "resolution_watermark_sha256": "2" * 64,
+        "ontology_snapshot_id": "ont-1",
+        "ontology_snapshot_sha256": "3" * 64,
+        "cutoff_at": "2026-07-28T12:00:00Z",
+        "recorded_at": "2026-07-28T12:00:00Z",
+        "generation_sha256": "4" * 64,
+        "config_json": config_json,
+    }
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_generations VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        tuple(header.values()),
+    )
+
+    seal: dict[str, object] = {
+        "generation_id": gen_id,
+        "projection_seal_id": "seal-1",
+        "projection_seal_sha256": "5" * 64,
+        "change_count": 10,
+        "upsert_count": 10,
+        "tombstone_count": 0,
+        "effective_entry_count": 10,
+        "batch_count": 1,
+        "ordered_entry_set_sha256": "6" * 64,
+    }
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_seals VALUES (?,?,?,?,?,?,?,?,?)",
+        tuple(seal.values()),
+    )
+
+    binding: dict[str, object] = {
+        "generation_id": gen_id,
+        "resolution_scope_sha256": "7" * 64,
+        "resolution_snapshot_commitment_sha256": "8" * 64,
+    }
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_scope_bindings VALUES (?,?,?)",
+        tuple(binding.values()),
+    )
+
+    payload = projection_audit_payload(header, seal, binding)
+    payload_json = canonical_json(payload)
+    receipt = {
+        "generation_id": gen_id,
+        "projection_seal_sha256": seal["projection_seal_sha256"],
+        "verifier_name": AUDIT_VERIFIER_NAME,
+        "verifier_version": AUDIT_VERIFIER_VERSION,
+        "verifier_code_sha256": AUDIT_VERIFIER_CODE_SHA256,
+        "verifier_config_sha256": digest_text(config_json),
+        "audit_payload_json": payload_json,
+        "audit_payload_sha256": digest_text(payload_json),
+    }
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_audit_receipts VALUES (?,?,?,?,?,?,?,?)",
+        tuple(receipt.values()),
+    )
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    v1 = admit_canonical_projection_for_read(conn, gen_id, verification=cache)
+    assert v1.generation_id == gen_id
+    assert cache.counts()[(PROJECTION_GENERATION_ADMISSION, (gen_id,))] == 1
+
+    # Second call returns the memoized admission without re-executing audit
+    v2 = admit_canonical_projection_for_read(conn, gen_id, verification=cache)
+    assert v2 == v1
+    assert cache.counts()[(PROJECTION_GENERATION_ADMISSION, (gen_id,))] == 1
 
     conn.close()

@@ -10,13 +10,14 @@ OR-of-all-tokens compilers:
   stopword-only plans to ``None`` and the lanes return no lexical candidates.
 * **Phrase queries.** Quoted spans in the question compile to phrase operands
   (adjacent, in order) instead of being broken into independent OR tokens.
-* **KPI alias expansion.** When the legacy ``kpi_aliases`` table is present,
-  query terms that match an alias row expand to the counterpart spelling as an
-  OR alternative inside their AND group. The table is dropped at the checkout's
-  ``0002_drop_dead_tables`` migration, so current-head deployments resolve an
-  empty alias map (never an error): alias help degrades to a no-op while sealed
-  retrieval stays fail-closed on its corpus seals. Pre-0002 deployments and
-  hermetic fixtures that carry the table get the expansion.
+* **KPI alias expansion.** Reads admitted, active reported labels and counterpart
+  canonical KPI names from ``kpi_definition_revisions`` joined with ``kpi_definitions``
+  at current schema head, as well as active rows from legacy ``kpi_aliases`` when
+  present in older snapshots or fixtures. Query terms and unquoted multiword spans
+  that match an alias expand to counterpart spellings as OR alternatives inside their
+  AND group. When neither table is present, an empty alias map resolves cleanly
+  without error: alias help degrades to a no-op while sealed retrieval stays fail-closed
+  on its corpus seals.
 * **AND-biased matching with OR fallback.** Lanes first match all content
   terms; only an empty result falls back to any-term matching. This intentionally
   prioritizes high-precision conjunctive hits when available over broader partial

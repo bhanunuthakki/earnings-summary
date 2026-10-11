@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Generator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 
 # Kinds of verification work the sealed plane memoizes per request.
@@ -91,6 +91,13 @@ class RequestVerificationCache:
         self._token: int | None = None
         self._in_flight_tokens: dict[tuple[str, tuple[str, ...]], list[int]] = {}
         self._expected_changes: int = conn.total_changes
+        with suppress(Exception):
+            self._conn.set_trace_callback(self._on_trace_sql)
+
+    def _on_trace_sql(self, statement: str) -> None:
+        if "ROLLBACK" in statement.upper():
+            self._entries.clear()
+            self._expected_changes = self._conn.total_changes
 
     def ensure_bound(self, conn: sqlite3.Connection) -> None:
         """Fail closed when the memo is used through a different connection."""
@@ -112,6 +119,25 @@ class RequestVerificationCache:
             delta = self._conn.total_changes - before
             if delta > 0:
                 self._expected_changes += delta
+
+    @contextmanager
+    def savepoint(self, name: str) -> Generator[None, None, None]:
+        """Execute within a SQLite savepoint; roll back and invalidate memo on error."""
+
+        self._conn.execute(f"SAVEPOINT {name}")
+        try:
+            yield
+        except Exception:
+            self._conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
+            self._conn.execute(f"RELEASE SAVEPOINT {name}")
+            self.invalidate()
+            raise
+        self._conn.execute(f"RELEASE SAVEPOINT {name}")
+
+    def notify_rollback(self) -> None:
+        """Notify the cache that a rollback occurred, invalidating all memoized entries."""
+
+        self.invalidate()
 
     def _check_same_connection_mutation(self) -> None:
         """Clear memoized entries when unacknowledged same-connection writes occur."""

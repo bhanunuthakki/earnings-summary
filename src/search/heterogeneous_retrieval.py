@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import sqlite3
-from collections.abc import Generator, Sequence
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -441,7 +441,7 @@ def retrieve_heterogeneous(
         *_request_population_db_values(request, population_columns),
     )
     header_columns = _HEADER_COLUMNS + population_columns
-    with _savepoint(conn, "heterogeneous_retrieval_trace"):
+    with _savepoint(conn, "heterogeneous_retrieval_trace", verification=verification):
         with verification.authorized_write() if verification is not None else nullcontext():
             conn.execute(
                 "INSERT INTO heterogeneous_retrieval_trace_headers "  # nosec B608 -- trusted internal SQL shape; values remain bound
@@ -1066,6 +1066,31 @@ def _admit_research_snapshot_for_read(
         raise HeterogeneousRetrievalError("research_snapshot_bounded_admission_tampered")
 
 
+def _extract_committed_aliases(
+    query_text: str,
+    alias_map: Mapping[str, Sequence[str]],
+    plan: LexicalQueryPlan,
+) -> dict[str, list[str]]:
+    query_normalized = normalize_alias(query_text)
+    query_words = set(query_normalized.split())
+    committed: dict[str, list[str]] = {}
+    for key, variants in alias_map.items():
+        norm_key = normalize_alias(key)
+        key_words = set(norm_key.split())
+        is_relevant = (
+            norm_key in query_normalized
+            or (key_words and key_words.issubset(query_words))
+            or any(normalize_alias(op) == norm_key for op in plan.operands)
+            or any(
+                normalize_alias(op) in {normalize_alias(v) for v in variants}
+                for op in plan.operands
+            )
+        )
+        if is_relevant:
+            committed[norm_key] = list(variants)
+    return committed
+
+
 def _collect_candidates(
     conn: sqlite3.Connection,
     request: HeterogeneousRetrievalRequest,
@@ -1079,12 +1104,11 @@ def _collect_candidates(
     if request.filters.include_narrative:
         alias_map = kpi_alias_expansions(conn)
         lexical_plan = plan_lexical_query(request.query_text, aliases=alias_map)
-        committed_aliases: dict[str, list[str]] = {}
-        if lexical_plan is not None:
-            for group in lexical_plan.groups:
-                if len(group) > 1:
-                    primary = group[0]
-                    committed_aliases[normalize_alias(primary)] = list(group[1:])
+        committed_aliases = (
+            _extract_committed_aliases(request.query_text, alias_map, lexical_plan)
+            if lexical_plan is not None
+            else {}
+        )
         for bundle in request.narrative_bundles:
             for candidate in _lexical_candidates(
                 conn,
@@ -1366,11 +1390,7 @@ def _lexical_candidates(
         alias_map = kpi_alias_expansions(conn)
         plan = plan_lexical_query(query_text, aliases=alias_map)
         if plan is not None:
-            committed_aliases = {}
-            for group in plan.groups:
-                if len(group) > 1:
-                    primary = group[0]
-                    committed_aliases[normalize_alias(primary)] = list(group[1:])
+            committed_aliases = _extract_committed_aliases(query_text, alias_map, plan)
     if plan is None:
         return []
     sql = (
@@ -2100,13 +2120,20 @@ def _sealed_trace_payload(
 
 
 @contextmanager
-def _savepoint(conn: sqlite3.Connection, name: str) -> Generator[None, None, None]:
+def _savepoint(
+    conn: sqlite3.Connection,
+    name: str,
+    *,
+    verification: RequestVerificationCache | None = None,
+) -> Generator[None, None, None]:
     conn.execute(f"SAVEPOINT {name}")
     try:
         yield
     except Exception:
         conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
         conn.execute(f"RELEASE SAVEPOINT {name}")
+        if verification is not None:
+            verification.invalidate()
         raise
     conn.execute(f"RELEASE SAVEPOINT {name}")
 

@@ -924,6 +924,78 @@ def test_sealed_lane_unquoted_multiword_kpi_alias_retrieval(
         conn.close()
 
 
+def test_sealed_lane_unquoted_multiword_alias_and_canonical_name_replay_after_retirement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When a query contains both an unquoted multiword alias and its canonical name, trace replays cleanly even after alias retirement."""
+    conn = _sealed_conn(tmp_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS kpi_definitions (
+                id INTEGER PRIMARY KEY,
+                ticker TEXT NOT NULL,
+                name TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS kpi_definition_revisions (
+                kpi_definition_revision_id TEXT PRIMARY KEY,
+                kpi_definition_id INTEGER NOT NULL,
+                reported_label TEXT NOT NULL,
+                status TEXT NOT NULL,
+                lifecycle TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("INSERT INTO kpi_definitions VALUES (1, 'AAPL', 'Subscription Revenue')")
+        conn.execute(
+            "INSERT INTO kpi_definition_revisions VALUES ('rev-1', 1, 'Services ARR', 'admitted', 'active')"
+        )
+        chunk_text = "Services ARR subscription revenue expanded thirty percent on cloud growth."
+        conn.execute(
+            "INSERT INTO search_lexical_chunks VALUES ('sealed-both-sub', ?)", (chunk_text,)
+        )
+        conn.execute(
+            "INSERT INTO search_chunks VALUES ('sealed-both-sub', 'manifest', ?, 'node-both-sub', 0, ?, ?)",
+            (digest_text(chunk_text), len(chunk_text), chunk_text),
+        )
+        conn.execute(
+            "INSERT INTO evidence_nodes VALUES ('node-both-sub', 'extraction-run', 'passage', ?)",
+            (canonical_json({"section": "MD&A"}),),
+        )
+        conn.commit()
+
+        # Query contains both unquoted multiword alias 'Services ARR' AND its canonical counterpart 'subscription revenue'
+        query = "Services ARR subscription revenue cloud growth"
+        ids = _sealed_ids(conn, monkeypatch, "trace-both-terms", query)
+        assert ids == ["sealed-both-sub"]
+
+        # Verify initial trace verification succeeds
+        reverified = retrieval_module.verify_heterogeneous_retrieval_trace(conn, "trace-both-terms")
+        assert [str(item["candidate_id"]) for item in reverified.ordered_results] == [
+            "sealed-both-sub"
+        ]
+
+        # Retire the alias definition
+        conn.execute(
+            "UPDATE kpi_definition_revisions SET lifecycle='discontinued' WHERE kpi_definition_revision_id='rev-1'"
+        )
+        conn.commit()
+
+        # Re-verification MUST still succeed using the committed alias plan in candidate lineage
+        reverified_after = retrieval_module.verify_heterogeneous_retrieval_trace(
+            conn, "trace-both-terms"
+        )
+        assert [str(item["candidate_id"]) for item in reverified_after.ordered_results] == [
+            "sealed-both-sub"
+        ]
+    finally:
+        conn.close()
+
+
 def test_verify_legacy_trace_without_lexical_plan_in_lineage(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

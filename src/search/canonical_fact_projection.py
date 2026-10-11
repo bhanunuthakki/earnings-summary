@@ -77,6 +77,9 @@ _AUDIT_VERIFIER_CODE_SHA256 = verifier_source_artifact_sha256(
         "search/canonical_fact_projection.py": Path(__file__).resolve(),
     }
 )
+AUDIT_VERIFIER_NAME = _AUDIT_VERIFIER_NAME
+AUDIT_VERIFIER_VERSION = _AUDIT_VERIFIER_VERSION
+AUDIT_VERIFIER_CODE_SHA256 = _AUDIT_VERIFIER_CODE_SHA256
 
 
 def canonical_time(value: object) -> str:
@@ -974,6 +977,9 @@ def _projection_audit_payload(
         "tombstone_count": _int(seal["tombstone_count"]),
         "upsert_count": _int(seal["upsert_count"]),
     }
+
+
+projection_audit_payload = _projection_audit_payload
 
 
 def _verify_generation_references(
