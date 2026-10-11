@@ -208,7 +208,9 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # +1 exact, read-only canonical financial evidence peek.
     # +1 read-only calculation peek that opens the original reported inputs.
     # +1 exact-edition descriptor for shared-reader reload and historical links.
-    assert len(rules) == 179
+    # +1 sealed evidence citation source-version viewer: the destination for
+    # /source/version/<document_version_id>?node=… citations.
+    assert len(rules) == 180
     assert rules["peek_canonical_financial"] == "/api/peek/canonical-financial"
     assert rules["peek_financial_calculation"] == "/api/peek/financial-calculation"
     assert rules["operations_host_runtime_api"] == "/api/operations/host-runtime"
@@ -248,6 +250,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
         endpoint: rules[endpoint]
         for endpoint in (
             "source_viewer",
+            "source_version_viewer",
             "source_pdf_page_image",
             "vendored_font_file",
             "peek_alert",
@@ -292,6 +295,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
         )
     } == {
         "source_viewer": "/source/<int:doc_id>",
+        "source_version_viewer": "/source/version/<document_version_id>",
         "source_pdf_page_image": "/source/<int:doc_id>/page/<int:page>.png",
         "vendored_font_file": "/src/ui/vendor/fonts/<filename>",
         "peek_alert": "/api/peek/alert/<int:alert_id>",

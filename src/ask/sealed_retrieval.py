@@ -1455,10 +1455,34 @@ def _fact_item(
     cutoff: datetime,
 ) -> SealedEvidenceItem:
     row = conn.execute(
-        "SELECT * FROM canonical_fact_projection_entries "
-        "WHERE canonical_metric_cell_id=? AND entry_sha256=? "
-        "AND change_kind='upsert' ORDER BY recorded_at DESC LIMIT 1",
-        (candidate["candidate_id"], candidate["source_commitment_sha256"]),
+        """
+        WITH RECURSIVE lineage(generation_id,parent_generation_id,depth) AS (
+          SELECT generation_id,parent_generation_id,0
+          FROM canonical_fact_projection_generations
+          WHERE generation_id=?
+          UNION ALL
+          SELECT parent.generation_id,parent.parent_generation_id,lineage.depth+1
+          FROM canonical_fact_projection_generations parent
+          JOIN lineage ON parent.generation_id=lineage.parent_generation_id
+          WHERE lineage.depth<32
+        ),
+        selected_entry AS (
+          SELECT entry.*
+          FROM lineage
+          JOIN canonical_fact_projection_entries entry
+            ON entry.generation_id=lineage.generation_id
+          WHERE entry.canonical_metric_cell_id=?
+          ORDER BY lineage.depth,entry.generation_id,entry.entry_ordinal
+          LIMIT 1
+        )
+        SELECT * FROM selected_entry
+        WHERE entry_sha256=? AND change_kind='upsert'
+        """,
+        (
+            receipt.fact_generation_id,
+            candidate["candidate_id"],
+            candidate["source_commitment_sha256"],
+        ),
     ).fetchone()
     if row is None:
         raise PromotionVerificationError(
