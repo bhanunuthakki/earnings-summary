@@ -18,9 +18,10 @@ OR-of-all-tokens compilers:
   retrieval stays fail-closed on its corpus seals. Pre-0002 deployments and
   hermetic fixtures that carry the table get the expansion.
 * **AND-biased matching with OR fallback.** Lanes first match all content
-  terms; only an empty result falls back to any-term matching, so precision
-  improves where the corpus supports it and recall never drops below the old
-  OR behavior.
+  terms; only an empty result falls back to any-term matching. This intentionally
+  prioritizes high-precision conjunctive hits when available over broader partial
+  matches; when conjunctive hits exist, broader disjunctive hits are omitted
+  in favor of higher precision.
 
 The compiled expression is a pure function of ``(query_text, alias map)``.
 The sealed trace verifier re-runs the same planner on the same committed
@@ -256,34 +257,70 @@ def plan_lexical_query(
 
 
 def kpi_alias_expansions(conn: sqlite3.Connection) -> dict[str, tuple[str, ...]]:
-    """Bidirectional alias variants from the legacy ``kpi_aliases`` authority.
+    """Bidirectional alias variants from current definition revisions and legacy alias rows.
 
-    Keys and variants are normalized (casefolded, token-joined). Retired rows
-    (``effective_to`` set) do not expand. The table is absent at the checkout's
-    current migration head; absence yields an empty map so alias help is a
-    no-op, never an error. Only the retirement marker is honored: the legacy
-    table predates the effective-dating discipline and the planner reads no
-    clock, preserving determinism.
+    Reads admitted, active reported labels and counterpart canonical KPI names from
+    ``kpi_definition_revisions`` joined with ``kpi_definitions`` when present at current schema head,
+    as well as active rows from legacy ``kpi_aliases`` when present in older snapshots or fixtures.
+    Absence of either table yields an empty map rather than an error.
+    Keys and variants are normalized (casefolded, token-joined).
+    Deterministic: variants are sorted alphabetically per key.
     """
 
-    present = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='kpi_aliases'"
-    ).fetchone()
-    if present is None:
-        return {}
     variants: dict[str, set[str]] = {}
-    rows = conn.execute(
-        "SELECT canonical_name,reported_name FROM kpi_aliases "
-        "WHERE effective_to IS NULL ORDER BY id LIMIT ?",
-        (MAX_ALIAS_ROWS,),
-    ).fetchall()
-    for canonical_raw, reported_raw in rows:
-        canonical = _normalize_alias(str(canonical_raw))
-        reported = _normalize_alias(str(reported_raw))
-        if not canonical or not reported or canonical == reported:
-            continue
-        variants.setdefault(reported, set()).add(canonical)
-        variants.setdefault(canonical, set()).add(reported)
+
+    has_revisions = (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='kpi_definition_revisions'"
+        ).fetchone()
+        is not None
+    )
+    has_definitions = (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='kpi_definitions'"
+        ).fetchone()
+        is not None
+    )
+
+    if has_revisions and has_definitions:
+        rows = conn.execute(
+            "SELECT d.name, r.reported_label FROM kpi_definition_revisions AS r "
+            "JOIN kpi_definitions AS d ON d.id=r.kpi_definition_id "
+            "WHERE r.status='admitted' AND r.lifecycle='active' "
+            "ORDER BY r.kpi_definition_revision_id LIMIT ?",
+            (MAX_ALIAS_ROWS,),
+        ).fetchall()
+        for canonical_raw, reported_raw in rows:
+            canonical = _normalize_alias(str(canonical_raw))
+            reported = _normalize_alias(str(reported_raw))
+            if not canonical or not reported or canonical == reported:
+                continue
+            variants.setdefault(reported, set()).add(canonical)
+            variants.setdefault(canonical, set()).add(reported)
+
+    has_legacy = (
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='kpi_aliases'"
+        ).fetchone()
+        is not None
+    )
+
+    if has_legacy:
+        remaining_rows = max(0, MAX_ALIAS_ROWS - sum(len(v) for v in variants.values()))
+        if remaining_rows > 0:
+            rows = conn.execute(
+                "SELECT canonical_name,reported_name FROM kpi_aliases "
+                "WHERE effective_to IS NULL ORDER BY id LIMIT ?",
+                (remaining_rows,),
+            ).fetchall()
+            for canonical_raw, reported_raw in rows:
+                canonical = _normalize_alias(str(canonical_raw))
+                reported = _normalize_alias(str(reported_raw))
+                if not canonical or not reported or canonical == reported:
+                    continue
+                variants.setdefault(reported, set()).add(canonical)
+                variants.setdefault(canonical, set()).add(reported)
+
     return {key: tuple(sorted(values)) for key, values in variants.items()}
 
 

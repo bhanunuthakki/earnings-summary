@@ -1233,3 +1233,54 @@ def test_real_empty_generation_still_builds_and_admits(
         assert verified.change_count == 0
     finally:
         conn.close()
+
+
+def test_kpi_alias_expansions_from_current_head_schema() -> None:
+    """kpi_alias_expansions resolves bidirectional variants from kpi_definition_revisions at head."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """
+        CREATE TABLE kpi_definitions (
+            id INTEGER PRIMARY KEY,
+            ticker TEXT NOT NULL,
+            name TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE kpi_definition_revisions (
+            kpi_definition_revision_id TEXT PRIMARY KEY,
+            kpi_definition_id INTEGER NOT NULL,
+            reported_label TEXT NOT NULL,
+            status TEXT NOT NULL,
+            lifecycle TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("INSERT INTO kpi_definitions VALUES (1, 'AAPL', 'Subscription Revenue')")
+    conn.execute("INSERT INTO kpi_definitions VALUES (2, 'MSFT', 'Cloud Gross Margin')")
+    conn.execute(
+        "INSERT INTO kpi_definition_revisions VALUES ('rev-1', 1, 'Services ARR', 'admitted', 'active')"
+    )
+    conn.execute(
+        "INSERT INTO kpi_definition_revisions VALUES ('rev-2', 2, 'Intelligent Cloud Margin', 'admitted', 'active')"
+    )
+    # Quarantined or discontinued rows must be excluded
+    conn.execute(
+        "INSERT INTO kpi_definition_revisions VALUES ('rev-3', 1, 'Inactive Label', 'quarantined', 'active')"
+    )
+    conn.execute(
+        "INSERT INTO kpi_definition_revisions VALUES ('rev-4', 2, 'Retired Label', 'admitted', 'discontinued')"
+    )
+
+    expansions = kpi_alias_expansions(conn)
+
+    assert expansions["services arr"] == ("subscription revenue",)
+    assert expansions["subscription revenue"] == ("services arr",)
+    assert expansions["intelligent cloud margin"] == ("cloud gross margin",)
+    assert expansions["cloud gross margin"] == ("intelligent cloud margin",)
+    assert "inactive label" not in expansions
+    assert "retired label" not in expansions
+
+    conn.close()

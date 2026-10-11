@@ -87,7 +87,7 @@ class RequestVerificationCache:
         self.journal: list[VerificationEvent] = []
         self._entries: dict[tuple[str, tuple[str, ...]], tuple[int, object]] = {}
         self._token: int | None = None
-        self._lookup_token: int | None = None
+        self._in_flight_tokens: dict[tuple[str, tuple[str, ...]], list[int]] = {}
 
     def ensure_bound(self, conn: sqlite3.Connection) -> None:
         """Fail closed when the memo is used through a different connection."""
@@ -101,13 +101,21 @@ class RequestVerificationCache:
     def verified(self, kind: str, coordinate: tuple[str, ...]) -> object:
         """Return the memoized verification value, or ``NOT_VERIFIED``."""
 
-        self._lookup_token = self._change_token()
+        token = self._change_token()
         entry = self._entries.get((kind, coordinate))
-        if entry is not None and entry[0] == self._lookup_token:
+        if entry is not None and entry[0] == token:
             return entry[1]
+        self._in_flight_tokens.setdefault((kind, coordinate), []).append(token)
         return NOT_VERIFIED
 
-    def record(self, kind: str, coordinate: tuple[str, ...], value: object) -> None:
+    def record(
+        self,
+        kind: str,
+        coordinate: tuple[str, ...],
+        value: object,
+        *,
+        start_token: int | None = None,
+    ) -> None:
         """Journal one executed verification and memoize it at the live token."""
 
         token = self._change_token()
@@ -121,7 +129,9 @@ class RequestVerificationCache:
         )
         if not self.enabled:
             return
-        if self._lookup_token is not None and token != self._lookup_token:
+        stack = self._in_flight_tokens.get((kind, coordinate))
+        lookup_token = start_token if start_token is not None else (stack.pop() if stack else None)
+        if lookup_token is not None and token != lookup_token:
             # An external commit landed while this verification was running;
             # its result cannot be attributed to a stable database view.
             return

@@ -76,6 +76,7 @@ from search.embedding_runtime_artifact import (
 from search.heterogeneous_retrieval import HeterogeneousRetrievalRequest, NarrativeBundle
 from search.local_vector import vector_records_digest, vector_sha256
 from search.request_verification import (
+    NOT_VERIFIED,
     POPULATION_CUTOVER_CURRENT,
     POPULATION_RECEIPT,
     PROMOTION_COORDINATES,
@@ -85,6 +86,7 @@ from search.request_verification import (
     SEMANTIC_RUNTIME_COORDINATES,
     SEMANTIC_RUNTIME_INSTANCE,
     RequestVerificationCache,
+    VerificationCacheError,
 )
 
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
@@ -1175,3 +1177,117 @@ def test_one_evidence_block_is_reused_byte_for_byte_by_answer_and_audit(
             ),
         },
     )
+
+
+def test_nested_verification_invalidation_across_connections(tmp_path: Path) -> None:
+    """An external commit between outer start and nested completion invalidates only the outer check."""
+    db_path = tmp_path / "dedup_tokens.db"
+    conn1 = sqlite3.connect(db_path)
+    conn2 = sqlite3.connect(db_path)
+    conn1.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+    conn1.commit()
+
+    cache = RequestVerificationCache(conn1)
+
+    # 1. Outer verification begins on coordinate ('outer',)
+    assert cache.verified("outer_check", ("outer",)) is NOT_VERIFIED
+
+    # 2. External commit occurs on conn2 while outer check is underway
+    conn2.execute("INSERT INTO t VALUES (1, 'hello')")
+    conn2.commit()
+
+    # 3. Nested verification begins on coordinate ('nested',)
+    assert cache.verified("nested_check", ("nested",)) is NOT_VERIFIED
+
+    # 4. Nested verification completes and records its result at current token
+    cache.record("nested_check", ("nested",), "nested_result")
+
+    # 5. Outer verification completes and attempts to record its result
+    cache.record("outer_check", ("outer",), "outer_result")
+
+    # Outer verification MUST NOT be memoized because data_version changed during its execution
+    assert cache.verified("outer_check", ("outer",)) is NOT_VERIFIED
+
+    # Nested verification was executed entirely at the new token, so it IS memoized
+    assert cache.verified("nested_check", ("nested",)) == "nested_result"
+
+    conn1.close()
+    conn2.close()
+
+
+def test_exact_semantic_runtime_enforces_connection_boundary(tmp_path: Path) -> None:
+    """ExactSemanticRuntime fails closed when passed a verification cache bound to a different connection."""
+    db_path, runtime, records = _build_fixture(tmp_path / "root", tmp_path / "storage")
+    conn1 = sqlite3.connect(db_path)
+    conn2 = sqlite3.connect(db_path)
+
+    cache1 = RequestVerificationCache(conn1)
+    probe = _Probe()
+    storage_uri = f"lance://{(runtime.index_root / f'run-{VECTOR_RUN_ID}' / 'vectors.lance').resolve().as_posix()}#evidence_chunks"
+    counting_index = _CountingIndex(records, storage_uri, probe)
+    encoder = _FixedQueryEncoder()
+
+    with pytest.raises(VerificationCacheError, match="bound to a different connection"):
+        exact_semantic_module.ExactSemanticRuntime.from_verified_components_for_test(
+            conn2,
+            vector_index_run_id=VECTOR_RUN_ID,
+            embedding_promotion_id=EMBEDDING_PROMOTION_ID,
+            index=counting_index,
+            encoder=encoder,
+            verification=cache1,
+        )
+
+    conn1.close()
+    conn2.close()
+
+
+def test_verified_retrieval_trace_receipt_is_protected_from_caller_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mutating a returned verified retrieval trace receipt cannot corrupt the cached copy."""
+    storage_root = tmp_path / "storage"
+    root = tmp_path / "run"
+    db_path, runtime, records = _build_fixture(root, storage_root)
+    probe = _Probe()
+    _install_doubles(monkeypatch, probe, records=records, runtime=runtime, enabled=True)
+    _install_turn_seams(monkeypatch, probe, runtime=runtime)
+
+    list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME"]),
+            ContextPack(scope="portfolio", default_tickers=["ACME"], system_context="ctx"),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+    assert len(probe.packages) == 1
+    trace_id = probe.packages[0].record.retrieval_assembly[0].trace_id
+
+    conn = sqlite3.connect(db_path)
+    cache = RequestVerificationCache(conn)
+
+    # 1. First verification loads and caches the receipt
+    receipt1 = retrieval_module.verify_heterogeneous_retrieval_trace(
+        conn,
+        trace_id,
+        local_vector_runtime=runtime,
+        verification=cache,
+    )
+    assert len(receipt1.ordered_results) > 0
+    original_score = receipt1.ordered_results[0]["final_score"]
+
+    # 2. Mutate nested dictionary in receipt1
+    receipt1.ordered_results[0]["final_score"] = "MUTATED"
+
+    # 3. Second verification from cache returns an independent deep copy
+    receipt2 = retrieval_module.verify_heterogeneous_retrieval_trace(
+        conn,
+        trace_id,
+        local_vector_runtime=runtime,
+        verification=cache,
+    )
+    assert receipt2.ordered_results[0]["final_score"] == original_score
+    assert receipt2.ordered_results[0]["final_score"] != "MUTATED"
+
+    conn.close()

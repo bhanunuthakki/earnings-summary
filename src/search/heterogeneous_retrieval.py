@@ -493,8 +493,8 @@ def verify_heterogeneous_retrieval_trace(
         local_vector_runtime=local_vector_runtime,
         verification=verification,
     )
-    verification.record(RETRIEVAL_TRACE, coordinate, receipt)
-    return receipt
+    verification.record(RETRIEVAL_TRACE, coordinate, receipt.model_copy(deep=True))
+    return receipt.model_copy(deep=True)
 
 
 def _derive_trace_verification(
