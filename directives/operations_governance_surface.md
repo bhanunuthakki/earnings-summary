@@ -41,6 +41,33 @@ inventory. The cleanup does not infer ownership or deletion rights from that cou
 
 ## Outcome
 
+### `execution/_lib.py` adoption for a bounded read-only command subset (2026-10-10)
+Disposition: **CLI database-resolution hardening, no new surface**. Six read-only
+`execution/` diagnostics now resolve their database through the shared
+`execution/_lib.py` seam (`command_parser`, `add_database_argument`,
+`require_db_path`) instead of each re-deriving a `sys.path` bootstrap, an
+`argparse` shell, and a checkout-relative `data/portfolio.db` default:
+`show_source_calls.py`, `report_workload_inventory.py`,
+`provenance_coverage_report.py`, `filing_sections_report.py`,
+`audit_transcript_evidence.py`, and `expire_stale_research.py` (its dry-run and
+`--resurrect-expired` read paths). Their flags, defaults, and `--help` output are
+byte-identical; `--db`/`--db-path` resolution is now explicit flag →
+`EARNINGS_SUMMARY_DB_PATH`/configured → the canonical `require_db_path` policy, so
+running with no flag and no configured database exits 2 with
+`refusing to run: The checkout-default portfolio database is prohibited` and never
+opens or creates `data/portfolio.db`. `report_workload_inventory.py`'s
+`--repo-root` no longer selects the checkout database, and `expire_stale_research.py`
+no longer falls back to it. The `config/architecture_boundaries.json`
+`execution_sys_path_mutations` allowlist shrank by the six adopted files (314 → 308)
+and `scripts/check_architecture_boundaries.py` exits 0. No alert, action, panel,
+route, scheduler task, or managed service changed; the weekly
+`cron/run_weekly_cleanup.bat` `expire_stale_research.py --apply` invocation is
+unchanged and resolves the machine-visible `EARNINGS_SUMMARY_DB_PATH` as before.
+Evidence: `tests/test_execution_lib.py` (legacy-help reproduction, raw-formatter,
+`require_db_path` refusal, and no-own-bootstrap tests), and the unchanged
+`tests/test_source_calls_routes.py`, `tests/test_provenance_coverage_report.py`,
+`tests/test_audit_transcript_evidence.py`, `tests/test_expire_stale_research.py`.
+
 ### Shared truth remedies — 2026-10-03
 
 Disposition: **no Operations surface change**. Explore, Ask, saved financial

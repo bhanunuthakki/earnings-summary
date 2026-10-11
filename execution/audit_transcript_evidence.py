@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import sqlite3
 import sys
@@ -11,15 +10,22 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:  # direct script invocation
+    from _lib import PROJECT_ROOT, add_database_argument, command_parser, require_db_path
+except ImportError:  # pragma: no cover - package import fallback
+    from execution._lib import (
+        PROJECT_ROOT,
+        add_database_argument,
+        command_parser,
+        require_db_path,
+    )
 
-from compute.evidence_snapshot import (  # noqa: E402
+from compute.evidence_snapshot import (
     UnsafeEvidencePathError,
     capture_snapshot,
     recorded_evidence_location,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 class IntegrityStatus(StrEnum):
@@ -208,13 +214,17 @@ def audit_transcript_evidence(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
-    parser.add_argument("--db", type=Path)
+    parser = command_parser(__doc__)
+    parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    add_database_argument(parser, flag="--db", help_text="", metavar=None)
     parser.add_argument("--ticker")
     args = parser.parse_args()
     repo_root = args.repo_root.resolve()
-    db_path = args.db.resolve() if args.db else repo_root / "data" / "portfolio.db"
+    try:
+        db_path = require_db_path(args.db)
+    except (RuntimeError, FileNotFoundError) as exc:
+        sys.stderr.write(f"refusing to run: {exc}\n")
+        return 2
     report = audit_transcript_evidence(repo_root, db_path, args.ticker)
     print(report.model_dump_json())
     sys.stderr.write(

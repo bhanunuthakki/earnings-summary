@@ -15,14 +15,14 @@ Usage:
 
 from __future__ import annotations
 
-import argparse
 import sys
-from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:  # direct script invocation
+    from _lib import add_database_argument, command_parser, require_db_path
+except ImportError:  # pragma: no cover - package import fallback
+    from execution._lib import add_database_argument, command_parser, require_db_path
 
-from sources.registry import SourceCallSummary, summarize_source_calls  # noqa: E402
+from sources.registry import SourceCallSummary, summarize_source_calls
 
 
 def _fmt_pct(x: float) -> str:
@@ -69,16 +69,25 @@ def _render(rows: list[SourceCallSummary]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = command_parser(__doc__)
     parser.add_argument(
         "--since",
         default=None,
         help="Inclusive ISO lower bound on called_at, e.g. 2026-05-01.",
     )
-    parser.add_argument("--db-path", default=None, help="Override the portfolio DB path.")
+    add_database_argument(
+        parser,
+        flag="--db-path",
+        help_text="Override the portfolio DB path.",
+        metavar=None,
+    )
     args = parser.parse_args()
 
-    db_path = Path(args.db_path) if args.db_path else None
+    try:
+        db_path = require_db_path(args.db_path)
+    except (RuntimeError, FileNotFoundError) as exc:
+        sys.stderr.write(f"refusing to run: {exc}\n")
+        return 2
     rows = summarize_source_calls(since=args.since, db_path=db_path)
     sys.stdout.write(_render(rows) + "\n")
     return 0

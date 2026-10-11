@@ -37,13 +37,15 @@ matches again.
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
 from datetime import timedelta
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+try:  # direct script invocation
+    from _lib import add_database_argument, command_parser, require_db_path
+except ImportError:  # pragma: no cover - package import fallback
+    from execution._lib import add_database_argument, command_parser, require_db_path
 
 from clock import now_naive_utc
 from research.proposals import ResearchTask, list_tasks, set_task_status
@@ -125,7 +127,7 @@ def render_resurrect_section(tasks: list[ResearchTask]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = command_parser(__doc__)
     parser.add_argument(
         "--days",
         type=int,
@@ -140,7 +142,9 @@ def main() -> int:
     parser.add_argument(
         "--apply", action="store_true", help="write the expiry (default is a dry run)"
     )
-    parser.add_argument("--db-path", type=Path, default=None, help="override the portfolio DB")
+    add_database_argument(
+        parser, flag="--db-path", help_text="override the portfolio DB", metavar=None
+    )
     parser.add_argument(
         "--resurrect-expired",
         action="store_true",
@@ -152,12 +156,18 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    try:
+        db_path = require_db_path(args.db_path)
+    except (RuntimeError, FileNotFoundError) as exc:
+        sys.stderr.write(f"refusing to run: {exc}\n")
+        return 2
+
     if args.resurrect_expired:
-        tasks = resurrect_expired_preview(db_path=args.db_path)
+        tasks = resurrect_expired_preview(db_path=db_path)
         print(render_resurrect_section(tasks))
         return 0
 
-    ids = expire_stale_tasks(days=args.days, apply=args.apply, db_path=args.db_path)
+    ids = expire_stale_tasks(days=args.days, apply=args.apply, db_path=db_path)
     mode = "expired" if args.apply else "would expire (dry run; pass --apply)"
     print(f"{len(ids)} stale proposed research task(s) {mode}: {ids}")
     return 0
