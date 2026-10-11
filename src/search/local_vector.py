@@ -20,6 +20,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from datetime import UTC, datetime
 from importlib import metadata
+from numbers import Real
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -295,26 +296,20 @@ class StagedVectorIndex(Protocol):
     def publish(self, index_run_id: str) -> str: ...
 
 
-class _LanceSearch(Protocol):
-    def where(self, predicate: str, *, prefilter: bool) -> _LanceSearch: ...
+class _LanceQuery(Protocol):
+    """Sync lancedb 0.40.0 query builders returned by Table.search()."""
 
-    def limit(self, limit: int) -> _LanceSearch: ...
+    def where(self, predicate: str, *, prefilter: bool = True) -> _LanceQuery: ...
 
-    def to_list(self) -> list[dict[str, object]]: ...
-
-
-class _LancePlainQuery(Protocol):
-    def where(self, predicate: str) -> _LancePlainQuery: ...
-
-    def limit(self, limit: int) -> _LancePlainQuery: ...
+    def limit(self, limit: int) -> _LanceQuery: ...
 
     def to_list(self) -> list[dict[str, object]]: ...
 
 
 class _LanceTable(Protocol):
-    def search(self, vector: list[float]) -> _LanceSearch: ...
+    """Sync lancedb 0.40.0 Table: plain scans use search(None); query() is gone."""
 
-    def query(self) -> _LancePlainQuery: ...
+    def search(self, vector: list[float] | None) -> _LanceQuery: ...
 
     def add(self, data: list[dict[str, object]]) -> None: ...
 
@@ -501,8 +496,20 @@ class FastEmbedEncoder:
             raise LocalVectorCapabilityError(
                 "installed fastembed constructor cannot prove offline loading"
             ) from None
-        required = {"model_name", "cache_dir", "local_files_only", "providers"}
+        required = {"model_name", "cache_dir", "providers"}
         if not required.issubset(parameters):
+            raise LocalVectorCapabilityError(
+                "installed fastembed API cannot accept the local embedding settings"
+            )
+        # fastembed 0.9.0 receives local_files_only only through **kwargs (its
+        # base class pops the flag), so a named parameter is no longer the only
+        # acceptable shape. The kwargs path is still verified after
+        # construction against the resolved offline mode below.
+        offline_flag_named = "local_files_only" in parameters
+        accepts_offline_flag = offline_flag_named or any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+        )
+        if not accepts_offline_flag:
             raise LocalVectorCapabilityError(
                 "installed fastembed API cannot prove offline local-only loading"
             )
@@ -525,6 +532,11 @@ class FastEmbedEncoder:
             raise LocalVectorCapabilityError(
                 "local embedding runtime initialization failed closed"
             ) from None
+        if not offline_flag_named and not _reports_local_only(instance):
+            raise LocalVectorCapabilityError(
+                "installed fastembed accepted local_files_only only implicitly; the "
+                "constructed runtime does not report local-only loading"
+            )
         return cls(instance)
 
     def encode_passages(self, texts: list[str]) -> list[list[float]]:
@@ -561,11 +573,29 @@ def _embedding_rows(raw: object) -> list[list[float]]:
             ) from exc
         numeric_values: list[float] = []
         for value in values:
-            if isinstance(value, bool) or not isinstance(value, int | float):
+            # fastembed 0.9.0 yields numpy scalar rows (float32 for the approved
+            # BGE models), not Python floats, so every real numeric scalar is
+            # accepted and converted; bools and non-numeric values still fail
+            # closed. Discovered by the M4 offline runtime comparison probe.
+            if isinstance(value, bool) or not isinstance(value, Real):
                 raise LocalVectorCapabilityError("FastEmbed returned a non-numeric embedding value")
             numeric_values.append(float(value))
         result.append(numeric_values)
     return result
+
+
+def _reports_local_only(instance: object) -> bool:
+    """Whether a kwargs-constructed FastEmbed instance reports its resolved offline mode.
+
+    fastembed 0.9.0 pops ``local_files_only`` out of ``**kwargs`` and records the
+    resolved mode as ``_local_files_only`` on the instance; a public spelling is
+    accepted so named-parameter fastembed generations keep working. A constructor
+    that silently swallows the flag reports neither and fails closed.
+    """
+    return any(
+        getattr(instance, attribute, None) is True
+        for attribute in ("local_files_only", "_local_files_only")
+    )
 
 
 def _verify_component_versions(
@@ -668,7 +698,7 @@ class LanceVectorIndex:
 
     def read_projection(self, index_run_id: str, *, expected_count: int) -> list[dict[str, object]]:
         table = cast(_LanceTable, self._open_any_table(index_run_id))
-        rows = table.query().limit(expected_count + 1).to_list()
+        rows = table.search(None).limit(expected_count + 1).to_list()
         _validate_vector_records(rows)
         if len(rows) != expected_count:
             raise LocalVectorCapabilityError(
@@ -722,7 +752,7 @@ class LanceVectorIndex:
             + " AND "
             + _predicate("chunk_id", last_chunk_id, operator="<=")
         )
-        return table.query().where(predicate).limit(expected_count + 1).to_list()
+        return table.search(None).where(predicate).limit(expected_count + 1).to_list()
 
     def open_table(self, index_run_id: str) -> object:
         table = self._tables.get(index_run_id)
