@@ -461,7 +461,7 @@
     },
     "tests/test_bounded_source_reader.py": {
       "seconds": 0.015,
-      "shard": "2"
+      "shard": "3 overflow"
     },
     "tests/test_brief_provenance_log.py": {
       "seconds": 1.8,
@@ -2757,7 +2757,7 @@
     },
     "tests/test_onboarding_state_authority.py": {
       "seconds": 0.006,
-      "shard": "6 overflow"
+      "shard": "5"
     },
     "tests/test_onmymind_feed.py": {
       "seconds": 3.86,
@@ -2777,7 +2777,7 @@
     },
     "tests/test_onon_provenance.py": {
       "seconds": 0.005,
-      "shard": "5"
+      "shard": "6 overflow"
     },
     "tests/test_ooxml_native_inventory.py": {
       "seconds": 2.0,
@@ -3585,7 +3585,7 @@
     },
     "tests/test_research_snapshot_publication_clock.py": {
       "seconds": 0.003,
-      "shard": "6 overflow"
+      "shard": "8"
     },
     "tests/test_research_tables.py": {
       "seconds": 13.74,
@@ -3803,6 +3803,10 @@
       "seconds": 1.2,
       "shard": "8 overflow"
     },
+    "tests/test_search_runtime_installed_probes.py": {
+      "seconds": 0.02,
+      "shard": "3"
+    },
     "tests/test_sec_6k_fetch.py": {
       "seconds": 1.6,
       "shard": "2 overflow"
@@ -3841,7 +3845,7 @@
     },
     "tests/test_sec_financial_classification.py": {
       "seconds": 0.019,
-      "shard": "3"
+      "shard": "2"
     },
     "tests/test_sec_former_ticker_bootstrap.py": {
       "seconds": 1.2,
@@ -4709,7 +4713,7 @@
     },
     "tests/test_xbrl_units.py": {
       "seconds": 0.01,
-      "shard": "3 overflow"
+      "shard": "6 overflow"
     },
     "tests/test_xbrl_value_classify.py": {
       "seconds": 2.0,
@@ -4727,16 +4731,16 @@
   "shard_timings_seconds": {
     "1": 269.227,
     "1 overflow": 269.228,
-    "2": 269.212,
+    "2": 269.216,
     "2 overflow": 269.275,
-    "3": 269.214,
-    "3 overflow": 269.209,
+    "3": 269.215,
+    "3 overflow": 269.214,
     "4": 269.223,
-    "5": 269.211,
+    "5": 269.212,
     "6": 269.222,
-    "6 overflow": 269.21,
+    "6 overflow": 269.216,
     "7": 269.226,
-    "8": 269.212,
+    "8": 269.215,
     "8 overflow": 269.246
   }
 }
