@@ -509,6 +509,14 @@ jobs:
           echo "base=$base" >> "$GITHUB_OUTPUT"
       - name: Check changed retained files with the shared local gate
         run: PYTHONPATH=src python -m quality.check_changed --base "${{ steps.changed.outputs.base }}" --mode committed --check format --check lint --check suppressions
+      - name: Architecture boundary seams and ratchets
+        # Receipt-based anti-sprawl gate next to the boundary seam check: a new
+        # module, LOC bucket growth, fan-out growth, or new duplicated LOC fails
+        # until the baseline receipt is deliberately re-measured in the same
+        # reviewed change (scanner drift holds the gate, never passes it).
+        run: |
+          python scripts/check_architecture_boundaries.py
+          PYTHONPATH=src python scripts/check_architecture_ratchet.py
 
   typecheck:
     needs: [changes]

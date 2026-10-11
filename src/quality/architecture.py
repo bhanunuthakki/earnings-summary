@@ -450,6 +450,7 @@ def architecture_regressions(
     current: ArchitectureMetrics, baseline: ArchitectureMetrics
 ) -> tuple[str, ...]:
     comparisons = {
+        "executable_modules": (current.executable_modules, baseline.executable_modules),
         "total_noncomment_loc": (current.total_noncomment_loc, baseline.total_noncomment_loc),
         "modules_over_1000_loc": (current.modules_over_1000_loc, baseline.modules_over_1000_loc),
         "modules_over_2000_loc": (current.modules_over_2000_loc, baseline.modules_over_2000_loc),

@@ -199,6 +199,10 @@
       "seconds": 20.15,
       "shard": "6"
     },
+    "tests/test_architecture_ratchet_gate.py": {
+      "seconds": 0.2,
+      "shard": "8 overflow"
+    },
     "tests/test_architecture_runtime_contracts.py": {
       "seconds": 1.7,
       "shard": "2"
