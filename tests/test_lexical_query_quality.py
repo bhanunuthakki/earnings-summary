@@ -814,6 +814,9 @@ def test_sealed_lane_kpi_alias_query_retrieves_alias_candidate(
             conn, monkeypatch, "trace-alias-retired", "did MAU grow in the recent release"
         )
         assert retired_ids == []
+        # The earlier sealed trace MUST remain verifiable even after alias retirement
+        reverified = retrieval_module.verify_heterogeneous_retrieval_trace(conn, "trace-alias")
+        assert [str(item["candidate_id"]) for item in reverified.ordered_results] == ["sealed-mau"]
         _record_evidence(
             "val-search-005-sealed-kpi-aliases.json",
             {
@@ -839,6 +842,135 @@ def test_sealed_lane_kpi_alias_query_retrieves_alias_candidate(
                 "scope_note": _SCOPE_NOTE,
             },
         )
+    finally:
+        conn.close()
+
+
+def test_sealed_lane_unquoted_multiword_kpi_alias_retrieval(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unquoted multiword alias term expands to its counterpart and retrieves the sealed document."""
+    conn = _sealed_conn(tmp_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS kpi_definitions (
+                id INTEGER PRIMARY KEY,
+                ticker TEXT NOT NULL,
+                name TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS kpi_definition_revisions (
+                kpi_definition_revision_id TEXT PRIMARY KEY,
+                kpi_definition_id INTEGER NOT NULL,
+                reported_label TEXT NOT NULL,
+                status TEXT NOT NULL,
+                lifecycle TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("INSERT INTO kpi_definitions VALUES (1, 'AAPL', 'Subscription Revenue')")
+        conn.execute(
+            "INSERT INTO kpi_definition_revisions VALUES ('rev-1', 1, 'Services ARR', 'admitted', 'active')"
+        )
+        chunk_text = "Subscription revenue expanded thirty percent on cloud growth."
+        conn.execute(
+            "INSERT INTO search_lexical_chunks VALUES ('sealed-sub-rev', ?)", (chunk_text,)
+        )
+        conn.execute(
+            "INSERT INTO search_chunks VALUES ('sealed-sub-rev', 'manifest', ?, 'node-sub-rev', 0, ?, ?)",
+            (digest_text(chunk_text), len(chunk_text), chunk_text),
+        )
+        conn.execute(
+            "INSERT INTO evidence_nodes VALUES ('node-sub-rev', 'extraction-run', 'passage', ?)",
+            (canonical_json({"section": "MD&A"}),),
+        )
+        conn.commit()
+
+        # Unquoted question with multiword alias term 'Services ARR'
+        query = "What drove Services ARR in recent period"
+        ids = _sealed_ids(conn, monkeypatch, "trace-multiword-alias", query)
+        assert ids == ["sealed-sub-rev"]
+
+        # Verify trace re-verification succeeds
+        reverified = retrieval_module.verify_heterogeneous_retrieval_trace(
+            conn, "trace-multiword-alias"
+        )
+        assert [str(item["candidate_id"]) for item in reverified.ordered_results] == [
+            "sealed-sub-rev"
+        ]
+
+        # Discontinue the revision
+        conn.execute(
+            "UPDATE kpi_definition_revisions SET lifecycle='discontinued' WHERE kpi_definition_revision_id='rev-1'"
+        )
+        conn.commit()
+
+        # The earlier sealed trace MUST remain verifiable even after retirement
+        reverified_after = retrieval_module.verify_heterogeneous_retrieval_trace(
+            conn, "trace-multiword-alias"
+        )
+        assert [str(item["candidate_id"]) for item in reverified_after.ordered_results] == [
+            "sealed-sub-rev"
+        ]
+
+        # A new query after retirement no longer expands the alias
+        retired_ids = _sealed_ids(conn, monkeypatch, "trace-multiword-retired", query)
+        assert retired_ids == []
+    finally:
+        conn.close()
+
+
+def test_verify_legacy_trace_without_lexical_plan_in_lineage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A legacy trace generated without lexical_plan in candidate lineage verifies via legacy replay."""
+    conn = _sealed_conn(tmp_path)
+    try:
+        query = "operating margin"
+        ids = _sealed_ids(conn, monkeypatch, "trace-legacy-compat", query)
+        assert len(ids) > 0
+
+        # Strip lexical_plan from candidate lineage to simulate a legacy trace
+        candidates = conn.execute(
+            "SELECT candidate_ordinal, candidate_json, lineage_json FROM heterogeneous_retrieval_trace_candidates WHERE trace_id='trace-legacy-compat'"
+        ).fetchall()
+        updated_candidates: list[dict[str, object]] = []
+        for ordinal, c_json_str, l_json_str in candidates:
+            c_dict = cast(dict[str, object], json.loads(str(c_json_str)))
+            l_dict = cast(dict[str, object], json.loads(str(l_json_str)))
+            l_dict.pop("lexical_plan", None)
+            new_l_json = canonical_json(l_dict)
+            new_l_sha = digest_text(new_l_json)
+            c_dict["lineage_sha256"] = new_l_sha
+            new_c_json = canonical_json(c_dict)
+            updated_candidates.append(c_dict)
+            conn.execute(
+                "UPDATE heterogeneous_retrieval_trace_candidates SET lineage_json=?, lineage_sha256=?, candidate_json=?, candidate_sha256=? WHERE trace_id='trace-legacy-compat' AND candidate_ordinal=?",
+                (new_l_json, new_l_sha, new_c_json, digest_text(new_c_json), ordinal),
+            )
+
+        cand_set_json = canonical_json(updated_candidates)
+        cand_set_sha = digest_text(cand_set_json)
+        seal_row = conn.execute(
+            "SELECT trace_json FROM heterogeneous_retrieval_trace_seals WHERE trace_id='trace-legacy-compat'"
+        ).fetchone()
+        assert seal_row is not None
+        seal_dict = cast(dict[str, object], json.loads(str(seal_row[0])))
+        seal_dict["candidate_set_sha256"] = cand_set_sha
+        new_trace_json = canonical_json(seal_dict)
+        conn.execute(
+            "UPDATE heterogeneous_retrieval_trace_seals SET canonical_candidate_set_json=?, candidate_set_sha256=?, trace_json=?, trace_sha256=? WHERE trace_id='trace-legacy-compat'",
+            (cand_set_json, cand_set_sha, new_trace_json, digest_text(new_trace_json)),
+        )
+        conn.commit()
+
+        monkeypatch.setattr(retrieval_module, "_derive_research_coordinates", _derive_research)
+        receipt = retrieval_module.verify_heterogeneous_retrieval_trace(conn, "trace-legacy-compat")
+        assert [str(item["candidate_id"]) for item in receipt.ordered_results] == ids
     finally:
         conn.close()
 
@@ -1284,3 +1416,13 @@ def test_kpi_alias_expansions_from_current_head_schema() -> None:
     assert "retired label" not in expansions
 
     conn.close()
+
+
+def test_plan_lexical_query_unquoted_multiword_alias() -> None:
+    """An unquoted multiword alias in ordinary query text expands to its counterpart."""
+    aliases = {"services arr": ("subscription revenue",)}
+    plan = plan_lexical_query("What drove Services ARR in recent quarter?", aliases=aliases)
+    assert plan is not None
+    assert ("Services ARR", "subscription revenue") in plan.groups
+    assert '("Services ARR" OR "subscription revenue")' in plan.match_all
+    assert '"Services ARR" OR "subscription revenue"' in plan.match_any

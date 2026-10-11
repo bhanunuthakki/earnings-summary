@@ -181,7 +181,7 @@ class LexicalQueryPlan:
 
     @property
     def match_any(self) -> str:
-        """Recall-preserving fallback expression: any operand matches."""
+        """Disjunctive fallback expression: matches any content operand when conjunctive search yields no hits."""
         return " OR ".join(_quoted(operand) for operand in self.operands)
 
 
@@ -223,8 +223,33 @@ def plan_lexical_query(
             _add_operand(" ".join(words), sink=phrases)
     remainder_parts.append(query_text[cursor:])
 
-    for match in _TOKEN_RX.finditer(" ".join(remainder_parts)):
-        _add_operand(match.group(0), sink=tokens)
+    remainder_text = " ".join(remainder_parts)
+    remainder_words = [
+        (match.group(0), match.start(), match.end()) for match in _WORD_RX.finditer(remainder_text)
+    ]
+
+    consumed_indices: set[int] = set()
+    multiword_alias_keys = {key for key in alias_map if " " in key}
+
+    if multiword_alias_keys and remainder_words:
+        max_n = min(
+            max(len(key.split()) for key in multiword_alias_keys),
+            len(remainder_words),
+        )
+        for n in range(max_n, 1, -1):
+            for i in range(len(remainder_words) - n + 1):
+                if any(idx in consumed_indices for idx in range(i, i + n)):
+                    continue
+                slice_words = remainder_words[i : i + n]
+                candidate_key = _normalize_alias(" ".join(w[0] for w in slice_words))
+                if candidate_key in multiword_alias_keys:
+                    span_text = " ".join(w[0] for w in slice_words)
+                    _add_operand(span_text, sink=phrases)
+                    consumed_indices.update(range(i, i + n))
+
+    for i, (word, _, _) in enumerate(remainder_words):
+        if i not in consumed_indices and (len(word) >= 2 or _TOKEN_RX.fullmatch(word)):
+            _add_operand(word, sink=tokens)
 
     content_phrases = [
         phrase
@@ -349,6 +374,9 @@ def fact_alias_terms(
 
 def _normalize_alias(text: str) -> str:
     return " ".join(_WORD_RX.findall(text.casefold()))
+
+
+normalize_alias = _normalize_alias
 
 
 def _quoted(operand: str) -> str:

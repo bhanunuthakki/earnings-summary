@@ -1291,3 +1291,73 @@ def test_verified_retrieval_trace_receipt_is_protected_from_caller_mutation(
     assert receipt2.ordered_results[0]["final_score"] != "MUTATED"
 
     conn.close()
+
+
+def test_unacknowledged_same_connection_mutation_invalidates_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unacknowledged same-connection write invalidates memoized state and prevents reuse."""
+    storage_root = tmp_path / "storage"
+    root = tmp_path / "run"
+    db_path, runtime, records = _build_fixture(root, storage_root)
+    probe = _Probe()
+    _install_doubles(monkeypatch, probe, records=records, runtime=runtime, enabled=True)
+    _install_turn_seams(monkeypatch, probe, runtime=runtime)
+
+    list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME"]),
+            ContextPack(scope="portfolio", default_tickers=["ACME"], system_context="ctx"),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+    assert len(probe.packages) == 1
+    trace_id = probe.packages[0].record.retrieval_assembly[0].trace_id
+
+    conn = sqlite3.connect(db_path)
+    cache = RequestVerificationCache(conn)
+    trace_coord = (
+        trace_id,
+        str(runtime.index_root),
+        str(runtime.runtime_root),
+    )
+
+    # 1. First verification memoizes RETRIEVAL_TRACE
+    retrieval_module.verify_heterogeneous_retrieval_trace(
+        conn,
+        trace_id,
+        local_vector_runtime=runtime,
+        verification=cache,
+    )
+    assert cache.counts()[(retrieval_module.RETRIEVAL_TRACE, trace_coord)] == 1
+
+    # Second check hits cache without re-executing
+    retrieval_module.verify_heterogeneous_retrieval_trace(
+        conn,
+        trace_id,
+        local_vector_runtime=runtime,
+        verification=cache,
+    )
+    assert cache.counts()[(retrieval_module.RETRIEVAL_TRACE, trace_coord)] == 1
+
+    # 2. Mutate database on the SAME connection (unacknowledged write)
+    conn.execute(
+        "UPDATE heterogeneous_retrieval_trace_results SET final_score='0.99999999' WHERE trace_id=?",
+        (trace_id,),
+    )
+    conn.commit()
+
+    # 3. Third verification detects same-connection mutation, invalidates memo, and re-executes.
+    # Because database state was tampered with, re-verification does NOT return the cached receipt
+    # and instead re-runs against the database, failing closed with HeterogeneousRetrievalError!
+    with pytest.raises(retrieval_module.HeterogeneousRetrievalError):
+        retrieval_module.verify_heterogeneous_retrieval_trace(
+            conn,
+            trace_id,
+            local_vector_runtime=runtime,
+            verification=cache,
+        )
+
+    conn.close()

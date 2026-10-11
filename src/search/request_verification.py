@@ -35,6 +35,8 @@ speed.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Generator
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 # Kinds of verification work the sealed plane memoizes per request.
@@ -88,6 +90,7 @@ class RequestVerificationCache:
         self._entries: dict[tuple[str, tuple[str, ...]], tuple[int, object]] = {}
         self._token: int | None = None
         self._in_flight_tokens: dict[tuple[str, tuple[str, ...]], list[int]] = {}
+        self._expected_changes: int = conn.total_changes
 
     def ensure_bound(self, conn: sqlite3.Connection) -> None:
         """Fail closed when the memo is used through a different connection."""
@@ -97,6 +100,32 @@ class RequestVerificationCache:
                 "in-request verification cache is bound to a different connection; "
                 "a sealed request must verify through the connection it opened"
             )
+
+    @contextmanager
+    def authorized_write(self) -> Generator[None, None, None]:
+        """Acknowledge authorized same-connection trace writes without invalidating memo."""
+
+        before = self._conn.total_changes
+        try:
+            yield
+        finally:
+            delta = self._conn.total_changes - before
+            if delta > 0:
+                self._expected_changes += delta
+
+    def _check_same_connection_mutation(self) -> None:
+        """Clear memoized entries when unacknowledged same-connection writes occur."""
+
+        current_changes = self._conn.total_changes
+        if current_changes != self._expected_changes:
+            self._entries.clear()
+            self._expected_changes = current_changes
+
+    def invalidate(self) -> None:
+        """Explicitly invalidate all memoized entries."""
+
+        self._entries.clear()
+        self._expected_changes = self._conn.total_changes
 
     def verified(self, kind: str, coordinate: tuple[str, ...]) -> object:
         """Return the memoized verification value, or ``NOT_VERIFIED``."""
@@ -147,6 +176,7 @@ class RequestVerificationCache:
         return counts
 
     def _change_token(self) -> int:
+        self._check_same_connection_mutation()
         row = self._conn.execute("PRAGMA data_version").fetchone()
         token = int(row[0])
         if self._token != token:

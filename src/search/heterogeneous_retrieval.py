@@ -6,7 +6,7 @@ import copy
 import json
 import sqlite3
 from collections.abc import Generator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -39,7 +39,12 @@ from search.exact_semantic import (
     backend_receipt_json,
     evidence_from_json,
 )
-from search.lexical_query import kpi_alias_expansions, plan_lexical_query
+from search.lexical_query import (
+    LexicalQueryPlan,
+    kpi_alias_expansions,
+    normalize_alias,
+    plan_lexical_query,
+)
 from search.local_vector import LanceVectorIndex, LocalVectorCapabilityError
 from search.request_verification import (
     NOT_VERIFIED,
@@ -437,14 +442,15 @@ def retrieve_heterogeneous(
     )
     header_columns = _HEADER_COLUMNS + population_columns
     with _savepoint(conn, "heterogeneous_retrieval_trace"):
-        conn.execute(
-            "INSERT INTO heterogeneous_retrieval_trace_headers "  # nosec B608 -- trusted internal SQL shape; values remain bound
-            f"({','.join(header_columns)}) VALUES "
-            f"({','.join('?' for _ in header_columns)})",
-            header_values,
-        )
-        ranked = _rank_candidates(request, candidates)
-        _write_trace(conn, request, ranked, commitments)
+        with verification.authorized_write() if verification is not None else nullcontext():
+            conn.execute(
+                "INSERT INTO heterogeneous_retrieval_trace_headers "  # nosec B608 -- trusted internal SQL shape; values remain bound
+                f"({','.join(header_columns)}) VALUES "
+                f"({','.join('?' for _ in header_columns)})",
+                header_values,
+            )
+            ranked = _rank_candidates(request, candidates)
+            _write_trace(conn, request, ranked, commitments)
         return verify_heterogeneous_retrieval_trace(
             conn,
             request.trace_id,
@@ -1071,6 +1077,14 @@ def _collect_candidates(
     semantic_receipts: list[dict[str, object]] = []
     lane_limit = max(1, request.candidate_limit // max(1, len(request.narrative_bundles) + 1))
     if request.filters.include_narrative:
+        alias_map = kpi_alias_expansions(conn)
+        lexical_plan = plan_lexical_query(request.query_text, aliases=alias_map)
+        committed_aliases: dict[str, list[str]] = {}
+        if lexical_plan is not None:
+            for group in lexical_plan.groups:
+                if len(group) > 1:
+                    primary = group[0]
+                    committed_aliases[normalize_alias(primary)] = list(group[1:])
         for bundle in request.narrative_bundles:
             for candidate in _lexical_candidates(
                 conn,
@@ -1078,6 +1092,8 @@ def _collect_candidates(
                 request.query_text,
                 lane_limit,
                 reporting_entity_id=request.filters.reporting_entity_id,
+                plan=lexical_plan,
+                committed_aliases=committed_aliases,
             ):
                 collected[("narrative", str(candidate["candidate_id"]))] = candidate
             if bundle.vector_index_run_id is not None:
@@ -1343,8 +1359,18 @@ def _lexical_candidates(
     limit: int,
     *,
     reporting_entity_id: str | None = None,
+    plan: LexicalQueryPlan | None = None,
+    committed_aliases: dict[str, list[str]] | None = None,
 ) -> list[dict[str, object]]:
-    plan = plan_lexical_query(query_text, aliases=kpi_alias_expansions(conn))
+    if plan is None:
+        alias_map = kpi_alias_expansions(conn)
+        plan = plan_lexical_query(query_text, aliases=alias_map)
+        if plan is not None:
+            committed_aliases = {}
+            for group in plan.groups:
+                if len(group) > 1:
+                    primary = group[0]
+                    committed_aliases[normalize_alias(primary)] = list(group[1:])
     if plan is None:
         return []
     sql = (
@@ -1364,14 +1390,17 @@ def _lexical_candidates(
         "ORDER BY lexical_rank,chunk.chunk_id LIMIT ?"
     )
     filter_params = (bundle.corpus_manifest_id, reporting_entity_id, reporting_entity_id, limit)
-    # AND-biased first; the OR fallback only runs on an empty result so recall
-    # never drops below the pre-planner OR-of-all-tokens behavior. The plan is
-    # a pure function of (query, alias map), so the trace verifier re-runs the
-    # same expressions on the same committed question and reproduces the exact
-    # candidates and bm25 scores.
+    # AND-biased first: conjunctive matching prioritizes high-precision hits
+    # over broad disjunctive noise. The disjunctive fallback only executes
+    # when the conjunctive candidate set is empty. Stopword removal, phrase
+    # grouping, and the operand cap deliberately favor precision over
+    # unconstrained recall. The plan and committed alias expansions are bound
+    # to candidate lineage so verification replays the exact expressions.
     rows = _rows(conn, sql, (plan.match_all, *filter_params))
+    used_all = bool(rows)
     if not rows:
         rows = _rows(conn, sql, (plan.match_any, *filter_params))
+    selected_expression = "match_all" if used_all else "match_any"
     return [
         {
             "candidate_id": str(row["chunk_id"]),
@@ -1384,6 +1413,13 @@ def _lexical_candidates(
                 "corpus_manifest_id": bundle.corpus_manifest_id,
                 "evidence_node_id": row["evidence_node_id"],
                 "lexical_index_run_id": bundle.lexical_index_run_id,
+                "lexical_plan": {
+                    "version": "lexical_query_plan.v1",
+                    "match_all": plan.match_all,
+                    "match_any": plan.match_any,
+                    "selected_expression": selected_expression,
+                    "aliases": committed_aliases or {},
+                },
             },
             "semantic_score": None,
             "source_commitment_sha256": str(row["content_sha256"]),
@@ -1597,6 +1633,102 @@ def _write_trace(
     )
 
 
+def _recompute_lexical_candidate(
+    conn: sqlite3.Connection,
+    bundle: NarrativeBundle,
+    plan: LexicalQueryPlan,
+    *,
+    selected_expression: str,
+    candidate_id: str,
+    limit: int,
+    reporting_entity_id: str | None,
+    trace_id: str,
+) -> dict[str, object] | None:
+    sql = (
+        "SELECT chunk.chunk_id,chunk.content_sha256,chunk.evidence_node_id,"
+        "chunk.char_start,chunk.char_end,chunk.manifest_id,"
+        "node.extraction_run_id,run.document_version_id,"
+        "bm25(search_lexical_chunks) AS lexical_rank "
+        "FROM search_lexical_chunks "
+        "JOIN search_chunks chunk ON chunk.chunk_id=search_lexical_chunks.chunk_id "
+        "JOIN evidence_nodes node ON node.node_id=chunk.evidence_node_id "
+        "JOIN evidence_extraction_runs run "
+        "ON run.extraction_run_id=node.extraction_run_id "
+        "JOIN v_evidence_document_versions_canonical document "
+        "ON document.document_version_id=run.document_version_id "
+        "WHERE search_lexical_chunks MATCH ? AND chunk.manifest_id=? "
+        "AND (? IS NULL OR document.reporting_entity_id=?) "
+        "ORDER BY lexical_rank,chunk.chunk_id LIMIT ?"
+    )
+    filter_params = (bundle.corpus_manifest_id, reporting_entity_id, reporting_entity_id, limit)
+    if selected_expression == "match_all":
+        expr = plan.match_all
+    else:
+        all_hits = _rows(conn, sql, (plan.match_all, *filter_params))
+        if all_hits:
+            raise HeterogeneousRetrievalError(
+                "narrative_candidate_lexical_fallback_invalid",
+                trace_id=trace_id,
+            )
+        expr = plan.match_any
+    rows = _rows(conn, sql, (expr, *filter_params))
+    for row in rows:
+        if str(row["chunk_id"]) == candidate_id:
+            return {
+                "candidate_id": str(row["chunk_id"]),
+                "lexical_score": canonical_decimal(
+                    Decimal(1) / (Decimal(1) + abs(Decimal(str(row["lexical_rank"]))))
+                ),
+            }
+    return None
+
+
+def _recompute_legacy_lexical_candidate(
+    conn: sqlite3.Connection,
+    bundle: NarrativeBundle,
+    query_text: str,
+    *,
+    candidate_id: str,
+    limit: int,
+    reporting_entity_id: str | None,
+) -> dict[str, object] | None:
+    expression = " OR ".join(
+        f'"{token.replace(chr(34), chr(34) * 2)}"' for token in query_text.split() if token.strip()
+    )
+    if not expression:
+        return None
+    sql = (
+        "SELECT chunk.chunk_id,chunk.content_sha256,chunk.evidence_node_id,"
+        "chunk.char_start,chunk.char_end,chunk.manifest_id,"
+        "node.extraction_run_id,run.document_version_id,"
+        "bm25(search_lexical_chunks) AS lexical_rank "
+        "FROM search_lexical_chunks "
+        "JOIN search_chunks chunk ON chunk.chunk_id=search_lexical_chunks.chunk_id "
+        "JOIN evidence_nodes node ON node.node_id=chunk.evidence_node_id "
+        "JOIN evidence_extraction_runs run "
+        "ON run.extraction_run_id=node.extraction_run_id "
+        "JOIN v_evidence_document_versions_canonical document "
+        "ON document.document_version_id=run.document_version_id "
+        "WHERE search_lexical_chunks MATCH ? AND chunk.manifest_id=? "
+        "AND (? IS NULL OR document.reporting_entity_id=?) "
+        "ORDER BY lexical_rank,chunk.chunk_id LIMIT ?"
+    )
+    rows = _rows(
+        conn,
+        sql,
+        (expression, bundle.corpus_manifest_id, reporting_entity_id, reporting_entity_id, limit),
+    )
+    for row in rows:
+        if str(row["chunk_id"]) == candidate_id:
+            return {
+                "candidate_id": str(row["chunk_id"]),
+                "lexical_score": canonical_decimal(
+                    Decimal(1) / (Decimal(1) + abs(Decimal(str(row["lexical_rank"]))))
+                ),
+            }
+    return None
+
+
 def _verify_candidate_source(
     conn: sqlite3.Connection,
     request: HeterogeneousRetrievalRequest,
@@ -1637,24 +1769,56 @@ def _verify_candidate_source(
             "WHERE chunk.chunk_id=? AND chunk.manifest_id=?",
             (candidate["candidate_id"], manifest_id),
         )
-        recomputed = (
-            next(
-                (
-                    item
-                    for item in _lexical_candidates(
-                        conn,
-                        bundle,
-                        request.query_text,
-                        request.candidate_limit,
-                        reporting_entity_id=request.filters.reporting_entity_id,
+        recomputed = None
+        if candidate["lexical_score"] is not None:
+            plan_data = lineage.get("lexical_plan")
+            if plan_data is not None and isinstance(plan_data, dict):
+                plan_dict = cast(dict[str, object], plan_data)
+                raw_aliases = plan_dict.get("aliases")
+                aliases_dict = (
+                    cast(dict[str, list[object]], raw_aliases)
+                    if isinstance(raw_aliases, dict)
+                    else {}
+                )
+                committed_alias_map = {
+                    str(k): tuple(str(x) for x in v) for k, v in aliases_dict.items()
+                }
+                verified_plan = plan_lexical_query(request.query_text, aliases=committed_alias_map)
+                if (
+                    verified_plan is None
+                    or verified_plan.match_all != plan_dict.get("match_all")
+                    or verified_plan.match_any != plan_dict.get("match_any")
+                ):
+                    raise HeterogeneousRetrievalError(
+                        "narrative_candidate_lexical_plan_tampered",
+                        trace_id=request.trace_id,
                     )
-                    if item["candidate_id"] == candidate["candidate_id"]
-                ),
-                None,
-            )
-            if candidate["lexical_score"] is not None
-            else None
-        )
+                raw_selected = plan_dict.get("selected_expression")
+                selected_expr = str(raw_selected) if raw_selected is not None else ""
+                if selected_expr not in {"match_all", "match_any"}:
+                    raise HeterogeneousRetrievalError(
+                        "narrative_candidate_lexical_plan_invalid",
+                        trace_id=request.trace_id,
+                    )
+                recomputed = _recompute_lexical_candidate(
+                    conn,
+                    bundle,
+                    verified_plan,
+                    selected_expression=selected_expr,
+                    candidate_id=str(candidate["candidate_id"]),
+                    limit=request.candidate_limit,
+                    reporting_entity_id=request.filters.reporting_entity_id,
+                    trace_id=request.trace_id,
+                )
+            else:
+                recomputed = _recompute_legacy_lexical_candidate(
+                    conn,
+                    bundle,
+                    request.query_text,
+                    candidate_id=str(candidate["candidate_id"]),
+                    limit=request.candidate_limit,
+                    reporting_entity_id=request.filters.reporting_entity_id,
+                )
         semantic = semantic_expected.get((manifest_id, str(candidate["candidate_id"])))
         semantic_score = candidate["semantic_score"]
         semantic_valid = (
