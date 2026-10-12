@@ -1,7 +1,7 @@
 {
   "schema_version": "1",
   "scoped_revision": "WORKTREE",
-  "commit_hash": "54cc009f0dc068586f3e70620891996289e85579",
+  "commit_hash": "aa66701ffb439c1ffe097e601c0bdc6ef78799bf",
   "source_hash": "40022e39b2ac1a09c60dc0a077b690e2a08f64afda4e1f0415d212989106a997",
   "scanner_hash": "3e5eeae4a510bfc41990c977ec0d327f0ae945ba849766b82534e0efa043bdf1",
   "parser_version": "python-ast-normalized-v1",
