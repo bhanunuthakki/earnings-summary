@@ -34,10 +34,14 @@ speed.
 
 from __future__ import annotations
 
+import re
 import sqlite3
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+
+_ROLLBACK_PATTERN = re.compile(r"(?is)^(?:\s*(?:/\*.*?\*/|--[^\n]*(?:\n|$)))*\s*rollback\b")
+_CONNECTION_TRACE_STACK: dict[int, list[Callable[[str], None]]] = {}
 
 # Kinds of verification work the sealed plane memoizes per request.
 SEMANTIC_PROJECTION_READ = "semantic_projection_read_rehash_verify"
@@ -93,15 +97,22 @@ class RequestVerificationCache:
         self._in_flight_tokens: dict[tuple[str, tuple[str, ...]], list[tuple[int, int]]] = {}
         self._expected_changes: int = conn.total_changes
         self._closed: bool = False
-        self._previous_trace = getattr(conn, "_trace_callback", None)
-        with suppress(Exception):
-            self._conn.set_trace_callback(self._on_trace_sql)
+        conn_id = id(conn)
+        if conn_id not in _CONNECTION_TRACE_STACK:
+            stack: list[Callable[[str], None]] = []
+            _CONNECTION_TRACE_STACK[conn_id] = stack
+
+            def _dispatch_trace(statement: str) -> None:
+                for handler in list(_CONNECTION_TRACE_STACK.get(conn_id, [])):
+                    with suppress(Exception):
+                        handler(statement)
+
+            with suppress(Exception):
+                self._conn.set_trace_callback(_dispatch_trace)
+        _CONNECTION_TRACE_STACK[conn_id].append(self._on_trace_sql)
 
     def _on_trace_sql(self, statement: str) -> None:
-        if self._previous_trace is not None:
-            with suppress(Exception):
-                self._previous_trace(statement)
-        if "ROLLBACK" in statement.upper():
+        if _ROLLBACK_PATTERN.match(statement):
             self._entries.clear()
             self._epoch += 1
             self._expected_changes = self._conn.total_changes
@@ -112,8 +123,15 @@ class RequestVerificationCache:
         if self._closed:
             return
         self._closed = True
-        with suppress(Exception):
-            self._conn.set_trace_callback(self._previous_trace)
+        conn_id = id(self._conn)
+        stack = _CONNECTION_TRACE_STACK.get(conn_id)
+        if stack is not None:
+            if self._on_trace_sql in stack:
+                stack.remove(self._on_trace_sql)
+            if not stack:
+                _CONNECTION_TRACE_STACK.pop(conn_id, None)
+                with suppress(Exception):
+                    self._conn.set_trace_callback(None)
 
     def __enter__(self) -> RequestVerificationCache:
         return self

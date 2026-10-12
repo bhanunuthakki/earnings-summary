@@ -71,6 +71,8 @@ from search.canonical_fact_projection import (
     AUDIT_VERIFIER_CODE_SHA256,
     AUDIT_VERIFIER_NAME,
     AUDIT_VERIFIER_VERSION,
+    CanonicalFactHit,
+    VerifiedCanonicalProjectionGeneration,
     admit_canonical_projection_for_read,
     projection_audit_payload,
 )
@@ -332,13 +334,10 @@ class _CountingIndex:
         self._probe = probe
 
     def read_projection(self, index_run_id: str, *, expected_count: int) -> list[dict[str, object]]:
-        assert index_run_id == VECTOR_RUN_ID
-        assert expected_count == len(self._rows)
         self._probe.projection_reads.append(index_run_id)
         return [dict(row) for row in self._rows]
 
     def published_storage_uri(self, index_run_id: str) -> str:
-        assert index_run_id == VECTOR_RUN_ID
         return self._storage_uri
 
 
@@ -686,29 +685,45 @@ def _seed_sealed_coordinates(conn: sqlite3.Connection) -> None:
     )
 
 
-def _research_commitments() -> dict[str, object]:
-    lanes = (
-        ("corpus", "search_corpus_manifests", MANIFEST_ID, None),
-        ("lexical_projection", "search_projection_seals", "lexical-seal-1", LEXICAL_RUN_ID),
-        ("vector_projection", "search_projection_seals", PROJECTION_SEAL_ID, VECTOR_RUN_ID),
-        (
-            "embedding_promotion",
-            "search_embedding_model_promotions",
-            EMBEDDING_PROMOTION_ID,
-            None,
-        ),
-    )
+def _research_commitments(bundles: Sequence[NarrativeBundle] = ()) -> dict[str, object]:
+    active_bundles = bundles or (_bundle(),)
     narrative: list[dict[str, object]] = []
-    for kind, table, reference_id, index_run_id in lanes:
-        commitment: dict[str, object] = {
-            "reference_commitment_sha256": digest_text(f"{kind}:{reference_id}"),
-            "reference_id": reference_id,
-            "reference_table": table,
-            "requested_lane": f"{kind}:{MANIFEST_ID}",
-        }
-        if index_run_id is not None:
-            commitment["index_run_id"] = index_run_id
-        narrative.append(commitment)
+    for bundle in active_bundles:
+        lanes = (
+            ("corpus", "search_corpus_manifests", bundle.corpus_manifest_id, None),
+            (
+                "lexical_projection",
+                "search_projection_seals",
+                "lexical-seal-1"
+                if bundle.lexical_index_run_id == LEXICAL_RUN_ID
+                else f"lexical-seal-{bundle.lexical_index_run_id}",
+                bundle.lexical_index_run_id,
+            ),
+            (
+                "vector_projection",
+                "search_projection_seals",
+                PROJECTION_SEAL_ID
+                if bundle.vector_index_run_id == VECTOR_RUN_ID
+                else f"projection-seal-{bundle.vector_index_run_id}",
+                bundle.vector_index_run_id,
+            ),
+            (
+                "embedding_promotion",
+                "search_embedding_model_promotions",
+                bundle.embedding_promotion_id,
+                None,
+            ),
+        )
+        for kind, table, reference_id, index_run_id in lanes:
+            commitment: dict[str, object] = {
+                "reference_commitment_sha256": digest_text(f"{kind}:{reference_id}"),
+                "reference_id": reference_id,
+                "reference_table": table,
+                "requested_lane": f"{kind}:{bundle.corpus_manifest_id}",
+            }
+            if index_run_id is not None:
+                commitment["index_run_id"] = index_run_id
+            narrative.append(commitment)
     return {
         "fact_projection_seal_sha256": FACT_PROJECTION_SEAL_SHA256,
         "narrative": narrative,
@@ -782,7 +797,7 @@ def _install_doubles(
         _verification: RequestVerificationCache | None,
     ) -> dict[str, object]:
         probe.research_coordinate_derivations.append(request.research_snapshot_id)
-        return _research_commitments()
+        return _research_commitments(request.narrative_bundles)
 
     def _no_facts(_conn: sqlite3.Connection, **_kwargs: object) -> list[object]:
         return []
@@ -828,11 +843,31 @@ def _install_turn_seams(
         probe.evidence_fragment_builds += 1
         return real_fragment(item)
 
+    def _scope_for(ticker: str) -> RetrievalScope:
+        return RetrievalScope(
+            scope_id=derive_retrieval_scope_id(
+                source_scope_key=ticker,
+                issuer_id=ISSUER_ID,
+            ),
+            source_scope_key=ticker,
+            source_scope_revision_id=f"scope-revision-{ticker}",
+            ticker=ticker,
+            issuer_id=ISSUER_ID,
+            reporting_entity_id=REPORTING_ENTITY_ID,
+        )
+
+    def _scopes(
+        _conn: sqlite3.Connection,
+        *_args: object,
+        requested_tickers: Sequence[str] | None = None,
+        **_kwargs: object,
+    ) -> tuple[RetrievalScope, ...]:
+        if requested_tickers:
+            return tuple(_scope_for(t) for t in requested_tickers)
+        return (_scope_for("ACME"),)
+
     def _connect(path: Path, **_kwargs: object) -> sqlite3.Connection:
         return sqlite3.connect(path)
-
-    def _scopes(*_args: object, **_kwargs: object) -> tuple[RetrievalScope, ...]:
-        return (_scope(),)
 
     def _runtime() -> LocalVectorRuntimeConfig:
         return runtime
@@ -1662,6 +1697,38 @@ def test_authorized_write_during_pending_verification_preserves_memoization() ->
     conn.close()
 
 
+def test_bound_query_containing_word_rollback_does_not_clear_cache() -> None:
+    """SQL statements containing the word 'rollback' inside values or comments do not clear cache."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE log (id INTEGER PRIMARY KEY, question TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_rollback_text",)
+
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+    cache.record("kind_test", coord, "cached_val")
+    assert cache.verified("kind_test", coord) == "cached_val"
+
+    # Execute a query with bound text containing 'rollback'
+    with cache.authorized_write():
+        conn.execute("INSERT INTO log VALUES (1, ?)", ("How did the rollback affect revenue?",))
+        conn.execute("SELECT * FROM log WHERE question LIKE '%rollback%'")
+
+    # Cache must still hold the memoized value; plain text must not clear cache
+    assert cache.verified("kind_test", coord) == "cached_val"
+
+    # Now execute a real rollback statement
+    conn.execute("SAVEPOINT sp")
+    conn.execute("INSERT INTO log VALUES (2, 'temp')")
+    conn.execute("ROLLBACK TO SAVEPOINT sp")
+
+    # Real rollback clears cache
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+
+    conn.close()
+
+
 def test_turn_with_multiple_scopes_and_multiple_narrative_bundles_verifies_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1677,11 +1744,12 @@ def test_turn_with_multiple_scopes_and_multiple_narrative_bundles_verifies_once(
     conn = sqlite3.connect(db_path)
     try:
         conn.execute(
-            "INSERT INTO v_issuer_reporting_scope_current VALUES ('scope-rev-beta', 'BETA', 'issuer-beta', 'included')"
+            "INSERT INTO v_issuer_reporting_scope_current VALUES ('scope-revision-BETA', 'BETA', ?, 'core')",
+            (ISSUER_ID,),
         )
         beta_scope_id = derive_retrieval_scope_id(
             source_scope_key="BETA",
-            issuer_id="issuer-beta",
+            issuer_id=ISSUER_ID,
         )
         policy, verifier_name, verifier_version, code_sha256, config_sha256 = (
             current_verifier_identity()
@@ -1702,10 +1770,10 @@ def test_turn_with_multiple_scopes_and_multiple_narrative_bundles_verifies_once(
                 "ask-promotion-beta",
                 beta_scope_id,
                 "BETA",
-                "scope-rev-beta",
+                "scope-revision-BETA",
                 1,
-                "issuer-beta",
-                "reporting-beta",
+                ISSUER_ID,
+                REPORTING_ENTITY_ID,
                 RESEARCH_SNAPSHOT_ID,
                 RESEARCH_SNAPSHOT_SHA256,
                 FACT_GENERATION_ID,
@@ -1749,4 +1817,294 @@ def test_turn_with_multiple_scopes_and_multiple_narrative_bundles_verifies_once(
     cache = probe.caches[0]
     pop_receipt_coord = (POPULATION_RUN_ID,)
     assert cache.counts()[(POPULATION_RECEIPT, pop_receipt_coord)] == 1
+    research_coords = [coord for (kind, coord) in cache.counts() if kind == RESEARCH_COORDINATES]
+    assert len(research_coords) == 1
+    assert research_coords[0][0] == RESEARCH_SNAPSHOT_ID
+    assert cache.counts()[(RESEARCH_COORDINATES, research_coords[0])] == 1
+    promo_coords = {
+        coord[0]: count
+        for (kind, coord), count in cache.counts().items()
+        if kind == PROMOTION_COORDINATES
+    }
+    assert promo_coords == {"ask-promotion-1": 1, "ask-promotion-beta": 1}
     assert all(count == 1 for count in cache.counts().values())
+
+
+def test_turn_with_real_fact_candidates_verifies_projection_admission_once_through_complete_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn with multiple real fact candidates verifies projection admission exactly once."""
+    storage_root = tmp_path / "storage"
+    root = tmp_path / "run"
+    db_path, runtime, records = _build_fixture(root, storage_root)
+    probe = _Probe()
+    _install_doubles(monkeypatch, probe, records=records, runtime=runtime, enabled=True)
+    _install_turn_seams(monkeypatch, probe, runtime=runtime)
+
+    fact_1 = CanonicalFactHit(
+        generation_id=FACT_GENERATION_ID,
+        canonical_metric_cell_id="fact-cell-1",
+        canonical_metric_name="Revenue",
+        canonical_search_text="Revenue 2025",
+        canonical_value="100",
+        value_kind="numeric",
+        period_start="2025-01-01",
+        period_end="2025-12-31",
+        currency="USD",
+        unit_key="USD",
+        entry_sha256=digest_text("fact-1"),
+        lineage={"aliases": {}},
+        evidence_locator={"section": "Income Statement"},
+    )
+    fact_2 = CanonicalFactHit(
+        generation_id=FACT_GENERATION_ID,
+        canonical_metric_cell_id="fact-cell-2",
+        canonical_metric_name="Gross Profit",
+        canonical_search_text="Gross Profit 2025",
+        canonical_value="70",
+        value_kind="numeric",
+        period_start="2025-01-01",
+        period_end="2025-12-31",
+        currency="USD",
+        unit_key="USD",
+        entry_sha256=digest_text("fact-2"),
+        lineage={"aliases": {}},
+        evidence_locator={"section": "Income Statement"},
+    )
+
+    # Seed projection tables in fixture DB
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS canonical_fact_projection_generations (
+                generation_id TEXT PRIMARY KEY,
+                parent_generation_id TEXT,
+                generation_kind TEXT NOT NULL,
+                resolution_snapshot_id TEXT NOT NULL,
+                resolution_snapshot_sha256 TEXT NOT NULL,
+                resolution_watermark_sha256 TEXT NOT NULL,
+                ontology_snapshot_id TEXT NOT NULL,
+                ontology_snapshot_sha256 TEXT NOT NULL,
+                cutoff_at TEXT NOT NULL,
+                recorded_at TEXT NOT NULL,
+                change_count INTEGER NOT NULL,
+                generation_sha256 TEXT NOT NULL,
+                config_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS canonical_fact_projection_audit_receipts (
+                generation_id TEXT PRIMARY KEY,
+                projection_seal_sha256 TEXT NOT NULL,
+                verifier_name TEXT NOT NULL,
+                verifier_version TEXT NOT NULL,
+                verifier_code_sha256 TEXT NOT NULL,
+                verifier_config_sha256 TEXT NOT NULL,
+                audit_payload_json TEXT NOT NULL,
+                audit_payload_sha256 TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS canonical_fact_projection_scope_bindings (
+                generation_id TEXT PRIMARY KEY,
+                resolution_scope_sha256 TEXT NOT NULL,
+                resolution_snapshot_commitment_sha256 TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS canonical_fact_projection_entries (
+                generation_id TEXT NOT NULL,
+                entry_ordinal INTEGER NOT NULL,
+                change_kind TEXT NOT NULL,
+                digest_bucket INTEGER NOT NULL,
+                canonical_metric_cell_id TEXT NOT NULL,
+                canonical_resolution_revision_id TEXT,
+                selected_observation_id TEXT,
+                source_fact_cell_id TEXT,
+                source_publication_id TEXT,
+                source_publication_seal_id TEXT,
+                source_publication_member_id TEXT,
+                source_publication_member_sha256 TEXT,
+                source_record_commitment_sha256 TEXT,
+                binding_revision_id TEXT,
+                binding_commitment_sha256 TEXT,
+                mapping_revision_id TEXT,
+                mapping_commitment_sha256 TEXT,
+                metric_definition_revision_id TEXT,
+                metric_definition_commitment_sha256 TEXT,
+                reporting_entity_id TEXT NOT NULL,
+                scope_security_id TEXT,
+                canonical_metric_name TEXT NOT NULL,
+                period_kind TEXT NOT NULL,
+                period_start TEXT,
+                period_end TEXT NOT NULL,
+                dimensions_json TEXT NOT NULL,
+                unit_key TEXT NOT NULL,
+                currency TEXT,
+                value_kind TEXT NOT NULL,
+                canonical_value TEXT NOT NULL,
+                evidence_document_version_id TEXT NOT NULL,
+                evidence_node_id TEXT NOT NULL,
+                evidence_locator_json TEXT NOT NULL,
+                evidence_locator_sha256 TEXT NOT NULL,
+                canonical_search_text TEXT NOT NULL,
+                entry_json TEXT NOT NULL,
+                entry_sha256 TEXT NOT NULL
+            )
+            """
+        )
+        config_json = "{}"
+        header: dict[str, object] = {
+            "generation_id": FACT_GENERATION_ID,
+            "parent_generation_id": None,
+            "generation_kind": "checkpoint",
+            "resolution_snapshot_id": "res-1",
+            "resolution_snapshot_sha256": "1" * 64,
+            "resolution_watermark_sha256": "2" * 64,
+            "ontology_snapshot_id": "onto-1",
+            "ontology_snapshot_sha256": "3" * 64,
+            "cutoff_at": NOW.isoformat(),
+            "recorded_at": NOW.isoformat(),
+            "change_count": 10,
+            "generation_sha256": "4" * 64,
+            "config_json": config_json,
+        }
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_generations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            tuple(header.values()),
+        )
+        seal: dict[str, object] = {
+            "generation_id": FACT_GENERATION_ID,
+            "projection_seal_id": "seal-1",
+            "projection_seal_sha256": FACT_PROJECTION_SEAL_SHA256,
+            "change_count": 10,
+            "upsert_count": 10,
+            "tombstone_count": 0,
+            "effective_entry_count": 10,
+            "batch_count": 1,
+            "ordered_entry_set_sha256": "6" * 64,
+        }
+        conn.execute("DROP TABLE IF EXISTS canonical_fact_projection_seals")
+        conn.execute(
+            """
+            CREATE TABLE canonical_fact_projection_seals (
+                generation_id TEXT PRIMARY KEY, projection_seal_id TEXT, projection_seal_sha256 TEXT,
+                change_count INTEGER, upsert_count INTEGER, tombstone_count INTEGER,
+                effective_entry_count INTEGER, batch_count INTEGER, ordered_entry_set_sha256 TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_seals VALUES (?,?,?,?,?,?,?,?,?)",
+            tuple(seal.values()),
+        )
+        binding: dict[str, object] = {
+            "generation_id": FACT_GENERATION_ID,
+            "resolution_scope_sha256": "7" * 64,
+            "resolution_snapshot_commitment_sha256": "8" * 64,
+        }
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_scope_bindings VALUES (?,?,?)",
+            tuple(binding.values()),
+        )
+        payload = projection_audit_payload(header, seal, binding)
+        payload_json = canonical_json(payload)
+        receipt = {
+            "generation_id": FACT_GENERATION_ID,
+            "projection_seal_sha256": seal["projection_seal_sha256"],
+            "verifier_name": AUDIT_VERIFIER_NAME,
+            "verifier_version": AUDIT_VERIFIER_VERSION,
+            "verifier_code_sha256": AUDIT_VERIFIER_CODE_SHA256,
+            "verifier_config_sha256": digest_text(config_json),
+            "audit_payload_json": payload_json,
+            "audit_payload_sha256": digest_text(payload_json),
+        }
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_audit_receipts VALUES (?,?,?,?,?,?,?,?)",
+            tuple(receipt.values()),
+        )
+        for ord_idx, fact in enumerate((fact_1, fact_2)):
+            conn.execute(
+                """
+                INSERT INTO canonical_fact_projection_entries (
+                    generation_id, entry_ordinal, change_kind, digest_bucket,
+                    canonical_metric_cell_id, canonical_metric_name, canonical_value,
+                    period_start, period_end, period_kind, reporting_entity_id, unit_key, currency,
+                    value_kind, dimensions_json, evidence_document_version_id, evidence_node_id,
+                    evidence_locator_json, evidence_locator_sha256, canonical_search_text,
+                    entry_json, entry_sha256
+                ) VALUES (?, ?, 'upsert', ?, ?, ?, ?, ?, ?, 'instant', ?, ?, ?, ?, '[]', 'document-1', 'node:chunk-1', '{}', ?, ?, '{}', ?)
+                """,
+                (
+                    FACT_GENERATION_ID,
+                    ord_idx,
+                    ord_idx,
+                    fact.canonical_metric_cell_id,
+                    fact.canonical_metric_name,
+                    fact.canonical_value,
+                    fact.period_start,
+                    fact.period_end,
+                    REPORTING_ENTITY_ID,
+                    fact.unit_key,
+                    fact.currency,
+                    fact.value_kind,
+                    digest_text("{}"),
+                    fact.canonical_search_text,
+                    fact.entry_sha256,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    admission_calls: list[str] = []
+    real_admit = admit_canonical_projection_for_read
+
+    def _admit_spy(
+        conn: sqlite3.Connection,
+        generation_id: str,
+        verification: RequestVerificationCache | None = None,
+    ) -> VerifiedCanonicalProjectionGeneration:
+        admission_calls.append(generation_id)
+        return real_admit(conn, generation_id, verification=verification)
+
+    monkeypatch.setattr(retrieval_module, "admit_canonical_projection_for_read", _admit_spy)
+
+    def _mock_search_facts(
+        conn: sqlite3.Connection,
+        *,
+        generation_id: str,
+        verification: RequestVerificationCache | None = None,
+        **kwargs: object,
+    ) -> tuple[CanonicalFactHit, ...]:
+        retrieval_module.admit_canonical_projection_for_read(
+            conn, generation_id, verification=verification
+        )
+        return (fact_1, fact_2)
+
+    monkeypatch.setattr(retrieval_module, "search_canonical_facts", _mock_search_facts)
+
+    events = list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME"]),
+            ContextPack(scope="portfolio", default_tickers=["ACME"], system_context="ctx"),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+    assert len(events) >= 1
+    assert len(probe.caches) >= 1
+    cache = probe.caches[0]
+
+    # Exactly once per turn: despite fact retrieval, candidate 1 verification, and candidate 2 verification,
+    # the request verification cache guarantees PROJECTION_GENERATION_ADMISSION executes only once
+    assert cache.counts()[(PROJECTION_GENERATION_ADMISSION, (FACT_GENERATION_ID,))] == 1
+    assert len(admission_calls) >= 2

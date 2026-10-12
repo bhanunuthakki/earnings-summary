@@ -41,7 +41,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -1167,6 +1167,31 @@ def _admit_generation(
     )
 
 
+def _seed_fact_entries(
+    conn: sqlite3.Connection,
+    generation_id: str,
+    cells: Sequence[tuple[str, str, str, str]],
+) -> list[dict[str, object]]:
+    entry_columns = cast(tuple[str, ...], getattr(projection_module, "_ENTRY_COLUMNS"))
+    entries = [
+        _fact_entry(
+            generation_id,
+            ordinal,
+            cell_id=cell_id,
+            metric_name=metric_name,
+            search_text=search_text,
+            period_end=period_end,
+        )
+        for ordinal, (cell_id, metric_name, search_text, period_end) in enumerate(cells)
+    ]
+    conn.executemany(
+        "INSERT INTO canonical_fact_projection_entries (" + ",".join(entry_columns) + ") "
+        "VALUES (" + ",".join("?" for _ in entry_columns) + ")",
+        [tuple(entry[column] for column in entry_columns) for entry in entries],
+    )
+    return entries
+
+
 def _fact_conn() -> sqlite3.Connection:
     entry_columns = cast(tuple[str, ...], getattr(projection_module, "_ENTRY_COLUMNS"))
     integer_columns = {"entry_ordinal", "digest_bucket"}
@@ -1209,22 +1234,7 @@ CREATE TABLE source_fact_publication_members (
         "INSERT INTO canonical_fact_projection_generations VALUES (?,?,?,?,?)",
         ("generation-facts", None, "resolution-snapshot", "ontology-snapshot", NOW.isoformat()),
     )
-    entries = [
-        _fact_entry(
-            "generation-facts",
-            ordinal,
-            cell_id=cell_id,
-            metric_name=metric_name,
-            search_text=search_text,
-            period_end=period_end,
-        )
-        for ordinal, (cell_id, metric_name, search_text, period_end) in enumerate(_FACT_CELLS)
-    ]
-    conn.executemany(
-        "INSERT INTO canonical_fact_projection_entries (" + ",".join(entry_columns) + ") "
-        "VALUES (" + ",".join("?" for _ in entry_columns) + ")",
-        [tuple(entry[column] for column in entry_columns) for entry in entries],
-    )
+    entries = _seed_fact_entries(conn, "generation-facts", _FACT_CELLS)
     buckets: dict[int, list[str]] = {}
     for entry in entries:
         digest = cast(int, entry["digest_bucket"])
@@ -1614,6 +1624,109 @@ def test_fact_trace_replays_cleanly_after_alias_retirement(
         reverified = retrieval_module.verify_heterogeneous_retrieval_trace(conn, "trace-fact-alias")
         assert [str(item["candidate_id"]) for item in reverified.ordered_results] == [
             "canonical:mau:2025"
+        ]
+    finally:
+        conn.close()
+
+
+def test_fact_trace_replays_cleanly_after_alias_addition_with_empty_initial_aliases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A trace sealed with no aliases stores an empty alias map and replays cleanly after new aliases are added."""
+    conn = _fact_conn()
+    try:
+        monkeypatch.setattr(
+            projection_module, "admit_canonical_projection_for_read", _admit_generation
+        )
+        monkeypatch.setattr(retrieval_module, "_derive_research_coordinates", _derive_research)
+
+        conn.executescript(
+            """
+            CREATE TABLE research_snapshot_headers (
+                research_snapshot_id TEXT PRIMARY KEY, request_json TEXT NOT NULL, cutoff_at TEXT NOT NULL
+            );
+            CREATE TABLE heterogeneous_retrieval_trace_headers (
+                trace_id TEXT PRIMARY KEY, idempotency_key TEXT UNIQUE, research_snapshot_id TEXT,
+                research_snapshot_sha256 TEXT, fact_generation_id TEXT,
+                fact_projection_seal_sha256 TEXT, narrative_commitments_json TEXT,
+                narrative_commitments_sha256 TEXT, semantic_receipts_json TEXT,
+                semantic_receipts_sha256 TEXT, query_sha256 TEXT, query_json TEXT, ranker_json TEXT,
+                ranker_sha256 TEXT, filters_json TEXT, filters_sha256 TEXT, candidate_limit INTEGER,
+                result_limit INTEGER, cutoff_at TEXT, recorded_at TEXT
+            );
+            CREATE TABLE heterogeneous_retrieval_trace_candidates (
+                trace_id TEXT, candidate_ordinal INTEGER, candidate_kind TEXT, candidate_id TEXT,
+                source_commitment_sha256 TEXT, lexical_score TEXT, semantic_score TEXT,
+                normalized_score TEXT, ranker_name TEXT, filter_outcome TEXT, filter_reason TEXT,
+                evidence_locator_json TEXT, lineage_json TEXT, lineage_sha256 TEXT,
+                candidate_json TEXT, candidate_sha256 TEXT
+            );
+            CREATE TABLE heterogeneous_retrieval_trace_results (
+                trace_id TEXT, result_ordinal INTEGER, candidate_ordinal INTEGER, final_score TEXT,
+                result_json TEXT, result_sha256 TEXT
+            );
+            CREATE TABLE heterogeneous_retrieval_trace_seals (
+                trace_id TEXT, candidate_count INTEGER, result_count INTEGER,
+                canonical_candidate_set_json TEXT, candidate_set_sha256 TEXT,
+                canonical_result_set_json TEXT, result_set_sha256 TEXT, trace_json TEXT,
+                trace_sha256 TEXT, sealed_at TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO research_snapshot_headers VALUES (?,?,?)",
+            ("research-snapshot", "{}", NOW.isoformat()),
+        )
+        conn.commit()
+
+        # Query "revenue 2024" initially has NO aliases defined in kpi_aliases
+        req = HeterogeneousRetrievalRequest(
+            trace_id="trace-fact-no-alias",
+            idempotency_key="trace-fact-no-alias",
+            research_snapshot_id="research-snapshot",
+            fact_generation_id="generation-facts",
+            narrative_bundles=(),
+            query_text="revenue 2024",
+            candidate_limit=10,
+            result_limit=4,
+            filters=RetrievalFilters(include_narrative=False, include_facts=True),
+            cutoff_at=NOW,
+            recorded_at=NOW,
+        )
+        receipt = retrieve_heterogeneous(conn, req)
+        assert [str(item["candidate_id"]) for item in receipt.ordered_results] == [
+            "canonical:revenue:2024"
+        ]
+
+        # Verify candidate lineage explicitly committed empty alias map {"aliases": {}}
+        cand_row = conn.execute(
+            "SELECT lineage_json FROM heterogeneous_retrieval_trace_candidates WHERE trace_id='trace-fact-no-alias'"
+        ).fetchone()
+        assert cand_row is not None
+        lineage = json.loads(str(cand_row[0]))
+        assert "aliases" in lineage
+        assert lineage["aliases"] == {}
+
+        # Initial verification succeeds
+        verified = retrieval_module.verify_heterogeneous_retrieval_trace(
+            conn, "trace-fact-no-alias"
+        )
+        assert [str(item["candidate_id"]) for item in verified.ordered_results] == [
+            "canonical:revenue:2024"
+        ]
+
+        # Add a new alias later to the authority
+        conn.execute(
+            "INSERT INTO kpi_aliases VALUES (2, NULL, 'Revenue', 'Sales ARR', NULL, NULL, NULL)"
+        )
+        conn.commit()
+
+        # Re-verification MUST still succeed using the committed empty alias map without expanding newly added aliases
+        reverified = retrieval_module.verify_heterogeneous_retrieval_trace(
+            conn, "trace-fact-no-alias"
+        )
+        assert [str(item["candidate_id"]) for item in reverified.ordered_results] == [
+            "canonical:revenue:2024"
         ]
     finally:
         conn.close()

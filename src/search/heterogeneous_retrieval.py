@@ -686,6 +686,7 @@ def _derive_trace_verification(
             request,
             candidate,
             semantic_expected=semantic_expected,
+            verification=verification,
         )
         candidate_jsons.append(payload)
     results = _rows(
@@ -1755,6 +1756,7 @@ def _verify_candidate_source(
     candidate: dict[str, object],
     *,
     semantic_expected: dict[tuple[str, str], tuple[str, str]],
+    verification: RequestVerificationCache | None = None,
 ) -> None:
     locator = _json_object(candidate["evidence_locator_json"])
     lineage = _json_object(candidate["lineage_json"])
@@ -1886,11 +1888,17 @@ def _verify_candidate_source(
                 "narrative_candidate_evidence_mismatch", trace_id=request.trace_id
             )
         return
-    raw_aliases = lineage.get("aliases")
     replay_aliases: dict[str, tuple[str, ...]] | None = None
-    if isinstance(raw_aliases, dict):
-        aliases_dict = cast(dict[str, list[object]], raw_aliases)
-        replay_aliases = {str(k): tuple(str(x) for x in v) for k, v in aliases_dict.items()}
+    if "aliases" in lineage:
+        raw_aliases = lineage["aliases"]
+        if isinstance(raw_aliases, dict):
+            aliases_dict = cast(dict[str, list[object]], raw_aliases)
+            replay_aliases = {str(k): tuple(str(x) for x in v) for k, v in aliases_dict.items()}
+        else:
+            replay_aliases = {}
+    else:
+        # Legacy trace path: "aliases" was omitted from candidate lineage
+        replay_aliases = None
     hits = search_canonical_facts(
         conn,
         generation_id=request.fact_generation_id,
@@ -1898,6 +1906,7 @@ def _verify_candidate_source(
         limit=request.candidate_limit,
         reporting_entity_id=request.filters.reporting_entity_id,
         aliases=replay_aliases,
+        verification=verification,
     )
     match = next(
         (hit for hit in hits if hit.canonical_metric_cell_id == candidate["candidate_id"]),

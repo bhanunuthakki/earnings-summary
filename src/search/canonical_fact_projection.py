@@ -669,9 +669,8 @@ def search_canonical_facts(
             "source_publication_id": row["source_publication_id"],
             "source_publication_member_id": row["source_publication_member_id"],
             "source_publication_seal_id": row["source_publication_seal_id"],
+            "aliases": committed_aliases,
         }
-        if committed_aliases:
-            lineage_dict["aliases"] = committed_aliases
         hits.append(
             CanonicalFactHit(
                 generation_id=generation_id,
