@@ -270,7 +270,7 @@ Budget gating is **DB, not env**: `llm_budgets`/`llm_budget_alerts` (migration 0
 |---|---|---|---|---|
 | Pill/head click | click (not on a ctl) | min ⇄ last expanded mode; expanded focuses input | — | P0 |
 | Submit | Enter/Ask | user bubble; "working…" card; stage notes ("compiling the view"/"running the view"/"researching"); deltas stream; final = prose w/ inline [n] cite chips + citation-chip row + "⚠ N unverified" chip, or a view fragment inline | error frame → red text "failed — try again"; network → "network error — try again"; no answer → "no answer — try again"; busy guard blocks double-submit | P0 |
-| Slash commands | type `/review <T or company name>`, `/help`, `/discovery …` | deterministic reply, no LLM (src/ask/commands.py `COMMAND_PREFIXES`); `/review` resolves company names → ticker | unsupported surface → "Commands aren't available on this surface — try /help in the report chat." | P0 |
+| Slash commands | type `/review <T or company name>`, `/help`, `/discovery …` | deterministic reply, no LLM (src/ask/engine.py `COMMAND_PREFIXES`); `/review` resolves company names → ticker | unsupported surface → "Commands aren't available on this surface — try /help in the report chat." | P0 |
 | `◫` split | click / again | split column under measured topbar height; registers CCOverlay open; Esc or × exits split→float | scrim:false by design; every shell overlay covers the dock | P1 |
 | `×` | click | split→float, float→min (one level) | — | P1 |
 | `⇗` pop-out | click | stashes `askThread` (+ pending input as `askQ`), min, `#explore`, `cc-ask-q` event — Ask tab replays turns | — | P1 |
