@@ -259,6 +259,19 @@ def source_chip_html(src: CellSource) -> str:
         rows.append(f'<div class="src-pop-row">fetched {_esc(src.fetched_at[:10])}</div>')
     if src.doc_type:
         rows.append(f'<div class="src-pop-row">{_esc(src.doc_type)}</div>')
+    # Observation Version state (VAL-CROSS-002(3)): the chip's citation is
+    # chain-complete only when the cited document has an immutable Observation
+    # Version. Present → the version id plus the provenance-chain open link
+    # below; absent → the explicit "not recorded" degraded state, never a
+    # silently partial chain.
+    if src.doc_id is not None:
+        if src.document_version_id is not None:
+            rows.append(
+                f'<div class="src-pop-row mono">observation version '
+                f"{_esc(src.document_version_id)}</div>"
+            )
+        else:
+            rows.append('<div class="src-pop-row mono">observation version not recorded</div>')
     if src.extracted_by:
         rows.append(f'<div class="src-pop-row mono">via {_esc(src.extracted_by)}</div>')
     if src.computed_from:
@@ -271,6 +284,11 @@ def source_chip_html(src: CellSource) -> str:
         rows.append(_locator_row_html(src.locator))
     viewer = viewer_href(src)
     is_peek = viewer is not None and viewer.startswith("/api/peek/")
+    if src.document_version_id is not None:
+        rows.append(
+            f'<div class="src-pop-row"><a href="/source/version/{_esc(src.document_version_id)}" '
+            'target="_blank" rel="noopener">provenance chain ↗</a></div>'
+        )
     if viewer:
         rows.append(
             f'<div class="src-pop-row"><a href="{_esc(viewer)}" target="_blank" '

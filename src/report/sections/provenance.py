@@ -13,7 +13,7 @@ from report.models import (
     SourceDocRow,
     ValidationIssueRow,
 )
-from report.sections._common import has_table, missing, open_repo_db
+from report.sections._common import document_version_ids, has_table, missing, open_repo_db
 
 # Severity sort order derived from the live Severity enum (S10): most-severe
 # first. The prior CASE matched 'error'/'warning' — a vocabulary no writer
@@ -111,7 +111,7 @@ def _source_docs(conn: sqlite3.Connection, ticker: str) -> list[SourceDocRow]:
         """,
         (ticker.upper(),),
     )
-    return [
+    rows = [
         SourceDocRow(
             doc_type=str(r["doc_type"]),
             period_end=str(r["period_end"])[:10] if r["period_end"] else None,
@@ -122,6 +122,14 @@ def _source_docs(conn: sqlite3.Connection, ticker: str) -> list[SourceDocRow]:
         )
         for r in cursor.fetchall()
     ]
+    # Citation anchors route to the Observation Version view (the full
+    # provenance chain) wherever one exists; rows without one keep the
+    # legacy viewer link plus the explicit degraded state (VAL-CROSS-002(3)).
+    versions = document_version_ids(conn, [r.doc_id for r in rows if r.doc_id is not None])
+    for row in rows:
+        if row.doc_id is not None:
+            row.document_version_id = versions.get(row.doc_id)
+    return rows
 
 
 def _open_validation_issues(

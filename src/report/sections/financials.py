@@ -54,6 +54,7 @@ from report.sections._common import (
     UNDERLYING_QUARTERS,
     calendar_quarter_key,
     compute_growth,
+    document_version_ids,
     has_table,
     missing,
     open_repo_db,
@@ -229,6 +230,13 @@ def build_legacy_shadow(
         quarter_labels_full,
         conn=db_conn,
     )
+    _stamp_observation_versions(
+        db_conn,
+        line_items=line_items,
+        annual_items=annual_items,
+        kpi_series=kpi_series,
+        annual_kpi_series=annual_kpi_series,
+    )
     if conn is None:
         db_conn.close()
 
@@ -251,6 +259,37 @@ def build_legacy_shadow(
         quarter_labels_full=quarter_labels_full,
         currency=currency,
     )
+
+
+def _stamp_observation_versions(
+    conn: sqlite3.Connection,
+    *,
+    line_items: list[QuarterlyLineItem],
+    annual_items: list[AnnualLineItem],
+    kpi_series: list[KpiSeries],
+    annual_kpi_series: list[AnnualKpiSeries],
+) -> None:
+    """Stamp every chip's cited document with its Observation Version.
+
+    One batched resolve for the whole section (VAL-CROSS-002(3)): a chip whose
+    document carries an Observation Version links the full provenance chain;
+    a chip without one renders the explicit "not recorded" degraded state in
+    its popover — never a silently partial chain. No-op without chips or
+    without the evidence plane.
+    """
+    chips = [
+        src
+        for group in (line_items, annual_items, kpi_series, annual_kpi_series)
+        for row in group
+        for src in row.sources_full
+        if src is not None
+    ]
+    if not chips:
+        return
+    versions = document_version_ids(conn, [chip.doc_id for chip in chips])
+    for chip in chips:
+        if chip.doc_id is not None:
+            chip.document_version_id = versions.get(chip.doc_id)
 
 
 def _period_date_key(raw: object) -> str:
@@ -1619,6 +1658,13 @@ def build(
             else SectionStatus.PARTIAL
             if quarterly or annual
             else SectionStatus.MISSING_DATA
+        )
+        _stamp_observation_versions(
+            conn,
+            line_items=quarterly,
+            annual_items=annual,
+            kpi_series=kpis,
+            annual_kpi_series=annual_kpis,
         )
         return FinancialsSection(
             status=status,

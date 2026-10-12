@@ -9,6 +9,7 @@ to the last 12.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterable
 from datetime import date
 from pathlib import Path
 
@@ -133,6 +134,36 @@ def has_table(conn: sqlite3.Connection, name: str) -> bool:
         (name,),
     )
     return cursor.fetchone() is not None
+
+
+def document_version_ids(conn: sqlite3.Connection, doc_ids: Iterable[int | None]) -> dict[int, str]:
+    """Resolve legacy ``documents.id`` values to their Observation Versions.
+
+    A citation may only claim the full provenance chain when the cited
+    document has an ``evidence_document_versions`` row; this maps each legacy
+    id to that row's ``document_version_id`` (highest ``version_sequence``
+    wins, so a superseding version answers for the document). Fail-closed and
+    schema-tolerant: no evidence plane, no matching rows, or a query error all
+    return ``{}`` so callers keep the legacy anchor and render the explicit
+    degraded state instead of a silently partial chain.
+    """
+    ids = sorted({int(doc_id) for doc_id in doc_ids if doc_id is not None})
+    if not ids or not has_table(conn, "evidence_document_versions"):
+        return {}
+    marks = ",".join("?" * len(ids))
+    try:
+        rows = conn.execute(
+            "SELECT legacy_document_id, document_version_id FROM ("
+            " SELECT legacy_document_id, document_version_id,"
+            " ROW_NUMBER() OVER (PARTITION BY legacy_document_id"
+            " ORDER BY version_sequence DESC, recorded_at DESC) AS rn"
+            f" FROM evidence_document_versions WHERE legacy_document_id IN ({marks})"
+            ") WHERE rn = 1",
+            ids,
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    return {int(row[0]): str(row[1]) for row in rows}
 
 
 def missing(stage: str, fix_command: str, detail: str | None = None) -> MissingReason:

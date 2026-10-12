@@ -1097,7 +1097,13 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/portfolio_panel.py": "40bb72a454e55db7fdced77d585085713bc682fd68625dd204a7ddc311273e65",  # pragma: allowlist secret
         "pipeline/portfolio_styles.py": "397f25bbb814a248a8c887faf5ac75284c69d2e22336f7cb04c7b7d020f72ab6",  # pragma: allowlist secret
         "pipeline/research_cockpit.py": "397f25bbb814a248a8c887faf5ac75284c69d2e22336f7cb04c7b7d020f72ab6",  # pragma: allowlist secret
-        "pipeline/source_viewers.py": "2fa6149b5c3e81709c2fb6e3199b236c32b5ea951ef5a328ee414c6c80bcdab5",  # pragma: allowlist secret
+        # VAL-CROSS-002(3): the legacy /source/<doc_id> fallback view now
+        # embeds the same provenance-chain rows the /source/version/<id>
+        # route serves (or the explicit "not recorded" degraded state), so
+        # older built reports keep resolving the full chain. The dynamic
+        # visual skeleton grew by those rows; all reuse the existing sv-*
+        # classes (no new visual vocabulary).
+        "pipeline/source_viewers.py": "9be48b4c06a11e381d1b9df4c9baf49014cc84c387c0774c2200dac8053fa4bb",  # pragma: allowlist secret
         "pipeline/work_os_copilot.py": "46a2dc3469b3e57e8365049f250e60da96ba9ed8780043be11e8c4044eb1bf1d",  # pragma: allowlist secret
         "pipeline/provenance_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
         "pipeline/work_os_shell.py": "7449e57db7d43c7cf29d0c76f132667ff189f1170be72fe73aa2a350c56c346e",  # pragma: allowlist secret

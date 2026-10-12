@@ -26,6 +26,7 @@ from pathlib import Path
 
 from report.models import SectionStatus, SynthesisLensRow, SynthesisSection
 from report.render_clock import render_now
+from report.sections._common import document_version_ids
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -96,6 +97,19 @@ def _citations_for_source_docs(
                 "period": period_end,
             }
         )
+    # Citation anchors route to the Observation Version view (the full
+    # provenance chain) wherever one exists; a citing slot without one keeps
+    # the legacy viewer href and carries the explicit degraded state so the
+    # popover never presents a silently partial chain (VAL-CROSS-002(3)).
+    versions = document_version_ids(conn, source_doc_ids)
+    for item, doc_id in zip(items, source_doc_ids, strict=True):
+        version_id = versions.get(doc_id)
+        if version_id is not None:
+            item["document_version_id"] = version_id
+            item["href"] = f"/source/version/{version_id}"
+        else:
+            item["document_version_id"] = None
+            item["no_observation_version"] = True
     return items
 
 
@@ -111,8 +125,8 @@ def build(
     # module unless the section is actually built.
     sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
     try:
-        from llm_artifact_store import read_current  # type: ignore[import-not-found]
-        from synthesis_lenses import list_lenses_for_ticker  # type: ignore[import-not-found]
+        from llm_artifact_store import read_current
+        from synthesis_lenses import list_lenses_for_ticker
     except ImportError as exc:
         log.warning({"event": "synthesis_imports_failed", "error": str(exc)})
         return SynthesisSection(status=SectionStatus.MISSING_DATA, ticker=ticker)

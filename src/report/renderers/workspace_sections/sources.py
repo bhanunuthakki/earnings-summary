@@ -181,34 +181,54 @@ def _sources_tab(
             + lg.th("Type", "type", "text", num=False)
             + lg.th("Period", "period", "text", num=False)
             + "<th>Path</th>"
+            + lg.th("Obs. version", "obsver", "text", num=False)
             + lg.th("Fetched", "fetched", "text", num=False)
             + "</tr></thead><tbody>"
         )
         for d in prov.source_docs:
-            # Path deep-links the in-app /source/<doc_id> viewer (numbered
-            # transcript reader / section-keyed 10-K reader / metadata card with
-            # the outbound link) when the row carries a doc_id; older built
-            # reports without it fall back to the plain path text.
-            if d.doc_id is not None:
+            # Citation click-through (VAL-CROSS-002(3)): a cited document with
+            # an Observation Version resolves the full provenance chain at
+            # /source/version/<id> (issuer, fiscal period, source document,
+            # source-bytes sha256+locator, observation version). A cited
+            # document without one keeps the in-app /source/<doc_id> viewer
+            # link AND carries the explicit "not recorded" state — never a
+            # silently partial chain. Older built reports without doc_id fall
+            # back to the plain path text.
+            if d.doc_id is not None and d.document_version_id is not None:
+                path_cell = (
+                    f'<a href="/source/version/{_esc(d.document_version_id)}" '
+                    f'data-server-path="/source/version/{_esc(d.document_version_id)}" '
+                    f'target="_blank" rel="noopener">{_esc(d.file_path)}</a>'
+                )
+                version_cell = f'<span class="mono">{_esc(d.document_version_id)}</span>'
+            elif d.doc_id is not None:
                 path_cell = (
                     f'<a href="/source/{d.doc_id}" '
                     f'data-server-path="/source/{d.doc_id}" target="_blank" '
-                    f'rel="noopener">{_esc(d.file_path)}</a>'
+                    f'rel="noopener" title="No observation version recorded for this '
+                    f'document — legacy viewer or original source only">'
+                    f"{_esc(d.file_path)}</a>"
                 )
+                version_cell = "not recorded"
             else:
                 path_cell = _esc(d.file_path)
+                version_cell = "—"
+            version_key = d.document_version_id or "not recorded"
             data = (
                 lg.data_text(
-                    f"{d.doc_type} {d.period_end or ''} {d.file_path} {d.fetched_at or ''}"
+                    f"{d.doc_type} {d.period_end or ''} {d.file_path} "
+                    f"{version_key} {d.fetched_at or ''}"
                 )
                 + lg.data_text_key("type", d.doc_type)
                 + lg.data_text_key("period", d.period_end)
+                + lg.data_text_key("obsver", version_key)
                 + lg.data_text_key("fetched", d.fetched_at)
             )
             body.write(
                 f"<tr{data}><td>{_esc(d.doc_type)}</td>"
                 f"<td>{_esc(d.period_end or '—')}</td>"
                 f"<td>{path_cell}</td>"
+                f"<td>{version_cell}</td>"
                 f"<td>{_esc(d.fetched_at or '—')}</td></tr>"
             )
         body.write("</tbody></table></div>")

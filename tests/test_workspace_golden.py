@@ -225,6 +225,11 @@ def _cell_sources(values: list[float | None]) -> list[CellSource | None]:
                     fetched_at="2026-05-04T08:00:00",
                     doc_type="press_release",
                     doc_id=104,
+                    # Variant 3 is the one that renders the clickable popover
+                    # (each row surfaces the chip of its LATEST sourced cell,
+                    # and 16-value series end on variant 3) — so it carries the
+                    # Observation Version the popover links the chain with.
+                    document_version_id="legacy-doc-104",
                     confidence=0.66,
                     extracted_by="llm:claude-sonnet-4-6",
                     issues=["SEC says $1,201M vs FMP $1,198M (0.25% delta)"],
@@ -1081,6 +1086,9 @@ def _provenance() -> ProvenanceSection:
                 sha256="ab12cd34",
                 fetched_at="2026-05-02T08:00:00",
                 doc_id=101,  # deep-links the /source/<doc_id> viewer
+                # has an Observation Version → the citation anchor routes to
+                # /source/version/<id> (the full provenance chain)
+                document_version_id="legacy-doc-101",
             ),
             SourceDocRow(
                 doc_type="transcript",
@@ -1088,6 +1096,15 @@ def _provenance() -> ProvenanceSection:
                 file_path="data/transcripts/TEST_Q1_2026.txt",
                 fetched_at="2026-04-30T21:00:00",
                 # doc_id left None — exercises the plain-path fallback for legacy rows
+            ),
+            SourceDocRow(
+                doc_type="fmp_income_statement",
+                period_end="2026-03-31",
+                file_path="data/historical/fmp/TEST_income_statement.json",
+                fetched_at="2026-05-01T08:00:00",
+                # doc_id without an Observation Version — keeps the legacy
+                # viewer link and renders the explicit "not recorded" state
+                doc_id=105,
             ),
         ],
         open_validation_issues=2,
