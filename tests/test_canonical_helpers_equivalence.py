@@ -13,15 +13,23 @@ This suite proves, in the contract's mandatory order:
 
 1. per-site byte identity — every mapped call site's OLD private implementation
    (captured verbatim, exec'd from the fixture) produces output byte-identical
-   to its mapped canonical function over a seeded, deterministic corpus plus
-   real payload/hash rows read-only from the bench DB;
+   to its mapped canonical function over (a) a seeded, deterministic corpus
+   and (b) a bench-gated read-only leg that loads the real payload rows sampled
+   from the bench DB and passes each through every mapped json/sha/content_sha256
+   legacy body and its canonical target (VAL-DEDUP-001 condition 1(b));
 2. distinct-variant discipline — genuinely different byte semantics
    (``ensure_ascii``, ``allow_nan``, ``default=str``, separators, naive-vs-aware
    coercion, raising-vs-tolerant table checks) stay distinct named functions
    and provably differ on discriminating probes;
 3. tree-state enforcement — collapsed sites are absent, retained sites are
    byte-unchanged and carry a written reason, and no undispositioned private
-   copy exists anywhere under ``src/`` or ``execution/``.
+   copy exists anywhere under ``src/`` or ``execution/``;
+4. stored-hash non-drift and family dispositions — stored receipt/payload
+   digests and Observation Version identities recompute exactly from real
+   rows (including the thesis check-receipt family), and every hash-bearing
+   family that cannot be recomputed from the DB alone (the external-bytes
+   blob_sha256 families) carries a recorded disposition bound to real schema
+   facts — never a silent omission.
 
 The bench-DB legs are mission-local evidence (they skip hermetically when
 ``.tmp/portfolio_bench.db`` is absent). The bench DB is only ever opened with
@@ -35,12 +43,14 @@ import json
 import random
 import sqlite3
 from collections.abc import Callable
+from contextlib import suppress
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Self, cast
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, RootModel
 
 import clock
 from provenance.population_cli_harness import parse_timezone_aware_datetime
@@ -840,7 +850,9 @@ def test_fixture_summary_is_consistent() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 4. bench-DB legs: stored-hash non-drift on real rows (read-only)
+# 4. bench-DB legs: real-payload old-vs-new equality, stored-hash non-drift,
+#    and recorded family dispositions (read-only; skipped when the bench DB
+#    is absent — it is a mission-local artifact)
 # ---------------------------------------------------------------------------
 
 _BENCH_SPECS: list[dict[str, object]] = [
@@ -910,6 +922,235 @@ def _sample_rows(
             (limit,),
         ).fetchall(),
     )
+
+
+# ---------------------------------------------------------------------------
+# 4a. per-site OLD-vs-NEW byte identity over real bench-DB payload rows
+# ---------------------------------------------------------------------------
+
+_REAL_EQUIV_ROWS_PER_SPEC = 40
+_REAL_MIN_PROBES_PER_TARGET = 100
+
+
+class _RealPayloadRoot(RootModel[object]):
+    """RootModel wrapper carrying one real bench payload so method-shaped
+    legacy bodies (``self.model_dump(mode="json", ...)`` / ``self.root``)
+    serialize real payload data instead of synthetic probe models."""
+
+
+@dataclass(frozen=True)
+class _RealPayloadInputs:
+    """Per-target probe inputs derived from real bench-DB payload rows."""
+
+    values: list[object]
+    wrapped: list[_RealPayloadRoot]
+    texts: list[str]
+    digests: list[str]
+    joined: list[tuple[str, ...]]
+    files: list[Path]
+    rows_per_spec: dict[str, int]
+
+
+_REAL_VALUE_TARGETS = frozenset(
+    {
+        "canonical_json",
+        "canonical_json_ascii",
+        "canonical_json_ascii_default_str",
+        "canonical_json_ascii_no_nan",
+        "canonical_json_no_nan",
+        "content_sha256",
+        "content_sha256_ascii",
+        "content_sha256_ascii_default_str",
+        "content_sha256_no_nan",
+    }
+)
+_REAL_MODEL_VALUE_TARGETS = frozenset({"canonical_json_model", "content_sha256_model"})
+_REAL_MODEL_OR_TEXT_TARGETS = frozenset({"content_sha256_model_or_text"})
+_REAL_OR_TEXT_TARGETS = frozenset({"content_sha256_or_text"})
+
+
+def _real_payload_inputs(conn: sqlite3.Connection, files_dir: Path) -> _RealPayloadInputs:
+    """Sample the real payload rows ``_BENCH_SPECS`` already samples, bounded.
+
+    Every sampled row contributes its raw payload text (text/bytes/file probes)
+    and its stored digest (digest-validator probes plus real multi-part string
+    tuples: digest alone, digest+payload, payload alone — the production shapes
+    of the joined digests). Payloads that parse as JSON also contribute their
+    decoded value (json/content probes). The thesis check-receipt family adds
+    its production identity shapes (receipt_id+digest, ticker+run_id).
+    """
+    values: list[object] = []
+    texts: list[str] = []
+    digests: list[str] = []
+    joined: list[tuple[str, ...]] = []
+    rows_per_spec: dict[str, int] = {}
+    for spec in _BENCH_SPECS:
+        table = cast("str", spec["table"])
+        payload_column = cast("str", spec["payload"])
+        rows = _sample_rows(
+            conn,
+            table,
+            payload_column,
+            cast("str", spec["hash"]),
+            min(cast("int", spec.get("limit", 500)), _REAL_EQUIV_ROWS_PER_SPEC),
+        )
+        rows_per_spec[f"{table}.{payload_column}"] = len(rows)
+        for payload_text, stored_hash in rows:
+            assert isinstance(payload_text, str) and isinstance(stored_hash, str)
+            texts.append(payload_text)
+            digests.append(stored_hash)
+            joined.append((stored_hash,))
+            joined.append((stored_hash, payload_text))
+            joined.append((payload_text,))
+            # text-only payload columns (e.g. document bodies) do not yield a
+            # JSON value; they still feed the text/bytes/file/digest probes
+            with suppress(json.JSONDecodeError):
+                values.append(json.loads(payload_text))
+    receipt_rows = cast(
+        "list[tuple[str, str, str, str]]",
+        conn.execute(
+            "SELECT receipt_id, ticker, run_id, receipt_sha256 "
+            "FROM thesis_evaluation_episode_check_receipts ORDER BY rowid LIMIT ?",
+            (_REAL_EQUIV_ROWS_PER_SPEC,),
+        ).fetchall(),
+    )
+    for receipt_id, ticker, run_id, receipt_sha in receipt_rows:
+        joined.append((receipt_id, receipt_sha))
+        joined.append((ticker, run_id))
+    files: list[Path] = []
+    for index, text in enumerate(texts):
+        path = files_dir / f"real_payload_{index:04d}.bin"
+        path.write_bytes(text.encode("utf-8"))
+        files.append(path)
+    wrapped = [_RealPayloadRoot(root=value) for value in values]
+    return _RealPayloadInputs(
+        values=values,
+        wrapped=wrapped,
+        texts=texts,
+        digests=digests,
+        joined=joined,
+        files=files,
+        rows_per_spec=rows_per_spec,
+    )
+
+
+def _real_probe_args(
+    target: str, extra: dict[str, object] | None, inputs: _RealPayloadInputs
+) -> list[tuple[object, ...]]:
+    if target in _REAL_VALUE_TARGETS:
+        return [(value,) for value in inputs.values]
+    if target in _REAL_MODEL_VALUE_TARGETS:
+        return [(value,) for value in inputs.values] + [(model,) for model in inputs.wrapped]
+    if target in _REAL_MODEL_OR_TEXT_TARGETS:
+        return (
+            [(value,) for value in inputs.values]
+            + [(model,) for model in inputs.wrapped]
+            + [(text,) for text in inputs.texts]
+        )
+    if target in _REAL_OR_TEXT_TARGETS:
+        return [(value,) for value in inputs.values] + [(text,) for text in inputs.texts]
+    if target == "sha256_text":
+        return [(text,) for text in inputs.texts]
+    if target == "sha256_bytes":
+        return [(text.encode("utf-8"),) for text in inputs.texts]
+    if target.startswith("sha256_joined"):
+        return list(inputs.joined)
+    if target in ("require_sha256", "require_sha256_exact"):
+        message = cast("str", (extra or {}).get("message"))
+        if message.startswith("f'"):
+            return [(digest, "real_payload_digest") for digest in inputs.digests]
+        return [(digest,) for digest in inputs.digests]
+    if target == "sha256_file":
+        return [(path,) for path in inputs.files]
+    raise AssertionError(f"no real-payload probe adapter for canonical target {target}")
+
+
+@pytest.mark.skipif(
+    not BENCH_DB.exists(), reason="bench DB not provisioned (mission-local artifact)"
+)
+def test_mapped_legacy_bodies_match_canonical_on_real_bench_payloads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """VAL-DEDUP-001 condition (1)(b): per-site OLD-vs-NEW byte identity over
+    real bench-DB payload rows.
+
+    Loads the real payload rows ``_BENCH_SPECS`` samples (bounded, read-only)
+    and passes each through every mapped json/sha/content_sha256 legacy body and
+    its canonical target via the same exec machinery as the synthetic sweep —
+    proving on real data the variants the synthetic corpus alone cannot reach
+    site-by-site (``_ascii_no_nan``, ``_ascii_default_str``, ``_model``, the
+    ``*_or_text`` helpers, and the joined digests), with a minimum real-payload
+    probe count per target.
+    """
+    monkeypatch.setattr(clock, "datetime", _FrozenDateTime)
+    conn = sqlite3.connect(f"file:{BENCH_DB}?mode=ro", uri=True)
+    try:
+        inputs = _real_payload_inputs(conn, tmp_path)
+        ns = _base_namespace()
+        counts: dict[str, int] = {}
+        expected_targets: set[str] = set()
+        mismatches: list[str] = []
+        for site in _mapped_sites():
+            target = cast("str", site["canonical_target"])
+            if not target.startswith(
+                ("canonical_json", "content_sha256", "sha256", "require_sha256")
+            ):
+                continue
+            expected_targets.add(target)
+            extra = cast("dict[str, object] | None", site["canonical_extra"])
+            canonical = _canonical_callable(target)
+            if cast("str", site["scope"]) == "method":
+                assert extra is not None and "model_call" in extra, _site_id(site)
+                model_call = cast("str", extra["model_call"])
+                method = _exec_site(site, dict(ns))
+                for probe in inputs.wrapped:
+                    legacy_outcome = _outcome(method, (probe,))
+                    expected_payload: object = eval(model_call, {"self": probe})
+                    canonical_outcome = _outcome(canonical, (expected_payload,))
+                    counts[target] = counts.get(target, 0) + 1
+                    if not _outcomes_equal(legacy_outcome, canonical_outcome):
+                        mismatches.append(f"{_site_id(site)} -> {target} real-payload model probe")
+                        if len(mismatches) >= 25:
+                            break
+                if len(mismatches) >= 25:
+                    break
+                continue
+            legacy = _exec_site(site, dict(ns))
+            for args in _real_probe_args(target, extra, inputs):
+                call_args, kwargs = _canonical_call_args(target, extra, args)
+                legacy_outcome = _outcome(legacy, args)
+                canonical_outcome = _outcome(canonical, call_args, kwargs)
+                counts[target] = counts.get(target, 0) + 1
+                if not _outcomes_equal(legacy_outcome, canonical_outcome):
+                    mismatches.append(
+                        f"{_site_id(site)} -> {target} real-payload probe={args!r:.240} "
+                        f"legacy={legacy_outcome!r:.240} canonical={canonical_outcome!r:.240}"
+                    )
+                    if len(mismatches) >= 25:
+                        break
+            if len(mismatches) >= 25:
+                break
+        assert not mismatches, "\n".join(mismatches)
+        assert set(counts) == expected_targets, "every mapped json/sha/content_sha256 target swept"
+        low = {
+            target: count for target, count in counts.items() if count < _REAL_MIN_PROBES_PER_TARGET
+        }
+        assert not low, f"real-payload probe floor unmet: {low}"
+        assert sum(counts.values()) > 15000, "expected a broad real-payload sweep"
+        print(
+            "REAL_PAYLOAD_EQUIVALENCE_EVIDENCE "
+            + json.dumps(
+                {
+                    "per_target_probe_counts": {
+                        target: counts[target] for target in sorted(counts)
+                    },
+                    "rows_sampled_per_spec": dict(sorted(inputs.rows_per_spec.items())),
+                    "total_real_payload_probes": sum(counts.values()),
+                }
+            )
+        )
+    finally:
+        conn.close()
 
 
 @pytest.mark.skipif(
@@ -994,5 +1235,192 @@ def test_observation_identity_recomputes_exactly() -> None:
                 if len(problems) > 10:
                     break
         assert not problems, "\n".join(problems)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 4b. the thesis check-receipt family recomputes from stored columns
+# ---------------------------------------------------------------------------
+
+_BENCH_RECOMPUTED_RECEIPT_FAMILY: dict[str, object] = {
+    "table": "thesis_evaluation_episode_check_receipts",
+    "observed_rows": 123,
+    "covered_by": "test_thesis_check_receipt_digests_recompute_from_stored_columns",
+    "reason": (
+        "Scrutiny flagged this family as unsampled. Unlike the blob_sha256 "
+        "families it IS recomputable from the DB alone: every receipt_sha256 "
+        "input is a stored column (the receipts row joined with its episode "
+        "row reproduces exactly the payload dict the writer hashes in "
+        "src/compute/thesis_evaluation_episodes.py::_receipt_sha256), so the "
+        "family is proven by recomputation below rather than dispositioned "
+        "as unreachable (verified 123/123 on 2026-10-12)."
+    ),
+}
+
+
+@pytest.mark.skipif(
+    not BENCH_DB.exists(), reason="bench DB not provisioned (mission-local artifact)"
+)
+def test_thesis_check_receipt_digests_recompute_from_stored_columns() -> None:
+    """Stored-hash non-drift for the thesis check-receipt family (123 rows at
+    capture): receipt_sha256 == sha256_text(canonical_json_no_nan(payload)),
+    where the payload is reconstructed from stored columns exactly as the
+    writer builds it (src/compute/thesis_evaluation_episodes.py::
+    ``_receipt_sha256``: the receipts row joined with its episode row)."""
+    conn = sqlite3.connect(f"file:{BENCH_DB}?mode=ro", uri=True)
+    try:
+        rows = cast(
+            "list[tuple[str | None, ...]]",
+            conn.execute(
+                "SELECT r.receipt_id, r.episode_id, r.ticker, r.run_id, r.checked_at, "
+                "r.semantic_input_sha256, r.result_sha256, r.receipt_sha256, "
+                "e.evidence_as_of, e.ruleset_sha256, e.overall_status, "
+                "e.provenance_completeness, e.rule_evaluations_json, e.soft_rule_results_json "
+                "FROM thesis_evaluation_episode_check_receipts r "
+                "LEFT JOIN thesis_evaluation_episodes e ON e.episode_id = r.episode_id "
+                "ORDER BY r.rowid"
+            ).fetchall(),
+        )
+        assert len(rows) > 100, "expected the full check-receipt family in the bench DB"
+        problems: list[str] = []
+        recomputed_rows = 0
+        for row in rows:
+            (
+                receipt_id,
+                episode_id,
+                ticker,
+                run_id,
+                checked_at,
+                semantic_input_sha256,
+                result_sha256,
+                receipt_sha256,
+                evidence_as_of,
+                ruleset_sha256,
+                overall_status,
+                provenance_completeness,
+                rule_evaluations_json,
+                soft_rule_results_json,
+            ) = row
+            if episode_id is None or rule_evaluations_json is None or receipt_sha256 is None:
+                problems.append(f"unjoinable check receipt {receipt_id}")
+                continue
+            payload: dict[str, object] = {
+                "episode_id": episode_id,
+                "ticker": ticker,
+                "run_id": run_id,
+                "checked_at": checked_at,
+                "evidence_as_of": evidence_as_of,
+                "semantic_input_sha256": semantic_input_sha256,
+                "ruleset_sha256": ruleset_sha256,
+                "result_sha256": result_sha256,
+                "severity": overall_status,
+                "provenance_completeness": provenance_completeness,
+                "rule_evaluations_json": rule_evaluations_json,
+                "soft_rule_results_json": soft_rule_results_json,
+            }
+            recomputed = deterministic.sha256_text(deterministic.canonical_json_no_nan(payload))
+            recomputed_rows += 1
+            if recomputed != receipt_sha256:
+                problems.append(f"check-receipt digest drift for {receipt_id}")
+                if len(problems) > 10:
+                    break
+        assert not problems, "\n".join(problems)
+        assert recomputed_rows == len(rows), "every captured receipt row must be recomputable"
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 4c. recorded dispositions for families the DB alone cannot recompute
+# ---------------------------------------------------------------------------
+
+_BENCH_EXTERNAL_BYTES_HASH_FAMILIES: list[dict[str, object]] = [
+    {
+        "table": "evidence_document_versions",
+        "hash_column": "blob_sha256",
+        "observed_rows": 581,
+        "locator_columns": ("document_key",),
+        "reason": (
+            "blob_sha256 digests the raw document bytes, which live outside the "
+            "database in the external document store; the table stores only the "
+            "digest, the document_key locator, and metadata (no blob-content "
+            "column), so the digest is not recomputable from the DB alone."
+        ),
+    },
+    {
+        "table": "evidence_blob_location_observations",
+        "hash_column": "blob_sha256",
+        "observed_rows": 792,
+        "locator_columns": ("storage_uri",),
+        "reason": (
+            "blob_sha256 digests blob bytes held at the external storage_uri; "
+            "the table records only the digest, the storage locator, and "
+            "verification metadata, so the digest is not recomputable from the "
+            "DB alone."
+        ),
+    },
+    {
+        "table": "evidence_source_observations",
+        "hash_column": "blob_sha256",
+        "observed_rows": 826,
+        "locator_columns": ("source_url",),
+        "reason": (
+            "blob_sha256 digests source bytes fetched from source_url over the "
+            "network; the bytes are not persisted (the table stores the digest, "
+            "the URL, and retrieval metadata), so the digest is not recomputable "
+            "from the DB alone."
+        ),
+    },
+]
+
+
+@pytest.mark.skipif(
+    not BENCH_DB.exists(), reason="bench DB not provisioned (mission-local artifact)"
+)
+def test_unsampled_hash_families_carry_recorded_dispositions() -> None:
+    """Every hash-bearing family scrutiny flagged as unsampled carries either a
+    recorded not-recomputable reason bound to real schema/row facts, or a
+    recomputation leg that proves it — never a silent omission."""
+    conn = sqlite3.connect(f"file:{BENCH_DB}?mode=ro", uri=True)
+    try:
+        for family in _BENCH_EXTERNAL_BYTES_HASH_FAMILIES:
+            table = cast("str", family["table"])
+            hash_column = cast("str", family["hash_column"])
+            reason = cast("str", family["reason"])
+            assert len(reason) > 60, f"{table}: disposition reason is not substantive"
+            columns = {
+                cast("str", row[1]): cast("str", row[2])
+                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            assert hash_column in columns, f"{table}: recorded hash column absent"
+            assert not any("BLOB" in decl.upper() for decl in columns.values()), (
+                f"{table}: external-bytes disposition assumes no blob-content column"
+            )
+            for locator in cast("tuple[str, ...]", family["locator_columns"]):
+                assert locator in columns, f"{table}: recorded locator column {locator} absent"
+            count = cast(
+                "int",
+                conn.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {hash_column} IS NOT NULL"
+                ).fetchone()[0],
+            )
+            assert count >= cast("int", family["observed_rows"]), (
+                f"{table}: family shrank below the dispositioned row floor"
+            )
+        covered_by = cast("str", _BENCH_RECOMPUTED_RECEIPT_FAMILY["covered_by"])
+        assert callable(globals().get(covered_by)), (
+            "the recomputed-family disposition must name its covering test"
+        )
+        receipt_count = cast(
+            "int",
+            conn.execute(
+                "SELECT COUNT(*) FROM thesis_evaluation_episode_check_receipts "
+                "WHERE receipt_sha256 IS NOT NULL"
+            ).fetchone()[0],
+        )
+        assert receipt_count >= cast("int", _BENCH_RECOMPUTED_RECEIPT_FAMILY["observed_rows"]), (
+            "check-receipt family shrank below the dispositioned row floor"
+        )
     finally:
         conn.close()
