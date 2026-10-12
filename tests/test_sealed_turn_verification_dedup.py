@@ -1580,3 +1580,173 @@ def test_canonical_fact_projection_generation_admission_deduplication() -> None:
     assert cache.counts()[(PROJECTION_GENERATION_ADMISSION, (gen_id,))] == 1
 
     conn.close()
+
+
+def test_same_connection_mutation_during_pending_verification_rejects_memoization() -> None:
+    """A same-connection write occurring between verified() and record() must not store stale result."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_pending_1",)
+
+    # 1. verified() lookup returns NOT_VERIFIED and captures state
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+
+    # 2. An unacknowledged same-connection write occurs while verification is running
+    conn.execute("INSERT INTO t VALUES (1, 'mutated')")
+
+    # 3. record() is called with the value derived before the mutation
+    cache.record("kind_test", coord, "stale_result")
+
+    # 4. The stale result must NOT have been memoized; verified() must return NOT_VERIFIED
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+
+    conn.close()
+
+
+def test_invalidation_during_pending_verification_rejects_memoization() -> None:
+    """Explicit cache invalidation occurring between verified() and record() must not store result."""
+    conn = sqlite3.connect(":memory:")
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_pending_2",)
+
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+    cache.invalidate()
+    cache.record("kind_test", coord, "stale_result")
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+
+    conn.close()
+
+
+def test_rollback_during_pending_verification_rejects_memoization() -> None:
+    """A database rollback occurring between verified() and record() must not store result."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_pending_3",)
+
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+
+    conn.execute("SAVEPOINT sp")
+    conn.execute("INSERT INTO t VALUES (1, 'temp')")
+    conn.execute("ROLLBACK TO SAVEPOINT sp")
+    conn.execute("RELEASE SAVEPOINT sp")
+
+    cache.record("kind_test", coord, "stale_result")
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+
+    conn.close()
+
+
+def test_authorized_write_during_pending_verification_preserves_memoization() -> None:
+    """Authorized same-connection trace writes do not invalidate pending verification."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE trace (id INTEGER PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_pending_4",)
+
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+
+    with cache.authorized_write():
+        conn.execute("INSERT INTO trace VALUES (1, 'trace_row')")
+
+    cache.record("kind_test", coord, "valid_result")
+    assert cache.verified("kind_test", coord) == "valid_result"
+
+    conn.close()
+
+
+def test_turn_with_multiple_scopes_and_multiple_narrative_bundles_verifies_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn spanning multiple scopes and narrative bundles verifies each coordinate once across all bundles."""
+    storage_root = tmp_path / "storage"
+    root = tmp_path / "run"
+    db_path, runtime, records = _build_fixture(root, storage_root)
+    probe = _Probe()
+    _install_doubles(monkeypatch, probe, records=records, runtime=runtime, enabled=True)
+    _install_turn_seams(monkeypatch, probe, runtime=runtime)
+
+    # Seed a second retrieval scope and promotion for BETA
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            "INSERT INTO v_issuer_reporting_scope_current VALUES ('scope-rev-beta', 'BETA', 'issuer-beta', 'included')"
+        )
+        beta_scope_id = derive_retrieval_scope_id(
+            source_scope_key="BETA",
+            issuer_id="issuer-beta",
+        )
+        policy, verifier_name, verifier_version, code_sha256, config_sha256 = (
+            current_verifier_identity()
+        )
+        inventory_json = canonical_json((INVENTORY_ID,))
+        bundle_2 = NarrativeBundle(
+            corpus_manifest_id=MANIFEST_ID,
+            lexical_index_run_id=LEXICAL_RUN_ID,
+            vector_index_run_id=VECTOR_RUN_ID,
+            embedding_promotion_id=EMBEDDING_PROMOTION_ID,
+        )
+        bundles_json = canonical_json([bundle_2.model_dump(mode="json")])
+        conn.execute(
+            "INSERT INTO ask_retrieval_scope_promotions VALUES "
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "ask-promotion-beta",
+                "ask-promotion-beta",
+                beta_scope_id,
+                "BETA",
+                "scope-rev-beta",
+                1,
+                "issuer-beta",
+                "reporting-beta",
+                RESEARCH_SNAPSHOT_ID,
+                RESEARCH_SNAPSHOT_SHA256,
+                FACT_GENERATION_ID,
+                FACT_PROJECTION_SEAL_SHA256,
+                inventory_json,
+                digest_text(inventory_json),
+                bundles_json,
+                digest_text(bundles_json),
+                NOW.isoformat(),
+                POPULATION_RUN_ID,
+                POPULATION_RECEIPT_SHA256,
+                NOW.isoformat(),
+                policy,
+                verifier_name,
+                verifier_version,
+                code_sha256,
+                config_sha256,
+                "promoted",
+                None,
+                NOW.isoformat(),
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Execute a turn with both ACME and BETA tickers
+    list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME", "BETA"]),
+            ContextPack(scope="portfolio", default_tickers=["ACME", "BETA"], system_context="ctx"),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+
+    # Both scopes share population cutover, research snapshot, and projection coordinates
+    # Turn cache ensures each coordinate is verified at most once across the entire turn
+    assert len(probe.caches) >= 1
+    cache = probe.caches[0]
+    pop_receipt_coord = (POPULATION_RUN_ID,)
+    assert cache.counts()[(POPULATION_RECEIPT, pop_receipt_coord)] == 1
+    assert all(count == 1 for count in cache.counts().values())

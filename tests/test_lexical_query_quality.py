@@ -1498,3 +1498,122 @@ def test_plan_lexical_query_unquoted_multiword_alias() -> None:
     assert ("Services ARR", "subscription revenue") in plan.groups
     assert '("Services ARR" OR "subscription revenue")' in plan.match_all
     assert '"Services ARR" OR "subscription revenue"' in plan.match_any
+
+
+def test_plan_and_search_query_containing_both_alias_and_canonical_kpi_names() -> None:
+    """When a query contains both a KPI alias and its canonical name, documents with only the canonical name and documents with both names are retrieved."""
+    aliases = {"mau": ("monthly active users",), "monthly active users": ("mau",)}
+
+    # 1. Query planning: both terms merge into the same equivalence group
+    plan = plan_lexical_query("MAU monthly active users", aliases=aliases)
+    assert plan is not None
+    assert len(plan.groups) == 1
+    assert set(plan.groups[0]) == {"monthly active users", "mau"}
+
+    # 2. SQLite FTS5 evaluation
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.execute(
+            "CREATE VIRTUAL TABLE search_lexical_chunks USING fts5(chunk_id UNINDEXED, text)"
+        )
+        conn.execute(
+            "INSERT INTO search_lexical_chunks VALUES ('doc-canonical-only', 'In Q2 monthly active users grew 20 percent year over year.')"
+        )
+        conn.execute(
+            "INSERT INTO search_lexical_chunks VALUES ('doc-both-names', 'In Q2 MAU (monthly active users) reached all-time record highs.')"
+        )
+        conn.commit()
+
+        matched = conn.execute(
+            "SELECT chunk_id FROM search_lexical_chunks WHERE search_lexical_chunks MATCH ? ORDER BY chunk_id",
+            (plan.match_all,),
+        ).fetchall()
+        matched_ids = [row[0] for row in matched]
+        assert matched_ids == ["doc-both-names", "doc-canonical-only"]
+    finally:
+        conn.close()
+
+
+def test_fact_trace_replays_cleanly_after_alias_retirement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a fact is retrieved via an active KPI alias, trace re-verification succeeds even after alias retirement."""
+    monkeypatch.setattr(projection_module, "admit_canonical_projection_for_read", _admit_generation)
+    monkeypatch.setattr(retrieval_module, "_derive_research_coordinates", _derive_research)
+
+    conn = _fact_conn()
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE research_snapshot_headers (
+                research_snapshot_id TEXT PRIMARY KEY, request_json TEXT NOT NULL, cutoff_at TEXT NOT NULL
+            );
+            CREATE TABLE heterogeneous_retrieval_trace_headers (
+                trace_id TEXT PRIMARY KEY, idempotency_key TEXT UNIQUE, research_snapshot_id TEXT,
+                research_snapshot_sha256 TEXT, fact_generation_id TEXT,
+                fact_projection_seal_sha256 TEXT, narrative_commitments_json TEXT,
+                narrative_commitments_sha256 TEXT, semantic_receipts_json TEXT,
+                semantic_receipts_sha256 TEXT, query_sha256 TEXT, query_json TEXT, ranker_json TEXT,
+                ranker_sha256 TEXT, filters_json TEXT, filters_sha256 TEXT, candidate_limit INTEGER,
+                result_limit INTEGER, cutoff_at TEXT, recorded_at TEXT
+            );
+            CREATE TABLE heterogeneous_retrieval_trace_candidates (
+                trace_id TEXT, candidate_ordinal INTEGER, candidate_kind TEXT, candidate_id TEXT,
+                source_commitment_sha256 TEXT, lexical_score TEXT, semantic_score TEXT,
+                normalized_score TEXT, ranker_name TEXT, filter_outcome TEXT, filter_reason TEXT,
+                evidence_locator_json TEXT, lineage_json TEXT, lineage_sha256 TEXT,
+                candidate_json TEXT, candidate_sha256 TEXT
+            );
+            CREATE TABLE heterogeneous_retrieval_trace_results (
+                trace_id TEXT, result_ordinal INTEGER, candidate_ordinal INTEGER, final_score TEXT,
+                result_json TEXT, result_sha256 TEXT
+            );
+            CREATE TABLE heterogeneous_retrieval_trace_seals (
+                trace_id TEXT, candidate_count INTEGER, result_count INTEGER,
+                canonical_candidate_set_json TEXT, candidate_set_sha256 TEXT,
+                canonical_result_set_json TEXT, result_set_sha256 TEXT, trace_json TEXT,
+                trace_sha256 TEXT, sealed_at TEXT
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO research_snapshot_headers VALUES (?,?,?)",
+            ("research-snapshot", "{}", NOW.isoformat()),
+        )
+        conn.execute(_ALIAS_ROW_SQL, (None,))
+        conn.commit()
+
+        req = HeterogeneousRetrievalRequest(
+            trace_id="trace-fact-alias",
+            idempotency_key="trace-fact-alias",
+            research_snapshot_id="research-snapshot",
+            fact_generation_id="generation-facts",
+            narrative_bundles=(),
+            query_text="MAU growth 2025",
+            candidate_limit=10,
+            result_limit=4,
+            filters=RetrievalFilters(include_narrative=False, include_facts=True),
+            cutoff_at=NOW,
+            recorded_at=NOW,
+        )
+        receipt = retrieve_heterogeneous(conn, req)
+        assert [str(item["candidate_id"]) for item in receipt.ordered_results] == [
+            "canonical:mau:2025"
+        ]
+
+        verified = retrieval_module.verify_heterogeneous_retrieval_trace(conn, "trace-fact-alias")
+        assert [str(item["candidate_id"]) for item in verified.ordered_results] == [
+            "canonical:mau:2025"
+        ]
+
+        # Retire alias
+        conn.execute("UPDATE kpi_aliases SET effective_to='2020-01-01'")
+        conn.commit()
+
+        # Re-verification MUST succeed using committed aliases in fact candidate lineage
+        reverified = retrieval_module.verify_heterogeneous_retrieval_trace(conn, "trace-fact-alias")
+        assert [str(item["candidate_id"]) for item in reverified.ordered_results] == [
+            "canonical:mau:2025"
+        ]
+    finally:
+        conn.close()

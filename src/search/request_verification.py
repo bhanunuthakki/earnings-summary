@@ -87,17 +87,39 @@ class RequestVerificationCache:
         self._conn = conn
         self.enabled = enabled
         self.journal: list[VerificationEvent] = []
-        self._entries: dict[tuple[str, tuple[str, ...]], tuple[int, object]] = {}
+        self._entries: dict[tuple[str, tuple[str, ...]], tuple[tuple[int, int], object]] = {}
         self._token: int | None = None
-        self._in_flight_tokens: dict[tuple[str, tuple[str, ...]], list[int]] = {}
+        self._epoch: int = 0
+        self._in_flight_tokens: dict[tuple[str, tuple[str, ...]], list[tuple[int, int]]] = {}
         self._expected_changes: int = conn.total_changes
+        self._closed: bool = False
+        self._previous_trace = getattr(conn, "_trace_callback", None)
         with suppress(Exception):
             self._conn.set_trace_callback(self._on_trace_sql)
 
     def _on_trace_sql(self, statement: str) -> None:
+        if self._previous_trace is not None:
+            with suppress(Exception):
+                self._previous_trace(statement)
         if "ROLLBACK" in statement.upper():
             self._entries.clear()
+            self._epoch += 1
             self._expected_changes = self._conn.total_changes
+
+    def close(self) -> None:
+        """Release trace callback registration on the connection."""
+
+        if self._closed:
+            return
+        self._closed = True
+        with suppress(Exception):
+            self._conn.set_trace_callback(self._previous_trace)
+
+    def __enter__(self) -> RequestVerificationCache:
+        return self
+
+    def __exit__(self, exc_type: object, exc_val: object, exc_tb: object) -> None:
+        self.close()
 
     def ensure_bound(self, conn: sqlite3.Connection) -> None:
         """Fail closed when the memo is used through a different connection."""
@@ -140,27 +162,33 @@ class RequestVerificationCache:
         self.invalidate()
 
     def _check_same_connection_mutation(self) -> None:
-        """Clear memoized entries when unacknowledged same-connection writes occur."""
+        """Clear memoized entries and advance epoch when unacknowledged same-connection writes occur."""
 
         current_changes = self._conn.total_changes
         if current_changes != self._expected_changes:
             self._entries.clear()
+            self._epoch += 1
             self._expected_changes = current_changes
 
     def invalidate(self) -> None:
         """Explicitly invalidate all memoized entries."""
 
         self._entries.clear()
+        self._epoch += 1
         self._expected_changes = self._conn.total_changes
+
+    def _state_token(self) -> tuple[int, int]:
+        token = self._change_token()
+        return (token, self._epoch)
 
     def verified(self, kind: str, coordinate: tuple[str, ...]) -> object:
         """Return the memoized verification value, or ``NOT_VERIFIED``."""
 
-        token = self._change_token()
+        state = self._state_token()
         entry = self._entries.get((kind, coordinate))
-        if entry is not None and entry[0] == token:
+        if entry is not None and entry[0] == state:
             return entry[1]
-        self._in_flight_tokens.setdefault((kind, coordinate), []).append(token)
+        self._in_flight_tokens.setdefault((kind, coordinate), []).append(state)
         return NOT_VERIFIED
 
     def record(
@@ -169,11 +197,12 @@ class RequestVerificationCache:
         coordinate: tuple[str, ...],
         value: object,
         *,
-        start_token: int | None = None,
+        start_token: tuple[int, int] | int | None = None,
     ) -> None:
         """Journal one executed verification and memoize it at the live token."""
 
         token = self._change_token()
+        current_state = (token, self._epoch)
         self.journal.append(
             VerificationEvent(
                 kind=kind,
@@ -185,12 +214,15 @@ class RequestVerificationCache:
         if not self.enabled:
             return
         stack = self._in_flight_tokens.get((kind, coordinate))
-        lookup_token = start_token if start_token is not None else (stack.pop() if stack else None)
-        if lookup_token is not None and token != lookup_token:
-            # An external commit landed while this verification was running;
-            # its result cannot be attributed to a stable database view.
-            return
-        self._entries[(kind, coordinate)] = (token, value)
+        lookup_state = start_token if start_token is not None else (stack.pop() if stack else None)
+        if lookup_state is not None:
+            if isinstance(lookup_state, tuple) and lookup_state != current_state:
+                # Database mutated (external commit, unacknowledged write, rollback,
+                # or explicit invalidation) while verification was running; do not memoize.
+                return
+            if isinstance(lookup_state, int) and lookup_state != current_state[0]:
+                return
+        self._entries[(kind, coordinate)] = (current_state, value)
 
     def counts(self) -> dict[tuple[str, tuple[str, ...]], int]:
         """Executed-verification counters grouped by kind and coordinate."""
@@ -208,4 +240,5 @@ class RequestVerificationCache:
         if self._token != token:
             self._token = token
             self._entries.clear()
+            self._epoch += 1
         return token

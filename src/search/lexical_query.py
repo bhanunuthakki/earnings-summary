@@ -262,27 +262,78 @@ def plan_lexical_query(
     if not content:
         return None
 
-    groups: list[tuple[str, ...]] = []
-    operands: list[str] = []
-    used = {_normalize_alias(term) for term in content}
+    groups: list[list[str]] = []
+    group_norm_roots: list[str] = []
+    group_norm_members: list[set[str]] = []
+
     for term in content:
-        if len(operands) >= MAX_OPERANDS:
-            break
-        group = [term]
-        operands.append(term)
-        for variant in alias_map.get(_normalize_alias(term), ()):
-            if len(operands) >= MAX_OPERANDS:
+        norm_term = _normalize_alias(term)
+        variants = [
+            v for v in alias_map.get(norm_term, ()) if v and _normalize_alias(v) != norm_term
+        ]
+
+        target_group_idx: int | None = None
+        for idx, root_norm in enumerate(group_norm_roots):
+            if norm_term == root_norm:
+                target_group_idx = idx
                 break
-            if not variant or variant in used:
-                continue
-            used.add(variant)
-            group.append(variant)
-            operands.append(variant)
-        groups.append(tuple(group))
-    return LexicalQueryPlan(groups=tuple(groups), operands=tuple(operands))
+            root_variants = {_normalize_alias(v) for v in alias_map.get(root_norm, ())}
+            term_variants = {_normalize_alias(v) for v in variants}
+            if norm_term in root_variants or root_norm in term_variants:
+                target_group_idx = idx
+                break
+
+        if target_group_idx is not None:
+            target_group = groups[target_group_idx]
+            target_members = group_norm_members[target_group_idx]
+            if norm_term not in target_members:
+                target_members.add(norm_term)
+                target_group.append(term)
+            for v in variants:
+                v_norm = _normalize_alias(v)
+                if v_norm not in target_members:
+                    target_members.add(v_norm)
+                    target_group.append(v)
+        else:
+            new_group = [term]
+            new_members = {norm_term}
+            for v in variants:
+                v_norm = _normalize_alias(v)
+                if v_norm not in new_members:
+                    new_members.add(v_norm)
+                    new_group.append(v)
+            groups.append(new_group)
+            group_norm_roots.append(norm_term)
+            group_norm_members.append(new_members)
+
+    operands: list[str] = []
+    seen_operands: set[str] = set()
+    final_groups: list[tuple[str, ...]] = []
+
+    for group in groups:
+        pruned_group: list[str] = []
+        for item in group:
+            item_norm = _normalize_alias(item)
+            if item_norm not in seen_operands:
+                if len(operands) >= MAX_OPERANDS:
+                    continue
+                seen_operands.add(item_norm)
+                operands.append(item)
+            pruned_group.append(item)
+        if pruned_group:
+            final_groups.append(tuple(pruned_group))
+
+    if not final_groups or not operands:
+        return None
+
+    return LexicalQueryPlan(groups=tuple(final_groups), operands=tuple(operands))
 
 
-def kpi_alias_expansions(conn: sqlite3.Connection) -> dict[str, tuple[str, ...]]:
+def kpi_alias_expansions(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str | None = None,
+) -> dict[str, tuple[str, ...]]:
     """Bidirectional alias variants from current definition revisions and legacy alias rows.
 
     Reads admitted, active reported labels and counterpart canonical KPI names from
@@ -309,13 +360,18 @@ def kpi_alias_expansions(conn: sqlite3.Connection) -> dict[str, tuple[str, ...]]
     )
 
     if has_revisions and has_definitions:
-        rows = conn.execute(
+        query_sql = (
             "SELECT d.name, r.reported_label FROM kpi_definition_revisions AS r "
             "JOIN kpi_definitions AS d ON d.id=r.kpi_definition_id "
-            "WHERE r.status='admitted' AND r.lifecycle='active' "
-            "ORDER BY r.kpi_definition_revision_id LIMIT ?",
-            (MAX_ALIAS_ROWS,),
-        ).fetchall()
+            "WHERE r.status='admitted' AND r.lifecycle='active'"
+        )
+        params: list[object] = []
+        if ticker is not None:
+            query_sql += " AND d.ticker=?"
+            params.append(ticker)
+        query_sql += " ORDER BY r.kpi_definition_revision_id LIMIT ?"
+        params.append(MAX_ALIAS_ROWS)
+        rows = conn.execute(query_sql, params).fetchall()
         for canonical_raw, reported_raw in rows:
             canonical = _normalize_alias(str(canonical_raw))
             reported = _normalize_alias(str(reported_raw))
@@ -334,11 +390,16 @@ def kpi_alias_expansions(conn: sqlite3.Connection) -> dict[str, tuple[str, ...]]
     if has_legacy:
         remaining_rows = max(0, MAX_ALIAS_ROWS - sum(len(v) for v in variants.values()))
         if remaining_rows > 0:
-            rows = conn.execute(
-                "SELECT canonical_name,reported_name FROM kpi_aliases "
-                "WHERE effective_to IS NULL ORDER BY id LIMIT ?",
-                (remaining_rows,),
-            ).fetchall()
+            query_sql = (
+                "SELECT canonical_name,reported_name FROM kpi_aliases WHERE effective_to IS NULL"
+            )
+            params = []
+            if ticker is not None:
+                query_sql += " AND (ticker=? OR ticker IS NULL)"
+                params.append(ticker)
+            query_sql += " ORDER BY id LIMIT ?"
+            params.append(remaining_rows)
+            rows = conn.execute(query_sql, params).fetchall()
             for canonical_raw, reported_raw in rows:
                 canonical = _normalize_alias(str(canonical_raw))
                 reported = _normalize_alias(str(reported_raw))

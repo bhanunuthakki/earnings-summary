@@ -1886,12 +1886,18 @@ def _verify_candidate_source(
                 "narrative_candidate_evidence_mismatch", trace_id=request.trace_id
             )
         return
+    raw_aliases = lineage.get("aliases")
+    replay_aliases: dict[str, tuple[str, ...]] | None = None
+    if isinstance(raw_aliases, dict):
+        aliases_dict = cast(dict[str, list[object]], raw_aliases)
+        replay_aliases = {str(k): tuple(str(x) for x in v) for k, v in aliases_dict.items()}
     hits = search_canonical_facts(
         conn,
         generation_id=request.fact_generation_id,
         query_text=request.query_text,
         limit=request.candidate_limit,
         reporting_entity_id=request.filters.reporting_entity_id,
+        aliases=replay_aliases,
     )
     match = next(
         (hit for hit in hits if hit.canonical_metric_cell_id == candidate["candidate_id"]),
