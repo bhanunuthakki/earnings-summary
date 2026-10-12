@@ -34,13 +34,11 @@ drift.
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
 from uuid import uuid4
 
 from ask.grounding import EvidenceItem, build_evidence_block
@@ -49,6 +47,7 @@ from evals.harness import (
     EvalAbortError,
     EvalRunSummary,
     dumps_compact,
+    load_golden_doc,
     now_naive_utc,
     resolve_git_sha,
     sha256_file,
@@ -126,27 +125,6 @@ class CautionCase:
 # ---------------------------------------------------------------------------
 
 
-def _load_doc(path: Path) -> list[dict[str, object]]:
-    try:
-        payload: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        raise ValueError(f"golden file unreadable at {path}: {exc}") from exc
-    if not isinstance(payload, dict):
-        raise ValueError("golden file must be a JSON object")
-    doc = cast("dict[str, object]", payload)
-    if doc.get("purpose") != PURPOSE:
-        raise ValueError(f"golden file purpose must be {PURPOSE!r}, got {doc.get('purpose')!r}")
-    raw_cases = doc.get("cases")
-    if not isinstance(raw_cases, list) or not raw_cases:
-        raise ValueError("golden file needs a non-empty `cases` list")
-    out: list[dict[str, object]] = []
-    for i, entry in enumerate(cast("list[object]", raw_cases)):
-        if not isinstance(entry, dict):
-            raise ValueError(f"cases[{i}]: must be an object")
-        out.append(cast("dict[str, object]", entry))
-    return out
-
-
 def _require_str(c: dict[str, object], key: str, label: str, errors: list[str]) -> str:
     v = c.get(key)
     if not isinstance(v, str) or not v.strip():
@@ -171,7 +149,7 @@ def load_caution_golden(path: Path) -> list[CautionCase]:
     errors: list[str] = []
     seen: set[str] = set()
     cases: list[CautionCase] = []
-    for i, c in enumerate(_load_doc(path)):
+    for i, c in enumerate(load_golden_doc(path, PURPOSE)):
         label = f"cases[{i}]"
         case_id = _require_str(c, "id", label, errors)
         if case_id in seen:

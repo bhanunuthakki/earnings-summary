@@ -20,7 +20,7 @@ import execution.serve_portfolio_tracker as tracker_server
 from integrations.portfolio_tracker_v1 import HealthV1, V1Fetch
 from operations import host_runtime
 from operations.backup_observer import BackupConfig, observe_backup
-from operations.topology_observer import TopologyConfig, compare_topology
+from operations.host_runtime import TopologyConfig, compare_topology
 from pipeline.operations_panel import render_host_runtime
 from runtime import portfolio_tracker as runtime
 

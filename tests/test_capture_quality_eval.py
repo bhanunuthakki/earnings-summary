@@ -309,7 +309,7 @@ def test_capture_persistence_strips_private_exchange_defense_in_depth(
     summary.cases[0].judge_verdict = "PRIVATE VERDICT"
     summary.cases[0].judge_rationale = "PRIVATE RATIONALE"
 
-    from evals import harness, store
+    from evals import harness
 
     def fake_write_run(observed: EvalRunSummary, *, db_path: Path) -> int:
         assert db_path == tmp_path / "portfolio.db"
@@ -319,7 +319,7 @@ def test_capture_persistence_strips_private_exchange_defense_in_depth(
         assert observed.cases[0].judge_rationale is None
         return 7
 
-    monkeypatch.setattr(store, "write_run", fake_write_run)
+    monkeypatch.setattr(harness, "write_run", fake_write_run)
 
     def skip_record_score(*_args: object, **_kwargs: object) -> None:
         return None

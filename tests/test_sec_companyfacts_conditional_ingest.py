@@ -33,18 +33,16 @@ import pytest
 from execution import fetch_sec_xbrl as fetch_sec_xbrl_execution
 from pipeline import sec_xbrl
 from pipeline.restatement_detector import FinancialFactSchemaProfile
-from pipeline.sec_companyfacts_fetch_receipts import (
-    CompanyFactsValidators,
-    fetch_receipts_table_present,
-    load_companyfacts_fetch_receipt,
-)
 from pipeline.sec_xbrl import (
     CompanyFactsNotModified,
     CompanyFactsSelection,
+    CompanyFactsValidators,
     FactAdmissionTimingPhase,
     FetchedCompanyFacts,
     IngestStats,
+    fetch_receipts_table_present,
     ingest_for_ticker,
+    load_companyfacts_fetch_receipt,
 )
 from provenance.issuer_registry import (
     IdentifierAssertion,

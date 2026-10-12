@@ -24,17 +24,35 @@ exist yet, which is why this module deliberately speaks only in
   ON_NEWS          — after the news ingest writes a new story
   CALENDAR_DRIVEN  — when a calendar event (SayDo period_target due,
                      earnings T-N reminder) fires
+
+The module also owns the one piece of sensor *mechanics* that several sensors
+share verbatim: the optional 1-2 sentence LLM context line that enriches a
+deterministic memo (see ``LlmContextSite`` / ``maybe_trigger_llm_context``).
+It still never imports a CRUD row type.
 """
 
 from __future__ import annotations
 
+import logging
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, ClassVar, Protocol, runtime_checkable
+
+from llm.anchors import compose_anchor_block
+from llm_artifact_store import (
+    UpsertRequest,
+    artifact_is_reusable,
+    compute_input_sha256,
+    read_current,
+    upsert,
+)
+from runtime.deterministic import sha256_text
+
+log = logging.getLogger(__name__)
 
 
 class Cadence(StrEnum):
@@ -290,3 +308,176 @@ class StatefulTrigger(Protocol):
         dry_run: bool,
         as_of: datetime | None = None,
     ) -> StatefulTriggerResult: ...
+
+
+# ---------------------------------------------------------------------------
+# Optional LLM context line — shared sensor mechanics
+# ---------------------------------------------------------------------------
+#
+# Several sensors follow one contract: ``build_alert`` composes a deterministic
+# memo and *then* optionally enriches it with a 1-2 sentence LLM line. The
+# deterministic memo is the contract, so the enrichment degrades silently to
+# ``None`` on any failure (LLM down, budget cap, empty response, store error)
+# and caches through the artifact store. Only the prompt text, the cache period
+# label and the log event names differ between sensors, so the mechanics live
+# here and each sensor declares an ``LlmContextSite``.
+#
+# The host sensor passes its own module-level ``call_llm`` and anchor loaders so
+# its established test seams — ``monkeypatch.setattr("triggers.<sensor>.call_llm",
+# ...)`` and the same for an anchor loader — keep working unchanged.
+
+
+AnchorLoader = Callable[[Path, str], str]
+
+
+@dataclass(frozen=True)
+class LlmContextSite:
+    """Per-sensor wiring for the optional LLM context line.
+
+    ``period_label`` names the evidence field the cache inputs carry (for
+    example ``period_end`` or ``period_target``); it is part of the
+    ``input_sha256`` contract, so it must not change for a live sensor.
+    """
+
+    purpose: str
+    prompt_version: str
+    event_prefix: str
+    period_label: str
+    build_prompt: Callable[[str, str], str]
+
+
+def _read_cached_or_call_context(
+    *,
+    site: LlmContextSite,
+    ticker: str,
+    kpi_name: str,
+    fiscal_period: str,
+    factual_core: str,
+    anchor_block: str,
+    cache_inputs: list[bytes | str],
+    db_path: Path,
+    call_llm: Callable[..., str],
+) -> str | None:
+    """Return the context line, hitting the artifact-store cache when possible.
+
+    Per-entity artifacts share the ``(ticker, purpose)`` slot, so the caller
+    keys ``fiscal_period`` by the entity that owns the line; ``input_sha256``
+    still guards correctness.
+    """
+    existing = read_current(
+        ticker=ticker,
+        purpose=site.purpose,
+        fiscal_period=fiscal_period,
+        db_path=db_path,
+    )
+    new_sha = compute_input_sha256(prompt_version=site.prompt_version, cache_inputs=cache_inputs)
+    if (
+        existing is not None
+        and artifact_is_reusable(existing, input_sha256=new_sha)
+        and isinstance(existing.content_md, str)
+        and existing.content_md.strip()
+    ):
+        log.info(
+            {
+                "event": f"{site.event_prefix}_context_cache_hit",
+                "ticker": ticker,
+                "kpi": kpi_name,
+                "artifact_id": existing.id,
+            }
+        )
+        return existing.content_md
+
+    prompt = site.build_prompt(factual_core, anchor_block)
+    raw = call_llm(prompt, purpose=site.purpose, ticker=ticker)
+    context = raw.strip()
+    if not context:
+        return None
+
+    _ = upsert(
+        UpsertRequest(
+            ticker=ticker,
+            purpose=site.purpose,
+            fiscal_period=fiscal_period,
+            content_md=context,
+            cache_inputs=cache_inputs,
+            prompt_version=site.prompt_version,
+        ),
+        db_path=db_path,
+    )
+    return context
+
+
+def maybe_trigger_llm_context(
+    *,
+    site: LlmContextSite,
+    ticker: str,
+    kpi_name: str,
+    period_value: str,
+    fiscal_period: str,
+    factual_core: str,
+    repo_root: Path,
+    db_path: Path,
+    anchor_loaders: tuple[AnchorLoader, AnchorLoader, AnchorLoader, AnchorLoader],
+    call_llm: Callable[..., str],
+) -> str | None:
+    """Best-effort 1-2 sentence context line, or ``None``.
+
+    Degrades silently to ``None`` on ANY failure so ``build_alert`` always
+    emits the deterministic memo. Cache-aware via the artifact store.
+    """
+    thesis_loader, bear_loader, ir_loader, priors_loader = anchor_loaders
+    try:
+        # Compose the full 4-block anchor (thesis + bear + IR + analyst priors)
+        # so the context line can weigh the event against the bear case,
+        # management's IR framing and the analyst's own open watch-items;
+        # compose_anchor_block omits whichever blocks are absent.
+        anchor_block = compose_anchor_block(
+            thesis_loader(repo_root, ticker),
+            bear_loader(repo_root, ticker),
+            ir_loader(repo_root, ticker),
+            priors_loader(repo_root, ticker),
+        )
+    except Exception as exc:  # anchor is optional; never block the memo
+        log.debug(
+            {
+                "event": f"{site.event_prefix}_anchor_load_failed",
+                "ticker": ticker,
+                "error": str(exc),
+            }
+        )
+        anchor_block = ""
+
+    # Deterministic cache-input list for ``compute_input_sha256``. Order and
+    # the period label are part of the contract — changing either invalidates
+    # every cached context artifact.
+    cache_inputs: list[bytes | str] = [
+        f"ticker={ticker}",
+        f"kpi={kpi_name}",
+        f"{site.period_label}={period_value}",
+        "factual_sha=" + sha256_text(factual_core),
+        "anchor_sha=" + sha256_text(anchor_block),
+    ]
+    try:
+        return _read_cached_or_call_context(
+            site=site,
+            ticker=ticker,
+            kpi_name=kpi_name,
+            fiscal_period=fiscal_period,
+            factual_core=factual_core,
+            anchor_block=anchor_block,
+            cache_inputs=cache_inputs,
+            db_path=db_path,
+            call_llm=call_llm,
+        )
+    except Exception as exc:
+        # The deterministic memo is the contract — an LLM/budget/parse failure
+        # here must NOT sink the alert. Log and proceed without the line.
+        log.warning(
+            {
+                "event": f"{site.event_prefix}_context_failed",
+                "ticker": ticker,
+                "kpi": kpi_name,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+        return None

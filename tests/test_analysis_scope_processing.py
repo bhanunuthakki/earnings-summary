@@ -31,7 +31,7 @@ from provenance.research_snapshot import (
     derive_obligations,
     seal_processing_snapshot,
 )
-from provenance.source_expectation_lifecycle import (
+from provenance.source_coverage_reconcile import (
     ExpectedDocumentLifecycle,
     persist_expected_document_lifecycle,
 )

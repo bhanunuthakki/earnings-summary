@@ -26,8 +26,8 @@ from advisor.position_review import (
     review_reply_text,
 )
 from advisor.position_tax import PositionTaxView, TrimTaxEstimate, unavailable_tax_view
-from ask.commands import COMMAND_PREFIXES, run_chat_command
-from capture.matcher import DISTINCTIVE_ALIASES, build_roster_index
+from ask.engine import COMMAND_PREFIXES, run_chat_command
+from capture.matcher import DISTINCTIVE_ALIASES, RosterIndex, build_roster_index
 from dispatch_registry import Job, Registry
 
 _PRE_DEFAULT = PreAnalysis(
@@ -189,10 +189,16 @@ def test_review_reply_text_plain_usage_message_is_ascii() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def _roster() -> object:
+def _roster() -> RosterIndex:
     """A roster with the tracked symbols + the distinctive-name alias seed —
     the same shape ``load_roster`` builds in prod."""
     return build_roster_index(symbols=["RBRK", "NU", "NVO"], phrases=DISTINCTIVE_ALIASES)
+
+
+def _fake_roster(_repo_root: Path) -> RosterIndex:
+    """A single-name roster for the loader seam (replaces
+    ``_load_review_roster`` in monkeypatch tests)."""
+    return build_roster_index(symbols=["RBRK"], phrases=DISTINCTIVE_ALIASES)
 
 
 def test_parse_resolves_company_name_to_ticker() -> None:
@@ -239,7 +245,7 @@ def test_review_reply_text_resolves_company_name_end_to_end(
     monkeypatch.setattr(
         pr,
         "_load_review_roster",
-        lambda _rr: build_roster_index(symbols=["RBRK"], phrases=DISTINCTIVE_ALIASES),
+        _fake_roster,
     )
     out = review_reply_text(Path("."), "/review Rubrik", plain=True)
     assert seen["ticker"] == "RBRK"
@@ -284,7 +290,7 @@ def test_review_command_background_job_uses_resolved_ticker(
     monkeypatch.setattr(
         pr,
         "_load_review_roster",
-        lambda _rr: build_roster_index(symbols=["RBRK"], phrases=DISTINCTIVE_ALIASES),
+        _fake_roster,
     )
     run_chat_command(Path("."), "/review Rubrik at $70", _Capturing())
     assert started["ticker"] == "RBRK"

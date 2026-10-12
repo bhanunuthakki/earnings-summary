@@ -127,7 +127,7 @@ AUDITED_LEGACY_FACT_READS = {
     "src/dcf/fact_drivers.py": 1,
     "src/decision_conditions.py": 4,
     "src/pipeline/confidence.py": 2,
-    "src/pipeline/key_metrics.py": 1,
+    "src/pipeline/explore_panel.py": 1,
     "src/pipeline/kpi_persistence.py": 4,
     # Exact predecessor/head reads guard the one governed append-only repair
     # write. They are not product analytics and retire with that write seam.

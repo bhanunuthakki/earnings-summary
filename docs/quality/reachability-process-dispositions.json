@@ -42,17 +42,6 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run executes only the fixed self-probe and the BOOTSTRAP execution/sqlite_bootstrap.py probe commands.",
-      "fingerprint": "5c52b0de8549fe8182b1c25ba2cc33b0ca5cd05494c0a44d1b79551bd1f17e9c",
-      "line": 56,
-      "path": "execution/benchmark_sqlite_runtime.py",
-      "targets": [
-        "execution/benchmark_sqlite_runtime.py",
-        "execution/sqlite_bootstrap.py"
-      ]
-    },
-    {
-      "disposition": "internal_python_target",
       "evidence": "The paint-cycle runner launches only this checked-in harness in its fixed child-sample mode through the managed Python bootstrap to isolate cold request sequences.",
       "fingerprint": "e64c57305fbc6cc887aba13cc8575b3fcc27902b02d791f7a04a209ce23c434f",
       "line": 571,
@@ -63,12 +52,13 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "The hermetic smoke test invokes only the fixed bench harness CLI using the test process's Python interpreter.",
-      "fingerprint": "92227ec2d74eaa1e08cd8df0bc94502a864214b3b14a0c39f9907d1f7adeb2e4",
-      "line": 38,
-      "path": "tests/test_bench_flows.py",
+      "evidence": "_run executes only the fixed self-probe and the BOOTSTRAP execution/sqlite_bootstrap.py probe commands.",
+      "fingerprint": "5c52b0de8549fe8182b1c25ba2cc33b0ca5cd05494c0a44d1b79551bd1f17e9c",
+      "line": 56,
+      "path": "execution/benchmark_sqlite_runtime.py",
       "targets": [
-        "execution/bench_flows.py"
+        "execution/benchmark_sqlite_runtime.py",
+        "execution/sqlite_bootstrap.py"
       ]
     },
     {
@@ -650,8 +640,8 @@
     {
       "disposition": "external_process",
       "evidence": "Private _system_probe has one production caller observe_owner. Both validated OwnerConfig.kind branches construct a fixed native PowerShell program. OwnerConfig.name and task_path restrictive validators exclude quote/code delimiters. Task branch queries Get-ScheduledTask/Get-ScheduledTaskInfo/Export-ScheduledTask and COM Schedule.Service; service branch queries Get-CimInstance/Get-ItemProperty and fixed sc.exe sdshow. No Python entrypoint, owner-supplied executable, or arbitrary command is accepted. Output uses bounded temporary capture, timeout15s and discarded stderr. This classification proves dispatch scope, not native command success or current host configuration.",
-      "fingerprint": "7766e42371e98f0e169214b680ca95feed775ee61ee934741158a73b0b5f794d",
-      "line": 382,
+      "fingerprint": "826a9460678b62c6ca0ce19b973179a761b33f52695a08350bbefd1488ab51ba",
+      "line": 273,
       "path": "src/operations/host_runtime.py",
       "targets": [
         "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
@@ -660,9 +650,9 @@
     {
       "disposition": "external_process",
       "evidence": "Private _json_command has exactly two production callers, both native_projection: fixed PS executable with fixed flags and locally constructed read-only process/listener/service/task query; fixed TAILSCALE executable with literal serve status --json. Configuration executable paths and route URLs are compared only and never form argv executables. Service/task names and task paths are constrained by closed safe-character validators; ports are strict bounded integers. No caller passes an operator command or Python entrypoint. Output is bounded, stderr discarded, timeouts30s and5s.",
-      "fingerprint": "c41ccab48cae97518e62a967326f7213c09e54d0d1ff89deefc8d6ec2529144b",
-      "line": 209,
-      "path": "src/operations/topology_observer.py",
+      "fingerprint": "707e86617efb83a5f4d517ab70ff34f77b7fdfd88a9c9644e2d6a5215a2af0e8",
+      "line": 617,
+      "path": "src/operations/host_runtime.py",
       "targets": [
         "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
         "C:\\Program Files\\Tailscale\\tailscale.exe"
@@ -783,8 +773,8 @@
     {
       "disposition": "closed_command_set",
       "evidence": "run_git executes only fixed Git commit, blob, tree, and archive probes used to bind and extract the two immutable experiment arms.",
-      "fingerprint": "aff42dfcc447c00c959a14e25f4de1812d0e86a2ac5f7a7148a6597d8aa45b68",
-      "line": 107,
+      "fingerprint": "c01bc6dc821865a77ddf3563cbb36f65c3b034757d99aeb576d3e3832a0071af",
+      "line": 254,
       "path": "src/quality/performance_experiment.py",
       "targets": [
         "git"
@@ -793,8 +783,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "run_experiment_subprocess executes the immutable workload argv from the validated sealed experiment declaration.",
-      "fingerprint": "2ee304b1c01b6de9ed1256d1e2f1b469e90a611a2462dfc3d796a8dcd437ab5a",
-      "line": 120,
+      "fingerprint": "4e9fac74cd49182383277da9b88dc71bb403075714f0cd02c4453f0efd82f735",
+      "line": 267,
       "path": "src/quality/performance_experiment.py",
       "targets": [
         "sealed declaration workload argv"
@@ -913,6 +903,16 @@
     },
     {
       "disposition": "internal_python_target",
+      "evidence": "The hermetic smoke test invokes only the fixed bench harness CLI using the test process's Python interpreter.",
+      "fingerprint": "92227ec2d74eaa1e08cd8df0bc94502a864214b3b14a0c39f9907d1f7adeb2e4",
+      "line": 38,
+      "path": "tests/test_bench_flows.py",
+      "targets": [
+        "execution/bench_flows.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
       "evidence": "REFRESH_DCF is the checked-in execution/refresh_dcf.py path run via managed_python_prefix.",
       "fingerprint": "70770e6fbb240839a5f2c7bf748c320fd941014cd233616fc12a8eb251f4cb10",
       "line": 351,
@@ -955,7 +955,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "838150d9c16157569781e284c0a098ea7fdc1e797a7fafcbe3796504c1a5cdc7",
+      "source_sha256": "99e4a30cec6da5bcdd680da640e2cb6e6f5bfe49c0668066592588ec6295a041",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

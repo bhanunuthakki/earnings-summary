@@ -10,16 +10,16 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.sealed_growth_projection import (
+from pipeline.three_regime_renderer import (
     FIXED_COHORT,
     GrowthRenderManifest,
     SealedFile,
     SealedSourceFile,
+    ThreeRegimeDeterministicRenderer,
     load_growth_manifest,
     policy_bundle_sha256,
     project_growth_regimes,
 )
-from pipeline.three_regime_renderer import ThreeRegimeDeterministicRenderer
 from provenance.source_regime import SourceRegime
 from report.offline_artifact import OfflineBoundaryError
 from tests.test_canonical_growth_screen import STAMP, seed_growth_graph
@@ -205,7 +205,7 @@ def test_sealed_file_identity_ignores_access_time_but_retains_change_time(
 ) -> None:
     import os
 
-    from pipeline.sealed_growth_projection import verify_sealed_file
+    from pipeline.three_regime_renderer import verify_sealed_file
 
     path = tmp_path / "source.bin"
     path.write_bytes(b"exact source")

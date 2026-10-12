@@ -19,6 +19,7 @@ from typing import Literal, Self, TypeAlias, cast
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from provenance.issuer_registry import evidence_document_relation
+from provenance.observation_resolution import persist_idempotent_row
 from runtime.deterministic import require_sha256
 
 InventorySourceKind: TypeAlias = Literal["sec_submissions", "ir_crawl", "earnings_events"]
@@ -374,22 +375,15 @@ class SourceCoverageLedger:
         identity_value: str,
         record_id: str,
     ) -> PersistResult:
-        cursor = self._conn.execute(
-            f"INSERT INTO {table} ({', '.join(columns)}) "  # nosec B608 -- trusted internal SQL shape; values remain bound
-            f"VALUES ({', '.join('?' for _ in columns)}) ON CONFLICT DO NOTHING",
-            values,
+        created = persist_idempotent_row(
+            self._conn,
+            table=table,
+            columns=columns,
+            values=values,
+            identity_column=identity_column,
+            identity_value=identity_value,
         )
-        if cursor.rowcount == 1:
-            return PersistResult(record_id, True)
-        existing = self._conn.execute(
-            f"SELECT {', '.join(columns)} FROM {table} WHERE {identity_column} = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
-            (identity_value,),
-        ).fetchone()
-        if existing is None or not _same(tuple(existing), values):
-            raise ValueError(
-                f"immutable {table} identity {identity_value!r} conflicts with existing data"
-            )
-        return PersistResult(record_id, False)
+        return PersistResult(record_id, created)
 
     def _persist_expected_document_obligation_binding(
         self,
@@ -802,22 +796,3 @@ class SourceCoverageLedger:
             record.idempotency_key,
             record.assessment_id,
         )
-
-
-def _same(existing: tuple[object, ...], expected: tuple[object, ...]) -> bool:
-    if len(existing) != len(expected):
-        return False
-    for stored, supplied in zip(existing, expected, strict=True):
-        if isinstance(supplied, datetime):
-            try:
-                parsed = datetime.fromisoformat(str(stored)).replace(tzinfo=None)
-            except ValueError:
-                return False
-            if parsed != supplied.replace(tzinfo=None):
-                return False
-        elif isinstance(supplied, bool):
-            if bool(stored) is not supplied:
-                return False
-        elif stored != supplied:
-            return False
-    return True

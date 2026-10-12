@@ -28,7 +28,6 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import cast
-from uuid import uuid4
 
 from dcf.scenario_prior import ScenarioPrior, propose_scenario_prior
 from evals.harness import (
@@ -36,9 +35,7 @@ from evals.harness import (
     EvalAbortError,
     EvalRunSummary,
     dumps_compact,
-    now_naive_utc,
-    resolve_git_sha,
-    sha256_file,
+    run_golden_eval,
 )
 from llm.cli import DEFAULT_MODEL, LLM_MODELS, is_hard_stop
 from llm.prompt_versions import prompt_version_for
@@ -211,42 +208,14 @@ def run_scenario_prior_eval(
     """The full mode-A run. Does NOT persist — the caller decides
     (execution/run_llm_evals.py). ``generate_fn`` injects a fake proposer for
     tests; None = the production ``propose_scenario_prior`` over pinned anchors."""
-    cases = load_scenario_prior_golden(golden_path)
-    if limit is not None:
-        cases = cases[: max(0, limit)]
     target: GenerateFn = generate_fn if generate_fn is not None else _production_generate
-
-    summary = EvalRunSummary(
-        run_id=uuid4().hex,
+    return run_golden_eval(
         purpose=PURPOSE,
-        mode="live",
+        golden_path=golden_path,
+        code_root=code_root,
+        cases=load_scenario_prior_golden(golden_path),
+        grade_case=lambda case: grade_scenario_prior_case(case, generate_fn=target),
         prompt_version=prompt_version_for(PURPOSE),
         model=LLM_MODELS.get(PURPOSE, DEFAULT_MODEL),
-        judge_model=None,  # deterministic skew + grounded check, no judge
-        golden_set_sha=sha256_file(golden_path),
-        started_at=now_naive_utc(),
-        git_sha=resolve_git_sha(code_root),
+        limit=limit,
     )
-    for i, case in enumerate(cases):
-        result = grade_scenario_prior_case(case, generate_fn=target)
-        if i == 0 and result.failure_stage == "call":
-            retry = grade_scenario_prior_case(case, generate_fn=target)
-            if retry.failure_stage == "call":
-                raise EvalAbortError(
-                    f"{PURPOSE}: the first case errored twice ({result.judge_rationale}) — "
-                    "transport looks down; aborting instead of scoring 0s."
-                )
-            result = retry
-        summary.cases.append(result)
-        log.info(
-            {
-                "event": "eval_case_graded",
-                "purpose": PURPOSE,
-                "case_id": result.case_id,
-                "passed": result.passed,
-                "score": result.score,
-                "failure_stage": result.failure_stage,
-            }
-        )
-    summary.finished_at = now_naive_utc()
-    return summary

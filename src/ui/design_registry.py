@@ -633,7 +633,6 @@ _BHA_89_TO_92_ADDITIONAL_EMITTERS = (
     "pipeline/calibration_receipt.py",
     "pipeline/console_scaffold.py",
     "pipeline/ir_approval_panel.py",
-    "pipeline/key_metrics.py",
     "pipeline/operations_styles.py",
     "pipeline/performance_risk_panel.py",
     "pipeline/provenance_panel.py",

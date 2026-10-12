@@ -39,6 +39,7 @@ answer for an eligibility GATE: "unknown" must never read as "eligible").
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
@@ -49,7 +50,6 @@ from typing import Literal, cast
 from pydantic import ValidationError
 
 from allocation.candidate_fit import CandidateFit
-from allocation.digest import allocation_payload_sha
 from compute.thesis_evaluator import HoldingsSpec, load_holdings_spec
 from dcf.latest import LatestDcfRow, latest_dcf_row
 from dcf.readiness import load_valuation_readiness
@@ -119,6 +119,16 @@ _REQUIRED_SOURCES_BY_CLASS: dict[str, tuple[str, ...]] = {
 # helper is module-private; repo convention is to duplicate a few lines of
 # shared logic rather than promote a private helper to a shared import).
 _STUB_REGENERATED_STATUS = "stub_regenerated_from_corruption"
+
+
+def allocation_payload_sha(payload: object) -> str:
+    """SHA-256 hex of canonical JSON: sorted keys, compact separators, UTF-8.
+
+    The single deterministic payload digest for the allocation gate's
+    ``input_sha`` fields (folded in from the former ``allocation.digest``).
+    """
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 @dataclass(slots=True, frozen=True)

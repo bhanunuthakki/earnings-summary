@@ -208,8 +208,8 @@
     {
       "disposition": "internal_target",
       "evidence": "The fixed MUTATING_KINDS set plus the explicit ask-kind branch select only these checked-in self-registering artifact modules.",
-      "fingerprint": "aaa079ba3bc000f89002e2b010b9b36d370fcf204f77b83284b829d61a156894",
-      "line": 66,
+      "fingerprint": "ca9325f4dca2f0504053042f807ea786e2084621174f8fbc60090a05e9cf1f0f",
+      "line": 209,
       "path": "src/research/apply.py",
       "targets": [
         "src/research/ask_proposal_artifact.py",
@@ -254,7 +254,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "838150d9c16157569781e284c0a098ea7fdc1e797a7fafcbe3796504c1a5cdc7",
+      "source_sha256": "99e4a30cec6da5bcdd680da640e2cb6e6f5bfe49c0668066592588ec6295a041",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

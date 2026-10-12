@@ -619,9 +619,9 @@
     {
       "disposition": "schema_field",
       "evidence": "Columns come from EmbeddingEvaluationReceipt.model_fields.",
-      "fingerprint": "0806a408b439e2298ce5b8f31d807f5937aba39e87d5119e52b8393053913f7c",
-      "line": 104,
-      "path": "src/search/embedding_evaluation_receipt.py",
+      "fingerprint": "66f4d5f3699de815932d257736e0a82ddf6043811ae96e9464eb01783b5ee85d",
+      "line": 145,
+      "path": "src/search/embedding_promotion.py",
       "targets": [
         "EmbeddingEvaluationReceipt.model_fields"
       ]
@@ -691,7 +691,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "838150d9c16157569781e284c0a098ea7fdc1e797a7fafcbe3796504c1a5cdc7",
+      "source_sha256": "99e4a30cec6da5bcdd680da640e2cb6e6f5bfe49c0668066592588ec6295a041",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

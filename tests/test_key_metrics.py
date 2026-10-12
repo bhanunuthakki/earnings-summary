@@ -22,7 +22,7 @@ from compute.key_metrics import (
     extract_for_ticker,
     suggest_key_metrics,
 )
-from pipeline.key_metrics import (
+from pipeline.explore_panel import (
     KeyMetricBubble,
     key_metric_bubbles,
     load_llm_picks,

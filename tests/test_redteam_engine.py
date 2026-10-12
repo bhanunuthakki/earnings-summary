@@ -15,7 +15,7 @@ import pytest
 
 from llm.cli import LLMBudgetExceeded
 from llm.structured import StructuredParseError
-from redteam import cross_book, engine, lenses, store
+from redteam import engine, lenses, store
 from redteam.models import RedTeamLLMItem
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -343,7 +343,7 @@ def test_dry_run_makes_zero_llm_calls(tmp_path: Path, monkeypatch: pytest.Monkey
         raise AssertionError("call_llm_structured must never be called in --dry-run")
 
     monkeypatch.setattr(lenses, "call_llm_structured", _boom)
-    monkeypatch.setattr(cross_book, "call_llm_structured", _boom)
+    monkeypatch.setattr(engine, "call_llm_structured", _boom)
 
     result = engine.run_red_team(
         repo_root=repo_root, db_path=db_path, month="2026-08", dry_run=True
@@ -373,7 +373,7 @@ def test_idempotency_skips_unless_forced(tmp_path: Path, monkeypatch: pytest.Mon
         return dict(_STUB_ITEM)
 
     monkeypatch.setattr(lenses, "call_llm_structured", _stub)
-    monkeypatch.setattr(cross_book, "call_llm_structured", _stub)
+    monkeypatch.setattr(engine, "call_llm_structured", _stub)
 
     first = engine.run_red_team(repo_root=repo_root, db_path=db_path, month="2026-08")
     assert not first.already_done
@@ -406,7 +406,7 @@ def test_transient_failure_defers_that_item_and_continues(
         return dict(_STUB_ITEM)
 
     monkeypatch.setattr(lenses, "call_llm_structured", _flaky)
-    monkeypatch.setattr(cross_book, "call_llm_structured", _stub_ok)
+    monkeypatch.setattr(engine, "call_llm_structured", _stub_ok)
 
     result = engine.run_red_team(repo_root=repo_root, db_path=db_path, month="2026-08")
 
@@ -443,7 +443,7 @@ def test_parse_failure_on_both_attempts_tallies_and_continues(
         raise StructuredParseError("bad json twice", raw_head="not json")
 
     monkeypatch.setattr(lenses, "call_llm_structured", _unparseable)
-    monkeypatch.setattr(cross_book, "call_llm_structured", _stub_ok)
+    monkeypatch.setattr(engine, "call_llm_structured", _stub_ok)
 
     result = engine.run_red_team(repo_root=repo_root, db_path=db_path, month="2026-08")
     assert result.tally.get("parse_failed", 0) == 1
@@ -468,7 +468,7 @@ def test_missing_thesis_json_is_skipped_not_fabricated(
     )
     db_path = _make_db(tmp_path)
     monkeypatch.setattr(lenses, "call_llm_structured", _stub_ok)
-    monkeypatch.setattr(cross_book, "call_llm_structured", _stub_ok)
+    monkeypatch.setattr(engine, "call_llm_structured", _stub_ok)
 
     result = engine.run_red_team(repo_root=repo_root, db_path=db_path, month="2026-08")
     assert result.tally.get("no_thesis", 0) == 1
@@ -507,22 +507,21 @@ def test_held_tickers_excludes_cash_likes_index_etfs_and_sub_floor_weights(
 
 
 def test_factor_block_prompt_none_when_no_clusters() -> None:
-    assert cross_book.factor_block_prompt(Path("."), clusters=[], weights={}) is None
+    assert engine.factor_block_prompt(Path("."), clusters=[], weights={}) is None
 
 
 def test_style_drift_prompt_none_when_no_usable_beta() -> None:
     assert (
-        cross_book.style_drift_prompt(legs=[("Value", "VTV-VUG", None)], strategy_summary="x")
-        is None
+        engine.style_drift_prompt(legs=[("Value", "VTV-VUG", None)], strategy_summary="x") is None
     )
 
 
 def test_human_capital_prompt_none_when_no_ai_linked_holding() -> None:
-    assert cross_book.human_capital_prompt(weights={"NU": 0.1, "MELI": 0.1}) is None
+    assert engine.human_capital_prompt(weights={"NU": 0.1, "MELI": 0.1}) is None
 
 
 def test_human_capital_prompt_fires_on_ai_linked_holding() -> None:
-    prompt = cross_book.human_capital_prompt(weights={"META": 0.1, "NU": 0.1})
+    prompt = engine.human_capital_prompt(weights={"META": 0.1, "NU": 0.1})
     assert prompt is not None
     assert "META" in prompt
 

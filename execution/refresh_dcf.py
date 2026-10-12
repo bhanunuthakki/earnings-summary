@@ -61,7 +61,6 @@ from db_paths import configured_db_path
 from dcf import assumptions_doc
 from dcf import equity_bridge as equity_bridge_mod
 from dcf import forecast_series as forecast_series_mod
-from dcf import live_price as live_price_mod
 from dcf import persist as persist_mod
 from dcf import redesign as redesign_mod
 from dcf import reverse as reverse_mod
@@ -71,6 +70,7 @@ from dcf.meli_inputs import RECIPE as MELI_INPUT_RECIPE
 from dcf.provenance import DcfInputProvenance, input_clock_summary
 from pipeline.db_writer_gate import hold_writer_gate
 from runtime.python_process import managed_python_prefix
+from sources import price as live_price_mod
 from sources import registry as source_calls_registry
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from ticker_validation import safe_ticker
