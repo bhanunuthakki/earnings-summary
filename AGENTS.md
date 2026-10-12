@@ -65,6 +65,10 @@ UI work uses the shared `frontend-quality` procedure. Registered controls and fa
 
 - Repo credential files: `.env`, `credentials.json`, `token.json` (global no-log/no-commit rules apply). Pass keys to scripts via environment variables, never CLI args; `src/log_redact.py` is the canonical redaction helper.
 
+## Agent delegation and review — repo scope note
+
+Use the global evidence and execution contract plus `procedures/agent-operations.md` for delegation and `procedures/judging.md` for J0-J3 review rigor. The repository does not redefine either policy.
+
 ## Application LLM authority
 
 The global fleet policy and usage index own ordinary membership-provider order and its environment variables. `src/llm/fleet_policy.py` resolves that policy for the application; it does not set a competing provider order. `LLM_MODELS` in `src/llm/cli.py` owns per-purpose model pins, `directives/model_eval_loop.md` owns qualification and promotion, and `directives/cheapest_model_routing.md` owns economic ordering. These local owners do not override fleet provider priority. Explicit Judge selection and independence remain separate at the authorities registered in the fleet usage index. Session delegation and review follow the global contract.
