@@ -36,7 +36,6 @@ REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES = (
             "execution/comments_server.py",
             "src/operations/models.py",
             "src/operations/host_runtime.py",
-            "src/operations/topology_observer.py",
             "src/operations/backup_observer.py",
             "src/operations/registry.py",
             "src/operations/review_bundle.py",

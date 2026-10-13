@@ -356,7 +356,7 @@ def record_dismiss_pass(
     return {"decision_id": result.decision_id, "created": result.created, "ticker": ticker}
 
 
-# The deterministic /discovery chat commands moved to ask.commands (the
+# The deterministic /discovery chat commands moved to ask.engine (the
 # unified ask engine intercepts them from BOTH chat surfaces); the REST
 # build routes share its buildable-status set via discovery.store.
 

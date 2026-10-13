@@ -41,7 +41,7 @@
 | `LEDGER_WORLDVIEW` | **off** (`worldview_panel.py:29`) | Worldview section inside Ledger panel: Tenets list, approval queue, tensions, "add a Tenet" box, "Distill from flagged musings" | returns `""` when off — Ledger tab must look unchanged, no gap |
 | `LEDGER_WORLDVIEW_ANCHOR` | **off** (`llm/anchors.py:543`) | Tenet-anchor injection into LLM prompts (Socratic, durable Ask context, workspace data, anchors) | prod has 0 Tenets → anchor inert even when on; verify no prompt bloat when empty |
 | `LEDGER_ARTIFACT_BRIEF` | **on** (`capture/poller.py:170`) | auto web-fetch + LLM brief when the intent tap stamps `engage_intent` on a captured URL/artifact musing | this is the kill switch for capture-time web/LLM spend; failure must never affect capture (fire-and-forget) |
-| `REVIEW_FULL_VERDICT` | **on** (`ask/commands.py:43`) | `/review <TICKER>` full verdict body | off → shortened output; verify Telegram copy both ways |
+| `REVIEW_FULL_VERDICT` | **on** (`src/ask/engine.py:161`) | `/review <TICKER>` full verdict body | off → shortened output; verify Telegram copy both ways |
 | `ANALYST_NOTES_SYNC` | **on**; `=0` disables (`comments.py:349`) | comment→analyst_notes mirror sync | off silently skips sync — FTS search of musings misses new comments |
 | `CAPTURE_TELEGRAM_TOKEN_FILE` | unset (`token_store.py`) | overrides bot-token path (default `data/secrets/telegram_bot_token`) | token file absent → poller exits 0 "not configured", not a crash |
 | `CAPTURE_WHISPER_MODEL` | default model (`transcribe.py:46`) | voice-note transcription model | ffmpeg auto-prepended to PATH from `C:\ffmpeg\bin` |

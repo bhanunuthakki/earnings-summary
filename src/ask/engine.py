@@ -4,8 +4,8 @@ Every production conversational turn (``POST /api/ask/stream``) goes through
 :func:`respond_turn`, which routes it to
 one of three paths and yields a single event-stream vocabulary:
 
-  command    — deterministic slash commands (``ask.commands``): no LLM,
-               instant reply. ``/discovery …``, ``/help``.
+  command    — deterministic slash commands (:func:`run_chat_command` in
+               this module): no LLM, instant reply. ``/discovery …``, ``/help``.
   data       — metric-shaped questions: NL → ViewSpec compile (fast model,
                budget-gated) → execute → rendered matrix/chart fragment.
                ``/view <q>`` forces this path; otherwise a failed compile

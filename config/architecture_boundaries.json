@@ -124,7 +124,6 @@
     "execution/extract_facts.py",
     "execution/extract_footnotes.py",
     "execution/extract_investor_decks.py",
-    "execution/extract_key_metrics.py",
     "execution/extract_kpis_from_ir.py",
     "execution/extract_kpis_from_summaries.py",
     "execution/extract_nvo_patent_timeline.py",
