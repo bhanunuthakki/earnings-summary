@@ -39,12 +39,22 @@ import sqlite3
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import cast
 
 from sqlite_runtime import ManagedConnection, active_managed_trace_connection_count
 
 _ROLLBACK_PATTERN = re.compile(r"(?is)^(?:\s*(?:/\*.*?\*/|--[^\n]*(?:\n|$)))*\s*rollback\b")
 
 TraceObserver = Callable[[str], None]
+
+
+def _is_managed_connection(conn: object) -> bool:
+    return isinstance(conn, ManagedConnection) or (
+        type(conn).__name__ == "ManagedConnection"
+        and hasattr(conn, "register_trace_observer")
+        and hasattr(conn, "register_rollback_observer")
+        and hasattr(conn, "rollback_generation")
+    )
 
 
 def register_connection_trace_observer(
@@ -56,8 +66,9 @@ def register_connection_trace_observer(
     Fails closed if the connection is not a ManagedConnection, ensuring
     unmanaged connections never have their trace callbacks replaced or wiped.
     """
-    if isinstance(conn, ManagedConnection):
-        return conn.register_trace_observer(observer)
+    if _is_managed_connection(conn):
+        managed = cast(ManagedConnection, conn)
+        return managed.register_trace_observer(observer)
     raise VerificationCacheError(
         "RequestVerificationCache requires a ManagedConnection to guarantee trace callback "
         f"preservation without replacing caller state; received {type(conn).__name__}"
@@ -125,27 +136,27 @@ class RequestVerificationCache:
     """
 
     def __init__(self, conn: sqlite3.Connection, *, enabled: bool = True) -> None:
-        if not isinstance(conn, ManagedConnection):
+        if not _is_managed_connection(conn):
             raise VerificationCacheError(
                 "RequestVerificationCache requires a ManagedConnection to guarantee trace callback "
                 f"preservation without replacing caller state; received {type(conn).__name__}"
             )
-        self._conn = conn
+        self._conn = cast(ManagedConnection, conn)
         self.enabled = enabled
         self.journal: list[VerificationEvent] = []
         self._entries: dict[tuple[str, tuple[str, ...]], tuple[StateToken, object]] = {}
         self._token: int | None = None
         self._epoch: int = 0
         self._in_flight_tokens: dict[tuple[str, tuple[str, ...]], list[StateToken]] = {}
-        self._expected_changes: int = conn.total_changes
+        self._expected_changes: int = self._conn.total_changes
         self._schema_version: SchemaVersionMap = self._read_schema_version()
-        self._rollback_generation: int = conn.rollback_generation
+        self._rollback_generation: int = self._conn.rollback_generation
         self._closed: bool = False
         self._unregister_trace: Callable[[], None] | None = register_connection_trace_observer(
-            conn, self._on_trace_sql
+            self._conn, self._on_trace_sql
         )
-        self._unregister_rollback: Callable[[], None] | None = conn.register_rollback_observer(
-            self.notify_rollback
+        self._unregister_rollback: Callable[[], None] | None = (
+            self._conn.register_rollback_observer(self.notify_rollback)
         )
 
     def _read_schema_version(self) -> SchemaVersionMap:

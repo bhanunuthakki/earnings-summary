@@ -207,7 +207,8 @@ def install_managed_connection_factory() -> None:
         sqlite3.connect = _managed_connect
 
 
-install_managed_connection_factory()
+if __name__ != "<run_path>":
+    install_managed_connection_factory()
 
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 _WAL_TRANSITION_RETRY_INTERVAL_S = 0.01
