@@ -2478,17 +2478,37 @@ def test_direct_base_delegation_cursor_factory_is_rejected() -> None:
 
     with pytest.raises(
         TypeError,
-        match=r"ManagedConnection cursor factory CooperativeChild overrides executescript in CooperativeChild without subclassing ManagedCursor",
+        match=r"ManagedConnection cursor factory CooperativeChild has unmanaged execution override for executescript in CooperativeChild\. Overridden execution methods must belong to ManagedCursor subclasses\.",
     ):
         conn.cursor(factory=CooperativeChild)
 
     with pytest.raises(
         TypeError,
-        match=r"ManagedConnection cursor factory DirectParent overrides executescript in DirectParent without subclassing ManagedCursor",
+        match=r"ManagedConnection cursor factory DirectParent has unmanaged execution override for executescript in DirectParent\. Overridden execution methods must belong to ManagedCursor subclasses\.",
     ):
         conn.cursor(factory=DirectParent)
 
-    # 2. Override that references super while executing through direct base call
+    # 2. Mixed-inheritance: unmanaged ancestor supplying override before ManagedCursor in MRO
+    class ManagedChild(DirectParent, ManagedCursor):
+        pass
+
+    with pytest.raises(
+        TypeError,
+        match=r"ManagedConnection cursor factory ManagedChild has unmanaged execution override for executescript in DirectParent\. Overridden execution methods must belong to ManagedCursor subclasses\.",
+    ):
+        conn.cursor(factory=ManagedChild)
+
+    # 3. Pure unmanaged child that merely inherits an override without defining one itself
+    class PureChild(DirectParent):
+        pass
+
+    with pytest.raises(
+        TypeError,
+        match=r"ManagedConnection cursor factory PureChild has unmanaged execution override for executescript in DirectParent\. Overridden execution methods must belong to ManagedCursor subclasses\.",
+    ):
+        conn.cursor(factory=PureChild)
+
+    # 4. Override that references super while executing through direct base call
     class SuperDirectCursor(sqlite3.Cursor):
         def executescript(self, script: str) -> sqlite3.Cursor:
             if False:
@@ -2500,31 +2520,49 @@ def test_direct_base_delegation_cursor_factory_is_rejected() -> None:
 
     with pytest.raises(
         TypeError,
-        match=r"ManagedConnection cursor factory SuperDirectCursor overrides executescript in SuperDirectCursor without subclassing ManagedCursor",
+        match=r"ManagedConnection cursor factory SuperDirectCursor has unmanaged execution override for executescript in SuperDirectCursor\. Overridden execution methods must belong to ManagedCursor subclasses\.",
     ):
         conn.cursor(factory=SuperDirectCursor)
 
-    # 3. Direct execute override on sqlite3.Cursor subclass is rejected
+    # 5. Direct execute override on sqlite3.Cursor subclass is rejected
     class DirectExecuteCursor(sqlite3.Cursor):
         def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
             return sqlite3.Cursor.execute(self, *args, **kwargs)
 
     with pytest.raises(
         TypeError,
-        match=r"ManagedConnection cursor factory DirectExecuteCursor overrides execute in DirectExecuteCursor without subclassing ManagedCursor",
+        match=r"ManagedConnection cursor factory DirectExecuteCursor has unmanaged execution override for execute in DirectExecuteCursor\. Overridden execution methods must belong to ManagedCursor subclasses\.",
     ):
         conn.cursor(factory=DirectExecuteCursor)
 
-    # 4. Direct executemany override on sqlite3.Cursor subclass is rejected
+    # 6. Direct executemany override on sqlite3.Cursor subclass is rejected
     class DirectExecuteManyCursor(sqlite3.Cursor):
         def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
             return sqlite3.Cursor.executemany(self, *args, **kwargs)
 
     with pytest.raises(
         TypeError,
-        match=r"ManagedConnection cursor factory DirectExecuteManyCursor overrides executemany in DirectExecuteManyCursor without subclassing ManagedCursor",
+        match=r"ManagedConnection cursor factory DirectExecuteManyCursor has unmanaged execution override for executemany in DirectExecuteManyCursor\. Overridden execution methods must belong to ManagedCursor subclasses\.",
     ):
         conn.cursor(factory=DirectExecuteManyCursor)
+
+    # 7. Custom cursor without execution overrides is accepted and dynamically wrapped
+    class CustomHelperCursor(sqlite3.Cursor):
+        def custom_helper(self) -> int:
+            return 42
+
+    cur = conn.cursor(factory=CustomHelperCursor)
+    assert isinstance(cur, ManagedCursor)
+    assert isinstance(cur, CustomHelperCursor)
+    assert cur.custom_helper() == 42
+
+    # 8. Legitimate ManagedCursor subclass is accepted directly
+    class ProperManagedCursor(ManagedCursor):
+        pass
+
+    proper_cur = conn.cursor(factory=ProperManagedCursor)
+    assert isinstance(proper_cur, ProperManagedCursor)
+    assert isinstance(proper_cur, ManagedCursor)
 
     conn.close()
 

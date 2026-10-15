@@ -111,18 +111,19 @@ def _resolve_managed_cursor_factory(factory: Any) -> Any:
     if factory is sqlite3.Cursor or factory is ManagedCursor or factory is None:
         return ManagedCursor
     if isinstance(factory, type) and issubclass(factory, sqlite3.Cursor):
-        if issubclass(factory, ManagedCursor):
-            return factory
         for cls in factory.__mro__:
             if cls is sqlite3.Cursor or cls is object:
                 break
+            if cls is ManagedCursor:
+                continue
             for method_name in ("execute", "executemany", "executescript"):
-                if method_name in cls.__dict__:
+                if method_name in cls.__dict__ and not issubclass(cls, ManagedCursor):
                     raise TypeError(
-                        f"ManagedConnection cursor factory {factory.__name__} overrides {method_name} "
-                        f"in {cls.__name__} without subclassing ManagedCursor. Cursor factories overriding "
-                        "execution methods must subclass ManagedCursor directly."
+                        f"ManagedConnection cursor factory {factory.__name__} has unmanaged execution override "
+                        f"for {method_name} in {cls.__name__}. Overridden execution methods must belong to ManagedCursor subclasses."
                     )
+        if issubclass(factory, ManagedCursor):
+            return factory
         cached = _MANAGED_CURSOR_FACTORY_CACHE.get(factory)
         if cached is None:
             bases: tuple[Any, ...] = (ManagedCursor, factory)
