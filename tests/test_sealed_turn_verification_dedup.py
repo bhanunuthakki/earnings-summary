@@ -2254,6 +2254,144 @@ def test_unsupported_cursor_factory_raises_type_error() -> None:
     conn.close()
 
 
+def test_implicit_rollback_on_error_handling_custom_cursor_execute_invalidates_cache() -> None:
+    """Custom cursor that handles SQLite errors internally on execute still invalidates cache on implicit rollback."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    class TolerantCursor(sqlite3.Cursor):
+        def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+            try:
+                return super().execute(*args, **kwargs)
+            except sqlite3.IntegrityError:
+                return self
+
+    cur = conn.cursor(factory=TolerantCursor)
+    assert isinstance(cur, TolerantCursor)
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_tolerant_execute",)
+
+    with cache.authorized_write():
+        conn.execute("INSERT INTO t VALUES (1, 'row1')")
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admitted_row1")
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    # Tolerant cursor executes duplicate INSERT OR ROLLBACK, swallowing the IntegrityError
+    res = cur.execute("INSERT OR ROLLBACK INTO t VALUES (1, 'dup')")
+    assert res is cur
+
+    # Transaction rolled back, row 1 was removed
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 0
+    # Cache MUST be invalidated despite the error being handled internally!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_implicit_rollback_on_error_handling_custom_cursor_executemany_invalidates_cache() -> None:
+    """Custom cursor that handles SQLite errors internally on executemany still invalidates cache on implicit rollback."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    class TolerantManyCursor(sqlite3.Cursor):
+        def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+            try:
+                return super().executemany(*args, **kwargs)
+            except sqlite3.IntegrityError:
+                return self
+
+    cur = conn.cursor(factory=TolerantManyCursor)
+    assert isinstance(cur, TolerantManyCursor)
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_tolerant_many",)
+
+    with cache.authorized_write():
+        conn.execute("INSERT INTO t VALUES (1, 'row1')")
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admitted_row1")
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    res = cur.executemany("INSERT OR ROLLBACK INTO t VALUES (?, ?)", [(1, "dup")])
+    assert res is cur
+
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 0
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_implicit_rollback_on_error_handling_custom_cursor_executescript_invalidates_cache() -> (
+    None
+):
+    """Custom cursor that handles SQLite errors internally on executescript still invalidates cache on implicit rollback."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    class TolerantScriptCursor(sqlite3.Cursor):
+        def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+            try:
+                return super().executescript(*args, **kwargs)
+            except sqlite3.IntegrityError:
+                return self
+
+    cur = conn.cursor(factory=TolerantScriptCursor)
+    assert isinstance(cur, TolerantScriptCursor)
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_tolerant_script",)
+
+    with cache.authorized_write():
+        conn.execute("INSERT INTO t VALUES (1, 'row1')")
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admitted_row1")
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    res = cur.executescript("INSERT OR ROLLBACK INTO t VALUES (1, 'dup');")
+    assert res is cur
+
+    # Cache MUST be invalidated
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_explicit_commit_on_managed_cursor_does_not_notify_rollback() -> None:
+    """Explicit COMMIT statements do not trigger rollback notifications on ManagedCursor."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    rollback_called = False
+
+    def on_rollback() -> None:
+        nonlocal rollback_called
+        rollback_called = True
+
+    managed_conn = cast(ManagedConnection, conn)
+    unregister = managed_conn.register_rollback_observer(on_rollback)
+
+    cur = conn.cursor()
+    conn.execute("BEGIN")
+    conn.execute("INSERT INTO t VALUES (1, 'row1')")
+    cur.execute("COMMIT")
+
+    assert not rollback_called
+    unregister()
+    conn.close()
+
+
 def test_connection_trace_preserves_existing_observer_and_nested_caches() -> None:
     """Existing trace observer is preserved across cache creation, nested caches, and removal."""
     conn = sqlite3.connect(":memory:")

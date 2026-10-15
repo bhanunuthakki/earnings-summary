@@ -30,48 +30,80 @@ _ACTIVE_OBSERVED_CONNECTIONS: weakref.WeakSet[ManagedConnection] = weakref.WeakS
 _SQL_PREFIX = r"(?:[\s;\ufeff]|/\*.*?\*/|--[^\n]*(?:\n|$))*"
 ROLLBACK_PATTERN = re.compile(rf"(?is)^{_SQL_PREFIX}rollback\b")
 ATTACH_OR_DETACH_PATTERN = re.compile(rf"(?is)^{_SQL_PREFIX}(?:attach|detach)\b")
+COMMIT_PATTERN = re.compile(rf"(?is)^{_SQL_PREFIX}(?:commit|end|release)\b")
 _ROLLBACK_PATTERN = ROLLBACK_PATTERN
 _ATTACH_OR_DETACH_PATTERN = ATTACH_OR_DETACH_PATTERN
+_COMMIT_PATTERN = COMMIT_PATTERN
 
 
 class ManagedCursor(sqlite3.Cursor):
     """Cursor that reports automatic transaction rollbacks to its parent connection."""
 
+    def _check_implicit_rollback(
+        self,
+        was_in_tx: bool,
+        exc: BaseException | None,
+        statement: Any,
+    ) -> None:
+        conn = self.connection
+        if (
+            was_in_tx
+            and not getattr(conn, "in_transaction", False)
+            and (
+                exc is not None
+                or not (isinstance(statement, str) and _COMMIT_PATTERN.match(statement))
+            )
+        ):
+            notify = getattr(conn, "notify_rollback", None)
+            if callable(notify):
+                notify()
+
     def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
         conn = self.connection
         was_in_tx = getattr(conn, "in_transaction", False)
+        exc: BaseException | None = None
+        statement = (
+            args[0]
+            if args
+            else kwargs.get("sql") or kwargs.get("operation") or kwargs.get("statement")
+        )
         try:
             return super().execute(*args, **kwargs)
-        except Exception:
-            if was_in_tx and not getattr(conn, "in_transaction", False):
-                notify = getattr(conn, "notify_rollback", None)
-                if callable(notify):
-                    notify()
+        except BaseException as e:
+            exc = e
             raise
+        finally:
+            self._check_implicit_rollback(was_in_tx, exc, statement)
 
     def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
         conn = self.connection
         was_in_tx = getattr(conn, "in_transaction", False)
+        exc: BaseException | None = None
+        statement = (
+            args[0]
+            if args
+            else kwargs.get("sql") or kwargs.get("operation") or kwargs.get("statement")
+        )
         try:
             return super().executemany(*args, **kwargs)
-        except Exception:
-            if was_in_tx and not getattr(conn, "in_transaction", False):
-                notify = getattr(conn, "notify_rollback", None)
-                if callable(notify):
-                    notify()
+        except BaseException as e:
+            exc = e
             raise
+        finally:
+            self._check_implicit_rollback(was_in_tx, exc, statement)
 
     def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
         conn = self.connection
         was_in_tx = getattr(conn, "in_transaction", False)
+        exc: BaseException | None = None
+        statement = args[0] if args else kwargs.get("sql_script") or kwargs.get("script")
         try:
             return super().executescript(*args, **kwargs)
-        except Exception:
-            if was_in_tx and not getattr(conn, "in_transaction", False):
-                notify = getattr(conn, "notify_rollback", None)
-                if callable(notify):
-                    notify()
+        except BaseException as e:
+            exc = e
             raise
+        finally:
+            self._check_implicit_rollback(was_in_tx, exc, statement)
 
 
 _MANAGED_CURSOR_FACTORY_CACHE: dict[type[Any], type[Any]] = {}
@@ -541,6 +573,7 @@ def _apply_writer_policy(conn: sqlite3.Connection, *, require_wal: bool = True) 
 
 __all__ = [
     "ATTACH_OR_DETACH_PATTERN",
+    "COMMIT_PATTERN",
     "ROLLBACK_PATTERN",
     "SQLITE_BUSY_TIMEOUT_MS",
     "ManagedConnection",
