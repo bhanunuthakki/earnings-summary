@@ -2388,6 +2388,10 @@ def test_implicit_rollback_on_error_handling_custom_cursor_executescript_invalid
     cache.record("test_kind", coord, "admitted_row1")
     assert cache.verified("test_kind", coord) == "admitted_row1"
 
+    rollbacks: list[int] = []
+    managed_conn = cast(ManagedConnection, conn)
+    unregister = managed_conn.register_rollback_observer(lambda: rollbacks.append(1))
+
     changes_before = conn.total_changes
     # Script has explicit BEGIN and duplicate INSERT OR ROLLBACK that rolls back
     res = cur.executescript("BEGIN; INSERT OR ROLLBACK INTO t VALUES (1, 'dup');")
@@ -2395,11 +2399,15 @@ def test_implicit_rollback_on_error_handling_custom_cursor_executescript_invalid
 
     # Assert total_changes did NOT change: proves cache invalidation cannot pass solely from total_changes!
     assert conn.total_changes == changes_before
+    # Explicit transaction-state and notification assertions
+    assert conn.in_transaction is False
+    assert len(rollbacks) == 1
     # Row 1 still exists, duplicate was rejected
     assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
     # Cache MUST be invalidated by the rollback notification intercepted by _InnerManagedCursor!
     assert cache.verified("test_kind", coord) is NOT_VERIFIED
 
+    unregister()
     cache.close()
     conn.close()
 
@@ -2423,6 +2431,10 @@ def test_implicit_rollback_on_tolerant_script_rolls_back_partial_inserts_and_inv
     cur = conn.cursor(factory=TolerantScriptCursor)
     assert isinstance(cur, TolerantScriptCursor)
 
+    rollbacks: list[int] = []
+    managed_conn = cast(ManagedConnection, conn)
+    unregister = managed_conn.register_rollback_observer(lambda: rollbacks.append(1))
+
     cache = RequestVerificationCache(conn)
     coord = ("coord_tolerant_script_partial",)
     cache.record("test_kind", coord, "admitted_row1")
@@ -2434,13 +2446,60 @@ def test_implicit_rollback_on_tolerant_script_rolls_back_partial_inserts_and_inv
     )
     assert res is cur
 
+    # Explicit transaction-state and notification assertions
+    assert conn.in_transaction is False
+    assert len(rollbacks) == 1
     # Row 2 was rolled back and removed from the table!
     assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
     assert conn.execute("SELECT id FROM t").fetchall() == [(1,)]
     # Cache MUST be invalidated
     assert cache.verified("test_kind", coord) is NOT_VERIFIED
 
+    unregister()
     cache.close()
+    conn.close()
+
+
+def test_direct_base_delegation_cursor_factory_is_rejected() -> None:
+    """Cursor factory overriding execution methods with direct base calls without cooperative super() is rejected."""
+    conn = sqlite3.connect(":memory:")
+
+    # 1. Direct executescript delegation is rejected
+    class TolerantDirectScriptCursor(sqlite3.Cursor):
+        def executescript(self, script: str) -> sqlite3.Cursor:
+            try:
+                return sqlite3.Cursor.executescript(self, script)
+            except sqlite3.IntegrityError:
+                return self
+
+    with pytest.raises(
+        TypeError,
+        match=r"ManagedConnection cursor factory TolerantDirectScriptCursor overrides executescript without cooperative super\(\) delegation",
+    ):
+        conn.cursor(factory=TolerantDirectScriptCursor)
+
+    # 2. Direct execute delegation is rejected
+    class DirectExecuteCursor(sqlite3.Cursor):
+        def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+            return sqlite3.Cursor.execute(self, *args, **kwargs)
+
+    with pytest.raises(
+        TypeError,
+        match=r"ManagedConnection cursor factory DirectExecuteCursor overrides execute without cooperative super\(\) delegation",
+    ):
+        conn.cursor(factory=DirectExecuteCursor)
+
+    # 3. Direct executemany delegation is rejected
+    class DirectExecuteManyCursor(sqlite3.Cursor):
+        def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+            return sqlite3.Cursor.executemany(self, *args, **kwargs)
+
+    with pytest.raises(
+        TypeError,
+        match=r"ManagedConnection cursor factory DirectExecuteManyCursor overrides executemany without cooperative super\(\) delegation",
+    ):
+        conn.cursor(factory=DirectExecuteManyCursor)
+
     conn.close()
 
 
