@@ -74,6 +74,26 @@ class ManagedCursor(sqlite3.Cursor):
             raise
 
 
+_MANAGED_CURSOR_FACTORY_CACHE: dict[type[Any], type[Any]] = {}
+
+
+def _resolve_managed_cursor_factory(factory: Any) -> Any:
+    """Ensure cursor factory inherits ManagedCursor so automatic rollbacks notify observers."""
+    if factory is sqlite3.Cursor or factory is ManagedCursor or factory is None:
+        return ManagedCursor
+    if isinstance(factory, type) and issubclass(factory, sqlite3.Cursor):
+        if issubclass(factory, ManagedCursor):
+            return factory
+        cached = _MANAGED_CURSOR_FACTORY_CACHE.get(factory)
+        if cached is None:
+            cached = type(f"Managed_{factory.__name__}", (ManagedCursor, factory), {})
+            _MANAGED_CURSOR_FACTORY_CACHE[factory] = cached
+        return cached
+    raise TypeError(
+        f"ManagedConnection requires cursor factory subclassing sqlite3.Cursor; received {factory!r}"
+    )
+
+
 class ManagedConnection(sqlite3.Connection):
     """Connection providing multi-observer trace dispatching without overwriting user callbacks."""
 
@@ -172,9 +192,8 @@ class ManagedConnection(sqlite3.Connection):
         return cur.executescript(*args, **kwargs)
 
     def cursor(self, factory: Any = ManagedCursor) -> sqlite3.Cursor:
-        if factory is sqlite3.Cursor:
-            factory = ManagedCursor
-        return super().cursor(factory=factory)
+        resolved_factory = _resolve_managed_cursor_factory(factory)
+        return super().cursor(factory=resolved_factory)
 
     def close(self) -> None:
         _ACTIVE_OBSERVED_CONNECTIONS.discard(self)

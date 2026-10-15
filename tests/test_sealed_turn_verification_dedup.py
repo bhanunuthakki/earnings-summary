@@ -30,7 +30,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -2164,6 +2164,94 @@ def test_attached_database_with_normal_embedded_quotes_invalidates_cache(
     cache.close()
     conn.close()
     conn_ext.close()
+
+
+def test_implicit_rollback_on_custom_cursor_created_before_cache_invalidates() -> None:
+    """Custom cursor created BEFORE cache registration detects automatic rollback and invalidates cache."""
+    conn = sqlite3.connect(":memory:")
+
+    class CustomCursorBefore(sqlite3.Cursor):
+        def helper_tag(self) -> str:
+            return "before"
+
+    # Cursor created BEFORE cache registration
+    cur = conn.cursor(factory=CustomCursorBefore)
+    assert isinstance(cur, CustomCursorBefore)
+    assert cur.helper_tag() == "before"
+
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_custom_cursor_before",)
+
+    # Insert row inside authorized write leaving transaction open
+    with cache.authorized_write():
+        conn.execute("INSERT INTO t VALUES (1, 'row1')")
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admitted_row1")
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    # Execute duplicate INSERT OR ROLLBACK using the custom cursor
+    with pytest.raises(sqlite3.IntegrityError):
+        cur.execute("INSERT OR ROLLBACK INTO t VALUES (1, 'dup')")
+
+    # Transaction rolled back, row 1 was removed
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 0
+    # Cache MUST be invalidated by the implicit rollback on custom cursor!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_implicit_rollback_on_custom_cursor_created_after_cache_invalidates() -> None:
+    """Custom cursor created AFTER cache registration detects automatic rollback and invalidates cache."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_custom_cursor_after",)
+
+    # Insert row inside authorized write leaving transaction open
+    with cache.authorized_write():
+        conn.execute("INSERT INTO t VALUES (1, 'row1')")
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admitted_row1")
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    class CustomCursorAfter(sqlite3.Cursor):
+        def helper_tag(self) -> str:
+            return "after"
+
+    # Cursor created AFTER cache registration
+    cur = conn.cursor(factory=CustomCursorAfter)
+    assert isinstance(cur, CustomCursorAfter)
+    assert cur.helper_tag() == "after"
+
+    with pytest.raises(sqlite3.IntegrityError):
+        cur.execute("INSERT OR ROLLBACK INTO t VALUES (1, 'dup')")
+
+    # Transaction rolled back, row 1 was removed
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 0
+    # Cache MUST be invalidated
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_unsupported_cursor_factory_raises_type_error() -> None:
+    """Non-Cursor-subclass factory is rejected with TypeError."""
+    conn = sqlite3.connect(":memory:")
+    with pytest.raises(
+        TypeError, match=r"ManagedConnection requires cursor factory subclassing sqlite3\.Cursor"
+    ):
+        conn.cursor(factory=cast(Any, object))
+    conn.close()
 
 
 def test_connection_trace_preserves_existing_observer_and_nested_caches() -> None:
