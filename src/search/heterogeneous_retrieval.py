@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import sqlite3
-from collections.abc import Generator, Sequence
-from contextlib import contextmanager
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -13,7 +14,10 @@ from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from provenance.population_completeness import PopulationCompletenessLedger
+from provenance.population_completeness import (
+    PopulationCompletenessLedger,
+    PopulationCutoverReceipt,
+)
 from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
 from provenance.search_index_lineage import load_projection_seal
 from provenance.verifier_identity import verifier_source_artifact_sha256
@@ -35,7 +39,21 @@ from search.exact_semantic import (
     backend_receipt_json,
     evidence_from_json,
 )
+from search.lexical_query import (
+    LexicalQueryPlan,
+    kpi_alias_expansions,
+    normalize_alias,
+    plan_lexical_query,
+)
 from search.local_vector import LanceVectorIndex, LocalVectorCapabilityError
+from search.request_verification import (
+    NOT_VERIFIED,
+    POPULATION_RECEIPT,
+    RESEARCH_COORDINATES,
+    RETRIEVAL_TRACE,
+    SEMANTIC_RUNTIME_INSTANCE,
+    RequestVerificationCache,
+)
 
 MAX_CANDIDATES = 1_000
 _RESEARCH_AUDITOR_NAME = "strict-research-snapshot-admission-auditor"
@@ -337,9 +355,12 @@ def retrieve_heterogeneous(
     *,
     semantic_runtimes: Sequence[ExactSemanticRuntime] = (),
     local_vector_runtime: LocalVectorRuntimeConfig | None = None,
+    verification: RequestVerificationCache | None = None,
 ) -> HeterogeneousRetrievalReceipt:
     """Retrieve bounded candidates and durably seal the full investor-grade trace."""
 
+    if verification is not None:
+        verification.ensure_bound(conn)
     query_json = canonical_json(
         {
             "query_text": request.query_text,
@@ -378,11 +399,21 @@ def retrieve_heterogeneous(
             request.trace_id,
             semantic_runtimes=semantic_runtimes,
             local_vector_runtime=local_vector_runtime,
+            verification=verification,
         )
-    commitments = _verify_research_coordinates(conn, request)
-    candidates, semantic_receipts = _collect_candidates(
-        conn, request, semantic_runtimes, local_vector_runtime
-    )
+    commitments = _request_research_coordinates(conn, request, verification)
+    if verification is None:
+        candidates, semantic_receipts = _collect_candidates(
+            conn, request, semantic_runtimes, local_vector_runtime
+        )
+    else:
+        candidates, semantic_receipts = _collect_candidates(
+            conn,
+            request,
+            semantic_runtimes,
+            local_vector_runtime,
+            verification=verification,
+        )
     narrative_json = canonical_json(commitments["narrative"])
     semantic_json = canonical_json(semantic_receipts)
     commitments["semantic_receipts_sha256"] = digest_text(semantic_json)
@@ -410,20 +441,22 @@ def retrieve_heterogeneous(
         *_request_population_db_values(request, population_columns),
     )
     header_columns = _HEADER_COLUMNS + population_columns
-    with _savepoint(conn, "heterogeneous_retrieval_trace"):
-        conn.execute(
-            "INSERT INTO heterogeneous_retrieval_trace_headers "  # nosec B608 -- trusted internal SQL shape; values remain bound
-            f"({','.join(header_columns)}) VALUES "
-            f"({','.join('?' for _ in header_columns)})",
-            header_values,
-        )
-        ranked = _rank_candidates(request, candidates)
-        _write_trace(conn, request, ranked, commitments)
+    with _savepoint(conn, "heterogeneous_retrieval_trace", verification=verification):
+        with verification.authorized_write() if verification is not None else nullcontext():
+            conn.execute(
+                "INSERT INTO heterogeneous_retrieval_trace_headers "  # nosec B608 -- trusted internal SQL shape; values remain bound
+                f"({','.join(header_columns)}) VALUES "
+                f"({','.join('?' for _ in header_columns)})",
+                header_values,
+            )
+            ranked = _rank_candidates(request, candidates)
+            _write_trace(conn, request, ranked, commitments)
         return verify_heterogeneous_retrieval_trace(
             conn,
             request.trace_id,
             semantic_runtimes=semantic_runtimes,
             local_vector_runtime=local_vector_runtime,
+            verification=verification,
         )
 
 
@@ -433,9 +466,51 @@ def verify_heterogeneous_retrieval_trace(
     *,
     semantic_runtimes: Sequence[ExactSemanticRuntime] = (),
     local_vector_runtime: LocalVectorRuntimeConfig | None = None,
+    verification: RequestVerificationCache | None = None,
 ) -> HeterogeneousRetrievalReceipt:
-    """Public no-callback verifier for a persisted retrieval trace."""
+    """Public no-callback verifier for a persisted retrieval trace.
 
+    With an in-request verification cache and no injected semantic runtimes,
+    the full trace verification runs at most once per trace per request; the
+    retrieval write, plan execution, and evidence load reuse that verified
+    receipt, bounded by the connection's ``PRAGMA data_version`` token."""
+
+    if verification is None or semantic_runtimes:
+        return _derive_trace_verification(
+            conn,
+            trace_id,
+            semantic_runtimes=semantic_runtimes,
+            local_vector_runtime=local_vector_runtime,
+            verification=verification,
+        )
+    verification.ensure_bound(conn)
+    coordinate = (
+        trace_id,
+        "environment" if local_vector_runtime is None else str(local_vector_runtime.index_root),
+        "" if local_vector_runtime is None else str(local_vector_runtime.runtime_root),
+    )
+    memoized = verification.verified(RETRIEVAL_TRACE, coordinate)
+    if memoized is not NOT_VERIFIED:
+        return cast(HeterogeneousRetrievalReceipt, memoized).model_copy(deep=True)
+    receipt = _derive_trace_verification(
+        conn,
+        trace_id,
+        semantic_runtimes=semantic_runtimes,
+        local_vector_runtime=local_vector_runtime,
+        verification=verification,
+    )
+    verification.record(RETRIEVAL_TRACE, coordinate, receipt.model_copy(deep=True))
+    return receipt.model_copy(deep=True)
+
+
+def _derive_trace_verification(
+    conn: sqlite3.Connection,
+    trace_id: str,
+    *,
+    semantic_runtimes: Sequence[ExactSemanticRuntime],
+    local_vector_runtime: LocalVectorRuntimeConfig | None,
+    verification: RequestVerificationCache | None,
+) -> HeterogeneousRetrievalReceipt:
     header = _row(
         conn,
         "SELECT * FROM heterogeneous_retrieval_trace_headers WHERE trace_id=?",
@@ -477,8 +552,8 @@ def verify_heterogeneous_retrieval_trace(
     )
     if canonical_time(research_cutoff) != canonical_time(request.cutoff_at):
         raise HeterogeneousRetrievalError("retrieval_trace_cutoff_mismatch", trace_id=trace_id)
-    _verify_trace_population_cutover(conn, request)
-    commitments = _verify_research_coordinates(conn, request)
+    _verify_trace_population_cutover(conn, request, verification)
+    commitments = _request_research_coordinates(conn, request, verification)
     narrative_json = canonical_json(commitments["narrative"])
     semantic_receipts = _json_array(header["semantic_receipts_json"])
     lane_limit = max(1, request.candidate_limit // max(1, len(request.narrative_bundles) + 1))
@@ -528,6 +603,7 @@ def verify_heterogeneous_retrieval_trace(
             exact_row_cap=evidence.backend.exact_row_cap,
             trace_id=trace_id,
             local_vector_runtime=local_vector_runtime,
+            verification=verification,
         )
         _require_recomputable_semantic_receipt(
             receipt,
@@ -537,6 +613,7 @@ def verify_heterogeneous_retrieval_trace(
             limit=lane_limit,
             trace_id=trace_id,
             runtime=runtime,
+            verification=verification,
         )
         for candidate in receipt.candidates:
             semantic_expected[(bundle.corpus_manifest_id, candidate.chunk_id)] = (
@@ -609,6 +686,7 @@ def verify_heterogeneous_retrieval_trace(
             request,
             candidate,
             semantic_expected=semantic_expected,
+            verification=verification,
         )
         candidate_jsons.append(payload)
     results = _rows(
@@ -690,8 +768,53 @@ def verify_heterogeneous_retrieval_trace(
     )
 
 
+def _request_research_coordinates(
+    conn: sqlite3.Connection,
+    request: HeterogeneousRetrievalRequest,
+    verification: RequestVerificationCache | None,
+) -> dict[str, object]:
+    # Uncached callers keep the two-argument call shape that existing
+    # substitutes of ``_verify_research_coordinates`` are written against.
+    if verification is None:
+        return _verify_research_coordinates(conn, request)
+    return _verify_research_coordinates(conn, request, verification=verification)
+
+
 def _verify_research_coordinates(
-    conn: sqlite3.Connection, request: HeterogeneousRetrievalRequest
+    conn: sqlite3.Connection,
+    request: HeterogeneousRetrievalRequest,
+    verification: RequestVerificationCache | None = None,
+) -> dict[str, object]:
+    """Verify the research snapshot + projection coordinates bound to a request.
+
+    The derivation runs at most once per immutable coordinate set per request;
+    later verifications inside the same request reuse the memoized
+    commitments, bounded by the connection's ``PRAGMA data_version`` token."""
+
+    coordinate = (
+        request.research_snapshot_id,
+        request.fact_generation_id,
+        canonical_time(request.cutoff_at),
+        digest_text(
+            canonical_json([bundle.model_dump(mode="json") for bundle in request.narrative_bundles])
+        ),
+        str(request.filters.reporting_entity_id),
+    )
+    if verification is not None:
+        verification.ensure_bound(conn)
+        memoized = verification.verified(RESEARCH_COORDINATES, coordinate)
+        if memoized is not NOT_VERIFIED:
+            return copy.deepcopy(cast(dict[str, object], memoized))
+    commitments = _derive_research_coordinates(conn, request, verification)
+    if verification is not None:
+        verification.record(RESEARCH_COORDINATES, coordinate, commitments)
+    return commitments
+
+
+def _derive_research_coordinates(
+    conn: sqlite3.Connection,
+    request: HeterogeneousRetrievalRequest,
+    verification: RequestVerificationCache | None,
 ) -> dict[str, object]:
     _admit_research_snapshot_for_read(
         conn, request.research_snapshot_id, cutoff_at=request.cutoff_at
@@ -754,7 +877,9 @@ def _verify_research_coordinates(
             "retrieval_reporting_entity_outside_research_universe",
             trace_id=request.trace_id,
         )
-    verified_generation = admit_canonical_projection_for_read(conn, request.fact_generation_id)
+    verified_generation = admit_canonical_projection_for_read(
+        conn, request.fact_generation_id, verification
+    )
     members = _rows(
         conn,
         "SELECT requested_lane,reference_table,reference_id,"
@@ -942,16 +1067,49 @@ def _admit_research_snapshot_for_read(
         raise HeterogeneousRetrievalError("research_snapshot_bounded_admission_tampered")
 
 
+def _extract_committed_aliases(
+    query_text: str,
+    alias_map: Mapping[str, Sequence[str]],
+    plan: LexicalQueryPlan,
+) -> dict[str, list[str]]:
+    query_normalized = normalize_alias(query_text)
+    query_words = set(query_normalized.split())
+    committed: dict[str, list[str]] = {}
+    for key, variants in alias_map.items():
+        norm_key = normalize_alias(key)
+        key_words = set(norm_key.split())
+        is_relevant = (
+            norm_key in query_normalized
+            or (key_words and key_words.issubset(query_words))
+            or any(normalize_alias(op) == norm_key for op in plan.operands)
+            or any(
+                normalize_alias(op) in {normalize_alias(v) for v in variants}
+                for op in plan.operands
+            )
+        )
+        if is_relevant:
+            committed[norm_key] = list(variants)
+    return committed
+
+
 def _collect_candidates(
     conn: sqlite3.Connection,
     request: HeterogeneousRetrievalRequest,
     semantic_runtimes: Sequence[ExactSemanticRuntime],
     local_vector_runtime: LocalVectorRuntimeConfig | None = None,
+    verification: RequestVerificationCache | None = None,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     collected: dict[tuple[str, str], dict[str, object]] = {}
     semantic_receipts: list[dict[str, object]] = []
     lane_limit = max(1, request.candidate_limit // max(1, len(request.narrative_bundles) + 1))
     if request.filters.include_narrative:
+        alias_map = kpi_alias_expansions(conn)
+        lexical_plan = plan_lexical_query(request.query_text, aliases=alias_map)
+        committed_aliases = (
+            _extract_committed_aliases(request.query_text, alias_map, lexical_plan)
+            if lexical_plan is not None
+            else {}
+        )
         for bundle in request.narrative_bundles:
             for candidate in _lexical_candidates(
                 conn,
@@ -959,6 +1117,8 @@ def _collect_candidates(
                 request.query_text,
                 lane_limit,
                 reporting_entity_id=request.filters.reporting_entity_id,
+                plan=lexical_plan,
+                committed_aliases=committed_aliases,
             ):
                 collected[("narrative", str(candidate["candidate_id"]))] = candidate
             if bundle.vector_index_run_id is not None:
@@ -968,6 +1128,7 @@ def _collect_candidates(
                     semantic_runtimes,
                     trace_id=request.trace_id,
                     local_vector_runtime=local_vector_runtime,
+                    verification=verification,
                 )
                 try:
                     evidence = runtime.search(request.query_text, limit=lane_limit)
@@ -1005,6 +1166,7 @@ def _collect_candidates(
                     limit=lane_limit,
                     trace_id=request.trace_id,
                     runtime=runtime,
+                    verification=verification,
                 )
                 semantic_receipts.append(semantic.model_dump(mode="json"))
                 for candidate in semantic.candidates:
@@ -1041,6 +1203,7 @@ def _collect_candidates(
             query_text=request.query_text,
             limit=lane_limit,
             reporting_entity_id=request.filters.reporting_entity_id,
+            verification=verification,
         )
         for fact in facts:
             collected[("fact", fact.canonical_metric_cell_id)] = {
@@ -1064,6 +1227,7 @@ def _require_recomputable_semantic_receipt(
     limit: int,
     trace_id: str,
     runtime: ExactSemanticRuntime | None = None,
+    verification: RequestVerificationCache | None = None,
 ) -> None:
     """Admit only receipts whose scores the local verifier can recompute."""
 
@@ -1099,6 +1263,7 @@ def _require_recomputable_semantic_receipt(
             (),
             exact_row_cap=evidence.backend.exact_row_cap,
             trace_id=trace_id,
+            verification=verification,
         )
         verifier.verify(evidence, query_text=query_text, limit=limit)
     except (ExactSemanticError, ValueError) as exc:
@@ -1116,6 +1281,7 @@ def _semantic_runtime(
     exact_row_cap: int | None = None,
     trace_id: str,
     local_vector_runtime: LocalVectorRuntimeConfig | None = None,
+    verification: RequestVerificationCache | None = None,
 ) -> ExactSemanticRuntime:
     if bundle.vector_index_run_id is None or bundle.embedding_promotion_id is None:
         raise HeterogeneousRetrievalError("semantic_bundle_coordinates_missing", trace_id=trace_id)
@@ -1139,6 +1305,20 @@ def _semantic_runtime(
     )
     if runtime_config is None:
         raise HeterogeneousRetrievalError("semantic_local_runtime_unavailable", trace_id=trace_id)
+    cap = exact_row_cap if exact_row_cap is not None else MAX_EXACT_VECTOR_ROWS
+    coordinate = (
+        str(bundle.vector_index_run_id),
+        str(bundle.embedding_promotion_id),
+        str(bundle.corpus_manifest_id),
+        str(cap),
+        str(runtime_config.index_root),
+        str(runtime_config.runtime_root),
+    )
+    if verification is not None:
+        verification.ensure_bound(conn)
+        memoized = verification.verified(SEMANTIC_RUNTIME_INSTANCE, coordinate)
+        if memoized is not NOT_VERIFIED:
+            return cast(ExactSemanticRuntime, memoized)
     try:
         seal = load_projection_seal(conn, index_run_id=bundle.vector_index_run_id)
         if seal is None:
@@ -1150,12 +1330,13 @@ def _semantic_runtime(
             raise ExactSemanticError(
                 "semantic projection is outside the configured local index root"
             )
-        return ExactSemanticRuntime.from_local_ledger(
+        runtime = ExactSemanticRuntime.from_local_ledger(
             conn,
             vector_index_run_id=bundle.vector_index_run_id,
             embedding_promotion_id=bundle.embedding_promotion_id,
             runtime_root=runtime_config.runtime_root,
-            exact_row_cap=(exact_row_cap if exact_row_cap is not None else MAX_EXACT_VECTOR_ROWS),
+            exact_row_cap=cap,
+            verification=verification,
         )
     except (
         ExactSemanticError,
@@ -1165,6 +1346,35 @@ def _semantic_runtime(
         raise HeterogeneousRetrievalError(
             "semantic_local_runtime_unavailable", trace_id=trace_id
         ) from exc
+    if verification is not None:
+        verification.record(SEMANTIC_RUNTIME_INSTANCE, coordinate, runtime)
+    return runtime
+
+
+def semantic_runtime_for_bundle(
+    conn: sqlite3.Connection,
+    bundle: NarrativeBundle,
+    *,
+    exact_row_cap: int | None = None,
+    trace_id: str,
+    local_vector_runtime: LocalVectorRuntimeConfig | None = None,
+    verification: RequestVerificationCache | None = None,
+) -> ExactSemanticRuntime:
+    """Shared in-request construction of the sealed exact semantic runtime.
+
+    The promotion verifier and the retrieval lanes construct the runtime
+    through this one path, so a request builds (and binds, and verifies the
+    coordinates of) at most one runtime per immutable bundle coordinate."""
+
+    return _semantic_runtime(
+        conn,
+        bundle,
+        (),
+        exact_row_cap=exact_row_cap,
+        trace_id=trace_id,
+        local_vector_runtime=local_vector_runtime,
+        verification=verification,
+    )
 
 
 def _lexical_candidates(
@@ -1174,14 +1384,17 @@ def _lexical_candidates(
     limit: int,
     *,
     reporting_entity_id: str | None = None,
+    plan: LexicalQueryPlan | None = None,
+    committed_aliases: dict[str, list[str]] | None = None,
 ) -> list[dict[str, object]]:
-    expression = " OR ".join(
-        f'"{token.replace(chr(34), chr(34) * 2)}"' for token in query_text.split() if token.strip()
-    )
-    if not expression:
+    if plan is None:
+        alias_map = kpi_alias_expansions(conn)
+        plan = plan_lexical_query(query_text, aliases=alias_map)
+        if plan is not None:
+            committed_aliases = _extract_committed_aliases(query_text, alias_map, plan)
+    if plan is None:
         return []
-    rows = _rows(
-        conn,
+    sql = (
         "SELECT chunk.chunk_id,chunk.content_sha256,chunk.evidence_node_id,"
         "chunk.char_start,chunk.char_end,chunk.manifest_id,"
         "node.extraction_run_id,run.document_version_id,"
@@ -1195,15 +1408,20 @@ def _lexical_candidates(
         "ON document.document_version_id=run.document_version_id "
         "WHERE search_lexical_chunks MATCH ? AND chunk.manifest_id=? "
         "AND (? IS NULL OR document.reporting_entity_id=?) "
-        "ORDER BY lexical_rank,chunk.chunk_id LIMIT ?",
-        (
-            expression,
-            bundle.corpus_manifest_id,
-            reporting_entity_id,
-            reporting_entity_id,
-            limit,
-        ),
+        "ORDER BY lexical_rank,chunk.chunk_id LIMIT ?"
     )
+    filter_params = (bundle.corpus_manifest_id, reporting_entity_id, reporting_entity_id, limit)
+    # AND-biased first: conjunctive matching prioritizes high-precision hits
+    # over broad disjunctive noise. The disjunctive fallback only executes
+    # when the conjunctive candidate set is empty. Stopword removal, phrase
+    # grouping, and the operand cap deliberately favor precision over
+    # unconstrained recall. The plan and committed alias expansions are bound
+    # to candidate lineage so verification replays the exact expressions.
+    rows = _rows(conn, sql, (plan.match_all, *filter_params))
+    used_all = bool(rows)
+    if not rows:
+        rows = _rows(conn, sql, (plan.match_any, *filter_params))
+    selected_expression = "match_all" if used_all else "match_any"
     return [
         {
             "candidate_id": str(row["chunk_id"]),
@@ -1216,6 +1434,13 @@ def _lexical_candidates(
                 "corpus_manifest_id": bundle.corpus_manifest_id,
                 "evidence_node_id": row["evidence_node_id"],
                 "lexical_index_run_id": bundle.lexical_index_run_id,
+                "lexical_plan": {
+                    "version": "lexical_query_plan.v1",
+                    "match_all": plan.match_all,
+                    "match_any": plan.match_any,
+                    "selected_expression": selected_expression,
+                    "aliases": committed_aliases or {},
+                },
             },
             "semantic_score": None,
             "source_commitment_sha256": str(row["content_sha256"]),
@@ -1429,12 +1654,109 @@ def _write_trace(
     )
 
 
+def _recompute_lexical_candidate(
+    conn: sqlite3.Connection,
+    bundle: NarrativeBundle,
+    plan: LexicalQueryPlan,
+    *,
+    selected_expression: str,
+    candidate_id: str,
+    limit: int,
+    reporting_entity_id: str | None,
+    trace_id: str,
+) -> dict[str, object] | None:
+    sql = (
+        "SELECT chunk.chunk_id,chunk.content_sha256,chunk.evidence_node_id,"
+        "chunk.char_start,chunk.char_end,chunk.manifest_id,"
+        "node.extraction_run_id,run.document_version_id,"
+        "bm25(search_lexical_chunks) AS lexical_rank "
+        "FROM search_lexical_chunks "
+        "JOIN search_chunks chunk ON chunk.chunk_id=search_lexical_chunks.chunk_id "
+        "JOIN evidence_nodes node ON node.node_id=chunk.evidence_node_id "
+        "JOIN evidence_extraction_runs run "
+        "ON run.extraction_run_id=node.extraction_run_id "
+        "JOIN v_evidence_document_versions_canonical document "
+        "ON document.document_version_id=run.document_version_id "
+        "WHERE search_lexical_chunks MATCH ? AND chunk.manifest_id=? "
+        "AND (? IS NULL OR document.reporting_entity_id=?) "
+        "ORDER BY lexical_rank,chunk.chunk_id LIMIT ?"
+    )
+    filter_params = (bundle.corpus_manifest_id, reporting_entity_id, reporting_entity_id, limit)
+    if selected_expression == "match_all":
+        expr = plan.match_all
+    else:
+        all_hits = _rows(conn, sql, (plan.match_all, *filter_params))
+        if all_hits:
+            raise HeterogeneousRetrievalError(
+                "narrative_candidate_lexical_fallback_invalid",
+                trace_id=trace_id,
+            )
+        expr = plan.match_any
+    rows = _rows(conn, sql, (expr, *filter_params))
+    for row in rows:
+        if str(row["chunk_id"]) == candidate_id:
+            return {
+                "candidate_id": str(row["chunk_id"]),
+                "lexical_score": canonical_decimal(
+                    Decimal(1) / (Decimal(1) + abs(Decimal(str(row["lexical_rank"]))))
+                ),
+            }
+    return None
+
+
+def _recompute_legacy_lexical_candidate(
+    conn: sqlite3.Connection,
+    bundle: NarrativeBundle,
+    query_text: str,
+    *,
+    candidate_id: str,
+    limit: int,
+    reporting_entity_id: str | None,
+) -> dict[str, object] | None:
+    expression = " OR ".join(
+        f'"{token.replace(chr(34), chr(34) * 2)}"' for token in query_text.split() if token.strip()
+    )
+    if not expression:
+        return None
+    sql = (
+        "SELECT chunk.chunk_id,chunk.content_sha256,chunk.evidence_node_id,"
+        "chunk.char_start,chunk.char_end,chunk.manifest_id,"
+        "node.extraction_run_id,run.document_version_id,"
+        "bm25(search_lexical_chunks) AS lexical_rank "
+        "FROM search_lexical_chunks "
+        "JOIN search_chunks chunk ON chunk.chunk_id=search_lexical_chunks.chunk_id "
+        "JOIN evidence_nodes node ON node.node_id=chunk.evidence_node_id "
+        "JOIN evidence_extraction_runs run "
+        "ON run.extraction_run_id=node.extraction_run_id "
+        "JOIN v_evidence_document_versions_canonical document "
+        "ON document.document_version_id=run.document_version_id "
+        "WHERE search_lexical_chunks MATCH ? AND chunk.manifest_id=? "
+        "AND (? IS NULL OR document.reporting_entity_id=?) "
+        "ORDER BY lexical_rank,chunk.chunk_id LIMIT ?"
+    )
+    rows = _rows(
+        conn,
+        sql,
+        (expression, bundle.corpus_manifest_id, reporting_entity_id, reporting_entity_id, limit),
+    )
+    for row in rows:
+        if str(row["chunk_id"]) == candidate_id:
+            return {
+                "candidate_id": str(row["chunk_id"]),
+                "lexical_score": canonical_decimal(
+                    Decimal(1) / (Decimal(1) + abs(Decimal(str(row["lexical_rank"]))))
+                ),
+            }
+    return None
+
+
 def _verify_candidate_source(
     conn: sqlite3.Connection,
     request: HeterogeneousRetrievalRequest,
     candidate: dict[str, object],
     *,
     semantic_expected: dict[tuple[str, str], tuple[str, str]],
+    verification: RequestVerificationCache | None = None,
 ) -> None:
     locator = _json_object(candidate["evidence_locator_json"])
     lineage = _json_object(candidate["lineage_json"])
@@ -1469,24 +1791,56 @@ def _verify_candidate_source(
             "WHERE chunk.chunk_id=? AND chunk.manifest_id=?",
             (candidate["candidate_id"], manifest_id),
         )
-        recomputed = (
-            next(
-                (
-                    item
-                    for item in _lexical_candidates(
-                        conn,
-                        bundle,
-                        request.query_text,
-                        request.candidate_limit,
-                        reporting_entity_id=request.filters.reporting_entity_id,
+        recomputed = None
+        if candidate["lexical_score"] is not None:
+            plan_data = lineage.get("lexical_plan")
+            if plan_data is not None and isinstance(plan_data, dict):
+                plan_dict = cast(dict[str, object], plan_data)
+                raw_aliases = plan_dict.get("aliases")
+                aliases_dict = (
+                    cast(dict[str, list[object]], raw_aliases)
+                    if isinstance(raw_aliases, dict)
+                    else {}
+                )
+                committed_alias_map = {
+                    str(k): tuple(str(x) for x in v) for k, v in aliases_dict.items()
+                }
+                verified_plan = plan_lexical_query(request.query_text, aliases=committed_alias_map)
+                if (
+                    verified_plan is None
+                    or verified_plan.match_all != plan_dict.get("match_all")
+                    or verified_plan.match_any != plan_dict.get("match_any")
+                ):
+                    raise HeterogeneousRetrievalError(
+                        "narrative_candidate_lexical_plan_tampered",
+                        trace_id=request.trace_id,
                     )
-                    if item["candidate_id"] == candidate["candidate_id"]
-                ),
-                None,
-            )
-            if candidate["lexical_score"] is not None
-            else None
-        )
+                raw_selected = plan_dict.get("selected_expression")
+                selected_expr = str(raw_selected) if raw_selected is not None else ""
+                if selected_expr not in {"match_all", "match_any"}:
+                    raise HeterogeneousRetrievalError(
+                        "narrative_candidate_lexical_plan_invalid",
+                        trace_id=request.trace_id,
+                    )
+                recomputed = _recompute_lexical_candidate(
+                    conn,
+                    bundle,
+                    verified_plan,
+                    selected_expression=selected_expr,
+                    candidate_id=str(candidate["candidate_id"]),
+                    limit=request.candidate_limit,
+                    reporting_entity_id=request.filters.reporting_entity_id,
+                    trace_id=request.trace_id,
+                )
+            else:
+                recomputed = _recompute_legacy_lexical_candidate(
+                    conn,
+                    bundle,
+                    request.query_text,
+                    candidate_id=str(candidate["candidate_id"]),
+                    limit=request.candidate_limit,
+                    reporting_entity_id=request.filters.reporting_entity_id,
+                )
         semantic = semantic_expected.get((manifest_id, str(candidate["candidate_id"])))
         semantic_score = candidate["semantic_score"]
         semantic_valid = (
@@ -1534,12 +1888,25 @@ def _verify_candidate_source(
                 "narrative_candidate_evidence_mismatch", trace_id=request.trace_id
             )
         return
+    replay_aliases: dict[str, tuple[str, ...]] | None = None
+    if "aliases" in lineage:
+        raw_aliases = lineage["aliases"]
+        if isinstance(raw_aliases, dict):
+            aliases_dict = cast(dict[str, list[object]], raw_aliases)
+            replay_aliases = {str(k): tuple(str(x) for x in v) for k, v in aliases_dict.items()}
+        else:
+            replay_aliases = {}
+    else:
+        # Legacy trace path: "aliases" was omitted from candidate lineage
+        replay_aliases = None
     hits = search_canonical_facts(
         conn,
         generation_id=request.fact_generation_id,
         query_text=request.query_text,
         limit=request.candidate_limit,
         reporting_entity_id=request.filters.reporting_entity_id,
+        aliases=replay_aliases,
+        verification=verification,
     )
     match = next(
         (hit for hit in hits if hit.canonical_metric_cell_id == candidate["candidate_id"]),
@@ -1700,11 +2067,23 @@ def _trace_population_coordinates(
 def _verify_trace_population_cutover(
     conn: sqlite3.Connection,
     request: HeterogeneousRetrievalRequest,
+    verification: RequestVerificationCache | None = None,
 ) -> None:
     if request.population_run_id is None:
         return
+    coordinate = (request.population_run_id,)
     try:
-        verified = PopulationCompletenessLedger(conn).verify(request.population_run_id)
+        memoized = (
+            NOT_VERIFIED
+            if verification is None
+            else verification.verified(POPULATION_RECEIPT, coordinate)
+        )
+        if memoized is NOT_VERIFIED:
+            verified = PopulationCompletenessLedger(conn).verify(request.population_run_id)
+            if verification is not None:
+                verification.record(POPULATION_RECEIPT, coordinate, verified)
+        else:
+            verified = cast(PopulationCutoverReceipt, memoized)
     except (sqlite3.Error, ValueError) as exc:
         raise HeterogeneousRetrievalError(
             "retrieval_trace_population_cutover_invalid",
@@ -1756,13 +2135,20 @@ def _sealed_trace_payload(
 
 
 @contextmanager
-def _savepoint(conn: sqlite3.Connection, name: str) -> Generator[None, None, None]:
+def _savepoint(
+    conn: sqlite3.Connection,
+    name: str,
+    *,
+    verification: RequestVerificationCache | None = None,
+) -> Generator[None, None, None]:
     conn.execute(f"SAVEPOINT {name}")
     try:
         yield
     except Exception:
         conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
         conn.execute(f"RELEASE SAVEPOINT {name}")
+        if verification is not None:
+            verification.invalidate()
         raise
     conn.execute(f"RELEASE SAVEPOINT {name}")
 

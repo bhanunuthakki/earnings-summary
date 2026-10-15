@@ -47,7 +47,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from collections.abc import Collection, Generator, Iterable, Iterator
+from collections.abc import Collection, Generator, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -115,6 +115,7 @@ from llm.cli import call_llm
 from llm.prompt_registry import PromptTemplate, register
 from llm.structured import call_llm_structured_with_raw
 from search.embedding_promotion import LocalVectorRuntimeConfig
+from search.request_verification import RequestVerificationCache
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from viewspec.engine import execute_view, metric_catalog
 from viewspec.render import render_view_fragment, view_summary
@@ -831,6 +832,20 @@ def _evidence_prompt_fragment(sealed: SealedEvidenceItem) -> str:
     )
 
 
+def _sealed_evidence_block(
+    evidence: Sequence[SealedEvidenceItem],
+) -> tuple[tuple[str, ...], str]:
+    """Assemble the sealed evidence prompt block exactly once per turn.
+
+    The returned fragments and block are constructed a single time and the
+    exact same bytes are reused for the answer prompt and the claim-audit
+    prompt; the persisted retrieval assembly binds each fragment hash to its
+    cited source commitment (VAL-SEARCH-008)."""
+
+    fragments = tuple(_evidence_prompt_fragment(item) for item in evidence)
+    return fragments, "\n\n".join(fragments)
+
+
 def _governed_call_identity(
     db_path: Path,
     *,
@@ -960,6 +975,7 @@ def _shadow_retrieval(
         role=SQLiteConnectionRole.WRITER,
         schema_preflight=True,
     )
+    verification: RequestVerificationCache | None = None
     try:
         scopes = load_production_scopes(
             conn,
@@ -967,7 +983,10 @@ def _shadow_retrieval(
             requested_tickers=_sealed_scope_tickers(turn, pack),
         )
         runtime = _sealed_runtime()
-        readiness = assess_retrieval_readiness(conn, scopes, runtime=runtime)
+        verification = RequestVerificationCache(conn)
+        readiness = assess_retrieval_readiness(
+            conn, scopes, runtime=runtime, verification=verification
+        )
         if readiness.outcome != "ready":
             log.warning(
                 {
@@ -983,13 +1002,28 @@ def _shadow_retrieval(
             question=text,
             created_at=datetime.now(UTC),
         )
-        execute_sealed_retrieval_plan(conn, plan, local_vector_runtime=runtime)
+        execute_sealed_retrieval_plan(
+            conn, plan, local_vector_runtime=runtime, verification=verification
+        )
         conn.commit()
     except Exception:
         conn.rollback()
         log.warning({"event": "ask_shadow_retrieval_failed"}, exc_info=True)
     finally:
+        if verification is not None:
+            verification.close()
         conn.close()
+
+
+def run_shadow_retrieval(
+    text: str,
+    turn: AskTurn,
+    pack: ContextPack,
+    *,
+    db_path: Path,
+) -> None:
+    """Execute verified shadow retrieval plan and persist trace without changing prompt."""
+    _shadow_retrieval(text, turn, pack, db_path=db_path)
 
 
 def _sealed_or_shadow_narrative_events(
@@ -1034,13 +1068,17 @@ def _sealed_or_shadow_narrative_events(
             role=SQLiteConnectionRole.WRITER,
             schema_preflight=True,
         )
+        verification: RequestVerificationCache | None = None
         try:
             scopes = load_production_scopes(
                 conn,
                 _PRODUCTION_SCOPE_REGISTRY,
                 requested_tickers=_sealed_scope_tickers(turn, pack),
             )
-            readiness = assess_retrieval_readiness(conn, scopes, runtime=runtime)
+            verification = RequestVerificationCache(conn)
+            readiness = assess_retrieval_readiness(
+                conn, scopes, runtime=runtime, verification=verification
+            )
             if readiness.outcome != "ready":
                 raise PromotionVerificationError(
                     readiness.reason_code,
@@ -1056,6 +1094,7 @@ def _sealed_or_shadow_narrative_events(
                 conn,
                 plan,
                 local_vector_runtime=runtime,
+                verification=verification,
             )
             evidence: list[SealedEvidenceItem] = []
             for receipt in execution.receipts:
@@ -1065,6 +1104,7 @@ def _sealed_or_shadow_narrative_events(
                         receipt.trace_id,
                         start_number=len(evidence) + 1,
                         local_vector_runtime=runtime,
+                        verification=verification,
                     )
                 )
             if not evidence:
@@ -1077,10 +1117,11 @@ def _sealed_or_shadow_narrative_events(
             conn.rollback()
             raise
         finally:
+            if verification is not None:
+                verification.close()
             conn.close()
 
-        fragments = tuple(_evidence_prompt_fragment(item) for item in evidence)
-        evidence_block = "\n\n".join(fragments)
+        fragments, evidence_block = _sealed_evidence_block(evidence)
         prompt_variables = AnswerPromptVariables(
             system_context=pack.system_context or "You are a portfolio research assistant.",
             thread_text=thread_text or "(first turn)",
@@ -1816,5 +1857,6 @@ __all__ = [
     "fold_events",
     "respond_turn",
     "route_turn",
+    "run_shadow_retrieval",
     "sanitize_history",
 ]

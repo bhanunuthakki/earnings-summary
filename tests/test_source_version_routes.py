@@ -40,6 +40,7 @@ from flask.testing import FlaskClient
 import ask.sealed_retrieval as sealed_retrieval
 from search.embedding_promotion import LocalVectorRuntimeConfig
 from search.heterogeneous_retrieval import HeterogeneousRetrievalReceipt
+from search.request_verification import RequestVerificationCache
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SEALED_RETRIEVAL_SOURCE = PROJECT_ROOT / "src" / "ask" / "sealed_retrieval.py"
@@ -929,9 +930,11 @@ def test_fact_emitter_reconciles_to_its_source_version_route(
             requested_trace_id: str,
             *,
             local_vector_runtime: LocalVectorRuntimeConfig | None = None,
+            verification: RequestVerificationCache | None = None,
         ) -> HeterogeneousRetrievalReceipt:
             assert requested_trace_id == trace_id
             assert local_vector_runtime is None
+            assert verification is None
             return receipt
 
         monkeypatch.setattr(
