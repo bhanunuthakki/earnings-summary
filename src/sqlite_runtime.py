@@ -103,64 +103,6 @@ class ManagedCursor(sqlite3.Cursor):
             raise
 
 
-class _InnerManagedCursor(sqlite3.Cursor):
-    """Inner cursor wrapper placed after custom factories in MRO to catch exceptions before custom suppression."""
-
-    def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
-        conn = self.connection
-        was_in_tx = getattr(conn, "in_transaction", False)
-        try:
-            return super().execute(*args, **kwargs)
-        except BaseException:
-            if was_in_tx and not getattr(conn, "in_transaction", False):
-                notify = getattr(conn, "notify_rollback", None)
-                if callable(notify):
-                    notify()
-            raise
-
-    def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
-        conn = self.connection
-        was_in_tx = getattr(conn, "in_transaction", False)
-        try:
-            return super().executemany(*args, **kwargs)
-        except BaseException:
-            if was_in_tx and not getattr(conn, "in_transaction", False):
-                notify = getattr(conn, "notify_rollback", None)
-                if callable(notify):
-                    notify()
-            raise
-
-    def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
-        conn = self.connection
-        try:
-            return super().executescript(*args, **kwargs)
-        except BaseException:
-            notify = getattr(conn, "notify_rollback", None)
-            if callable(notify):
-                notify()
-            raise
-
-
-def _uses_cooperative_delegation(fn: Any) -> bool:
-    """Check if an overridden execution method uses cooperative super() delegation."""
-    while hasattr(fn, "__wrapped__"):
-        fn = fn.__wrapped__
-    code = getattr(fn, "__code__", None)
-    if code is None:
-        return False
-    if "super" in code.co_names:
-        return True
-    try:
-        import dis
-
-        for instr in dis.get_instructions(fn):
-            if "super" in instr.opname.lower() or instr.argval == "super":
-                return True
-    except Exception:
-        pass
-    return False
-
-
 _MANAGED_CURSOR_FACTORY_CACHE: dict[type[Any], type[Any]] = {}
 
 
@@ -171,28 +113,19 @@ def _resolve_managed_cursor_factory(factory: Any) -> Any:
     if isinstance(factory, type) and issubclass(factory, sqlite3.Cursor):
         if issubclass(factory, ManagedCursor):
             return factory
-        for method_name, method, base_method in (
-            ("execute", getattr(factory, "execute", None), sqlite3.Cursor.execute),
-            ("executemany", getattr(factory, "executemany", None), sqlite3.Cursor.executemany),
-            (
-                "executescript",
-                getattr(factory, "executescript", None),
-                sqlite3.Cursor.executescript,
-            ),
-        ):
-            if (
-                method is not None
-                and method is not base_method
-                and not _uses_cooperative_delegation(method)
-            ):
-                raise TypeError(
-                    f"ManagedConnection cursor factory {factory.__name__} overrides {method_name} "
-                    "without cooperative super() delegation. Cursor factories overriding execution methods "
-                    "must use cooperative super() delegation or subclass ManagedCursor directly."
-                )
+        for cls in factory.__mro__:
+            if cls is sqlite3.Cursor or cls is object:
+                break
+            for method_name in ("execute", "executemany", "executescript"):
+                if method_name in cls.__dict__:
+                    raise TypeError(
+                        f"ManagedConnection cursor factory {factory.__name__} overrides {method_name} "
+                        f"in {cls.__name__} without subclassing ManagedCursor. Cursor factories overriding "
+                        "execution methods must subclass ManagedCursor directly."
+                    )
         cached = _MANAGED_CURSOR_FACTORY_CACHE.get(factory)
         if cached is None:
-            bases: tuple[Any, ...] = (ManagedCursor, factory, _InnerManagedCursor)
+            bases: tuple[Any, ...] = (ManagedCursor, factory)
             cached = type(
                 f"Managed_{factory.__name__}",
                 bases,

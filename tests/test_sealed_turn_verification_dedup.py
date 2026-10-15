@@ -2260,7 +2260,7 @@ def test_implicit_rollback_on_error_handling_custom_cursor_execute_invalidates_c
     conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
     conn.commit()
 
-    class TolerantCursor(sqlite3.Cursor):
+    class TolerantCursor(ManagedCursor):
         def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
             try:
                 return super().execute(*args, **kwargs)
@@ -2299,7 +2299,7 @@ def test_implicit_rollback_on_error_handling_custom_cursor_executemany_invalidat
     conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
     conn.commit()
 
-    class TolerantManyCursor(sqlite3.Cursor):
+    class TolerantManyCursor(ManagedCursor):
         def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
             try:
                 return super().executemany(*args, **kwargs)
@@ -2373,7 +2373,7 @@ def test_implicit_rollback_on_error_handling_custom_cursor_executescript_invalid
     conn.execute("INSERT INTO t VALUES (1, 'row1')")
     conn.commit()
 
-    class TolerantScriptCursor(sqlite3.Cursor):
+    class TolerantScriptCursor(ManagedCursor):
         def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
             try:
                 return super().executescript(*args, **kwargs)
@@ -2404,7 +2404,7 @@ def test_implicit_rollback_on_error_handling_custom_cursor_executescript_invalid
     assert len(rollbacks) == 1
     # Row 1 still exists, duplicate was rejected
     assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
-    # Cache MUST be invalidated by the rollback notification intercepted by _InnerManagedCursor!
+    # Cache MUST be invalidated by the rollback notification intercepted by ManagedCursor!
     assert cache.verified("test_kind", coord) is NOT_VERIFIED
 
     unregister()
@@ -2421,7 +2421,7 @@ def test_implicit_rollback_on_tolerant_script_rolls_back_partial_inserts_and_inv
     conn.execute("INSERT INTO t VALUES (1, 'row1')")
     conn.commit()
 
-    class TolerantScriptCursor(sqlite3.Cursor):
+    class TolerantScriptCursor(ManagedCursor):
         def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
             try:
                 return super().executescript(*args, **kwargs)
@@ -2461,12 +2461,38 @@ def test_implicit_rollback_on_tolerant_script_rolls_back_partial_inserts_and_inv
 
 
 def test_direct_base_delegation_cursor_factory_is_rejected() -> None:
-    """Cursor factory overriding execution methods with direct base calls without cooperative super() is rejected."""
+    """Cursor factories overriding execution methods without subclassing ManagedCursor are rejected."""
     conn = sqlite3.connect(":memory:")
 
-    # 1. Direct executescript delegation is rejected
-    class TolerantDirectScriptCursor(sqlite3.Cursor):
+    # 1. Inherited direct delegation (Judge's exact DirectParent / CooperativeChild finding)
+    class DirectParent(sqlite3.Cursor):
         def executescript(self, script: str) -> sqlite3.Cursor:
+            try:
+                return sqlite3.Cursor.executescript(self, script)
+            except sqlite3.IntegrityError:
+                return self
+
+    class CooperativeChild(DirectParent):
+        def executescript(self, script: str) -> sqlite3.Cursor:
+            return super().executescript(script)
+
+    with pytest.raises(
+        TypeError,
+        match=r"ManagedConnection cursor factory CooperativeChild overrides executescript in CooperativeChild without subclassing ManagedCursor",
+    ):
+        conn.cursor(factory=CooperativeChild)
+
+    with pytest.raises(
+        TypeError,
+        match=r"ManagedConnection cursor factory DirectParent overrides executescript in DirectParent without subclassing ManagedCursor",
+    ):
+        conn.cursor(factory=DirectParent)
+
+    # 2. Override that references super while executing through direct base call
+    class SuperDirectCursor(sqlite3.Cursor):
+        def executescript(self, script: str) -> sqlite3.Cursor:
+            if False:
+                super().executescript(script)
             try:
                 return sqlite3.Cursor.executescript(self, script)
             except sqlite3.IntegrityError:
@@ -2474,29 +2500,29 @@ def test_direct_base_delegation_cursor_factory_is_rejected() -> None:
 
     with pytest.raises(
         TypeError,
-        match=r"ManagedConnection cursor factory TolerantDirectScriptCursor overrides executescript without cooperative super\(\) delegation",
+        match=r"ManagedConnection cursor factory SuperDirectCursor overrides executescript in SuperDirectCursor without subclassing ManagedCursor",
     ):
-        conn.cursor(factory=TolerantDirectScriptCursor)
+        conn.cursor(factory=SuperDirectCursor)
 
-    # 2. Direct execute delegation is rejected
+    # 3. Direct execute override on sqlite3.Cursor subclass is rejected
     class DirectExecuteCursor(sqlite3.Cursor):
         def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
             return sqlite3.Cursor.execute(self, *args, **kwargs)
 
     with pytest.raises(
         TypeError,
-        match=r"ManagedConnection cursor factory DirectExecuteCursor overrides execute without cooperative super\(\) delegation",
+        match=r"ManagedConnection cursor factory DirectExecuteCursor overrides execute in DirectExecuteCursor without subclassing ManagedCursor",
     ):
         conn.cursor(factory=DirectExecuteCursor)
 
-    # 3. Direct executemany delegation is rejected
+    # 4. Direct executemany override on sqlite3.Cursor subclass is rejected
     class DirectExecuteManyCursor(sqlite3.Cursor):
         def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
             return sqlite3.Cursor.executemany(self, *args, **kwargs)
 
     with pytest.raises(
         TypeError,
-        match=r"ManagedConnection cursor factory DirectExecuteManyCursor overrides executemany without cooperative super\(\) delegation",
+        match=r"ManagedConnection cursor factory DirectExecuteManyCursor overrides executemany in DirectExecuteManyCursor without subclassing ManagedCursor",
     ):
         conn.cursor(factory=DirectExecuteManyCursor)
 
