@@ -1976,6 +1976,69 @@ def test_attached_database_replacement_invalidates_cache(tmp_path: Path) -> None
     conn_ext2.close()
 
 
+def test_attached_database_reattachment_same_file_with_leading_empty_statement_invalidates_cache(
+    tmp_path: Path,
+) -> None:
+    """Detaching and reattaching the same file with leading semicolons/comments invalidates cache."""
+    db_path = tmp_path / "attached_same.db"
+    conn_ext = sqlite3.connect(db_path)
+    conn_ext.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn_ext.execute("INSERT INTO substrate VALUES (1, 'v1')")
+    conn_ext.commit()
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(f"ATTACH DATABASE '{db_path}' AS ext")
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_attached_same_file",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admission_v1")
+    assert cache.verified("test_kind", coord) == "admission_v1"
+
+    # Execute DETACH with leading semicolons, whitespace, and comments
+    conn.execute("; /* detach comment */ ; DETACH DATABASE ext")
+
+    # Update through external connection and commit (advancing ext data_version externally)
+    conn_ext.execute("UPDATE substrate SET val = 'v2' WHERE id = 1")
+    conn_ext.commit()
+
+    # Reattach the SAME file with leading semicolons, whitespace, and comments
+    conn.execute(f"; -- reattach comment\n ; ATTACH DATABASE '{db_path}' AS ext")
+
+    # Cached admission MUST be invalidated despite identical file path and restored data_version!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+    conn_ext.close()
+
+
+def test_rollback_with_leading_empty_statement_invalidates_cache() -> None:
+    """Rollback statements prefixed by leading semicolons and comments invalidate cache."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE log (id INT PRIMARY KEY, msg TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_rollback_leading_semi",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admitted_pre_rollback")
+    assert cache.verified("test_kind", coord) == "admitted_pre_rollback"
+
+    # Open savepoint so rollback is valid in SQLite
+    conn.execute("SAVEPOINT sp")
+    # Execute rollback with leading semicolons and comments
+    conn.execute("; /* comment */ ; ROLLBACK TO SAVEPOINT sp")
+
+    # Cache MUST be invalidated by the rollback
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
 def test_connection_trace_preserves_existing_observer_and_nested_caches() -> None:
     """Existing trace observer is preserved across cache creation, nested caches, and removal."""
     conn = sqlite3.connect(":memory:")

@@ -27,10 +27,11 @@ TraceObserver = Callable[[str], object]
 RollbackObserver = Callable[[], object]
 
 _ACTIVE_OBSERVED_CONNECTIONS: weakref.WeakSet[ManagedConnection] = weakref.WeakSet()
-_ROLLBACK_PATTERN = re.compile(r"(?is)^(?:\s*(?:/\*.*?\*/|--[^\n]*(?:\n|$)))*\s*rollback\b")
-_ATTACH_OR_DETACH_PATTERN = re.compile(
-    r"(?is)^(?:\s*(?:/\*.*?\*/|--[^\n]*(?:\n|$)))*\s*(?:attach|detach)\b"
-)
+_SQL_PREFIX = r"(?:[\s;]|/\*.*?\*/|--[^\n]*(?:\n|$))*"
+ROLLBACK_PATTERN = re.compile(rf"(?is)^{_SQL_PREFIX}rollback\b")
+ATTACH_OR_DETACH_PATTERN = re.compile(rf"(?is)^{_SQL_PREFIX}(?:attach|detach)\b")
+_ROLLBACK_PATTERN = ROLLBACK_PATTERN
+_ATTACH_OR_DETACH_PATTERN = ATTACH_OR_DETACH_PATTERN
 
 
 class ManagedCursor(sqlite3.Cursor):
@@ -520,6 +521,8 @@ def _apply_writer_policy(conn: sqlite3.Connection, *, require_wal: bool = True) 
 
 
 __all__ = [
+    "ATTACH_OR_DETACH_PATTERN",
+    "ROLLBACK_PATTERN",
     "SQLITE_BUSY_TIMEOUT_MS",
     "ManagedConnection",
     "SQLiteConnectionRole",

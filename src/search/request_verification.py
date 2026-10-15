@@ -34,16 +34,18 @@ speed.
 
 from __future__ import annotations
 
-import re
 import sqlite3
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import cast
 
-from sqlite_runtime import ManagedConnection, active_managed_trace_connection_count
-
-_ROLLBACK_PATTERN = re.compile(r"(?is)^(?:\s*(?:/\*.*?\*/|--[^\n]*(?:\n|$)))*\s*rollback\b")
+from sqlite_runtime import (
+    ATTACH_OR_DETACH_PATTERN,
+    ROLLBACK_PATTERN,
+    ManagedConnection,
+    active_managed_trace_connection_count,
+)
 
 TraceObserver = Callable[[str], None]
 
@@ -208,7 +210,7 @@ class RequestVerificationCache:
             )
 
     def _on_trace_sql(self, statement: str) -> None:
-        if _ROLLBACK_PATTERN.match(statement):
+        if ROLLBACK_PATTERN.match(statement) or ATTACH_OR_DETACH_PATTERN.match(statement):
             self.invalidate()
 
     def close(self) -> None:
