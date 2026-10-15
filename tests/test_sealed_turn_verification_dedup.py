@@ -850,6 +850,7 @@ def _install_turn_seams(
     probe: _Probe,
     *,
     runtime: LocalVectorRuntimeConfig,
+    audit_cites: tuple[int, ...] = (1,),
 ) -> None:
     engine_names = vars(engine)
     real_block = cast(
@@ -930,7 +931,13 @@ def _install_turn_seams(
         probe.audit_prompts.append(prompt)
         prompts["ask_claim_audit"] = prompt
         claims = [
-            {"char_start": start, "char_end": end, "quote": quote, "cites": [1], "supported": True}
+            {
+                "char_start": start,
+                "char_end": end,
+                "quote": quote,
+                "cites": list(audit_cites),
+                "supported": True,
+            }
             for start, end, quote in required_claim_spans(ANSWER)
         ]
         raw = json.dumps({"claims": claims})
@@ -1767,6 +1774,71 @@ def test_bound_query_containing_word_rollback_does_not_clear_cache() -> None:
     conn.close()
 
 
+def test_implicit_rollback_invalidates_cache_and_rejects_stale_verifications() -> None:
+    """Automatic transaction rollback (e.g. INSERT OR ROLLBACK) invalidates verification cache."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_implicit_rollback",)
+
+    # 1. Insert row inside authorized write
+    with cache.authorized_write():
+        conn.execute("INSERT INTO t VALUES (1, 'initial')")
+
+    # 2. Verify row and cache result while transaction is uncommitted
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "cached_val")
+    assert cache.verified("test_kind", coord) == "cached_val"
+
+    # 3. Attempt duplicate insert with INSERT OR ROLLBACK, catching IntegrityError
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT OR ROLLBACK INTO t VALUES (1, 'dup')")
+
+    # The transaction rolled back: row is gone from the database
+    assert conn.execute("SELECT count(*) FROM t").fetchone()[0] == 0
+
+    # 4. Request cached verification again: MUST NOT return stale verification!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_same_connection_schema_changes_invalidate_cache() -> None:
+    """Same-connection DDL (CREATE, DROP, ALTER) invalidates cache without changing total_changes."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_ddl",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "substrate_admission")
+    assert cache.verified("test_kind", coord) == "substrate_admission"
+
+    changes_before = conn.total_changes
+
+    # Execute DDL (DROP TABLE) which modifies schema without changing total_changes
+    conn.execute("DROP TABLE substrate")
+    assert conn.total_changes == changes_before
+
+    # Cache MUST be invalidated by the schema change!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    # Also test CREATE TABLE
+    cache.record("test_kind", coord, "substrate_recreated")
+    assert cache.verified("test_kind", coord) == "substrate_recreated"
+
+    conn.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
 def test_connection_trace_preserves_existing_observer_and_nested_caches() -> None:
     """Existing trace observer is preserved across cache creation, nested caches, and removal."""
     conn = sqlite3.connect(":memory:")
@@ -2293,7 +2365,7 @@ def test_turn_with_real_fact_candidates_verifies_projection_admission_once_throu
     db_path, runtime, records = _build_fixture(root, storage_root)
     probe = _Probe()
     _install_doubles(monkeypatch, probe, records=records, runtime=runtime, enabled=True)
-    _install_turn_seams(monkeypatch, probe, runtime=runtime)
+    _install_turn_seams(monkeypatch, probe, runtime=runtime, audit_cites=(1, 3))
 
     # Restore REAL search_canonical_facts on retrieval module
     monkeypatch.setattr(retrieval_module, "search_canonical_facts", search_canonical_facts)
@@ -2651,6 +2723,15 @@ def test_turn_with_real_fact_candidates_verifies_projection_admission_once_throu
 
     citations_events = [event for event in events if event["type"] == "citations"]
     assert len(citations_events) == 1
-    items = citations_events[0].get("items")
+    items = cast(list[dict[str, object]], citations_events[0].get("items"))
     assert isinstance(items, list)
-    assert items != []
+    cited_fact_items = [item for item in items if item.get("kind") == "fact"]
+    assert len(cited_fact_items) == 1
+    assert cited_fact_items[0]["candidate_id"] == "canonical:revenue_sub:2025"
+    assert cited_fact_items[0]["value"] == "100 USD"
+
+    fact_citations = [
+        c for c in probe.packages[0].citations if c.candidate_id == "canonical:revenue_sub:2025"
+    ]
+    assert len(fact_citations) == 1
+    assert fact_citations[0].candidate_kind == "fact"

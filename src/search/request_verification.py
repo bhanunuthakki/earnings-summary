@@ -129,15 +129,24 @@ class RequestVerificationCache:
         self._conn = conn
         self.enabled = enabled
         self.journal: list[VerificationEvent] = []
-        self._entries: dict[tuple[str, tuple[str, ...]], tuple[tuple[int, int], object]] = {}
+        self._entries: dict[tuple[str, tuple[str, ...]], tuple[tuple[int, int, int], object]] = {}
         self._token: int | None = None
         self._epoch: int = 0
-        self._in_flight_tokens: dict[tuple[str, tuple[str, ...]], list[tuple[int, int]]] = {}
+        self._in_flight_tokens: dict[tuple[str, tuple[str, ...]], list[tuple[int, int, int]]] = {}
         self._expected_changes: int = conn.total_changes
+        self._schema_version: int = self._read_schema_version()
+        self._rollback_generation: int = conn.rollback_generation
         self._closed: bool = False
         self._unregister_trace: Callable[[], None] | None = register_connection_trace_observer(
             conn, self._on_trace_sql
         )
+        self._unregister_rollback: Callable[[], None] | None = conn.register_rollback_observer(
+            self.notify_rollback
+        )
+
+    def _read_schema_version(self) -> int:
+        row = self._conn.execute("PRAGMA schema_version").fetchone()
+        return int(row[0]) if row is not None else 0
 
     @property
     def is_closed(self) -> bool:
@@ -162,12 +171,10 @@ class RequestVerificationCache:
 
     def _on_trace_sql(self, statement: str) -> None:
         if _ROLLBACK_PATTERN.match(statement):
-            self._entries.clear()
-            self._epoch += 1
-            self._expected_changes = self._conn.total_changes
+            self.invalidate()
 
     def close(self) -> None:
-        """Release trace callback registration on the connection and release cached entries."""
+        """Release trace and rollback registrations on the connection and release cached entries."""
 
         if self._closed:
             return
@@ -175,6 +182,9 @@ class RequestVerificationCache:
         if self._unregister_trace is not None:
             self._unregister_trace()
             self._unregister_trace = None
+        if self._unregister_rollback is not None:
+            self._unregister_rollback()
+            self._unregister_rollback = None
         self._entries.clear()
         self._in_flight_tokens.clear()
 
@@ -229,13 +239,21 @@ class RequestVerificationCache:
         self.invalidate()
 
     def _check_same_connection_mutation(self) -> None:
-        """Clear memoized entries and advance epoch when unacknowledged same-connection writes occur."""
+        """Clear memoized entries and advance epoch when unacknowledged writes, DDL, or rollbacks occur."""
 
         current_changes = self._conn.total_changes
-        if current_changes != self._expected_changes:
+        current_schema = self._read_schema_version()
+        current_rollback = self._conn.rollback_generation
+        if (
+            current_changes != self._expected_changes
+            or current_schema != self._schema_version
+            or current_rollback != self._rollback_generation
+        ):
             self._entries.clear()
             self._epoch += 1
             self._expected_changes = current_changes
+            self._schema_version = current_schema
+            self._rollback_generation = current_rollback
 
     def invalidate(self) -> None:
         """Explicitly invalidate all memoized entries."""
@@ -244,10 +262,12 @@ class RequestVerificationCache:
         self._entries.clear()
         self._epoch += 1
         self._expected_changes = self._conn.total_changes
+        self._schema_version = self._read_schema_version()
+        self._rollback_generation = self._conn.rollback_generation
 
-    def _state_token(self) -> tuple[int, int]:
+    def _state_token(self) -> tuple[int, int, int]:
         token = self._change_token()
-        return (token, self._epoch)
+        return (token, self._schema_version, self._epoch)
 
     def verified(self, kind: str, coordinate: tuple[str, ...]) -> object:
         """Return the memoized verification value, or ``NOT_VERIFIED``."""
@@ -266,14 +286,14 @@ class RequestVerificationCache:
         coordinate: tuple[str, ...],
         value: object,
         *,
-        start_token: tuple[int, int] | int | None = None,
+        start_token: tuple[int, int, int] | int | None = None,
     ) -> None:
         """Journal one executed verification and memoize it at the live token."""
 
         self._assert_not_closed()
 
-        token = self._change_token()
-        current_state = (token, self._epoch)
+        current_state = self._state_token()
+        token = current_state[0]
         self.journal.append(
             VerificationEvent(
                 kind=kind,

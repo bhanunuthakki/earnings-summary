@@ -7,6 +7,7 @@ The role is explicit because readers must not alter database-wide durability
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -16,15 +17,41 @@ from collections.abc import Callable
 from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from runtime.sqlite_adapters import register_datetime_adapters
 from schema_compat import require_current_for_write
 from scope_identity import derive_retrieval_scope_id
 
 TraceObserver = Callable[[str], object]
+RollbackObserver = Callable[[], object]
 
 _ACTIVE_OBSERVED_CONNECTIONS: weakref.WeakSet[ManagedConnection] = weakref.WeakSet()
+_ROLLBACK_PATTERN = re.compile(r"(?is)^(?:\s*(?:/\*.*?\*/|--[^\n]*(?:\n|$)))*\s*rollback\b")
+
+
+class ManagedCursor(sqlite3.Cursor):
+    """Cursor that reports automatic transaction rollbacks to its parent connection."""
+
+    def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        conn = cast(ManagedConnection, self.connection)
+        was_in_tx = conn.in_transaction
+        try:
+            return super().execute(*args, **kwargs)
+        except Exception:
+            if was_in_tx and not conn.in_transaction:
+                conn.notify_rollback()
+            raise
+
+    def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        conn = cast(ManagedConnection, self.connection)
+        was_in_tx = conn.in_transaction
+        try:
+            return super().executemany(*args, **kwargs)
+        except Exception:
+            if was_in_tx and not conn.in_transaction:
+                conn.notify_rollback()
+            raise
 
 
 class ManagedConnection(sqlite3.Connection):
@@ -34,6 +61,30 @@ class ManagedConnection(sqlite3.Connection):
         super().__init__(*args, **kwargs)
         self._user_trace_callback: TraceObserver | None = None
         self._trace_observers: list[TraceObserver] = []
+        self._rollback_observers: list[RollbackObserver] = []
+        self._rollback_generation: int = 0
+
+    @property
+    def rollback_generation(self) -> int:
+        """Monotonic counter incremented whenever an explicit or implicit rollback occurs."""
+        return self._rollback_generation
+
+    def register_rollback_observer(self, observer: RollbackObserver) -> Callable[[], None]:
+        """Register an observer callable invoked when a transaction rolls back."""
+        self._rollback_observers.append(observer)
+
+        def _unregister() -> None:
+            if observer in self._rollback_observers:
+                self._rollback_observers.remove(observer)
+
+        return _unregister
+
+    def notify_rollback(self) -> None:
+        """Increment rollback generation and notify all registered rollback observers."""
+        self._rollback_generation += 1
+        for observer in list(self._rollback_observers):
+            with suppress(Exception):
+                observer()
 
     def set_trace_callback(self, trace_callback: TraceObserver | None) -> None:
         """Register or clear the user trace callback while preserving internal observers."""
@@ -67,6 +118,8 @@ class ManagedConnection(sqlite3.Connection):
         return self._user_trace_callback
 
     def _dispatch_trace(self, statement: str) -> None:
+        if _ROLLBACK_PATTERN.match(statement):
+            self.notify_rollback()
         if self._user_trace_callback is not None:
             with suppress(Exception):
                 self._user_trace_callback(statement)
@@ -80,9 +133,48 @@ class ManagedConnection(sqlite3.Connection):
         else:
             super().set_trace_callback(None)
 
+    def rollback(self) -> None:
+        try:
+            super().rollback()
+        finally:
+            self.notify_rollback()
+
+    def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        was_in_tx = self.in_transaction
+        try:
+            return super().execute(*args, **kwargs)
+        except Exception:
+            if was_in_tx and not self.in_transaction:
+                self.notify_rollback()
+            raise
+
+    def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        was_in_tx = self.in_transaction
+        try:
+            return super().executemany(*args, **kwargs)
+        except Exception:
+            if was_in_tx and not self.in_transaction:
+                self.notify_rollback()
+            raise
+
+    def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        was_in_tx = self.in_transaction
+        try:
+            return super().executescript(*args, **kwargs)
+        except Exception:
+            if was_in_tx and not self.in_transaction:
+                self.notify_rollback()
+            raise
+
+    def cursor(self, factory: Any = ManagedCursor) -> sqlite3.Cursor:
+        if factory is sqlite3.Cursor:
+            factory = ManagedCursor
+        return super().cursor(factory=factory)
+
     def close(self) -> None:
         _ACTIVE_OBSERVED_CONNECTIONS.discard(self)
         self._trace_observers.clear()
+        self._rollback_observers.clear()
         self._user_trace_callback = None
         super().close()
 
