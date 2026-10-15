@@ -1909,6 +1909,73 @@ def test_temporary_table_shadowing_verified_main_table_invalidates_cache() -> No
     conn.close()
 
 
+def test_external_dml_on_attached_database_invalidates_cache(tmp_path: Path) -> None:
+    """External commit to an attached database invalidates turn-scoped verification cache."""
+    db_path = tmp_path / "attached.db"
+    conn_ext = sqlite3.connect(db_path)
+    conn_ext.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn_ext.execute("INSERT INTO substrate VALUES (1, 'init')")
+    conn_ext.commit()
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(f"ATTACH DATABASE '{db_path}' AS ext")
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_attached_dml",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "initial_admission")
+    assert cache.verified("test_kind", coord) == "initial_admission"
+
+    # External connection updates and commits to the attached database
+    conn_ext.execute("UPDATE substrate SET val = 'mutated' WHERE id = 1")
+    conn_ext.commit()
+
+    # Cached admission MUST be invalidated by the external commit to the attached database!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+    conn_ext.close()
+
+
+def test_attached_database_replacement_invalidates_cache(tmp_path: Path) -> None:
+    """Detaching and attaching another database under the same schema name invalidates cache."""
+    db1_path = tmp_path / "attached1.db"
+    conn_ext1 = sqlite3.connect(db1_path)
+    conn_ext1.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn_ext1.execute("INSERT INTO substrate VALUES (1, 'db1')")
+    conn_ext1.commit()
+
+    db2_path = tmp_path / "attached2.db"
+    conn_ext2 = sqlite3.connect(db2_path)
+    conn_ext2.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn_ext2.execute("INSERT INTO substrate VALUES (1, 'db2')")
+    conn_ext2.commit()
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(f"ATTACH DATABASE '{db1_path}' AS ext")
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_attached_replacement",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admission_db1")
+    assert cache.verified("test_kind", coord) == "admission_db1"
+
+    # Detach db1 and attach db2 under the same schema name
+    conn.execute("DETACH DATABASE ext")
+    conn.execute(f"ATTACH DATABASE '{db2_path}' AS ext")
+
+    # Cache MUST be invalidated by attachment replacement!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+    conn_ext1.close()
+    conn_ext2.close()
+
+
 def test_connection_trace_preserves_existing_observer_and_nested_caches() -> None:
     """Existing trace observer is preserved across cache creation, nested caches, and removal."""
     conn = sqlite3.connect(":memory:")

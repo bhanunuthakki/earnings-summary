@@ -28,6 +28,9 @@ RollbackObserver = Callable[[], object]
 
 _ACTIVE_OBSERVED_CONNECTIONS: weakref.WeakSet[ManagedConnection] = weakref.WeakSet()
 _ROLLBACK_PATTERN = re.compile(r"(?is)^(?:\s*(?:/\*.*?\*/|--[^\n]*(?:\n|$)))*\s*rollback\b")
+_ATTACH_OR_DETACH_PATTERN = re.compile(
+    r"(?is)^(?:\s*(?:/\*.*?\*/|--[^\n]*(?:\n|$)))*\s*(?:attach|detach)\b"
+)
 
 
 class ManagedCursor(sqlite3.Cursor):
@@ -134,7 +137,7 @@ class ManagedConnection(sqlite3.Connection):
         return self._user_trace_callback
 
     def _dispatch_trace(self, statement: str) -> None:
-        if _ROLLBACK_PATTERN.match(statement):
+        if _ROLLBACK_PATTERN.match(statement) or _ATTACH_OR_DETACH_PATTERN.match(statement):
             self.notify_rollback()
         if self._user_trace_callback is not None:
             with suppress(Exception):

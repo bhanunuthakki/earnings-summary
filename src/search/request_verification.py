@@ -109,7 +109,7 @@ class VerificationEvent:
 
     kind: str
     coordinate: tuple[str, ...]
-    change_token: int
+    change_token: object
     sequence: int
 
 
@@ -123,8 +123,9 @@ class _NotVerified:
 NOT_VERIFIED = _NotVerified()
 
 
-SchemaVersionMap = tuple[tuple[str, int], ...]
-StateToken = tuple[int, SchemaVersionMap, int]
+DataVersionMap = tuple[tuple[str, int], ...]
+SchemaTopologyMap = tuple[tuple[str, str, int], ...]
+StateToken = tuple[DataVersionMap, SchemaTopologyMap, int]
 
 
 class RequestVerificationCache:
@@ -145,11 +146,11 @@ class RequestVerificationCache:
         self.enabled = enabled
         self.journal: list[VerificationEvent] = []
         self._entries: dict[tuple[str, tuple[str, ...]], tuple[StateToken, object]] = {}
-        self._token: int | None = None
+        self._token: DataVersionMap | None = None
         self._epoch: int = 0
         self._in_flight_tokens: dict[tuple[str, tuple[str, ...]], list[StateToken]] = {}
         self._expected_changes: int = self._conn.total_changes
-        self._schema_version: SchemaVersionMap = self._read_schema_version()
+        self._schema_version: SchemaTopologyMap = self._read_schema_version()
         self._rollback_generation: int = self._conn.rollback_generation
         self._closed: bool = False
         self._unregister_trace: Callable[[], None] | None = register_connection_trace_observer(
@@ -159,19 +160,30 @@ class RequestVerificationCache:
             self._conn.register_rollback_observer(self.notify_rollback)
         )
 
-    def _read_schema_version(self) -> SchemaVersionMap:
-        versions: list[tuple[str, int]] = []
+    def _read_schema_version(self) -> SchemaTopologyMap:
+        versions: list[tuple[str, str, int]] = []
         for row in self._conn.execute("PRAGMA database_list").fetchall():
             schema_name = str(row[1])
+            file_path = str(row[2])
             cursor = self._conn.execute(f'PRAGMA "{schema_name}".schema_version')
             row_v = cursor.fetchone()
             version = int(row_v[0]) if row_v is not None else 0
-            versions.append((schema_name, version))
-        if not any(name == "temp" for name, _ in versions):
+            versions.append((schema_name, file_path, version))
+        if not any(name == "temp" for name, _, _ in versions):
             cursor = self._conn.execute('PRAGMA "temp".schema_version')
             row_v = cursor.fetchone()
             version = int(row_v[0]) if row_v is not None else 0
-            versions.append(("temp", version))
+            versions.append(("temp", "", version))
+        return tuple(sorted(versions))
+
+    def _read_data_versions(self) -> DataVersionMap:
+        versions: list[tuple[str, int]] = []
+        for row in self._conn.execute("PRAGMA database_list").fetchall():
+            schema_name = str(row[1])
+            cursor = self._conn.execute(f'PRAGMA "{schema_name}".data_version')
+            row_v = cursor.fetchone()
+            version = int(row_v[0]) if row_v is not None else 0
+            versions.append((schema_name, version))
         return tuple(sorted(versions))
 
     @property
@@ -337,7 +349,7 @@ class RequestVerificationCache:
                 # Database mutated (external commit, unacknowledged write, rollback,
                 # or explicit invalidation) while verification was running; do not memoize.
                 return
-            if isinstance(lookup_state, int) and lookup_state != current_state[0]:
+            if isinstance(lookup_state, int):
                 return
         self._entries[(kind, coordinate)] = (current_state, value)
 
@@ -350,12 +362,11 @@ class RequestVerificationCache:
             counts[key] = counts.get(key, 0) + 1
         return counts
 
-    def _change_token(self) -> int:
+    def _change_token(self) -> DataVersionMap:
         self._check_same_connection_mutation()
-        row = self._conn.execute("PRAGMA data_version").fetchone()
-        token = int(row[0])
-        if self._token != token:
-            self._token = token
+        versions = self._read_data_versions()
+        if self._token != versions:
+            self._token = versions
             self._entries.clear()
             self._epoch += 1
-        return token
+        return versions
