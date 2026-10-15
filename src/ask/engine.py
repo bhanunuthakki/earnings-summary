@@ -975,6 +975,7 @@ def _shadow_retrieval(
         role=SQLiteConnectionRole.WRITER,
         schema_preflight=True,
     )
+    verification: RequestVerificationCache | None = None
     try:
         scopes = load_production_scopes(
             conn,
@@ -1009,6 +1010,8 @@ def _shadow_retrieval(
         conn.rollback()
         log.warning({"event": "ask_shadow_retrieval_failed"}, exc_info=True)
     finally:
+        if verification is not None:
+            verification.close()
         conn.close()
 
 
@@ -1054,6 +1057,7 @@ def _sealed_or_shadow_narrative_events(
             role=SQLiteConnectionRole.WRITER,
             schema_preflight=True,
         )
+        verification: RequestVerificationCache | None = None
         try:
             scopes = load_production_scopes(
                 conn,
@@ -1102,6 +1106,8 @@ def _sealed_or_shadow_narrative_events(
             conn.rollback()
             raise
         finally:
+            if verification is not None:
+                verification.close()
             conn.close()
 
         fragments, evidence_block = _sealed_evidence_block(evidence)

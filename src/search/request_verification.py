@@ -41,7 +41,74 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 
 _ROLLBACK_PATTERN = re.compile(r"(?is)^(?:\s*(?:/\*.*?\*/|--[^\n]*(?:\n|$)))*\s*rollback\b")
-_CONNECTION_TRACE_STACK: dict[int, list[Callable[[str], None]]] = {}
+
+TraceObserver = Callable[[str], None]
+
+
+class ConnectionTraceDispatcher:
+    """Connection-owned dispatcher coordinating multiple trace observers on one SQLite connection."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+        self._observers: list[TraceObserver] = []
+
+    def dispatch(self, statement: str) -> None:
+        for observer in list(self._observers):
+            with suppress(Exception):
+                observer(statement)
+
+    def register(self, observer: TraceObserver) -> Callable[[], None]:
+        self._observers.append(observer)
+
+        def _unregister() -> None:
+            self.unregister(observer)
+
+        return _unregister
+
+    def unregister(self, observer: TraceObserver) -> None:
+        if observer in self._observers:
+            self._observers.remove(observer)
+        if not self._observers:
+            _DISPATCHERS.pop(id(self._conn), None)
+            with suppress(Exception):
+                self._conn.set_trace_callback(None)
+
+    @property
+    def observer_count(self) -> int:
+        """Return the number of active observers registered on this connection."""
+        return len(self._observers)
+
+
+_DISPATCHERS: dict[int, ConnectionTraceDispatcher] = {}
+
+
+def register_connection_trace_observer(
+    conn: sqlite3.Connection, observer: TraceObserver
+) -> Callable[[], None]:
+    """Register a trace observer through the connection-owned dispatcher.
+
+    Returns a callable that unregisters the observer when invoked.
+    """
+    conn_id = id(conn)
+    dispatcher = _DISPATCHERS.get(conn_id)
+    if dispatcher is None:
+        dispatcher = ConnectionTraceDispatcher(conn)
+        _DISPATCHERS[conn_id] = dispatcher
+        with suppress(Exception):
+            conn.set_trace_callback(dispatcher.dispatch)
+    return dispatcher.register(observer)
+
+
+def active_connection_trace_dispatcher_count() -> int:
+    """Return the number of connections currently registered in the trace dispatcher."""
+    return len(_DISPATCHERS)
+
+
+def active_connection_trace_observer_count(conn: sqlite3.Connection) -> int:
+    """Return the number of active observers registered on the given connection."""
+    dispatcher = _DISPATCHERS.get(id(conn))
+    return dispatcher.observer_count if dispatcher is not None else 0
+
 
 # Kinds of verification work the sealed plane memoizes per request.
 SEMANTIC_PROJECTION_READ = "semantic_projection_read_rehash_verify"
@@ -97,19 +164,9 @@ class RequestVerificationCache:
         self._in_flight_tokens: dict[tuple[str, tuple[str, ...]], list[tuple[int, int]]] = {}
         self._expected_changes: int = conn.total_changes
         self._closed: bool = False
-        conn_id = id(conn)
-        if conn_id not in _CONNECTION_TRACE_STACK:
-            stack: list[Callable[[str], None]] = []
-            _CONNECTION_TRACE_STACK[conn_id] = stack
-
-            def _dispatch_trace(statement: str) -> None:
-                for handler in list(_CONNECTION_TRACE_STACK.get(conn_id, [])):
-                    with suppress(Exception):
-                        handler(statement)
-
-            with suppress(Exception):
-                self._conn.set_trace_callback(_dispatch_trace)
-        _CONNECTION_TRACE_STACK[conn_id].append(self._on_trace_sql)
+        self._unregister_trace: Callable[[], None] | None = register_connection_trace_observer(
+            conn, self._on_trace_sql
+        )
 
     def _on_trace_sql(self, statement: str) -> None:
         if _ROLLBACK_PATTERN.match(statement):
@@ -118,20 +175,16 @@ class RequestVerificationCache:
             self._expected_changes = self._conn.total_changes
 
     def close(self) -> None:
-        """Release trace callback registration on the connection."""
+        """Release trace callback registration on the connection and release cached entries."""
 
         if self._closed:
             return
         self._closed = True
-        conn_id = id(self._conn)
-        stack = _CONNECTION_TRACE_STACK.get(conn_id)
-        if stack is not None:
-            if self._on_trace_sql in stack:
-                stack.remove(self._on_trace_sql)
-            if not stack:
-                _CONNECTION_TRACE_STACK.pop(conn_id, None)
-                with suppress(Exception):
-                    self._conn.set_trace_callback(None)
+        if self._unregister_trace is not None:
+            self._unregister_trace()
+            self._unregister_trace = None
+        self._entries.clear()
+        self._in_flight_tokens.clear()
 
     def __enter__(self) -> RequestVerificationCache:
         return self

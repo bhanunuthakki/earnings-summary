@@ -71,10 +71,10 @@ from search.canonical_fact_projection import (
     AUDIT_VERIFIER_CODE_SHA256,
     AUDIT_VERIFIER_NAME,
     AUDIT_VERIFIER_VERSION,
-    CanonicalFactHit,
-    VerifiedCanonicalProjectionGeneration,
     admit_canonical_projection_for_read,
+    digest_bucket,
     projection_audit_payload,
+    search_canonical_facts,
 )
 from search.embedding_promotion import EmbeddingPromotion, LocalVectorRuntimeConfig
 from search.embedding_runtime_artifact import (
@@ -97,6 +97,9 @@ from search.request_verification import (
     SEMANTIC_RUNTIME_INSTANCE,
     RequestVerificationCache,
     VerificationCacheError,
+    active_connection_trace_dispatcher_count,
+    active_connection_trace_observer_count,
+    register_connection_trace_observer,
 )
 
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
@@ -112,6 +115,10 @@ LEXICAL_RUN_ID = "lexical-1"
 VECTOR_RUN_ID = "vector-1"
 EMBEDDING_PROMOTION_ID = "embedding-promotion-1"
 PROJECTION_SEAL_ID = "projection-seal-1"
+MANIFEST_ID_BETA = "manifest-beta"
+LEXICAL_RUN_ID_BETA = "lexical-beta"
+VECTOR_RUN_ID_BETA = "vector-beta"
+PROJECTION_SEAL_ID_BETA = "projection-seal-vector-beta"
 RESEARCH_SNAPSHOT_ID = "research-1"
 RESEARCH_SNAPSHOT_SHA256 = "d" * 64
 FACT_GENERATION_ID = "facts-1"
@@ -328,17 +335,28 @@ class _StructuredResult:
 class _CountingIndex:
     """In-memory sealed vector projection that counts every full read."""
 
-    def __init__(self, rows: list[dict[str, object]], storage_uri: str, probe: _Probe) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, object]],
+        storage_uri: str,
+        probe: _Probe,
+        *,
+        rows_by_run: dict[str, list[dict[str, object]]] | None = None,
+        uris_by_run: dict[str, str] | None = None,
+    ) -> None:
         self._rows = rows
         self._storage_uri = storage_uri
         self._probe = probe
+        self._rows_by_run = rows_by_run or {}
+        self._uris_by_run = uris_by_run or {}
 
     def read_projection(self, index_run_id: str, *, expected_count: int) -> list[dict[str, object]]:
         self._probe.projection_reads.append(index_run_id)
-        return [dict(row) for row in self._rows]
+        rows = self._rows_by_run.get(index_run_id, self._rows)
+        return [dict(row) for row in rows]
 
     def published_storage_uri(self, index_run_id: str) -> str:
-        return self._storage_uri
+        return self._uris_by_run.get(index_run_id, self._storage_uri)
 
 
 class _FixedQueryEncoder:
@@ -765,11 +783,19 @@ def _install_doubles(
     records: list[dict[str, object]],
     runtime: LocalVectorRuntimeConfig,
     enabled: bool,
+    extra_records_by_run: dict[str, list[dict[str, object]]] | None = None,
+    extra_uris_by_run: dict[str, str] | None = None,
 ) -> None:
     storage_uri = f"lance://{(runtime.index_root / f'run-{VECTOR_RUN_ID}' / 'vectors.lance').resolve().as_posix()}#evidence_chunks"
 
     def _index(_root: Path) -> _CountingIndex:
-        return _CountingIndex(records, storage_uri, probe)
+        return _CountingIndex(
+            records,
+            storage_uri,
+            probe,
+            rows_by_run=extra_records_by_run,
+            uris_by_run=extra_uris_by_run,
+        )
 
     def _encoder(*_args: object, **_kwargs: object) -> _FixedQueryEncoder:
         return _FixedQueryEncoder()
@@ -1254,6 +1280,7 @@ def test_nested_verification_invalidation_across_connections(tmp_path: Path) -> 
     # Nested verification was executed entirely at the new token, so it IS memoized
     assert cache.verified("nested_check", ("nested",)) == "nested_result"
 
+    cache.close()
     conn1.close()
     conn2.close()
 
@@ -1280,6 +1307,7 @@ def test_exact_semantic_runtime_enforces_connection_boundary(tmp_path: Path) -> 
             verification=cache1,
         )
 
+    cache1.close()
     conn1.close()
     conn2.close()
 
@@ -1333,6 +1361,7 @@ def test_verified_retrieval_trace_receipt_is_protected_from_caller_mutation(
     assert receipt2.ordered_results[0]["final_score"] == original_score
     assert receipt2.ordered_results[0]["final_score"] != "MUTATED"
 
+    cache.close()
     conn.close()
 
 
@@ -1403,6 +1432,7 @@ def test_unacknowledged_same_connection_mutation_invalidates_cache(
             verification=cache,
         )
 
+    cache.close()
     conn.close()
 
 
@@ -1505,6 +1535,7 @@ def test_savepoint_rollback_invalidates_cached_trace_receipt(
             verification=cache,
         )
 
+    cache.close()
     conn.close()
 
 
@@ -1614,6 +1645,7 @@ def test_canonical_fact_projection_generation_admission_deduplication() -> None:
     assert v2 == v1
     assert cache.counts()[(PROJECTION_GENERATION_ADMISSION, (gen_id,))] == 1
 
+    cache.close()
     conn.close()
 
 
@@ -1638,6 +1670,7 @@ def test_same_connection_mutation_during_pending_verification_rejects_memoizatio
     # 4. The stale result must NOT have been memoized; verified() must return NOT_VERIFIED
     assert cache.verified("kind_test", coord) is NOT_VERIFIED
 
+    cache.close()
     conn.close()
 
 
@@ -1652,6 +1685,7 @@ def test_invalidation_during_pending_verification_rejects_memoization() -> None:
     cache.record("kind_test", coord, "stale_result")
     assert cache.verified("kind_test", coord) is NOT_VERIFIED
 
+    cache.close()
     conn.close()
 
 
@@ -1674,6 +1708,7 @@ def test_rollback_during_pending_verification_rejects_memoization() -> None:
     cache.record("kind_test", coord, "stale_result")
     assert cache.verified("kind_test", coord) is NOT_VERIFIED
 
+    cache.close()
     conn.close()
 
 
@@ -1694,6 +1729,7 @@ def test_authorized_write_during_pending_verification_preserves_memoization() ->
     cache.record("kind_test", coord, "valid_result")
     assert cache.verified("kind_test", coord) == "valid_result"
 
+    cache.close()
     conn.close()
 
 
@@ -1726,42 +1762,205 @@ def test_bound_query_containing_word_rollback_does_not_clear_cache() -> None:
     # Real rollback clears cache
     assert cache.verified("kind_test", coord) is NOT_VERIFIED
 
+    cache.close()
     conn.close()
 
 
-def test_turn_with_multiple_scopes_and_multiple_narrative_bundles_verifies_once(
+def test_connection_trace_preserves_existing_observer_and_nested_caches() -> None:
+    """Existing trace observer is preserved across cache creation, nested caches, and removal."""
+    conn = sqlite3.connect(":memory:")
+    statements: list[str] = []
+    initial_dispatchers = active_connection_trace_dispatcher_count()
+
+    # 1. Register an existing observer before any verification cache
+    unregister_existing = register_connection_trace_observer(conn, statements.append)
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers + 1
+    assert active_connection_trace_observer_count(conn) == 1
+
+    conn.execute("SELECT 1")
+    assert any("SELECT 1" in s for s in statements)
+
+    # 2. Outer verification cache created
+    cache1 = RequestVerificationCache(conn)
+    assert active_connection_trace_observer_count(conn) == 2
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers + 1
+
+    # 3. Nested inner verification cache created
+    cache2 = RequestVerificationCache(conn)
+    assert active_connection_trace_observer_count(conn) == 3
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers + 1
+
+    # Statement dispatched to all active observers
+    statements.clear()
+    conn.execute("SELECT 2")
+    assert any("SELECT 2" in s for s in statements)
+
+    # 4. Nested inner cache closes
+    cache2.close()
+    assert active_connection_trace_observer_count(conn) == 2
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers + 1
+
+    # 5. Outer cache closes
+    cache1.close()
+    assert active_connection_trace_observer_count(conn) == 1
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers + 1
+
+    # Existing observer still receives statements!
+    statements.clear()
+    conn.execute("SELECT 3")
+    assert any("SELECT 3" in s for s in statements)
+
+    # 6. Unregister existing observer -> cleans up connection dispatcher completely
+    unregister_existing()
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
+    assert active_connection_trace_observer_count(conn) == 0
+
+    conn.close()
+
+
+def test_turn_lifecycle_cleans_up_verification_cache_and_trace_registry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A turn spanning multiple scopes and narrative bundles verifies each coordinate once across all bundles."""
+    """Repeated successful and failed turns guarantee verification cache cleanup and empty registry."""
     storage_root = tmp_path / "storage"
     root = tmp_path / "run"
     db_path, runtime, records = _build_fixture(root, storage_root)
     probe = _Probe()
     _install_doubles(monkeypatch, probe, records=records, runtime=runtime, enabled=True)
     _install_turn_seams(monkeypatch, probe, runtime=runtime)
+    initial_dispatchers = active_connection_trace_dispatcher_count()
 
-    # Seed a second retrieval scope and promotion for BETA
+    # 1. Run first successful turn
+    events1 = list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME"]),
+            ContextPack(scope="portfolio", default_tickers=["ACME"], system_context="ctx"),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+    assert [event["type"] for event in events1] == ["stage", "delta", "citations", "final"]
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
+
+    # 2. Run second successful turn
+    events2 = list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME"]),
+            ContextPack(scope="portfolio", default_tickers=["ACME"], system_context="ctx"),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+    assert [event["type"] for event in events2] == ["stage", "delta", "citations", "final"]
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
+
+    # 3. Run a failed turn (e.g. unknown ticker causing promotion_missing)
+    events3 = list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["UNKNOWN_TICKER"]),
+            ContextPack(
+                scope="portfolio", default_tickers=["UNKNOWN_TICKER"], system_context="ctx"
+            ),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+    assert any(event["type"] == "error" for event in events3)
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
+
+
+def test_turn_with_multiple_scopes_and_multiple_narrative_bundles_verifies_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn spanning multiple scopes and distinct narrative bundles verifies each coordinate once across all bundles."""
+    storage_root = tmp_path / "storage"
+    root = tmp_path / "run"
+    db_path, runtime, records = _build_fixture(root, storage_root)
+    probe = _Probe()
+
+    dataset_beta = storage_root / f"run-{VECTOR_RUN_ID_BETA}" / "vectors.lance"
+    storage_uri_beta = f"lance://{dataset_beta.resolve().as_posix()}#evidence_chunks"
+
+    beta_records = [
+        {
+            **_vector_record(
+                "beta-chunk-1",
+                "Subscription demand continued in international markets.",
+                [0.5, 0.5],
+            ),
+            "manifest_id": MANIFEST_ID_BETA,
+            "ticker": "ACME",
+        }
+    ]
+
+    _install_doubles(
+        monkeypatch,
+        probe,
+        records=records,
+        runtime=runtime,
+        enabled=True,
+        extra_records_by_run={VECTOR_RUN_ID_BETA: beta_records},
+        extra_uris_by_run={VECTOR_RUN_ID_BETA: storage_uri_beta},
+    )
+    _install_turn_seams(monkeypatch, probe, runtime=runtime)
+
     conn = sqlite3.connect(db_path)
     try:
+        bundle_1 = _bundle()
+        bundle_2 = NarrativeBundle(
+            corpus_manifest_id=MANIFEST_ID_BETA,
+            lexical_index_run_id=LEXICAL_RUN_ID_BETA,
+            vector_index_run_id=VECTOR_RUN_ID_BETA,
+            embedding_promotion_id=EMBEDDING_PROMOTION_ID,
+        )
+        two_bundles = (bundle_1, bundle_2)
+        bundles_json = canonical_json([b.model_dump(mode="json") for b in two_bundles])
+        bundles_sha256 = digest_text(bundles_json)
+
+        # Update research snapshot to contain both bundles
+        req = _research_request()
+        req_updated = req.model_copy(
+            update={
+                "corpus_bundles": (
+                    CorpusProjectionBundle(
+                        corpus_manifest_id=MANIFEST_ID,
+                        lexical_index_run_id=LEXICAL_RUN_ID,
+                        vector_index_run_id=VECTOR_RUN_ID,
+                        embedding_promotion_id=EMBEDDING_PROMOTION_ID,
+                    ),
+                    CorpusProjectionBundle(
+                        corpus_manifest_id=MANIFEST_ID_BETA,
+                        lexical_index_run_id=LEXICAL_RUN_ID_BETA,
+                        vector_index_run_id=VECTOR_RUN_ID_BETA,
+                        embedding_promotion_id=EMBEDDING_PROMOTION_ID,
+                    ),
+                )
+            }
+        )
+        conn.execute(
+            "UPDATE research_snapshot_headers SET request_json=? WHERE research_snapshot_id=?",
+            (req_updated.model_dump_json(), RESEARCH_SNAPSHOT_ID),
+        )
+
+        # Update ACME promotion to have both bundles
+        conn.execute(
+            "UPDATE ask_retrieval_scope_promotions SET narrative_bundles_json=?, narrative_bundles_sha256=? WHERE promotion_id=?",
+            (bundles_json, bundles_sha256, "ask-promotion-1"),
+        )
+
+        # Seed BETA scope and promotion with both bundles
         conn.execute(
             "INSERT INTO v_issuer_reporting_scope_current VALUES ('scope-revision-BETA', 'BETA', ?, 'core')",
             (ISSUER_ID,),
         )
-        beta_scope_id = derive_retrieval_scope_id(
-            source_scope_key="BETA",
-            issuer_id=ISSUER_ID,
-        )
+        beta_scope_id = derive_retrieval_scope_id(source_scope_key="BETA", issuer_id=ISSUER_ID)
         policy, verifier_name, verifier_version, code_sha256, config_sha256 = (
             current_verifier_identity()
         )
         inventory_json = canonical_json((INVENTORY_ID,))
-        bundle_2 = NarrativeBundle(
-            corpus_manifest_id=MANIFEST_ID,
-            lexical_index_run_id=LEXICAL_RUN_ID,
-            vector_index_run_id=VECTOR_RUN_ID,
-            embedding_promotion_id=EMBEDDING_PROMOTION_ID,
-        )
-        bundles_json = canonical_json([bundle_2.model_dump(mode="json")])
         conn.execute(
             "INSERT INTO ask_retrieval_scope_promotions VALUES "
             "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -1781,7 +1980,7 @@ def test_turn_with_multiple_scopes_and_multiple_narrative_bundles_verifies_once(
                 inventory_json,
                 digest_text(inventory_json),
                 bundles_json,
-                digest_text(bundles_json),
+                bundles_sha256,
                 NOW.isoformat(),
                 POPULATION_RUN_ID,
                 POPULATION_RECEIPT_SHA256,
@@ -1796,12 +1995,88 @@ def test_turn_with_multiple_scopes_and_multiple_narrative_bundles_verifies_once(
                 NOW.isoformat(),
             ),
         )
+
+        # Seed bundle 2 tables:
+        conn.execute(
+            "INSERT INTO search_manifest_source_inventories VALUES (?,?)",
+            (MANIFEST_ID_BETA, INVENTORY_ID),
+        )
+        conn.execute(
+            "INSERT INTO search_index_runs VALUES (?,?,?,?,?)",
+            (VECTOR_RUN_ID_BETA, MANIFEST_ID_BETA, "vector", CONFIG_SHA256, "succeeded"),
+        )
+        chunk_text_beta = "Subscription demand continued in international markets."
+        conn.execute(
+            "INSERT INTO search_chunks VALUES (?,?,?,?,?,?,?)",
+            (
+                "beta-chunk-1",
+                MANIFEST_ID_BETA,
+                digest_text(chunk_text_beta),
+                "node:beta-chunk-1",
+                0,
+                len(chunk_text_beta),
+                chunk_text_beta,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO search_lexical_chunks VALUES (?,?)",
+            ("beta-chunk-1", chunk_text_beta),
+        )
+        conn.execute(
+            "INSERT INTO search_index_memberships VALUES (?,?,?)",
+            (VECTOR_RUN_ID_BETA, "beta-chunk-1", "included"),
+        )
+        conn.execute(
+            "INSERT INTO search_embedding_artifacts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                VECTOR_RUN_ID_BETA,
+                "beta-chunk-1",
+                "passage",
+                "local-test",
+                "deterministic-two-dimensional",
+                2,
+                beta_records[0]["vector_sha256"],
+                storage_uri_beta,
+                beta_records[0]["input_sha256"],
+                CONFIG_SHA256,
+                "succeeded",
+                _runtime_artifact().sha256(),
+            ),
+        )
+        chunk_count, chunk_sha256 = manifest_chunk_commitment(conn, manifest_id=MANIFEST_ID_BETA)
+        artifact_count, artifact_sha256 = vector_artifact_commitment(
+            conn, index_run_id=VECTOR_RUN_ID_BETA
+        )
+        assert artifact_count == chunk_count == len(beta_records)
+        persist_projection_seal(
+            conn,
+            SearchProjectionSeal(
+                projection_seal_id=PROJECTION_SEAL_ID_BETA,
+                idempotency_key=PROJECTION_SEAL_ID_BETA,
+                index_run_id=VECTOR_RUN_ID_BETA,
+                manifest_id=MANIFEST_ID_BETA,
+                index_kind="vector",
+                chunk_count=chunk_count,
+                chunk_set_sha256=chunk_sha256,
+                projection_records_sha256=vector_records_digest(beta_records),
+                artifact_set_sha256=artifact_sha256,
+                provider="local-test",
+                model="deterministic-two-dimensional",
+                dimensions=2,
+                runtime_artifact_sha256=_runtime_artifact().sha256(),
+                config_sha256=CONFIG_SHA256,
+                storage_uri=storage_uri_beta,
+                sealed_at=NOW,
+            ),
+        )
         conn.commit()
     finally:
         conn.close()
 
+    initial_dispatchers = active_connection_trace_dispatcher_count()
+
     # Execute a turn with both ACME and BETA tickers
-    list(
+    events = list(
         engine.respond_turn(
             AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME", "BETA"]),
             ContextPack(scope="portfolio", default_tickers=["ACME", "BETA"], system_context="ctx"),
@@ -1811,8 +2086,10 @@ def test_turn_with_multiple_scopes_and_multiple_narrative_bundles_verifies_once(
         )
     )
 
-    # Both scopes share population cutover, research snapshot, and projection coordinates
-    # Turn cache ensures each coordinate is verified at most once across the entire turn
+    # Reaches final event cleanly with no errors
+    assert [event["type"] for event in events] == ["stage", "delta", "citations", "final"]
+
+    # Both scopes and both distinct narrative bundles verified exactly once
     assert len(probe.caches) >= 1
     cache = probe.caches[0]
     pop_receipt_coord = (POPULATION_RUN_ID,)
@@ -1827,13 +2104,38 @@ def test_turn_with_multiple_scopes_and_multiple_narrative_bundles_verifies_once(
         if kind == PROMOTION_COORDINATES
     }
     assert promo_coords == {"ask-promotion-1": 1, "ask-promotion-beta": 1}
+
+    # Distinct narrative bundle coordinates both verified once
+    assert (
+        cache.counts()[
+            (SEMANTIC_PROJECTION_READ, (VECTOR_RUN_ID, EMBEDDING_PROMOTION_ID, PROJECTION_SEAL_ID))
+        ]
+        == 1
+    )
+    assert (
+        cache.counts()[
+            (
+                SEMANTIC_PROJECTION_READ,
+                (VECTOR_RUN_ID_BETA, EMBEDDING_PROMOTION_ID, PROJECTION_SEAL_ID_BETA),
+            )
+        ]
+        == 1
+    )
+    assert (
+        cache.counts()[(SEMANTIC_RUNTIME_COORDINATES, (VECTOR_RUN_ID, EMBEDDING_PROMOTION_ID))] == 1
+    )
+    assert (
+        cache.counts()[(SEMANTIC_RUNTIME_COORDINATES, (VECTOR_RUN_ID_BETA, EMBEDDING_PROMOTION_ID))]
+        == 1
+    )
     assert all(count == 1 for count in cache.counts().values())
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
 
 
 def test_turn_with_real_fact_candidates_verifies_projection_admission_once_through_complete_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A turn with multiple real fact candidates verifies projection admission exactly once."""
+    """A turn with multiple real fact candidates runs real search_canonical_facts and verifies admission exactly once."""
     storage_root = tmp_path / "storage"
     root = tmp_path / "run"
     db_path, runtime, records = _build_fixture(root, storage_root)
@@ -1841,38 +2143,10 @@ def test_turn_with_real_fact_candidates_verifies_projection_admission_once_throu
     _install_doubles(monkeypatch, probe, records=records, runtime=runtime, enabled=True)
     _install_turn_seams(monkeypatch, probe, runtime=runtime)
 
-    fact_1 = CanonicalFactHit(
-        generation_id=FACT_GENERATION_ID,
-        canonical_metric_cell_id="fact-cell-1",
-        canonical_metric_name="Revenue",
-        canonical_search_text="Revenue 2025",
-        canonical_value="100",
-        value_kind="numeric",
-        period_start="2025-01-01",
-        period_end="2025-12-31",
-        currency="USD",
-        unit_key="USD",
-        entry_sha256=digest_text("fact-1"),
-        lineage={"aliases": {}},
-        evidence_locator={"section": "Income Statement"},
-    )
-    fact_2 = CanonicalFactHit(
-        generation_id=FACT_GENERATION_ID,
-        canonical_metric_cell_id="fact-cell-2",
-        canonical_metric_name="Gross Profit",
-        canonical_search_text="Gross Profit 2025",
-        canonical_value="70",
-        value_kind="numeric",
-        period_start="2025-01-01",
-        period_end="2025-12-31",
-        currency="USD",
-        unit_key="USD",
-        entry_sha256=digest_text("fact-2"),
-        lineage={"aliases": {}},
-        evidence_locator={"section": "Income Statement"},
-    )
+    # Restore REAL search_canonical_facts on retrieval module
+    monkeypatch.setattr(retrieval_module, "search_canonical_facts", search_canonical_facts)
 
-    # Seed projection tables in fixture DB
+    # Seed projection and fact tables in fixture DB
     conn = sqlite3.connect(db_path)
     try:
         conn.execute(
@@ -1960,6 +2234,46 @@ def test_turn_with_real_fact_candidates_verifies_projection_admission_once_throu
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS canonical_fact_projection_buckets (
+                generation_id TEXT NOT NULL,
+                digest_bucket INTEGER NOT NULL,
+                canonical_entry_set_json TEXT NOT NULL,
+                entry_set_sha256 TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS source_fact_publication_seals (
+                publication_seal_id TEXT PRIMARY KEY,
+                publication_id TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS source_fact_publication_members (
+                publication_member_id TEXT PRIMARY KEY,
+                publication_id TEXT NOT NULL,
+                canonical_member_sha256 TEXT NOT NULL,
+                record_commitment_sha256 TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS kpi_aliases (
+                id INTEGER PRIMARY KEY,
+                ticker TEXT,
+                canonical_name TEXT NOT NULL,
+                reported_name TEXT NOT NULL,
+                effective_to TEXT
+            )
+            """
+        )
+
         config_json = "{}"
         header: dict[str, object] = {
             "generation_id": FACT_GENERATION_ID,
@@ -1972,7 +2286,7 @@ def test_turn_with_real_fact_candidates_verifies_projection_admission_once_throu
             "ontology_snapshot_sha256": "3" * 64,
             "cutoff_at": NOW.isoformat(),
             "recorded_at": NOW.isoformat(),
-            "change_count": 10,
+            "change_count": 2,
             "generation_sha256": "4" * 64,
             "config_json": config_json,
         }
@@ -1984,10 +2298,10 @@ def test_turn_with_real_fact_candidates_verifies_projection_admission_once_throu
             "generation_id": FACT_GENERATION_ID,
             "projection_seal_id": "seal-1",
             "projection_seal_sha256": FACT_PROJECTION_SEAL_SHA256,
-            "change_count": 10,
-            "upsert_count": 10,
+            "change_count": 2,
+            "upsert_count": 2,
             "tombstone_count": 0,
-            "effective_entry_count": 10,
+            "effective_entry_count": 2,
             "batch_count": 1,
             "ordered_entry_set_sha256": "6" * 64,
         }
@@ -1995,9 +2309,15 @@ def test_turn_with_real_fact_candidates_verifies_projection_admission_once_throu
         conn.execute(
             """
             CREATE TABLE canonical_fact_projection_seals (
-                generation_id TEXT PRIMARY KEY, projection_seal_id TEXT, projection_seal_sha256 TEXT,
-                change_count INTEGER, upsert_count INTEGER, tombstone_count INTEGER,
-                effective_entry_count INTEGER, batch_count INTEGER, ordered_entry_set_sha256 TEXT
+                generation_id TEXT PRIMARY KEY,
+                projection_seal_id TEXT,
+                projection_seal_sha256 TEXT,
+                change_count INTEGER,
+                upsert_count INTEGER,
+                tombstone_count INTEGER,
+                effective_entry_count INTEGER,
+                batch_count INTEGER,
+                ordered_entry_set_sha256 TEXT
             )
             """
         )
@@ -2030,66 +2350,116 @@ def test_turn_with_real_fact_candidates_verifies_projection_admission_once_throu
             "INSERT INTO canonical_fact_projection_audit_receipts VALUES (?,?,?,?,?,?,?,?)",
             tuple(receipt.values()),
         )
-        for ord_idx, fact in enumerate((fact_1, fact_2)):
-            conn.execute(
-                """
-                INSERT INTO canonical_fact_projection_entries (
-                    generation_id, entry_ordinal, change_kind, digest_bucket,
-                    canonical_metric_cell_id, canonical_metric_name, canonical_value,
-                    period_start, period_end, period_kind, reporting_entity_id, unit_key, currency,
-                    value_kind, dimensions_json, evidence_document_version_id, evidence_node_id,
-                    evidence_locator_json, evidence_locator_sha256, canonical_search_text,
-                    entry_json, entry_sha256
-                ) VALUES (?, ?, 'upsert', ?, ?, ?, ?, ?, ?, 'instant', ?, ?, ?, ?, '[]', 'document-1', 'node:chunk-1', '{}', ?, ?, '{}', ?)
-                """,
-                (
-                    FACT_GENERATION_ID,
-                    ord_idx,
-                    ord_idx,
-                    fact.canonical_metric_cell_id,
-                    fact.canonical_metric_name,
-                    fact.canonical_value,
-                    fact.period_start,
-                    fact.period_end,
-                    REPORTING_ENTITY_ID,
-                    fact.unit_key,
-                    fact.currency,
-                    fact.value_kind,
-                    digest_text("{}"),
-                    fact.canonical_search_text,
-                    fact.entry_sha256,
-                ),
+
+        import search.canonical_fact_projection as projection_module
+
+        payload_columns = cast(
+            tuple[str, ...], getattr(projection_module, "_ENTRY_PAYLOAD_COLUMNS")
+        )
+        exact = "a" * 64
+        cells = [
+            (
+                "canonical:revenue:2025",
+                "Revenue",
+                "Revenue | How did revenue grow | 2025-12-31",
+                "2025-12-31",
+            ),
+            (
+                "canonical:revenue_sub:2025",
+                "Subscription Revenue",
+                "Subscription Revenue | How did revenue grow | 2025-12-31",
+                "2025-12-31",
+            ),
+        ]
+        entries: list[dict[str, object]] = []
+        for ord_idx, (cell_id, name, search_text, p_end) in enumerate(cells):
+            entry_payload: dict[str, object] = {column: None for column in payload_columns}
+            entry_payload.update(
+                {
+                    "binding_commitment_sha256": exact,
+                    "binding_revision_id": f"binding-{ord_idx}",
+                    "canonical_metric_cell_id": cell_id,
+                    "canonical_metric_name": name,
+                    "canonical_resolution_revision_id": f"resolution-{ord_idx}",
+                    "canonical_search_text": search_text,
+                    "canonical_value": "100",
+                    "currency": "USD",
+                    "dimensions_json": "[]",
+                    "evidence_document_version_id": "document-1",
+                    "evidence_locator_json": "{}",
+                    "evidence_locator_sha256": digest_text("{}"),
+                    "evidence_node_id": "node:chunk-1",
+                    "mapping_commitment_sha256": exact,
+                    "mapping_revision_id": f"mapping-{ord_idx}",
+                    "metric_definition_commitment_sha256": exact,
+                    "metric_definition_revision_id": f"definition-{ord_idx}",
+                    "period_end": p_end,
+                    "period_kind": "instant",
+                    "reporting_entity_id": REPORTING_ENTITY_ID,
+                    "selected_observation_id": f"observation-{ord_idx}",
+                    "source_publication_id": "publication-1",
+                    "source_publication_member_id": f"member-{ord_idx}",
+                    "source_publication_member_sha256": exact,
+                    "source_publication_seal_id": "publication-seal-1",
+                    "source_record_commitment_sha256": exact,
+                    "unit_key": "USD",
+                    "value_kind": "numeric",
+                }
             )
+            committed = {
+                **entry_payload,
+                "change_kind": "upsert",
+                "entry_version": "canonical_fact_projection_entry.v1",
+            }
+            e_json = canonical_json(committed)
+            entries.append(
+                {
+                    "generation_id": FACT_GENERATION_ID,
+                    "entry_ordinal": ord_idx,
+                    "change_kind": "upsert",
+                    "digest_bucket": digest_bucket(cell_id),
+                    **entry_payload,
+                    "entry_json": e_json,
+                    "entry_sha256": digest_text(e_json),
+                }
+            )
+
+        entry_columns = cast(tuple[str, ...], getattr(projection_module, "_ENTRY_COLUMNS"))
+        conn.executemany(
+            "INSERT INTO canonical_fact_projection_entries ("
+            + ",".join(entry_columns)
+            + ") VALUES ("
+            + ",".join("?" for _ in entry_columns)
+            + ")",
+            [tuple(entry[col] for col in entry_columns) for entry in entries],
+        )
+
+        buckets: dict[int, list[str]] = {}
+        for entry in entries:
+            d = cast(int, entry["digest_bucket"])
+            buckets.setdefault(d, []).append(str(entry["entry_sha256"]))
+        for bucket, shas in buckets.items():
+            p_load = canonical_json(sorted(shas))
+            conn.execute(
+                "INSERT INTO canonical_fact_projection_buckets VALUES (?,?,?,?)",
+                (FACT_GENERATION_ID, bucket, p_load, digest_text(p_load)),
+            )
+
+        conn.execute(
+            "INSERT INTO source_fact_publication_seals VALUES (?,?)",
+            ("publication-seal-1", "publication-1"),
+        )
+        for ord_idx in range(len(cells)):
+            conn.execute(
+                "INSERT INTO source_fact_publication_members VALUES (?,?,?,?)",
+                (f"member-{ord_idx}", "publication-1", exact, exact),
+            )
+
         conn.commit()
     finally:
         conn.close()
 
-    admission_calls: list[str] = []
-    real_admit = admit_canonical_projection_for_read
-
-    def _admit_spy(
-        conn: sqlite3.Connection,
-        generation_id: str,
-        verification: RequestVerificationCache | None = None,
-    ) -> VerifiedCanonicalProjectionGeneration:
-        admission_calls.append(generation_id)
-        return real_admit(conn, generation_id, verification=verification)
-
-    monkeypatch.setattr(retrieval_module, "admit_canonical_projection_for_read", _admit_spy)
-
-    def _mock_search_facts(
-        conn: sqlite3.Connection,
-        *,
-        generation_id: str,
-        verification: RequestVerificationCache | None = None,
-        **kwargs: object,
-    ) -> tuple[CanonicalFactHit, ...]:
-        retrieval_module.admit_canonical_projection_for_read(
-            conn, generation_id, verification=verification
-        )
-        return (fact_1, fact_2)
-
-    monkeypatch.setattr(retrieval_module, "search_canonical_facts", _mock_search_facts)
+    initial_dispatchers = active_connection_trace_dispatcher_count()
 
     events = list(
         engine.respond_turn(
@@ -2100,11 +2470,13 @@ def test_turn_with_real_fact_candidates_verifies_projection_admission_once_throu
             retrieval_mode="sealed",
         )
     )
-    assert len(events) >= 1
+
+    # Reaches final event cleanly with citations
+    assert [event["type"] for event in events] == ["stage", "delta", "citations", "final"]
     assert len(probe.caches) >= 1
     cache = probe.caches[0]
 
-    # Exactly once per turn: despite fact retrieval, candidate 1 verification, and candidate 2 verification,
-    # the request verification cache guarantees PROJECTION_GENERATION_ADMISSION executes only once
+    # Exactly once per turn: real fact retrieval forwards cache to admit_canonical_projection_for_read
+    # and subsequent trace candidate verification reuses memoized admission
     assert cache.counts()[(PROJECTION_GENERATION_ADMISSION, (FACT_GENERATION_ID,))] == 1
-    assert len(admission_calls) >= 2
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
