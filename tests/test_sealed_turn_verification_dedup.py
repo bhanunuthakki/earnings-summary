@@ -101,6 +101,7 @@ from search.request_verification import (
     active_connection_trace_observer_count,
     register_connection_trace_observer,
 )
+from sqlite_runtime import ManagedConnection
 
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
 SESSION_ID = "session-dedup"
@@ -1828,16 +1829,124 @@ def test_connection_trace_preserves_existing_observer_and_nested_caches() -> Non
     conn.close()
 
 
+def test_managed_connect_handles_positional_and_keyword_factories() -> None:
+    """_managed_connect preserves positional and keyword custom factories while wrapping defaults."""
+    # 1. Default connect returns ManagedConnection
+    conn_default = sqlite3.connect(":memory:")
+    assert isinstance(conn_default, ManagedConnection)
+    conn_default.close()
+
+    # 2. Keyword explicit default returns ManagedConnection
+    conn_kw_default = sqlite3.connect(":memory:", factory=sqlite3.Connection)
+    assert isinstance(conn_kw_default, ManagedConnection)
+    conn_kw_default.close()
+
+    # 3. Custom factory via keyword returns custom class, not ManagedConnection
+    class CustomKeywordConn(sqlite3.Connection):
+        pass
+
+    conn_kw_custom = sqlite3.connect(":memory:", factory=CustomKeywordConn)
+    assert isinstance(conn_kw_custom, CustomKeywordConn)
+    assert not isinstance(conn_kw_custom, ManagedConnection)
+    conn_kw_custom.close()
+
+    # 4. Positional default factory (index 5) returns ManagedConnection
+    conn_pos_default = sqlite3.connect(":memory:", 5.0, 0, "DEFERRED", True, sqlite3.Connection)
+    assert isinstance(conn_pos_default, ManagedConnection)
+    conn_pos_default.close()
+
+    # 5. Positional custom factory returns custom class, not ManagedConnection
+    class CustomPositionalConn(sqlite3.Connection):
+        pass
+
+    conn_pos_custom = sqlite3.connect(":memory:", 5.0, 0, "DEFERRED", True, CustomPositionalConn)
+    assert isinstance(conn_pos_custom, CustomPositionalConn)
+    assert not isinstance(conn_pos_custom, ManagedConnection)
+    conn_pos_custom.close()
+
+
+def test_unmanaged_connection_fails_closed_without_modifying_trace_callback() -> None:
+    """Unmanaged connection rejects verification cache and trace observer without replacing callbacks."""
+
+    class UnmanagedConn(sqlite3.Connection):
+        pass
+
+    conn = sqlite3.connect(":memory:", factory=UnmanagedConn)
+    assert not isinstance(conn, ManagedConnection)
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+
+    # Initial query reaches the user's trace callback
+    conn.execute("SELECT 'initial'")
+    assert any("SELECT 'initial'" in s for s in statements)
+    statements.clear()
+
+    # Registering observer directly fails closed
+    with pytest.raises(VerificationCacheError, match="requires a ManagedConnection"):
+        register_connection_trace_observer(conn, statements.append)
+
+    # Cache instantiation fails closed
+    with pytest.raises(VerificationCacheError, match="requires a ManagedConnection"):
+        RequestVerificationCache(conn)
+
+    # User callback is still intact and completely unmodified
+    conn.execute("SELECT 'after_failure'")
+    assert any("SELECT 'after_failure'" in s for s in statements)
+
+    conn.set_trace_callback(None)
+    conn.close()
+
+
+def test_verification_cache_closed_guards_fail_closed() -> None:
+    """Closed RequestVerificationCache rejects all memo operations while keeping journals readable."""
+    conn = sqlite3.connect(":memory:")
+    cache = RequestVerificationCache(conn)
+    assert cache.is_closed is False
+    cache.close()
+    assert cache.is_closed is True
+
+    # Operations fail closed
+    with pytest.raises(VerificationCacheError, match="closed"):
+        cache.verified("kind", ("coord",))
+
+    with pytest.raises(VerificationCacheError, match="closed"):
+        cache.record("kind", ("coord",), "val")
+
+    with pytest.raises(VerificationCacheError, match="closed"):
+        cache.ensure_bound(conn)
+
+    with pytest.raises(VerificationCacheError, match="closed"):
+        cache.invalidate()
+
+    with pytest.raises(VerificationCacheError, match="closed"):
+        cache.notify_rollback()
+
+    with pytest.raises(VerificationCacheError, match="closed"), cache.authorized_write():
+        pass
+
+    with pytest.raises(VerificationCacheError, match="closed"), cache.savepoint("sp"):
+        pass
+
+    # Journals and counts remain readable for post-turn audit
+    assert isinstance(cache.journal, list)
+    assert isinstance(cache.counts(), dict)
+
+    conn.close()
+
+
 def test_turn_lifecycle_cleans_up_verification_cache_and_trace_registry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Repeated successful and failed turns guarantee verification cache cleanup and empty registry."""
+    import uuid
+
     storage_root = tmp_path / "storage"
     root = tmp_path / "run"
     db_path, runtime, records = _build_fixture(root, storage_root)
     probe = _Probe()
     _install_doubles(monkeypatch, probe, records=records, runtime=runtime, enabled=True)
     _install_turn_seams(monkeypatch, probe, runtime=runtime)
+    monkeypatch.setattr(engine, "uuid4", uuid.uuid4)
     initial_dispatchers = active_connection_trace_dispatcher_count()
 
     # 1. Run first successful turn
@@ -1881,14 +1990,38 @@ def test_turn_lifecycle_cleans_up_verification_cache_and_trace_registry(
     assert any(event["type"] == "error" for event in events3)
     assert active_connection_trace_dispatcher_count() == initial_dispatchers
 
-    # 4. Direct shadow retrieval lifecycle cleanup
+    # 4. Direct shadow retrieval lifecycle cleanup, proving execution and trace persistence
+    conn_chk = sqlite3.connect(db_path)
+    try:
+        traces_before = conn_chk.execute(
+            "SELECT count(*) FROM heterogeneous_retrieval_trace_headers"
+        ).fetchone()[0]
+    finally:
+        conn_chk.close()
+
+    cache_count_before = len(probe.caches)
     engine.run_shadow_retrieval(
         QUESTION,
         AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME"]),
         ContextPack(scope="portfolio", default_tickers=["ACME"], system_context="ctx"),
         db_path=db_path,
     )
+    assert len(probe.caches) == cache_count_before + 1
+    shadow_cache = probe.caches[-1]
+    assert shadow_cache.is_closed is True
+    assert shadow_cache.entry_count == 0
+    assert shadow_cache.in_flight_count == 0
+    assert len(shadow_cache.journal) > 0
     assert active_connection_trace_dispatcher_count() == initial_dispatchers
+
+    conn_chk = sqlite3.connect(db_path)
+    try:
+        traces_after = conn_chk.execute(
+            "SELECT count(*) FROM heterogeneous_retrieval_trace_headers"
+        ).fetchone()[0]
+        assert traces_after == traces_before + 1
+    finally:
+        conn_chk.close()
 
 
 def test_turn_with_multiple_scopes_and_multiple_narrative_bundles_verifies_once(

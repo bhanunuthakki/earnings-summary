@@ -37,7 +37,7 @@ from __future__ import annotations
 import re
 import sqlite3
 from collections.abc import Callable, Generator
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from sqlite_runtime import ManagedConnection, active_managed_trace_connection_count
@@ -47,73 +47,33 @@ _ROLLBACK_PATTERN = re.compile(r"(?is)^(?:\s*(?:/\*.*?\*/|--[^\n]*(?:\n|$)))*\s*
 TraceObserver = Callable[[str], None]
 
 
-class ConnectionTraceDispatcher:
-    """Connection-owned dispatcher coordinating multiple trace observers on one SQLite connection."""
-
-    def __init__(self, conn: sqlite3.Connection) -> None:
-        self._conn = conn
-        self._observers: list[TraceObserver] = []
-
-    def dispatch(self, statement: str) -> None:
-        for observer in list(self._observers):
-            with suppress(Exception):
-                observer(statement)
-
-    def register(self, observer: TraceObserver) -> Callable[[], None]:
-        self._observers.append(observer)
-
-        def _unregister() -> None:
-            self.unregister(observer)
-
-        return _unregister
-
-    def unregister(self, observer: TraceObserver) -> None:
-        if observer in self._observers:
-            self._observers.remove(observer)
-        if not self._observers:
-            _DISPATCHERS.pop(id(self._conn), None)
-            with suppress(Exception):
-                self._conn.set_trace_callback(None)
-
-    @property
-    def observer_count(self) -> int:
-        """Return the number of active observers registered on this connection."""
-        return len(self._observers)
-
-
-_DISPATCHERS: dict[int, ConnectionTraceDispatcher] = {}
-
-
 def register_connection_trace_observer(
     conn: sqlite3.Connection, observer: TraceObserver
 ) -> Callable[[], None]:
     """Register a trace observer through the connection-owned dispatcher.
 
     Returns a callable that unregisters the observer when invoked.
+    Fails closed if the connection is not a ManagedConnection, ensuring
+    unmanaged connections never have their trace callbacks replaced or wiped.
     """
     if isinstance(conn, ManagedConnection):
         return conn.register_trace_observer(observer)
-    conn_id = id(conn)
-    dispatcher = _DISPATCHERS.get(conn_id)
-    if dispatcher is None:
-        dispatcher = ConnectionTraceDispatcher(conn)
-        _DISPATCHERS[conn_id] = dispatcher
-        with suppress(Exception):
-            conn.set_trace_callback(dispatcher.dispatch)
-    return dispatcher.register(observer)
+    raise VerificationCacheError(
+        "RequestVerificationCache requires a ManagedConnection to guarantee trace callback "
+        f"preservation without replacing caller state; received {type(conn).__name__}"
+    )
 
 
 def active_connection_trace_dispatcher_count() -> int:
     """Return the number of connections currently registered in the trace dispatcher."""
-    return active_managed_trace_connection_count() + len(_DISPATCHERS)
+    return active_managed_trace_connection_count()
 
 
 def active_connection_trace_observer_count(conn: sqlite3.Connection) -> int:
     """Return the number of active observers registered on the given connection."""
     if isinstance(conn, ManagedConnection):
         return conn.trace_observer_count
-    dispatcher = _DISPATCHERS.get(id(conn))
-    return dispatcher.observer_count if dispatcher is not None else 0
+    return 0
 
 
 # Kinds of verification work the sealed plane memoizes per request.
@@ -161,6 +121,11 @@ class RequestVerificationCache:
     """
 
     def __init__(self, conn: sqlite3.Connection, *, enabled: bool = True) -> None:
+        if not isinstance(conn, ManagedConnection):
+            raise VerificationCacheError(
+                "RequestVerificationCache requires a ManagedConnection to guarantee trace callback "
+                f"preservation without replacing caller state; received {type(conn).__name__}"
+            )
         self._conn = conn
         self.enabled = enabled
         self.journal: list[VerificationEvent] = []
@@ -173,6 +138,27 @@ class RequestVerificationCache:
         self._unregister_trace: Callable[[], None] | None = register_connection_trace_observer(
             conn, self._on_trace_sql
         )
+
+    @property
+    def is_closed(self) -> bool:
+        """Whether the cache has completed its lifecycle and closed."""
+        return self._closed
+
+    @property
+    def entry_count(self) -> int:
+        """Return the number of currently memoized entries."""
+        return len(self._entries)
+
+    @property
+    def in_flight_count(self) -> int:
+        """Return the number of active in-flight verification tokens."""
+        return len(self._in_flight_tokens)
+
+    def _assert_not_closed(self) -> None:
+        if self._closed:
+            raise VerificationCacheError(
+                "RequestVerificationCache is closed and cannot perform verification operations"
+            )
 
     def _on_trace_sql(self, statement: str) -> None:
         if _ROLLBACK_PATTERN.match(statement):
@@ -201,6 +187,7 @@ class RequestVerificationCache:
     def ensure_bound(self, conn: sqlite3.Connection) -> None:
         """Fail closed when the memo is used through a different connection."""
 
+        self._assert_not_closed()
         if conn is not self._conn:
             raise VerificationCacheError(
                 "in-request verification cache is bound to a different connection; "
@@ -211,6 +198,7 @@ class RequestVerificationCache:
     def authorized_write(self) -> Generator[None, None, None]:
         """Acknowledge authorized same-connection trace writes without invalidating memo."""
 
+        self._assert_not_closed()
         before = self._conn.total_changes
         try:
             yield
@@ -223,6 +211,7 @@ class RequestVerificationCache:
     def savepoint(self, name: str) -> Generator[None, None, None]:
         """Execute within a SQLite savepoint; roll back and invalidate memo on error."""
 
+        self._assert_not_closed()
         self._conn.execute(f"SAVEPOINT {name}")
         try:
             yield
@@ -236,6 +225,7 @@ class RequestVerificationCache:
     def notify_rollback(self) -> None:
         """Notify the cache that a rollback occurred, invalidating all memoized entries."""
 
+        self._assert_not_closed()
         self.invalidate()
 
     def _check_same_connection_mutation(self) -> None:
@@ -250,6 +240,7 @@ class RequestVerificationCache:
     def invalidate(self) -> None:
         """Explicitly invalidate all memoized entries."""
 
+        self._assert_not_closed()
         self._entries.clear()
         self._epoch += 1
         self._expected_changes = self._conn.total_changes
@@ -261,6 +252,7 @@ class RequestVerificationCache:
     def verified(self, kind: str, coordinate: tuple[str, ...]) -> object:
         """Return the memoized verification value, or ``NOT_VERIFIED``."""
 
+        self._assert_not_closed()
         state = self._state_token()
         entry = self._entries.get((kind, coordinate))
         if entry is not None and entry[0] == state:
@@ -277,6 +269,8 @@ class RequestVerificationCache:
         start_token: tuple[int, int] | int | None = None,
     ) -> None:
         """Journal one executed verification and memoize it at the live token."""
+
+        self._assert_not_closed()
 
         token = self._change_token()
         current_state = (token, self._epoch)

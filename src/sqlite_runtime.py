@@ -96,9 +96,16 @@ _ORIGINAL_SQLITE3_CONNECT = sqlite3.connect
 
 
 def _managed_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
-    if "factory" not in kwargs or kwargs["factory"] is sqlite3.Connection:
-        kwargs["factory"] = ManagedConnection
-    return _ORIGINAL_SQLITE3_CONNECT(*args, **kwargs)
+    if len(args) >= 6:
+        factory = args[5]
+        if factory is sqlite3.Connection or factory is None:
+            args = (*args[:5], ManagedConnection, *args[6:])
+        return _ORIGINAL_SQLITE3_CONNECT(*args, **kwargs)
+    kw = dict(kwargs)
+    factory = kw.get("factory")
+    if factory is sqlite3.Connection or factory is None or "factory" not in kw:
+        kw["factory"] = ManagedConnection
+    return _ORIGINAL_SQLITE3_CONNECT(*args, **kw)
 
 
 def install_managed_connection_factory() -> None:
