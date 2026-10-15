@@ -2329,12 +2329,48 @@ def test_implicit_rollback_on_error_handling_custom_cursor_executemany_invalidat
     conn.close()
 
 
+def test_executescript_implicit_precommit_does_not_notify_rollback() -> None:
+    """Successful script execution's implicit pre-commit of pending transaction causes no rollback notification."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    rollbacks: list[int] = []
+    managed_conn = cast(ManagedConnection, conn)
+    unregister = managed_conn.register_rollback_observer(lambda: rollbacks.append(1))
+
+    # Open transaction and insert row 1
+    conn.execute("INSERT INTO t VALUES (1, 'row1')")
+    assert conn.in_transaction is True
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_precommit",)
+    cache.record("test_kind", coord, "admitted_row1")
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    cur = conn.cursor()
+    # Script executes successfully: pre-commits pending transaction as a commit, not rollback
+    cur.executescript("SELECT 1;")
+
+    # Assertions proving pre-commit committed and caused no rollback notification
+    assert len(rollbacks) == 0
+    assert conn.in_transaction is False
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
+    # Cached admission remains valid because row 1 was committed
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    unregister()
+    cache.close()
+    conn.close()
+
+
 def test_implicit_rollback_on_error_handling_custom_cursor_executescript_invalidates_cache() -> (
     None
 ):
-    """Custom cursor that handles SQLite errors internally on executescript still invalidates cache on implicit rollback."""
+    """Tolerant script with explicit BEGIN and real rollback failure invalidates cache without total_changes changing."""
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.execute("INSERT INTO t VALUES (1, 'row1')")
     conn.commit()
 
     class TolerantScriptCursor(sqlite3.Cursor):
@@ -2349,17 +2385,58 @@ def test_implicit_rollback_on_error_handling_custom_cursor_executescript_invalid
 
     cache = RequestVerificationCache(conn)
     coord = ("coord_tolerant_script",)
-
-    with cache.authorized_write():
-        conn.execute("INSERT INTO t VALUES (1, 'row1')")
-
-    assert cache.verified("test_kind", coord) is NOT_VERIFIED
     cache.record("test_kind", coord, "admitted_row1")
     assert cache.verified("test_kind", coord) == "admitted_row1"
 
-    res = cur.executescript("INSERT OR ROLLBACK INTO t VALUES (1, 'dup');")
+    changes_before = conn.total_changes
+    # Script has explicit BEGIN and duplicate INSERT OR ROLLBACK that rolls back
+    res = cur.executescript("BEGIN; INSERT OR ROLLBACK INTO t VALUES (1, 'dup');")
     assert res is cur
 
+    # Assert total_changes did NOT change: proves cache invalidation cannot pass solely from total_changes!
+    assert conn.total_changes == changes_before
+    # Row 1 still exists, duplicate was rejected
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
+    # Cache MUST be invalidated by the rollback notification intercepted by _InnerManagedCursor!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_implicit_rollback_on_tolerant_script_rolls_back_partial_inserts_and_invalidates_cache() -> (
+    None
+):
+    """Tolerant script with explicit BEGIN and partial insert demonstrates row rollback and cache invalidation."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.execute("INSERT INTO t VALUES (1, 'row1')")
+    conn.commit()
+
+    class TolerantScriptCursor(sqlite3.Cursor):
+        def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+            try:
+                return super().executescript(*args, **kwargs)
+            except sqlite3.IntegrityError:
+                return self
+
+    cur = conn.cursor(factory=TolerantScriptCursor)
+    assert isinstance(cur, TolerantScriptCursor)
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_tolerant_script_partial",)
+    cache.record("test_kind", coord, "admitted_row1")
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    # Script inserts row 2 inside transaction, then hits duplicate on row 1, rolling back row 2
+    res = cur.executescript(
+        "BEGIN; INSERT INTO t VALUES (2, 'row2'); INSERT OR ROLLBACK INTO t VALUES (1, 'dup');"
+    )
+    assert res is cur
+
+    # Row 2 was rolled back and removed from the table!
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
+    assert conn.execute("SELECT id FROM t").fetchall() == [(1,)]
     # Cache MUST be invalidated
     assert cache.verified("test_kind", coord) is NOT_VERIFIED
 
@@ -2368,26 +2445,38 @@ def test_implicit_rollback_on_error_handling_custom_cursor_executescript_invalid
 
 
 def test_explicit_commit_on_managed_cursor_does_not_notify_rollback() -> None:
-    """Explicit COMMIT statements do not trigger rollback notifications on ManagedCursor."""
+    """Explicit COMMIT, END, and outermost RELEASE statements do not trigger rollback notifications on ManagedCursor."""
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
     conn.commit()
 
-    rollback_called = False
-
-    def on_rollback() -> None:
-        nonlocal rollback_called
-        rollback_called = True
-
+    rollbacks: list[str] = []
     managed_conn = cast(ManagedConnection, conn)
-    unregister = managed_conn.register_rollback_observer(on_rollback)
+    unregister = managed_conn.register_rollback_observer(lambda: rollbacks.append("rollback"))
 
     cur = conn.cursor()
+
+    # 1. COMMIT statement preserves commit without rollback notification
     conn.execute("BEGIN")
     conn.execute("INSERT INTO t VALUES (1, 'row1')")
     cur.execute("COMMIT")
+    assert len(rollbacks) == 0
 
-    assert not rollback_called
+    # 2. END statement preserves commit without rollback notification
+    conn.execute("BEGIN")
+    conn.execute("INSERT INTO t VALUES (2, 'row2')")
+    cur.execute("END")
+    assert len(rollbacks) == 0
+
+    # 3. Outermost RELEASE SAVEPOINT preserves commit without rollback notification
+    conn.execute("SAVEPOINT sp")
+    conn.execute("INSERT INTO t VALUES (3, 'row3')")
+    cur.execute("RELEASE SAVEPOINT sp")
+    assert len(rollbacks) == 0
+
+    # All three rows were committed successfully
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 3
+
     unregister()
     conn.close()
 

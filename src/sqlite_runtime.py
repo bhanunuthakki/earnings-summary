@@ -94,16 +94,51 @@ class ManagedCursor(sqlite3.Cursor):
 
     def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
         conn = self.connection
-        was_in_tx = getattr(conn, "in_transaction", False)
-        exc: BaseException | None = None
-        statement = args[0] if args else kwargs.get("sql_script") or kwargs.get("script")
         try:
             return super().executescript(*args, **kwargs)
-        except BaseException as e:
-            exc = e
+        except BaseException:
+            notify = getattr(conn, "notify_rollback", None)
+            if callable(notify):
+                notify()
             raise
-        finally:
-            self._check_implicit_rollback(was_in_tx, exc, statement)
+
+
+class _InnerManagedCursor(sqlite3.Cursor):
+    """Inner cursor wrapper placed after custom factories in MRO to catch exceptions before custom suppression."""
+
+    def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        conn = self.connection
+        was_in_tx = getattr(conn, "in_transaction", False)
+        try:
+            return super().execute(*args, **kwargs)
+        except BaseException:
+            if was_in_tx and not getattr(conn, "in_transaction", False):
+                notify = getattr(conn, "notify_rollback", None)
+                if callable(notify):
+                    notify()
+            raise
+
+    def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        conn = self.connection
+        was_in_tx = getattr(conn, "in_transaction", False)
+        try:
+            return super().executemany(*args, **kwargs)
+        except BaseException:
+            if was_in_tx and not getattr(conn, "in_transaction", False):
+                notify = getattr(conn, "notify_rollback", None)
+                if callable(notify):
+                    notify()
+            raise
+
+    def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        conn = self.connection
+        try:
+            return super().executescript(*args, **kwargs)
+        except BaseException:
+            notify = getattr(conn, "notify_rollback", None)
+            if callable(notify):
+                notify()
+            raise
 
 
 _MANAGED_CURSOR_FACTORY_CACHE: dict[type[Any], type[Any]] = {}
@@ -118,7 +153,12 @@ def _resolve_managed_cursor_factory(factory: Any) -> Any:
             return factory
         cached = _MANAGED_CURSOR_FACTORY_CACHE.get(factory)
         if cached is None:
-            cached = type(f"Managed_{factory.__name__}", (ManagedCursor, factory), {})
+            bases: tuple[Any, ...] = (ManagedCursor, factory, _InnerManagedCursor)
+            cached = type(
+                f"Managed_{factory.__name__}",
+                bases,
+                {},
+            )
             _MANAGED_CURSOR_FACTORY_CACHE[factory] = cached
         return cached
     raise TypeError(
