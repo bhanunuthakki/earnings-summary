@@ -40,6 +40,8 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 
+from sqlite_runtime import ManagedConnection, active_managed_trace_connection_count
+
 _ROLLBACK_PATTERN = re.compile(r"(?is)^(?:\s*(?:/\*.*?\*/|--[^\n]*(?:\n|$)))*\s*rollback\b")
 
 TraceObserver = Callable[[str], None]
@@ -89,6 +91,8 @@ def register_connection_trace_observer(
 
     Returns a callable that unregisters the observer when invoked.
     """
+    if isinstance(conn, ManagedConnection):
+        return conn.register_trace_observer(observer)
     conn_id = id(conn)
     dispatcher = _DISPATCHERS.get(conn_id)
     if dispatcher is None:
@@ -101,11 +105,13 @@ def register_connection_trace_observer(
 
 def active_connection_trace_dispatcher_count() -> int:
     """Return the number of connections currently registered in the trace dispatcher."""
-    return len(_DISPATCHERS)
+    return active_managed_trace_connection_count() + len(_DISPATCHERS)
 
 
 def active_connection_trace_observer_count(conn: sqlite3.Connection) -> int:
     """Return the number of active observers registered on the given connection."""
+    if isinstance(conn, ManagedConnection):
+        return conn.trace_observer_count
     dispatcher = _DISPATCHERS.get(id(conn))
     return dispatcher.observer_count if dispatcher is not None else 0
 

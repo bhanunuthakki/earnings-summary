@@ -1772,48 +1772,58 @@ def test_connection_trace_preserves_existing_observer_and_nested_caches() -> Non
     statements: list[str] = []
     initial_dispatchers = active_connection_trace_dispatcher_count()
 
-    # 1. Register an existing observer before any verification cache
-    unregister_existing = register_connection_trace_observer(conn, statements.append)
-    assert active_connection_trace_dispatcher_count() == initial_dispatchers + 1
-    assert active_connection_trace_observer_count(conn) == 1
+    # 1. Register an existing observer directly through standard conn.set_trace_callback()
+    conn.set_trace_callback(statements.append)
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
+    assert active_connection_trace_observer_count(conn) == 0
 
     conn.execute("SELECT 1")
     assert any("SELECT 1" in s for s in statements)
 
     # 2. Outer verification cache created
     cache1 = RequestVerificationCache(conn)
-    assert active_connection_trace_observer_count(conn) == 2
+    assert active_connection_trace_observer_count(conn) == 1
     assert active_connection_trace_dispatcher_count() == initial_dispatchers + 1
 
     # 3. Nested inner verification cache created
     cache2 = RequestVerificationCache(conn)
-    assert active_connection_trace_observer_count(conn) == 3
+    assert active_connection_trace_observer_count(conn) == 2
     assert active_connection_trace_dispatcher_count() == initial_dispatchers + 1
 
-    # Statement dispatched to all active observers
+    # Statement dispatched to all active observers and the user trace callback
     statements.clear()
     conn.execute("SELECT 2")
     assert any("SELECT 2" in s for s in statements)
 
     # 4. Nested inner cache closes
     cache2.close()
-    assert active_connection_trace_observer_count(conn) == 2
+    assert active_connection_trace_observer_count(conn) == 1
     assert active_connection_trace_dispatcher_count() == initial_dispatchers + 1
 
     # 5. Outer cache closes
     cache1.close()
-    assert active_connection_trace_observer_count(conn) == 1
-    assert active_connection_trace_dispatcher_count() == initial_dispatchers + 1
+    assert active_connection_trace_observer_count(conn) == 0
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
 
-    # Existing observer still receives statements!
+    # Existing observer installed via standard set_trace_callback still receives statements!
     statements.clear()
     conn.execute("SELECT 3")
     assert any("SELECT 3" in s for s in statements)
 
-    # 6. Unregister existing observer -> cleans up connection dispatcher completely
-    unregister_existing()
-    assert active_connection_trace_dispatcher_count() == initial_dispatchers
-    assert active_connection_trace_observer_count(conn) == 0
+    # 6. Unregister standard trace callback -> stops receiving statements
+    conn.set_trace_callback(None)
+    statements.clear()
+    conn.execute("SELECT 4")
+    assert len(statements) == 0
+
+    # 7. Also test registered observers cooperatively with standard trace callback
+    unreg = register_connection_trace_observer(conn, statements.append)
+    conn.set_trace_callback(statements.append)
+    statements.clear()
+    conn.execute("SELECT 5")
+    assert len([s for s in statements if "SELECT 5" in s]) == 2
+    unreg()
+    conn.set_trace_callback(None)
 
     conn.close()
 
@@ -1869,6 +1879,15 @@ def test_turn_lifecycle_cleans_up_verification_cache_and_trace_registry(
         )
     )
     assert any(event["type"] == "error" for event in events3)
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
+
+    # 4. Direct shadow retrieval lifecycle cleanup
+    engine.run_shadow_retrieval(
+        QUESTION,
+        AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME"]),
+        ContextPack(scope="portfolio", default_tickers=["ACME"], system_context="ctx"),
+        db_path=db_path,
+    )
     assert active_connection_trace_dispatcher_count() == initial_dispatchers
 
 
@@ -2476,7 +2495,29 @@ def test_turn_with_real_fact_candidates_verifies_projection_admission_once_throu
     assert len(probe.caches) >= 1
     cache = probe.caches[0]
 
-    # Exactly once per turn: real fact retrieval forwards cache to admit_canonical_projection_for_read
-    # and subsequent trace candidate verification reuses memoized admission
     assert cache.counts()[(PROJECTION_GENERATION_ADMISSION, (FACT_GENERATION_ID,))] == 1
     assert active_connection_trace_dispatcher_count() == initial_dispatchers
+
+    conn_verify = sqlite3.connect(db_path)
+    try:
+        cand_rows = conn_verify.execute(
+            "SELECT candidate_id, candidate_kind FROM heterogeneous_retrieval_trace_candidates"
+        ).fetchall()
+        cand_set = {(str(r[0]), str(r[1])) for r in cand_rows}
+        assert ("canonical:revenue:2025", "fact") in cand_set
+        assert ("canonical:revenue_sub:2025", "fact") in cand_set
+
+        package = probe.packages[0]
+        assembly_items = {
+            (item.candidate_id, item.candidate_kind) for item in package.record.retrieval_assembly
+        }
+        assert ("canonical:revenue:2025", "fact") in assembly_items
+        assert ("canonical:revenue_sub:2025", "fact") in assembly_items
+    finally:
+        conn_verify.close()
+
+    citations_events = [event for event in events if event["type"] == "citations"]
+    assert len(citations_events) == 1
+    items = citations_events[0].get("items")
+    assert isinstance(items, list)
+    assert items != []

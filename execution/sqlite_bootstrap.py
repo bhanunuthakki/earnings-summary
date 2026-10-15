@@ -60,8 +60,10 @@ def preload_sqlite() -> str:
     sys.path.insert(0, os.fspath(PROJECT_ROOT))
     sys.path.insert(0, os.fspath(PROJECT_ROOT / "src"))
     from runtime.sqlite_adapters import register_datetime_adapters
+    from sqlite_runtime import install_managed_connection_factory
 
     register_datetime_adapters()
+    install_managed_connection_factory()
     _LOADED_VERSION = sqlite3.sqlite_version
     return _LOADED_VERSION
 

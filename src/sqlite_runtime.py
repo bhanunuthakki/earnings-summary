@@ -11,12 +11,103 @@ import sqlite3
 import sys
 import time
 import unicodedata
+import weakref
+from collections.abc import Callable
+from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 from runtime.sqlite_adapters import register_datetime_adapters
 from schema_compat import require_current_for_write
 from scope_identity import derive_retrieval_scope_id
+
+TraceObserver = Callable[[str], object]
+
+_ACTIVE_OBSERVED_CONNECTIONS: weakref.WeakSet[ManagedConnection] = weakref.WeakSet()
+
+
+class ManagedConnection(sqlite3.Connection):
+    """Connection providing multi-observer trace dispatching without overwriting user callbacks."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._user_trace_callback: TraceObserver | None = None
+        self._trace_observers: list[TraceObserver] = []
+
+    def set_trace_callback(self, trace_callback: TraceObserver | None) -> None:
+        """Register or clear the user trace callback while preserving internal observers."""
+        self._user_trace_callback = trace_callback
+        self._sync_trace_callback()
+
+    def register_trace_observer(self, observer: TraceObserver) -> Callable[[], None]:
+        """Register an observer callable that receives executed statements.
+
+        Returns a callable that unregisters the observer when invoked.
+        """
+        self._trace_observers.append(observer)
+        self._sync_trace_callback()
+        _ACTIVE_OBSERVED_CONNECTIONS.add(self)
+
+        def _unregister() -> None:
+            if observer in self._trace_observers:
+                self._trace_observers.remove(observer)
+            self._sync_trace_callback()
+            if not self._trace_observers:
+                _ACTIVE_OBSERVED_CONNECTIONS.discard(self)
+
+        return _unregister
+
+    @property
+    def trace_observer_count(self) -> int:
+        return len(self._trace_observers)
+
+    @property
+    def user_trace_callback(self) -> TraceObserver | None:
+        return self._user_trace_callback
+
+    def _dispatch_trace(self, statement: str) -> None:
+        if self._user_trace_callback is not None:
+            with suppress(Exception):
+                self._user_trace_callback(statement)
+        for observer in list(self._trace_observers):
+            with suppress(Exception):
+                observer(statement)
+
+    def _sync_trace_callback(self) -> None:
+        if self._user_trace_callback is not None or self._trace_observers:
+            super().set_trace_callback(self._dispatch_trace)
+        else:
+            super().set_trace_callback(None)
+
+    def close(self) -> None:
+        _ACTIVE_OBSERVED_CONNECTIONS.discard(self)
+        self._trace_observers.clear()
+        self._user_trace_callback = None
+        super().close()
+
+
+def active_managed_trace_connection_count() -> int:
+    """Return the number of ManagedConnection instances currently carrying trace observers."""
+    return len(_ACTIVE_OBSERVED_CONNECTIONS)
+
+
+_ORIGINAL_SQLITE3_CONNECT = sqlite3.connect
+
+
+def _managed_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+    if "factory" not in kwargs or kwargs["factory"] is sqlite3.Connection:
+        kwargs["factory"] = ManagedConnection
+    return _ORIGINAL_SQLITE3_CONNECT(*args, **kwargs)
+
+
+def install_managed_connection_factory() -> None:
+    """Ensure standard sqlite3.connect defaults to ManagedConnection."""
+    if sqlite3.connect is not _managed_connect:
+        sqlite3.connect = _managed_connect
+
+
+install_managed_connection_factory()
 
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 _WAL_TRANSITION_RETRY_INTERVAL_S = 0.01
@@ -133,6 +224,7 @@ def connect_sqlite(
             ),
             uri=True,
             timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+            factory=ManagedConnection,
         )
     else:
         if (
@@ -144,7 +236,11 @@ def connect_sqlite(
             raise FileNotFoundError("schema-preflighted writer requires an existing database")
         if resolved != ":memory:":
             Path(resolved).parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(resolved, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
+        conn = sqlite3.connect(
+            resolved,
+            timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+            factory=ManagedConnection,
+        )
 
     try:
         register_sqlite_integrity_functions(conn)
@@ -321,8 +417,11 @@ def _apply_writer_policy(conn: sqlite3.Connection, *, require_wal: bool = True) 
 
 __all__ = [
     "SQLITE_BUSY_TIMEOUT_MS",
+    "ManagedConnection",
     "SQLiteConnectionRole",
+    "active_managed_trace_connection_count",
     "connect_sqlite",
+    "install_managed_connection_factory",
     "require_safe_sqlite_writer_runtime",
     "sqlite_version_is_wal_reset_safe",
 ]

@@ -1015,6 +1015,17 @@ def _shadow_retrieval(
         conn.close()
 
 
+def run_shadow_retrieval(
+    text: str,
+    turn: AskTurn,
+    pack: ContextPack,
+    *,
+    db_path: Path,
+) -> None:
+    """Execute verified shadow retrieval plan and persist trace without changing prompt."""
+    _shadow_retrieval(text, turn, pack, db_path=db_path)
+
+
 def _sealed_or_shadow_narrative_events(
     text: str,
     turn: AskTurn,
@@ -1846,5 +1857,6 @@ __all__ = [
     "fold_events",
     "respond_turn",
     "route_turn",
+    "run_shadow_retrieval",
     "sanitize_history",
 ]
