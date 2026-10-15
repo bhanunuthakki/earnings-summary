@@ -27,7 +27,7 @@ TraceObserver = Callable[[str], object]
 RollbackObserver = Callable[[], object]
 
 _ACTIVE_OBSERVED_CONNECTIONS: weakref.WeakSet[ManagedConnection] = weakref.WeakSet()
-_SQL_PREFIX = r"(?:[\s;]|/\*.*?\*/|--[^\n]*(?:\n|$))*"
+_SQL_PREFIX = r"(?:[\s;\ufeff]|/\*.*?\*/|--[^\n]*(?:\n|$))*"
 ROLLBACK_PATTERN = re.compile(rf"(?is)^{_SQL_PREFIX}rollback\b")
 ATTACH_OR_DETACH_PATTERN = re.compile(rf"(?is)^{_SQL_PREFIX}(?:attach|detach)\b")
 _ROLLBACK_PATTERN = ROLLBACK_PATTERN

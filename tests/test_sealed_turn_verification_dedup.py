@@ -2039,6 +2039,68 @@ def test_rollback_with_leading_empty_statement_invalidates_cache() -> None:
     conn.close()
 
 
+def test_attached_database_reattachment_same_file_with_bom_invalidates_cache(
+    tmp_path: Path,
+) -> None:
+    """Detaching and reattaching the same file with UTF-8 BOM invalidates cache."""
+    db_path = tmp_path / "attached_bom.db"
+    conn_ext = sqlite3.connect(db_path)
+    conn_ext.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn_ext.execute("INSERT INTO substrate VALUES (1, 'v1')")
+    conn_ext.commit()
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(f"ATTACH DATABASE '{db_path}' AS ext")
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_attached_bom",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admission_v1")
+    assert cache.verified("test_kind", coord) == "admission_v1"
+
+    # Execute DETACH with leading UTF-8 BOM (\ufeff)
+    conn.execute("\ufeffDETACH DATABASE ext")
+
+    # Update through external connection and commit (advancing ext data_version externally)
+    conn_ext.execute("UPDATE substrate SET val = 'v2' WHERE id = 1")
+    conn_ext.commit()
+
+    # Reattach the SAME file with leading UTF-8 BOM (\ufeff) and parameter binding
+    conn.execute("\ufeffATTACH DATABASE ? AS ext", (str(db_path),))
+
+    # Cached admission MUST be invalidated despite identical file path and restored data_version!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+    conn_ext.close()
+
+
+def test_rollback_with_bom_invalidates_cache() -> None:
+    """Rollback statements prefixed by leading UTF-8 BOM (\\ufeff) invalidate cache."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE log (id INT PRIMARY KEY, msg TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_rollback_bom",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admitted_pre_rollback")
+    assert cache.verified("test_kind", coord) == "admitted_pre_rollback"
+
+    # Open savepoint and execute rollback with leading UTF-8 BOM (\ufeff)
+    conn.execute("SAVEPOINT sp")
+    conn.execute("\ufeffROLLBACK TO SAVEPOINT sp")
+
+    # Cache MUST be invalidated by the rollback
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
 def test_connection_trace_preserves_existing_observer_and_nested_caches() -> None:
     """Existing trace observer is preserved across cache creation, nested caches, and removal."""
     conn = sqlite3.connect(":memory:")
