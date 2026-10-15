@@ -101,7 +101,7 @@ from search.request_verification import (
     active_connection_trace_observer_count,
     register_connection_trace_observer,
 )
-from sqlite_runtime import ManagedConnection
+from sqlite_runtime import ManagedConnection, ManagedCursor
 
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
 SESSION_ID = "session-dedup"
@@ -1806,6 +1806,42 @@ def test_implicit_rollback_invalidates_cache_and_rejects_stale_verifications() -
     conn.close()
 
 
+def test_implicit_rollback_on_reused_shortcut_cursor_invalidates_cache() -> None:
+    """Reused cursor returned by connection shortcut (conn.execute) detects automatic rollback."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_reused_shortcut_cursor",)
+
+    # 1. Obtain cursor via connection shortcut
+    shortcut_cursor = conn.execute("SELECT 1")
+    assert isinstance(shortcut_cursor, ManagedCursor)
+
+    # 2. Insert row inside authorized write
+    with cache.authorized_write():
+        conn.execute("INSERT INTO t VALUES (1, 'initial')")
+
+    # 3. Verify row and cache result while transaction is uncommitted
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "cached_val")
+    assert cache.verified("test_kind", coord) == "cached_val"
+
+    # 4. Execute duplicate insert through the reused cursor from the shortcut
+    with pytest.raises(sqlite3.IntegrityError):
+        shortcut_cursor.execute("INSERT OR ROLLBACK INTO t VALUES (1, 'dup')")
+
+    # Transaction rolled back: row is gone from database
+    assert conn.execute("SELECT count(*) FROM t").fetchone()[0] == 0
+
+    # 5. Request cached verification again: must NOT return stale verification
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
 def test_same_connection_schema_changes_invalidate_cache() -> None:
     """Same-connection DDL (CREATE, DROP, ALTER) invalidates cache without changing total_changes."""
     conn = sqlite3.connect(":memory:")
@@ -1833,6 +1869,40 @@ def test_same_connection_schema_changes_invalidate_cache() -> None:
     assert cache.verified("test_kind", coord) == "substrate_recreated"
 
     conn.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_temporary_table_shadowing_verified_main_table_invalidates_cache() -> None:
+    """Creating a temporary table that shadows a verified main table invalidates the cache."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn.execute("INSERT INTO substrate VALUES (1, 'main_data')")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("substrate", "1")
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "main_admission")
+    assert cache.verified("test_kind", coord) == "main_admission"
+
+    # CREATE TEMP TABLE shadows the existing main table without altering main schema or total_changes
+    changes_before = conn.total_changes
+    conn.execute("CREATE TEMP TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    assert conn.total_changes == changes_before
+
+    # Verification queries use unqualified table names, so the temporary table shadows the main table.
+    # Cache MUST be invalidated by the temporary schema change!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    # Also test dropping the shadowing temporary table invalidates cache
+    cache.record("test_kind", coord, "temp_admission")
+    assert cache.verified("test_kind", coord) == "temp_admission"
+
+    conn.execute("DROP TABLE temp.substrate")
     assert cache.verified("test_kind", coord) is NOT_VERIFIED
 
     cache.close()

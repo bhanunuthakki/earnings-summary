@@ -17,7 +17,7 @@ from collections.abc import Callable
 from contextlib import suppress
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from runtime.sqlite_adapters import register_datetime_adapters
 from schema_compat import require_current_for_write
@@ -34,23 +34,39 @@ class ManagedCursor(sqlite3.Cursor):
     """Cursor that reports automatic transaction rollbacks to its parent connection."""
 
     def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
-        conn = cast(ManagedConnection, self.connection)
-        was_in_tx = conn.in_transaction
+        conn = self.connection
+        was_in_tx = getattr(conn, "in_transaction", False)
         try:
             return super().execute(*args, **kwargs)
         except Exception:
-            if was_in_tx and not conn.in_transaction:
-                conn.notify_rollback()
+            if was_in_tx and not getattr(conn, "in_transaction", False):
+                notify = getattr(conn, "notify_rollback", None)
+                if callable(notify):
+                    notify()
             raise
 
     def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
-        conn = cast(ManagedConnection, self.connection)
-        was_in_tx = conn.in_transaction
+        conn = self.connection
+        was_in_tx = getattr(conn, "in_transaction", False)
         try:
             return super().executemany(*args, **kwargs)
         except Exception:
-            if was_in_tx and not conn.in_transaction:
-                conn.notify_rollback()
+            if was_in_tx and not getattr(conn, "in_transaction", False):
+                notify = getattr(conn, "notify_rollback", None)
+                if callable(notify):
+                    notify()
+            raise
+
+    def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        conn = self.connection
+        was_in_tx = getattr(conn, "in_transaction", False)
+        try:
+            return super().executescript(*args, **kwargs)
+        except Exception:
+            if was_in_tx and not getattr(conn, "in_transaction", False):
+                notify = getattr(conn, "notify_rollback", None)
+                if callable(notify):
+                    notify()
             raise
 
 
@@ -140,31 +156,16 @@ class ManagedConnection(sqlite3.Connection):
             self.notify_rollback()
 
     def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
-        was_in_tx = self.in_transaction
-        try:
-            return super().execute(*args, **kwargs)
-        except Exception:
-            if was_in_tx and not self.in_transaction:
-                self.notify_rollback()
-            raise
+        cur = self.cursor()
+        return cur.execute(*args, **kwargs)
 
     def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
-        was_in_tx = self.in_transaction
-        try:
-            return super().executemany(*args, **kwargs)
-        except Exception:
-            if was_in_tx and not self.in_transaction:
-                self.notify_rollback()
-            raise
+        cur = self.cursor()
+        return cur.executemany(*args, **kwargs)
 
     def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
-        was_in_tx = self.in_transaction
-        try:
-            return super().executescript(*args, **kwargs)
-        except Exception:
-            if was_in_tx and not self.in_transaction:
-                self.notify_rollback()
-            raise
+        cur = self.cursor()
+        return cur.executescript(*args, **kwargs)
 
     def cursor(self, factory: Any = ManagedCursor) -> sqlite3.Cursor:
         if factory is sqlite3.Cursor:

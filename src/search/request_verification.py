@@ -112,6 +112,10 @@ class _NotVerified:
 NOT_VERIFIED = _NotVerified()
 
 
+SchemaVersionMap = tuple[tuple[str, int], ...]
+StateToken = tuple[int, SchemaVersionMap, int]
+
+
 class RequestVerificationCache:
     """Turn-scoped memo over immutable verification coordinates.
 
@@ -129,12 +133,12 @@ class RequestVerificationCache:
         self._conn = conn
         self.enabled = enabled
         self.journal: list[VerificationEvent] = []
-        self._entries: dict[tuple[str, tuple[str, ...]], tuple[tuple[int, int, int], object]] = {}
+        self._entries: dict[tuple[str, tuple[str, ...]], tuple[StateToken, object]] = {}
         self._token: int | None = None
         self._epoch: int = 0
-        self._in_flight_tokens: dict[tuple[str, tuple[str, ...]], list[tuple[int, int, int]]] = {}
+        self._in_flight_tokens: dict[tuple[str, tuple[str, ...]], list[StateToken]] = {}
         self._expected_changes: int = conn.total_changes
-        self._schema_version: int = self._read_schema_version()
+        self._schema_version: SchemaVersionMap = self._read_schema_version()
         self._rollback_generation: int = conn.rollback_generation
         self._closed: bool = False
         self._unregister_trace: Callable[[], None] | None = register_connection_trace_observer(
@@ -144,9 +148,20 @@ class RequestVerificationCache:
             self.notify_rollback
         )
 
-    def _read_schema_version(self) -> int:
-        row = self._conn.execute("PRAGMA schema_version").fetchone()
-        return int(row[0]) if row is not None else 0
+    def _read_schema_version(self) -> SchemaVersionMap:
+        versions: list[tuple[str, int]] = []
+        for row in self._conn.execute("PRAGMA database_list").fetchall():
+            schema_name = str(row[1])
+            cursor = self._conn.execute(f'PRAGMA "{schema_name}".schema_version')
+            row_v = cursor.fetchone()
+            version = int(row_v[0]) if row_v is not None else 0
+            versions.append((schema_name, version))
+        if not any(name == "temp" for name, _ in versions):
+            cursor = self._conn.execute('PRAGMA "temp".schema_version')
+            row_v = cursor.fetchone()
+            version = int(row_v[0]) if row_v is not None else 0
+            versions.append(("temp", version))
+        return tuple(sorted(versions))
 
     @property
     def is_closed(self) -> bool:
@@ -265,7 +280,7 @@ class RequestVerificationCache:
         self._schema_version = self._read_schema_version()
         self._rollback_generation = self._conn.rollback_generation
 
-    def _state_token(self) -> tuple[int, int, int]:
+    def _state_token(self) -> StateToken:
         token = self._change_token()
         return (token, self._schema_version, self._epoch)
 
@@ -286,7 +301,7 @@ class RequestVerificationCache:
         coordinate: tuple[str, ...],
         value: object,
         *,
-        start_token: tuple[int, int, int] | int | None = None,
+        start_token: StateToken | tuple[object, ...] | int | None = None,
     ) -> None:
         """Journal one executed verification and memoize it at the live token."""
 
