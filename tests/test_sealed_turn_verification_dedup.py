@@ -2101,6 +2101,71 @@ def test_rollback_with_bom_invalidates_cache() -> None:
     conn.close()
 
 
+def test_attached_database_with_escaped_quotes_and_comments_invalidates_cache(
+    tmp_path: Path,
+) -> None:
+    """Attached database with embedded quotes and comment markers invalidates cache on external DML."""
+    db_path = tmp_path / "attached_quoted.db"
+    conn_ext = sqlite3.connect(db_path)
+    conn_ext.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn_ext.execute("INSERT INTO substrate VALUES (1, 'v1')")
+    conn_ext.commit()
+
+    conn = sqlite3.connect(":memory:")
+    # Attach under schema name containing embedded double quote and comment marker
+    conn.execute('ATTACH DATABASE ? AS "main"".data_version --"', (str(db_path),))
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_attached_quoted",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admission_v1")
+    assert cache.verified("test_kind", coord) == "admission_v1"
+
+    # External connection updates and commits to attached database
+    conn_ext.execute("UPDATE substrate SET val = 'v2' WHERE id = 1")
+    conn_ext.commit()
+
+    # Cached admission MUST be invalidated despite tricky quoted schema name!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+    conn_ext.close()
+
+
+def test_attached_database_with_normal_embedded_quotes_invalidates_cache(
+    tmp_path: Path,
+) -> None:
+    """Attached database with normal embedded double quotes in schema name remains usable and invalidates."""
+    db_path = tmp_path / "attached_normal_quote.db"
+    conn_ext = sqlite3.connect(db_path)
+    conn_ext.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn_ext.execute("INSERT INTO substrate VALUES (1, 'v1')")
+    conn_ext.commit()
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute('ATTACH DATABASE ? AS "my""schema"', (str(db_path),))
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_normal_quote",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admission_v1")
+    assert cache.verified("test_kind", coord) == "admission_v1"
+
+    # External connection updates and commits to attached database
+    conn_ext.execute("UPDATE substrate SET val = 'v2' WHERE id = 1")
+    conn_ext.commit()
+
+    # Cached admission MUST be invalidated
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+    conn_ext.close()
+
+
 def test_connection_trace_preserves_existing_observer_and_nested_caches() -> None:
     """Existing trace observer is preserved across cache creation, nested caches, and removal."""
     conn = sqlite3.connect(":memory:")

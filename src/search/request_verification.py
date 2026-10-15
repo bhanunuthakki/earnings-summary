@@ -50,6 +50,12 @@ from sqlite_runtime import (
 TraceObserver = Callable[[str], None]
 
 
+def _quote_identifier(identifier: str) -> str:
+    """Quote a SQLite identifier by enclosing in double quotes and escaping embedded quotes."""
+    escaped = identifier.replace('"', '""')
+    return f'"{escaped}"'
+
+
 def _is_managed_connection(conn: object) -> bool:
     return isinstance(conn, ManagedConnection) or (
         type(conn).__name__ == "ManagedConnection"
@@ -167,7 +173,8 @@ class RequestVerificationCache:
         for row in self._conn.execute("PRAGMA database_list").fetchall():
             schema_name = str(row[1])
             file_path = str(row[2])
-            cursor = self._conn.execute(f'PRAGMA "{schema_name}".schema_version')
+            quoted_schema = _quote_identifier(schema_name)
+            cursor = self._conn.execute(f"PRAGMA {quoted_schema}.schema_version")
             row_v = cursor.fetchone()
             version = int(row_v[0]) if row_v is not None else 0
             versions.append((schema_name, file_path, version))
@@ -182,7 +189,8 @@ class RequestVerificationCache:
         versions: list[tuple[str, int]] = []
         for row in self._conn.execute("PRAGMA database_list").fetchall():
             schema_name = str(row[1])
-            cursor = self._conn.execute(f'PRAGMA "{schema_name}".data_version')
+            quoted_schema = _quote_identifier(schema_name)
+            cursor = self._conn.execute(f"PRAGMA {quoted_schema}.data_version")
             row_v = cursor.fetchone()
             version = int(row_v[0]) if row_v is not None else 0
             versions.append((schema_name, version))
@@ -262,15 +270,16 @@ class RequestVerificationCache:
         """Execute within a SQLite savepoint; roll back and invalidate memo on error."""
 
         self._assert_not_closed()
-        self._conn.execute(f"SAVEPOINT {name}")
+        quoted_name = _quote_identifier(name)
+        self._conn.execute(f"SAVEPOINT {quoted_name}")
         try:
             yield
         except Exception:
-            self._conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
-            self._conn.execute(f"RELEASE SAVEPOINT {name}")
+            self._conn.execute(f"ROLLBACK TO SAVEPOINT {quoted_name}")
+            self._conn.execute(f"RELEASE SAVEPOINT {quoted_name}")
             self.invalidate()
             raise
-        self._conn.execute(f"RELEASE SAVEPOINT {name}")
+        self._conn.execute(f"RELEASE SAVEPOINT {quoted_name}")
 
     def notify_rollback(self) -> None:
         """Notify the cache that a rollback occurred, invalidating all memoized entries."""
