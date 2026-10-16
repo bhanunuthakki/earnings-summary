@@ -99,6 +99,8 @@ def register_actions_routes(app: Flask, ctx: ServerContext) -> None:
             str(db_path),
             executable=executable,
         )
+        if ctx.source_state_root is not None:
+            argv.extend(("--source-state-root", str(ctx.source_state_root)))
         if force:
             argv.append("--force")
         if steps:
@@ -430,6 +432,8 @@ def register_actions_routes(app: Flask, ctx: ServerContext) -> None:
         sheet_id = str(body.get("sheet_id", "")).strip()
         if sheet_id:
             argv += ["--sheet-id", sheet_id]
+        if ctx.source_state_root is not None:
+            argv.extend(("--state-root", str(ctx.source_state_root)))
         try:
             job = job_registry.start(ticker=ticker, kind="dcf-import", argv=argv)
         except RegistryConflict as e:
@@ -462,6 +466,8 @@ def register_actions_routes(app: Flask, ctx: ServerContext) -> None:
             "--repo-root",
             str(repo_root),
         )
+        if ctx.source_state_root is not None:
+            argv.extend(("--state-root", str(ctx.source_state_root)))
         try:
             job = job_registry.start(ticker="_REPO", kind="rebuild-dcfs", argv=argv)
         except RegistryConflict as e:

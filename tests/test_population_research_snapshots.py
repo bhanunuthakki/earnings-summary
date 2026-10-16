@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -21,9 +22,29 @@ from provenance.research_snapshot import (
     ResearchUniverse,
     canonical_json,
 )
+from tests.test_memo_peer_roundtrip import PeerFixture
+from tests.test_memo_peer_roundtrip import peer_memo as peer_memo
 
 _CUTOFF = datetime(2026, 7, 29, 0, 0, tzinfo=UTC)
 _SHA = "a" * 64
+_processing_coordinate: Callable[..., tuple[str, tuple[str, ...]]] = getattr(
+    population, "_processing_coordinate"
+)
+_ontology_coordinate: Callable[..., str] = getattr(population, "_ontology_coordinate")
+_resolution_coordinate: Callable[..., str] = getattr(population, "_resolution_coordinate")
+_canonical_projection_coordinate: Callable[..., str] = getattr(
+    population, "_canonical_projection_coordinate"
+)
+_publication_coordinates: Callable[..., tuple[str, ...]] = getattr(
+    population, "_publication_coordinates"
+)
+_issuer_ids: Callable[..., tuple[str, ...]] = getattr(population, "_issuer_ids")
+_population_input_commitment: Callable[..., str] = getattr(
+    population, "_population_input_commitment"
+)
+_require_unambiguous_terminal: Callable[[sqlite3.Connection, ResearchSnapshotRequest], None] = (
+    getattr(population, "_require_unambiguous_terminal")
+)
 
 
 def _connection() -> sqlite3.Connection:
@@ -137,18 +158,14 @@ def test_research_verifier_ignores_snapshot_recorded_after_observation(
         ),
     )
 
-    def assembled_request(*_args: object, **_kwargs: object) -> ResearchSnapshotRequest:
+    def assemble(*_args: object, **_kwargs: object) -> ResearchSnapshotRequest:
         return request
 
-    def verified_request(*_args: object) -> None:
+    def verify(*_args: object) -> None:
         return None
 
-    monkeypatch.setattr(
-        population,
-        "assemble_research_snapshot_request",
-        assembled_request,
-    )
-    monkeypatch.setattr(population, "verify_research_snapshot", verified_request)
+    monkeypatch.setattr(population, "assemble_research_snapshot_request", assemble)
+    monkeypatch.setattr(population, "verify_research_snapshot", verify)
 
     before = verify_research_snapshots(
         conn,
@@ -324,14 +341,10 @@ def test_research_verifier_reassembles_terminal_request_at_o2(
         ),
     )
 
-    def assembled_request(*_args: object, **_kwargs: object) -> ResearchSnapshotRequest:
+    def assemble(*_args: object, **_kwargs: object) -> ResearchSnapshotRequest:
         return current_request
 
-    monkeypatch.setattr(
-        population,
-        "assemble_research_snapshot_request",
-        assembled_request,
-    )
+    monkeypatch.setattr(population, "assemble_research_snapshot_request", assemble)
 
     with pytest.raises(ValueError, match="assembled K,O request"):
         verify_research_snapshots(
@@ -725,7 +738,7 @@ def test_current_processing_and_fact_coordinates_select_latest_complete_as_of_o(
         );
         CREATE TABLE canonical_fact_resolution_snapshot_seals (
             resolution_snapshot_id TEXT PRIMARY KEY,
-            sealed_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL
         );
         CREATE TABLE canonical_fact_resolution_snapshot_scope_members (
             resolution_snapshot_id TEXT NOT NULL,
@@ -826,17 +839,15 @@ def test_current_processing_and_fact_coordinates_select_latest_complete_as_of_o(
             (generation_id, "resolution-current", clock.isoformat()),
         )
 
-    assert getattr(population, "_processing_coordinate")(
+    assert _processing_coordinate(
         conn,
         "issuer-a",
         _CUTOFF,
         observed,
     ) == ("processing-current", ("document-a",))
+    assert _ontology_coordinate(conn, _CUTOFF, observed) == "ontology-current"
     assert (
-        getattr(population, "_ontology_coordinate")(conn, _CUTOFF, observed) == "ontology-current"
-    )
-    assert (
-        getattr(population, "_resolution_coordinate")(
+        _resolution_coordinate(
             conn,
             "issuer-a",
             ("entity-a",),
@@ -846,7 +857,7 @@ def test_current_processing_and_fact_coordinates_select_latest_complete_as_of_o(
         == "resolution-current"
     )
     assert (
-        getattr(population, "_canonical_projection_coordinate")(
+        _canonical_projection_coordinate(
             conn,
             "resolution-current",
             "ontology-current",
@@ -896,7 +907,7 @@ def test_source_publication_coordinate_uses_knowledge_and_observation_clocks() -
         ("publication", observed.isoformat()),
     )
 
-    assert getattr(population, "_publication_coordinates")(
+    assert _publication_coordinates(
         conn,
         "resolution",
         _CUTOFF,
@@ -908,7 +919,7 @@ def test_source_publication_coordinate_uses_knowledge_and_observation_clocks() -
         ((_CUTOFF + timedelta(hours=1)).isoformat(),),
     )
     with pytest.raises(ResearchSnapshotPlanError, match="source_fact_publication_seal_missing"):
-        getattr(population, "_publication_coordinates")(
+        _publication_coordinates(
             conn,
             "resolution",
             _CUTOFF,
@@ -942,7 +953,7 @@ def test_expected_issuer_universe_comes_from_active_reporting_obligations() -> N
         """
     )
 
-    assert getattr(population, "_issuer_ids")(conn, _CUTOFF) == ("issuer-without-processing",)
+    assert _issuer_ids(conn, _CUTOFF) == ("issuer-without-processing",)
 
 
 def test_stale_generation_coordinates_are_not_admitted() -> None:
@@ -1006,7 +1017,7 @@ def test_stale_generation_coordinates_are_not_admitted() -> None:
         );
         CREATE TABLE canonical_fact_resolution_snapshot_seals (
             resolution_snapshot_id TEXT PRIMARY KEY,
-            sealed_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL
         );
         CREATE TABLE canonical_fact_resolution_snapshot_scope_members (
             resolution_snapshot_id TEXT NOT NULL,
@@ -1065,17 +1076,17 @@ def test_stale_generation_coordinates_are_not_admitted() -> None:
     with pytest.raises(ResearchSnapshotPlanError, match="exact_search_corpus_missing"):
         select_exact_corpus_coordinate(conn, ("document-a",), _CUTOFF)
     with pytest.raises(ResearchSnapshotPlanError, match="ontology_snapshot_missing"):
-        getattr(population, "_ontology_coordinate")(conn, _CUTOFF)
+        _ontology_coordinate(conn, _CUTOFF)
     with pytest.raises(
         ResearchSnapshotPlanError,
         match="issuer_scoped_canonical_resolution_missing",
     ):
-        getattr(population, "_resolution_coordinate")(conn, "issuer-a", ("entity-a",), _CUTOFF)
+        _resolution_coordinate(conn, "issuer-a", ("entity-a",), _CUTOFF)
     with pytest.raises(
         ResearchSnapshotPlanError,
         match="audited_canonical_projection_missing",
     ):
-        getattr(population, "_canonical_projection_coordinate")(
+        _canonical_projection_coordinate(
             conn,
             "stale-resolution",
             "stale-ontology",
@@ -1099,12 +1110,12 @@ def test_input_commitment_changes_with_any_upstream_digest() -> None:
         }
     ]
 
-    assert getattr(population, "_population_input_commitment")(
+    assert _population_input_commitment(
         _CUTOFF,
         ("issuer-a",),
         ("issuer-a",),
         baseline,
-    ) != getattr(population, "_population_input_commitment")(
+    ) != _population_input_commitment(
         _CUTOFF,
         ("issuer-a",),
         ("issuer-a",),
@@ -1120,3 +1131,81 @@ def test_subset_apply_requires_dry_run_commitments() -> None:
             issuer_ids=("issuer-a",),
             apply=True,
         )
+
+
+def test_v2_assembler_uses_genuine_sealed_peer_context(peer_memo: PeerFixture) -> None:
+    """Read real constituent seals; no coordinate or source verifier is replaced."""
+    conn, _root, _artifact, review, _context, cutoff, _reference = peer_memo
+    row = conn.execute(
+        "SELECT request_json FROM research_snapshot_headers WHERE research_snapshot_id=?",
+        (review.research_snapshot_id,),
+    ).fetchone()
+    assert row is not None
+    retained = ResearchSnapshotRequest.model_validate_json(str(row[0]))
+    assembled = population.assemble_research_snapshot_request(
+        conn,
+        retained.research_universe.issuer_id,
+        cutoff,
+        observed_through=cutoff,
+        projection_mode="lexical_only",
+        source_publication_reference_clock="publication_created_v2",
+    )
+    assert assembled.source_publication_reference_clock == "publication_created_v2"
+    assert assembled.research_universe == retained.research_universe
+    assert assembled.processing_snapshot_ids == retained.processing_snapshot_ids
+    assert assembled.corpus_bundles == retained.corpus_bundles
+    assert assembled.source_fact_publication_ids == retained.source_fact_publication_ids
+    assert assembled.ontology_snapshot_id == retained.ontology_snapshot_id
+    assert (
+        assembled.canonical_fact_resolution_snapshot_id
+        == retained.canonical_fact_resolution_snapshot_id
+    )
+    assert assembled.canonical_fact_projection_run_id == retained.canonical_fact_projection_run_id
+    assert (
+        population.verify_research_snapshot(
+            conn, retained.research_snapshot_id
+        ).research_snapshot_id
+        == retained.research_snapshot_id
+    )
+    # A separately named existing seal cannot be adopted as the producer's terminal.
+    with pytest.raises(ResearchSnapshotPlanError, match="terminal_scope_conflict"):
+        _require_unambiguous_terminal(conn, assembled)
+
+    # Use a fresh observation scope. Preserve both earlier, separately named seals.
+    observed = cutoff + timedelta(seconds=1)
+    request = ResearchSnapshotPopulationRequest(
+        cutoff_at=cutoff,
+        operation_recorded_at=observed,
+        issuer_ids=(retained.research_universe.issuer_id,),
+        projection_mode="lexical_only",
+        source_publication_reference_clock="publication_created_v2",
+    )
+    before = conn.total_changes
+    preview = population.populate_research_snapshots(conn, request)
+    assert preview.ready_issuer_count == 1 and preview.blocked_issuer_count == 0
+    assert conn.total_changes == before
+    apply = request.model_copy(
+        update={
+            "apply": True,
+            "input_commitment_sha256": preview.input_commitment_sha256,
+            "plan_commitment_sha256": preview.plan_commitment_sha256,
+        }
+    )
+    created = population.populate_research_snapshots(conn, apply)
+    assert created.created_snapshot_count == 1 and created.ready_issuer_count == 1
+    assert created.blocked_issuer_count == 0, created.statuses
+    after = conn.total_changes
+    replay = population.populate_research_snapshots(conn, apply)
+    assert replay.created_snapshot_count == 0 and replay.ready_issuer_count == 1
+    assert conn.total_changes == after
+    verification = population.verify_research_snapshots(
+        conn, PopulationTemporalScope(knowledge_cutoff=cutoff, observed_through=observed)
+    )
+    assert verification.materialized_count == 1
+    assert (
+        conn.execute(
+            "SELECT request_json FROM research_snapshot_headers WHERE research_snapshot_id=?",
+            (retained.research_snapshot_id,),
+        ).fetchone()[0]
+        == row[0]
+    )

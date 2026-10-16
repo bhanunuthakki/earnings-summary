@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
@@ -28,6 +28,9 @@ from integrations.portfolio_allocation import (
 )
 from integrations.portfolio_offline_snapshot import OfflinePortfolioSnapshot
 from integrations.portfolio_tracker_client import LivePortfolio, LivePosition
+from sources.financial_growth_evidence import FinancialGrowthReference
+from sources.report_financials import FinancialEvidenceReference
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from tests.comments_server_seams import patch_server_seam
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -203,22 +206,27 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # +2 fixed, read-only tracker bridge endpoints retained from the live runtime.
     # -2 retired score/fit presentation peeks.
     # +1 read-only degraded earnings draft peek.
-    # +1 read-only cached host-runtime evidence projection.
-    # +1 sealed evidence citation source-version viewer (2026-10-08 search
-    # milestone): the destination for the sealed Ask lane's
+    # +1 bounded cached host-runtime evidence endpoint.
+    # +1 exact, read-only canonical financial evidence peek.
+    # +1 read-only calculation peek that opens the original reported inputs.
+    # +1 exact-edition descriptor for shared-reader reload and historical links.
+    # +1 sealed evidence citation source-version viewer: the destination for
     # /source/version/<document_version_id>?node=… citations.
-    assert len(rules) == 177
+    assert len(rules) == 180
+    assert rules["peek_canonical_financial"] == "/api/peek/canonical-financial"
+    assert rules["peek_financial_calculation"] == "/api/peek/financial-calculation"
     assert rules["operations_host_runtime_api"] == "/api/operations/host-runtime"
-    host_rule = next(
-        rule
-        for rule in client.application.url_map.iter_rules()
-        if rule.endpoint == "operations_host_runtime_api"
-    )
-    assert host_rule.methods == {"GET", "HEAD", "OPTIONS"}
     assert rules["tracker_read_health"] == "/portfolio-tracker/api/v1/health"
     assert rules["tracker_read_snapshot"] == "/portfolio-tracker/api/v1/portfolio-snapshot"
     for rule in client.application.url_map.iter_rules():
-        if rule.endpoint in {"tracker_read_health", "tracker_read_snapshot"}:
+        if rule.endpoint in {
+            "tracker_read_health",
+            "tracker_read_snapshot",
+            "operations_host_runtime_api",
+            "peek_canonical_financial",
+            "peek_financial_calculation",
+            "brief_descriptor_api",
+        }:
             assert rule.methods == {"GET", "HEAD", "OPTIONS"}
     assert rules["dcf.dcf_grade_evidence"] == "/api/dcf/evidence/<ticker>"
     assert "allocation_recommendation_get" not in rules
@@ -265,6 +273,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
             "ticker_page",
             "latest_report_for_ticker",
             "brief_library_api",
+            "brief_descriptor_api",
             "brief_body_api",
             "report_reader_css",
             "company_desk_api",
@@ -309,6 +318,7 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
         "ticker_page": "/ticker/<ticker>",
         "latest_report_for_ticker": "/reports/<ticker>",
         "brief_library_api": "/api/work-os/briefs",
+        "brief_descriptor_api": "/api/work-os/briefs/<artifact_id>",
         "brief_body_api": "/api/work-os/briefs/<artifact_id>/body",
         "report_reader_css": "/api/work-os/report-reader.css",
         "company_desk_api": "/api/work-os/companies/<ticker>/desk",
@@ -330,6 +340,52 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
         "notes_api": "/api/notes",
         "notes_action_api": "/api/notes/<int:note_id>/<action>",
     }
+
+
+def test_financial_calculation_uses_read_only_database_role(
+    client: FlaskClient, app_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    roles: list[SQLiteConnectionRole] = []
+    connect = connect_sqlite
+
+    def observed_connect(
+        path: str | os.PathLike[str],
+        *,
+        role: SQLiteConnectionRole,
+        schema_preflight: bool | None = None,
+    ) -> sqlite3.Connection:
+        roles.append(role)
+        assert role is SQLiteConnectionRole.READ_ONLY
+        assert schema_preflight is True
+        # The dashboard fixture has a minimal schema, not an Alembic stamp.
+        return connect(path, role=role, schema_preflight=False)
+
+    patch_server_seam(monkeypatch, "connect_sqlite", observed_connect)
+    reference = FinancialGrowthReference(
+        formula="qoq",
+        inputs=tuple(
+            FinancialEvidenceReference(
+                ticker="NU",
+                concept="revenue",
+                canonical_metric_cell_id=f"synthetic-cell-{index}",
+                observation_id=f"synthetic-observation-{index}",
+                canonical_resolution_revision_id=f"synthetic-resolution-{index}",
+                metric_definition_revision_id="synthetic-definition",
+                as_of=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+            for index in range(2)
+        ),
+    )
+    database = app_repo / "data/portfolio.db"
+    before = database.read_bytes()
+    response = client.get(
+        "/api/peek/financial-calculation", query_string={"reference": reference.model_dump_json()}
+    )
+    assert response.status_code == 404
+    assert roles == [SQLiteConnectionRole.READ_ONLY]
+    assert database.read_bytes() == before
+    assert client.post("/api/peek/financial-calculation").status_code == 405
+    assert roles == [SQLiteConnectionRole.READ_ONLY]
 
 
 def test_replaced_compatibility_routes_are_absent(client: FlaskClient) -> None:

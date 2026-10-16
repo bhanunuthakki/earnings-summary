@@ -94,7 +94,7 @@ def test_plain_prompt_gets_central_purpose_version_and_body_hash() -> None:
     assert attributed == prompt
     assert isinstance(attributed, RenderedPrompt)
     assert attributed.template_id == "purpose:bear_case"
-    assert attributed.template_version == "v2"
+    assert attributed.template_version == "v3"
     assert attributed.vars_sha256 == hashlib.sha256(prompt.encode()).hexdigest()
 
 
@@ -128,7 +128,7 @@ def test_call_llm_attributes_plain_prompt_before_transport(
     attributed = observed[0]
     assert isinstance(attributed, RenderedPrompt)
     assert attributed.template_id == "purpose:bear_case"
-    assert attributed.template_version == "v2"
+    assert attributed.template_version == "v3"
 
 
 # ---------------------------------------------------------------------------

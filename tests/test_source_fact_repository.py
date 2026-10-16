@@ -61,12 +61,17 @@ def conn(
         database.close()
 
 
-def seed_foundation(conn: sqlite3.Connection) -> None:
+def seed_foundation(conn: sqlite3.Connection, *, source_path: Path | None = None) -> None:
     """Seed the reusable admitted-fact foundation for reader tests."""
-    _seed_foundation(conn)
+    if source_path is not None:
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_bytes(b"filing bytes")
+    _seed_foundation(
+        conn, storage_uri=source_path.as_uri() if source_path else "file:///filing.json"
+    )
 
 
-def _seed_foundation(conn: sqlite3.Connection) -> None:
+def _seed_foundation(conn: sqlite3.Connection, *, storage_uri: str = "file:///filing.json") -> None:
     conn.execute(
         "INSERT INTO issuer_entities VALUES (?,?,?,?)",
         ("issuer-1", "issuer-key-1", "operating_company", STAMP),
@@ -85,7 +90,7 @@ def _seed_foundation(conn: sqlite3.Connection) -> None:
     blob_sha = sha256("filing bytes")
     conn.execute(
         "INSERT INTO evidence_content_blobs VALUES (?,?,?,?,?)",
-        (blob_sha, 12, "application/json", "file:///filing.json", STAMP),
+        (blob_sha, 12, "application/json", storage_uri, STAMP),
     )
     conn.execute(
         "INSERT INTO evidence_source_observations "

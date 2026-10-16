@@ -5,11 +5,10 @@ bounded legacy backfill, complete-candidate resolution policy, and the one
 read-side compatibility boundary.  It never averages or deletes candidates:
 material ambiguity is recorded and canonical reads fail closed.
 
-This module is also the single writer of ``current_fact_selection``, the
-physical materialization of the resolution ledger's current resolved
-selection (migration 0049).  The table mirrors the ledger inside each persist
-transaction, and the bounded, checkpointed convergence window keeps it exactly
-equal to what the resolved views serve.
+The historical ``current_fact_selection`` table is not a read authority. Its
+unconsumed mirror and convergence writes are retired; canonical readers use
+the immutable resolution ledger through the resolved views. Historical schema
+revisions and checkpoint fields remain compatible.
 """
 
 from __future__ import annotations
@@ -19,6 +18,7 @@ import json
 import logging
 import re
 import sqlite3
+from calendar import monthrange
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -31,6 +31,21 @@ from urllib.parse import unquote, urlparse
 from pydantic import BaseModel, ConfigDict, Field
 
 from models.documents import SourceType
+from models.facts import Unit
+from pipeline.kpi_definition_revisions import (
+    IssuerKpiDefinitionRevision,
+    KpiDefinitionPeriodKind,
+    KpiDefinitionStatus,
+    current_kpi_definition_revision,
+    kpi_definition_revision_by_id,
+)
+from pipeline.kpi_semantics import (
+    KpiSemanticContext,
+    KpiSemanticStatus,
+    current_kpi_semantic_context,
+    normalize_source_numeric,
+    parse_source_numeric,
+)
 from provenance.observation_resolution import (
     ObservationDimension,
     ObservationResolutionLedger,
@@ -78,6 +93,271 @@ DOCUMENT_FACT_REHYDRATION_SQL: Final = (
 )
 
 
+class ReviewedKpiNativeProjection(BaseModel):
+    """One frozen proof for a newly published native KPI observation."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    schema_version: Literal["reviewed_kpi_native_projection.v1"] = (
+        "reviewed_kpi_native_projection.v1"
+    )
+    legacy_observation_id: str = Field(min_length=1)
+    fact_id: int = Field(gt=0)
+    ticker: str = Field(min_length=1)
+    context_id: int = Field(gt=0)
+    context_revision: int = Field(gt=0)
+    review_knowledge_at: datetime
+    source_node_recorded_at: datetime
+    context: KpiSemanticContext
+    definition: IssuerKpiDefinitionRevision
+    expected_definition_head_id: str = Field(min_length=1)
+    source_document_id: int = Field(gt=0)
+    source_document_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_document_version_id: str = Field(min_length=1)
+    source_evidence_node_id: str = Field(min_length=1)
+    source_locator_json: str = Field(min_length=1)
+    source_entry_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fiscal_year: int = Field(ge=1900, le=2200)
+    fiscal_period: Literal["Q1", "Q2", "Q3", "Q4", "FY"]
+    raw_fact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+def prepare_reviewed_kpi_native_projection(
+    conn: sqlite3.Connection,
+    *,
+    observation_id: str,
+    source_evidence_node_id: str,
+    knowledge_cutoff: datetime,
+) -> ReviewedKpiNativeProjection:
+    """Validate durable capture coordinates; never repair an immutable v1 observation."""
+    if knowledge_cutoff.tzinfo is None:
+        raise ValueError("reviewed native projection cutoff must be aware")
+    prior_factory = conn.row_factory
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT fact.*,document.sha256 AS source_sha256,link.observation_id,"
+            "observation.numeric_value AS captured_numeric,observation.unit AS captured_unit,observation.currency AS captured_currency,observation.fiscal_period_type AS captured_fiscal_period_type,observation.period_end AS captured_period_end,original_node.extraction_run_id AS captured_run_id "
+            "FROM kpi_facts fact JOIN fact_observation_revisions link "
+            "ON link.fact_table='kpi_facts' AND link.fact_row_id=fact.id "
+            "JOIN reported_observations observation ON observation.observation_id=link.observation_id "
+            "JOIN evidence_nodes original_node ON original_node.node_id=observation.evidence_node_id JOIN documents document ON document.id=fact.source_doc_id WHERE link.observation_id=? AND NOT EXISTS (SELECT 1 FROM kpi_facts successor WHERE successor.supersedes_id=fact.id)",
+            (observation_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("reviewed native KPI capture is absent")
+        if (
+            str(row["captured_fiscal_period_type"])
+            != _observation_period_type(str(row["fiscal_period_type"]))
+            or str(row["captured_period_end"])[:10] != str(row["period_end"])[:10]
+        ):
+            raise ValueError("reviewed native KPI fiscal coordinates differ from immutable capture")
+        current = current_kpi_semantic_context(conn, kpi_fact_id=int(row["id"]))
+        if current is None or current.context.status is not KpiSemanticStatus.ADMITTED:
+            raise ValueError("reviewed native KPI requires its admitted context")
+        if current.kpi_definition_revision_id is None:
+            raise ValueError("reviewed native KPI requires its exact definition binding")
+        definition = kpi_definition_revision_by_id(
+            conn, kpi_definition_revision_id=current.kpi_definition_revision_id
+        )
+        head = current_kpi_definition_revision(
+            conn, kpi_definition_id=int(row["kpi_definition_id"])
+        )
+        context = current.context
+        if (
+            definition is None
+            or head is None
+            or definition.status is not KpiDefinitionStatus.ADMITTED
+        ):
+            raise ValueError("reviewed native KPI definition is unavailable")
+        if any(
+            moment > knowledge_cutoff
+            for moment in (
+                current.knowledge_at,
+                definition.knowledge_at,
+                definition.recorded_at,
+                head.knowledge_at,
+                head.recorded_at,
+            )
+        ):
+            raise ValueError("reviewed native KPI proof is after the cutoff")
+        if context.source_precision is None or context.source_precision.kind == "unknown":
+            raise ValueError("reviewed native KPI requires explicit source precision")
+        if (
+            context.reported_period_start is None
+            or context.reported_period_end is None
+            or definition.period_kind is not KpiDefinitionPeriodKind.DURATION
+            or context.reported_period_end.isoformat() != str(row["period_end"])[:10]
+            or str(row["fiscal_period_type"]) not in {"Q1", "Q2", "Q3", "Q4", "FY"}
+        ):
+            raise ValueError("reviewed native KPI requires explicit quarterly duration coordinates")
+        fiscal_label = str(row["fiscal_period_type"])
+        quarter = 4 if fiscal_label == "FY" else int(fiscal_label[1])
+        end = context.reported_period_end
+        start = context.reported_period_start
+        calendar_end = end.replace(month=quarter * 3, day=monthrange(end.year, quarter * 3)[1])
+        quarter_start = end.replace(month=(quarter - 1) * 3 + 1, day=1)
+        year_start = end.replace(month=1, day=1)
+        header = context.source_column_header or ""
+        cumulative_marker = {2: "Six Months Ended", 3: "Nine Months Ended", 4: "Year Ended"}.get(
+            quarter
+        )
+        is_quarter = fiscal_label != "FY" and start == quarter_start
+        has_cumulative_header = any(
+            marker.lower() in header.lower()
+            for marker in ("Six Months Ended", "Nine Months Ended", "Year Ended")
+        )
+        is_cumulative = start == year_start and (
+            quarter == 1
+            or (cumulative_marker is not None and cumulative_marker.lower() in header.lower())
+        )
+        if (
+            end != calendar_end
+            or not (is_quarter or is_cumulative)
+            or (fiscal_label == "FY" and not is_cumulative)
+            or (is_quarter and has_cumulative_header)
+        ):
+            raise ValueError(
+                "reviewed native KPI duration does not match its exact source header and fiscal label"
+            )
+        if not isinstance(definition.unit_key, Unit):
+            raise ValueError("reviewed native KPI requires an explicit native unit")
+        if (
+            definition.accounting_basis != context.accounting_basis
+            or definition.consolidation_scope != context.consolidation_scope
+            or definition.dimensions != context.dimensions
+            or definition.unit_scale != context.unit_scale
+            or definition.unit_key.value != str(row["unit"])
+            or (None if definition.currency is None else definition.currency.value)
+            != row["currency"]
+        ):
+            raise ValueError("reviewed native KPI semantic axes disagree")
+        if (
+            Decimal(str(row["captured_numeric"])) != Decimal(str(row["value"]))
+            or str(row["captured_unit"]) != str(row["unit"])
+            or row["captured_currency"] != row["currency"]
+        ):
+            raise ValueError("reviewed native KPI value differs from its immutable capture")
+        node = conn.execute(
+            "SELECT node.text,node.locator_json,node.locator_sha256,run.document_version_id,"
+            "version.legacy_document_id,version.blob_sha256,node.recorded_at,run.input_sha256,run.extraction_run_id,run.outcome,run.completed_at "
+            "FROM evidence_nodes node JOIN evidence_extraction_runs run "
+            "ON run.extraction_run_id=node.extraction_run_id JOIN evidence_document_versions version "
+            "ON version.document_version_id=run.document_version_id WHERE node.node_id=?",
+            (source_evidence_node_id,),
+        ).fetchone()
+        # Read validation-only coordinates separately: the original row is a
+        # historical raw-fact commitment and must retain its exact hash shape.
+        captured_run = conn.execute(
+            "SELECT document_version_id,input_sha256,outcome,completed_at "
+            "FROM evidence_extraction_runs WHERE extraction_run_id=?",
+            (row["captured_run_id"],),
+        ).fetchone()
+        if (
+            node is None
+            or captured_run is None
+            or (
+                str(node["document_version_id"]) != str(captured_run["document_version_id"])
+                or str(captured_run["input_sha256"]) != str(row["source_sha256"])
+                or str(captured_run["outcome"]) != "succeeded"
+                or str(node["outcome"]) != "succeeded"
+                or captured_run["completed_at"] is None
+                or node["completed_at"] is None
+                or _utc_instant(
+                    _datetime(captured_run["completed_at"], field="capture.completed_at")
+                )
+                > _utc_instant(knowledge_cutoff)
+                or _utc_instant(_datetime(node["completed_at"], field="source.completed_at"))
+                > _utc_instant(knowledge_cutoff)
+                or (
+                    str(node["extraction_run_id"]) != str(row["captured_run_id"])
+                    and (
+                        definition.source_evidence_node_id != source_evidence_node_id
+                        or definition.source_document_version_id != str(node["document_version_id"])
+                    )
+                )
+                or int(node["legacy_document_id"]) != int(row["source_doc_id"])
+                or str(node["blob_sha256"]) != str(row["source_sha256"])
+                or str(node["input_sha256"]) != str(row["source_sha256"])
+                or _utc_instant(_datetime(node["recorded_at"], field="node.recorded_at"))
+                > _utc_instant(knowledge_cutoff)
+            )
+        ):
+            raise ValueError("reviewed native KPI evidence identity changed")
+        from models.facts import FactLocator
+        from provenance.evidence_ledger import EvidenceLocator
+
+        locator = EvidenceLocator.model_validate_json(str(node["locator_json"]))
+        fact_locator = FactLocator.model_validate_json(str(row["locator"]))
+        if locator.canonical_sha256 != str(node["locator_sha256"]) or (
+            fact_locator.pdf_page is not None and fact_locator.pdf_page != locator.page_number
+        ):
+            raise ValueError("reviewed native KPI evidence locator changed")
+        text = str(node["text"])
+        if any(
+            not quote or quote not in text
+            for quote in (
+                row["source_excerpt"],
+                context.source_value_text,
+                context.source_column_header,
+                context.source_row_label,
+            )
+        ):
+            raise ValueError("reviewed native KPI source wording is not in its evidence node")
+        if context.source_value_text is None or normalize_source_numeric(
+            parse_source_numeric(context.source_value_text),
+            unit=definition.unit_key,
+            unit_scale=context.unit_scale,
+        ) != Decimal(str(row["value"])):
+            raise ValueError("reviewed native KPI source token differs from the captured value")
+        if any(qualifier not in text for qualifier in context.source_precision.qualifiers):
+            raise ValueError("reviewed native KPI precision wording is absent")
+        raw_sha = hashlib.sha256(
+            json.dumps(dict(row), sort_keys=True, default=str).encode()
+        ).hexdigest()
+        entry_sha = hashlib.sha256(
+            json.dumps(
+                {
+                    "raw_fact_sha256": raw_sha,
+                    "context_id": current.id,
+                    "context_revision": current.revision,
+                    "context": context.model_dump(mode="json"),
+                    "definition_sha256": definition.commitment_sha256,
+                    "source_node": source_evidence_node_id,
+                    "source_locator_sha256": locator.canonical_sha256,
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        source_node_recorded_at = _datetime(node["recorded_at"], field="node.recorded_at")
+        if source_node_recorded_at.tzinfo is None:
+            source_node_recorded_at = _utc_instant(source_node_recorded_at)
+        return ReviewedKpiNativeProjection(
+            legacy_observation_id=observation_id,
+            fact_id=int(row["id"]),
+            ticker=str(row["ticker"]).upper(),
+            context_id=current.id,
+            context_revision=current.revision,
+            context=context,
+            definition=definition,
+            review_knowledge_at=current.knowledge_at,
+            source_node_recorded_at=source_node_recorded_at,
+            expected_definition_head_id=head.kpi_definition_revision_id,
+            source_document_id=int(row["source_doc_id"]),
+            source_document_sha256=str(row["source_sha256"]),
+            source_document_version_id=str(node["document_version_id"]),
+            source_evidence_node_id=source_evidence_node_id,
+            source_locator_json=locator.canonical_json,
+            source_entry_sha256=entry_sha,
+            fiscal_year=context.reported_period_end.year,
+            fiscal_period=cast(
+                Literal["Q1", "Q2", "Q3", "Q4", "FY"], str(row["fiscal_period_type"])
+            ),
+            raw_fact_sha256=raw_sha,
+        )
+    finally:
+        conn.row_factory = prior_factory
+
+
 class _CutoverModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -97,6 +377,7 @@ class FactCutoverCheckpoint(_CutoverModel):
     table_index: int = Field(default=0, ge=0, le=len(_TABLES))
     last_row_id: int = Field(default=0, ge=0)
     updated_at: datetime
+    # Retain old checkpoints without running the retired materialization scan.
     selection_cursor: str = Field(default="")
 
 
@@ -687,15 +968,6 @@ def execute_fact_cutover(
                 summary.resolutions_replayed += 1
             if result.resolution_status == "unresolved_material":
                 summary.unresolved_material += 1
-        selection = refresh_current_fact_selection(
-            conn,
-            batch_size=request.batch_size,
-            cursor=checkpoint.selection_cursor,
-        )
-        summary.selection_keys_examined = selection.keys_examined
-        summary.selection_rows_written = selection.rows_written
-        summary.selection_rows_deleted = selection.rows_deleted
-        summary.selection_pass_wrapped = selection.wrapped
         conn.commit()
     except Exception:
         conn.rollback()
@@ -706,7 +978,7 @@ def execute_fact_cutover(
             table_index=next_checkpoint.table_index,
             last_row_id=next_checkpoint.last_row_id,
             updated_at=datetime.now(UTC),
-            selection_cursor=selection.next_cursor,
+            selection_cursor=checkpoint.selection_cursor,
         ),
     )
     summary.checkpoint_complete = _is_complete(conn, next_checkpoint)
@@ -839,8 +1111,6 @@ def resolve_fact_logical_key(
         candidate_count=len(candidates),
         material_dissent=material_dissent,
     )
-    if _reconcile_current_fact_selection(conn, logical_key):
-        _emit_event("current_fact_selection_reconciled", logical_key=logical_key)
     return FactResolutionResult(
         resolution_id=resolution_id,
         logical_key=logical_key,
@@ -1008,182 +1278,6 @@ def capture_fact_row_observation(
         recorded_at=recorded_at,
     )
     return created
-
-
-@dataclass(frozen=True, slots=True)
-class FactLogicalKeyComponents:
-    """The governed-reader lookup columns decomposed from one fact logical key."""
-
-    fact_table: FactTable
-    ticker: str
-    concept_key: str
-    period_end: str
-    fiscal_period_type: str
-
-
-def parse_fact_logical_key(logical_key: str) -> FactLogicalKeyComponents:
-    """Split ``{fact_table}:{ticker}:{concept}:{period_end}:{fpt}`` into columns.
-
-    The concept segment may itself contain colons (``kpi_definition:<id>``),
-    so only the first two and last two segments are positional. The fact table
-    segment must name one of the two governed legacy fact tables.
-    """
-
-    parts = logical_key.split(":")
-    if len(parts) < 5 or parts[0] not in _TABLES or not parts[1] or not parts[-2] or not parts[-1]:
-        raise ValueError(f"not a fact logical key: {logical_key!r}")
-    fact_table: FactTable = parts[0]  # narrowed by the _TABLES membership check
-    return FactLogicalKeyComponents(
-        fact_table=fact_table,
-        ticker=parts[1],
-        concept_key=":".join(parts[2:-2]),
-        period_end=parts[-2],
-        fiscal_period_type=parts[-1],
-    )
-
-
-class CurrentFactSelectionSync(BaseModel):
-    """Machine-readable result of one bounded selection-convergence window."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    available: bool = True
-    keys_examined: int = 0
-    rows_written: int = 0
-    rows_deleted: int = 0
-    wrapped: bool = False
-    next_cursor: str = ""
-
-
-def refresh_current_fact_selection(
-    conn: sqlite3.Connection,
-    *,
-    batch_size: int,
-    cursor: str = "",
-) -> CurrentFactSelectionSync:
-    """Reconcile one bounded window of logical keys with the ledger's current state.
-
-    ``current_fact_selection`` is a derived materialization of exactly what the
-    resolved views serve: the latest ``observation_resolution_revisions`` row
-    per logical key whose ``fact_resolution_outcomes`` status is ``resolved``.
-    Each window recomputes the ledger's exact row for every captured key in a
-    bounded key range — and for any table row inside that same range — writing
-    only actual differences and deleting rows the ledger no longer selects, so
-    a converged database issues no writes at all. When a forward pass exhausts
-    the captured keys, the cursor wraps so later bounded passes re-verify the
-    whole key space. The caller owns the transaction: a failed window rolls
-    back with its caller's batch.
-    """
-
-    if batch_size < 1:
-        raise ValueError("batch_size must be positive")
-    if not _current_fact_selection_available(conn):
-        log.info(
-            "current_fact_selection_unavailable",
-            extra={"event": "current_fact_selection_unavailable"},
-        )
-        return CurrentFactSelectionSync(available=False, next_cursor=cursor)
-    rows_written = 0
-    rows_deleted = 0
-    wrapped = False
-    window = conn.execute(
-        "SELECT DISTINCT logical_key FROM fact_observation_revisions "
-        "WHERE logical_key > ? ORDER BY logical_key LIMIT ?",
-        (cursor, batch_size),
-    ).fetchall()
-    if not window:
-        # No captured key remains beyond the cursor, so every selection row
-        # there lacks a ledger anchor and is drift by definition. Delete the
-        # stragglers before the pass wraps (or finishes, when no key exists).
-        strays = conn.execute(
-            "SELECT logical_key FROM current_fact_selection WHERE logical_key > ?",
-            (cursor,),
-        ).fetchall()
-        for stray in strays:
-            conn.execute(
-                "DELETE FROM current_fact_selection WHERE logical_key = ?",
-                (str(stray[0]),),
-            )
-        rows_deleted = len(strays)
-        if cursor == "":
-            return CurrentFactSelectionSync(rows_deleted=rows_deleted, next_cursor="")
-        wrapped = True
-        cursor = ""
-        window = conn.execute(
-            "SELECT DISTINCT logical_key FROM fact_observation_revisions "
-            "WHERE logical_key > '' ORDER BY logical_key LIMIT ?",
-            (batch_size,),
-        ).fetchall()
-        if not window:
-            return CurrentFactSelectionSync(
-                rows_deleted=rows_deleted,
-                wrapped=True,
-                next_cursor="",
-            )
-    next_cursor = str(window[-1][0])
-    desired = {
-        str(row["logical_key"]): row
-        for row in conn.execute(
-            "SELECT link.logical_key, link.fact_table, link.fact_row_id, "
-            "link.fact_revision, link.observation_id, resolution.resolution_id, "
-            "resolution.revision AS resolution_revision "
-            "FROM fact_observation_revisions AS link "
-            "JOIN v_observation_resolution_current AS resolution "
-            "ON resolution.selected_observation_id = link.observation_id "
-            "JOIN fact_resolution_outcomes AS outcome "
-            "ON outcome.resolution_id = resolution.resolution_id "
-            "WHERE link.logical_key > ? AND link.logical_key <= ? "
-            "AND outcome.resolution_status = 'resolved' "
-            "AND link.fact_revision = (SELECT MAX(latest.fact_revision) "
-            "FROM fact_observation_revisions AS latest "
-            "WHERE latest.fact_table = link.fact_table "
-            "AND latest.fact_row_id = link.fact_row_id)",
-            (cursor, next_cursor),
-        ).fetchall()
-    }
-    existing = {
-        str(row["logical_key"]): row
-        for row in conn.execute(
-            "SELECT logical_key, fact_table, fact_row_id, fact_revision, "
-            "observation_id, resolution_id, resolution_revision, ticker, "
-            "concept_key, period_end, fiscal_period_type "
-            "FROM current_fact_selection "
-            "WHERE logical_key > ? AND logical_key <= ?",
-            (cursor, next_cursor),
-        ).fetchall()
-    }
-    rows_written = 0
-    # The window enumerates captured keys, but any table row inside the same
-    # range is in scope too: a row whose key has no desired ledger state is
-    # drift and must not survive the window just because no link names it.
-    in_scope = sorted({str(row[0]) for row in window} | set(existing))
-    for logical_key in in_scope:
-        ledger_row = desired.get(logical_key)
-        table_row = existing.get(logical_key)
-        if ledger_row is None:
-            if table_row is not None:
-                conn.execute(
-                    "DELETE FROM current_fact_selection WHERE logical_key = ?",
-                    (logical_key,),
-                )
-                rows_deleted += 1
-            continue
-        components = parse_fact_logical_key(logical_key)
-        payload = _selection_payload(ledger_row, components)
-        if table_row is not None and tuple(table_row)[1:] == payload:
-            continue
-        conn.execute(
-            _SELECTION_UPSERT_SQL,
-            (logical_key, *payload),
-        )
-        rows_written += 1
-    return CurrentFactSelectionSync(
-        keys_examined=len(window),
-        rows_written=rows_written,
-        rows_deleted=rows_deleted,
-        wrapped=wrapped,
-        next_cursor=next_cursor,
-    )
 
 
 def _capture_fact_row(
@@ -1607,6 +1701,10 @@ def _companyfacts_list(value: object) -> list[object]:
 def _load_complete_candidates(
     conn: sqlite3.Connection, logical_key: str, knowledge_cutoff: datetime
 ) -> tuple[_Candidate, ...]:
+    # Keep each indexed successor lookup outside its revision/evidence joins.
+    # A reorderable JOIN can start with all links for a fact table and repeat
+    # that ledger walk for every candidate. CROSS JOIN preserves these filters
+    # and the complete candidate set while fixing the selective outer loop.
     rows = conn.execute(
         "SELECT link.observation_id, link.fact_table, link.fact_row_id, link.fact_revision, "
         "observation.numeric_value, observation.currency, observation.unit, "
@@ -1624,10 +1722,10 @@ def _load_complete_candidates(
         "AND latest.fact_row_id = link.fact_row_id) "
         "AND ((link.fact_table = 'financial_facts' AND NOT EXISTS ("
         "SELECT 1 FROM financial_facts AS successor "
-        "JOIN fact_observation_revisions AS successor_link "
+        "CROSS JOIN fact_observation_revisions AS successor_link "
         "ON successor_link.fact_table = 'financial_facts' "
         "AND successor_link.fact_row_id = successor.id "
-        "JOIN reported_observations AS successor_observation "
+        "CROSS JOIN reported_observations AS successor_observation "
         "ON successor_observation.observation_id = successor_link.observation_id "
         "WHERE successor.supersedes_id = link.fact_row_id "
         "AND successor_link.fact_revision = (SELECT MAX(latest_successor.fact_revision) "
@@ -1638,10 +1736,10 @@ def _load_complete_candidates(
         "<= julianday(:knowledge_cutoff))) OR "
         "(link.fact_table = 'kpi_facts' AND NOT EXISTS ("
         "SELECT 1 FROM kpi_facts AS successor "
-        "JOIN fact_observation_revisions AS successor_link "
+        "CROSS JOIN fact_observation_revisions AS successor_link "
         "ON successor_link.fact_table = 'kpi_facts' "
         "AND successor_link.fact_row_id = successor.id "
-        "JOIN reported_observations AS successor_observation "
+        "CROSS JOIN reported_observations AS successor_observation "
         "ON successor_observation.observation_id = successor_link.observation_id "
         "WHERE successor.supersedes_id = link.fact_row_id "
         "AND successor_link.fact_revision = (SELECT MAX(latest_successor.fact_revision) "
@@ -1750,103 +1848,6 @@ def _current_resolution(conn: sqlite3.Connection, logical_key: str) -> sqlite3.R
     if not isinstance(row, sqlite3.Row):
         raise RuntimeError("fact resolution requires sqlite3.Row row_factory")
     return row
-
-
-def _current_fact_selection_available(conn: sqlite3.Connection) -> bool:
-    return _object_exists(conn, "current_fact_selection", object_type="table")
-
-
-_SELECTION_UPSERT_SQL = (
-    "INSERT INTO current_fact_selection "
-    "(logical_key, fact_table, fact_row_id, fact_revision, observation_id, "
-    "resolution_id, resolution_revision, ticker, concept_key, period_end, "
-    "fiscal_period_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-    "ON CONFLICT(logical_key) DO UPDATE SET "
-    "fact_table=excluded.fact_table, fact_row_id=excluded.fact_row_id, "
-    "fact_revision=excluded.fact_revision, observation_id=excluded.observation_id, "
-    "resolution_id=excluded.resolution_id, "
-    "resolution_revision=excluded.resolution_revision, ticker=excluded.ticker, "
-    "concept_key=excluded.concept_key, period_end=excluded.period_end, "
-    "fiscal_period_type=excluded.fiscal_period_type"
-)
-
-
-def _selection_payload(
-    ledger_row: sqlite3.Row, components: FactLogicalKeyComponents
-) -> tuple[str, int, int, str, str, int, str, str, str, str]:
-    """Build the ten non-key column values for one selection row."""
-
-    return (
-        str(ledger_row["fact_table"]),
-        int(ledger_row["fact_row_id"]),
-        int(ledger_row["fact_revision"]),
-        str(ledger_row["observation_id"]),
-        str(ledger_row["resolution_id"]),
-        int(ledger_row["resolution_revision"]),
-        components.ticker,
-        components.concept_key,
-        components.period_end,
-        components.fiscal_period_type,
-    )
-
-
-def _current_selection_row(conn: sqlite3.Connection, logical_key: str) -> sqlite3.Row | None:
-    """Derive one key's exact selection exactly as the resolved views derive it."""
-
-    return conn.execute(
-        "SELECT link.fact_table, link.fact_row_id, link.fact_revision, "
-        "link.observation_id, resolution.resolution_id, "
-        "resolution.revision AS resolution_revision "
-        "FROM fact_observation_revisions AS link "
-        "JOIN v_observation_resolution_current AS resolution "
-        "ON resolution.selected_observation_id = link.observation_id "
-        "JOIN fact_resolution_outcomes AS outcome "
-        "ON outcome.resolution_id = resolution.resolution_id "
-        "WHERE link.logical_key = ? "
-        "AND outcome.resolution_status = 'resolved' "
-        "AND link.fact_revision = (SELECT MAX(latest.fact_revision) "
-        "FROM fact_observation_revisions AS latest "
-        "WHERE latest.fact_table = link.fact_table "
-        "AND latest.fact_row_id = link.fact_row_id)",
-        (logical_key,),
-    ).fetchone()
-
-
-def _reconcile_current_fact_selection(conn: sqlite3.Connection, logical_key: str) -> bool:
-    """Mirror one logical key's current resolution into ``current_fact_selection``.
-
-    Runs inside the caller's persist transaction, so a ledger revision and its
-    materialized selection flip or vanish together. A key whose current
-    resolution is not ``resolved`` — or whose selected observation's capture is
-    no longer the latest revision for its fact row — has no view row and
-    therefore no selection row. Returns ``True`` only when a row was written
-    or deleted; an already-mirrored decision issues no writes. Pre-0049
-    schemas skip the mirror rather than failing the persist.
-    """
-
-    if not _current_fact_selection_available(conn):
-        return False
-    components = parse_fact_logical_key(logical_key)
-    desired = _current_selection_row(conn, logical_key)
-    existing = conn.execute(
-        "SELECT fact_table, fact_row_id, fact_revision, observation_id, "
-        "resolution_id, resolution_revision, ticker, concept_key, period_end, "
-        "fiscal_period_type FROM current_fact_selection WHERE logical_key = ?",
-        (logical_key,),
-    ).fetchone()
-    if desired is None:
-        if existing is None:
-            return False
-        conn.execute(
-            "DELETE FROM current_fact_selection WHERE logical_key = ?",
-            (logical_key,),
-        )
-        return True
-    payload = _selection_payload(desired, components)
-    if existing is not None and tuple(existing) == payload:
-        return False
-    conn.execute(_SELECTION_UPSERT_SQL, (logical_key, *payload))
-    return True
 
 
 def _same_current_decision(

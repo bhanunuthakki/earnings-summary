@@ -13,7 +13,7 @@ import hashlib
 import json
 import sqlite3
 import time
-from collections.abc import Generator, Iterator
+from collections.abc import Generator, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -74,6 +74,9 @@ _AUDIT_VERIFIER_CODE_SHA256 = verifier_source_artifact_sha256(
         "search/canonical_fact_projection.py": Path(__file__).resolve(),
     }
 )
+AUDIT_VERIFIER_NAME = _AUDIT_VERIFIER_NAME
+AUDIT_VERIFIER_VERSION = _AUDIT_VERIFIER_VERSION
+AUDIT_VERIFIER_CODE_SHA256 = _AUDIT_VERIFIER_CODE_SHA256
 
 
 def canonical_time(value: object) -> str:
@@ -586,6 +589,8 @@ def search_canonical_facts(
     limit: int,
     reporting_entity_id: str | None = None,
     verification: RequestVerificationCache | None = None,
+    aliases: Mapping[str, tuple[str, ...]] | None = None,
+    ticker: str | None = None,
 ) -> tuple[CanonicalFactHit, ...]:
     """Bounded SQL lexical candidate stage over a sealed generation chain."""
 
@@ -606,11 +611,16 @@ def search_canonical_facts(
     admit_canonical_projection_for_read(conn, generation_id, verification)
     plan = plan_canonical_fact_query(query_text)
     # KPI alias expansion: the sealed search text carries the metric's own
-    # definition aliases, but an alias recorded only in the legacy kpi_aliases
-    # authority (present in pre-0002 deployments and hermetic fixtures; absent
-    # at the current head, where the reader resolves an empty map) still has to
-    # bridge a query phrased with it to the canonical fact.
-    tokens = (*plan.metric_terms, *fact_alias_terms(plan.metric_terms, kpi_alias_expansions(conn)))
+    # definition aliases, but an alias recorded in the definitions or legacy kpi_aliases
+    # authority still has to bridge a query phrased with it to the canonical fact.
+    alias_map = aliases if aliases is not None else kpi_alias_expansions(conn, ticker=ticker)
+    expanded = fact_alias_terms(plan.metric_terms, alias_map)
+    tokens = (*plan.metric_terms, *expanded)
+    committed_aliases: dict[str, list[str]] = {}
+    for term in plan.metric_terms:
+        term_norm = term.casefold()
+        if term_norm in alias_map:
+            committed_aliases[term] = list(alias_map[term_norm])
     score_sql = " + ".join(
         "CASE WHEN instr(lower(entry.canonical_search_text),?)>0 THEN 1 ELSE 0 END" for _ in tokens
     )
@@ -643,6 +653,21 @@ def search_canonical_facts(
     verified_buckets: set[int] = set()
     for row in rows:
         _verify_projected_hit_for_read(conn, generation_id, row, verified_buckets=verified_buckets)
+        lineage_dict: dict[str, object] = {
+            "binding_commitment_sha256": row["binding_commitment_sha256"],
+            "binding_revision_id": row["binding_revision_id"],
+            "canonical_resolution_revision_id": row["canonical_resolution_revision_id"],
+            "metric_definition_commitment_sha256": row["metric_definition_commitment_sha256"],
+            "metric_definition_revision_id": row["metric_definition_revision_id"],
+            "ontology_snapshot_id": header["ontology_snapshot_id"],
+            "resolution_snapshot_id": header["resolution_snapshot_id"],
+            "selected_observation_id": row["selected_observation_id"],
+            "source_fact_cell_id": row["source_fact_cell_id"],
+            "source_publication_id": row["source_publication_id"],
+            "source_publication_member_id": row["source_publication_member_id"],
+            "source_publication_seal_id": row["source_publication_seal_id"],
+            "aliases": committed_aliases,
+        }
         hits.append(
             CanonicalFactHit(
                 generation_id=generation_id,
@@ -656,22 +681,7 @@ def search_canonical_facts(
                 currency=_optional_text(row["currency"]),
                 unit_key=str(row["unit_key"]),
                 entry_sha256=str(row["entry_sha256"]),
-                lineage={
-                    "binding_commitment_sha256": row["binding_commitment_sha256"],
-                    "binding_revision_id": row["binding_revision_id"],
-                    "canonical_resolution_revision_id": row["canonical_resolution_revision_id"],
-                    "metric_definition_commitment_sha256": row[
-                        "metric_definition_commitment_sha256"
-                    ],
-                    "metric_definition_revision_id": row["metric_definition_revision_id"],
-                    "ontology_snapshot_id": header["ontology_snapshot_id"],
-                    "resolution_snapshot_id": header["resolution_snapshot_id"],
-                    "selected_observation_id": row["selected_observation_id"],
-                    "source_fact_cell_id": row["source_fact_cell_id"],
-                    "source_publication_id": row["source_publication_id"],
-                    "source_publication_member_id": row["source_publication_member_id"],
-                    "source_publication_seal_id": row["source_publication_seal_id"],
-                },
+                lineage=lineage_dict,
                 evidence_locator=json.loads(str(row["evidence_locator_json"])),
             )
         )
@@ -971,6 +981,9 @@ def _projection_audit_payload(
         "tombstone_count": _int(seal["tombstone_count"]),
         "upsert_count": _int(seal["upsert_count"]),
     }
+
+
+projection_audit_payload = _projection_audit_payload
 
 
 def _verify_generation_references(

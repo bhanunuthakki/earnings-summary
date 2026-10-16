@@ -71,7 +71,9 @@ _FORM_MAP: dict[str, FilingForm] = {
     "20-F": FilingForm.FORM_20F,
     "20-F/A": FilingForm.FORM_20F,
     "40-F": FilingForm.FORM_40F,
+    "40-F/A": FilingForm.FORM_40F,
     "6-K": FilingForm.FORM_6K,
+    "6-K/A": FilingForm.FORM_6K,
     "S-1": FilingForm.FORM_S1,
     "S-1/A": FilingForm.FORM_S1,
 }

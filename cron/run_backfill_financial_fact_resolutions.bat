@@ -1,11 +1,10 @@
 @echo off
 REM Daily 07:45 - financial-fact resolution ledger backfill (F4c in
 REM .tmp/audit/lineage.md). Captures any legacy fact rows that lack immutable
-REM observations, resolves their logical keys under policy v2, and converges
-REM one bounded window of the current_fact_selection materialization toward
-REM the resolution ledger (migration 0049). One bounded batch per run with an
-REM explicit checkpoint under .tmp/financial-fact-resolution-cutover/state.json;
-REM repeated runs are idempotent and wrap to re-verify the whole key space.
+REM observations and resolves their logical keys under policy v2.
+REM One bounded batch per run uses the explicit checkpoint under
+REM .tmp/financial-fact-resolution-cutover/state.json. The unused selection
+REM mirror is not maintained; old selection cursors remain readable.
 REM Deterministic local DB work - no LLM leg, no network. Deliberately after
 REM the 03:00-07:30 data chain so same-day acquisitions resolve the same day.
 REM Log to .tmp/cron_logs/backfill_financial_fact_resolutions_<TS>.log.

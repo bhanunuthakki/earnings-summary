@@ -7,16 +7,40 @@ script is subprocess plumbing covered by integration tests in CI.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sqlite3
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import pytest
+
+if TYPE_CHECKING:
+    from execution.onboard_pending_tickers import StageOutcome, StageResult, TickerResult
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _load_module():
+@runtime_checkable
+class PendingOnboarding(Protocol):
+    StageOutcome: type[StageOutcome]
+    StageResult: type[StageResult]
+
+    def find_pending_tickers(self, db_path: Path) -> list[tuple[str, str]]: ...
+
+    def onboard_one(
+        self,
+        ticker: str,
+        pending_reason: str,
+        *,
+        skip_fmp: bool,
+        skip_commitments: bool,
+        log_path: Path,
+        skip_sec: bool = False,
+    ) -> TickerResult: ...
+
+
+def _load_module() -> PendingOnboarding:
     """Import execution/onboard_pending_tickers.py without executing main()."""
     src = PROJECT_ROOT / "execution" / "onboard_pending_tickers.py"
     spec = importlib.util.spec_from_file_location("onboard_pending_tickers", src)
@@ -24,6 +48,7 @@ def _load_module():
     mod = importlib.util.module_from_spec(spec)
     sys.modules["onboard_pending_tickers"] = mod
     spec.loader.exec_module(mod)
+    assert isinstance(mod, PendingOnboarding)
     return mod
 
 
@@ -181,8 +206,14 @@ def test_zero_facts_flags_pending(db: Path) -> None:
     assert pending == [("AMD", "no_financial_facts")]
 
 
-def test_zero_dcf_flags_pending_when_facts_present(db: Path) -> None:
+def test_zero_dcf_flags_pending_when_facts_and_valuation_inputs_present(
+    db: Path, tmp_path: Path
+) -> None:
     mod = _load_module()
+    holdings_dir = tmp_path / "holdings"
+    setattr(mod, "_HOLDINGS_DIR", holdings_dir)
+    holdings_dir.mkdir()
+    (holdings_dir / "BKNG.json").write_text('{"wacc": 0.09}')
     _add_ticker(db, "BKNG", "watchlist", instrument_type="equity", facts=5, dcf=0)
     pending = mod.find_pending_tickers(db)
     assert pending == [("BKNG", "no_dcf_run")]
@@ -251,7 +282,8 @@ def test_reason_precedence(db: Path) -> None:
     pending = dict(mod.find_pending_tickers(db))
     assert pending["T1"] == "no_instrument_type"
     assert pending["T2"] == "no_financial_facts"
-    assert pending["T3"] == "no_dcf_run"
+    # Missing owner-conditioned valuation input does not repeat source onboarding.
+    assert "T3" not in pending
     assert pending["T4"] == "no_commitments"
 
 
@@ -406,11 +438,11 @@ def test_onboard_one_skips_heavy_stages_for_no_commitments(
 
     invoked: list[str] = []
 
-    def fake_run_subprocess(cmd, stage, log_path):
+    def fake_run_subprocess(cmd: list[str], stage: str, log_path: Path) -> StageResult:
         invoked.append(stage)
         return mod.StageResult(stage=stage, outcome=mod.StageOutcome.OK, rc=0, detail="")
 
-    mod._run_subprocess = fake_run_subprocess  # type: ignore[assignment]
+    setattr(mod, "_run_subprocess", fake_run_subprocess)
 
     result = mod.onboard_one(
         ticker="DONE",
@@ -434,15 +466,19 @@ def test_onboard_one_skips_heavy_stages_for_no_commitments(
 def test_onboard_one_runs_full_chain_for_data_pending(tmp_path: Path) -> None:
     """When pending_reason isn't 'no_commitments', all 4 stages should fire."""
     mod = _load_module()
+    holdings_dir = tmp_path / "holdings"
+    setattr(mod, "_HOLDINGS_DIR", holdings_dir)
+    holdings_dir.mkdir()
+    (holdings_dir / "NEW.json").write_text(json.dumps({"wacc": 0.09}))
     log_path = tmp_path / "log.txt"
 
     invoked: list[str] = []
 
-    def fake_run_subprocess(cmd, stage, log_path):
+    def fake_run_subprocess(cmd: list[str], stage: str, log_path: Path) -> StageResult:
         invoked.append(stage)
         return mod.StageResult(stage=stage, outcome=mod.StageOutcome.OK, rc=0, detail="")
 
-    mod._run_subprocess = fake_run_subprocess  # type: ignore[assignment]
+    setattr(mod, "_run_subprocess", fake_run_subprocess)
 
     mod.onboard_one(
         ticker="NEW",
@@ -466,11 +502,11 @@ def test_onboard_one_skip_commitments_flag(tmp_path: Path) -> None:
 
     invoked: list[str] = []
 
-    def fake_run_subprocess(cmd, stage, log_path):
+    def fake_run_subprocess(cmd: list[str], stage: str, log_path: Path) -> StageResult:
         invoked.append(stage)
         return mod.StageResult(stage=stage, outcome=mod.StageOutcome.OK, rc=0, detail="")
 
-    mod._run_subprocess = fake_run_subprocess  # type: ignore[assignment]
+    setattr(mod, "_run_subprocess", fake_run_subprocess)
 
     result_full = mod.onboard_one(
         ticker="NEW",
@@ -479,6 +515,7 @@ def test_onboard_one_skip_commitments_flag(tmp_path: Path) -> None:
         skip_commitments=True,
         log_path=log_path,
     )
-    assert invoked == ["onboard_ticker", "run_thesis_evaluator", "refresh_dcf"]
+    assert invoked == ["onboard_ticker"]
+    assert all(s.outcome is mod.StageOutcome.SKIPPED for s in result_full.stages[1:3])
     assert result_full.stages[3].stage == "extract_commitments"
     assert result_full.stages[3].outcome is mod.StageOutcome.SKIPPED

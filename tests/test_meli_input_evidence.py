@@ -22,9 +22,11 @@ import pytest
 
 from dcf import input_evidence as evidence
 from dcf import meli_inputs
+from dcf.meli_input_preview import preview_meli_inputs
 from dcf.readiness import load_valuation_readiness
 from dcf.specialized_price import SpecializedPriceObservation
 from execution import build_meli_platform_dcf as meli
+from execution import preview_meli_inputs as preview_cli
 from provenance.canonical_fact_resolution import (
     CanonicalFactResolutionEngine,
     ResolutionPolicy,
@@ -37,6 +39,7 @@ from provenance.fact_plane_v2 import (
     FactDimensionV2,
 )
 from provenance.fact_read_model import FactReadModel
+from provenance.immutable_artifact import ImmutableArtifactConflictError
 from provenance.issuer_registry import IssuerRegistry, Security
 from provenance.metric_ontology import (
     BindingRevision,
@@ -124,12 +127,13 @@ def _inputs() -> dict[str, float]:
 def _seed_real_inputs(
     conn: sqlite3.Connection,
     *,
+    source_path: Path | None = None,
     shared_revenues: bool = False,
     extra_country: bool = False,
     security_scope: bool = False,
 ) -> dict[str, evidence.FactBinding]:
     """No mocking source publication, ontology, binding, resolver or fact reader."""
-    seed_foundation(conn)
+    seed_foundation(conn, source_path=source_path)
     if security_scope:
         IssuerRegistry(conn).persist(
             Security(
@@ -706,7 +710,9 @@ def _seed_real_inputs(
 
 
 def _request(
-    conn: sqlite3.Connection, refs: dict[str, evidence.FactBinding]
+    conn: sqlite3.Connection,
+    refs: dict[str, evidence.FactBinding],
+    source_context: evidence.SourceReadContext,
 ) -> evidence.ModelInputRequest:
     inputs = _inputs()
     request = evidence.ModelInputRequest(
@@ -732,6 +738,7 @@ def _request(
         effective_inputs={key: inputs[key] for key in meli_inputs.ASSUMPTION_KEYS},
         assumption_keys=meli_inputs.ASSUMPTION_KEYS,
         as_of=NOW,
+        source_context=source_context,
     )
     actuals, _calculations = meli_inputs.calculate_actuals(proof)
     complete = {**inputs, **{key: actuals[key] for key in meli_inputs.REPORTED_DRIVER_KEYS}}
@@ -754,11 +761,20 @@ def _request(
 
 
 @pytest.fixture
+def source_context(tmp_path: Path) -> evidence.SourceReadContext:
+    """Explicit isolated raw-byte authority; no database-path inference."""
+    return evidence.SourceReadContext.for_sec_state_root(tmp_path / "source-state")
+
+
+@pytest.fixture
 def real_inputs(
-    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+    source_context: evidence.SourceReadContext,
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Generator[tuple[sqlite3.Connection, evidence.ModelInputRequest], None, None]:
     conn = sqlite3.connect(migrated_db(tmp_path / "meli.db"))
-    refs = _seed_real_inputs(conn)
+    refs = _seed_real_inputs(conn, source_path=source_context.content_roots[0] / "fixture.json")
 
     def coverage(
         _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime
@@ -767,17 +783,22 @@ def real_inputs(
 
     monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
     try:
-        yield conn, _request(conn, refs)
+        yield conn, _request(conn, refs, source_context)
     finally:
         conn.close()
 
 
 @pytest.fixture
 def shared_revenue_inputs(
-    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+    source_context: evidence.SourceReadContext,
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Generator[tuple[sqlite3.Connection, evidence.ModelInputRequest], None, None]:
     conn = sqlite3.connect(migrated_db(tmp_path / "meli-shared-revenues.db"))
-    refs = _seed_real_inputs(conn, shared_revenues=True)
+    refs = _seed_real_inputs(
+        conn, shared_revenues=True, source_path=source_context.content_roots[0] / "fixture.json"
+    )
 
     def coverage(
         _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime
@@ -786,12 +807,13 @@ def shared_revenue_inputs(
 
     monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
     try:
-        yield conn, _request(conn, refs)
+        yield conn, _request(conn, refs, source_context)
     finally:
         conn.close()
 
 
 def test_shared_revenues_qname_routes_four_roles_by_sealed_dimensions(
+    source_context: evidence.SourceReadContext,
     shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
 ) -> None:
     conn, request = shared_revenue_inputs
@@ -803,6 +825,7 @@ def test_shared_revenues_qname_routes_four_roles_by_sealed_dimensions(
         effective_inputs={key: item.value for key, item in request.assumptions.items()},
         assumption_keys=meli_inputs.ASSUMPTION_KEYS,
         as_of=NOW,
+        source_context=source_context,
     )
     selected = {
         item.key: item
@@ -832,6 +855,7 @@ def test_shared_revenues_qname_routes_four_roles_by_sealed_dimensions(
 
 @pytest.mark.parametrize("replacement", ["revenue_total_ytd", "revenue_fintech_ytd"])
 def test_shared_revenue_selector_rejects_missing_or_wrong_segment(
+    source_context: evidence.SourceReadContext,
     shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
     replacement: str,
 ) -> None:
@@ -840,7 +864,9 @@ def test_shared_revenue_selector_rejects_missing_or_wrong_segment(
         update={"facts": {**request.facts, "comm_rev0_ytd": request.facts[replacement]}}
     )
     with pytest.raises(evidence.InputEvidenceError, match="input_semantic_admission_failed"):
-        meli_inputs.prepare_meli_inputs(conn, altered, effective_inputs=_inputs(), as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, altered, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
 
 
 @pytest.mark.parametrize(
@@ -851,6 +877,7 @@ def test_shared_revenue_selector_rejects_missing_or_wrong_segment(
     ],
 )
 def test_real_published_distractor_cell_cannot_feed_meli_role(
+    source_context: evidence.SourceReadContext,
     tmp_path: Path,
     migrated_db: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
@@ -924,6 +951,7 @@ def test_real_published_distractor_cell_cannot_feed_meli_role(
                 effective_inputs={key: inputs[key] for key in meli_inputs.ASSUMPTION_KEYS},
                 assumption_keys=meli_inputs.ASSUMPTION_KEYS,
                 as_of=NOW,
+                source_context=source_context,
             )
     finally:
         conn.close()
@@ -943,6 +971,7 @@ def test_real_published_distractor_cell_cannot_feed_meli_role(
     ],
 )
 def test_shared_revenue_revised_definition_fails_closed(
+    source_context: evidence.SourceReadContext,
     shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
     change: str,
 ) -> None:
@@ -1051,16 +1080,21 @@ def test_shared_revenue_revised_definition_fails_closed(
             }
         )
     with pytest.raises(evidence.InputEvidenceError, match="input_semantic_admission_failed"):
-        meli_inputs.prepare_meli_inputs(conn, request, effective_inputs=_inputs(), as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
 
 
 def test_shared_revenue_append_only_dimension_and_recipe_cannot_be_bypassed(
+    source_context: evidence.SourceReadContext,
     shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
 ) -> None:
     conn, request = shared_revenue_inputs
     old_recipe = request.model_copy(update={"recipe": "meli-platform-sotp-inputs/v3"})
     with pytest.raises(evidence.InputEvidenceError, match="input_recipe_mismatch"):
-        meli_inputs.prepare_meli_inputs(conn, old_recipe, effective_inputs=_inputs(), as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, old_recipe, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
     cell_id = request.facts["comm_rev0_ytd"].canonical_metric_cell_id
     with pytest.raises(sqlite3.IntegrityError, match="append-only"):
         conn.execute(
@@ -1071,11 +1105,12 @@ def test_shared_revenue_append_only_dimension_and_recipe_cannot_be_bypassed(
 
 
 def test_real_reported_bindings_compute_ttm_and_bridge(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
 ) -> None:
     conn, request = real_inputs
     inputs, receipt = meli_inputs.prepare_meli_inputs(
-        conn, request, effective_inputs=_inputs(), as_of=NOW
+        conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
     )
     assert len(receipt.inputs) == 28
     assert all(item.observation_kind == "reported" for item in receipt.inputs)
@@ -1087,7 +1122,7 @@ def test_real_reported_bindings_compute_ttm_and_bridge(
     assert {item.key for item in receipt.calculations} >= {"comm_rev0", "net_cash", "fpay_rev0"}
     assert (
         meli_inputs.verify_meli_inputs(
-            conn, receipt, effective_inputs=inputs, as_of=NOW
+            conn, receipt, effective_inputs=inputs, as_of=NOW, source_context=source_context
         ).model_output_sha256
         == receipt.model_output_sha256
     )
@@ -1103,7 +1138,10 @@ def test_real_reported_bindings_compute_ttm_and_bridge(
     ],
 )
 def test_real_authorities_reject_tainted_population(
-    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest], change: str, reason: str
+    source_context: evidence.SourceReadContext,
+    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    change: str,
+    reason: str,
 ) -> None:
     conn, request = real_inputs
     if change == "missing":
@@ -1127,14 +1165,42 @@ def test_real_authorities_reject_tainted_population(
             }
         )
     with pytest.raises(evidence.InputEvidenceError, match=reason):
-        meli_inputs.prepare_meli_inputs(conn, request, effective_inputs=_inputs(), as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
 
 
-def test_seed_only_model_cannot_persist(tmp_path: Path) -> None:
+def test_meli_recipe_rejects_an_onon_request_before_reading_sources(
+    source_context: evidence.SourceReadContext,
+) -> None:
+    request = evidence.ModelInputRequest(
+        recipe=meli_inputs.RECIPE,
+        ticker="ONON",
+        research_snapshot_id="snapshot",
+        financial_period_end=END,
+        facts={},
+        assumptions={},
+    )
+    with (
+        sqlite3.connect(":memory:") as conn,
+        pytest.raises(evidence.InputEvidenceError, match="input_recipe_issuer_mismatch"),
+    ):
+        meli_inputs.prepare_meli_inputs(
+            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
+
+
+def test_seed_only_model_cannot_persist(
+    source_context: evidence.SourceReadContext, tmp_path: Path
+) -> None:
     assumptions = meli.Assum(derive_capm=0)
     with pytest.raises(evidence.InputEvidenceError, match="model_input_receipt_required"):
         meli.persist_dcf_run(
-            assumptions, meli.mirror(assumptions), {}, db_path=tmp_path / "absent.db"
+            assumptions,
+            meli.mirror(assumptions),
+            {},
+            db_path=tmp_path / "absent.db",
+            source_context=source_context,
         )
     assert not (tmp_path / "absent.db").exists()
 
@@ -1147,7 +1213,10 @@ def _coverage_fixture(monkeypatch: pytest.MonkeyPatch) -> sqlite3.Connection:
         CREATE TABLE source_inventory_snapshots (snapshot_id TEXT, inventory_key TEXT, revision INTEGER,
             issuer_id TEXT, ticker TEXT, source_kind TEXT, outcome TEXT, authoritative INTEGER,
             completed_at TEXT, recorded_at TEXT);
-        CREATE TABLE expected_documents (snapshot_id TEXT, period_end TEXT, form_type TEXT, recorded_at TEXT);
+        CREATE TABLE expected_documents (
+            snapshot_id TEXT, period_end TEXT, form_type TEXT, recorded_at TEXT, filing_at TEXT,
+            document_type TEXT, accession_number TEXT, issuer_id TEXT, ticker TEXT,
+            source_kind TEXT, expectation_basis TEXT);
     """)
     conn.execute(
         "INSERT INTO research_snapshot_headers VALUES (?,?)",
@@ -1159,8 +1228,9 @@ def _coverage_fixture(monkeypatch: pytest.MonkeyPatch) -> sqlite3.Connection:
         (NOW.isoformat(), NOW.isoformat()),
     )
     conn.execute(
-        "INSERT INTO expected_documents VALUES ('inventory','2026-06-30','10-Q',?)",
-        (NOW.isoformat(),),
+        "INSERT INTO expected_documents VALUES ('inventory','2026-06-30','10-Q',?,?,"
+        "'filing','0001099590-26-000001','issuer-1','MELI','sec_filing','authoritative')",
+        (NOW.isoformat(), NOW.isoformat()),
     )
 
     def verify(_conn: sqlite3.Connection, _snapshot_id: str) -> SimpleNamespace:
@@ -1220,11 +1290,12 @@ def test_current_source_coverage_is_independent_of_quote_and_capture(
 
 
 def test_replayed_base_is_not_scenario_acceptance_and_wrong_outputs_are_blocked(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
 ) -> None:
     conn, request = real_inputs
     inputs, receipt = meli_inputs.prepare_meli_inputs(
-        conn, request, effective_inputs=_inputs(), as_of=NOW
+        conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
     )
     result = meli_inputs.model_output(inputs)
     snapshot = {
@@ -1251,20 +1322,21 @@ def test_replayed_base_is_not_scenario_acceptance_and_wrong_outputs_are_blocked(
             json.dumps({"model_input_receipt": receipt.model_dump(mode="json")}),
         ),
     )
-    good = load_valuation_readiness(conn, "MELI", as_of=NOW)
+    good = load_valuation_readiness(conn, "MELI", as_of=NOW, source_context=source_context)
     assert not good.ready
     assert good.financial_input_completeness == "verified", good.reason_codes
     assert good.latest_reporting_period_status == "verified"
     assert good.assumption_reviewed_at == NOW.isoformat()
     assert good.reason_codes == ("scenario_acceptance_unverified",)
     conn.execute("UPDATE dcf_runs SET npv=npv+1000")
-    wrong = load_valuation_readiness(conn, "MELI", as_of=NOW)
+    wrong = load_valuation_readiness(conn, "MELI", as_of=NOW, source_context=source_context)
     assert not wrong.ready
     assert "persisted_model_output_replay_mismatch" in wrong.reason_codes
     assert wrong.financial_input_completeness == "verified"
 
 
 def test_real_old_period_cannot_fill_current_ytd_slot(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
 ) -> None:
     conn, request = real_inputs
@@ -1272,11 +1344,14 @@ def test_real_old_period_cannot_fill_current_ytd_slot(
         update={"facts": {**request.facts, "comm_rev0_ytd": request.facts["comm_rev0_prior_ytd"]}}
     )
     with pytest.raises(evidence.InputEvidenceError, match="input_coordinate_mismatch"):
-        meli_inputs.prepare_meli_inputs(conn, request, effective_inputs=_inputs(), as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
 
 
 @pytest.mark.parametrize("adopt_revision", [False, True])
 def test_current_definition_supersession_invalidates_old_binding_recipe(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
     adopt_revision: bool,
 ) -> None:
@@ -1313,7 +1388,9 @@ def test_current_definition_supersession_invalidates_old_binding_recipe(
             }
         )
     with pytest.raises(evidence.InputEvidenceError, match="input_semantic_admission_failed"):
-        meli_inputs.prepare_meli_inputs(conn, request, effective_inputs=_inputs(), as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
 
 
 @pytest.mark.parametrize(
@@ -1321,6 +1398,7 @@ def test_current_definition_supersession_invalidates_old_binding_recipe(
     ["nimal", "credit_cash_allocation", "operating_cash_reserve", "credit_funding_debt_allocation"],
 )
 def test_changed_variance_or_actual_basis_requires_new_review(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
     driver_key: str,
 ) -> None:
@@ -1335,10 +1413,13 @@ def test_changed_variance_or_actual_basis_requires_new_review(
         }
     )
     with pytest.raises(evidence.InputEvidenceError, match="assumption_review_variance_mismatch"):
-        meli_inputs.prepare_meli_inputs(conn, request, effective_inputs=_inputs(), as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+        )
 
 
 def test_verified_loader_uses_explicit_state_artifact_and_detects_changes(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1354,7 +1435,7 @@ def test_verified_loader_uses_explicit_state_artifact_and_detects_changes(
 
     monkeypatch.setattr(meli, "datetime", SimpleNamespace(now=now))
     assumptions, receipt = meli.load_verified_assumptions(
-        "MELI", db_path=db, assumptions_path=artifact
+        "MELI", db_path=db, assumptions_path=artifact, source_context=source_context
     )
     assert assumptions.comm_rev0 == pytest.approx(_inputs()["comm_rev0"])
     assert assumptions.price == 0
@@ -1369,6 +1450,7 @@ def test_verified_loader_uses_explicit_state_artifact_and_detects_changes(
             db_path=db,
             input_receipt=receipt,
             assumptions_path=artifact,
+            source_context=source_context,
         )
     assert conn.execute("SELECT COUNT(*) FROM dcf_runs").fetchone()[0] == 0
 
@@ -1394,6 +1476,7 @@ def test_verified_loader_rejects_seed_only_artifact(tmp_path: Path) -> None:
     ],
 )
 def test_reviewed_allocations_must_fit_reported_pools(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
     changes: dict[str, float],
 ) -> None:
@@ -1408,10 +1491,13 @@ def test_reviewed_allocations_must_fit_reported_pools(
         }
     )
     with pytest.raises(evidence.InputEvidenceError, match="allocation_outside_reported_pools"):
-        meli_inputs.prepare_meli_inputs(conn, revised, effective_inputs=inputs, as_of=NOW)
+        meli_inputs.prepare_meli_inputs(
+            conn, revised, effective_inputs=inputs, as_of=NOW, source_context=source_context
+        )
 
 
 def test_real_builder_persistence_keeps_subsecond_calculation_clock(
+    source_context: evidence.SourceReadContext,
     real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1434,7 +1520,7 @@ def test_real_builder_persistence_keeps_subsecond_calculation_clock(
     destination = tmp_path / "model.xlsx"
     monkeypatch.setattr(meli, "DEST", destination)
     assumptions, receipt = meli.load_verified_assumptions(
-        "MELI", db_path=db, assumptions_path=artifact
+        "MELI", db_path=db, assumptions_path=artifact, source_context=source_context
     )
     assumptions.price = 1700.0
     quote = SpecializedPriceObservation(
@@ -1463,17 +1549,356 @@ def test_real_builder_persistence_keeps_subsecond_calculation_clock(
         db_path=db,
         input_receipt=receipt,
         assumptions_path=artifact,
+        source_context=source_context,
     )
     saved = conn.execute("SELECT created_at,npv,npv_per_share FROM dcf_runs").fetchone()
     assert datetime.fromisoformat(saved[0]) == NOW
     assert saved[1] == model.equity_value
     assert saved[2] == model.vps
-    readiness = load_valuation_readiness(conn, "MELI", as_of=NOW)
+    readiness = load_valuation_readiness(conn, "MELI", as_of=NOW, source_context=source_context)
     assert readiness.financial_input_completeness == "verified", readiness.reason_codes
     assert "model_input_receipt_after_calculation" not in readiness.reason_codes
     assert "scenario_acceptance_unverified" in readiness.reason_codes
     # The old second-resolution SQL timestamp genuinely precedes this receipt.
     # Retain the strict consumer ordering instead of adding a time tolerance.
     conn.execute("UPDATE dcf_runs SET created_at=?", (NOW.replace(microsecond=0).isoformat(),))
-    truncated = load_valuation_readiness(conn, "MELI", as_of=NOW)
+    truncated = load_valuation_readiness(conn, "MELI", as_of=NOW, source_context=source_context)
     assert "model_input_receipt_after_calculation" in truncated.reason_codes
+
+
+def test_input_preview_selects_all_reported_roles_without_writes_or_priors(
+    shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    source_context: evidence.SourceReadContext,
+) -> None:
+    # This existing fixture mocks only source-coverage verification. Publication,
+    # metric revisions, dimensions, resolver and provenance reads remain real.
+    conn, request = shared_revenue_inputs
+    conn.execute("PRAGMA query_only=ON")
+    changes = conn.total_changes
+    result = preview_meli_inputs(
+        conn,
+        research_snapshot_id=request.research_snapshot_id,
+        financial_period_end=END,
+        as_of=NOW,
+        source_context=source_context,
+    )
+    assert result.state == "reported_inputs_verified_not_model_ready"
+    assert result.model_ready is False
+    assert len(result.slots) == 28
+    assert all(slot.state == "matched" for slot in result.slots)
+    assert result.facts == request.facts
+    assert conn.total_changes == changes
+    assert not hasattr(result, "assumptions")
+    assert not hasattr(result, "model_output_sha256")
+    replayed = preview_meli_inputs(
+        conn,
+        research_snapshot_id=request.research_snapshot_id,
+        financial_period_end=END,
+        as_of=NOW,
+        source_context=source_context,
+    )
+    # Fresh observation clocks differ; every deterministic v1 field still replays.
+    assert result.model_dump() == replayed.model_dump()
+    assert result.source_integrity == replayed.source_integrity == "present_bytes_verified"
+    assert tuple(
+        (item.document_version_id, item.blob_sha256, item.byte_size, item.reader_policy)
+        for item in result.raw_document_verifications
+    ) == tuple(
+        (item.document_version_id, item.blob_sha256, item.byte_size, item.reader_policy)
+        for item in replayed.raw_document_verifications
+    )
+    assert replayed.raw_document_verifications[0].verified_at > (
+        result.raw_document_verifications[0].verified_at
+    )
+
+
+@pytest.mark.parametrize("role", [None, "meli.comm_rev0"])
+def test_input_preview_refuses_missing_or_ambiguous_roles_without_partial_bindings(
+    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    role: str | None,
+    source_context: evidence.SourceReadContext,
+) -> None:
+    conn, request = real_inputs
+    ontology = MetricOntology(conn)
+    metric_id = request.facts["revenue_total_ytd"].metric_id
+    old = ontology.metric_definition_as_known(metric_id, NOW)
+    assert old is not None
+    scope = {key: value for key, value in old.scope_constraints.items() if key != "valuation_role"}
+    if role is not None:
+        scope["valuation_role"] = role
+    ontology.persist_metric_definition(
+        old.model_copy(
+            update={
+                "metric_definition_revision_id": old.metric_definition_revision_id + ":preview-v2",
+                "idempotency_key": old.idempotency_key + ":preview-v2",
+                "revision": 2,
+                "supersedes_metric_definition_revision_id": old.metric_definition_revision_id,
+                "scope_constraints": scope,
+                "effective_at": NOW,
+                "knowledge_at": NOW,
+                "recorded_at": NOW,
+            }
+        )
+    )
+    conn.commit()
+    conn.execute("PRAGMA query_only=ON")
+    result = preview_meli_inputs(
+        conn,
+        research_snapshot_id=request.research_snapshot_id,
+        financial_period_end=END,
+        as_of=NOW,
+        source_context=source_context,
+    )
+    slots = {slot.key: slot for slot in result.slots}
+    assert slots["revenue_total_ytd"].state == "missing"
+    assert slots["comm_rev0_ytd"].state == ("matched" if role is None else "ambiguous")
+    assert len(slots["comm_rev0_ytd"].candidate_cell_ids) == (1 if role is None else 2)
+    assert result.state == "incomplete"
+    assert result.source_integrity == "unverified" and result.raw_document_verifications == ()
+    assert result.model_ready is False
+    assert result.facts == {}
+
+
+def test_input_preview_rejects_missing_source_coverage_before_reading_candidates(
+    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    monkeypatch: pytest.MonkeyPatch,
+    source_context: evidence.SourceReadContext,
+) -> None:
+    conn, request = real_inputs
+
+    def unavailable(
+        _conn: sqlite3.Connection,
+        _request: evidence.ModelInputRequest,
+        _cutoff: datetime,
+    ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
+        raise evidence.InputEvidenceError("current_sec_inventory_missing")
+
+    monkeypatch.setattr(evidence, "verify_source_coverage", unavailable)
+    with pytest.raises(evidence.InputEvidenceError, match="current_sec_inventory_missing"):
+        preview_meli_inputs(
+            conn,
+            research_snapshot_id=request.research_snapshot_id,
+            financial_period_end=END,
+            as_of=NOW,
+            source_context=source_context,
+        )
+
+
+def test_input_preview_cli_reads_explicit_database_and_preserves_existing_output(
+    shared_revenue_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    source_context: evidence.SourceReadContext,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    conn, request = shared_revenue_inputs
+    database = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
+    output = tmp_path / "preview.json"
+    monkeypatch.setattr(preview_cli, "PROJECT_ROOT", tmp_path)
+    arguments = [
+        "--state-root",
+        str(source_context.content_roots[0].parents[2]),
+        "--db",
+        str(database),
+        "--snapshot-id",
+        request.research_snapshot_id,
+        "--period-end",
+        END.isoformat(),
+        "--as-of",
+        NOW.isoformat(),
+        "--output",
+        str(output),
+    ]
+    assert preview_cli.main(arguments) == 0
+    result = json.loads(output.read_text())
+    assert result["model_ready"] is False
+    assert len(result["facts"]) == 28
+    assert (
+        result["facts"]["comm_rev0_ytd"]["observation_id"]
+        == request.facts["comm_rev0_ytd"].observation_id
+    )
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["matched_inputs"] == 28
+    assert summary["model_ready"] is False
+    original = output.read_bytes()
+    # The canonical publisher permits exact replay, but never replaces bytes.
+    assert preview_cli.main(arguments) == 0
+    assert output.read_bytes() == original
+    output.write_text("previous different artifact")
+    with pytest.raises(ImmutableArtifactConflictError):
+        preview_cli.main(arguments)
+    assert output.read_text() == "previous different artifact"
+
+
+def test_input_preview_excludes_old_basis_cell_after_definition_reclassification(
+    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    source_context: evidence.SourceReadContext,
+) -> None:
+    conn, request = real_inputs
+    ontology = MetricOntology(conn)
+    credit = ontology.metric_definition_as_known(request.facts["cb0"].metric_id, NOW)
+    cash = ontology.metric_definition_as_known(
+        request.facts["reported_available_cash_and_investments"].metric_id, NOW
+    )
+    assert credit is not None and cash is not None
+    assert credit.accounting_basis == "us_gaap" and cash.accounting_basis == "management"
+    ontology.persist_metric_definition(
+        credit.model_copy(
+            update={
+                "metric_definition_revision_id": credit.metric_definition_revision_id
+                + ":new-basis",
+                "idempotency_key": credit.idempotency_key + ":new-basis",
+                "revision": 2,
+                "supersedes_metric_definition_revision_id": credit.metric_definition_revision_id,
+                "accounting_basis": cash.accounting_basis,
+                "scope_constraints": cash.scope_constraints,
+                "effective_at": NOW,
+                "knowledge_at": NOW,
+                "recorded_at": NOW,
+            }
+        )
+    )
+    conn.commit()
+    conn.execute("PRAGMA query_only=ON")
+    result = preview_meli_inputs(
+        conn,
+        research_snapshot_id=request.research_snapshot_id,
+        financial_period_end=END,
+        as_of=NOW,
+        source_context=source_context,
+    )
+    slots = {slot.key: slot for slot in result.slots}
+    selected = slots["reported_available_cash_and_investments"]
+    assert selected.state == "matched"
+    assert selected.candidate_cell_ids == (
+        request.facts["reported_available_cash_and_investments"].canonical_metric_cell_id,
+    )
+    assert slots["cb0"].state == "missing"
+    assert result.facts == {} and result.model_ready is False
+
+
+def test_input_preview_excludes_retired_binding_from_apparent_competing_role(
+    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    source_context: evidence.SourceReadContext,
+) -> None:
+    conn, request = real_inputs
+    ontology = MetricOntology(conn)
+    total = ontology.metric_definition_as_known(request.facts["revenue_total_ytd"].metric_id, NOW)
+    commerce = ontology.metric_definition_as_known(request.facts["comm_rev0_ytd"].metric_id, NOW)
+    assert total is not None and commerce is not None
+    ontology.persist_metric_definition(
+        total.model_copy(
+            update={
+                "metric_definition_revision_id": total.metric_definition_revision_id + ":new-role",
+                "idempotency_key": total.idempotency_key + ":new-role",
+                "revision": 2,
+                "supersedes_metric_definition_revision_id": total.metric_definition_revision_id,
+                "scope_constraints": commerce.scope_constraints,
+                "effective_at": NOW,
+                "knowledge_at": NOW,
+                "recorded_at": NOW,
+            }
+        )
+    )
+    binding = ontology.binding_as_known(request.facts["revenue_total_ytd"].observation_id, NOW)
+    assert binding is not None
+    ontology.persist_binding(
+        binding.model_copy(
+            update={
+                "binding_revision_id": binding.binding_revision_id + ":retired",
+                "idempotency_key": binding.idempotency_key + ":retired",
+                "revision": 2,
+                "supersedes_binding_revision_id": binding.binding_revision_id,
+                "binding_status": "retired",
+                "effective_at": NOW,
+                "knowledge_at": NOW,
+                "recorded_at": NOW,
+            }
+        )
+    )
+    conn.commit()
+    conn.execute("PRAGMA query_only=ON")
+    result = preview_meli_inputs(
+        conn,
+        research_snapshot_id=request.research_snapshot_id,
+        financial_period_end=END,
+        as_of=NOW,
+        source_context=source_context,
+    )
+    slots = {slot.key: slot for slot in result.slots}
+    assert slots["comm_rev0_ytd"].state == "matched"
+    assert slots["comm_rev0_ytd"].candidate_cell_ids == (
+        request.facts["comm_rev0_ytd"].canonical_metric_cell_id,
+    )
+    assert slots["revenue_total_ytd"].state == "missing"
+    assert result.facts == {} and result.model_ready is False
+
+
+@pytest.mark.parametrize("damage", ["missing", "changed", "outside-root"])
+def test_input_preview_rechecks_present_source_bytes(
+    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    source_context: evidence.SourceReadContext,
+    damage: str,
+    tmp_path: Path,
+) -> None:
+    conn, request = real_inputs
+    path = source_context.content_roots[0] / "fixture.json"
+    if damage == "missing":
+        path.unlink()
+    elif damage == "changed":
+        raw = path.read_bytes()
+        path.write_bytes(bytes([raw[0] ^ 1]) + raw[1:])
+    else:
+        source_context = evidence.SourceReadContext.for_sec_state_root(tmp_path / "other-state")
+    conn.execute("PRAGMA query_only=ON")
+    before = conn.total_changes
+    with pytest.raises(evidence.InputEvidenceError, match="model_input_source_"):
+        preview_meli_inputs(
+            conn,
+            research_snapshot_id=request.research_snapshot_id,
+            financial_period_end=END,
+            as_of=NOW,
+            source_context=source_context,
+        )
+    assert conn.total_changes == before
+
+
+@pytest.mark.parametrize("state_root", ["relative-state", "/", "/tmp/../state"])
+def test_input_preview_cli_refuses_source_root_before_database_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    state_root: str,
+) -> None:
+    database = tmp_path / "must-not-exist.db"
+    output = tmp_path / "preview.json"
+
+    def denied(_path: Path, *, role: object) -> sqlite3.Connection:
+        raise AssertionError("database access must follow source-root validation")
+
+    monkeypatch.setattr(preview_cli, "connect_sqlite", denied)
+    monkeypatch.setattr(preview_cli, "PROJECT_ROOT", tmp_path)
+    assert (
+        preview_cli.main(
+            [
+                "--db",
+                str(database),
+                "--snapshot-id",
+                "absent",
+                "--period-end",
+                END.isoformat(),
+                "--as-of",
+                NOW.isoformat(),
+                "--output",
+                str(output),
+                "--state-root",
+                state_root,
+            ]
+        )
+        == 3
+    )
+    refusal = json.loads(capsys.readouterr().out)
+    assert refusal["state"] == "unavailable"
+    assert refusal["reason_code"] == "source_authority_unavailable"
+    assert refusal["model_ready"] is False
+    assert not database.exists() and not output.exists()

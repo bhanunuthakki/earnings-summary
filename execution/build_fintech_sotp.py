@@ -51,11 +51,12 @@ try:
 except ImportError:  # ``python -m execution.build_fintech_sotp``
     from execution._lib import PROJECT_ROOT
 
-from db_paths import configured_db_path
+from db_paths import require_db_path, resolve_db_path
 from dcf.artifact_promotion import (
     ArtifactPromotion,
     live_path_from_env,
     promotion_from_env,
+    run_dcf_entrypoint,
 )
 from dcf.provenance import build_file_provenance, schema_supports_provenance
 from dcf.specialized_price import (
@@ -206,7 +207,7 @@ def _load(ticker: str) -> Sotp:
     # Opt-in: derive ke from the global risk-free/ERP when the name asks for it
     # (after JSON overrides so beta / the flag can be tuned per name).
     global_loaded = (
-        global_dcf.load_with_provenance(db_path=configured_db_path(REPO))
+        global_dcf.load_with_provenance(db_path=resolve_db_path(None, configured_root=REPO))
         if global_dcf is not None
         else None
     )
@@ -513,7 +514,7 @@ def persist_dcf_run(
 ) -> bool:
     """Best-effort upsert into dcf_runs so the brief's valuation panel reads the
     SOTP value/share. No-op without the DB / persist module."""
-    db = configured_db_path(REPO)
+    db = require_db_path(resolve_db_path(None, configured_root=REPO))
     if persist_mod is None or not db.exists() or not vps:
         return False
     holdings = REPO / "micro_thesis" / "holdings" / f"{T}.json"
@@ -604,7 +605,7 @@ def persist_dcf_run(
         return persist_mod.upsert(conn, row, artifact_promotion=artifact_promotion)
 
 
-def main() -> int:
+def _main_owned() -> int:
     s = _load(T)
     price_observation = resolve_specialized_price(
         REPO,
@@ -647,6 +648,10 @@ def main() -> int:
     print(f"  (5) - Net corp debt                     = ${-s.net_corp_debt / 1000:6.1f}B")
     print(f"  = SOTP equity ${eq / 1000:.1f}B  -> ${vps:.2f}/sh  (vs ${s.price:.2f}, {up:+.0%})")
     return 0
+
+
+def main() -> int:
+    return run_dcf_entrypoint(REPO, T, _main_owned, owner="build-fintech-sotp")
 
 
 if __name__ == "__main__":

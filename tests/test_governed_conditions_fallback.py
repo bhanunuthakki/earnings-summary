@@ -38,12 +38,15 @@ def _create_decisions_db() -> sqlite3.Connection:
     return conn
 
 
-def test_build_decision_projection_owner_overrides_when_populated() -> None:
+def test_build_decision_projection_owner_overrides_when_populated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     conn = _create_decisions_db()
     owner_conds = json.dumps(
         [
             {
                 "metric": "Services Gross Margin",
+                "metric_source": "kpi",
                 "op": "ge",
                 "threshold": 75.0,
                 "unit": "percent",
@@ -56,6 +59,7 @@ def test_build_decision_projection_owner_overrides_when_populated() -> None:
         [
             {
                 "metric": "iPhone Revenue",
+                "metric_source": "kpi",
                 "op": "ge",
                 "threshold": 40.0,
                 "unit": "billions",
@@ -76,9 +80,24 @@ def test_build_decision_projection_owner_overrides_when_populated() -> None:
         (model_conds,),
     )
 
+    reads: list[str] = []
+
+    def fetch_observations(
+        _conn: sqlite3.Connection, _ticker: str, metric: str, _periods: int
+    ) -> list[KpiObservation]:
+        reads.append(metric)
+        if metric != "Services Gross Margin":
+            raise AssertionError("Unused model conditions must not read financial history")
+        return [_observation("80", "2026-06-30", Unit.PERCENT)]
+
+    monkeypatch.setattr(decisions_projection, "fetch_kpi_observations", fetch_observations)
     _projection, conditions, _issues = build_decision_projection(
         conn, "AAPL", as_of=datetime(2026, 8, 15, tzinfo=UTC)
     )
+    assert reads == ["Services Gross Margin"]
+    assert conditions[0].latest_value == 80
+    assert _projection.owner is not None and _projection.model is not None
+    assert _projection.relationship == "agree"
 
     assert len(conditions) == 1
     assert conditions[0].metric == "Services Gross Margin"
@@ -287,17 +306,20 @@ def test_condition_projection_uses_financial_history_and_keeps_non_green_gates(
     ) -> list[KpiObservation]:
         return [_observation("9", "2026-06-30")]
 
-    def fetch_financial_history(
-        _conn: sqlite3.Connection, _ticker: str, _metric: str, _periods: int
-    ) -> list[KpiObservation]:
-        calls.append("financial")
-        return [_observation("9", "2026-06-30")]
+    def read_financial_condition(
+        _conn: sqlite3.Connection,
+        _ticker: str,
+        condition: StoredDecisionCondition,
+        *,
+        cutoff: datetime,
+    ):
+        from decision_conditions import FinancialConditionRead
 
-    monkeypatch.setattr(
-        decisions_projection,
-        "fetch_financial_history",
-        fetch_financial_history,
-    )
+        calls.append("financial")
+        assert cutoff == datetime(2026, 8, 1, tzinfo=UTC)
+        return FinancialConditionRead(None, None, "financial_cadence_unresolved")
+
+    monkeypatch.setattr(decisions_projection, "read_financial_condition", read_financial_condition)
     monkeypatch.setattr(decisions_projection, "fetch_kpi_observations", fetch_kpi_observations)
     conn = sqlite3.connect(":memory:")
     as_of = datetime(2026, 8, 1, tzinfo=UTC)
@@ -343,6 +365,7 @@ def test_condition_projection_uses_financial_history_and_keeps_non_green_gates(
     )
 
     assert calls == ["financial"]
-    assert financial.status == "BREACH"
-    assert financial.evidence_ref == "financial_facts:Revenue:2026-06-30"
+    assert financial.status == "PENDING DATA"
+    assert financial.status_detail == "financial_cadence_unresolved"
+    assert financial.evidence_ref == "condition:unavailable:Revenue"
     assert future.status == stale.status == unresolved.status == "PENDING DATA"

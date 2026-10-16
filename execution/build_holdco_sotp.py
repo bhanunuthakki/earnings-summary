@@ -67,12 +67,14 @@ try:
 except ImportError:  # ``python -m execution.build_holdco_sotp``
     from execution._lib import PROJECT_ROOT
 
-from db_paths import configured_db_path
+from db_paths import require_db_path, resolve_db_path
 from dcf import reverse_valuation as reverse_valuation_mod
 from dcf.artifact_promotion import (
     ArtifactPromotion,
+    DcfCommittedCleanupError,
     live_path_from_env,
     promotion_from_env,
+    run_dcf_entrypoint,
 )
 from dcf.provenance import (
     build_file_provenance,
@@ -102,7 +104,8 @@ else:
 
 # Data repo (may differ from the executing checkout): REPO is the DATA root;
 # code always imports from the executing checkout via ``_lib``.
-REPO = Path(os.environ.get("DCF_REPO_ROOT") or PROJECT_ROOT)
+CODE_ROOT = PROJECT_ROOT
+REPO = Path(os.environ.get("DCF_REPO_ROOT") or CODE_ROOT)
 T = os.environ.get("DCF_TICKER", "BN")
 DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 OWNER_INPUTS_DEST = Path(os.environ.get("DCF_OWNER_INPUTS_DEST") or DEST)
@@ -116,7 +119,7 @@ def _global_assumptions_note() -> dict[str, object]:
     separate realization rate. The dashboard surfaces this as 'not used'."""
     if global_dcf is None:  # pragma: no cover
         return {"applies_to_valuation": False, "note": "global module unavailable"}
-    g = global_dcf.load(db_path=configured_db_path(REPO))
+    g = global_dcf.load(db_path=resolve_db_path(None, configured_root=REPO))
     return {
         "risk_free_rate": g.risk_free_rate,
         "equity_risk_premium": g.equity_risk_premium,
@@ -256,7 +259,7 @@ def persist_dcf_run(
 ) -> bool:
     """Best-effort upsert into dcf_runs so the brief's valuation panel reads the
     SOTP value/share. Shape-agnostic (BN or BRK). No-op without the DB / persist module."""
-    db = configured_db_path(REPO)
+    db = require_db_path(resolve_db_path(None, configured_root=REPO))
     if persist_mod is None or not db.exists() or not vps:
         return False
     holdings = REPO / "micro_thesis" / "holdings" / f"{T}.json"
@@ -386,6 +389,10 @@ def _persist_then_sync_bn(
             price_observation,
             artifact_promotion=artifact_promotion,
         )
+    except DcfCommittedCleanupError:
+        # SQL and workbook publication already succeeded. Retain the matching
+        # synced JSON while the old workbook backup awaits recovery.
+        raise
     except Exception:
         _restore_assumptions_file(assumptions_path, assumptions_existed, assumptions_before)
         raise
@@ -885,9 +892,12 @@ def _brk_load() -> BrkSotp:
         p = fmp / name
         if not p.exists():
             return []
-        raw: Any = json.loads(p.read_text(encoding="utf-8"))
+        raw = json.loads(p.read_text(encoding="utf-8"))
         if isinstance(raw, dict):
-            return cast("list[dict[str, Any]]", raw.get("historical", [raw]))
+            record = cast("dict[str, Any]", raw)
+            raw = record.get("historical", [record])
+        if not isinstance(raw, list):
+            raise ValueError("FMP statement must contain rows")
         return cast("list[dict[str, Any]]", raw)
 
     try:
@@ -1104,8 +1114,12 @@ def _run_brk() -> int:
 _BRK_TICKERS = {"BRK-B", "BRK-A", "BRK.B", "BRK"}
 
 
-def main() -> int:
+def _main_owned() -> int:
     return _run_brk() if T.upper() in _BRK_TICKERS else _run_bn()
+
+
+def main() -> int:
+    return run_dcf_entrypoint(REPO, T, _main_owned, owner="build-holdco-sotp")
 
 
 if __name__ == "__main__":

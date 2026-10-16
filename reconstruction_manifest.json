@@ -1,5 +1,5 @@
 {
-  "manifest_version": "2026-08-28.1",
+  "manifest_version": "2026-10-07.1",
   "workspace_name": "earnings-summary",
   "description": "11-subsystem reconstruction manifest and deterministic inventory definition for the earnings-summary research platform.",
   "canonical_runtime": {
@@ -21,14 +21,24 @@
       "entrypoints": [
         "alembic/versions/0001_initial_schema.py",
         "src/sqlite_runtime.py",
-        "src/db.py"
+        "src/db.py",
+        "alembic/versions/0054_filing_xbrl_unit_protocol.py",
+        "alembic/versions/0055_kpi_definition_subject_bindings.py",
+        "src/pipeline/kpi_legacy_disposition_capture.py",
+        "src/pipeline/kpi_semantics.py",
+        "src/provenance/financial_derivations.py",
+        "src/provenance/research_snapshot.py",
+        "src/provenance/population_research_snapshots.py",
+        "execution/populate_research_snapshots.py"
       ],
       "dependencies": [
         "requirements.lock",
         "alembic.ini"
       ],
       "test_commands": [
-        "pytest tests/test_sqlite_runtime.py -q"
+        "pytest tests/test_sqlite_runtime.py -q",
+        "pytest tests/test_research_snapshot.py tests/test_research_snapshot_publication_clock.py tests/test_population_research_snapshots.py tests/test_population_research_projection_mode.py -q",
+        "pytest tests/test_kpi_legacy_dispositions.py tests/test_kpi_source_precision.py tests/test_financial_source_repairs.py tests/test_reviewed_kpi_native_population.py -q"
       ],
       "documentation": [
         "AGENTS.md",
@@ -37,9 +47,24 @@
       "version_ownership": "alembic/versions/ migration graph and alembic_version table; verification discovers the active head and requires exactly one head",
       "backup_ownership": "cron/backup_db.py online SQLite snapshot and execution/restore_drill.py throwaway restore verification; canonical Windows database authority uses WAL mode",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "alembic/versions", "kind": "directory", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "cron/backup_db.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "execution/restore_drill.py", "kind": "file", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "alembic/versions",
+          "kind": "directory",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "cron/backup_db.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "execution/restore_drill.py",
+          "kind": "file",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "durable_database",
       "reconstruction_tier": "tier_0_data_backbone",
@@ -59,28 +84,52 @@
         "execution/run_morning_pipeline.py",
         "execution/refresh_expected_earnings.py",
         "execution/refresh_cache.py",
+        "execution/onboard_ticker.py",
+        "execution/onboard_pending_tickers.py",
+        "execution/prepare_decision_brief.py",
+        "src/pipeline/sec_onboarding_identity.py",
+        "execution/refresh_dcf.py",
+        "execution/refresh_dispatch.py",
+        "execution/dcf_sheets.py",
+        "execution/run_advisor_memos.py",
+        "execution/run_socratic_questions.py",
+        "execution/publish_meli_reported_statements.py",
         "execution/plan_analysis_evidence_scope.py",
-        "src/provenance/analysis_scope.py"
+        "src/provenance/analysis_scope.py",
+        "execution/preview_meli_inputs.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
         "pytest tests/test_pipeline*.py -q",
-        "pytest tests/test_analysis_scope.py tests/test_analysis_scope_processing.py tests/test_analysis_scope_corpus.py tests/test_analysis_scope_cli.py tests/test_analysis_scope_isolation.py -q"
+        "pytest tests/test_onboard_sec_fallback.py tests/test_sec_onboarding_identity.py tests/test_onboarding_state_authority.py tests/test_runtime_state_authority.py tests/test_decision_brief_workflow.py -q",
+        "pytest tests/test_source_context_entrypoints.py tests/test_refresh_dispatch.py -q",
+        "pytest tests/test_meli_reported_statements.py -q",
+        "pytest tests/test_analysis_scope.py tests/test_analysis_scope_cli.py -q",
+        "pytest tests/test_meli_input_evidence.py -q"
       ],
       "documentation": [
         "AGENTS.md",
         "directives/data_pipeline_dag.md",
-        "directives/data_provenance.md",
-        "directives/operations_governance_surface.md",
-        "DEFINITIONS.md"
+        "directives/onboard_pending_tickers.md",
+        "docs/quality/new-ticker-decision-grade-review-20261004.md"
       ],
       "version_ownership": "Git commit SHA & execution script CLI parameter specifications",
       "backup_ownership": "Git version control (code) and ephemeral checkpoint state in .tmp/ (excluded from static backup)",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "execution", "kind": "directory", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": ".tmp", "kind": "directory", "required_in_checkout": false}
+        {
+          "field": "version_ownership",
+          "path": "execution",
+          "kind": "directory",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": ".tmp",
+          "kind": "directory",
+          "required_in_checkout": false
+        }
       ],
       "state_classification": "deterministic_orchestration",
       "reconstruction_tier": "tier_1_pipeline_execution",
@@ -102,23 +151,54 @@
         "src/sources/earnings_calendar.py",
         "src/sources/canonical_financial_series.py",
         "src/sources/registry.py",
-        "src/pipeline/source_policy.py"
+        "src/pipeline/source_policy.py",
+        "execution/continue_companyfacts_statements.py",
+        "src/provenance/companyfacts_statement_continuation.py",
+        "src/provenance/companyfacts_source_proof.py",
+        "src/provenance/financial_statement_admission.py",
+        "src/filings/processor_installation.py",
+        "src/filings/xbrl_units.py",
+        "src/pipeline/managed_ir_sources.py",
+        "src/provenance/fulltext_extractor_identity.py",
+        "src/filings/sec_financial_classification.py",
+        "src/provenance/sec_package_subject_witness.py",
+        "src/provenance/reviewed_sec_financial_tables.py",
+        "execution/publish_reviewed_sec_financial_tables.py",
+        "src/filings/edgar_fetch.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
-        "pytest tests/test_source_policy_contract.py -q"
+        "pytest tests/test_source_policy_contract.py -q",
+        "pytest tests/test_companyfacts_statement_continuation.py tests/test_financial_statement_admission.py tests/test_processor_installation.py tests/test_xbrl_units.py tests/test_filing_xbrl_unit_protocol_migration.py -q",
+        "pytest tests/test_sec_financial_classification.py tests/test_reviewed_sec_financial_tables.py tests/test_publish_reviewed_sec_financial_tables.py tests/test_onon_retained_integration.py tests/test_edgar_filing_selector.py -q"
       ],
       "documentation": [
-        "directives/design_language.md"
+        "directives/design_language.md",
+        "directives/edgar_pipeline.md"
       ],
       "version_ownership": "Issuer Acquisition Policy hash & source policy versioning",
       "backup_ownership": "Git version control (code) and immutable source documents in ir_documents/ and transcripts/",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "src/pipeline/source_policy.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "ir_documents", "kind": "directory", "required_in_checkout": false},
-        {"field": "backup_ownership", "path": "transcripts", "kind": "directory", "required_in_checkout": false}
+        {
+          "field": "version_ownership",
+          "path": "src/pipeline/source_policy.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "ir_documents",
+          "kind": "directory",
+          "required_in_checkout": false
+        },
+        {
+          "field": "backup_ownership",
+          "path": "transcripts",
+          "kind": "directory",
+          "required_in_checkout": false
+        }
       ],
       "state_classification": "source_ingestion_adapter",
       "reconstruction_tier": "tier_1_pipeline_execution",
@@ -138,13 +218,37 @@
         "src/compute/metrics_engine/engine.py",
         "src/compute/metrics_engine/io.py",
         "src/compute/kpi_extract_summaries.py",
-        "src/dcf/valuation.py"
+        "src/dcf/valuation.py",
+        "execution/prepare_cashflow_dcf.py",
+        "src/dcf/cashflow_inputs.py",
+        "src/dcf/cashflow_refresh.py",
+        "src/dcf/cashflow_scenarios.py",
+        "src/dcf/input_recipes.py",
+        "src/dcf/onon_model.py",
+        "src/dcf/onon_inputs.py",
+        "src/dcf/scenario_acceptance.py",
+        "execution/build_onon_dcf.py",
+        "src/compute/thesis_metric_series.py",
+        "src/evals/kpi_repair_judge.py",
+        "src/dcf/reviewed_input_roles.py",
+        "execution/review_onon_input_roles.py",
+        "src/dcf/input_evidence.py",
+        "src/dcf/grade_evidence.py",
+        "src/dcf/readiness.py",
+        "src/dcf/meli_input_preview.py",
+        "src/dcf/meli_scenario_preview.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
-        "pytest tests/test_metrics_engine.py -q"
+        "pytest tests/test_metrics_engine.py -q",
+        "pytest tests/test_dcf_grade_evidence.py -q",
+        "pytest tests/test_cashflow_input_evidence.py tests/test_cashflow_scenarios.py tests/test_valuation_readiness.py -q",
+        "pytest tests/test_onon_model.py tests/test_onon_inputs.py tests/test_build_onon_dcf.py tests/test_scenario_acceptance.py -q",
+        "pytest tests/test_reviewed_input_roles.py tests/test_review_onon_input_roles.py -q",
+        "pytest tests/test_model_source_bytes.py tests/test_source_context_entrypoints.py tests/test_meli_input_evidence.py tests/test_onon_explicit_routing.py -q",
+        "pytest tests/test_meli_scenario_preview.py -q"
       ],
       "documentation": [
         "directives/data_provenance.md"
@@ -152,9 +256,24 @@
       "version_ownership": "Deterministic metric ontology version & valuation model parameter schemas",
       "backup_ownership": "Git version control (formulas, DCF models, compute code) plus cron/backup_db.py and execution/restore_drill.py for derived database tables",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "src/compute", "kind": "directory", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "cron/backup_db.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "execution/restore_drill.py", "kind": "file", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "src/compute",
+          "kind": "directory",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "cron/backup_db.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "execution/restore_drill.py",
+          "kind": "file",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "deterministic_compute",
       "reconstruction_tier": "tier_1_pipeline_execution",
@@ -174,24 +293,48 @@
         "src/synthesis/lenses/catalyst_calendar.py",
         "src/macro_store.py",
         "src/research/qualitative_stress.py",
-        "execution/common_drawdown.py"
+        "execution/common_drawdown.py",
+        "execution/verify_decision_brief.py",
+        "src/research/decision_brief_workflow.py",
+        "src/research/decision_brief.py",
+        "src/research/memo_claim_support.py",
+        "src/research/memo_model_evidence.py"
       ],
       "dependencies": [
         "financial_compute_engine"
       ],
       "test_commands": [
         "pytest tests/test_advisor_memos.py -q",
-        "pytest tests/test_qualitative_stress.py -q"
+        "pytest tests/test_qualitative_stress.py -q",
+        "pytest tests/test_decision_brief.py tests/test_memo_claim_support.py -q",
+        "pytest tests/test_memo_context_v2.py tests/test_memo_model_evidence.py tests/test_memo_model_roundtrip.py tests/test_memo_peer_roundtrip.py -q"
       ],
       "documentation": [
-        "HOW_TO_USE_REPORTS.md"
+        "HOW_TO_USE_REPORTS.md",
+        "src/advisor/skills/earnings-summary-investing/references/analysis-paths.md",
+        "docs/quality/new-ticker-decision-grade-review-20261004.md"
       ],
       "version_ownership": "Playbook revision & research lens template versioning",
       "backup_ownership": "Git version control (lens logic, report generators) plus cron/backup_db.py and execution/restore_drill.py for research artifacts",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "HOW_TO_USE_REPORTS.md", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "cron/backup_db.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "execution/restore_drill.py", "kind": "file", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "HOW_TO_USE_REPORTS.md",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "cron/backup_db.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "execution/restore_drill.py",
+          "kind": "file",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "synthesis_research_lens",
       "reconstruction_tier": "tier_2_synthesis_lens",
@@ -210,24 +353,37 @@
       "entrypoints": [
         "src/llm/cli.py",
         "src/llm/model_eval.py",
-        "src/llm/model_ladder.py"
+        "src/llm/model_ladder.py",
+        "src/research/method_contract.py"
       ],
       "dependencies": [
         "core_data_layer"
       ],
       "test_commands": [
-        "pytest tests/test_llm_budget.py -q"
+        "pytest tests/test_llm_budget.py -q",
+        "pytest tests/test_research_method_contract.py -q"
       ],
       "documentation": [
         "directives/cheapest_model_routing.md",
         "directives/model_eval_loop.md",
+        "src/advisor/skills/earnings-summary-investing/references/research-method.md",
         "directives/llm_quota_scheduling.md"
       ],
       "version_ownership": "Model ladder configuration version & eval dataset SHA-256 hashes",
       "backup_ownership": "Git version control (eval cases, grader rubrics, CLI routers) and evals/ test corpus",
       "ownership_paths": [
-        {"field": "backup_ownership", "path": "evals", "kind": "directory", "required_in_checkout": true},
-        {"field": "version_ownership", "path": "evals", "kind": "directory", "required_in_checkout": true}
+        {
+          "field": "backup_ownership",
+          "path": "evals",
+          "kind": "directory",
+          "required_in_checkout": true
+        },
+        {
+          "field": "version_ownership",
+          "path": "evals",
+          "kind": "directory",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "eval_router_harness",
       "reconstruction_tier": "tier_2_synthesis_lens",
@@ -259,9 +415,24 @@
       "version_ownership": "Governance surface contract version & circuit state schema",
       "backup_ownership": "Git version control (telemetry renderers) plus cron/backup_db.py and execution/restore_drill.py for provider circuit rows",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "src/pipeline/operations_panel.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "cron/backup_db.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "execution/restore_drill.py", "kind": "file", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "src/pipeline/operations_panel.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "cron/backup_db.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "execution/restore_drill.py",
+          "kind": "file",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "governance_telemetry",
       "reconstruction_tier": "tier_3_presentation_cockpit",
@@ -294,8 +465,18 @@
       "version_ownership": "Design system token dictionary & CSS custom variable contract",
       "backup_ownership": "Git version control (server routes, UI templates, design tokens)",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "src/ui/tokens.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "src/ui", "kind": "directory", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "src/ui/tokens.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "src/ui",
+          "kind": "directory",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "interactive_cockpit",
       "reconstruction_tier": "tier_3_presentation_cockpit",
@@ -327,9 +508,24 @@
       "version_ownership": "Journal note schema version & thesis state revision stamps",
       "backup_ownership": "cron/backup_db.py online SQLite snapshot and execution/restore_drill.py throwaway restore verification for analyst notes and decision tables",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "src/user_state/notes.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "cron/backup_db.py", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "execution/restore_drill.py", "kind": "file", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "src/user_state/notes.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "cron/backup_db.py",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "execution/restore_drill.py",
+          "kind": "file",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "durable_memory",
       "reconstruction_tier": "tier_0_data_backbone",
@@ -361,8 +557,18 @@
       "version_ownership": "Batch script Git versioning & Task Scheduler XML task definitions",
       "backup_ownership": "Git version control (cron batch scripts, scheduler documentation)",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "cron", "kind": "directory", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "cron/task_manifest.json", "kind": "file", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "cron",
+          "kind": "directory",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "cron/task_manifest.json",
+          "kind": "file",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "scheduled_automation",
       "reconstruction_tier": "tier_1_pipeline_execution",
@@ -380,13 +586,18 @@
       "language": "python",
       "entrypoints": [
         "Makefile",
-        "pyproject.toml"
+        "pyproject.toml",
+        "src/quality/static_quality_gate.py",
+        "src/quality/function_lifecycle.py",
+        "execution/inventory_function_lifecycle.py"
       ],
       "dependencies": [
         "requirements.lock"
       ],
       "test_commands": [
-        "pytest tests/test_calendar_end_to_end.py -q"
+        "pytest tests/test_calendar_end_to_end.py -q",
+        "pytest tests/test_static_quality_gate.py tests/test_inventory_static_quality.py -q",
+        "pytest tests/test_function_lifecycle.py -q"
       ],
       "documentation": [
         "AGENTS.md"
@@ -394,8 +605,18 @@
       "version_ownership": "pyproject.toml tool configurations & requirements.lock pinned dependencies",
       "backup_ownership": "Git version control (tests, fixtures, lint and type-check configuration)",
       "ownership_paths": [
-        {"field": "version_ownership", "path": "pyproject.toml", "kind": "file", "required_in_checkout": true},
-        {"field": "backup_ownership", "path": "tests", "kind": "directory", "required_in_checkout": true}
+        {
+          "field": "version_ownership",
+          "path": "pyproject.toml",
+          "kind": "file",
+          "required_in_checkout": true
+        },
+        {
+          "field": "backup_ownership",
+          "path": "tests",
+          "kind": "directory",
+          "required_in_checkout": true
+        }
       ],
       "state_classification": "hermetic_verification",
       "reconstruction_tier": "tier_0_data_backbone",

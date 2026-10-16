@@ -41,12 +41,15 @@ from tests.fixtures.kpi_revision_setup import (
 from tests.fixtures.kpi_revision_setup import (
     semantic_fixture as _context,
 )
+from tests.fixtures.kpi_revision_setup import semantic_recording_clock as semantic_recording_clock
 from timeseries.kpi_revision_shadow import (
     KpiReaderShadowComparison,
     KpiRevisionReadRequest,
     read_revision_kpi_points,
 )
 from timeseries.loaders import load_kpi_series_with_provenance, rehearse_kpi_series_reader
+
+pytestmark = pytest.mark.usefixtures("semantic_recording_clock")
 
 
 def _request(**changes: object) -> KpiRevisionReadRequest:

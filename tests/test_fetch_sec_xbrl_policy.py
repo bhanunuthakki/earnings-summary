@@ -69,7 +69,6 @@ def test_sec_explicit_request_uses_stored_role_and_cannot_bypass_denial(
         )
 
     monkeypatch.setattr(fetch_sec_xbrl, "tracked_companies_for_user", tracked)
-    monkeypatch.setattr(fetch_sec_xbrl, "CIK_MAP", {"WIX": "1", "NOW": "2", "IDX": "3"})
     with sqlite3.connect(":memory:") as conn:
         assert cast(
             Callable[[argparse.Namespace, sqlite3.Connection], list[str]],
@@ -139,6 +138,162 @@ def test_sec_documented_foreign_non_filer_emits_an_honest_disposition(
     assert '"disposition": "documented_non_filer"' in stderr
 
 
+def test_sec_explicit_request_keeps_unmapped_authorized_company_for_identity_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def tracked(_conn: sqlite3.Connection, **_kwargs: object) -> list[Company]:
+        return _companies([("MBGL", ListType.EVALUATION)])
+
+    monkeypatch.setattr(fetch_sec_xbrl, "tracked_companies_for_user", tracked)
+    with sqlite3.connect(":memory:") as conn:
+        assert cast(
+            Callable[[argparse.Namespace, sqlite3.Connection], list[str]],
+            getattr(fetch_sec_xbrl, "_resolve_tickers"),
+        )(_args("MBGL"), conn) == ["MBGL"]
+
+
+@pytest.mark.parametrize("explicit_root", [False, True])
+def test_sec_cli_uses_selected_artifact_root_for_ingestion_and_raw_error_path(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    explicit_root: bool,
+) -> None:
+    checkout = tmp_path / "checkout"
+    state = tmp_path / "configured-state"
+    expected = state if explicit_root else checkout
+    raw = expected / "data" / "historical" / "sec" / "MBGL_companyfacts.json"
+    raw.parent.mkdir(parents=True)
+    raw.write_bytes(b"synthetic retained response")
+    received_roots: list[Path] = []
+    conn = sqlite3.connect(":memory:")
+
+    def open_test_db(_path: str) -> sqlite3.Connection:
+        return conn
+
+    def tickers(_args: argparse.Namespace, _conn: sqlite3.Connection) -> list[str]:
+        return ["MBGL"]
+
+    def begin_run(*_args: object, **_kwargs: object) -> str:
+        return "synthetic-root-test"
+
+    def ingest(
+        _conn: sqlite3.Connection,
+        *,
+        ticker: str,
+        project_root: Path,
+        run_id: str,
+        timing_sink: Callable[[sec_xbrl.SecIngestTimingReceipt], None],
+    ) -> sec_xbrl.IngestStats:
+        del ticker, run_id, timing_sink
+        received_roots.append(project_root)
+        raise ValueError("synthetic schema failure")
+
+    def finish(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(fetch_sec_xbrl, "PROJECT_ROOT", checkout)
+    monkeypatch.setattr(fetch_sec_xbrl, "open_db", open_test_db)
+    monkeypatch.setattr(fetch_sec_xbrl, "_resolve_tickers", tickers)
+    monkeypatch.setattr(fetch_sec_xbrl, "start_run", begin_run)
+    monkeypatch.setattr(fetch_sec_xbrl, "end_run", finish)
+    monkeypatch.setattr(fetch_sec_xbrl, "ingest_for_ticker", ingest)
+    database = tmp_path / "unrelated-database.db"
+    database.touch()
+    argv = ["fetch_sec_xbrl.py", "--db", str(database)]
+    if explicit_root:
+        argv.extend(("--project-root", str(state)))
+    monkeypatch.setattr(sys, "argv", argv)
+    assert fetch_sec_xbrl.main() == 1
+    assert received_roots == [expected]
+    result = json.loads(capsys.readouterr().out)
+    assert result["rows"][0]["raw_response_path"] == str(raw)
+
+
+def test_sec_cli_without_override_uses_existing_configured_database_for_consumers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    import db
+
+    configured = tmp_path / "configured-authority.db"
+    configured.touch()
+    conn = sqlite3.connect(":memory:")
+    opened: list[Path] = []
+    consumed: list[str] = []
+
+    def open_test_db(path: Path) -> sqlite3.Connection:
+        opened.append(path)
+        return conn
+
+    def tickers(_args: argparse.Namespace, _conn: sqlite3.Connection) -> list[str]:
+        return ["MBGL"]
+
+    def begin_run(*_args: object, **_kwargs: object) -> str:
+        return "configured-database-test"
+
+    def ingest(*_args: object, **_kwargs: object) -> sec_xbrl.IngestStats:
+        return sec_xbrl.IngestStats(accessions_inserted=0, facts_inserted=1)
+
+    def finish(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    def invalidate(
+        _conn: sqlite3.Connection,
+        *,
+        ticker: str,
+        stats: sec_xbrl.IngestStats,
+        db_path: str,
+    ) -> tuple[bool, int]:
+        del ticker, stats
+        consumed.append(db_path)
+        return False, 0
+
+    monkeypatch.setattr(db, "DB_PATH", str(configured))
+    monkeypatch.setattr(fetch_sec_xbrl, "open_db", open_test_db)
+    monkeypatch.setattr(fetch_sec_xbrl, "_resolve_tickers", tickers)
+    monkeypatch.setattr(fetch_sec_xbrl, "start_run", begin_run)
+    monkeypatch.setattr(fetch_sec_xbrl, "end_run", finish)
+    monkeypatch.setattr(fetch_sec_xbrl, "ingest_for_ticker", ingest)
+    monkeypatch.setattr(fetch_sec_xbrl, "handle_silent_staleness", invalidate)
+    monkeypatch.setattr(sys, "argv", ["fetch_sec_xbrl.py"])
+    assert fetch_sec_xbrl.main() == 0
+    assert opened == [configured.resolve()]
+    assert consumed == [str(configured.resolve())]
+
+
+@pytest.mark.parametrize("missing_override", [False, True])
+def test_sec_cli_unavailable_database_refuses_before_writer(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    missing_override: bool,
+) -> None:
+    import db
+
+    checkout_default = Path(fetch_sec_xbrl.__file__).resolve().parents[1] / "data" / "portfolio.db"
+    monkeypatch.setattr(db, "DB_PATH", str(checkout_default))
+    opened: list[object] = []
+
+    def refuse_writer(path: object) -> NoReturn:
+        opened.append(path)
+        raise AssertionError("writer must not open for an unavailable database")
+
+    monkeypatch.setattr(fetch_sec_xbrl, "open_db", refuse_writer)
+    argv = ["fetch_sec_xbrl.py"]
+    if missing_override:
+        argv.extend(("--db", str(tmp_path / "does-not-exist.db")))
+    monkeypatch.setattr(sys, "argv", argv)
+    assert fetch_sec_xbrl.main() == 3
+    assert opened == []
+    assert not (tmp_path / "does-not-exist.db").exists()
+    assert json.loads(capsys.readouterr().out) == {
+        "event": "sec_xbrl_database_unavailable",
+        "status": "unavailable",
+        "reason_code": "database_authority_unavailable",
+    }
+
+
 @pytest.mark.parametrize("status", [401, 403])
 def test_companyfacts_boundary_classifies_auth_denial(
     monkeypatch: pytest.MonkeyPatch,
@@ -166,6 +321,7 @@ def test_companyfacts_boundary_classifies_auth_denial(
 def test_sec_auth_denial_halts_before_the_next_ticker(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
 ) -> None:
     conn = sqlite3.connect(":memory:")
     calls: list[str] = []
@@ -227,7 +383,9 @@ def test_sec_auth_denial_halts_before_the_next_ticker(
 
     monkeypatch.setattr(fetch_sec_xbrl, "ingest_for_ticker", ingest)
     monkeypatch.setattr(fetch_sec_xbrl, "end_run", finish)
-    monkeypatch.setattr(sys, "argv", ["fetch_sec_xbrl.py", "--db", "unused.db"])
+    database = tmp_path / "authentication-policy.db"
+    database.touch()
+    monkeypatch.setattr(sys, "argv", ["fetch_sec_xbrl.py", "--db", str(database)])
 
     assert fetch_sec_xbrl.main() == 1
     assert calls == ["META"]

@@ -59,7 +59,20 @@ os.environ.setdefault(
 # local sessions; the worker id keeps paths useful when diagnosing a retained
 # crash directory.
 _worker_id = os.environ.get("PYTEST_XDIST_WORKER", "controller")
-_test_db_dir = Path(tempfile.mkdtemp(prefix=f"earnings-summary-pytest-{_worker_id}-"))
+_test_db_dir = Path(tempfile.mkdtemp(prefix=f"earnings-summary-pytest-{_worker_id}-")).resolve()
+_test_code_root = Path(__file__).resolve().parents[1]
+_managed_test_temps = (
+    os.name == "nt" or os.environ.get("EARNINGS_SUMMARY_MANAGED_TEST_TEMPS") == "1"
+)
+
+
+def _begin_collection_temp_run() -> None:
+    from src.operations.temp_run_retention import begin_temp_run
+
+    begin_temp_run(_test_db_dir, repo_root=_test_code_root, code_root=_test_code_root)
+
+
+_begin_collection_temp_run()
 _test_db_path = _test_db_dir / f"portfolio-{os.getpid()}.db"
 _db_original_marker = "_EARNINGS_SUMMARY_PYTEST_ORIGINAL_DB_PATH"
 _db_path_absent = "__pytest_db_path_was_absent__"
@@ -94,8 +107,41 @@ def pytest_collection_modifyitems(
     _restore_collection_db_override()
 
 
-atexit.register(shutil.rmtree, _test_db_dir, ignore_errors=True)
 atexit.register(_restore_collection_db_override)
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Keep default fixture output inside this explicitly owned session root."""
+    if _managed_test_temps and config.option.basetemp is None:
+        config.option.basetemp = os.fspath(_test_db_dir / "fixtures")
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """Seal fixture output after teardown; retain failed or interrupted sessions."""
+    del session
+    from src.operations.temp_run_retention import finish_temp_run
+
+    try:
+        manifest = finish_temp_run(
+            _test_db_dir,
+            repo_root=_test_code_root,
+            code_root=_test_code_root,
+            success=exitstatus == 0,
+            disposable_paths=_test_db_dir.rglob("*"),
+            allow_partial=True,
+        )
+        if exitstatus == 0 and not _managed_test_temps and not manifest.held_paths:
+            # macOS keeps pytest's existing fixture retention. It has no Windows
+            # weekly task; remove its private collection DB directory on exit.
+            atexit.register(shutil.rmtree, _test_db_dir, ignore_errors=True)
+    except (OSError, ValueError):
+        import warnings
+
+        warnings.warn(
+            "Test temp finalization failed; its active manifest preserves the files for review.",
+            RuntimeWarning,
+            stacklevel=1,
+        )
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -2,10 +2,8 @@
 fragment, /api/viewspec/run + /catalog, the /api/views CRUD, and the
 saved-view embed fragment.
 
-The DB is built via alembic (stamp the 0078 head, upgrade to head → 0079
-creates saved_views), mirroring test_journal_panel.py; the fact tables the
-engine reads are raw DDL on top (they live far earlier in the chain than
-the stamp point).
+The migrated DB contains a sealed synthetic financial publication. The real
+canonical series reader supplies the values, fiscal periods, and citations.
 """
 
 from __future__ import annotations
@@ -27,6 +25,9 @@ from pipeline.explore_panel import (
 from pipeline.research_panel_styles import RESEARCH_PANEL_STYLE
 from report.models import CellSource
 from tests.ask_stream_support import fold_sse_response
+from tests.test_report_canonical_financials import seed_table
+from tests.test_source_fact_repository import seed_foundation
+from ui.source_chip import viewer_href
 from viewspec.workbench import (
     RankedMetricCandidate,
     RankedMetricRow,
@@ -41,22 +42,46 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def _build_db(
     db_path: Path,
     migrated_db: Callable[..., Path],
-    fact_source_document: Callable[[sqlite3.Connection, str], int],
 ) -> None:
     migrated_db(db_path)
     conn = sqlite3.connect(db_path)
-    document_id = fact_source_document(conn, "TST")
-    for pe, fpt, v in [
-        ("2024-12-31 00:00:00", "Q4", 130.0),
-        ("2025-03-31 00:00:00", "Q1", 120.0),
-        ("2025-06-30 00:00:00", "Q2", 132.0),
-        ("2025-09-30 00:00:00", "Q3", 150.0),
-        ("2025-12-31 00:00:00", "Q4", 160.0),
-    ]:
-        conn.execute(
-            "INSERT INTO financial_facts (ticker, period_end, fiscal_period_type, line_item, value, source_doc_id, unit) VALUES ('TST', ?, ?, 'revenue', ?, ?, 'actual')",
-            (pe, fpt, v, document_id),
-        )
+    seed_foundation(conn)
+    # seed_table owns the sole version-to-legacy binding. Preserve the
+    # foundation's exact source bytes without prebinding another version.
+    source_path = db_path.parent / "TST-source.txt"
+    source_path.write_bytes(b"filing bytes")
+    document = conn.execute(
+        "INSERT INTO documents(ticker,source_type,doc_type,file_path,sha256,fetched_at,"
+        "fetch_status,raw_bytes_size,source_url,source_quality_tier) "
+        "SELECT 'TST','fmp','fmp_income_statement',?,blob.sha256,source.retrieved_at,"
+        "'ok',blob.byte_size,?,'fmp_normalized' FROM evidence_content_blobs blob "
+        "JOIN evidence_source_observations source ON source.blob_sha256=blob.sha256 "
+        "WHERE source.observation_id='source-1'",
+        (str(source_path), "https://example.test/TST/source"),
+    )
+    assert document.lastrowid is not None
+    document_id = document.lastrowid
+    conn.execute(
+        "INSERT INTO evidence_source_observations "
+        "SELECT 'explore-source','explore-source','fmp_normalized',?,blob_sha256,"
+        "source_published_at,filing_at,accepted_at,observed_at,retrieved_at,retrieval_config_sha256,"
+        "collector_code_version FROM evidence_source_observations WHERE observation_id='source-1'",
+        ("https://example.test/TST/source",),
+    )
+    seed_table(
+        conn,
+        [
+            ("revenue", "2024-10-01", "2024-12-31", "Q4", "130", "USD"),
+            ("revenue", "2025-01-01", "2025-03-31", "Q1", "120", "USD"),
+            ("revenue", "2025-04-01", "2025-06-30", "Q2", "132", "USD"),
+            ("revenue", "2025-07-01", "2025-09-30", "Q3", "150", "USD"),
+            ("revenue", "2025-10-01", "2025-12-31", "Q4", "160", "USD"),
+        ],
+        ticker="TST",
+        publication_prefix="explore",
+        legacy_document_id=document_id,
+        source_observation_id="explore-source",
+    )
     conn.execute(
         "INSERT INTO tracked_companies (user_id, ticker, name, list_type)"
         " VALUES ('bhanu', 'TST', 'Test Co', 'portfolio')"
@@ -69,10 +94,9 @@ def _build_db(
 def db_path(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
-    fact_source_document: Callable[[sqlite3.Connection, str], int],
 ) -> Path:
     db = tmp_path / "data" / "portfolio.db"
-    _build_db(db, migrated_db, fact_source_document)
+    _build_db(db, migrated_db)
     return db
 
 
@@ -200,6 +224,11 @@ def test_ranked_workbench_projects_governed_db_facts_with_current_provenance(
     assert row.source is not None
     assert row.source.doc_id == 1
     assert row.source.source_url == "https://example.test/TST/source"
+    assert row.source.canonical_reference is not None
+    assert row.source.canonical_reference.ticker == "TST"
+    assert row.source.canonical_reference.concept == "revenue"
+    href = viewer_href(row.source)
+    assert href is not None and href.startswith("/api/peek/canonical-financial?reference=")
 
     html_out = render_ranked_workbench(workbench)
     assert "160" in html_out
@@ -414,6 +443,8 @@ def test_run_endpoint_returns_fragment(client: FlaskClient) -> None:
     assert b"vx-matrix" in res.data
     assert b"Q4'25" in res.data.replace(b"&#x27;", b"'")
     assert b"cv2-point-label" in res.data
+    assert b"160" in res.data
+    assert b"/api/peek/canonical-financial?reference=" in res.data
     # The spec object may also arrive bare (no {"spec": ...} wrapper).
     bare = client.post("/api/viewspec/run", json=_SPEC)
     assert bare.status_code == 200

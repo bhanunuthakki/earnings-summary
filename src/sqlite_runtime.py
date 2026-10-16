@@ -9,14 +9,18 @@ from __future__ import annotations
 import inspect
 import itertools
 import os
+import re
 import sqlite3
 import sys
 import time
 import unicodedata
 import weakref
+from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Any
 
 from pipeline.db_writer_gate import (
     WriterConnectionClaim,
@@ -28,6 +32,261 @@ from pipeline.db_writer_gate import (
 from runtime.sqlite_adapters import register_datetime_adapters
 from schema_compat import require_current_for_write
 from scope_identity import derive_retrieval_scope_id
+
+TraceObserver = Callable[[str], object]
+RollbackObserver = Callable[[], object]
+
+_ACTIVE_OBSERVED_CONNECTIONS: weakref.WeakSet[ManagedConnection] = weakref.WeakSet()
+_SQL_PREFIX = r"(?:[\s;\ufeff]|/\*.*?\*/|--[^\n]*(?:\n|$))*"
+ROLLBACK_PATTERN = re.compile(rf"(?is)^{_SQL_PREFIX}rollback\b")
+ATTACH_OR_DETACH_PATTERN = re.compile(rf"(?is)^{_SQL_PREFIX}(?:attach|detach)\b")
+COMMIT_PATTERN = re.compile(rf"(?is)^{_SQL_PREFIX}(?:commit|end|release)\b")
+_ROLLBACK_PATTERN = ROLLBACK_PATTERN
+_ATTACH_OR_DETACH_PATTERN = ATTACH_OR_DETACH_PATTERN
+_COMMIT_PATTERN = COMMIT_PATTERN
+
+
+class ManagedCursor(sqlite3.Cursor):
+    """Cursor that reports automatic transaction rollbacks to its parent connection."""
+
+    def _check_implicit_rollback(
+        self,
+        was_in_tx: bool,
+        exc: BaseException | None,
+        statement: Any,
+    ) -> None:
+        conn = self.connection
+        if (
+            was_in_tx
+            and not getattr(conn, "in_transaction", False)
+            and (
+                exc is not None
+                or not (isinstance(statement, str) and _COMMIT_PATTERN.match(statement))
+            )
+        ):
+            notify = getattr(conn, "notify_rollback", None)
+            if callable(notify):
+                notify()
+
+    def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        conn = self.connection
+        was_in_tx = getattr(conn, "in_transaction", False)
+        exc: BaseException | None = None
+        statement = (
+            args[0]
+            if args
+            else kwargs.get("sql") or kwargs.get("operation") or kwargs.get("statement")
+        )
+        try:
+            return super().execute(*args, **kwargs)
+        except BaseException as e:
+            exc = e
+            raise
+        finally:
+            self._check_implicit_rollback(was_in_tx, exc, statement)
+
+    def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        conn = self.connection
+        was_in_tx = getattr(conn, "in_transaction", False)
+        exc: BaseException | None = None
+        statement = (
+            args[0]
+            if args
+            else kwargs.get("sql") or kwargs.get("operation") or kwargs.get("statement")
+        )
+        try:
+            return super().executemany(*args, **kwargs)
+        except BaseException as e:
+            exc = e
+            raise
+        finally:
+            self._check_implicit_rollback(was_in_tx, exc, statement)
+
+    def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        conn = self.connection
+        try:
+            return super().executescript(*args, **kwargs)
+        except BaseException:
+            notify = getattr(conn, "notify_rollback", None)
+            if callable(notify):
+                notify()
+            raise
+
+
+_MANAGED_CURSOR_FACTORY_CACHE: dict[type[Any], type[Any]] = {}
+
+
+def _resolve_managed_cursor_factory(factory: Any) -> Any:
+    """Ensure cursor factory adheres to ManagedCursor contract so automatic rollbacks notify observers."""
+    if factory is sqlite3.Cursor or factory is ManagedCursor or factory is None:
+        return ManagedCursor
+    if isinstance(factory, type) and issubclass(factory, sqlite3.Cursor):
+        for cls in factory.__mro__:
+            if cls is sqlite3.Cursor or cls is object:
+                break
+            if cls is ManagedCursor:
+                continue
+            for method_name in ("execute", "executemany", "executescript"):
+                if method_name in cls.__dict__ and not issubclass(cls, ManagedCursor):
+                    raise TypeError(
+                        f"ManagedConnection cursor factory {factory.__name__} has unmanaged execution override "
+                        f"for {method_name} in {cls.__name__}. Overridden execution methods must belong to ManagedCursor subclasses."
+                    )
+        if issubclass(factory, ManagedCursor):
+            return factory
+        cached = _MANAGED_CURSOR_FACTORY_CACHE.get(factory)
+        if cached is None:
+            bases: tuple[Any, ...] = (ManagedCursor, factory)
+            cached = type(
+                f"Managed_{factory.__name__}",
+                bases,
+                {},
+            )
+            _MANAGED_CURSOR_FACTORY_CACHE[factory] = cached
+        return cached
+    raise TypeError(
+        f"ManagedConnection requires cursor factory subclassing sqlite3.Cursor; received {factory!r}"
+    )
+
+
+class ManagedConnection(sqlite3.Connection):
+    """Connection providing multi-observer trace dispatching without overwriting user callbacks."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._user_trace_callback: TraceObserver | None = None
+        self._trace_observers: list[TraceObserver] = []
+        self._rollback_observers: list[RollbackObserver] = []
+        self._rollback_generation: int = 0
+
+    @property
+    def rollback_generation(self) -> int:
+        """Monotonic counter incremented whenever an explicit or implicit rollback occurs."""
+        return self._rollback_generation
+
+    def register_rollback_observer(self, observer: RollbackObserver) -> Callable[[], None]:
+        """Register an observer callable invoked when a transaction rolls back."""
+        self._rollback_observers.append(observer)
+
+        def _unregister() -> None:
+            if observer in self._rollback_observers:
+                self._rollback_observers.remove(observer)
+
+        return _unregister
+
+    def notify_rollback(self) -> None:
+        """Increment rollback generation and notify all registered rollback observers."""
+        self._rollback_generation += 1
+        for observer in list(self._rollback_observers):
+            with suppress(Exception):
+                observer()
+
+    def set_trace_callback(self, trace_callback: TraceObserver | None) -> None:
+        """Register or clear the user trace callback while preserving internal observers."""
+        self._user_trace_callback = trace_callback
+        self._sync_trace_callback()
+
+    def register_trace_observer(self, observer: TraceObserver) -> Callable[[], None]:
+        """Register an observer callable that receives executed statements.
+
+        Returns a callable that unregisters the observer when invoked.
+        """
+        self._trace_observers.append(observer)
+        self._sync_trace_callback()
+        _ACTIVE_OBSERVED_CONNECTIONS.add(self)
+
+        def _unregister() -> None:
+            if observer in self._trace_observers:
+                self._trace_observers.remove(observer)
+            self._sync_trace_callback()
+            if not self._trace_observers:
+                _ACTIVE_OBSERVED_CONNECTIONS.discard(self)
+
+        return _unregister
+
+    @property
+    def trace_observer_count(self) -> int:
+        return len(self._trace_observers)
+
+    @property
+    def user_trace_callback(self) -> TraceObserver | None:
+        return self._user_trace_callback
+
+    def _dispatch_trace(self, statement: str) -> None:
+        if _ROLLBACK_PATTERN.match(statement) or _ATTACH_OR_DETACH_PATTERN.match(statement):
+            self.notify_rollback()
+        if self._user_trace_callback is not None:
+            with suppress(Exception):
+                self._user_trace_callback(statement)
+        for observer in list(self._trace_observers):
+            with suppress(Exception):
+                observer(statement)
+
+    def _sync_trace_callback(self) -> None:
+        if self._user_trace_callback is not None or self._trace_observers:
+            super().set_trace_callback(self._dispatch_trace)
+        else:
+            super().set_trace_callback(None)
+
+    def rollback(self) -> None:
+        try:
+            super().rollback()
+        finally:
+            self.notify_rollback()
+
+    def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        cur = self.cursor()
+        return cur.execute(*args, **kwargs)
+
+    def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        cur = self.cursor()
+        return cur.executemany(*args, **kwargs)
+
+    def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+        cur = self.cursor()
+        return cur.executescript(*args, **kwargs)
+
+    def cursor(self, factory: Any = ManagedCursor) -> sqlite3.Cursor:
+        resolved_factory = _resolve_managed_cursor_factory(factory)
+        return super().cursor(factory=resolved_factory)
+
+    def close(self) -> None:
+        _ACTIVE_OBSERVED_CONNECTIONS.discard(self)
+        self._trace_observers.clear()
+        self._rollback_observers.clear()
+        self._user_trace_callback = None
+        super().close()
+
+
+def active_managed_trace_connection_count() -> int:
+    """Return the number of ManagedConnection instances currently carrying trace observers."""
+    return len(_ACTIVE_OBSERVED_CONNECTIONS)
+
+
+_ORIGINAL_SQLITE3_CONNECT = sqlite3.connect
+
+
+def _managed_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+    if len(args) >= 6:
+        factory = args[5]
+        if factory is sqlite3.Connection or factory is None:
+            args = (*args[:5], ManagedConnection, *args[6:])
+        return _ORIGINAL_SQLITE3_CONNECT(*args, **kwargs)
+    kw = dict(kwargs)
+    factory = kw.get("factory")
+    if factory is sqlite3.Connection or factory is None or "factory" not in kw:
+        kw["factory"] = ManagedConnection
+    return _ORIGINAL_SQLITE3_CONNECT(*args, **kw)
+
+
+def install_managed_connection_factory() -> None:
+    """Ensure standard sqlite3.connect defaults to ManagedConnection."""
+    if sqlite3.connect is not _managed_connect:
+        sqlite3.connect = _managed_connect
+
+
+if __name__ != "<run_path>":
+    install_managed_connection_factory()
 
 SQLITE_BUSY_TIMEOUT_MS = 30_000
 _WAL_TRANSITION_RETRY_INTERVAL_S = 0.01
@@ -137,11 +396,11 @@ class _WriterConnectionState:
     released: bool = False
 
 
-class _WriterConnection(sqlite3.Connection):
+class _WriterConnection(ManagedConnection):
     """A writer connection that frees its chain-gate slot when it closes.
 
-    Only instantiated for chain-gated connections; every other writer
-    connection is a plain ``sqlite3.Connection`` exactly as before.
+    Only instantiated for chain-gated connections. All writers retain managed
+    trace and rollback observers.
     """
 
     _writer_connection_state: _WriterConnectionState
@@ -158,12 +417,20 @@ class _WriterConnection(sqlite3.Connection):
         conn._writer_connection_state = state
 
     def close(self) -> None:
+        state = getattr(self, "_writer_connection_state", None)
         try:
             super().close()
-        finally:
-            state = getattr(self, "_writer_connection_state", None)
+        except BaseException as error:
             if state is not None:
-                _release_writer_connection_state(state)
+                try:
+                    _release_writer_connection_state(state)
+                except BaseException as cleanup_error:
+                    error.add_note(
+                        f"writer claim cleanup also failed: {type(cleanup_error).__name__}"
+                    )
+            raise
+        if state is not None:
+            _release_writer_connection_state(state)
 
 
 def _release_writer_connection_state(state: _WriterConnectionState) -> None:
@@ -178,15 +445,23 @@ def _release_writer_connection_state(state: _WriterConnectionState) -> None:
     if state.released:
         return
     state.released = True
-    if writer_connection_trace_enabled():
-        trace_writer_connection(
-            "writer_close",
-            db_path=state.db_path,
-            owner=state.owner,
-            conn_id=state.conn_id,
-            chain=state.chain,
-            file_claim=state.file_claim,
-        )
+    try:
+        if writer_connection_trace_enabled():
+            trace_writer_connection(
+                "writer_close",
+                db_path=state.db_path,
+                owner=state.owner,
+                conn_id=state.conn_id,
+                chain=state.chain,
+                file_claim=state.file_claim,
+            )
+    except BaseException as error:
+        if state.claim is not None:
+            try:
+                state.claim.release()
+            except BaseException as cleanup_error:
+                error.add_note(f"writer gate release also failed: {type(cleanup_error).__name__}")
+        raise
     if state.claim is not None:
         state.claim.release()
 
@@ -223,8 +498,8 @@ def _open_writer_connection(
     silent long block), and released when the connection closes. The opt-in
     trace records that open/close interval at this seam, so evidence can show
     the serialized chain opens per pid. Every other connection — unmarked
-    processes, other database files — is opened exactly as before: no wrapper,
-    no trace, no gate.
+    processes, other database files — retains managed observation without
+    a chain claim or writer trace.
     """
     claim: WriterConnectionClaim | None = None
     if (
@@ -233,11 +508,9 @@ def _open_writer_connection(
         and chain_gate_required(resolved)
     ):
         claim = claim_chain_writer_connection(resolved, owner=_writer_connection_owner())
-    # ONE raw connect site: the wrapper subclass is used exactly when this
-    # connection took the chain gate (otherwise the plain default factory, i.e.
-    # the previous behavior byte for byte).
+    # Keep managed observations in both cases; only chain writers own a claim.
     factory: type[sqlite3.Connection] = (
-        _WriterConnection if claim is not None else sqlite3.Connection
+        _WriterConnection if claim is not None else ManagedConnection
     )
     try:
         conn = sqlite3.connect(
@@ -245,9 +518,12 @@ def _open_writer_connection(
             timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
             factory=factory,
         )
-    except BaseException:
+    except BaseException as error:
         if claim is not None:
-            claim.release()
+            try:
+                claim.release()
+            except BaseException as cleanup_error:
+                error.add_note(f"writer gate release also failed: {type(cleanup_error).__name__}")
         raise
     if claim is None:
         return conn
@@ -271,9 +547,15 @@ def _open_writer_connection(
             file_claim=state.file_claim,
         )
         return conn
-    except BaseException:
-        conn.close()
-        claim.release()
+    except BaseException as error:
+        try:
+            conn.close()
+        except BaseException as cleanup_error:
+            error.add_note(f"writer connection cleanup also failed: {type(cleanup_error).__name__}")
+        try:
+            claim.release()
+        except BaseException as cleanup_error:
+            error.add_note(f"writer gate release also failed: {type(cleanup_error).__name__}")
         raise
 
 
@@ -323,6 +605,7 @@ def connect_sqlite(
             ),
             uri=True,
             timeout=SQLITE_BUSY_TIMEOUT_MS / 1000,
+            factory=ManagedConnection,
         )
     else:
         if (
@@ -348,8 +631,11 @@ def connect_sqlite(
             require_current_for_write(conn)
         if role is SQLiteConnectionRole.WRITER:
             _apply_writer_policy(conn, require_wal=resolved != ":memory:")
-    except Exception:
-        conn.close()
+    except BaseException as error:
+        try:
+            conn.close()
+        except BaseException as cleanup_error:
+            error.add_note(f"connection cleanup also failed: {type(cleanup_error).__name__}")
         raise
     return conn
 
@@ -510,9 +796,15 @@ def _apply_writer_policy(conn: sqlite3.Connection, *, require_wal: bool = True) 
 
 
 __all__ = [
+    "ATTACH_OR_DETACH_PATTERN",
+    "COMMIT_PATTERN",
+    "ROLLBACK_PATTERN",
     "SQLITE_BUSY_TIMEOUT_MS",
+    "ManagedConnection",
     "SQLiteConnectionRole",
+    "active_managed_trace_connection_count",
     "connect_sqlite",
+    "install_managed_connection_factory",
     "require_safe_sqlite_writer_runtime",
     "sqlite_version_is_wal_reset_safe",
 ]

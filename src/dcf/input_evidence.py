@@ -12,6 +12,7 @@ import sqlite3
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Literal
 
 from pydantic import (
@@ -22,12 +23,26 @@ from pydantic import (
     TypeAdapter,
     ValidationError,
     field_validator,
+    model_validator,
 )
 
 from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
+from provenance.evidence_native_candidates import (
+    resolve_local_storage_uri,
+    select_evidence_native_candidates_by_id,
+)
 from provenance.fact_read_model import FactReadModel
+from provenance.financial_statement_admission import (
+    ReviewedFinancialStatementRole,
+    verify_reviewed_financial_role,
+)
+from provenance.immutable_artifact import read_stable_artifact
 from provenance.metric_ontology import CanonicalDimension, MetricOntology, canonical_json
 from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
+from provenance.sec_package_subject_witness import (
+    SecPackageSubjectWitnessError,
+    verify_sec_package_subject_witness,
+)
 from runtime.deterministic import as_utc as _utc
 
 
@@ -52,6 +67,9 @@ class AssumptionBasis(FrozenModel):
     value: float
     attribution: Literal["owner", "analyst"]
     rationale: str = Field(min_length=10)
+    source_reference: str | None = Field(default=None, min_length=1)
+    source_as_of: date | None = None
+    recorded_at: AwareDatetime | None = None
 
 
 class DriverReview(FrozenModel):
@@ -78,13 +96,14 @@ class ModelCalculation(FrozenModel):
 
 class ModelInputRequest(FrozenModel):
     recipe: str
-    ticker: Literal["MELI"]
+    ticker: str = Field(min_length=1, max_length=32, pattern=r"^[A-Z][A-Z0-9.-]*$")
     research_snapshot_id: str
     financial_period_end: date
     # Canonical bindings are REPORTED only. TTM/residuals are model calculations.
     facts: dict[str, FactBinding]
     assumptions: dict[str, AssumptionBasis]
     assumption_review: AssumptionReview | None = None
+    recipe_context: dict[str, object] | None = None
 
 
 class InputRequirement(FrozenModel):
@@ -93,7 +112,7 @@ class InputRequirement(FrozenModel):
     unit_key: str
     currency: str | None
     period_kind: Literal["instant", "duration"]
-    consolidation_scope: Literal["consolidated"] = "consolidated"
+    consolidation_scope: Literal["consolidated", "other"] = "consolidated"
     annual: bool = False
     accounting_basis: str | None = None
     period_start: date | None = None
@@ -121,7 +140,7 @@ class ValuationRoleSelector(FrozenModel):
 _ROLE_SELECTORS = TypeAdapter(dict[str, ValuationRoleSelector])
 
 
-def _role_matches(
+def input_role_matches(
     scope: dict[str, object],
     requirement: InputRequirement,
     dimensions: tuple[CanonicalDimension, ...],
@@ -177,8 +196,50 @@ class VerifiedInput(FrozenModel):
     extraction_completed_at: datetime | None = None
 
 
+class SourceReadContext(FrozenModel):
+    """Explicit read authority; ledger paths and database locations grant none."""
+
+    content_roots: tuple[Path, ...]
+    max_documents: int = Field(default=28, gt=0, le=28, strict=True)
+    max_document_bytes: int = Field(default=100_000_000, gt=0, le=100_000_000, strict=True)
+    max_total_bytes: int = Field(default=250_000_000, gt=0, le=250_000_000, strict=True)
+
+    @field_validator("content_roots")
+    @classmethod
+    def explicit_roots(cls, roots: tuple[Path, ...]) -> tuple[Path, ...]:
+        if not roots or any(not root.is_absolute() or root == Path(root.anchor) for root in roots):
+            raise ValueError("explicit absolute content roots are required")
+        if any(".." in root.parts for root in roots):
+            raise ValueError("content roots must be lexical absolute paths")
+        return roots
+
+    @classmethod
+    def for_sec_state_root(cls, state_root: Path) -> SourceReadContext:
+        """Use the capture owner's SEC blob layout under an explicit state root."""
+        if not state_root.is_absolute() or state_root == Path(state_root.anchor):
+            raise ValueError("explicit absolute state root is required")
+        return cls(content_roots=(state_root / "data" / "evidence" / "blobs",))
+
+
+class RawDocumentWitness(FrozenModel):
+    """Present local-byte verification; this clock is not a financial cutoff."""
+
+    document_version_id: str
+    blob_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    byte_size: int = Field(ge=0, strict=True)
+    verified_at: AwareDatetime
+    reader_policy: Literal["bounded-stable-source/v1"] = "bounded-stable-source/v1"
+    storage_uri_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class ModelInputReceipt(FrozenModel):
-    schema_version: Literal["dcf_model_inputs.v2"] = "dcf_model_inputs.v2"
+    schema_version: Literal["dcf_model_inputs.v2", "dcf_model_inputs.v3"] = "dcf_model_inputs.v2"
+    source_integrity: Literal["unverified", "present_bytes_verified"] = Field(
+        default="unverified", exclude_if=lambda value: value == "unverified"
+    )
+    raw_documents: tuple[RawDocumentWitness, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
     recipe: str
     request: ModelInputRequest
     verified_at: AwareDatetime
@@ -196,6 +257,95 @@ class ModelInputReceipt(FrozenModel):
         "current-authoritative-inventory-24h/v1"
     )
 
+    @model_validator(mode="after")
+    def raw_document_population(self) -> ModelInputReceipt:
+        if self.schema_version == "dcf_model_inputs.v2":
+            if self.source_integrity != "unverified" or self.raw_documents:
+                raise ValueError("legacy receipt cannot claim physical source verification")
+        else:
+            expected = {item.document_version_id for item in self.inputs}
+            actual = [item.document_version_id for item in self.raw_documents]
+            if (
+                not expected
+                or None in expected
+                or set(actual) != expected
+                or len(actual) != len(set(actual))
+                or self.source_integrity != "present_bytes_verified"
+            ):
+                raise ValueError("physical source witness population mismatch")
+        return self
+
+
+def verify_input_source_bytes(
+    conn: sqlite3.Connection, inputs: tuple[VerifiedInput, ...], context: SourceReadContext | None
+) -> tuple[RawDocumentWitness, ...]:
+    """Freshly verify only the admitted documents; no acquisition or ledger writes."""
+    if context is None:
+        raise InputEvidenceError("model_input_source_context_unavailable")
+    ids = tuple(sorted({item.document_version_id for item in inputs if item.document_version_id}))
+    if not ids or any(item.document_version_id is None for item in inputs):
+        raise InputEvidenceError("model_input_source_document_missing")
+    if len(ids) > context.max_documents:
+        raise InputEvidenceError("model_input_source_population_limit")
+    original_factory = conn.row_factory
+    try:
+        conn.row_factory = sqlite3.Row
+        candidates = select_evidence_native_candidates_by_id(
+            conn, document_version_ids=ids, include_legacy=True
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise InputEvidenceError("model_input_source_metadata_unavailable") from exc
+    finally:
+        conn.row_factory = original_factory
+    candidate_ids = [item.document_version_id for item in candidates]
+    if set(candidate_ids) != set(ids) or len(candidate_ids) != len(ids):
+        raise InputEvidenceError("model_input_source_population_mismatch")
+    remaining = context.max_total_bytes
+    witnesses: list[RawDocumentWitness] = []
+    # Each document gets its own location proof and consumes its actual read budget.
+    for candidate in sorted(candidates, key=lambda item: item.document_version_id):
+        limit = min(context.max_document_bytes, remaining)
+        if limit <= 0 or candidate.byte_size > limit:
+            raise InputEvidenceError(
+                "model_input_source_byte_limit:" + candidate.document_version_id
+            )
+        path = resolve_local_storage_uri(
+            candidate.storage_uri, allowed_roots=context.content_roots, follow_links=False
+        )
+        if path is None:
+            raise InputEvidenceError(
+                "model_input_source_location_unapproved:" + candidate.document_version_id
+            )
+        root = next(root for root in context.content_roots if path.is_relative_to(root))
+        try:
+            if path.lstat().st_nlink != 1:
+                raise ValueError("source file has multiple links")
+            source, _payload = read_stable_artifact(
+                path, max_bytes=min(limit, max(1, candidate.byte_size)), allowed_root=root
+            )
+            if path.lstat().st_nlink != 1:
+                raise ValueError("source file link population changed")
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise InputEvidenceError(
+                "model_input_source_bytes_unavailable:" + candidate.document_version_id
+            ) from exc
+        del _payload
+        remaining -= source.size_bytes
+        if source.file_sha256 != candidate.blob_sha256 or source.size_bytes != candidate.byte_size:
+            raise InputEvidenceError(
+                "model_input_source_digest_or_size_mismatch:" + candidate.document_version_id
+            )
+        witnesses.append(
+            RawDocumentWitness(
+                document_version_id=candidate.document_version_id,
+                blob_sha256=candidate.blob_sha256,
+                byte_size=source.size_bytes,
+                verified_at=datetime.now(UTC),
+                storage_uri_sha256=hashlib.sha256(candidate.storage_uri.encode()).hexdigest(),
+            )
+        )
+    return tuple(witnesses)
+
 
 def canonical_digest(value: object) -> str:
     return hashlib.sha256(
@@ -205,6 +355,176 @@ def canonical_digest(value: object) -> str:
 
 def _time(raw: object) -> datetime:
     return _utc(datetime.fromisoformat(str(raw).replace("Z", "+00:00")))
+
+
+def _financial_filing_date(raw: object, cutoff: datetime) -> date:
+    if raw is None:
+        raise InputEvidenceError("financial_reporting_filing_date_missing")
+    try:
+        filed = _time(raw).date()
+    except ValueError as exc:
+        raise InputEvidenceError("financial_reporting_filing_date_invalid") from exc
+    if filed > cutoff.date():
+        raise InputEvidenceError("financial_reporting_filing_after_cutoff")
+    return filed
+
+
+def _foreign_interim_periods(
+    conn: sqlite3.Connection,
+    inventory_ids: tuple[str, ...],
+    snapshot: ResearchSnapshotRequest,
+    ticker: str,
+    cutoff: datetime,
+    proven_period_end: date | None,
+) -> tuple[date, ...]:
+    """Select explicitly classified 6-K packages, never every current report.
+
+    The expected-document owner supplies the classification. A financial IR
+    exhibit can qualify its same-accession SEC cover. Only after verifying all
+    classified financial periods do we exclude unknown native SEC packages filed
+    on or before the proven maximum period end from latest-period discovery:
+    reported period end <= filing date <= proven period end. This does not remove
+    any document from source closure or readership. A requested anchor is not proof.
+    """
+    try:
+        rows: list[sqlite3.Row | tuple[object, ...]] = []
+        for inventory_id in inventory_ids:
+            count = conn.execute(
+                "SELECT count(*) FROM expected_documents WHERE snapshot_id=? "
+                "AND form_type IN ('6-K','6-K/A') AND datetime(recorded_at)<=datetime(?)",
+                (inventory_id, cutoff.isoformat()),
+            ).fetchone()
+            if count is not None and int(count[0]):
+                rows.extend(
+                    conn.execute(
+                        "SELECT expected_document_id,period_end,document_type,issuer_id,ticker,"
+                        "expectation_basis,accession_number,source_kind,source_url,filing_at FROM expected_documents "
+                        "WHERE snapshot_id=? AND form_type IN ('6-K','6-K/A') "
+                        "AND datetime(recorded_at)<=datetime(?)",
+                        (inventory_id, cutoff.isoformat()),
+                    ).fetchall()
+                )
+        periods: list[date] = []
+        classified: set[str] = set()
+        unknown: list[tuple[str | None, date | None, str]] = []
+        financial_kinds = {
+            "financial_statement": "issuer_financial_statements",
+            "supplement": "issuer_financial_statements",
+            "earnings_release": "issuer_earnings_materials",
+            "earnings_material": "issuer_earnings_materials",
+        }
+        presentation_kinds = {"investor_presentation", "presentation", "investor_update"}
+        for row in rows:
+            (
+                identity,
+                period,
+                kind,
+                issuer,
+                symbol,
+                basis,
+                accession,
+                source_kind,
+                source_url,
+                filing_at,
+            ) = tuple(row)
+            if (
+                str(issuer) != snapshot.research_universe.issuer_id
+                or str(symbol).upper() != ticker
+                or str(basis) != "authoritative"
+                or str(source_kind) not in {"sec_filing", "ir_document"}
+            ):
+                raise InputEvidenceError("financial_reporting_package_authority_invalid")
+            kind = str(kind)
+            filed = (
+                _financial_filing_date(filing_at, cutoff)
+                if str(source_kind) == "sec_filing" or kind in financial_kinds
+                else None
+            )
+            accession_id = str(accession) if accession is not None else None
+            if kind not in financial_kinds and kind not in presentation_kinds:
+                unknown.append((accession_id, filed, str(source_kind)))
+                continue
+            expected_family = (
+                "continuous_disclosure"
+                if str(source_kind) == "sec_filing"
+                else financial_kinds.get(kind, "issuer_presentations")
+            )
+            binding = conn.execute(
+                "SELECT source_obligation_revision_id,issuer_id,reporting_entity_id,"
+                "document_family,canonical_binding_json,binding_sha256,knowledge_at,recorded_at "
+                "FROM expected_document_obligation_bindings WHERE expected_document_id=?",
+                (identity,),
+            ).fetchone()
+            if binding is None:
+                raise InputEvidenceError("financial_reporting_package_unbound")
+            obligation, bound_issuer, entity, family, encoded, digest, known, recorded = tuple(
+                binding
+            )
+            expected_binding = {
+                "document_family": expected_family,
+                "expected_document_id": str(identity),
+                "issuer_id": snapshot.research_universe.issuer_id,
+                "reporting_entity_id": str(entity),
+                "source_obligation_revision_id": str(obligation),
+            }
+            if (
+                str(issuer) != snapshot.research_universe.issuer_id
+                or str(symbol).upper() != ticker
+                or str(basis) != "authoritative"
+                or str(bound_issuer) != snapshot.research_universe.issuer_id
+                or str(entity) not in snapshot.research_universe.reporting_entity_ids
+                or str(obligation) not in snapshot.research_universe.source_obligation_revision_ids
+                or str(family) != expected_family
+                or json.loads(str(encoded)) != expected_binding
+                or hashlib.sha256(str(encoded).encode()).hexdigest() != str(digest)
+                or _time(known) > cutoff
+                or _time(recorded) > cutoff
+            ):
+                raise InputEvidenceError("financial_reporting_package_authority_invalid")
+            if str(source_kind) == "sec_filing":
+                try:
+                    verify_sec_package_subject_witness(
+                        conn,
+                        issuer_id=snapshot.research_universe.issuer_id,
+                        document_version_ids=snapshot.research_universe.document_version_ids,
+                        identity=str(identity),
+                        kind=kind,
+                        period=period,
+                        accession=accession_id,
+                        source_url=source_url,
+                        cutoff=cutoff,
+                    )
+                except SecPackageSubjectWitnessError as exc:
+                    raise InputEvidenceError(str(exc)) from exc
+            if accession_id is not None:
+                classified.add(accession_id)
+            if kind in financial_kinds:
+                if period is None:
+                    raise InputEvidenceError("financial_reporting_period_missing")
+                end = _time(period).date()
+                if end > cutoff.date():
+                    raise InputEvidenceError("financial_reporting_period_after_cutoff")
+                if filed is None or end > filed:
+                    raise InputEvidenceError("financial_reporting_period_after_filing")
+                periods.append(end)
+        bounds = periods + ([] if proven_period_end is None else [proven_period_end])
+        bound = max(bounds, default=None)
+        for accession, filed, source_kind in unknown:
+            if accession is not None and accession in classified:
+                continue
+            if (
+                source_kind == "sec_filing"
+                and bound is not None
+                and filed is not None
+                and filed <= bound
+            ):
+                continue
+            raise InputEvidenceError("financial_reporting_classification_unavailable")
+        return tuple(periods)
+    except (sqlite3.Error, ValueError) as exc:
+        if isinstance(exc, InputEvidenceError):
+            raise
+        raise InputEvidenceError("financial_reporting_package_authority_unavailable") from exc
 
 
 def verify_source_coverage(
@@ -263,15 +583,64 @@ def verify_source_coverage(
     # Expected periodic documents, rather than today's calendar quarter, name
     # the latest financial period. Snapshot verification proves document closure.
     latest_period: date | None = None
+    unresolved_annuals: list[tuple[tuple[str, str] | None, date]] = []
+    resolved_annuals: dict[tuple[str, str], date] = {}
+    annual_forms = {"10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"}
     for inventory_id in inventories:
         for row in conn.execute(
-            """SELECT period_end FROM expected_documents
-                WHERE snapshot_id=? AND form_type IN ('10-K','10-K/A','10-Q','10-Q/A')
-                AND period_end IS NOT NULL AND datetime(recorded_at)<=datetime(?)""",
+            """SELECT period_end,filing_at,form_type,document_type,accession_number,
+                issuer_id,ticker,source_kind,expectation_basis FROM expected_documents
+                WHERE snapshot_id=? AND form_type IN (
+                    '10-K','10-K/A','10-Q','10-Q/A','20-F','20-F/A','40-F','40-F/A')
+                AND datetime(recorded_at)<=datetime(?)""",
             (inventory_id, cutoff.isoformat()),
         ):
+            if (
+                str(row[5]) != snapshot.research_universe.issuer_id
+                or str(row[6]).upper() != request.ticker
+                or str(row[8]) != "authoritative"
+            ):
+                raise InputEvidenceError("financial_reporting_package_authority_invalid")
+            form, kind = str(row[2]), str(row[3])
+            annual_key = (form, str(row[4])) if row[4] is not None else None
+            if row[0] is None:
+                # Supporting files do not add a second unresolved annual duty.
+                if form in annual_forms and kind == "filing":
+                    if str(row[7]) != "sec_filing":
+                        raise InputEvidenceError("financial_reporting_package_authority_invalid")
+                    unresolved_annuals.append((annual_key, _financial_filing_date(row[1], cutoff)))
+                continue
             end = _time(row[0]).date()
+            if end > cutoff.date():
+                raise InputEvidenceError("financial_reporting_period_after_cutoff")
+            if end > _financial_filing_date(row[1], cutoff):
+                raise InputEvidenceError("financial_reporting_period_after_filing")
+            if (
+                annual_key is not None
+                and form in annual_forms
+                and kind in {"filing", "sec_financial_report"}
+                and str(row[7]) == "sec_filing"
+            ):
+                if annual_key in resolved_annuals and resolved_annuals[annual_key] != end:
+                    raise InputEvidenceError("financial_reporting_package_authority_invalid")
+                resolved_annuals[annual_key] = end
             latest_period = max(latest_period, end) if latest_period is not None else end
+    for end in _foreign_interim_periods(
+        conn, tuple(inventories), snapshot, request.ticker, cutoff, latest_period
+    ):
+        latest_period = max(latest_period, end) if latest_period is not None else end
+    for annual_key, filed in unresolved_annuals:
+        if annual_key is not None and annual_key in resolved_annuals:
+            if resolved_annuals[annual_key] > filed:
+                raise InputEvidenceError("financial_reporting_period_after_filing")
+            continue
+        # The existing reader admits only period_end <= filing date. Thus a
+        # filing on/before a proven period cannot introduce a newer admissible
+        # anchor. This is no legal claim or inferred period: the unknown annual
+        # remains in document closure/readership with its original metadata.
+        if latest_period is not None and filed <= latest_period:
+            continue
+        raise InputEvidenceError("financial_reporting_period_missing")
     if latest_period != request.financial_period_end:
         raise InputEvidenceError("financial_anchor_not_latest_published_period")
     return snapshot, admission.member_set_sha256, tuple(sorted(inventories))
@@ -286,6 +655,7 @@ def verify_model_inputs(
     effective_inputs: Mapping[str, float],
     assumption_keys: frozenset[str],
     as_of: datetime,
+    source_context: SourceReadContext | None = None,
 ) -> ModelInputReceipt:
     """Reconstruct every required actual through the canonical sealed read APIs."""
     if as_of.tzinfo is None:
@@ -361,7 +731,7 @@ def verify_model_inputs(
             or definition is None
             or definition.lifecycle != "active"
             or definition.metric_definition_revision_id != ref.metric_definition_revision_id
-            or not _role_matches(definition.scope_constraints, requirement, dimensions)
+            or not input_role_matches(definition.scope_constraints, requirement, dimensions)
             or (
                 requirement.accounting_basis is not None
                 and (
@@ -374,6 +744,21 @@ def verify_model_inputs(
             or bundle.cell.scope_security_id is not None
         ):
             raise InputEvidenceError(f"input_semantic_admission_failed:{requirement.key}")
+        if requirement.role.startswith("cashflow_equity."):
+            reviews = definition.scope_constraints.get("financial_statement_reviews")
+            try:
+                if not isinstance(reviews, dict):
+                    raise ValueError("reviewed statement population missing")
+                review = ReviewedFinancialStatementRole.model_validate(
+                    reviews.get(ref.observation_id)
+                )
+                verify_reviewed_financial_role(conn, review, bundle, cutoff=cutoff)
+                if requirement.role != f"cashflow_equity.{review.concept}":
+                    raise ValueError("reviewed statement role mismatch")
+            except (ValueError, RuntimeError, sqlite3.Error) as exc:
+                raise InputEvidenceError(
+                    f"input_source_context_unverified:{requirement.key}"
+                ) from exc
         if (
             bundle.cell.reporting_entity_id not in snapshot.research_universe.reporting_entity_ids
             or fact.decimal_value is None
@@ -431,7 +816,11 @@ def verify_model_inputs(
                 else None,
             )
         )
+    raw_documents = verify_input_source_bytes(conn, tuple(inputs), source_context)
     return ModelInputReceipt(
+        schema_version="dcf_model_inputs.v3",
+        source_integrity="present_bytes_verified",
+        raw_documents=raw_documents,
         recipe=recipe,
         request=request,
         verified_at=cutoff,

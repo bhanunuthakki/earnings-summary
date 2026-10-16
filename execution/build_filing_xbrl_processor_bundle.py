@@ -10,23 +10,22 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from filings.inline_xbrl_processor import (  # noqa: E402
+from filings.inline_xbrl_processor import (
     ProcessorBundleManifest,
     RuntimeArtifactMember,
     enumerate_closed_local_tree,
     runtime_artifact_set_sha256,
 )
-from log_redact import redact  # noqa: E402
-from provenance.immutable_artifact import (  # noqa: E402
+from log_redact import redact
+from provenance.immutable_artifact import (
     canonical_text_artifact_sha256,
     path_aliases_any,
     publish_text_no_clobber,
     read_stable_artifact,
     require_no_reparse_points,
 )
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 class _FrozenModel(BaseModel):
@@ -75,12 +74,14 @@ def build_filing_xbrl_processor_bundle(
     manifest = ProcessorBundleManifest.model_validate_json(template_bytes)
     bridge_source = PROJECT_ROOT / "execution" / "filing_xbrl_bridge.py"
     launcher_source = PROJECT_ROOT / "execution" / "filing_xbrl_appcontainer_launcher.cs"
-    for source in (bridge_source, launcher_source):
+    unit_source = PROJECT_ROOT / "src" / "filings" / "xbrl_units.py"
+    for source in (bridge_source, launcher_source, unit_source):
         require_no_reparse_points(source)
         if source.stat().st_nlink != 1:
             raise ValueError("bundle reviewed source has a hardlink alias")
     bridge_source_snapshot, bridge_source_bytes = read_stable_artifact(bridge_source)
     launcher_source_snapshot, _launcher_source_bytes = read_stable_artifact(launcher_source)
+    unit_source_snapshot, unit_source_bytes = read_stable_artifact(unit_source)
 
     candidates = enumerate_closed_local_tree(
         runtime_root,
@@ -141,6 +142,16 @@ def build_filing_xbrl_processor_bundle(
     _runtime_bridge_snapshot, runtime_bridge_bytes = read_stable_artifact(runtime_bridge)
     if runtime_bridge_bytes != bridge_source_bytes:
         raise ValueError("bundle bridge bytes differ from the reviewed source")
+    unit_members = tuple(
+        member
+        for member in members_tuple
+        if member.relative_path == "earnings_summary_xbrl_units.py"
+    )
+    if len(unit_members) != 1:
+        raise ValueError("bundle unit module is absent from the runtime closure")
+    _, runtime_unit_bytes = read_stable_artifact(runtime_root / "earnings_summary_xbrl_units.py")
+    if runtime_unit_bytes != unit_source_bytes:
+        raise ValueError("bundle unit bytes differ from the reviewed source")
     runtime_sha = runtime_artifact_set_sha256(members_tuple)
     execution = manifest.execution.model_copy(
         update={
@@ -154,10 +165,17 @@ def build_filing_xbrl_processor_bundle(
         update={
             "bridge_source_sha256": bridge_source_snapshot.file_sha256,
             "launcher_source_sha256": launcher_source_snapshot.file_sha256,
+            "unit_source_sha256": unit_source_snapshot.file_sha256,
         }
     )
-    sealed = manifest.model_copy(
-        update={"execution": execution, "build_provenance": build_provenance}
+    sealed = ProcessorBundleManifest.model_validate(
+        manifest.model_copy(
+            update={
+                "execution": execution,
+                "build_provenance": build_provenance,
+                "bridge_protocol_version": "filing-xbrl-bridge.v2",
+            }
+        ).model_dump(mode="json")
     )
     canonical = sealed.canonical_json
     published = publish_text_no_clobber(output, canonical)

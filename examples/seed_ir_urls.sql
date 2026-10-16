@@ -1,6 +1,8 @@
 -- Seed canonical IR URLs into tracked_companies.ir_url for the 33-name book.
 -- Verify each URL before running — corporate IR sites do change paths.
--- Apply with:  sqlite3 data/portfolio.db < data/seed_ir_urls.sql
+-- On the canonical host only, after explicit approval for the target state:
+-- sqlite3 "$EARNINGS_SUMMARY_DB_PATH" < examples/seed_ir_urls.sql
+-- Require an existing configured database; never create checkout-local state.
 
 -- Portfolio (12)
 UPDATE tracked_companies SET ir_url = 'https://ir.aboutamazon.com'                         WHERE ticker = 'AMZN';

@@ -141,6 +141,15 @@ class ReportArtifactRef(BaseModel):
     _standalone_relative = field_validator("standalone_path")(_relative_artifact_path)
     _manifest_relative = field_validator("manifest_path")(_relative_artifact_path)
 
+    @field_validator("artifact_id", "ticker")
+    @classmethod
+    def _safe_directory_component(cls, value: str) -> str:
+        if value in {"", ".", ".."} or any(
+            character in value for character in ("/", "\\", ":", "\0")
+        ):
+            raise ValueError("artifact identities must be single safe directory components")
+        return value
+
     @field_validator("body_path")
     @classmethod
     def _body_relative(cls, value: str | None) -> str | None:
@@ -267,6 +276,11 @@ def _repo_relative(repo_root: Path, path: Path) -> str:
         except ValueError as exc:
             raise ValueError("report artifacts must remain inside the repository") from exc
     return relative.as_posix()
+
+
+def validate_report_artifact_path(repo_root: Path, path: Path) -> None:
+    """Use the publisher's retained-root and governed output authority."""
+    _repo_relative(repo_root, path)
 
 
 def _read_index(repo_root: Path) -> ReportArtifactIndex:

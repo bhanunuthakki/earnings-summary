@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Tested backup-restore drill (sre-3, 2026-06-18 hardening refresh).
 
 A backup you have never restored is not a backup. Exercises cron/restore_db.py
@@ -13,6 +12,7 @@ import json
 import shutil
 import sqlite3
 import sys
+import tempfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
@@ -27,15 +27,14 @@ from pipeline.run_accounting import (
     start_run,
 )
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "cron"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "cron"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import backup_db  # noqa: E402
-import migrate_legacy_backups  # noqa: E402
-import restore_db  # noqa: E402
+import backup_db
+import migrate_legacy_backups
+import restore_db
 
-from runtime.backup_crypto import (  # noqa: E402
+from runtime.backup_crypto import (
     decrypt_file,
     encrypt_file,
     load_key,
@@ -95,7 +94,7 @@ def _accounting_conn(
 def test_backup_identity_dedupes_same_schema_and_changes_for_new_schema() -> None:
     conn = _accounting_conn(None, include_schema_table=False)
     try:
-        same_schema = backup_db._backup_invocation_inputs(
+        same_schema = backup_db.backup_invocation_inputs(
             Path("/backups"),
             14,
             "0029_retire_podcast_prototype",
@@ -120,7 +119,7 @@ def test_backup_identity_dedupes_same_schema_and_changes_for_new_schema() -> Non
             )
         assert exc_info.value.status is StageStatus.OK
 
-        new_schema = backup_db._backup_invocation_inputs(
+        new_schema = backup_db.backup_invocation_inputs(
             Path("/backups"),
             14,
             "0032_allow_source_reviewed_kpi_supersessions",
@@ -164,7 +163,7 @@ def test_start_accounting_records_current_schema_revision(
     monkeypatch.setattr(backup_db, "start_run", fake_start_run)
     monkeypatch.setattr(backup_db, "SRC_DB", tmp_path / "portfolio.db")
     try:
-        _accounting = backup_db._start_accounting(tmp_path / "backups", 14)
+        _accounting = backup_db.start_accounting(tmp_path / "backups", 14)
         assert captured["source_schema_revision"] == "0032_allow_source_reviewed_kpi_supersessions"
     finally:
         conn.close()
@@ -174,7 +173,7 @@ def test_source_schema_revision_fails_closed_when_unreadable() -> None:
     conn = _accounting_conn(None)
     try:
         with pytest.raises(RuntimeError, match="source Alembic revision"):
-            backup_db._source_schema_revision(conn)
+            backup_db.source_schema_revision(conn)
     finally:
         conn.close()
 
@@ -313,7 +312,7 @@ def test_backup_then_restore_end_to_end(tmp_path: Path, monkeypatch: pytest.Monk
         del success, error_msg, skipped_unchanged
         active_accounting[0].close()
 
-    monkeypatch.setattr(backup_db, "_start_accounting", fake_start_accounting)
+    monkeypatch.setattr(backup_db, "start_accounting", fake_start_accounting)
     monkeypatch.setattr(backup_db, "_finish_accounting", fake_finish_accounting)
     assert backup_db.main() == 0
 
@@ -351,7 +350,7 @@ def test_backup_continues_when_accounting_writer_is_busy(
     def accounting_busy(*_args: object) -> tuple[sqlite3.Connection, str]:
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr(backup_db, "_start_accounting", accounting_busy)
+    monkeypatch.setattr(backup_db, "start_accounting", accounting_busy)
 
     assert backup_db.main() == 0
     assert restore_db.list_snapshots(backup_dir)
@@ -367,20 +366,19 @@ def test_encrypt_stages_in_the_destination_directory(
     2026-08-02) — %TEMP% is on C:, so the check itself became the failure.
     Staging inside the destination directory makes the volumes equal always.
     A revert to gettempdir() staging fails this test."""
-    import runtime.backup_crypto as bc
-
     source = tmp_path / "payload.gz"
     source.write_bytes(b"payload" * 100)
     dest_dir = tmp_path / "pretend-virtual-drive"
     observed: list[Path] = []
-    real = bc._temp_destination
+    real = tempfile.mkstemp
 
-    def spy(destination: Path) -> tuple[int, Path]:
-        fd, p = real(destination)
-        observed.append(p)
-        return fd, p
+    def spy(*, prefix: str, **options: Path | str) -> tuple[int, str]:
+        staging_directory = Path(options["dir"])
+        descriptor, name = real(prefix=prefix, dir=staging_directory)
+        observed.append(Path(name))
+        return descriptor, name
 
-    monkeypatch.setattr(bc, "_temp_destination", spy)
+    monkeypatch.setattr(tempfile, "mkstemp", spy)
     encrypt_file(source, dest_dir / "snap.enc", key=b"k" * 32)
     assert observed, "staging helper was not used"
     assert observed[0].parent == dest_dir
@@ -561,7 +559,7 @@ def _prime_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path
         del success, skipped_unchanged
         acc[0].close()
 
-    monkeypatch.setattr(backup_db, "_start_accounting", _start)
+    monkeypatch.setattr(backup_db, "start_accounting", _start)
     monkeypatch.setattr(backup_db, "_finish_accounting", _finish)
     return live, backup_dir
 
@@ -611,49 +609,57 @@ def test_unchanged_archive_is_not_re_encrypted(
     assert second == first
 
 
-def test_archive_backup_failure_does_not_fail_primary(
+def test_archive_backup_failure_stops_retirement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     live, backup_dir = _prime_backup(tmp_path, monkeypatch)
     _make_archive(live)
+    assert backup_db.main() == 0
+    previous = set(backup_dir.glob("*.gz.enc"))
+    assert len(previous) == 2
+    with sqlite3.connect(str(live)) as conn:
+        conn.execute("UPDATE t SET v = 'changed' WHERE k = 'key'")
 
-    real = backup_db._consistent_snapshot
+    real = backup_db.consistent_snapshot
 
     def _boom_on_archive(src_db: Path, tmp_path: Path) -> None:
-        # _consistent_snapshot is shared with the primary backup; only the
+        # consistent_snapshot is shared with the primary backup; only the
         # archive leg (source under archive/) should fail.
         if src_db.parent.name == "archive":
             raise RuntimeError("simulated archive snapshot failure")
         real(src_db, tmp_path)
 
-    monkeypatch.setattr(backup_db, "_consistent_snapshot", _boom_on_archive)
-    # Primary DB backup succeeds; the archive leg swallows its error.
-    assert backup_db.main() == 0
-    assert not list(backup_dir.glob(f"{backup_db.ARCHIVE_PREFIX}.*.gz.enc"))
+    monkeypatch.setattr(backup_db, "consistent_snapshot", _boom_on_archive)
+    # The primary snapshot remains recoverable, but the chain reports failure.
+    assert backup_db.main() == 1
+    assert restore_db.list_snapshots(backup_dir)
+    assert all(path.exists() for path in previous)
+    assert len(list(backup_dir.glob("*.gz.enc"))) == 3
 
 
 # --- Content-skipped backup (workstream C3) --------------------------------
 
 
-def _receipt_path(live: Path) -> Path:
-    return live.parent / f"{live.name}.backup_receipt.json"
+def _receipt_path(snapshot: Path) -> Path:
+    return snapshot.with_name(snapshot.name + ".receipt.json")
 
 
-def test_backup_writes_local_upload_receipt(
+def test_backup_writes_local_verification_without_claiming_upload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    _live, backup_dir = _prime_backup(tmp_path, monkeypatch)
     assert backup_db.main() == 0
     snapshot = sorted(backup_dir.glob("portfolio.db.*.gz.enc"))[-1]
-    receipt: object = json.loads(_receipt_path(live).read_text(encoding="utf-8"))
+    receipt: object = json.loads(_receipt_path(snapshot).read_text(encoding="utf-8"))
     assert isinstance(receipt, Mapping)
     record = cast(Mapping[object, object], receipt)
     snapshot_name = record.get("snapshot_name")
     snapshot_sha256 = record.get("snapshot_sha256")
     assert isinstance(snapshot_name, str) and snapshot_name == snapshot.name
     assert isinstance(snapshot_sha256, str) and len(snapshot_sha256) == 64
-    uploaded_at = record.get("uploaded_at_utc")
-    assert isinstance(uploaded_at, str) and uploaded_at
+    verified_at = record.get("verified_at_utc")
+    assert isinstance(verified_at, str) and verified_at
+    assert record.get("uploaded_at_utc") is None
 
 
 def test_unchanged_backup_skips_upload_and_marks_run_skipped(
@@ -724,10 +730,10 @@ def test_changed_content_uploads_fresh_snapshot(
 def test_unusable_receipt_fails_toward_uploading(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, damage: str
 ) -> None:
-    live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    _live, backup_dir = _prime_backup(tmp_path, monkeypatch)
     assert backup_db.main() == 0
     assert len(list(backup_dir.glob("portfolio.db.*.gz.enc"))) == 1
-    receipt = _receipt_path(live)
+    receipt = _receipt_path(sorted(backup_dir.glob("portfolio.db.*.gz.enc"))[-1])
     if damage == "delete":
         receipt.unlink()
     elif damage == "corrupt":
@@ -754,3 +760,111 @@ def test_skip_never_engages_when_the_uploaded_snapshot_is_gone(
     assert len(list(backup_dir.glob("portfolio.db.*.gz.enc"))) == 1, (
         "a missing uploaded snapshot must force a fresh upload"
     )
+
+
+def test_idempotent_snapshot_run_emits_validated_current_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    assert backup_db.main() == 0
+    capsys.readouterr()
+
+    def suppressed(*_args: object) -> tuple[sqlite3.Connection, str]:
+        raise backup_db.PipelineRunSuppressedError("backup-key", "old-attempt", StageStatus.OK)
+
+    monkeypatch.setattr(backup_db, "start_accounting", suppressed)
+    assert backup_db.main() == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert any('"already_done"' in line for line in lines)
+    record = json.loads(lines[-1])
+    assert record["policy"] == "backup-retention-v1"
+    assert record["backup_dir"] == str(backup_dir.resolve())
+    assert (backup_dir / record["snapshot_name"]).is_file()
+
+
+def test_encryption_failure_keeps_last_good_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    assert backup_db.main() == 0
+    previous = set(backup_dir.glob("*.gz.enc"))
+    with sqlite3.connect(str(live)) as conn:
+        conn.execute("UPDATE t SET v = 'changed' WHERE k = 'key'")
+
+    def failed_encrypt(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("simulated encryption failure")
+
+    monkeypatch.setattr(backup_db, "encrypt_file", failed_encrypt)
+    assert backup_db.main() == 1
+    assert set(backup_dir.glob("*.gz.enc")) == previous
+
+
+def test_corrupt_encryption_output_has_no_receipt_and_keeps_last_good(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    live, backup_dir = _prime_backup(tmp_path, monkeypatch)
+    assert backup_db.main() == 0
+    previous = set(backup_dir.glob("*.gz.enc"))
+    with sqlite3.connect(str(live)) as conn:
+        conn.execute("UPDATE t SET v = 'changed' WHERE k = 'key'")
+    real_encrypt = backup_db.encrypt_file
+
+    def corrupt_encrypt(source: Path, destination: Path, *, key: bytes) -> None:
+        real_encrypt(source, destination, key=key)
+        payload = bytearray(destination.read_bytes())
+        payload[-1] ^= 1
+        destination.write_bytes(payload)
+
+    monkeypatch.setattr(backup_db, "encrypt_file", corrupt_encrypt)
+    assert backup_db.main() == 1
+    assert all(path.exists() for path in previous)
+    failed = set(backup_dir.glob("*.gz.enc")) - previous
+    assert len(failed) == 1
+    assert not _receipt_path(failed.pop()).exists()
+
+
+def test_main_refuses_unconfigured_checkout_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(backup_db, "SRC_DB", backup_db.DEFAULT_SRC_DB)
+    monkeypatch.delenv("EARNINGS_SUMMARY_DB_PATH", raising=False)
+
+    def no_environment(_root: Path) -> None:
+        pass
+
+    def must_not_read() -> int:
+        raise AssertionError("checkout fallback was read")
+
+    monkeypatch.setattr(backup_db, "load_project_env", no_environment)
+    monkeypatch.setattr(backup_db, "_run_backup", must_not_read)
+    assert backup_db.main() == 1
+
+
+def test_configured_destination_does_not_probe_untrusted_mounts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ES_DB_BACKUP_DIR", str(tmp_path / "configured"))
+
+    def forbidden_probe() -> Path:
+        raise AssertionError("configured destination caused a mount probe")
+
+    monkeypatch.setattr(backup_db, "_google_drive_root", forbidden_probe)
+    assert backup_db.configured_backup_dir() == tmp_path / "configured"
+
+
+def test_lazy_destination_ignores_unavailable_drive_mount(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ES_DB_BACKUP_DIR", raising=False)
+    monkeypatch.setattr(backup_db, "MIRROR_DRIVE_ROOT", tmp_path)
+    real = Path.is_dir
+
+    def unavailable_mount(path: Path) -> bool:
+        if ":/My Drive" in str(path):
+            raise OSError("mount unavailable")
+        return real(path)
+
+    monkeypatch.setattr(Path, "is_dir", unavailable_mount)
+    assert backup_db.configured_backup_dir() == tmp_path / "earnings-summary-db-backups"

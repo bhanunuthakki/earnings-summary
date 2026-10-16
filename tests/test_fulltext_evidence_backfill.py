@@ -29,6 +29,7 @@ from provenance.evidence_ledger import (
     PersistResult,
     SourceObservation,
 )
+from provenance.evidence_links import BlobLocationObservation, EvidenceLinkLedger
 from provenance.fulltext_backfill import FullTextBackfillRequest, backfill_fulltext_evidence
 from provenance.fulltext_extractor_identity import (
     PDF_FULLTEXT_PYPDF_VERSION,
@@ -1359,6 +1360,96 @@ def test_hash_mismatch_is_quarantined_before_parse(tmp_path: Path) -> None:
         conn.close()
 
 
+def test_blob_size_mismatch_is_quarantined_before_parse_even_when_alias_bytes_match(
+    tmp_path: Path,
+) -> None:
+    conn, repo_root = _connection(tmp_path)
+    try:
+        conn.execute("DROP TRIGGER IF EXISTS trg_evidence_content_blobs_append_only")
+        conn.execute("UPDATE evidence_content_blobs SET byte_size = byte_size + 1")
+        conn.commit()
+
+        result = backfill_fulltext_evidence(conn, _request(repo_root, apply=True))
+
+        assert result.documents_extracted == 0
+        assert result.documents_quarantined == 1
+        assert result.finding_counts == {"evidence_blob_size_mismatch": 1}
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM evidence_extraction_runs "
+                "WHERE extraction_run_id LIKE 'fulltext-run-%'"
+            ).fetchone()[0]
+            == 0
+        )
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("replica_present", [True, False])
+def test_fulltext_extracts_from_admitted_replica_when_legacy_alias_changed(
+    tmp_path: Path, replica_present: bool
+) -> None:
+    conn, repo_root = _connection(tmp_path)
+    try:
+        original = repo_root / "data" / "ACME.txt"
+        retained = original.read_bytes()
+        replica = repo_root / "data" / "historical" / "ACME.txt"
+        replica.parent.mkdir()
+        replica.write_bytes(retained)
+        digest = hashlib.sha256(retained).hexdigest()
+        verified_at = datetime(2026, 7, 20, 12, 0, 0)
+        location = BlobLocationObservation(
+            location_observation_id="fulltext-replica",
+            idempotency_key="fulltext-replica",
+            blob_sha256=digest,
+            storage_uri=replica.as_uri(),
+            location_kind="local",
+            availability_state="present",
+            location_sequence=1,
+            verified_at=verified_at,
+            verified_byte_size=len(retained),
+            verified_sha256=digest,
+            supersedes_location_observation_id=None,
+            recorded_at=verified_at,
+        )
+        assert EvidenceLinkLedger(conn).persist_location(location).created
+        if not replica_present:
+            unavailable = BlobLocationObservation(
+                location_observation_id="fulltext-replica-missing",
+                idempotency_key="fulltext-replica-missing",
+                blob_sha256=digest,
+                storage_uri=replica.as_uri(),
+                location_kind="local",
+                availability_state="missing",
+                location_sequence=2,
+                verified_at=verified_at,
+                verified_byte_size=None,
+                verified_sha256=None,
+                supersedes_location_observation_id=location.location_observation_id,
+                recorded_at=verified_at,
+            )
+            assert EvidenceLinkLedger(conn).persist_location(unavailable).created
+        conn.commit()
+        original.write_bytes(b"x" * len(retained))
+
+        result = backfill_fulltext_evidence(conn, _request(repo_root, apply=True))
+
+        assert result.documents_extracted == int(replica_present)
+        assert result.documents_quarantined == int(not replica_present)
+        assert result.finding_counts == (
+            {"verified_local_replica_fallback": 1} if replica_present else {"sha256_mismatch": 1}
+        )
+        node_count = conn.execute(
+            "SELECT COUNT(*) FROM evidence_nodes WHERE extraction_run_id LIKE 'fulltext-run-%'"
+        ).fetchone()[0]
+        if replica_present:
+            assert node_count > 1
+        else:
+            assert node_count == 0
+    finally:
+        conn.close()
+
+
 def test_evidence_native_lane_extracts_extensionless_content_without_legacy_row(
     tmp_path: Path,
 ) -> None:
@@ -1465,6 +1556,109 @@ def _install_versioned_pdf_reader(monkeypatch: pytest.MonkeyPatch, version: str)
 
     monkeypatch.setattr(pypdf, "__version__", version)
     monkeypatch.setattr(pypdf, "PdfReader", Reader)
+
+
+def _encrypted_pdf(user_password: str) -> bytes:
+    from pypdf import PdfWriter
+    from pypdf.constants import UserAccessPermissions
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=300, height=200)
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
+    page[NameObject("/Resources")] = DictionaryObject(
+        {
+            NameObject("/Font"): DictionaryObject({NameObject("/F1"): font}),
+        }
+    )
+    content = DecodedStreamObject()
+    content.set_data(b"BT /F1 12 Tf 20 100 Td (Reported revenue 123.) Tj ET")
+    page[NameObject("/Contents")] = content
+    writer.encrypt(
+        user_password,
+        owner_password="dummy-owner-only",  # pragma: allowlist secret -- synthetic PDF fixture
+        permissions_flag=UserAccessPermissions.PRINT,
+    )
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize("password", ["", "required-to-open"])
+def test_pdf_restrictions_do_not_replace_password_access_control(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, password: str
+) -> None:
+    import pypdf
+
+    # Exercise real PDF bytes under a controlled identity. The pinned-runtime
+    # integration gate separately proves the promoted parser installation.
+    monkeypatch.setattr(pypdf, "__version__", PDF_FULLTEXT_PYPDF_VERSION)
+    raw = _encrypted_pdf(password)
+    original_hash = hashlib.sha256(raw).hexdigest()
+    conn, repo_root = _connection(tmp_path, suffix=".pdf", content=raw)
+    try:
+        result = backfill_fulltext_evidence(conn, _request(repo_root, apply=True))
+        rows = conn.execute(
+            "SELECT text,locator_json FROM evidence_nodes WHERE node_kind='pdf_page'"
+        ).fetchall()
+        if password:
+            assert result.finding_counts == {"encrypted_pdf": 1}
+            assert result.documents_extracted == 0
+            assert not rows
+        else:
+            assert result.documents_extracted == 1
+            assert len(rows) == 1
+            assert rows[0]["text"].strip() == "Reported revenue 123."
+            locator = json.loads(rows[0]["locator_json"])
+            assert locator["page_number"] == 1
+            assert locator["source_ref"] == "data/ACME.pdf"
+        assert (
+            hashlib.sha256((repo_root / "data" / "ACME.pdf").read_bytes()).hexdigest()
+            == original_hash
+        )
+    finally:
+        conn.close()
+    assert hashlib.sha256(raw).hexdigest() == original_hash
+
+
+@pytest.mark.parametrize("permissions_valid", [False, None])
+def test_pdf_invalid_permissions_are_quarantined_before_page_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    permissions_valid: bool | None,
+) -> None:
+    import pypdf
+
+    class Reader:
+        is_encrypted = True
+        are_permissions_valid = permissions_valid
+
+        def __init__(self, _stream: object) -> None:
+            pass
+
+        def decrypt(self, password: str) -> int:
+            assert password == ""
+            return 1
+
+        @property
+        def pages(self) -> list[object]:
+            pytest.fail("Invalid PDF permissions must block page access")
+
+    monkeypatch.setattr(pypdf, "__version__", PDF_FULLTEXT_PYPDF_VERSION)
+    monkeypatch.setattr(pypdf, "PdfReader", Reader)
+    conn, repo_root = _connection(tmp_path, suffix=".pdf", content=b"retained-source")
+    try:
+        result = backfill_fulltext_evidence(conn, _request(repo_root, apply=True))
+        assert result.documents_extracted == 0
+        assert result.finding_counts == {"invalid_pdf_permissions": 1}
+    finally:
+        conn.close()
 
 
 @pytest.mark.parametrize("version", ["6.15.0", "6.16.1", "6.17.0", "unknown", None])

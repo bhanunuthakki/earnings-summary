@@ -141,6 +141,8 @@ def register_advisor_routes(app: Flask, ctx: ServerContext) -> None:
             "--repo-root",
             str(repo_root),
         )
+        if ctx.source_state_root is not None:
+            argv.extend(("--state-root", str(ctx.source_state_root)))
         try:
             job = job_registry.start(ticker="_REPO", kind=f"advisor-{memo_kind}", argv=argv)
         except RegistryConflict as e:
@@ -266,6 +268,8 @@ def register_advisor_routes(app: Flask, ctx: ServerContext) -> None:
             "--repo-root",
             str(repo_root),
         )
+        if ctx.source_state_root is not None:
+            argv.extend(("--state-root", str(ctx.source_state_root)))
         try:
             job = job_registry.start(ticker=ticker, kind="socratic-questions", argv=argv)
         except RegistryConflict as e:
@@ -328,6 +332,7 @@ def register_advisor_routes(app: Flask, ctx: ServerContext) -> None:
                 questions=questions,
                 answers=answers,
                 horizon_days=horizon_days,
+                source_context=ctx.source_context,
             )
         except ValueError as exc:  # length mismatch / empty answers / bad horizon
             return ({"error": str(exc)}, 400)

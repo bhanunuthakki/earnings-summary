@@ -13,16 +13,12 @@ This wires:
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
-import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from llm_artifact_store import (  # noqa: E402
-    _DEFAULT_TTL_DAYS,
+from llm_artifact_store import (
     UpsertRequest,
     default_expires_at,
     drain_dirty,
@@ -65,7 +61,7 @@ def test_default_expires_at_for_known_purpose() -> None:
     """bear_case has a 30d TTL; the helper returns now+30d."""
     now = datetime(2026, 5, 26, tzinfo=UTC)
     exp = default_expires_at("bear_case", now=now)
-    assert exp == now + timedelta(days=_DEFAULT_TTL_DAYS["bear_case"])
+    assert exp == now + timedelta(days=30)
 
 
 def test_default_expires_at_unknown_purpose_returns_none() -> None:
@@ -137,10 +133,11 @@ def test_drain_picks_up_expired_artifacts(tmp_path: Path) -> None:
         conn.execute(
             """
             INSERT INTO llm_artifacts (ticker, scope, purpose, input_sha256,
-                                       prompt_version, expires_at, dirty)
-            VALUES ('NU', 'ticker', 'bear_case', 'sha', 'v1', ?, 0)
+                                       prompt_version, expires_at, dirty,
+                                       content_md, output_sha256)
+            VALUES ('NU', 'ticker', 'bear_case', 'sha', 'v1', ?, 0, ?, ?)
             """,
-            (past.isoformat(),),
+            (past.isoformat(), "prior output", hashlib.sha256(b"prior output").hexdigest()),
         )
         conn.commit()
     finally:

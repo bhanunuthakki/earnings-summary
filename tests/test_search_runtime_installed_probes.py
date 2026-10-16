@@ -21,7 +21,7 @@ import json
 import platform
 import shutil
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -128,7 +128,7 @@ def test_installed_fastembed_consumes_local_files_only_through_kwargs(
 ) -> None:
     """The installed fastembed must accept local_files_only via **kwargs and fail
     closed on an empty cache instead of downloading."""
-    import fastembed
+    fastembed = pytest.importorskip("fastembed")
 
     parameters = inspect.signature(fastembed.TextEmbedding).parameters
     assert {"model_name", "cache_dir", "providers"}.issubset(parameters)
@@ -331,8 +331,8 @@ def test_probe_records_machine_readable_artifact(
 ) -> None:
     """Leave the runtime-probe receipt under .tmp/search-validation/ for the
     mission's evidence trail."""
-    import fastembed
-    import lancedb
+    fastembed = pytest.importorskip("fastembed")
+    lancedb = pytest.importorskip("lancedb")
 
     parameters = inspect.signature(fastembed.TextEmbedding).parameters
     database = lancedb.connect(str(probe_directory / "scan"))
@@ -344,7 +344,9 @@ def test_probe_records_machine_readable_artifact(
     var_keyword = "kwargs" in parameters
     sync_table_has_query = hasattr(database, "query")
     plain_scan_builder = type(builder).__name__
-    where_signature = str(inspect.signature(type(builder).where))
+    builder_type = cast(object, type(builder))
+    where_fn = cast(Callable[..., object], getattr(builder_type, "where"))
+    where_signature = str(inspect.signature(where_fn))
 
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     cache = probe_directory / "cache"

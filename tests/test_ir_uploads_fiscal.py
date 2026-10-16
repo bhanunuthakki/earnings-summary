@@ -16,16 +16,14 @@ from pathlib import Path
 import openpyxl
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import ir_uploads  # noqa: E402
-from ir_uploads import (  # noqa: E402
+import ir_uploads
+from ir_uploads import (
+    CategorizationFailure,
     CategorizationResult,
     calendar_id_from_fye,
     classify_ir_file,
 )
-from models.documents import DocType  # noqa: E402
+from models.documents import DocType
 
 _MELI_Q2_2026_LETTER_URL = (
     "https://http2.mlstatic.com/storage/ml-cms-backend/cms-documents-prod/"
@@ -198,9 +196,127 @@ def test_classify_detects_calendar_eval_names(tmp_path: Path, issuer: str, ticke
     ],
 )
 def test_filename_period_hint_handles_staging_year_quarter_token(
-    name: str, want: tuple[int, int] | None
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    want: tuple[int, int] | None,
 ) -> None:
-    from ir_uploads import _filename_period_hint
+    staged = tmp_path / name
+    staged.write_bytes(b"%PDF-1.4\n")
 
-    got, _evidence = _filename_period_hint(name)
-    assert got == want
+    def fingerprint_stub(_path: Path) -> str:
+        return "Brookfield Corporation today reported its financial results."
+
+    monkeypatch.setattr(ir_uploads, "fingerprint", fingerprint_stub)
+    result = classify_ir_file(staged, ticker_hint="BN", calendar_override="calendar")
+    if want is None:
+        assert isinstance(result, CategorizationFailure)
+        assert result.reason == "period_unidentified"
+    else:
+        assert isinstance(result, CategorizationResult)
+        year, quarter = want
+        month = quarter * 3
+        assert result.period_end == date(year, month, 31 if month in (3, 12) else 30)
+
+
+@pytest.mark.parametrize(
+    ("quarter", "month"),
+    [("first", 3), ("second", 6), ("third", 9), ("fourth", 12)],
+)
+def test_booking_quarter_release_with_qualified_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, quarter: str, month: int
+) -> None:
+    staged = tmp_path / "opaque-download.pdf"
+    staged.write_bytes(b"%PDF-1.4\n")
+    text = f"Booking Holdings today reported its {quarter} quarter 2024 financial results."
+
+    def fingerprint_stub(_path: Path) -> str:
+        return text
+
+    monkeypatch.setattr(ir_uploads, "fingerprint", fingerprint_stub)
+    result = classify_ir_file(staged, ticker_hint="BKNG")
+    assert isinstance(result, CategorizationResult)
+    assert result.ticker == "BKNG"
+    assert result.doc_type is DocType.IR_PRESS_RELEASE
+    assert result.period_end == date(2024, month, 31 if month in (3, 12) else 30)
+    assert any("today_reported:" in evidence for evidence in result.doc_type_evidence)
+
+
+@pytest.mark.parametrize(
+    ("title", "expected_type"),
+    [
+        ("Earnings Presentation", DocType.IR_PRESENTATION),
+        ("Prepared Remarks", DocType.IR_TRANSCRIPT),
+    ],
+)
+def test_booking_quarter_release_body_preserves_document_title_priority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, title: str, expected_type: DocType
+) -> None:
+    staged = tmp_path / "opaque-download.pdf"
+    staged.write_bytes(b"%PDF-1.4\n")
+    text = (
+        f"Booking Holdings {title}\nSecond Quarter 2024\n"
+        "We today reported its second quarter 2024 financial results."
+    )
+
+    def fingerprint_stub(_path: Path) -> str:
+        return text
+
+    monkeypatch.setattr(ir_uploads, "fingerprint", fingerprint_stub)
+    result = classify_ir_file(staged, ticker_hint="BKNG")
+    assert isinstance(result, CategorizationResult)
+    assert result.doc_type is expected_type
+    assert result.period_end == date(2024, 6, 30)
+
+
+@pytest.mark.parametrize(
+    ("page_text", "page_count", "expected"),
+    [
+        ("Issuer financial results", 1, "Issuer financial results"),
+        ({"unexpected": "structured"}, 1, "Fallback financial results"),
+        ("Issuer financial results", True, "Fallback financial results"),
+        ("Issuer financial results", -1, "Fallback financial results"),
+        ("Issuer financial results", "one", "Fallback financial results"),
+    ],
+)
+def test_pdf_fingerprint_validates_optional_extractor_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    page_text: str | dict[str, str],
+    page_count: int | str,
+    expected: str,
+) -> None:
+    from types import SimpleNamespace
+
+    closed: list[bool] = []
+
+    class OptionalPage:
+        def get_text(self) -> str | dict[str, str]:
+            return page_text
+
+    class OptionalDocument:
+        def __init__(self) -> None:
+            self.page_count = page_count
+
+        def load_page(self, _index: int) -> OptionalPage:
+            return OptionalPage()
+
+        def close(self) -> None:
+            closed.append(True)
+
+    class FallbackPage:
+        def extract_text(self) -> str:
+            return "Fallback financial results"
+
+    class FallbackReader:
+        def __init__(self, _path: str) -> None:
+            self.pages = [FallbackPage()]
+
+    def open_document(_path: str) -> OptionalDocument:
+        return OptionalDocument()
+
+    monkeypatch.setitem(sys.modules, "fitz", SimpleNamespace(open=open_document))
+    monkeypatch.setattr(ir_uploads, "PdfReader", FallbackReader)
+    result = ir_uploads.fingerprint_pdf(tmp_path / "source.pdf")
+    assert result == expected
+    assert closed == [True]

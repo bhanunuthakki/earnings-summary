@@ -7,7 +7,7 @@
 ## Architecture
 
 - `src/pipeline/sec_xbrl.py` — fetch + parse. `TAG_LADDERS` maps canonical `line_item` names to ordered GAAP+IFRS tag ladders. First rung with data wins per logical period; the winning tag is recorded in `FactLocator.json_path`. Exact CompanyFacts response bytes are retained as immutable snapshot documents; the conventional `{T}_companyfacts.json` is a mutable working cache, not historical evidence. CompanyFacts is a fact feed, not a retained copy of every native filing.
-- `execution/fetch_sec_xbrl.py` — CLI. Every SEC request is bound to active stored identity, role, and instrument. Portfolio, evaluation, and watchlist receive automatic full acquisition; corporate sources require equity/ADR identity and valid CIK. Index/ETF/unknown names fail closed for this lane. `--all-mapped` cannot widen automatic scope. Authorized names missing a CIK emit `sec_cik_map_stale`.
+- `execution/fetch_sec_xbrl.py` — CLI. Every SEC request is bound to active stored identity, role, and instrument. Portfolio, evaluation, and watchlist receive automatic full acquisition; corporate sources require equity/ADR identity and valid CIK. Index/ETF/unknown names fail closed for this lane. `--all-mapped` cannot widen automatic scope. CompanyFacts resolves the canonical ticker and verified SEC source authority before HTTP; the static CIK map retains historical compatibility pins, not new-company eligibility.
 - Tier precedence: SEC facts score confidence 1.00 (`sec_official` + deterministic) vs FMP 0.94, and `SOURCE_QUALITY_TIER_RANK` puts `sec_official` first — **where the two disagree, the filed SEC number wins by design**.
 
 ## Cadence
@@ -53,4 +53,70 @@ schtasks /create /tn "\earnings-summary\fetch_sec_xbrl" /xml "%USERPROFILE%\.gem
 
 ## Refreshing CIK_MAP
 
-Re-query `https://www.sec.gov/files/company_tickers.json` (identifying User-Agent required) and reverse-lookup new tickers; keep entries 10-digit zero-padded. Tracked-but-unmapped names surface as `sec_cik_map_stale` events in the weekly cron log. A genuinely unregistered name goes into `NO_SEC_FILERS` instead (the tests enforce the two sets stay disjoint and jointly cover the tracked universe).
+For an active new issuer, establish the canonical ticker/CIK identity and one
+verified SEC submissions authority through the issuer registry. CompanyFacts
+resolves that authority before HTTP. Unresolved identity, material dissent or a
+conflict with a retained historical pin fails closed and requires evidence-based
+identity reconciliation. Do not append a guessed CIK merely to allow network work.
+
+For retained static pins or a deployed version that still emits
+`sec_cik_map_stale`, re-query `https://www.sec.gov/files/company_tickers.json`
+with the configured identifying User-Agent and reverse-lookup the ticker. Keep
+pins 10-digit zero-padded and consistent with canonical identity. Repair or update
+the supported resolver, then resume the selected ticker. A missing map entry is
+not proof that the issuer is unregistered. A genuinely unregistered name receives
+the documented `NO_SEC_FILERS` disposition; do not infer it from a stale map.
+
+## Initiating evaluation coverage without FMP
+
+Use the investing skill's [new-company flow](../src/advisor/skills/earnings-summary-investing/references/analysis-paths.md#earnings-and-new-company-evaluation)
+for a preliminary report or full memo. An active evaluation equity/ADR has the
+same automatic SEC acquisition scope as a portfolio company. Missing owner thesis,
+industry template, FMP access or native archive completeness does not block the
+independent CompanyFacts lane.
+
+Run the selected-ticker command with `--db <configured-database>` and
+`--project-root <configured-state-root>`. The selectors are independent. Verify the
+state root used for immutable bytes. `ingest_for_ticker` also accepts `project_root`
+explicitly; a database selector alone does not retarget file outputs.
+If identity resolution fails or an older selection reports `sec_cik_map_stale`,
+repair the identity/resolver above and resume.
+Inspect the row receipt and admitted-reader result, not only the exit status.
+
+CompanyFacts ingestion validates the response CIK, retains exact response bytes,
+registers the immutable snapshot, binds issuer/document evidence, matches exact
+fact locators and records observation resolution under the installed schema.
+It can proceed before native filing capture and does not invoke the external
+filing-XBRL processor bundle. The bundle approval belongs to the separate
+`execution/ingest_sec_filing_xbrl.py` branch.
+
+Run native submissions/package inventory and capture separately for acquisition
+coverage. Use native filing XBRL or issuer document intake for facts outside the
+CompanyFacts tag/period support. Neither successful CompanyFacts ingestion nor
+native capture alone certifies the memo: extraction population, semantic admission,
+reader parity, valuation evidence and reconstruction checks remain separate.
+
+## Reviewed financial continuation and registration history
+
+The legacy CompanyFacts parser keeps its existing period support. The typed
+`execution/continue_companyfacts_statements.py` continuation can admit retained
+annual and YTD source entries without turning YTD into a quarter. Each entry must
+prove its exact raw snapshot bytes, JSON locator and hash, matching issuer and
+filing accession, source-backed fiscal span, reporting entity, basis, scope and
+reviewed native concept role. Definition and binding repositories retain prior
+versions. Missing context and conflicting semantics remain rejected.
+
+Exact SEC forms `10-12B` and `10-12B/A` now enter financial-package intake under
+`governed-reporting-package-scope@6`. Their original forms remain unchanged. They
+use `issuer_financial_statements` and the registered operating issuer's SEC
+`regulator_inventory` duty. A publisher duty cannot satisfy SEC archive coverage.
+Registration statements remain outside periodic reporting anchors. Processing
+uses `complete_reporting_document_processing` version 2 and
+`document-processing-terminal-at-k-observed-through-o.v2`; the research snapshot
+selection remains `research-snapshot-terminal-at-k-observed-through-o.v1`.
+
+Run these entrypoints through `execution/sqlite_bootstrap.py` with the approved
+database and retained-state selectors. Native processor installation has a typed,
+read-only preflight. Missing, template, unapproved, drifted or unqualified bundles
+remain separate blockers. Capture completeness does not establish extraction or
+memo qualification.

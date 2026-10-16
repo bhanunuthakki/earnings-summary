@@ -1,0 +1,135 @@
+{
+  "ticker": "CPNG",
+  "name": "Coupang",
+  "last_updated": "2026-10-03",
+  "thesis": "High-scrutiny evaluation stance. Coupang holds leading market share in Korean e-commerce (Rocket Delivery flywheel), but recent operational and governance execution warrants extreme caution: (1) In November 2025, a rogue former employee triggered a massive customer account data incident ('the Incident'), resulting in US class actions and severe regulatory punishment. On June 10, 2026, the PIPC announced an administrative fine of ~$278M for the breach plus an unrelated ~$132M advertising fine, causing Coupang to accrue $410M in regulatory fines in Q2'26 and plunge into a -$556M GAAP operating loss; (2) Product Commerce active customers grew only +3% YoY to 24.7M in Q2'26 (and +2% in Q1'26), with management explicitly confirming that customer growth was impaired by the Incident, proving real churn and reputational backlash; (3) Regulatory headwinds remain acute: the KFTC is actively investigating and pushing to unbundle Coupang Eats from the WOW membership (hearing Sept 2026), threatening core subscriber economics; (4) Stock-based compensation remains high (~$600M-$650M annualized run-rate, $164M in Q2'26 alone); (5) Optical cheapness (~0.6x EV/Sales, $6.2B cash vs $3.0B equity) is tempered by ongoing regulatory, customer churn, and governance risks. High margin of safety required.",
+  "verdict": "Watch",
+  "verdict_color": "yellow",
+  "key_driver": "Product Commerce active customer re-acceleration post-breach, resolution of KFTC WOW-bundling antitrust threats, and core operating leverage recovery ex-fines",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Free cash flow",
+    "Product Commerce active customers",
+    "Constant currency net revenues growth",
+    "Stock-based compensation"
+  ],
+  "_status": "evaluation",
+  "tier_1_kpis": [
+    {
+      "name": "Product Commerce Active Customers",
+      "current": "24.7M (Q2'26, +3% YoY; 23.9M Q1'26, +2% YoY)",
+      "prior": "23.9M (Q2'25)",
+      "yoy": "+3%",
+      "status": "Cautious",
+      "break_condition": "Customer count contracts QoQ for 2 consecutive quarters (structural churn validation)",
+      "source": "10-Q Part I Item 2"
+    },
+    {
+      "name": "Constant Currency Net Revenues YoY",
+      "current": "+10% YoY Q2'26 (Consolidated $8.86B reported, +4% USD)",
+      "prior": "+9% YoY Q1'26",
+      "yoy": "+10%",
+      "status": "Watch",
+      "break_condition": "<6% constant currency for 2 consecutive quarters",
+      "source": "10-Q Non-GAAP section"
+    },
+    {
+      "name": "GAAP Operating Margin (ex-regulatory fines)",
+      "current": "+1.6% Q2'26 ($146M operating profit ex-$410M PIPC fine; -6.3% reported)",
+      "prior": "+4.0% Q2'25",
+      "yoy": "-240bps ex-fine",
+      "status": "Weak",
+      "break_condition": "<1.0% ex-fines for 2 consecutive quarters",
+      "source": "10-Q Non-GAAP / Note 10"
+    },
+    {
+      "name": "Stock-Based Compensation / Revenue",
+      "current": "1.9% ($164M in Q2'26 on $8.86B revenue; $292M 6M'26)",
+      "prior": "1.3% ($113M Q2'25)",
+      "yoy": "+60bps",
+      "status": "Watch",
+      "break_condition": ">3.0% of revenue for 2 consecutive quarters",
+      "source": "10-Q Cash Flows / Stockholders Equity"
+    },
+    {
+      "name": "Regulatory & Legal Disposition (PIPC & KFTC)",
+      "current": "Accrued $410M PIPC fines in Q2'26; KFTC WOW/Eats unbundling hearing scheduled Sept 2026",
+      "prior": "Accrued $121M KFTC ranking fine in 2024",
+      "yoy": null,
+      "status": "High Risk",
+      "break_condition": "Adverse administrative/judicial ruling forcing separation of Coupang Eats from WOW membership",
+      "source": "10-Q Note 10 Commitments and Contingencies"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "Net Revenue per Active Customer (Constant Currency)",
+      "current": "+5% YoY in Q2'26",
+      "break_condition": "Contracts YoY for 2 consecutive quarters",
+      "source": "10-Q Part I Item 2"
+    },
+    {
+      "name": "Developing Offerings EBITDA Loss",
+      "current": "$1.43B rev (+24% CC); substantial investment drag in Taiwan and Farfetch",
+      "break_condition": "Segment loss widens beyond -$250M per quarter without clear Taiwan unit economics",
+      "source": "10-Q Segment Information"
+    },
+    {
+      "name": "Share Repurchase Execution Pace",
+      "current": "$445M repurchased in Q2'26 (23.2M shares); $907M remaining on $2B program",
+      "break_condition": "Cessation of repurchases while trading below 0.8x EV/Sales and holding >$5B cash",
+      "source": "10-Q Item 2"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Cash & Cash Equivalents Balance",
+      "current": "$6.2B as of June 30, 2026",
+      "source": "10-Q Balance Sheet"
+    }
+  ],
+  "competitive_watchlist": [
+    "Naver Shopping",
+    "AliExpress / Temu (Whale/Cross-border)",
+    "Shinsegae / SSG.com",
+    "Baemin (Delivery Hero Korea - Eats competitor)"
+  ],
+  "thesis_breakers_qualitative": [
+    "KFTC forces unbundling of Coupang Eats from WOW membership, collapsing subscriber value proposition",
+    "Further criminal indictments or personal sanctions against Bom Kim following prosecutor investigations",
+    "Sustained quarterly net customer attrition in Product Commerce to Naver or Chinese cross-border platforms",
+    "Farfetch integration costs spiral without achieving breakeven"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "active_customers_decline",
+      "kpi_name": "Product Commerce Active Customers",
+      "comparator": "lt",
+      "threshold": 23.5,
+      "unit": "millions",
+      "consecutive_periods": 2,
+      "narrative": "Active customer base falling below 23.5M for 2 consecutive quarters indicates structural churn."
+    },
+    {
+      "rule_id": "operating_margin_ex_fines_collapse",
+      "kpi_name": "GAAP Operating Margin (ex-regulatory fines)",
+      "comparator": "lt",
+      "threshold": 1.0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Underlying operating margin below 1% reveals failure to achieve operating leverage."
+    }
+  ],
+  "schema_version": 2,
+  "wacc": 0.105,
+  "mos_bar": 0.35,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 12.0
+  },
+  "flags": ["high_regulatory_risk", "governance_scrutiny", "breach_reputational_damage"],
+  "segments": ["Product Commerce", "Developing Offerings"],
+  "operational_kpis": [],
+  "break_rules_soft": []
+}

@@ -40,6 +40,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ticker")
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument(
+        "--state-root", type=Path, help="Explicit model source-byte read authority."
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
@@ -47,11 +50,16 @@ def main(argv: list[str] | None = None) -> int:
     ticker = args.ticker.upper()
 
     from advisor.socratic import generate_questions, persist_prelude
+    from dcf.input_evidence import SourceReadContext
     from llm.cli import is_hard_stop
+
+    source_context = (
+        SourceReadContext.for_sec_state_root(args.state_root) if args.state_root else None
+    )
 
     print(f"generating think-through questions for {ticker} (grounding + premortem)...", flush=True)
     try:
-        prelude = generate_questions(repo_root, ticker)
+        prelude = generate_questions(repo_root, ticker, source_context=source_context)
     except Exception as exc:
         if is_hard_stop(exc):
             print(f"HARD STOP: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)

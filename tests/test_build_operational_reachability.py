@@ -189,19 +189,197 @@ def test_actual_head_is_supported() -> None:
     # Test-sourced dynamic references stay tolerated (the residual assertion
     # below is the production gate); the sandbox kit's drift test resolves every
     # re-export through getattr to prove the kit never forks a control helper.
-    assert len(graph.unknown_edges) == 122
-    # Nine bounded Node children exercise synthetic browser request lifecycles.
+    # Keep the OS proxies and actual native metadata field lookup test-only and exact.
+    assert [
+        edge for edge in graph.unknown_edges if edge.source == "tests/test_bounded_source_reader.py"
+    ] == [
+        GraphEdge(
+            source="tests/test_bounded_source_reader.py",
+            target="<dynamic attribute>",
+            kind="getattr",
+            evidence="dynamic getattr expression",
+            confidence="low",
+            line=line,
+            unknown=True,
+        )
+        for line in (201, 289, 330)
+    ]
+    # The native fence tests read a fixed GenericMapping field tuple and select
+    # GetCurrentProcess or GetCurrentThread for read-only token observation.
+    assert [
+        edge for edge in graph.unknown_edges if edge.source == "tests/test_inline_xbrl_processor.py"
+    ] == [
+        GraphEdge(
+            source="tests/test_inline_xbrl_processor.py",
+            target="<dynamic attribute>",
+            kind="getattr",
+            evidence="dynamic getattr expression",
+            confidence="low",
+            line=line,
+            unknown=True,
+        )
+        for line in (123, 913)
+    ]
+    # Two managed-startup regressions add fresh subprocess seams. Keep the
+    # existing native bootstrap seam and reject any other additions in these files.
+    for source, lines in (
+        ("tests/test_sqlite_bootstrap.py", (32, 108)),
+        ("tests/test_weekly_cleanup.py", (190,)),
+    ):
+        assert [edge for edge in graph.unknown_edges if edge.source == source] == [
+            GraphEdge(
+                source=source,
+                target="<dynamic process entrypoint>",
+                kind="unknown",
+                evidence="subprocess/runpy expression",
+                confidence="low",
+                line=line,
+                unknown=True,
+            )
+            for line in lines
+        ]
+    # Retain main's 155 test seams plus the Windows held-handle and writer-gate regressions.
+    # No production gap is admitted.
+    assert len(graph.unknown_edges) == 157
+    assert [
+        edge for edge in graph.unknown_edges if edge.source == "tests/test_db_writer_gate.py"
+    ] == [
+        GraphEdge(
+            source="tests/test_db_writer_gate.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=296,
+            unknown=True,
+        )
+    ]
+    assert [
+        edge
+        for edge in graph.unknown_edges
+        if edge.source == "tests/test_job_runtime_process_tree.py"
+    ] == [
+        GraphEdge(
+            source="tests/test_job_runtime_process_tree.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=line,
+            unknown=True,
+        )
+        for line in (233, 328)
+    ]
+    assert (
+        GraphEdge(
+            source="tests/test_design_computed_canary.py",
+            target="playwright.sync_api",
+            kind="dynamic_import",
+            evidence="dynamic import expression (target unresolved)",
+            confidence="low",
+            line=107,
+            unknown=True,
+        )
+        in graph.unknown_edges
+    )
+    assert [
+        edge
+        for edge in graph.unknown_edges
+        if edge.source == "tests/test_job_runtime_lock_filenames.py"
+    ] == [
+        GraphEdge(
+            source="tests/test_job_runtime_lock_filenames.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=73,
+            unknown=True,
+        )
+    ]
+    assert [
+        edge for edge in graph.unknown_edges if edge.source == "tests/test_pytest_temp_lifecycle.py"
+    ] == [
+        GraphEdge(
+            source="tests/test_pytest_temp_lifecycle.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=62,
+            unknown=True,
+        )
+    ]
+    # Ten new acquisition/authority fixture calls preserve synthetic db globals.
+    # Exact AST evidence is retained in followup-test-edge-census.json.
+    new_fixture_calls = (
+        {("tests/test_onboard_sec_fallback.py", line) for line in (70, 320, 365, 397, 403)}
+        | {("tests/test_onboarding_state_authority.py", line) for line in (31, 60, 75)}
+        | {
+            ("tests/test_scheduled_singleflight.py", 98),
+            ("tests/test_split_root_legacy_adapters.py", 25),
+        }
+    )
+    assert new_fixture_calls <= {(edge.source, edge.line) for edge in graph.unknown_edges}
+    # A checked private-helper lookup removes the scheduled test's broad type
+    # suppression. Its dynamic name remains visible as one test-only seam.
+    # Six new synthetic children test artifact ownership and database refusal.
+    # Their executable choices remain test-only and visible in this inventory.
+    remedy_children = {
+        ("tests/test_dcf_artifact_ownership.py", 232),
+        ("tests/test_dcf_artifact_ownership.py", 242),
+        ("tests/test_dcf_artifact_ownership.py", 252),
+        ("tests/test_dcf_artifact_ownership.py", 312),
+        ("tests/test_retained_tool_database_authority.py", 35),
+        ("tests/test_retained_tool_database_authority.py", 182),
+    }
+    assert {
+        (edge.source, edge.line)
+        for edge in graph.unknown_edges
+        if edge.source in {source for source, _line in remedy_children}
+        and edge.target == "<dynamic process entrypoint>"
+    } == remedy_children
+    # Exact-period CLI and skill-maintenance checks add two test-owned calls.
+    # Keep their computed entrypoints explicit without admitting production gaps.
+    assert (
+        GraphEdge(
+            source="tests/test_earnings_readout.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=728,
+            unknown=True,
+        )
+        in graph.unknown_edges
+    )
+    assert (
+        GraphEdge(
+            source="instruction_tests/test_investing_skill_maintenance.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=371,
+            unknown=True,
+        )
+        in graph.unknown_edges
+    )
+    # Twelve bounded Node children exercise synthetic browser request lifecycles.
     # Keep their exact test-only inventory visible without admitting production edges.
     lifecycle_children = {
+        ("tests/test_company_desk_read_lifecycle.py", 97),
         ("tests/test_copilot_restore_read_lifecycle.py", 62),
         ("tests/test_copilot_restore_read_lifecycle.py", 112),
         ("tests/test_panel_read_lifecycle.py", 95),
         ("tests/test_panel_read_lifecycle.py", 152),
         ("tests/test_policy_refresh_lifecycle.py", 74),
         ("tests/test_ui_requests.py", 69),
-        ("tests/test_work_os_read_lifecycle.py", 63),
-        ("tests/test_work_os_read_lifecycle.py", 98),
-        ("tests/test_workspace_dcf_read_lifecycle.py", 63),
+        ("tests/test_work_os_read_lifecycle.py", 75),
+        ("tests/test_work_os_read_lifecycle.py", 110),
+        ("tests/test_workspace_dcf_read_lifecycle.py", 134),
+        ("tests/test_workspace_dcf_read_lifecycle.py", 193),
+        ("tests/test_workspace_dcf_read_lifecycle.py", 354),
     }
     assert {
         (edge.source, edge.line)
@@ -213,20 +391,25 @@ def test_actual_head_is_supported() -> None:
         for edge in graph.unknown_edges
         if (edge.source, edge.line) in lifecycle_children
     )
-    # The held-handle regression adds one bounded test-owned Python child. Its
-    # computed interpreter/exit-code argv remains an explicit test-only unknown.
-    assert (
-        GraphEdge(
-            source="tests/test_job_runtime_process_tree.py",
-            target="<dynamic process entrypoint>",
-            kind="unknown",
-            evidence="subprocess/runpy expression",
-            confidence="low",
-            line=191,
-            unknown=True,
-        )
-        in graph.unknown_edges
+
+    # Three bounded Node harnesses exercise rail state, exact-edition routing,
+    # and lazy research disclosures. Keep them visible as test-only processes.
+    compact_reader_children = {
+        ("tests/test_compact_brief_reader.py", 162),
+        ("tests/test_compact_brief_routing.py", 23),
+        ("tests/test_full_brief_chrome.py", 133),
+    }
+    assert {
+        (edge.source, edge.line)
+        for edge in graph.unknown_edges
+        if edge.source in {source for source, _line in compact_reader_children}
+    } == compact_reader_children
+    assert all(
+        edge.kind == "unknown" and edge.target == "<dynamic process entrypoint>"
+        for edge in graph.unknown_edges
+        if (edge.source, edge.line) in compact_reader_children
     )
+
     assert (
         sum(
             edge.source == "tests/test_dcf_assumption_cli.py"
@@ -1391,3 +1574,90 @@ def test_disposition_files_excluded_from_population(tmp_path: Path) -> None:
     assert any(
         e.path == "docs/quality/reachability-getattr-dispositions.json" for e in graph.exclusions
     )
+
+
+@pytest.mark.parametrize(
+    ("source", "command"),
+    [
+        ("Makefile", "python3 -m pytest tests/test_first.py tests/test_second.py"),
+        ("Makefile", "pytest tests/test_first.py tests/test_second.py"),
+        (
+            ".github/review.md",
+            "Retain tests/test_first.py tests/test_second.py as separate fixtures.",
+        ),
+        (
+            ".github/review.md",
+            "The copy tests/test_second.py is a fixture, not an executable command.",
+        ),
+    ],
+)
+def test_filename_and_prose_do_not_create_a_launcher_edge(
+    tmp_path: Path, source: str, command: str
+) -> None:
+    root = _repo(tmp_path)
+    _write(root, source, command + "\n")
+    _write(root, "tests/test_first.py", "VALUE = 1\n")
+    _write(root, "tests/test_second.py", "VALUE = 2\n")
+    _track(root, source, "tests")
+    graph = build_graph(root)
+    assert graph.collection_status == "COMPLETE"
+    assert not any(edge.target.startswith("tests/") for edge in graph.edges)
+    assert not {"tests/test_first.py", "tests/test_second.py"} & production_reachable_nodes(graph)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "py tests/test_second.py",
+        "python tests/test_second.py",
+        "python3 -u tests/test_second.py",
+        "/usr/bin/python3 tests/test_second.py",
+        r"C:\Runtime\python.exe -u tests/test_second.py",
+        "/usr/bin/py tests/test_second.py",
+        r"C:\Runtime\py.exe -u tests/test_second.py",
+        "python3 -m tests.test_second",
+    ],
+)
+def test_direct_python_launcher_still_reaches_a_test(tmp_path: Path, command: str) -> None:
+    root = _repo(tmp_path)
+    _write(root, "scripts/check.sh", command + "\n")
+    _write(root, "tests/__init__.py", "")
+    _write(root, "tests/test_second.py", "VALUE = 2\n")
+    _track(root, "scripts", "tests")
+    graph = build_graph(root)
+    assert any(
+        edge.source == "scripts/check.sh"
+        and edge.target == "tests/test_second.py"
+        and edge.kind == "wrapper"
+        for edge in graph.edges
+    )
+    assert "tests/test_second.py" in production_reachable_nodes(graph)
+
+
+def test_real_production_import_and_launch_of_test_remain_reachable(tmp_path: Path) -> None:
+    root = _repo(tmp_path)
+    _write(root, "tests/__init__.py", "")
+    _write(root, "tests/test_first.py", "VALUE = 1\n")
+    _write(root, "tests/test_second.py", "VALUE = 2\n")
+    _write(
+        root,
+        "execution/main.py",
+        "import tests.test_first\n"
+        "import subprocess\n"
+        "subprocess.run('python -u tests/test_second.py')\n",
+    )
+    _track(root, "execution", "tests")
+    graph = build_graph(root)
+    assert any(
+        edge.source == "execution/main.py"
+        and edge.target == "tests/test_first.py"
+        and edge.kind == "import"
+        for edge in graph.edges
+    )
+    assert any(
+        edge.source == "execution/main.py"
+        and edge.target == "tests/test_second.py"
+        and edge.kind == "python_entrypoint"
+        for edge in graph.edges
+    )
+    assert {"tests/test_first.py", "tests/test_second.py"} <= production_reachable_nodes(graph)

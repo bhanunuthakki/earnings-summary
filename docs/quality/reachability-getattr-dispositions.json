@@ -3,8 +3,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only fields declared in the checked-in _SOTP_SPEC dashboard spec.",
-      "fingerprint": "2b0a5eb90c7aa1eece3daac832704f0bf992809c264b1616dd150c0cfe0ed8e1",
-      "line": 443,
+      "fingerprint": "05409fe3a9075c8e8b0894947002d3778ccb48009228f538bed503af4aec8c3d",
+      "line": 450,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -13,8 +13,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Sync writes only _SOTP_SPEC fields via getattr on the Sotp dataclass.",
-      "fingerprint": "b7c7baffc3abea11c8b6006be7cb837045e0089e24e529bcec9bb514a4657a80",
-      "line": 606,
+      "fingerprint": "0f70bc632a2da07d6bfd5ea89d8305aee28bb02c2e56128ec74be2b39077d824",
+      "line": 613,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -23,8 +23,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Sync reads only _SOTP_SPEC fields via getattr on the Sotp dataclass.",
-      "fingerprint": "42b0f0806ff5bf9852665728d9241cb90866670cc4e6901723bc9ff6d827c8f0",
-      "line": 608,
+      "fingerprint": "387b516b46c8361491c4de10e8f8d632ea8d6059d22787b7c9d8836afe2aa0cc",
+      "line": 615,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -33,8 +33,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Dashboard build reads only _SOTP_SPEC fields via getattr.",
-      "fingerprint": "bc7f689be89b7e0f4e2f2d763a17a5a5d224d06153dfa5110717d28402001236",
-      "line": 737,
+      "fingerprint": "861fcbdff89be0948f095f68be08e900f1fa2bdad951e38057b6d4051691da79",
+      "line": 744,
       "path": "execution/build_holdco_sotp.py",
       "targets": [
         "_SOTP_SPEC"
@@ -43,8 +43,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-growth scenario attribute tuple.",
-      "fingerprint": "578c87501b26ab365ab9e62598a2ae2fafa85d0e9594a0330c94ac01d9f0d42e",
-      "line": 300,
+      "fingerprint": "0dfdbad7cdd5de3c1cdafcc28e7c344d8b410b0cac5def2f7e7b1b1a9c753674",
+      "line": 302,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_near",
@@ -55,8 +55,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-growth scenario attribute tuple.",
-      "fingerprint": "82f58f898cd79bf4bb398226749732e5fbc40e3f5e9944fb87b8462b495c3f27",
-      "line": 302,
+      "fingerprint": "5e103b1c59aa91b7b457acc49a8d99c8606496470086015f11373c401d33112a",
+      "line": 304,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_term",
@@ -67,8 +67,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-margin scenario attribute tuple.",
-      "fingerprint": "b8fefab87249d283a496c7242115a5374d00f81f4d24c638605c88315682a9c1",
-      "line": 304,
+      "fingerprint": "cee7a66bbaf8255cc422aaf8be816f1e49dbf5aa1d55493e655888d8da8d98dd",
+      "line": 306,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_near",
@@ -79,8 +79,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-margin scenario attribute tuple.",
-      "fingerprint": "c8b51e5422ce6ac4908c0d2774021482b8b0f9713580a93a1d58eb66854388c4",
-      "line": 306,
+      "fingerprint": "3363decfc2aec231c1665fc7a8fc5f13205225ba454358af15bc3c528026e2f1",
+      "line": 308,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_term",
@@ -101,8 +101,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "Dynamic level selects only standard logging adapter methods.",
-      "fingerprint": "5e219ccd3acf987ff6404c575dc9d15165f917d96e4ef0cf279a0f89801d3130",
-      "line": 205,
+      "fingerprint": "b7627399e53d9695e010cd3edffc897a787b88578765c03e2522e18b78297539",
+      "line": 219,
       "path": "execution/comments_server_context.py",
       "targets": [
         "logging"
@@ -111,8 +111,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr validates only the checked-in positive_fields argparse tuple.",
-      "fingerprint": "024c0a6038e5b5db448dd444a95bf226905e52be1a6555149f199a9aa50889dc",
-      "line": 1172,
+      "fingerprint": "a76c4c585e475230eefcc95258829da571c4aef31dfd6c9dcd77bb3930ee3cb0",
+      "line": 1174,
       "path": "execution/discover_ir_documents_all.py",
       "targets": [
         "positive_fields"
@@ -131,8 +131,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Document path extraction permits only the filepath and uri tuple.",
-      "fingerprint": "a363d7af04e4e624be79bc86c2ab22a1f7793bc987495fc3fe5e0b5e3cc55865",
-      "line": 494,
+      "fingerprint": "9ad361dff766080e91758cfbb3ec0d8e0a6f44bd66a1dd8a2f2343a076a122c9",
+      "line": 507,
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "filepath",
@@ -142,8 +142,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "getattr crosses only the Arelle, lxml, and XBRL relationship adapter boundaries.",
-      "fingerprint": "18bddc25e5ef7604123632be780a0fc3bbef6ef59d2a8fe8dd28fcd85f6856ca",
-      "line": 933,
+      "fingerprint": "c96b8cda21ec5a7fcaf87740c58558f6988665814740c68d3ecfb3482750857e",
+      "line": 955,
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "arelle",
@@ -205,8 +205,8 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "05ed6a70b3d8391d0bef4d2f805590e4cbae4c2b845774e58d2cfb48d4bf372c",
-      "line": 83,
+      "fingerprint": "f0ed194d7f0d4de9095cac088eb289434073edf76c2471d9f8b3bcdea0d976f5",
+      "line": 85,
       "path": "src/compute/evidence_snapshot.py",
       "targets": [
         "kernel32"
@@ -215,11 +215,25 @@
     {
       "disposition": "runtime_registry",
       "evidence": "getattr resolves only Windows kernel32 API names.",
-      "fingerprint": "46e6f6dd06200caacdcf598d3d745210d1c932813cd7cae8381450604afcab3d",
-      "line": 87,
+      "fingerprint": "c538fde6859a21840128a476bf3ea8b118d3a5f40c9771bec013b0db2649067a",
+      "line": 89,
       "path": "src/compute/evidence_snapshot.py",
       "targets": [
         "kernel32"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "_verified_metric_expression iterates only the literal numerator, denominator, input, left, right field tuple on the frozen, extra-forbid MetricExpression schema. Each child is recursively rebound through its source-file-bound KPI reference. No source data controls the attribute name.",
+      "fingerprint": "c45d8c1f2a07f5b866f0bf7b33700d10bf0e77be8bb46467020ff18df52c0b15",
+      "line": 1155,
+      "path": "src/compute/thesis_evaluator.py",
+      "targets": [
+        "numerator",
+        "denominator",
+        "input",
+        "left",
+        "right"
       ]
     },
     {
@@ -234,31 +248,29 @@
     },
     {
       "disposition": "closed_literal_set",
-      "evidence": "Scenario row reads only the declared scenario delta attributes.",
+      "evidence": "build_assumption_rows accesses only growth_near, growth_term, margin_near, margin_term, exit_multiple and terminal_g from the checked-in _SCEN_LEVER_LABELS tuple. Bull/Bear input and seed objects are selected by the adjacent literal scenario tuple. No data-selected attribute or executable target. This clarifies object labels versus the actual closed attribute registry.",
       "fingerprint": "54759f35844d9097c973e11719833241b75d5614032c5693eec069ccbc5984d8",
       "line": 532,
       "path": "src/dcf/assumptions_doc.py",
       "targets": [
-        "bull_deltas",
-        "bear_deltas"
+        "_SCEN_LEVER_LABELS"
       ]
     },
     {
       "disposition": "closed_literal_set",
-      "evidence": "Scenario seed reads only the declared scenario delta attributes.",
+      "evidence": "build_assumption_rows accesses only growth_near, growth_term, margin_near, margin_term, exit_multiple and terminal_g from the checked-in _SCEN_LEVER_LABELS tuple. Bull/Bear input and seed objects are selected by the adjacent literal scenario tuple. No data-selected attribute or executable target. This clarifies object labels versus the actual closed attribute registry.",
       "fingerprint": "c41c220b8f97127c5bcdbc32adc5f1d4a5cc38b255d2848cae745193ea93f195",
       "line": 533,
       "path": "src/dcf/assumptions_doc.py",
       "targets": [
-        "bull_deltas",
-        "bear_deltas"
+        "_SCEN_LEVER_LABELS"
       ]
     },
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr reads only _SCALAR_ROW_ATTR dashboard scalar attributes.",
-      "fingerprint": "2ec4687179e271c047f87b2c4500e35c0ae3fc50376e5b4ca6c6d2450016431e",
-      "line": 1464,
+      "fingerprint": "90b15a52dcf79ed10d08b00b3c3e98e62a9b10ef6d54d3586ad8e34962abf733",
+      "line": 1491,
       "path": "src/dcf/redesign.py",
       "targets": [
         "_SCALAR_ROW_ATTR"
@@ -357,8 +369,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "EDGAR CIK fallback resolves the fixed legacy _lookup_cik_for_ticker helper through a typed compatibility boundary.",
-      "fingerprint": "085409f1b512f0f77ec639e31f196ab8200066c3ef9455cbb9c0608189d1df53",
-      "line": 166,
+      "fingerprint": "e270f385238c606c31ad4b50ab7a4ae952674ea53aa36b3be94b85d160457dec",
+      "line": 168,
       "path": "src/filings/edgar_fetch.py",
       "targets": [
         "src/insider_transactions.py"
@@ -367,8 +379,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "EDGAR document fetch resolves the fixed legacy _strip_html helper through a typed compatibility boundary.",
-      "fingerprint": "4cdc82625eebc2836ef6f6d8b7fdb1cf2a7b1b693aaf64061dc1cfdfe23594d2",
-      "line": 293,
+      "fingerprint": "5ee12bdea8e1a6c3c4b2ed189abb74e190d9a55e840ab2b8de45c826e6f0272d",
+      "line": 295,
       "path": "src/filings/edgar_fetch.py",
       "targets": [
         "src/filing_text_fetcher.py"
@@ -387,8 +399,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "Windows-only ACL code resolves ctypes.WinDLL explicitly after the os.name guard.",
-      "fingerprint": "95f6e82f33f3a3859b3a65d35d9b68169b9b525af2f5a52dfc9464299ba215c5",
-      "line": 58,
+      "fingerprint": "395ef4759a4ecbfb7d5e3f47d8a9f9aea5738353526e8a665d8d9c08c4a13ad9",
+      "line": 102,
       "path": "src/filings/inline_xbrl_processor.py",
       "targets": [
         "ctypes.WinDLL"
@@ -397,11 +409,21 @@
     {
       "disposition": "external_adapter",
       "evidence": "Windows-only ACL verification resolves ctypes.get_last_error through a typed platform boundary.",
-      "fingerprint": "a3e073960b6db8b811f48189dbe7a41fc05271abfb94347293732e2f29a18f41",
-      "line": 65,
+      "fingerprint": "e39ed3c0eb3e5dc5e6567c8ea3089643942e6523fc8ebf4772ad4092334e883e",
+      "line": 109,
       "path": "src/filings/inline_xbrl_processor.py",
       "targets": [
         "ctypes.get_last_error"
+      ]
+    },
+    {
+      "disposition": "external_adapter",
+      "evidence": "Windows-only directory DACL verification resolves the fixed ctypes.WinDLL adapter for advapi32; it does not change caller impersonation or privileges.",
+      "fingerprint": "e817c3ba750963fdb6c7141b2871fc1d05b97f5aea61d2ef3a38f7a24d4710ef",
+      "line": 116,
+      "path": "src/filings/inline_xbrl_processor.py",
+      "targets": [
+        "ctypes.WinDLL"
       ]
     },
     {
@@ -453,9 +475,23 @@
     },
     {
       "disposition": "schema_field",
+      "evidence": "_magnitude_guard_violation compares only this literal tuple of KpiSemanticContext data fields between admitted contexts. The returned attributes are compared for equality; they are not invoked or used to select code.",
+      "fingerprint": "da529716f3925be1878d9ad85db3586b0d08059cd6dda4d5b4acc4e52ab03998",
+      "line": 424,
+      "path": "src/pipeline/kpi_persistence.py",
+      "targets": [
+        "accounting_basis",
+        "consolidation_scope",
+        "dimensions",
+        "period_role",
+        "publication_lane"
+      ]
+    },
+    {
+      "disposition": "schema_field",
       "evidence": "getattr reads only _COMPARE_METRIC_ROWS TickerMetrics fields.",
-      "fingerprint": "6dc3224b96d501764786f2821d3183b286a5a1cb2c45afeeb9660c86b1f255ca",
-      "line": 1949,
+      "fingerprint": "e5ec682a7e3bd2b59d5d40013de8200dca58759eb7aa6d15e3ed70017b8b1b31",
+      "line": 2005,
       "path": "src/pipeline/peeks.py",
       "targets": [
         "_COMPARE_METRIC_ROWS"
@@ -483,7 +519,7 @@
     },
     {
       "disposition": "closed_literal_set",
-      "evidence": "resolve_analysis_coverage iterates only the fixed literal source-identity field tuple and reads each field from the schema-validated frozen ExpectedDocument. The attribute name is not supplied by a request or source document; the value is compared with captured metadata and is not invoked.",
+      "evidence": "Analysis coverage compares only this fixed tuple of ExpectedDocument identity fields; no callable or dispatch target is selected.",
       "fingerprint": "85598e05597634eee69d12de4deedf1f4b6200bdca3a9b7c49fe6efbee1ec867",
       "line": 440,
       "path": "src/provenance/analysis_scope.py",
@@ -497,7 +533,7 @@
     },
     {
       "disposition": "closed_literal_set",
-      "evidence": "resolve_analysis_coverage iterates only the fixed literal period_start/period_end tuple on the schema-validated frozen ExpectedDocument. These reads enforce exact source-period equality; they perform no dynamic dispatch or resource selection.",
+      "evidence": "Analysis coverage compares only this fixed tuple of ExpectedDocument identity fields; no callable or dispatch target is selected.",
       "fingerprint": "5843980f3e3cb969cf401745be45ba6cce73193d8aae34bddb286ee5f0a6b96b",
       "line": 443,
       "path": "src/provenance/analysis_scope.py",
@@ -524,6 +560,29 @@
       "path": "src/provenance/filing_xbrl_extraction_ledger.py",
       "targets": [
         "_SEAL_COLUMNS"
+      ]
+    },
+    {
+      "disposition": "schema_field",
+      "evidence": "publish_discrete_quarter compares only the local literal fields tuple on the selected operands' FactCellV2 source coordinates. The returned attributes are compared for equality; they are not invoked or used to select code.",
+      "fingerprint": "bada77fb2be45ecf78627350ff7b84dae19079a7ba05ced2fda8b5bdeb793ec4",
+      "line": 139,
+      "path": "src/provenance/financial_derivations.py",
+      "targets": [
+        "reporting_entity_id",
+        "scope_security_id",
+        "concept_namespace",
+        "concept_name",
+        "taxonomy_name",
+        "taxonomy_version",
+        "accounting_basis",
+        "consolidation_scope",
+        "period_kind",
+        "period_start",
+        "fiscal_year",
+        "dimensions",
+        "unit_key",
+        "currency"
       ]
     },
     {
@@ -684,6 +743,31 @@
         "_build_quarter_cells",
         "_build_annual_cells"
       ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Synthetic positive authority fixture saves and restores exactly the four db globals in the literal DB_PATH/DATA_DIR/FMP_DIR/STATE_ROOT tuple. This getattr has no data-supplied field or production caller.",
+      "fingerprint": "719f380f62b16d0102331b7f110388ccdc2c7970f05c760b8509cef01510643a",
+      "line": 56,
+      "path": "tests/test_runtime_state_authority.py",
+      "targets": [
+        "DB_PATH",
+        "DATA_DIR",
+        "FMP_DIR",
+        "STATE_ROOT"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "POSIX bounded-source preflight reads only os constants O_NOFOLLOW, O_DIRECTORY and O_NONBLOCK from the literal generator tuple. A missing or zero constant refuses opening; this lookup dispatches no callable and has no input-selected attribute name.",
+      "fingerprint": "b94506cefc3145fb3176c77d94476f17ab5450323dc1143e3f124dff49e69df4",
+      "line": 56,
+      "path": "src/provenance/immutable_artifact.py",
+      "targets": [
+        "O_NOFOLLOW",
+        "O_DIRECTORY",
+        "O_NONBLOCK"
+      ]
     }
   ],
   "graph_provenance": {
@@ -691,11 +775,11 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "ef16d9852a45b3cfde6115c52459b26e910b24579fbf79827e180cb0d71fe1af",
+      "source_sha256": "85c1972e1d3a4cc641f4d40e70a4790d115efaa643debb44d7834f79c53bdde1",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
-    "scanner_sha256": "dffd867eda03733d7e0d9581dd6b8730d6c09f0a1b3d3245bba00b3c28e208db",
+    "scanner_sha256": "c9ec98b1cbcdf93c9b890d9a8a8c59ef6109598f67b1739c38463d79d5986175",
     "schema_version": "operational-reachability-raw/v1"
   },
   "schema_version": "reachability-getattr-dispositions/v2"

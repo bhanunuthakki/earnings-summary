@@ -4,7 +4,7 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -35,6 +35,10 @@ from pipeline.kpi_semantics import (
     KpiSemanticStatus,
     KpiUnitScale,
     persist_kpi_semantic_context,
+)
+from provenance.reporting_entity_registry import (
+    EvidenceSubjectBindingRevision,
+    ReportingEntityRegistry,
 )
 from sqlite_runtime import register_sqlite_integrity_functions
 
@@ -937,3 +941,266 @@ def _insert_raw_comparability_payload(
         f"VALUES ({','.join('?' for _ in values)})",  # nosec B608 -- fixed test columns
         values,
     )
+
+
+SUBJECT_PARENT = "0054_filing_xbrl_unit_protocol"
+SUBJECT_REVISION = "0055_kpi_definition_subject_bindings"
+SUBJECT_TRIGGERS = (
+    "trg_kpi_definition_revisions_source",
+    "trg_kpi_definition_comparability_source",
+    "trg_kpi_fact_semantic_definition_exact",
+)
+
+
+def _subject_triggers(path: Path) -> dict[str, str]:
+    with sqlite3.connect(path) as conn:
+        return {
+            name: str(
+                conn.execute("SELECT sql FROM sqlite_master WHERE name=?", (name,)).fetchone()[0]
+            )
+            for name in SUBJECT_TRIGGERS
+        }
+
+
+def test_subject_migration_roundtrip_preserves_all_other_guards_and_rows(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    path = migrated_db(tmp_path / "subject-roundtrip.db", target=SUBJECT_PARENT)
+    with _raw_guarded_connection(path) as conn:
+        _seed_authority(conn)
+        persist_kpi_definition_revision(conn, _definition())
+        before_rows = conn.execute("SELECT * FROM kpi_definition_revisions").fetchall()
+    before = _subject_triggers(path)
+    migrated_db(path, target=SUBJECT_REVISION, upgrade_existing=True)
+    after = _subject_triggers(path)
+    assert all(after[name] != before[name] for name in SUBJECT_TRIGGERS)
+    command.downgrade(_config(path), SUBJECT_PARENT)
+    assert _subject_triggers(path) == before
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT * FROM kpi_definition_revisions").fetchall() == before_rows
+
+
+@pytest.mark.parametrize("guard", SUBJECT_TRIGGERS)
+def test_subject_migration_refuses_unknown_guard_before_dropping_any(
+    tmp_path: Path, migrated_db: Callable[..., Path], guard: str
+) -> None:
+    path = migrated_db(tmp_path / "subject-unknown.db", target=SUBJECT_PARENT)
+    sql = _subject_triggers(path)[guard].replace("mismatch", "unreviewed_mismatch")
+    with sqlite3.connect(path) as conn:
+        conn.execute(f"DROP TRIGGER {guard}")
+        conn.execute(sql)
+    before = _subject_triggers(path)
+    with pytest.raises(RuntimeError, match="differs from its predecessor"):
+        migrated_db(path, target=SUBJECT_REVISION, upgrade_existing=True)
+    assert _subject_triggers(path) == before
+
+
+def _seed_legacy_subject_source(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT INTO documents(id,ticker,source_type,doc_type,file_path,sha256,fetched_at,"
+        "fetch_status,raw_bytes_size,source_url,source_quality_tier) "
+        "SELECT 101,ticker,source_type,doc_type,'evidence/legacy.pdf',?,fetched_at,"
+        "fetch_status,raw_bytes_size,source_url,source_quality_tier FROM documents WHERE id=100",
+        ("a" * 64,),
+    )
+    conn.execute(
+        "INSERT INTO evidence_document_versions "
+        "(document_version_id,document_key,version_sequence,observation_id,blob_sha256,issuer_id,"
+        "ticker,document_type,form_type,language,legacy_document_id,recorded_at) "
+        "SELECT 'document-legacy','document-legacy',2,observation_id,blob_sha256,'legacy-ticker:NU',"
+        "ticker,document_type,form_type,language,101,recorded_at "
+        "FROM evidence_document_versions WHERE document_version_id='document-nu-v1'"
+    )
+    conn.execute(
+        "INSERT INTO evidence_extraction_runs SELECT 'run-legacy','run-legacy','document-legacy',"
+        "input_sha256,extractor_name,extractor_config_sha256,extractor_code_version,output_sha256,"
+        "started_at,completed_at,outcome FROM evidence_extraction_runs WHERE extraction_run_id='run-nu-v1'"
+    )
+    conn.execute(
+        "INSERT INTO evidence_nodes SELECT 'node-legacy','node-legacy',1,'run-legacy',NULL,NULL,"
+        "node_kind,text,locator_json,locator_sha256,recorded_at "
+        "FROM evidence_nodes WHERE node_id='node-nu-v1'"
+    )
+    conn.execute(
+        "INSERT INTO evidence_nodes SELECT 'root-legacy','root-legacy',1,'run-legacy',NULL,NULL,"
+        "'document',text,locator_json,locator_sha256,recorded_at "
+        "FROM evidence_nodes WHERE node_id='node-nu-v1'"
+    )
+    conn.execute(
+        "INSERT INTO legacy_document_evidence_binding_revisions VALUES "
+        "('legacy-subject-source','legacy-subject-source',101,1,'document-legacy','root-legacy',"
+        "?,?,?,?,?,?,NULL)",
+        (LOCATOR_JSON, LOCATOR_SHA, "a" * 64, AT.isoformat(), AT.isoformat(), AT.isoformat()),
+    )
+
+
+@pytest.mark.parametrize("guard", ["definition", "comparability", "context"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "selected",
+        "missing",
+        "future_knowledge",
+        "future_recording",
+        "future_recording_microseconds",
+        "selected_offset",
+        "seconds_offset",
+        "newer_seconds_offset",
+        "unresolved",
+        "retired",
+        "wrong_entity",
+        "dissent",
+    ],
+)
+def test_subject_guards_refuse_invalid_sql_bypass_bindings(
+    tmp_path: Path, migrated_db: Callable[..., Path], guard: str, case: str
+) -> None:
+    path = migrated_db(tmp_path / "subject-bypass.db", target=SUBJECT_REVISION)
+    with _raw_guarded_connection(path) as conn:
+        _seed_authority(conn)
+        first = persist_kpi_definition_revision(conn, _definition())
+        second = persist_kpi_definition_revision(
+            conn,
+            _definition(
+                kpi_definition_revision_id="definition-nu-r2",
+                idempotency_key="definition-nu-r2",
+                revision=2,
+                supersedes_definition_revision_id=first.kpi_definition_revision_id,
+            ),
+        )
+        _seed_legacy_subject_source(conn)
+        if case != "missing":
+            conn.execute(
+                "INSERT INTO reporting_entities VALUES ('entity-other','entity-other','issuer-nu','legal_registrant','Other',?)",
+                (AT.isoformat(),),
+            )
+            stamp = AT + timedelta(
+                microseconds=100 if case == "future_recording_microseconds" else 100_000
+            )
+            binding_clock = (
+                AT.astimezone(timezone(timedelta(hours=-7))) if case == "selected_offset" else AT
+            )
+            if case == "seconds_offset":
+                binding_clock = (AT + timedelta(seconds=15)).astimezone(
+                    timezone(timedelta(seconds=-30))
+                )
+            registry = ReportingEntityRegistry(conn)
+            registry.persist(
+                EvidenceSubjectBindingRevision(
+                    binding_revision_id="binding-subject-1",
+                    idempotency_key="binding-subject-1",
+                    recorded_issuer_id="legacy-ticker:NU",
+                    revision=1,
+                    issuer_id="issuer-nu",
+                    reporting_entity_id="entity-other" if case == "wrong_entity" else "entity-nu",
+                    outcome="selected",
+                    decision_kind="manual",
+                    material_dissent=case == "dissent",
+                    reason_code="reviewed_subject",
+                    reason_details=(("test", "synthetic"),),
+                    effective_at=binding_clock,
+                    knowledge_at=stamp if case == "future_knowledge" else binding_clock,
+                    recorded_at=stamp
+                    if case
+                    in {"future_knowledge", "future_recording", "future_recording_microseconds"}
+                    else binding_clock,
+                )
+            )
+            if case in {"unresolved", "retired", "newer_seconds_offset"}:
+                newer_clock = (
+                    AT.astimezone(timezone(timedelta(seconds=30)))
+                    if case == "newer_seconds_offset"
+                    else AT
+                )
+                registry.persist(
+                    EvidenceSubjectBindingRevision(
+                        binding_revision_id="binding-subject-2",
+                        idempotency_key="binding-subject-2",
+                        recorded_issuer_id="legacy-ticker:NU",
+                        revision=2,
+                        supersedes_binding_revision_id="binding-subject-1",
+                        outcome="retired" if case == "retired" else "unresolved",
+                        decision_kind="manual",
+                        material_dissent=False,
+                        reason_code="withdrawn_subject",
+                        reason_details=(("test", "synthetic"),),
+                        effective_at=newer_clock,
+                        knowledge_at=newer_clock,
+                        recorded_at=newer_clock,
+                    )
+                )
+        if guard == "context":
+            conn.execute(
+                "INSERT INTO kpi_facts (id,ticker,period_end,fiscal_period_type,kpi_definition_id,value,currency,unit,source_doc_id,source_excerpt,confidence,extracted_by,locator) VALUES (1,'NU',?,'Q4',?,12.5,'USD','actual',101,'Monthly ARPAC was $12.5',1.0,'test',?)",
+                (AT.isoformat(), KPI_ROOT_ID, LOCATOR_JSON),
+            )
+
+        def insert() -> None:
+            # Definition commitments store UTC. Contexts also admit an offset cutoff.
+            cutoff = (
+                AT.astimezone(timezone(timedelta(hours=-7)))
+                if case == "selected_offset" and guard == "context"
+                else AT
+            )
+            if guard == "definition":
+                _insert_raw_definition(
+                    conn,
+                    _definition(
+                        kpi_definition_revision_id="definition-nu-r3",
+                        idempotency_key="definition-nu-r3",
+                        revision=3,
+                        supersedes_definition_revision_id=second.kpi_definition_revision_id,
+                        source_document_version_id="document-legacy",
+                        source_evidence_node_id="node-legacy",
+                        knowledge_at=cutoff,
+                        recorded_at=cutoff,
+                    ),
+                )
+            elif guard == "comparability":
+                _insert_raw_comparability(
+                    conn,
+                    KpiDefinitionComparabilityRevision(
+                        comparability_revision_id="relation-subject",
+                        idempotency_key="relation-subject",
+                        predecessor_definition_revision_id=first.kpi_definition_revision_id,
+                        successor_definition_revision_id=second.kpi_definition_revision_id,
+                        revision=1,
+                        relation_kind=KpiDefinitionRelationKind.SAME_DEFINITION,
+                        disposition=KpiDefinitionComparabilityDisposition.CONTINUOUS,
+                        reason_code="reviewed_continuity",
+                        reviewed_by="owner",
+                        source_document_version_id="document-legacy",
+                        source_evidence_node_id="node-legacy",
+                        source_locator={"page": 7},
+                        effective_at=AT,
+                        knowledge_at=cutoff,
+                        recorded_at=cutoff,
+                    ),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO kpi_fact_semantic_contexts (kpi_fact_id,revision,metric_name_as_reported,reported_period_end,period_role,publication_lane,accounting_basis,consolidation_scope,dimensions_json,unit_scale,status,reviewed_by,knowledge_at,created_at,kpi_definition_revision_id) VALUES (1,1,'Monthly ARPAC',?,'current','current_actual','management','consolidated','{}','none','admitted','owner',?,?,?)",
+                    (
+                        AT.date().isoformat(),
+                        cutoff.isoformat(),
+                        cutoff.isoformat(),
+                        second.kpi_definition_revision_id,
+                    ),
+                )
+
+        if case in {"selected", "selected_offset"}:
+            insert()
+        else:
+            with pytest.raises(sqlite3.IntegrityError, match="mismatch"):
+                insert()
+        assert (
+            conn.execute(
+                "SELECT issuer_id FROM evidence_document_versions WHERE document_version_id='document-legacy'"
+            ).fetchone()[0]
+            == "legacy-ticker:NU"
+        )
+    if case in {"selected", "selected_offset"}:
+        before = _subject_triggers(path)
+        with pytest.raises(RuntimeError, match="dependent rows are retained"):
+            command.downgrade(_config(path), SUBJECT_PARENT)
+        assert _subject_triggers(path) == before

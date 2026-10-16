@@ -11,21 +11,22 @@ from datetime import UTC, datetime
 from io import StringIO
 from pathlib import Path
 from typing import cast
+from urllib.parse import parse_qs, urlsplit
 
 from alerts import AlertRow
 from dashboard.evidence_drawer import load_brief_provenance, render_evidence_drawer
 from report.models import CellSource, QuarterlyEarningsCard, QuarterlyLineItem
 from report.renderers.charts_v2 import MatrixRow, yoy_heatmap_table
 from report.renderers.workspace_html import (
-    _financial_highlights_panel,  # pyright: ignore[reportPrivateUsage]
-    _source_chip_html,  # pyright: ignore[reportPrivateUsage]
-    _source_for_display_index,  # pyright: ignore[reportPrivateUsage]
-    _source_hover_title,  # pyright: ignore[reportPrivateUsage]
+    _financial_highlights_panel,
+    _source_chip_html,
+    _source_for_display_index,
+    _source_hover_title,
 )
-from report.sections.financials import (
-    _to_cell_source,  # pyright: ignore[reportPrivateUsage]
-)
+from report.sections.financials import to_cell_source
+from sources.report_financials import FinancialEvidenceReference
 from timeseries.loaders import load_financial_cell_provenance
+from ui.source_chip import viewer_href
 
 # ----------------------------------------------------------------------------
 # loader
@@ -168,7 +169,7 @@ def test_cell_provenance_loader_missing_db_returns_empty(tmp_path: Path) -> None
 
 
 def test_to_cell_source_maps_payload() -> None:
-    src = _to_cell_source(
+    src = to_cell_source(
         {
             "source": "sec_official",
             "fetched_at": "2026-02-01 10:00:00",
@@ -187,7 +188,7 @@ def test_to_cell_source_maps_payload() -> None:
     assert src.locator == '{"json_path":"x"}'
     # source_doc_id rides through so chips can deep-link /source/<id> (P4.3).
     assert src.doc_id == 2
-    assert _to_cell_source(None) is None
+    assert to_cell_source(None) is None
 
 
 def _line_item_with_sources() -> QuarterlyLineItem:
@@ -227,6 +228,37 @@ def test_source_for_display_index_translates_window() -> None:
 # ----------------------------------------------------------------------------
 # chip rendering
 # ----------------------------------------------------------------------------
+
+
+def test_canonical_chip_reference_precedes_legacy_and_escapes_transport() -> None:
+    reference = FinancialEvidenceReference(
+        ticker="SYNTH",
+        concept="revenue",
+        canonical_metric_cell_id="canonical-cell",
+        observation_id='observation:"><script>alert(1)</script>&',
+        canonical_resolution_revision_id="resolution",
+        metric_definition_revision_id="definition",
+        as_of=datetime(2025, 3, 31, tzinfo=UTC),
+    )
+    source = CellSource(
+        source="sec_xbrl",
+        doc_id=7,
+        fact_id=123,
+        locator='{"kind":"pdf_slide","locator_version":2,"pdf_page":14}',
+        canonical_reference=reference,
+    )
+    href = viewer_href(source)
+    assert href is not None
+    assert href.startswith("/api/peek/canonical-financial?reference=")
+    decoded = parse_qs(urlsplit(href).query)["reference"][0]
+    assert FinancialEvidenceReference.model_validate_json(decoded) == reference
+    html = _source_chip_html(source)
+    assert f'data-peek-url="{href}&amp;fragment=1"' in html
+    assert "<script>" not in html and "/source/7" not in html
+    assert "provenance/financial_facts:123" not in html
+    assert 'target="_blank" rel="noopener"' in html
+    direct = _source_chip_html(source, link_only=True)
+    assert f'href="{href}"' in direct and "<details" not in direct
 
 
 def test_source_chip_html_contents_and_escaping() -> None:

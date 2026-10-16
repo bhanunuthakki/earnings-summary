@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 # This suite exercises module-private ladder internals (_candidates, _http_get,
 # _stable_only, _fmp_get, _run_under_lock) by design.
 """Tier-aware ladder tests for the FMP /api/v3 -> /stable migration (plan 7.1).
@@ -14,20 +13,55 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
-import os
+import json
 import sqlite3
 import sys
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
-
-os.environ.setdefault("FMP_API_KEY", "test-key-unused")
 
 import execution.fetch_etf_data as etf
 import execution.refresh_cache as rc
 import execution.save_fmp_data as sfd
 from net.client import HttpCallError, HttpErrorKind, HttpJsonResponse
+
+
+class DispatchWork(Protocol):
+    def __call__(
+        self,
+        connection: sqlite3.Connection,
+        item: rc.QueueItem,
+        planned: rc.PlannedWork,
+        *,
+        tier: rc.TierConfig,
+        auth: rc.FmpAuthConfig,
+        db_path: Path,
+        log_path: Path,
+    ) -> rc.WorkOutcome: ...
+
+
+Candidates = Callable[
+    [str, str | None, dict[str, object]], list[tuple[str, str, dict[str, object]]]
+]
+candidates = cast("Candidates", getattr(sfd, "_candidates"))
+http_get = cast(
+    "Callable[[str, Mapping[str, object]], tuple[int, object | None, str | None]]",
+    getattr(sfd, "_http_get"),
+)
+forbidden_outcome = cast(
+    "Callable[[str | None], sfd.FmpWorkReceiptOutcome]", getattr(sfd, "_forbidden_outcome")
+)
+write_work_receipt = cast(
+    "Callable[[Path, sfd.FmpWorkReceipt], None]", getattr(sfd, "_write_work_receipt")
+)
+fmp_utc_now = cast("Callable[[], datetime]", getattr(sfd, "_utc_now"))
+cache_utc_now = cast("Callable[[], datetime]", getattr(rc, "_utc_now"))
+dispatch_one = cast("DispatchWork", getattr(rc, "_dispatch_one"))
+etf_fmp_get = cast("Callable[[str, str, str], object]", getattr(etf, "_fmp_get"))
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,10 +74,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def test_candidates_stable_only_drops_v3_v4(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sfd, "_stable_only", True)
     # symbol'd endpoint
-    kinds = [k for k, _u, _p in sfd._candidates("income-statement", "GOOGL", {})]
+    kinds = [k for k, _u, _p in candidates("income-statement", "GOOGL", {})]
     assert kinds == ["stable:income-statement"]
     # symbol-less endpoint (other branch of _candidates)
-    kinds2 = [k for k, _u, _p in sfd._candidates("financial-scores", None, {})]
+    kinds2 = [k for k, _u, _p in candidates("financial-scores", None, {})]
     assert kinds2 and all(k.startswith("stable:") for k in kinds2)
 
 
@@ -63,7 +97,7 @@ def test_fmp_provider_error_body_is_redacted_before_fetcher_logs(
 
     monkeypatch.setattr(sfd.FMP_CLIENT, "get_url_json", rejected)
 
-    _code, _body, error = sfd._http_get(
+    _code, _body, error = http_get(
         "https://financialmodelingprep.com/stable/profile",
         {"symbol": "RBRK"},
     )
@@ -74,21 +108,21 @@ def test_fmp_provider_error_body_is_redacted_before_fetcher_logs(
 
 def test_typed_403_receipt_distinguishes_endpoint_from_account_failure() -> None:
     assert (
-        sfd._forbidden_outcome("Restricted endpoint: upgrade your plan")
+        forbidden_outcome("Restricted endpoint: upgrade your plan")
         is sfd.FmpWorkReceiptOutcome.ENDPOINT_FORBIDDEN
     )
     assert (
-        sfd._forbidden_outcome("Invalid API key for this account")
+        forbidden_outcome("Invalid API key for this account")
         is sfd.FmpWorkReceiptOutcome.ACCOUNT_FORBIDDEN
     )
     assert (
-        sfd._forbidden_outcome(
+        forbidden_outcome(
             "Restricted Endpoint: This endpoint is not available under your current subscription."
         )
         is sfd.FmpWorkReceiptOutcome.ENDPOINT_FORBIDDEN
     )
     assert (
-        sfd._forbidden_outcome("Invalid API KEY. Please create a Free API Key.")
+        forbidden_outcome("Invalid API KEY. Please create a Free API Key.")
         is sfd.FmpWorkReceiptOutcome.ACCOUNT_FORBIDDEN
     )
 
@@ -136,7 +170,7 @@ def test_dispatch_preserves_typed_empty_and_contract_outcomes(
         policy_sha256="b" * 64,
         execution_mode=rc.ExecutionMode.LIVE,
         lease_token="lease-token",
-        lease_expires_at=rc._utc_now() + timedelta(minutes=5),
+        lease_expires_at=cache_utc_now() + timedelta(minutes=5),
     )
 
     class _FakeProc:
@@ -144,7 +178,7 @@ def test_dispatch_preserves_typed_empty_and_contract_outcomes(
 
     def fake_run(cmd: list[str], **_kwargs: object) -> _FakeProc:
         receipt_path = Path(cmd[cmd.index("--work-receipt") + 1])
-        sfd._write_work_receipt(
+        write_work_receipt(
             receipt_path,
             sfd.FmpWorkReceipt(
                 ticker="RBRK",
@@ -152,13 +186,13 @@ def test_dispatch_preserves_typed_empty_and_contract_outcomes(
                 period="quarter",
                 outcome=receipt_outcome,
                 http_status=200,
-                captured_at=rc._utc_now(),
+                captured_at=cache_utc_now(),
             ),
         )
         return _FakeProc()
 
     monkeypatch.setattr(rc.subprocess, "run", fake_run)
-    outcome = rc._dispatch_one(
+    outcome = dispatch_one(
         connection,
         item,
         planned,
@@ -182,6 +216,9 @@ def test_single_work_fetch_returns_nonzero_when_typed_receipt_is_all_failed(
         encoding="utf-8",
     )
     receipt_path = tmp_path / "receipt.json"
+    database = tmp_path / "explicit.sqlite"
+    database.touch()
+    monkeypatch.setenv("FMP_API_KEY", "test-key-unused")
     monkeypatch.setattr(sfd, "FMP_DIR", tmp_path / "fmp")
     monkeypatch.setattr(sfd, "SNAP_DIR", tmp_path / "snap")
     monkeypatch.setattr(sfd, "SECTOR_DIR", tmp_path / "sector")
@@ -205,7 +242,7 @@ def test_single_work_fetch_returns_nonzero_when_typed_receipt_is_all_failed(
                 period="quarter",
                 outcome=sfd.FmpWorkReceiptOutcome.ACCOUNT_FORBIDDEN,
                 http_status=403,
-                captured_at=sfd._utc_now(),
+                captured_at=fmp_utc_now(),
             )
         )
         return {"ok": 0, "empty": 0, "forbidden": 1, "error": 0, "skipped": 0, "total": 1}
@@ -216,6 +253,10 @@ def test_single_work_fetch_returns_nonzero_when_typed_receipt_is_all_failed(
         "argv",
         [
             "save_fmp_data.py",
+            "--repo-root",
+            str(tmp_path),
+            "--db",
+            str(database),
             "--manifest",
             str(manifest),
             "--work-receipt",
@@ -227,17 +268,68 @@ def test_single_work_fetch_returns_nonzero_when_typed_receipt_is_all_failed(
     assert receipt.outcome is sfd.FmpWorkReceiptOutcome.ACCOUNT_FORBIDDEN
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"items": {}},
+        {"items": ["not-an-object"]},
+        {"items": [{"ticker": 42, "endpoint": "income-statement", "period": "quarter"}]},
+    ],
+)
+def test_malformed_manifest_is_rejected_before_http(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload: object
+) -> None:
+    manifest = tmp_path / "malformed.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    database = tmp_path / "isolated.sqlite"
+    database.touch()
+    calls: list[str] = []
+
+    def configure(root: Path, db_path: Path | None) -> Path:
+        assert root == tmp_path and db_path == database
+        return database
+
+    def blocked_http(
+        endpoint: str, symbol: str | None = None, extra: dict[str, object] | None = None
+    ) -> tuple[int, object | None, str | None, str | None]:
+        calls.append(endpoint)
+        pytest.fail("Malformed manifest must fail before HTTP")
+
+    monkeypatch.setattr(sfd, "configure_runtime", configure)
+    monkeypatch.setattr(sfd, "API_KEY", "synthetic-test-key")
+    monkeypatch.setattr(sfd, "FMP_DIR", tmp_path / "fmp")
+    monkeypatch.setattr(sfd, "SNAP_DIR", tmp_path / "snap")
+    monkeypatch.setattr(sfd, "SECTOR_DIR", tmp_path / "sector")
+    monkeypatch.setattr(sfd, "fmp_call", blocked_http)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "save_fmp_data.py",
+            "--repo-root",
+            str(tmp_path),
+            "--db",
+            str(database),
+            "--manifest",
+            str(manifest),
+        ],
+    )
+    with pytest.raises(TypeError, match="FMP manifest"):
+        sfd.main()
+    assert calls == []
+
+
 def test_candidates_stable_only_keeps_stable_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
     """cashflow-statement has a stable-to-stable alias (cash-flow-statement); the
     alias survives the gate, only the v3/v4 rungs are dropped."""
     monkeypatch.setattr(sfd, "_stable_only", True)
-    kinds = [k for k, _u, _p in sfd._candidates("cashflow-statement", "GOOGL", {})]
+    kinds = [k for k, _u, _p in candidates("cashflow-statement", "GOOGL", {})]
     assert kinds == ["stable:cashflow-statement", "stable:cash-flow-statement"]
 
 
 def test_candidates_legacy_emits_v3_v4(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sfd, "_stable_only", False)
-    kinds = [k for k, _u, _p in sfd._candidates("income-statement", "GOOGL", {})]
+    kinds = [k for k, _u, _p in candidates("income-statement", "GOOGL", {})]
     assert "stable:income-statement" in kinds
     assert "v3-path:income-statement" in kinds
     assert "v4-query:income-statement" in kinds
@@ -310,8 +402,9 @@ def test_env_fmp_tier_free_enables_stable_only_at_import(
     assert spec is not None and spec.loader is not None
     fresh = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fresh)
-    assert fresh._stable_only is True
-    kinds = [k for k, _u, _p in fresh._candidates("income-statement", "G", {})]
+    assert getattr(fresh, "_stable_only") is True
+    fresh_candidates = cast("Candidates", getattr(fresh, "_candidates"))
+    kinds = [k for k, _u, _p in fresh_candidates("income-statement", "G", {})]
     assert kinds == ["stable:income-statement"]
 
 
@@ -329,7 +422,7 @@ def test_etf_fmp_get_stable_only_skips_v3(monkeypatch: pytest.MonkeyPatch) -> No
         return HttpJsonResponse(status_code=200, payload=[{"ok": 1}])
 
     monkeypatch.setattr(etf.FMP_CLIENT, "get_url_json", fake_get)
-    etf._fmp_get("key", "SOXX", "etf/info")
+    etf_fmp_get("key", "SOXX", "etf/info")
     assert requested == [f"{etf.FMP_BASE}/stable/etf/info/SOXX"]
     assert not any("/api/v3/" in url for url in requested)
 
@@ -350,7 +443,7 @@ def test_etf_fmp_get_legacy_falls_back_to_v3(monkeypatch: pytest.MonkeyPatch) ->
         return HttpJsonResponse(status_code=200, payload=[{"ok": 1}])
 
     monkeypatch.setattr(etf.FMP_CLIENT, "get_url_json", fake_get)
-    etf._fmp_get("key", "SOXX", "etf/info")
+    etf_fmp_get("key", "SOXX", "etf/info")
     assert any("/api/v3/" in url for url in requested)
 
 
@@ -406,7 +499,7 @@ def test_recovery_dispatch_propagates_fmp_tier_to_subprocess(
     def fake_run(cmd: list[str], **kwargs: object) -> _FakeProc:
         captured["env"] = kwargs.get("env")
         receipt_path = Path(cmd[cmd.index("--work-receipt") + 1])
-        sfd._write_work_receipt(
+        write_work_receipt(
             receipt_path,
             sfd.FmpWorkReceipt(
                 ticker="GOOGL",
@@ -416,7 +509,7 @@ def test_recovery_dispatch_propagates_fmp_tier_to_subprocess(
                 http_status=200,
                 file_path="data/historical/fmp/GOOGL_income_statement_annual.json",
                 content_sha256=hashlib.sha256(raw_path.read_bytes()).hexdigest(),
-                captured_at=rc._utc_now(),
+                captured_at=cache_utc_now(),
             ),
         )
         return _FakeProc()
@@ -435,7 +528,7 @@ def test_recovery_dispatch_propagates_fmp_tier_to_subprocess(
         lease_token="lease-token",
         lease_expires_at=datetime.now() + timedelta(minutes=5),
     )
-    rc._dispatch_one(
+    dispatch_one(
         connection,
         item,
         planned,

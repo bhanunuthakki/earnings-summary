@@ -130,8 +130,8 @@ def _company_tab(
     # P3 panels (strategic targets / customer concentrations / lease ladder):
     # P4.2 hide-don't-stub — strategic targets + lease ladder hide entirely
     # when cold (the Governance coverage report carries the inventory of
-    # gaps); customer concentration keeps an informative empty state because
-    # "no customer ≥ 5%" is itself a disclosure fact. Panels structurally
+    # gaps); customer concentration keeps an explicit unavailable state.
+    # An empty stored list does not establish a disclosure threshold. Panels structurally
     # irrelevant to the business model (a bank has no operating-lease ladder)
     # are suppressed via `suppressed_sections` regardless. See
     # industry_classifier.suppressed_sections_for_ticker.
@@ -613,17 +613,17 @@ def _strategic_targets_panel(body: StringIO, rows: list[StrategicTargetRow]) -> 
 def _customer_concentration_panel(body: StringIO, rows: list[CustomerConcentrationRow]) -> None:
     """P3-19a customer concentration table — named customers ≥ 5% of revenue.
 
-    Empty-state when none reported (most large-cap diversified businesses).
+    Empty-state means no qualifying stored rows, not a negative disclosure.
     Accessor filters out sub-5% rows so this is "material concentration only".
     """
     if not rows:
         _empty_panel(
             body,
             "Customer concentration",
-            "No named customer reaches 5% of revenue in disclosure — either "
-            "genuinely diversified, or concentration hasn't been disclosed "
-            "for this name.",
-            reason="none ≥ 5% reported",
+            "Customer concentration data is unavailable for this report. "
+            "An empty table does not establish whether material customer "
+            "concentration exists or was disclosed.",
+            reason="data unavailable",
             classes="customer-concentration-panel",
         )
         return

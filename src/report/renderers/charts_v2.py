@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from report.renderers.workspace_charts import CHARTS_V2_CSS
+from report.sections._common import level_cagr
 from sources.report_financials import annual_comparison_supported
 from ui.tokens import CHART_SERIES
 
@@ -662,6 +663,8 @@ class MatrixRow:
     # Raw HTML appended after the escaped row label — the caller-built
     # clickable source chip. Caller owns escaping of its text content.
     label_suffix_html: str = ""
+    cell_suffix_html: list[str] | None = None
+    cagr_suffix_html: dict[int, str] | None = None
     # Source-owned edge admission; None preserves unmigrated callers.
     comparison_eligible_edges: list[bool] | None = None
     # None preserves legacy callers; supplied but incomplete dates fail closed.
@@ -725,16 +728,8 @@ def yoy_heatmap_table(
         return (curr / prior - 1) * 100
 
     def cagr(curr: float | None, prior: float | None, n_years: float) -> float | None:
-        if curr is None or prior is None:
-            return None
-        if curr < 0 and prior < 0:
-            # Sign-stable negative series (capex is stored as negative spend):
-            # CAGR of the magnitude, matching the sign-through YoY% cells.
-            # Sign flips (loss→profit) still return None below.
-            curr, prior = -curr, -prior
-        if prior <= 0 or curr <= 0:
-            return None
-        return ((curr / prior) ** (1 / n_years) - 1) * 100
+        value = level_cagr(curr, prior, n_years)
+        return value * 100 if value is not None else None
 
     def heat_color(pct: float | None) -> str:
         if pct is None:
@@ -797,6 +792,13 @@ def yoy_heatmap_table(
                 t = row.cell_titles[j_full]
                 if t:
                     cell_title = f' title="{html.escape(t)}"'
+            suffix = (
+                row.cell_suffix_html[j_full]
+                if row.cell_suffix_html is not None
+                and j_full < len(row.cell_suffix_html)
+                and pct is not None
+                else ""
+            )
             if level_mode:
                 # Ratio/percentage metric: show the absolute level; shade by the
                 # YoY direction of that level (YoY% of a ratio isn't meaningful).
@@ -809,7 +811,7 @@ def yoy_heatmap_table(
             noisy = is_noisy(pct, base, latest_val)
             cls = "cv2-matrix-cell cv2-matrix-noisy" if noisy else "cv2-matrix-cell"
             bg = "" if noisy else heat_color(pct)
-            tb.append(f'<td class="{cls}" style="{bg}"{cell_title}>{fmt_pct(pct, 1)}</td>')
+            tb.append(f'<td class="{cls}" style="{bg}"{cell_title}>{fmt_pct(pct, 1)}{suffix}</td>')
         # Trailing columns: CAGR for flows; absolute pp/bps change for ratios.
         for q in cagr_periods:
             base = row.levels[-1 - q] if n_total > q else None
@@ -838,7 +840,8 @@ def yoy_heatmap_table(
                 noisy = False
             cls = "cv2-matrix-cagr-cell cv2-matrix-noisy" if noisy else "cv2-matrix-cagr-cell"
             bg = "" if noisy else heat_color(pct)
-            tb.append(f'<td class="{cls}" style="{bg}">{fmt_pct(pct, 1)}</td>')
+            suffix = (row.cagr_suffix_html or {}).get(q, "") if pct is not None else ""
+            tb.append(f'<td class="{cls}" style="{bg}">{fmt_pct(pct, 1)}{suffix}</td>')
         tb.append("</tr>")
     tb.append("</tbody>")
     _ = latest  # placeholder; per-row latest is what gates noisiness

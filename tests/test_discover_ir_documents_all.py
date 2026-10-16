@@ -475,7 +475,9 @@ def test_summaries_flag_runs_process_ir_documents(
     fake = _RecordingRun(downloaded={"NU": 2})
     _install(monkeypatch, fake, ["NU"])
     batch.main(["--repo-root", str(tmp_path), "--db", str(db), "--summaries"])
-    assert "process_ir_documents_state.py" in [_script_of(c) for c in fake.calls]
+    command = next(c for c in fake.calls if _script_of(c) == "process_ir_documents_state.py")
+    assert command[command.index("--db") + 1] == str(db)
+    assert command[command.index("--repo-root") + 1] == str(tmp_path)
 
 
 def test_existing_uncached_narrative_is_processed_without_new_downloads(

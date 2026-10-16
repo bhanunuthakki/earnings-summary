@@ -220,8 +220,10 @@ def test_customer_concentration_panel_empty_state() -> None:
     _customer_concentration_panel(out, [])
     html = out.getvalue()
     assert "Customer concentration" in html
-    assert "none ≥ 5% reported" in html
-    assert "genuinely diversified" in html
+    assert "data unavailable" in html
+    assert "does not establish" in html
+    assert "5%" not in html
+    assert "diversified" not in html
     assert "<tbody>" not in html
 
 

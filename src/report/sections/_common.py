@@ -88,9 +88,18 @@ def _ttm_cagr(
         # Sign-stable negative series (capex): CAGR of the magnitude. A sign
         # flip between the windows still returns None below.
         end_window, base_window = -end_window, -base_window
-    if base_window <= 0 or end_window <= 0:
+    return level_cagr(end_window, base_window, years)
+
+
+def level_cagr(curr: float | None, prior: float | None, years: float) -> float | None:
+    """Shared level CAGR; negative stable series use magnitudes."""
+    if curr is None or prior is None or years <= 0:
         return None
-    return (end_window / base_window) ** (1 / years) - 1.0
+    if curr < 0 and prior < 0:
+        curr, prior = -curr, -prior
+    if prior <= 0 or curr <= 0:
+        return None
+    return (curr / prior) ** (1 / years) - 1.0
 
 
 def _ttm(values: list[float | None], offset: int) -> float | None:
@@ -137,15 +146,11 @@ def has_table(conn: sqlite3.Connection, name: str) -> bool:
 
 
 def document_version_ids(conn: sqlite3.Connection, doc_ids: Iterable[int | None]) -> dict[int, str]:
-    """Resolve legacy ``documents.id`` values to their Observation Versions.
+    """Resolve only unambiguous legacy document-to-version bindings.
 
-    A citation may only claim the full provenance chain when the cited
-    document has an ``evidence_document_versions`` row; this maps each legacy
-    id to that row's ``document_version_id`` (highest ``version_sequence``
-    wins, so a superseding version answers for the document). Fail-closed and
-    schema-tolerant: no evidence plane, no matching rows, or a query error all
-    return ``{}`` so callers keep the legacy anchor and render the explicit
-    degraded state instead of a silently partial chain.
+    A document ID does not identify which correction a fact cited. When more
+    than one immutable version is bound, retain the explicit degraded state
+    instead of claiming the newest version supplied the cited observation.
     """
     ids = sorted({int(doc_id) for doc_id in doc_ids if doc_id is not None})
     if not ids or not has_table(conn, "evidence_document_versions"):
@@ -153,12 +158,9 @@ def document_version_ids(conn: sqlite3.Connection, doc_ids: Iterable[int | None]
     marks = ",".join("?" * len(ids))
     try:
         rows = conn.execute(
-            "SELECT legacy_document_id, document_version_id FROM ("
-            " SELECT legacy_document_id, document_version_id,"
-            " ROW_NUMBER() OVER (PARTITION BY legacy_document_id"
-            " ORDER BY version_sequence DESC, recorded_at DESC) AS rn"
-            f" FROM evidence_document_versions WHERE legacy_document_id IN ({marks})"
-            ") WHERE rn = 1",
+            "SELECT legacy_document_id, MIN(document_version_id) "
+            f"FROM evidence_document_versions WHERE legacy_document_id IN ({marks}) "
+            "GROUP BY legacy_document_id HAVING COUNT(*)=1",
             ids,
         ).fetchall()
     except sqlite3.Error:

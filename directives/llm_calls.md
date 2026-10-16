@@ -49,6 +49,82 @@ Direct provider clients are allowed only inside registered adapters under `src/l
 Call sites do not add ad-hoc provider retries, model IDs, fallback chains, or open-ended
 response parsing.
 
+## Financial narrative grounding
+
+This contract applies to all application LLM financial narratives: free-form Ask
+and Copilot answers, report-comment answers, Ledger responses, coaching, company
+and portfolio reports, briefs, evaluations, assessments, earnings summaries,
+cached synthesis, advisor memos and scheduled output. It also applies when an
+agent assembles a standardized report without calling the application's LLM.
+No service, model, transport, cache or template may lower this boundary silently.
+
+### Before generation
+
+Resolve the issuer, requested fiscal periods, knowledge cutoff, user scope and
+required claim classes. Read the existing verified corpus through the shared
+provenance-aware resolver. Row presence, provider retrieval, confidence and a
+source link do not establish admission. Preserve metric definition/revision,
+source observation and document/locator, fiscal start/end and period type,
+currency, unit/scale, scope, accounting basis, precision, and actual versus
+guidance/consensus/assumption status in the model context. Derived values need
+their operands, compatible definitions and reproducible calculation.
+
+If the required corpus is insufficient, flag the missing evidence early. Before
+new collection or a response with lower coverage, obtain the owner's agreement
+to the exact source classes, period window, expected effort and output limits.
+An existing approval covering those facts is sufficient; do not ask repeatedly.
+Use the authorized native intake routes. Do not turn a request for one year of
+earnings and forward estimates into an unapproved full-history ingestion.
+Unattended work defers or returns an explicit missing-evidence result when it
+cannot obtain that decision; it does not invent consent.
+
+Bounded research reduces the population to verify, not factual fidelity. A
+source-checked ad hoc assessment may be useful without recurring-series admission
+or complete archive coverage. Label its exact reviewed window, source basis and
+gaps. It cannot claim decision-grade readiness unless the existing gates pass.
+Open-ended conceptual research can proceed with visibly labeled hypotheses or
+assumptions. Existing company-specific factual anchors still use verified facts;
+the open-ended label never licenses an invented fact.
+
+### Before release
+
+Check every material factual assertion in the complete output against the exact
+selected corpus, not only its cited URL or numerical tokens. Verify the metric,
+period, currency/unit/scale, scope, accounting basis, comparison, qualifiers and
+actual/forecast status. Replay calculations through their owning code. Use exact
+source wording where a paraphrase cannot retain the qualifications safely.
+Model interpretation stays visibly separate from reported facts and estimates.
+
+The check runs before user-visible financial prose, current-cache promotion or
+final artifact publication. A failed, unavailable or incomplete check leaves an
+explicit draft/deferred/blocked result. Do not release a known contradiction with
+only a corrective footnote. Missing rows cannot establish zero, no concentration,
+no risk, no change or complete extraction.
+
+Retain the claim/source manifest, selected corpus identity and cutoff, policy and
+prompt identity, calculation evidence and verification disposition with the
+output. Reuse a cache only when its evidence, scope, freshness and verification
+remain valid. Historical unverified artifacts stay distinguishable; changing this
+contract does not retroactively certify them.
+
+### Implementation and evidence
+
+`src/llm/style.py` supplies the shared factual-grounding instruction block used by
+standard brief prompts and their cache identity. `src/research/method_contract.py`
+loads the source-owned research method for its registered routes. The canonical
+financial reader and memo verifier, and Ask's grounded/sealed retrieval and claim
+checks, own their existing executable gates. Instruction delivery is not proof
+that every caller uses those gates. Keep a complete call/surface inventory and
+record missing adapters and bypasses explicitly until their tests pass.
+
+Representative negative cases include a correct number with the wrong metric,
+denomination, period, reporting scope or actual/forecast status; a conflicting
+value; stale/restated facts; unsupported comparison; and absent evidence described
+as a negative finding. Deterministic checks cover reconstructed values and
+formulas. Semantic review must preserve source meaning; matching numbers or a
+model's self-check alone cannot certify it. Live evaluation evidence remains
+separate from mocked transport and unit-test results.
+
 ## Resolution and fallback
 
 `src/llm/resolver.py` resolves in this order:

@@ -135,6 +135,8 @@ def test_run_extract_uses_repo_root_for_cwd_and_script_path(
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
+    database = tmp_path / "explicit.sqlite"
+    monkeypatch.setattr(mod.db, "DB_PATH", str(database))
     rc = mod._run_extract(repo_root, "AAPL", 42, dry_run=False)
     assert rc == 0
     assert captured["kwargs"]["cwd"] == str(repo_root)
@@ -146,9 +148,7 @@ def test_run_extract_uses_repo_root_for_cwd_and_script_path(
     assert "--rescan-unreceipted" not in captured["cmd"]
     assert "--ticker" not in captured["cmd"]
     assert captured["cmd"][captured["cmd"].index("--transcript-id") + 1] == "42"
-    assert captured["cmd"][captured["cmd"].index("--db") + 1] == str(
-        repo_root / "data" / "portfolio.db"
-    )
+    assert captured["cmd"][captured["cmd"].index("--db") + 1] == str(database)
 
 
 def test_run_ingest_dry_run_skips_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:

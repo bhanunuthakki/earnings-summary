@@ -2167,7 +2167,7 @@ READER_OVERRIDE_CSS = """
   inline-size: 100%;
   max-inline-size: var(--main-max-width);
   margin-inline: auto;
-  padding: var(--sp-5);
+  padding: var(--sp-3) var(--sp-5) var(--sp-5);
 }
 .l1-root {
   height: auto !important;
@@ -2196,6 +2196,14 @@ READER_OVERRIDE_CSS = """
   padding-block: var(--sp-4);
   border-bottom: var(--bw-thin) solid var(--border);
 }
+.reader-group-title, .work-os-report-content .l1-tabs, .work-os-report-content .subtabs { display: none !important; }
+.reader-report-context { position: relative; margin-block-end: var(--sp-3); }
+.reader-report-context > summary { width: fit-content; margin-inline-start: auto; cursor: pointer; color: var(--muted); font-size: var(--fs-caption); }
+.reader-report-context:not([open]) > :not(summary) { display: none !important; }
+.reader-report-context[open] { border-bottom: var(--bw-thin) solid var(--border); padding-block-end: var(--sp-4); }
+.work-os-report-content .tab-body { padding: 0; }
+.work-os-report-content .tab-pane { padding-block-start: 0; }
+@media (max-width: 47.5rem) { .work-os-report-content.k-doc { padding: var(--sp-3); } }
 .reader-group-title {
   margin: 0 0 var(--sp-4);
   padding-bottom: var(--sp-2);

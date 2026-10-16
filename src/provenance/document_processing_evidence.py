@@ -25,6 +25,7 @@ from provenance.fulltext_extractor_identity import (
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
     pdf_table_extractor_code_version,
 )
+from provenance.ocr_extraction import normalize_extracted_text
 from provenance.pdf_table_extraction import PdfTableExtractionArtifact
 from runtime.deterministic import as_utc as _utc
 from runtime.deterministic import canonical_json as _canonical_json
@@ -335,8 +336,19 @@ def _all_run_nodes(
         raise DocumentProcessingEvidenceMissingError("native_evidence_nodes_missing")
     models: list[EvidenceNode] = []
     for row in rows:
-        recorded_at = _datetime(row["recorded_at"], "evidence_nodes.recorded_at")
-        if recorded_at > _utc(cutoff_at):
+        # Legacy output hashes retain the parsed clock's original timezone representation.
+        stored_clock = row["recorded_at"]
+        try:
+            recorded_at = (
+                stored_clock
+                if isinstance(stored_clock, datetime)
+                else datetime.fromisoformat(str(stored_clock))
+            )
+        except (TypeError, ValueError) as exc:
+            raise DocumentProcessingEvidenceIntegrityError(
+                "invalid_native_clock:evidence_nodes.recorded_at"
+            ) from exc
+        if _utc(recorded_at) > _utc(cutoff_at):
             raise DocumentProcessingEvidenceIntegrityError("native_node_after_cutoff")
         locator_json, locator_payload = _canonical_locator(row["locator_json"])
         stored_locator_sha = row["locator_sha256"]
@@ -1043,9 +1055,9 @@ def _node_derived(
             character_count = _require_int(page, "native_character_count")
             node = by_page.pop(page_number, None)
             if character_count > 0:
-                if node is None or _digest(_require_text(node, "text")) != _require_sha(
-                    page, "native_text_sha256"
-                ):
+                if node is None or _digest(
+                    normalize_extracted_text(_require_text(node, "text"))
+                ) != _require_sha(page, "native_text_sha256"):
                     raise DocumentProcessingEvidenceMissingError("pdf_native_page_output_missing")
                 members.append(_node_member(node, run, lane=lane))
             elif node is not None:

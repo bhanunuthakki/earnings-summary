@@ -298,7 +298,7 @@ def _run_process_stage(
     timeout_s: float,
     deadline_at: float | None = None,
 ) -> bool:
-    """Feed newly-registered docs into the LLM pipeline. Best-effort; never raises.
+    """Extract retained document text; optionally produce LLM summaries.
 
     Always: ``ir_narrative.py`` (cheap pypdf extraction → ``data/ir_narrative/<T>/``,
     the IR anchor every ``--enable-llm`` prompt reads) + flip ``brief_dirty`` so the
@@ -336,6 +336,8 @@ def _run_process_stage(
                 ticker,
                 "--repo-root",
                 str(repo_root),
+                "--db",
+                str(db_path),
             ],
             summary_timeout,
             f"[{ticker}] process_ir_documents",

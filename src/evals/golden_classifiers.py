@@ -47,6 +47,8 @@ from evals.harness import (
 from llm.cli import DEFAULT_MODEL, LLM_MODELS, is_hard_stop
 from llm.prompt_versions import prompt_version_for
 
+_load_doc = load_golden_doc
+
 log = logging.getLogger(__name__)
 
 GOLDEN_DIR = Path("evals") / "golden"
@@ -167,7 +169,15 @@ def load_intake_classifier_golden(path: Path) -> list[ClassifierCase]:
     return cases
 
 
-_CONDITION_GRADED_FIELDS = ("metric", "metric_source", "op", "threshold", "unit", "for_periods")
+_CONDITION_GRADED_FIELDS = (
+    "metric",
+    "metric_source",
+    "op",
+    "threshold",
+    "unit",
+    "for_periods",
+    "financial_cadence",
+)
 
 
 def _str_list(value: object) -> list[str] | None:
@@ -212,6 +222,8 @@ def load_decision_conditions_golden(path: Path) -> list[ClassifierCase]:
                 errors.append(f"{label} ({case_id}): expected[{j}] must be an object")
                 continue
             entry_obj = cast("dict[str, object]", entry)
+            if entry_obj.get("financial_cadence") not in (None, "quarterly", "annual"):
+                errors.append(f"{label} ({case_id}): expected[{j}] invalid financial_cadence")
             missing = [k for k in _CONDITION_GRADED_FIELDS if k not in entry_obj]
             if missing:
                 errors.append(f"{label} ({case_id}): expected[{j}] missing {missing}")
@@ -585,6 +597,7 @@ def _condition_key(obj: dict[str, object]) -> tuple[object, ...]:
         threshold_f,
         obj.get("unit"),
         obj.get("for_periods"),
+        obj.get("financial_cadence"),
     )
 
 

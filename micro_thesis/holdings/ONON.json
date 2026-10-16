@@ -1,0 +1,145 @@
+{
+  "ticker": "ONON",
+  "name": "On Holding",
+  "last_updated": "2026-10-04",
+  "thesis": "Evaluation thesis: On can compound premium sportswear sales while direct-to-consumer growth, international expansion and product breadth improve operating returns. Q2 2026 reported sales grew 13.5% in CHF and 21.6% at constant currency; DTC reached 45.7% of sales and gross margin reached 65.4%. Management targets at least CHF5.6 billion sales, 65% gross margin and 22% adjusted EBITDA margin in 2029. Those targets require evidence of repeat demand, disciplined distribution and cash returns after store costs, working capital, capital spending and stock compensation. Full-price positioning is a management strategy; zero discounting is not established. APAC and apparel growth support the opportunity, but customer retention, country-level returns and LightSpray unit economics remain unquantified. The $1 billion repurchase is an authorization, not an executed reduction in shares. A position decision remains conditional on a verified source population, attributed forecast assumptions and an adequate margin of safety. Use the explicit five-year cash-rent/SBC model; do not treat adjusted EBITDA as owner cash flow. The saved 9.5% discount rate and 16x terminal default are legacy inputs; the dated reviewed scenario artifact states its own effective rates and terminal assumptions.",
+  "verdict": "Evaluation",
+  "verdict_color": "green",
+  "key_driver": "DTC channel mix expansion, full-price gross margin preservation (>=65%), and APAC/Apparel category scaling",
+  "chart_priorities": [
+    "Revenue",
+    "Operating income",
+    "Gross profit margin",
+    "DTC channel net sales",
+    "Adjusted EBITDA margin",
+    "APAC net sales"
+  ],
+  "_status": "evaluation",
+  "tier_1_kpis": [
+    {
+      "name": "Constant Currency Net Sales YoY",
+      "current": "+21.6% (Q2'26, CHF 850.3M net sales; +13.5% reported CHF)",
+      "prior": "+26.4% (Q1 2026, constant currency; reported Q1 MD&A)",
+      "yoy": "+21.6%",
+      "status": "Green",
+      "break_condition": "<15% constant currency for 2 consecutive quarters",
+      "source": "6-K Exhibit 99.3 Press Release"
+    },
+    {
+      "name": "Gross Profit Margin",
+      "current": "65.4% (Q2'26, up 390 bps YoY from 61.5%; 64.8% 6M'26)",
+      "prior": "61.5% (Q2'25)",
+      "yoy": "+390 bps",
+      "status": "Green",
+      "break_condition": "Compresses below 60.0% for 2 consecutive quarters (loss of full-price discipline / discounting)",
+      "source": "6-K Exhibit 99.3 Press Release / Exhibit 99.1 Financials"
+    },
+    {
+      "name": "Direct-to-Consumer (DTC) Net Sales Mix",
+      "current": "45.7% (Q2'26, CHF 388.4M, +34.3% CC YoY; up from 41.1% in Q2'25)",
+      "prior": "41.1% (Q2'25)",
+      "yoy": "+460 bps mix",
+      "status": "Green",
+      "break_condition": "DTC growth decelerates below Wholesale growth for 2 consecutive quarters",
+      "source": "6-K Exhibit 99.3 Press Release"
+    },
+    {
+      "name": "Asia-Pacific (APAC) Net Sales YoY (CC)",
+      "current": "+54.7% (Q2'26, CHF 170.5M; +43.1% reported CHF)",
+      "prior": "+61.4% (Q1 2026, constant currency; reported Q1 MD&A)",
+      "yoy": "+54.7%",
+      "status": "Green",
+      "break_condition": "<25% constant currency for 2 consecutive quarters",
+      "source": "6-K Exhibit 99.3 Press Release"
+    },
+    {
+      "name": "Adjusted EBITDA Margin",
+      "current": "19.8% (Q2'26, CHF 168.1M, +23.5% YoY; guidance 19.5%-20.0% FY26)",
+      "prior": "18.2% (Q2'25)",
+      "yoy": "+160 bps",
+      "status": "Green",
+      "break_condition": "<17.0% for 2 consecutive quarters",
+      "source": "6-K Exhibit 99.3 Press Release"
+    }
+  ],
+  "tier_2_kpis": [
+    {
+      "name": "Apparel & Accessories Net Sales YoY (CC)",
+      "current": "Apparel +56.2% CC (CHF 54.2M); Accessories +102.2% CC (CHF 14.5M) in Q2'26",
+      "break_condition": "Apparel growth slows to footwear rate (<20%) indicating category extension failure",
+      "source": "6-K Exhibit 99.3 Press Release"
+    },
+    {
+      "name": "Americas Net Sales YoY (CC)",
+      "current": "+13.0% CC (CHF 451.6M; +4.5% reported CHF) in Q2'26",
+      "break_condition": "<8% CC for 2 consecutive quarters",
+      "source": "6-K Exhibit 99.3 Press Release"
+    },
+    {
+      "name": "Stock-Based Compensation / Revenue",
+      "current": "1.4% (CHF 12.2M on CHF 850.3M net sales in Q2'26)",
+      "break_condition": ">3.0% of revenue",
+      "source": "6-K Exhibit 99.3 Reconciliation"
+    }
+  ],
+  "tier_3_kpis": [
+    {
+      "name": "Net Working Capital Growth Since Prior Year End",
+      "current": "CHF635.9M as of June 30, 2026; +11.5% versus CHF570.3M at December 31, 2025. This is not year-over-year growth.",
+      "source": "6-K Exhibit 99.2 MD&A, Net Working Capital; June 30, 2026 versus December 31, 2025"
+    }
+  ],
+  "competitive_watchlist": [
+    "Deckers Outdoor (HOKA)",
+    "Nike",
+    "Adidas",
+    "Lululemon Athletica",
+    "Brooks Running"
+  ],
+  "thesis_breakers_qualitative": [
+    "Widespread promotional discounting / markdowns damaging premium brand cachet and gross margin",
+    "Wholesale channel channel-stuffing or inventory buildup leading to write-downs",
+    "Failure of new sports category entries (Football, Golf) to gain athlete adoption",
+    "Key founder or elite talent departures (e.g. Roger Federer, Executive Founder Team)"
+  ],
+  "break_rules": [
+    {
+      "rule_id": "gross_margin_discount_erosion",
+      "kpi_name": "Gross Profit Margin",
+      "comparator": "lt",
+      "threshold": 60.0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Gross margin below 60% for two consecutive quarters triggers review of pricing, discounting, channel mix, currency, freight and tariffs. The threshold alone does not establish pricing-power loss."
+    },
+    {
+      "rule_id": "constant_currency_growth_stall",
+      "kpi_name": "Constant Currency Net Sales YoY",
+      "comparator": "lt",
+      "threshold": 15.0,
+      "unit": "percent",
+      "consecutive_periods": 2,
+      "narrative": "Constant currency growth below 15% for 2 consecutive quarters indicates brand saturation."
+    }
+  ],
+  "schema_version": 2,
+  "wacc": 0.095,
+  "mos_bar": 0.25,
+  "dcf_defaults": {
+    "forecast_years": 5,
+    "terminal_multiple": 16.0
+  },
+  "flags": [
+    "high_dtc_growth",
+    "premium_pricing_discipline",
+    "founder_led"
+  ],
+  "segments": [
+    "Shoes",
+    "Apparel",
+    "Accessories"
+  ],
+  "operational_kpis": [],
+  "break_rules_soft": [],
+  "valuation_model": "onon_economic_fcff"
+}

@@ -1,66 +1,24 @@
-"""Find active-universe tickers missing data, analysis, or commitment-extraction
-work and run the appropriate subset of the pipeline for each. Closes the gap
-when tickers get added via raw SQL / direct DB writes / external API
-bypass AND keeps the commitment ledger fresh as new transcripts arrive.
+"""Catch up active portfolio, watchlist and evaluation tickers.
 
-A ticker is "pending" when ALL of:
-  - list_type IN (portfolio, watchlist, evaluation) — `db.ACTIVE_LIST_TYPES`
+Missing instrument classification or source facts queues onboarding. Missing
+DCF queues compute only when retained valuation inputs exist. It does not
+replay source acquisition. Missing owner thesis skips thesis evaluation; it
+does not block company-reported data. Transcript work uses the existing typed
+immutable scan-coverage classifier.
 
-AND ANY of:
-  - instrument_type IS NULL                  -> 'no_instrument_type'
-    (track_company would have set this; missing means the ticker bypassed
-    the auto-onboard hook)
-  - 0 rows in financial_facts                -> 'no_financial_facts'
-    (parse stage never ran)
-  - 0 rows in dcf_runs                       -> 'no_dcf_run'
-    (analysis stage never ran)
-  - has extractable transcripts but 0 management_commitments -> 'no_commitments'
-    (commitments never extracted from existing transcripts). On the active
-    schema, "extractable" uses the same typed immutable-coverage classifier as
-    the extractor. Legacy/invalid history stays out of automatic work, while a
-    valid changed source or genuinely never-scanned source remains eligible.
+FMP budget exhaustion and recently-IPO daily backoff defer only FMP. Independent
+SEC CompanyFacts acquisition still runs. ETF source selection remains separate.
+These operational queue checks do not certify report-grade completeness.
 
-Per-ticker work depends on pending_reason:
-  - no_instrument_type / no_financial_facts / no_dcf_run:
-      onboard_ticker -> run_thesis_evaluator -> refresh_dcf
-      -> extract_commitments_from_transcript --auto
-  - no_commitments:
-      extract_commitments_from_transcript --auto only
-
-Idempotent at every layer:
-  - save_fmp_data --skip-existing on the FMP fetch
-  - run_thesis_evaluator always recomputes from current facts
-  - refresh_dcf seeds dcf/<TICKER>.xlsx if missing then re-runs the PV calc;
-    skips with status='skipped' for tickers whose holdings JSON lacks WACC,
-    leaving the dcf_runs row absent for those (no perpetual write churn).
-  - extract_commitments --auto uses the typed immutable scan-coverage state
-
-Recently-IPO'd backoff (apply_ipo_backoff):
-  A ticker flagged `recently_ipod: true` in micro_thesis/holdings/<T>.json has
-  almost no FMP coverage until its first 10-Q is ingested (often months post
-  IPO), so the pending SQL would flag it `no_financial_facts` every hour and
-  re-run the full ~60-endpoint onboard — ~720 FMP calls/day against the 750/day
-  cap. We DEFER such tickers to a daily cadence (keyed off the most recent
-  fmp_endpoint_status.last_pulled) rather than skipping them: the first onboard
-  still runs (no prior fetch row), and once FMP has data the next daily
-  re-check onboards it. This is the chosen fix among the three options weighed
-  (vs. a save_fmp_data skip-window or hard skip) because it kills both the
-  hourly subprocess churn AND the FMP-call waste in one place while preserving
-  "auto-onboard the moment data arrives". The Issue-3 fix (recording accessible-
-  but-empty endpoints as `empty` not `forbidden`) is the complementary signal
-  that makes "is this IPO covered yet?" answerable.
-
-Designed to be invoked hourly by Windows Task Scheduler. See:
-  - directives/onboard_pending_tickers.md
-  - cron/onboard_pending_tickers.task.xml
-  - cron/run_onboard_pending.bat
+``--project-root`` selects retained artifacts. ``--db`` selects the configured
+database. Runtime configuration resolves before logs, discovery or child writes.
+The hourly scheduler uses one portfolio-db writer lock per ticker. Native stages
+retain their own immutable source and replay accounting.
 
 Usage:
-    python execution/onboard_pending_tickers.py
+    python execution/onboard_pending_tickers.py --project-root STATE --db DB
     python execution/onboard_pending_tickers.py --dry-run
-    python execution/onboard_pending_tickers.py --max 10
     python execution/onboard_pending_tickers.py --skip-fmp
-    python execution/onboard_pending_tickers.py --skip-commitments
 """
 
 from __future__ import annotations
@@ -68,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sqlite3
 import subprocess
 import sys
@@ -77,21 +36,23 @@ from enum import StrEnum
 from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import db  # noqa: E402
-from compute.say_do_extractor import transcripts_without_scan_receipt  # noqa: E402
-from pipeline.cadence_policy import (  # noqa: E402
+import db
+from compute.say_do_extractor import transcripts_without_scan_receipt
+from db_paths import require_db_path
+from pipeline.cadence_policy import (
     ESTIMATED_FMP_CALLS_PER_ONBOARD,
     check_onboarding_budget,
 )
-from pipeline.commitment_scan_receipts import scan_receipt_schema_available  # noqa: E402
-from pipeline.queries import open_db  # noqa: E402
-from provenance.selection import selected_transcripts_relation  # noqa: E402
-from runtime.job_runtime import JobAlreadyRunningError, JobLock  # noqa: E402
-from runtime.python_process import ensure_managed_python_argv, managed_python_prefix  # noqa: E402
+from pipeline.commitment_scan_receipts import scan_receipt_schema_available
+from pipeline.queries import open_db
+from provenance.selection import selected_transcripts_relation
+from runtime.job_runtime import JobAlreadyRunningError, JobLock
+from runtime.python_process import ensure_managed_python_argv, managed_python_prefix
+from runtime.secrets import load_project_env
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+_STATE_ROOT = PROJECT_ROOT
 _DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 _HOLDINGS_DIR = PROJECT_ROOT / "micro_thesis" / "holdings"
 _LOG_DIR = PROJECT_ROOT / ".tmp" / "cron_logs"
@@ -101,6 +62,23 @@ _LOG_DIR = PROJECT_ROOT / ".tmp" / "cron_logs"
 _COMMITMENT_ONLY_REASON = "no_commitments"
 
 log = logging.getLogger("onboard_pending")
+
+
+def configure_runtime(project_root: Path, database_path: Path | None) -> None:
+    """Resolve the retained state before discovery, logs or child writes."""
+    global _STATE_ROOT, _DB_PATH, _HOLDINGS_DIR, _LOG_DIR
+    state_root = project_root.expanduser().resolve()
+    load_project_env(state_root)
+    approved_database = database_path or os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
+    if not approved_database:
+        raise RuntimeError("An explicit or configured portfolio database is required")
+    resolved_database = require_db_path(approved_database)
+    _STATE_ROOT = state_root
+    _DB_PATH = resolved_database
+    _HOLDINGS_DIR = state_root / "micro_thesis" / "holdings"
+    _LOG_DIR = state_root / ".tmp" / "cron_logs"
+    os.environ["EARNINGS_SUMMARY_DB_PATH"] = str(resolved_database)
+    db.set_db_path(resolved_database, state_root=state_root)
 
 
 class StageOutcome(StrEnum):
@@ -160,6 +138,7 @@ def _pending_sql(conn: sqlite3.Connection, scan_log_exists: bool) -> str:
     return f"""
 SELECT
   tc.ticker,
+  {commitments_pending} AS commitments_pending,
   CASE
     WHEN tc.instrument_type IS NULL THEN 'no_instrument_type'
     -- ETFs have no FMP financial statements and no DCF by design (they onboard
@@ -210,16 +189,26 @@ def find_pending_tickers(db_path: Path) -> list[tuple[str, str]]:
     conn = open_db(db_path)
     try:
         rows = conn.execute(_pending_sql(conn, _scan_log_exists(conn))).fetchall()
+        source_or_compute_rows = [
+            (str(row["ticker"]), str(row["pending_reason"]))
+            for row in rows
+            if row["pending_reason"] != "no_dcf_run" or _has_valuation_inputs(str(row["ticker"]))
+        ]
         if not scan_receipt_schema_available(conn):
-            return [(row["ticker"], row["pending_reason"]) for row in rows]
+            suppressed = {ticker for ticker, _reason in source_or_compute_rows}
+            return source_or_compute_rows + [
+                (str(row["ticker"]), _COMMITMENT_ONLY_REASON)
+                for row in rows
+                if str(row["ticker"]) not in suppressed and row["commitments_pending"]
+            ]
 
         scan_tickers = {
             ticker for _transcript_id, ticker, _period_end in transcripts_without_scan_receipt(conn)
         }
         reason_by_ticker = {
-            str(row["ticker"]): str(row["pending_reason"])
-            for row in rows
-            if row["pending_reason"] != _COMMITMENT_ONLY_REASON
+            ticker: reason
+            for ticker, reason in source_or_compute_rows
+            if reason != _COMMITMENT_ONLY_REASON
         }
         ordered_tickers = [
             str(row["ticker"])
@@ -353,6 +342,47 @@ def _skipped(stage: str, detail: str) -> StageResult:
     return StageResult(stage=stage, outcome=StageOutcome.SKIPPED, rc=0, detail=detail)
 
 
+def _has_valuation_inputs(ticker: str) -> bool:
+    """Queue owner-conditioned compute only when its existing input exists."""
+    if (_STATE_ROOT / "dcf" / f"{ticker.upper()}.xlsx").is_file():
+        return True
+    holdings_path = _HOLDINGS_DIR / f"{ticker.upper()}.json"
+    assumptions_path = _STATE_ROOT / "data" / "dcf_assumptions" / f"{ticker.upper()}.json"
+    for path in (holdings_path, assumptions_path):
+        try:
+            raw: object = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        data = cast("dict[str, object]", raw)
+        wacc = data.get("wacc")
+        if isinstance(wacc, (int, float)) and not isinstance(wacc, bool) and wacc > 0:
+            return True
+        model = data.get("valuation_model")
+        if isinstance(model, str) and model in {
+            "fcff_dcf",
+            "bank_excess_return",
+            "holdco_sotp",
+            "fintech_sotp",
+            "platform_dcf",
+            "meli_platform_sotp",
+        }:
+            return True
+        redesign = data.get("redesign")
+        if isinstance(redesign, dict):
+            redesign_data = cast("dict[str, object]", redesign)
+            model = redesign_data.get("valuation_model")
+            if (
+                redesign_data
+                and redesign_data.get("dcf_applicable") is not False
+                and model != "none"
+                and model != "new"
+            ):
+                return True
+    return False
+
+
 def onboard_one(
     ticker: str,
     pending_reason: str,
@@ -360,6 +390,7 @@ def onboard_one(
     skip_fmp: bool,
     skip_commitments: bool,
     log_path: Path,
+    skip_sec: bool = False,
 ) -> TickerResult:
     """Run the appropriate stage chain for a single ticker. Returns a structured result.
 
@@ -383,10 +414,20 @@ def onboard_one(
             "execution/onboard_ticker.py",
             "--ticker",
             ticker,
+            "--project-root",
+            str(_STATE_ROOT),
+            "--db",
+            str(_DB_PATH),
         ]
         if skip_fmp:
             onboard_cmd.append("--skip-fmp")
-        stages.append(_run_subprocess(onboard_cmd, "onboard_ticker", log_path))
+        if skip_sec:
+            onboard_cmd.append("--skip-sec")
+        stages.append(
+            _skipped("onboard_ticker", "source acquisition is not missing")
+            if pending_reason == "no_dcf_run"
+            else _run_subprocess(onboard_cmd, "onboard_ticker", log_path)
+        )
 
         # run_thesis_evaluator is best-effort — missing holdings JSON returns non-zero
         # but should not abort the rest of the chain.
@@ -395,8 +436,16 @@ def onboard_one(
             "execution/run_thesis_evaluator.py",
             "--ticker",
             ticker,
+            "--db",
+            str(_DB_PATH),
+            "--holdings-dir",
+            str(_HOLDINGS_DIR),
         ]
-        stages.append(_run_subprocess(eval_cmd, "run_thesis_evaluator", log_path))
+        stages.append(
+            _run_subprocess(eval_cmd, "run_thesis_evaluator", log_path)
+            if (_HOLDINGS_DIR / f"{ticker.upper()}.json").is_file()
+            else _skipped("run_thesis_evaluator", "owner thesis input unavailable")
+        )
 
         # refresh_dcf replaces the old batch_dcf path: seeds dcf/<TICKER>.xlsx
         # if missing, refreshes its Historicals, then re-runs the PV calc.
@@ -405,8 +454,14 @@ def onboard_one(
             "execution/refresh_dcf.py",
             "--ticker",
             ticker,
+            "--repo-root",
+            str(_STATE_ROOT),
         ]
-        stages.append(_run_subprocess(dcf_cmd, "refresh_dcf", log_path))
+        stages.append(
+            _run_subprocess(dcf_cmd, "refresh_dcf", log_path)
+            if _has_valuation_inputs(ticker)
+            else _skipped("refresh_dcf", "existing valuation input unavailable")
+        )
 
     if skip_commitments:
         stages.append(_skipped("extract_commitments", "--skip-commitments flag"))
@@ -420,6 +475,8 @@ def onboard_one(
             "--auto",
             "--ticker",
             ticker,
+            "--db",
+            str(_DB_PATH),
         ]
         stages.append(_run_subprocess(commit_cmd, "extract_commitments", log_path))
 
@@ -453,11 +510,15 @@ def _remaining_fmp_budget() -> int:
     unavailable so the gate only fires when the data is reliable.
     """
     try:
-        sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-        import refresh_cache
+        from execution import refresh_cache
 
         tier = refresh_cache.resolve_tier(None)
-        return refresh_cache.remaining_budget(tier)
+        prior_cache_dir = refresh_cache.CACHE_DIR
+        try:
+            refresh_cache.CACHE_DIR = _STATE_ROOT / ".tmp" / "cacher"
+            return refresh_cache.remaining_budget(tier)
+        finally:
+            refresh_cache.CACHE_DIR = prior_cache_dir
     except (ImportError, SystemExit, ValueError, KeyError):
         # Can't read the tier or budget file — don't block the run.
         return 10**9
@@ -465,10 +526,23 @@ def _remaining_fmp_budget() -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--db", default=str(_DB_PATH), help="Path to portfolio.db")
+    ap.add_argument("--db", type=Path, help="Explicit configured portfolio database")
+    ap.add_argument(
+        "--project-root",
+        "--repo-root",
+        dest="project_root",
+        type=Path,
+        default=PROJECT_ROOT,
+        help="Private state/artifact root; code stays in the managed checkout",
+    )
     ap.add_argument("--dry-run", action="store_true", help="List pending tickers and exit")
     ap.add_argument("--max", type=int, default=0, help="Limit to first N tickers (0 = no limit)")
-    ap.add_argument("--skip-fmp", action="store_true", help="Skip FMP fetch (parse-only re-run)")
+    ap.add_argument(
+        "--skip-fmp",
+        action="store_true",
+        help="Skip FMP fetch; independent SEC acquisition still runs",
+    )
+    ap.add_argument("--skip-sec", action="store_true", help="Skip independent SEC CompanyFacts")
     ap.add_argument(
         "--skip-commitments",
         action="store_true",
@@ -489,6 +563,7 @@ def main() -> int:
         f"{ESTIMATED_FMP_CALLS_PER_ONBOARD})",
     )
     args = ap.parse_args()
+    configure_runtime(args.project_root, args.db)
 
     logging.basicConfig(level=logging.INFO, format="[onboard_pending] %(message)s")
     _LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -507,17 +582,19 @@ def main() -> int:
     log_stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
     log_path = _LOG_DIR / f"onboard_pending_{log_stamp}.log"
 
-    pending_all = find_pending_tickers(Path(args.db))
-    # Back recently-IPO'd, near-zero-coverage tickers off to a daily cadence so
-    # they don't re-run the full onboard hourly. Deferred tickers are surfaced
-    # in the report (not silently dropped) and still re-checked once a day.
-    pending, deferred = apply_ipo_backoff(pending_all, Path(args.db), _HOLDINGS_DIR)
+    pending_all = find_pending_tickers(_DB_PATH)
+    # Apply the existing daily FMP cadence without deferring SEC or local work.
+    _fmp_ready, deferred = apply_ipo_backoff(pending_all, _DB_PATH, _HOLDINGS_DIR)
+    # IPO cadence belongs to FMP. It cannot suppress independent SEC capture.
+    pending = pending_all
+    ipo_fmp_deferred = {ticker for ticker, _reason in deferred}
     deferred_payload = [
-        {"ticker": t, "reason": r, "deferred": "recently_ipod_daily_cadence"} for t, r in deferred
+        {"ticker": t, "reason": r, "deferred": "fmp_recently_ipod_daily_cadence"}
+        for t, r in deferred
     ]
     if deferred:
         log.info(
-            "deferred %d recently-IPO'd ticker(s) to daily cadence: %s",
+            "deferred FMP for %d recently-IPO'd ticker(s) to daily cadence: %s",
             len(deferred),
             ", ".join(t for t, _ in deferred),
         )
@@ -555,10 +632,13 @@ def main() -> int:
     needs_budget_gate = (
         not args.skip_budget_gate
         and not args.skip_fmp
-        and any(r != _COMMITMENT_ONLY_REASON for _, r in pending)
+        and any(r != _COMMITMENT_ONLY_REASON and t not in ipo_fmp_deferred for t, r in pending)
     )
+    fmp_deferred: dict[str, object] | None = None
     if needs_budget_gate:
-        full_onboards = sum(1 for _, r in pending if r != _COMMITMENT_ONLY_REASON)
+        full_onboards = sum(
+            1 for t, r in pending if r != _COMMITMENT_ONLY_REASON and t not in ipo_fmp_deferred
+        )
         remaining = _remaining_fmp_budget()
         allowed, reason = check_onboarding_budget(
             pending_count=full_onboards,
@@ -566,23 +646,13 @@ def main() -> int:
             calls_per_onboard=args.calls_per_onboard,
         )
         if not allowed:
-            report = {
-                "run_id": stamp,
-                "deferred": True,
-                "defer_reason": "fmp_budget_gate",
+            fmp_deferred = {
+                "reason": "fmp_budget_gate",
                 "detail": reason,
-                "pending_count": len(pending),
-                "log": str(log_path),
             }
-            print(json.dumps(report, indent=2))
-            # Budget exhaustion is an expected capacity decision, not a failed
-            # run.  The pending rows remain durable and the hourly scheduler
-            # retries them after quota resets.  Returning non-zero made every
-            # healthy deferral look like an operational outage in Task
-            # Scheduler and cron health.
-            log.info("budget gate deferred run: %s", reason)
-            return 0
-        log.info("budget gate passed: %s", reason)
+            log.info("FMP deferred; independent SEC and local work continue: %s", reason)
+        else:
+            log.info("budget gate passed: %s", reason)
 
     log.info("starting run %s — %d pending tickers — log: %s", stamp, len(pending), log_path)
     results: list[TickerResult] = []
@@ -601,7 +671,10 @@ def main() -> int:
                 result = onboard_one(
                     ticker,
                     reason,
-                    skip_fmp=args.skip_fmp,
+                    skip_fmp=(
+                        args.skip_fmp or fmp_deferred is not None or ticker in ipo_fmp_deferred
+                    ),
+                    skip_sec=args.skip_sec,
                     skip_commitments=args.skip_commitments,
                     log_path=log_path,
                 )
@@ -619,6 +692,7 @@ def main() -> int:
         "run_id": stamp,
         "pending_count": len(pending),
         "deferred": deferred_payload,
+        "fmp_deferred": fmp_deferred,
         "log": str(log_path),
         "results": [_result_to_dict(r) for r in results],
     }

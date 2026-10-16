@@ -1,0 +1,135 @@
+---
+name: earnings-summary-investing
+description: Use the earnings-summary project's existing sources and tools for public-company and ETF research, earnings previews and readouts, valuation and thesis review, thesis revision from notes or articles, investment decision cards, evaluation-list review, full-book portfolio risk, and investment memos. Prefer this workflow for research in earnings-summary and its portfolio or evaluation names. Route next-dollar allocation to the existing next-dollar-allocation skill. Does not execute trades or authorize publication.
+---
+
+# Earnings-summary investing
+
+Help the owner decide what changed, whether it changes the investment case, and
+what evidence supports the conclusion. Use this project's workflow directly.
+Do not load the generic Public Equity Investing plugin as a routine dependency.
+
+## Procedure maintenance
+
+Read current source owners before executing a route. The installed skill points
+to its tracked source; procedure edits are read immediately, but its route map
+needs semantic review when an interface or owner changes. Run
+`python3 scripts/check_investing_skill.py --check` to detect source changes and
+broken references. The existing Monthly prompt architecture refresh job reviews
+that result and updates this project-owned skill. Hash drift prompts review; it
+does not approve a policy change. See [maintenance](references/routes.md#maintenance) and the monthly
+[assessment loop](references/assessment.md).
+
+## Resolve the task and authority
+
+Resolve this file's real path; the installed skill can be a symlink. Its repository
+is four parents above the skill directory. Read the repository's current
+`AGENTS.md`. Use [routes](references/routes.md) for the smallest task owner.
+Select the relevant [analysis path](references/analysis-paths.md) from the request;
+valuation review, thesis revision and portfolio risk need no special tag.
+Combine paths when the request crosses them. A simple definition or grammar edit
+does not require an investing workflow.
+For initiating coverage or upgrading an evaluation memo, use the explicit
+[new-company flow](references/analysis-paths.md#earnings-and-new-company-evaluation).
+Continue through authorized source acquisition and repairable intake failures.
+FMP availability and an approved owner thesis are not prerequisites for SEC
+research or an analyst memo. They remain separate provider and owner decisions.
+Read `directives/directive_manifest.json` before treating a directive as policy:
+canonical files own policy, runbooks supply mechanics, drafts remain proposals.
+
+Carry forward the owner's named scope, current preferences and authorization.
+Read the canonical roster for portfolio and evaluation membership and levels.
+Do not infer the roster from thesis files, a static ticker list or a prior brief.
+For allocation, use the full account book through `next-dollar-allocation`.
+
+Before live access, follow `directives/agent_host_operations.md` and the machine
+operations procedure. Resolve the configured host and database. Use an explicit
+approved database path for database commands. A development checkout is not a
+live database, fallback host or place for duplicate background services.
+
+## Establish the evidence
+
+Apply the [financial narrative contract](../../../../directives/llm_calls.md#financial-narrative-grounding)
+to every requested brief, evaluation, assessment and financial answer. Use existing
+verified facts first. If the requested evidence is unavailable, flag the gap early
+and agree on the source classes, period window, effort and output limits before
+new collection or a response with lower coverage. Honor an already approved exact
+scope. A bounded request needs accurate facts within that window; it does not
+require an unrequested full-history ingestion. Open-ended reasoning may use
+explicit assumptions, but its factual anchors still require source support.
+
+Start with `micro_thesis/holdings/<TICKER>.json`, canonical database evidence,
+`transcripts/`, `ir_documents/` and existing research artifacts. Thesis thresholds
+and owner assumptions come from their recorded authority. A draft or stub does
+not become approved because it is present. Use issuer filings and investor
+relations sources for missing company evidence through the typed acquisition
+and intake routes. Generic search can discover a source; it cannot replace it.
+
+Resolve issuer identity and the exact fiscal year, quarter, period end and release
+date for every earnings request. A fiscal Q2 can precede another issuer's Q2 by
+months. Preserve an explicitly requested quarter. For an already reported Q3,
+label its preview as historical and enforce the historical knowledge cutoff;
+changing it to a current readout requires a scope decision. A future quarter
+cannot have a post-earnings readout. Mark earnings dates as confirmed, estimated
+or unannounced. Check
+currency, unit, scope, accounting basis, segment changes and comparative recasts.
+
+Use the shared provenance-aware readers. Preserve source wording and raw bytes.
+Separate acquisition completeness from extraction completeness. A URL, captured
+document or generated report alone does not establish complete evidence. Report
+missing packages, sections, facts and rejected semantic admissions explicitly.
+Call an output decision-grade only when source authority, completeness, semantic
+admission, reader parity and reconstruction checks all pass under project policy.
+
+## Form the investor judgment
+
+For company reports, earnings preparation/readouts and thesis work, follow the
+[research method](references/research-method.md) and its shared application adapter
+`src/research/method_contract.py`. It supplies the analytical
+steps and placement within existing artifacts; it does not replace their schemas.
+
+For an earnings preview, state the expectation bar, evidence that would confirm
+or weaken the thesis, key questions and the likely decision after each outcome.
+For a readout, compare reported results with dated prior guidance and available
+expectations. Explain what changed in the business and in the investment case.
+Do not invent consensus, call a beat without a comparable expectation, or confuse
+a guidance change with a change in the underlying business.
+
+Connect the evidence to the approved thesis and valuation assumptions. Identify
+the strongest counter-case and the evidence that would prove or kill the thesis.
+Use code or existing model calculations for arithmetic and sensitivities. Show
+which assumption can reverse the conclusion and the next event to watch. Make
+the supported action clear: research further, watch, maintain or reconsider the
+investment case. Position sizing uses recorded intent and portfolio context.
+
+Distinguish reported facts, management claims, consensus estimates, calculations
+and analyst inference. Missing evidence limits the conclusion; it does not imply
+that the thesis passed or that the owner should hold cash. Unsupported modes can
+produce bounded source-backed research without inventing a new durable pipeline.
+
+## Deliver through the existing surface
+
+Check the complete narrative against its selected corpus before delivery. Verify
+metric meaning, periods, currency/units, scale, reporting scope, basis and
+actual/forecast qualifications as well as values and calculations. Retain the
+claim/source evidence and verification disposition. A citation, successful
+render or model self-check is not a passing factual verification gate.
+
+Use the route's existing schema and report family. Keep a quick answer concise;
+do not impose a model, deck, memo or intake form on every question. Save durable
+research in the configured private output authority. Repository-generated
+deliverables use `output/research/<TICKER>/`; `.tmp/` holds intermediate receipts.
+Retain a source/context manifest or claim-level citations with the output.
+
+Check the route's actual scope before a bulk run. The pre-earnings CLI filters an
+eligible roster and date window; `--ticker` does not opt in an evaluation name.
+The post-earnings CLI covers portfolio names; explicit evaluation generation uses
+the supported cockpit route. Generation can spend LLM quota and write artifacts.
+Use existing cache and resumption rules rather than forcing unchanged reruns.
+
+Report generated, validated, committed, deployed and live-verified separately.
+Check the live runtime revision and selected artifact identity when verifying
+the front end; a local commit does not prove the live host runs that revision.
+Keep private availability distinct from public disclosure. Publication requires
+authorization for the concrete artifact, destination and disclosure effect.
+Do not execute trades or change owner constraints from an analyst recommendation.

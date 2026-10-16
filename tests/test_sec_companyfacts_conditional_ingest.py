@@ -704,7 +704,7 @@ def test_parse_and_fact_walk_run_outside_the_write_transaction(
         conn.close()
 
 
-def test_replay_without_receipts_table_still_skips_by_digest(
+def test_replay_without_receipts_table_reprocesses_without_extractor_proof(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     migrated_db: Callable[..., Path],
@@ -735,8 +735,8 @@ def test_replay_without_receipts_table_still_skips_by_digest(
             project_root=tmp_path,
             local_payload=_fetched(body, cik=CIK_ACME, retrieved_at=RETRIEVAL_LATER),
         )
-        assert replay.disposition == "skipped_unchanged"
-        assert replay.skip_reason == "digest_match"
+        assert replay.disposition == "ingested"
+        assert replay.skip_reason is None
         assert replay.facts_inserted == 0
     finally:
         conn.close()
@@ -794,7 +794,9 @@ def test_driver_reports_skip_rows_events_and_summary_without_staleness_checks(
         )
 
     monkeypatch.setattr(fetch_sec_xbrl_execution, "ingest_for_ticker", _skip_ingest)
-    monkeypatch.setattr(sys, "argv", ["fetch_sec_xbrl.py", "--db", "unused.db", "--ticker", "NU"])
+    database = tmp_path / "driver-fixture.db"
+    database.touch()
+    monkeypatch.setattr(sys, "argv", ["fetch_sec_xbrl.py", "--db", str(database), "--ticker", "NU"])
 
     assert fetch_sec_xbrl_execution.main() == 0
     captured = capsys.readouterr()
@@ -824,3 +826,85 @@ def test_driver_reports_skip_rows_events_and_summary_without_staleness_checks(
             "facts_inserted": 0,
         }
     ]
+
+
+@pytest.mark.parametrize("transport", ["digest", "304", "legacy_identity"])
+def test_changed_extractor_reprocesses_identical_payload_before_skip(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
+    transport: str,
+) -> None:
+    conn = _database(tmp_path, migrated_db, "changed-extractor.db")
+    _seed_issuer(conn, issuer_id="issuer-acme", cik=CIK_ACME)
+    _tracked(conn, "ACME")
+    _seed_ciks(monkeypatch)
+    body = _body(cik=1)
+    first = _fetched(body, cik=CIK_ACME, etag='W/"v1"')
+    calls: list[CompanyFactsValidators | None] = []
+
+    def fetch(
+        cik: str, *, validators: CompanyFactsValidators | None = None
+    ) -> FetchedCompanyFacts | CompanyFactsNotModified:
+        calls.append(validators)
+        if validators is not None:
+            return CompanyFactsNotModified(
+                source_url=f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json",
+                observed_at=RETRIEVAL_LATER,
+                retrieved_at=RETRIEVAL_LATER,
+            )
+        return _fetched(body, cik=cik, retrieved_at=RETRIEVAL_LATER)
+
+    try:
+        ingest_for_ticker(conn, ticker="ACME", project_root=tmp_path, local_payload=first)
+        original = load_companyfacts_fetch_receipt(conn, ticker="ACME")
+        assert original is not None
+        assert original.extractor_sha256 == sec_xbrl.companyfacts_extractor_sha256()
+        if transport == "legacy_identity":
+            conn.execute("UPDATE sec_companyfacts_fetch_receipts SET extractor_sha256=NULL")
+            conn.commit()
+        else:
+            monkeypatch.setattr(sec_xbrl, "TAG_LADDERS", tuple(reversed(sec_xbrl.TAG_LADDERS)))
+            assert sec_xbrl.companyfacts_extractor_sha256() != original.extractor_sha256
+        parses = _CallCounter(
+            monkeypatch, sec_xbrl, "parse_companyfacts_body", sec_xbrl.parse_companyfacts_body
+        )
+        walks = _CallCounter(
+            monkeypatch,
+            sec_xbrl,
+            "select_facts_from_companyfacts",
+            sec_xbrl.select_facts_from_companyfacts,
+        )
+        monkeypatch.setattr(sec_xbrl, "fetch_companyfacts", fetch)
+        replay = ingest_for_ticker(
+            conn,
+            ticker="ACME",
+            project_root=tmp_path,
+            local_payload=None
+            if transport == "304"
+            else _fetched(body, cik=CIK_ACME, retrieved_at=RETRIEVAL_LATER),
+        )
+        assert replay.disposition == "ingested"
+        assert replay.skip_reason is None
+        assert parses.calls == 1
+        assert walks.calls == 1
+        if transport == "304":
+            assert len(calls) == 2
+            assert calls[0] is not None
+            assert calls[1] is None
+        updated = load_companyfacts_fetch_receipt(conn, ticker="ACME")
+        assert updated is not None
+        assert updated.extractor_sha256 == sec_xbrl.companyfacts_extractor_sha256()
+        stable = ingest_for_ticker(
+            conn,
+            ticker="ACME",
+            project_root=tmp_path,
+            local_payload=_fetched(
+                body, cik=CIK_ACME, retrieved_at=RETRIEVAL_LATER + timedelta(hours=1)
+            ),
+        )
+        assert stable.disposition == "skipped_unchanged"
+        assert parses.calls == 1
+        assert walks.calls == 1
+    finally:
+        conn.close()

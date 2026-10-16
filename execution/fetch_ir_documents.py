@@ -46,22 +46,19 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_DIR))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from db_paths import configured_db_path  # noqa: E402
-from ir_pipeline._net import (  # noqa: E402
+from db_paths import configured_db_path
+from ir_pipeline._net import (
     UnsafeURLError,
     build_public_opener,
     curl_resolve_entries,
     ensure_safe_public_url,
     safe_redirect_url,
 )
-from ir_uploads import CategorizationFailure, classify_ir_file, sha256_of  # noqa: E402
-from log_redact import redact  # noqa: E402
-from pipeline.managed_ir_sources import (  # noqa: E402
+from ir_uploads import CategorizationFailure, classify_ir_file, sha256_of
+from log_redact import redact
+from pipeline.managed_ir_sources import (
     IssuerDocumentStagingReceipt,
     IssuerDocumentStagingRequest,
     PreparedIssuerDocumentPublisherError,
@@ -71,7 +68,7 @@ from pipeline.managed_ir_sources import (  # noqa: E402
     validate_prepared_staging,
     verifier_code_identity,
 )
-from pipeline.source_policy import (  # noqa: E402
+from pipeline.source_policy import (
     SOURCE_POLICY_CONFIG,
     ArtifactKind,
     CollectionSource,
@@ -79,17 +76,21 @@ from pipeline.source_policy import (  # noqa: E402
     authorize_stored_collection_target,
     reported_quarter_is_in_window,
 )
-from provenance.immutable_artifact import (  # noqa: E402
+from provenance.immutable_artifact import (
     ImmutableArtifactConflictError,
     require_no_reparse_points,
 )
-from provenance.secure_file_install import (  # noqa: E402
+from provenance.secure_file_install import (
     SecureFileInstallError,
     install_bytes_no_clobber,
 )
-from runtime.job_runtime import JobLock  # noqa: E402
-from runtime.python_process import managed_python_prefix  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from runtime.job_runtime import JobLock
+from runtime.python_process import managed_python_prefix
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+SCRIPT_DIR = Path(__file__).parent.resolve()
+PROJECT_ROOT = SCRIPT_DIR.parent
+SRC_DIR = PROJECT_ROOT / "src"
 
 LOG_FORMAT = json.dumps({"level": "%(levelname)s", "ts": "%(asctime)s", "msg": "%(message)s"})
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stderr)
@@ -594,12 +595,22 @@ def prepare_issuer_document_sources(
         source=CollectionSource.IR,
         artifact_kind=ArtifactKind.IR_DOCUMENT,
     )
-    in_window = authorization.fiscal_year_end_month is not None and reported_quarter_is_in_window(
-        fiscal_year=inventory.fiscal_year,
-        fiscal_quarter=inventory.fiscal_quarter,
-        fiscal_year_end_month=authorization.fiscal_year_end_month,
-        as_of=date.today(),
-    )
+    if request.historical_window is None:
+        in_window = (
+            authorization.fiscal_year_end_month is not None
+            and reported_quarter_is_in_window(
+                fiscal_year=inventory.fiscal_year,
+                fiscal_quarter=inventory.fiscal_quarter,
+                fiscal_year_end_month=authorization.fiscal_year_end_month,
+                as_of=date.today(),
+            )
+        )
+    else:
+        from pipeline.managed_ir_sources import issuer_request_period_is_allowed
+
+        in_window = issuer_request_period_is_allowed(
+            request, fiscal_year_end_month=authorization.fiscal_year_end_month, as_of=date.today()
+        )
     if not authorization.allowed:
         raise IssuerDocumentPreparationError("source_policy_denied")
     if not in_window:

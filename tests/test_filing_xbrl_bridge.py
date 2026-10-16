@@ -251,7 +251,7 @@ def test_bridge_normalizes_valid_numeric_fact_deterministically() -> None:
         concept_name=concept_name,
         context=context,
         context_id="D2024Q1",
-        unit_id="USD",
+        unit_id="u17",
         fiscal_year=2025,
         fiscal_period="Q1",
         filing_period_end=datetime.fromisoformat("2024-04-30T00:00:00"),
@@ -268,6 +268,9 @@ def test_bridge_normalizes_valid_numeric_fact_deterministically() -> None:
     assert normalized["fiscal_year"] == 2025
     assert normalized["fiscal_period"] == "Q1"
     assert normalized["currency"] == "USD"
+    assert normalized["unit_key"] == "USD"
+    assert normalized["source_unit_id"] == "u17"
+    assert normalized["consolidation_scope"] == "other"
     assert normalized["numeric_value"] == "784000000"
 
 

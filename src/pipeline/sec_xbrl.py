@@ -43,6 +43,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
 import tempfile
 import time
@@ -77,7 +78,8 @@ from pipeline.restatement_detector import (
 from provenance.financial_fact_resolution import (
     capture_fact_row_observation,
 )
-from provenance.issuer_registry import IssuerRegistry
+from provenance.inventory_identity import issuer_registry_available
+from provenance.issuer_registry import IssuerRegistry, UnresolvedIssuerIdentityError
 from provenance.sec_companyfacts_capture import (
     CompanyFactsContractError,
     CompanyFactsPayload,
@@ -115,8 +117,8 @@ log = logging.getLogger(__name__)
 # receipt plus its content digest is the resumable skip authority.
 #
 # The table is optional by design: synthetic fixtures that predate 0050 simply
-# have no validators, degrade to an unconditional GET, and still get the digest
-# short-circuit from the content-addressed snapshot document rows.
+# have no validators and degrade to an unconditional GET. Receipts without an
+# extractor identity must reprocess the retained bytes before they can skip.
 # ---------------------------------------------------------------------------
 
 _RECEIPTS_TABLE = "sec_companyfacts_fetch_receipts"
@@ -147,6 +149,7 @@ class CompanyFactsFetchReceipt:
     payload_fetched_at: datetime
     ingest_completed_at: datetime
     run_id: str
+    extractor_sha256: str | None = None
 
     @property
     def validators(self) -> CompanyFactsValidators:
@@ -166,6 +169,41 @@ def fetch_receipts_table_present(conn: sqlite3.Connection) -> bool:
     return row is not None
 
 
+def _fetch_receipt_extractor_column_present(conn: sqlite3.Connection) -> bool:
+    return any(
+        str(row[1]) == "extractor_sha256"
+        for row in conn.execute("PRAGMA table_info(sec_companyfacts_fetch_receipts)")
+    )
+
+
+def companyfacts_extractor_sha256() -> str:
+    """Bind repeat-skip authority to retained extractor code and active tag specs.
+
+    Source hashes automatically invalidate receipts when parsing, admission, or
+    provenance code changes. The active ladders also bind runtime spec overrides.
+    """
+    source_root = Path(__file__).resolve().parents[1]
+    sources = (
+        "pipeline/sec_xbrl.py",
+        "pipeline/restatement_detector.py",
+        "pipeline/locators.py",
+        "provenance/sec_companyfacts_capture.py",
+        "provenance/sec_companyfacts_fact_matcher.py",
+        "provenance/financial_fact_resolution.py",
+        "models/facts.py",
+    )
+    material = {
+        "protocol": "sec-companyfacts-extractor.v1",
+        "sources": {
+            name: hashlib.sha256((source_root / name).read_bytes()).hexdigest() for name in sources
+        },
+        "ladders": [(item.line_item, item.kind, item.sign, item.rungs) for item in TAG_LADDERS],
+    }
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def load_companyfacts_fetch_receipt(
     conn: sqlite3.Connection,
     *,
@@ -179,9 +217,12 @@ def load_companyfacts_fetch_receipt(
 
     if not fetch_receipts_table_present(conn):
         return None
+    extractor_column = (
+        "extractor_sha256" if _fetch_receipt_extractor_column_present(conn) else "NULL"
+    )
     row = conn.execute(
         "SELECT ticker, normalized_cik, payload_sha256, etag, last_modified, "
-        "payload_fetched_at, ingest_completed_at, run_id "
+        f"payload_fetched_at, ingest_completed_at, run_id, {extractor_column} "
         f"FROM {_RECEIPTS_TABLE} WHERE ticker = ?",  # nosec B608 -- fixed internal table name
         (ticker.upper(),),
     ).fetchone()
@@ -196,6 +237,7 @@ def load_companyfacts_fetch_receipt(
         payload_fetched_at=datetime.fromisoformat(str(row[5])),
         ingest_completed_at=datetime.fromisoformat(str(row[6])),
         run_id=str(row[7]),
+        extractor_sha256=None if row[8] is None else str(row[8]),
     )
 
 
@@ -215,11 +257,25 @@ def record_companyfacts_ingest_receipt(
 
     if not fetch_receipts_table_present(conn):
         return False
+    has_extractor = _fetch_receipt_extractor_column_present(conn)
+    extractor_column = ", extractor_sha256" if has_extractor else ""
+    extractor_placeholder = ", ?" if has_extractor else ""
+    extractor_update = ", extractor_sha256 = excluded.extractor_sha256" if has_extractor else ""
+    values = (
+        receipt.ticker.upper(),
+        receipt.normalized_cik,
+        receipt.payload_sha256,
+        receipt.etag,
+        receipt.last_modified,
+        receipt.payload_fetched_at.isoformat(),
+        receipt.ingest_completed_at.isoformat(),
+        receipt.run_id,
+    )
     conn.execute(
         f"INSERT INTO {_RECEIPTS_TABLE} "  # nosec B608 -- fixed internal table name
         "(ticker, normalized_cik, payload_sha256, etag, last_modified, "
-        "payload_fetched_at, ingest_completed_at, run_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        f"payload_fetched_at, ingest_completed_at, run_id{extractor_column}) "
+        f"VALUES (?, ?, ?, ?, ?, ?, ?, ?{extractor_placeholder}) "
         "ON CONFLICT(ticker) DO UPDATE SET "
         "normalized_cik = excluded.normalized_cik, "
         "payload_sha256 = excluded.payload_sha256, "
@@ -227,17 +283,8 @@ def record_companyfacts_ingest_receipt(
         "last_modified = excluded.last_modified, "
         "payload_fetched_at = excluded.payload_fetched_at, "
         "ingest_completed_at = excluded.ingest_completed_at, "
-        "run_id = excluded.run_id",
-        (
-            receipt.ticker.upper(),
-            receipt.normalized_cik,
-            receipt.payload_sha256,
-            receipt.etag,
-            receipt.last_modified,
-            receipt.payload_fetched_at.isoformat(),
-            receipt.ingest_completed_at.isoformat(),
-            receipt.run_id,
-        ),
+        f"run_id = excluded.run_id{extractor_update}",
+        (*values, receipt.extractor_sha256) if has_extractor else values,
     )
     return True
 
@@ -1773,14 +1820,18 @@ def persist_facts_from_companyfacts(
         # Deferred import breaks the intentional matcher -> ladder dependency
         # while keeping live admission at this boundary.
         from provenance.sec_companyfacts_fact_matcher import (
+            CompanyFactsMatchContext,
             match_companyfacts_fact_row,
         )
+
+        match_context = CompanyFactsMatchContext(snapshot_root)
 
         def _capture_companyfacts_provenance(fact_row_id: int) -> None:
             match_companyfacts_fact_row(
                 conn,
                 fact_row_id=fact_row_id,
                 blob_root=snapshot_root,
+                context=match_context,
             )
             capture_fact_row_observation(
                 conn,
@@ -1994,6 +2045,7 @@ def _completed_snapshot_payload_present(
     normalized_cik: str,
     digest: str,
     snapshot_root: Path,
+    extractor_sha256: str,
 ) -> bool:
     """True when `digest` is a COMPLETED prior ingest of `ticker`, fully retained.
 
@@ -2007,9 +2059,8 @@ def _completed_snapshot_payload_present(
       deterministic content-addressed path;
     - the retained snapshot bytes themselves on disk (a deleted snapshot file
       forces the full path, which re-registers the bytes);
-    - on post-0050 schemas, a completed fetch receipt whose payload digest
-      matches (the receipt commits in the same transaction as the walk, so its
-      presence is the airtight completion proof);
+    - a completed fetch receipt whose payload digest, issuer CIK and extractor
+      fingerprint match (legacy or missing extractor identities fail closed);
     - on post-0231 schemas, the evidence document version for the digest.
 
     Any drift fails closed: the caller reprocesses the payload from bytes.
@@ -2032,7 +2083,12 @@ def _completed_snapshot_payload_present(
     if not snapshot_path.is_file():
         return False
     receipt = load_companyfacts_fetch_receipt(conn, ticker=ticker)
-    if fetch_receipts_table_present(conn) and (receipt is None or receipt.payload_sha256 != digest):
+    if (
+        receipt is None
+        or receipt.payload_sha256 != digest
+        or receipt.normalized_cik != normalized_cik
+        or receipt.extractor_sha256 != extractor_sha256
+    ):
         return False
     if not _has_table(conn, "evidence_document_versions"):
         return True
@@ -2049,6 +2105,83 @@ def _completed_snapshot_payload_present(
         issuer_id=canonical_issuer.issuer_id,
         digest=digest,
     )
+
+
+def resolve_companyfacts_cik(
+    conn: sqlite3.Connection,
+    ticker: str,
+    *,
+    knowledge_at: datetime,
+) -> str:
+    """Resolve registered issuers before HTTP; retain historical static pins."""
+    normalized_ticker = ticker.strip().upper()
+    pinned = CIK_MAP.get(normalized_ticker)
+    if not issuer_registry_available(conn):
+        if pinned is None:
+            raise ValueError("SEC CompanyFacts issuer authority is unavailable")
+        log.info(
+            {
+                "event": "sec_companyfacts_identity_compatibility",
+                "ticker": normalized_ticker,
+                "reason": "issuer_registry_unavailable",
+            }
+        )
+        return pinned
+
+    registry = IssuerRegistry(conn)
+    try:
+        subject = registry.canonicalize_recorded_issuer(
+            f"legacy-ticker:{normalized_ticker}", knowledge_at=knowledge_at
+        )
+    except UnresolvedIssuerIdentityError as exc:
+        recorded_binding = conn.execute(
+            "SELECT 1 FROM legacy_issuer_binding_revisions "
+            "WHERE recorded_issuer_id = ? AND knowledge_at <= ? LIMIT 1",
+            (f"legacy-ticker:{normalized_ticker}", knowledge_at),
+        ).fetchone()
+        if pinned is None or recorded_binding is not None:
+            raise ValueError("SEC CompanyFacts ticker identity is unresolved") from exc
+        # Retained pins support historical names with no current ticker binding.
+        try:
+            identity = registry.resolve_identifier("sec_cik", pinned, knowledge_at=knowledge_at)
+        except UnresolvedIssuerIdentityError as identity_exc:
+            raise ValueError("SEC CompanyFacts pinned CIK is unresolved") from identity_exc
+        if identity.material_dissent:
+            raise ValueError("SEC CompanyFacts pinned CIK has material identity dissent") from exc
+        log.info(
+            {
+                "event": "sec_companyfacts_identity_compatibility",
+                "ticker": normalized_ticker,
+                "reason": "retained_historical_cik_pin",
+            }
+        )
+        return pinned
+    if subject.material_dissent:
+        raise ValueError("SEC CompanyFacts ticker has material identity dissent")
+    candidates = {
+        match.group(1)
+        for surface in registry.source_authority(
+            subject.issuer_id, "sec_submissions", knowledge_at=knowledge_at
+        )
+        if (
+            match := re.fullmatch(
+                r"https://data\.sec\.gov/submissions/CIK([0-9]{10})\.json",
+                surface.source_url,
+            )
+        )
+    }
+    if len(candidates) != 1:
+        raise ValueError("SEC CompanyFacts requires one verified SEC issuer authority")
+    cik = next(iter(candidates))
+    try:
+        identity = registry.resolve_identifier("sec_cik", cik, knowledge_at=knowledge_at)
+    except UnresolvedIssuerIdentityError as exc:
+        raise ValueError("SEC CompanyFacts CIK identity is unresolved") from exc
+    if identity.issuer_id != subject.issuer_id or identity.material_dissent:
+        raise ValueError("SEC CompanyFacts CIK conflicts with the canonical ticker identity")
+    if pinned is not None and pinned != cik:
+        raise ValueError("SEC CompanyFacts canonical CIK conflicts with the retained static pin")
+    return cik
 
 
 def ingest_for_ticker(
@@ -2271,13 +2404,12 @@ def ingest_for_ticker(
         )
 
     try:
-        cik = CIK_MAP.get(normalized_ticker)
-        if cik is None:
-            raise ValueError(f"No CIK registered for {ticker}; add to CIK_MAP")
+        cik = resolve_companyfacts_cik(conn, normalized_ticker, knowledge_at=datetime.now(UTC))
 
         # Narrowed binding for the skip closure above, which cannot inherit the
         # flow-narrowed type of `cik`.
         normalized_cik: str = cik
+        extractor_sha256 = companyfacts_extractor_sha256()
         receipt_row = load_companyfacts_fetch_receipt(conn, ticker=normalized_ticker)
         validators = receipt_row.validators if receipt_row is not None else None
 
@@ -2307,6 +2439,7 @@ def ingest_for_ticker(
                         normalized_cik=cik,
                         digest=receipt_row.payload_sha256,
                         snapshot_root=snapshot_root,
+                        extractor_sha256=extractor_sha256,
                     ):
                         return _record_unchanged_retrieval(
                             reason="not_modified",
@@ -2336,6 +2469,7 @@ def ingest_for_ticker(
             normalized_cik=cik,
             digest=digest,
             snapshot_root=snapshot_root,
+            extractor_sha256=extractor_sha256,
         ):
             return _record_unchanged_retrieval(
                 reason="digest_match",
@@ -2532,6 +2666,7 @@ def ingest_for_ticker(
                     payload_fetched_at=fetched.retrieved_at,
                     ingest_completed_at=datetime.now(UTC),
                     run_id=run_id,
+                    extractor_sha256=extractor_sha256,
                 ),
             ):
                 log.warning(

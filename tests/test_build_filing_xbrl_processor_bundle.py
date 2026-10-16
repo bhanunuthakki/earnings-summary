@@ -30,6 +30,10 @@ _load_approved_bundle_for_test = cast(
 
 
 def _write_offline_cache(runtime: Path) -> None:
+    shutil.copyfile(
+        ROOT / "src" / "filings" / "xbrl_units.py",
+        runtime / "earnings_summary_xbrl_units.py",
+    )
     cache_member = runtime / "offline-cache" / "https" / "taxonomy.example" / "2026.xsd"
     cache_member.parent.mkdir(parents=True)
     cache_member.write_bytes(b"sealed taxonomy")
@@ -60,12 +64,13 @@ def test_bundle_builder_seals_full_runtime_and_exact_replay(tmp_path: Path) -> N
 
     assert first.published is True
     assert second.published is False
-    assert first.runtime_member_count == 3
+    assert first.runtime_member_count == 4
     sealed = load_processor_bundle_manifest(output)
     assert sealed.execution.runtime_artifact_sha256 == first.runtime_artifact_sha256
     assert [member.relative_path for member in sealed.execution.runtime_members] == [
         "Scripts/python.exe",
         "earnings_summary_xbrl_bridge.py",
+        "earnings_summary_xbrl_units.py",
         "offline-cache/https/taxonomy.example/2026.xsd",
     ]
     assert json.loads(output.read_text())["execution"]["sandbox_launcher_sha256"] == (
@@ -94,6 +99,35 @@ def test_bundle_builder_rejects_missing_offline_taxonomy_cache(tmp_path: Path) -
                 output=tmp_path / "qualified.json",
             )
         )
+
+
+@pytest.mark.parametrize("mutation", ["missing", "changed"])
+def test_bundle_builder_requires_reviewed_shared_unit_source(tmp_path: Path, mutation: str) -> None:
+    runtime = tmp_path / "runtime"
+    (runtime / "Scripts").mkdir(parents=True)
+    (runtime / "Scripts" / "python.exe").write_bytes(b"python")
+    shutil.copyfile(
+        ROOT / "execution" / "filing_xbrl_bridge.py",
+        runtime / "earnings_summary_xbrl_bridge.py",
+    )
+    _write_offline_cache(runtime)
+    helper = runtime / "earnings_summary_xbrl_units.py"
+    if mutation == "missing":
+        helper.unlink()
+    else:
+        helper.write_bytes(b"changed units")
+    launcher = tmp_path / "launcher.exe"
+    launcher.write_bytes(b"launcher")
+    with pytest.raises(ValueError, match="bundle unit"):
+        build_filing_xbrl_processor_bundle(
+            FilingXbrlBundleBuildRequest(
+                template=ROOT / "config" / "filing_xbrl_processor_bundle.json",
+                runtime_root=runtime,
+                sandbox_launcher=launcher,
+                output=tmp_path / "bundle.json",
+            )
+        )
+    assert not (tmp_path / "bundle.json").exists()
 
 
 def test_bundle_builder_rejects_mutable_bytecode(tmp_path: Path) -> None:
@@ -155,6 +189,7 @@ def test_approved_bundle_loader_rejects_unsealed_manifest(tmp_path: Path) -> Non
                 "sandbox_launcher_sha256": result.sandbox_launcher_sha256,
                 "bridge_source_sha256": manifest.build_provenance.bridge_source_sha256,
                 "launcher_source_sha256": manifest.build_provenance.launcher_source_sha256,
+                "unit_source_sha256": manifest.build_provenance.unit_source_sha256,
             },
             sort_keys=True,
         ),

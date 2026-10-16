@@ -50,12 +50,13 @@ try:
 except ImportError:  # ``python -m execution.build_nu_platform_dcf``
     from execution._lib import PROJECT_ROOT
 
-from db_paths import configured_db_path
+from db_paths import require_db_path, resolve_db_path
 from dcf import reverse_valuation as reverse_valuation_mod
 from dcf.artifact_promotion import (
     ArtifactPromotion,
     live_path_from_env,
     promotion_from_env,
+    run_dcf_entrypoint,
 )
 from dcf.provenance import build_file_provenance, schema_supports_provenance
 from dcf.specialized_price import (
@@ -87,7 +88,8 @@ else:
 
 # Data repo (may differ from the executing checkout): REPO is the DATA root;
 # code always imports from the executing checkout via ``_lib``.
-REPO = Path(os.environ.get("DCF_REPO_ROOT") or PROJECT_ROOT)
+CODE_ROOT = PROJECT_ROOT
+REPO = Path(os.environ.get("DCF_REPO_ROOT") or CODE_ROOT)
 T = os.environ.get("DCF_TICKER", "NU")
 DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 
@@ -319,7 +321,7 @@ def load_assumptions(ticker: str) -> Assum:
     # an unpinned platform name tracks the dashboard-set global while a pinned
     # tax still wins (NU pins 0.28 -- a genuinely company-specific Brazilian rate).
     global_loaded = (
-        global_dcf.load_with_provenance(db_path=configured_db_path(REPO))
+        global_dcf.load_with_provenance(db_path=resolve_db_path(None, configured_root=REPO))
         if global_dcf is not None
         else None
     )
@@ -792,7 +794,7 @@ def persist_dcf_run(
     file edit can never make the sheet and the persisted snapshot disagree —
     a ticker with genuinely no holdings JSON still resolves to ``None`` either
     way, so this collapses "not passed" and "no holdings on file" safely."""
-    db = configured_db_path(REPO)
+    db = require_db_path(resolve_db_path(None, configured_root=REPO))
     if persist_mod is None or not db.exists() or not m.vps:
         return False
     if holdings is None:
@@ -889,7 +891,7 @@ def persist_dcf_run(
         return persist_mod.upsert(conn, row, artifact_promotion=artifact_promotion)
 
 
-def main() -> int:
+def _main_owned() -> int:
     s = load_assumptions(T)
     price_observation = resolve_specialized_price(
         REPO,
@@ -938,6 +940,10 @@ def main() -> int:
         f"FCFE ${m.vps:.2f} | RI floor ${m.vps_ri:.2f} | exit-PE ${m.vps_pe:.2f}  (vs ${s.price:.2f})"
     )
     return 0
+
+
+def main() -> int:
+    return run_dcf_entrypoint(REPO, T, _main_owned, owner="build-nu-platform-dcf")
 
 
 if __name__ == "__main__":

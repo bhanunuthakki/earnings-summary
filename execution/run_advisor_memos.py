@@ -41,6 +41,9 @@ def main(argv: list[str] | None = None) -> int:
         help="which memo run to execute",
     )
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument(
+        "--state-root", type=Path, help="Explicit model source-byte read authority."
+    )
     parser.add_argument("--user-id", default=None, help="defaults to identity.DEFAULT_USER_ID")
     parser.add_argument(
         "--margin-pp",
@@ -63,15 +66,19 @@ def main(argv: list[str] | None = None) -> int:
 
     from advisor.context import build_advisor_context
     from advisor.memos import generate_next_dollar_memo, run_swap_checks
+    from dcf.input_evidence import SourceReadContext
     from identity import DEFAULT_USER_ID
     from llm.cli import is_hard_stop
 
+    source_context = (
+        SourceReadContext.for_sec_state_root(args.state_root) if args.state_root else None
+    )
     user_id = args.user_id or DEFAULT_USER_ID
     failures = 0
     try:
         # One context fetch serves both kinds (tracker + DB round-trips are
         # the slow part; the memos only differ in prompts).
-        ctx = build_advisor_context(repo_root, user_id=user_id)
+        ctx = build_advisor_context(repo_root, user_id=user_id, source_context=source_context)
         print(
             f"context: {len(ctx.audit_rows)} holdings · "
             f"{len(ctx.candidates_val)} external candidates with DCFs · "

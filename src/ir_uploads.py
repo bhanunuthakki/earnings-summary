@@ -19,6 +19,7 @@ import re
 from collections.abc import Sequence
 from datetime import date, timedelta
 from pathlib import Path
+from typing import Protocol, cast
 
 from openpyxl import load_workbook
 from pypdf import PdfReader
@@ -264,7 +265,9 @@ _DOC_TYPE_RULES: list[tuple[DocType, re.Pattern[str], str]] = [
     (
         DocType.IR_PRESS_RELEASE,
         re.compile(
-            r"\btoday\s+(?:reported|announced|reports|announces)\s+(?:its\s+)?(?:financial\s+)?results?\b",
+            r"\btoday\s+(?:reported|announced|reports|announces)\s+(?:its\s+)?"
+            r"(?:(?:first|second|third|fourth)\s+quarter\s+(?:20\d{2}\s+)?)?"
+            r"(?:financial\s+)?results?\b",
             re.IGNORECASE,
         ),
         "today_reported",
@@ -567,6 +570,18 @@ _PDF_FINGERPRINT_PAGES = 2
 _PDF_FINGERPRINT_CHARS = 6000
 
 
+class _PdfFingerprintPage(Protocol):
+    def get_text(self) -> object: ...
+
+
+class _PdfFingerprintDocument(Protocol):
+    page_count: object
+
+    def load_page(self, index: int) -> _PdfFingerprintPage: ...
+
+    def close(self) -> None: ...
+
+
 def _fingerprint_pdf_pymupdf(path: Path) -> str | None:
     """First ~2 pages via PyMuPDF (``fitz``), or None if it is unavailable/fails.
 
@@ -584,8 +599,21 @@ def _fingerprint_pdf_pymupdf(path: Path) -> str | None:
     doc = None
     try:
         doc = fitz.open(str(path))
-        n = min(_PDF_FINGERPRINT_PAGES, doc.page_count)
-        chunks = [doc.load_page(i).get_text() or "" for i in range(n)]
+        if not all(hasattr(doc, name) for name in ("page_count", "load_page", "close")):
+            return None
+        checked_doc = cast(_PdfFingerprintDocument, doc)
+        page_count = checked_doc.page_count
+        if isinstance(page_count, bool) or not isinstance(page_count, int) or page_count < 0:
+            return None
+        n = min(_PDF_FINGERPRINT_PAGES, page_count)
+        chunks: list[str] = []
+        for i in range(n):
+            page_text = checked_doc.load_page(i).get_text()
+            if page_text is None:
+                page_text = ""
+            if not isinstance(page_text, str):
+                return None
+            chunks.append(page_text)
     except Exception:  # PyMuPDF's error tree is wide; degrade to the pypdf path
         return None
     finally:
@@ -836,8 +864,9 @@ def _detect_doc_type(
         pos = m.start()
         if (
             earliest_pos is None
+            or earliest_idx is None
             or pos < earliest_pos
-            or (pos == earliest_pos and idx < earliest_idx)  # type: ignore[operator]
+            or (pos == earliest_pos and idx < earliest_idx)
         ):
             earliest_pos = pos
             earliest_idx = idx

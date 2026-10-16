@@ -33,8 +33,9 @@ from pipeline.work_os_research import (
 )
 from pipeline.work_os_route_contract import DESTINATION_SURFACE_IDS
 from pipeline.work_os_styles import WORK_OS_CSS
+from report.renderers.workspace_dcf import JS as DCF_JS
 from ui.cite_marks import CITE_MARKS_SNIPPET
-from ui.controls import controls_css, controls_js
+from ui.controls import controls_css, controls_js, icon_svg
 from ui.living_grid import head_assets as living_grid_head_assets
 from ui.tokens import FAVICON_LINK, palette_css
 
@@ -434,6 +435,7 @@ def _production_runtime(generated_at: datetime) -> str:
 <div class="work-os-live-status" id="workOsLiveStatus" aria-live="polite" data-generated-at="{stamp}"></div>
 <script id="work-os-action-runtime">{CC_ACTION_JS}</script>
 <script id="work-os-overlay-runtime">{CC_OVERLAY_JS}</script>
+<script id="work-os-dcf-runtime">{DCF_JS}</script>
 <script id="work-os-production-runtime">
   const WORK_OS_ENDPOINTS = {endpoint_json};
   const WORK_OS_LEGACY_HASHES = {legacy_hash_json};
@@ -510,6 +512,18 @@ def _add_production_contract(
 ) -> str:
     html = html.replace("</title>", f"</title>{FAVICON_LINK}", 1)
     html = _SIDEBAR_COMMAND_RE.sub("", html, count=1)
+    html = re.sub(
+        r'<button type="button" class="sidebar-collapse-toggle.*?</button>',
+        '<button id="workOsAppSidebarToggle" type="button" '
+        'class="sidebar-collapse-toggle k-btn k-btn-quiet k-icon-btn work-os-rail-toggle" '
+        'onclick="toggleSidebar()" aria-controls="appSidebar" aria-expanded="true" '
+        'aria-label="Collapse application sidebar" title="Collapse application sidebar">'
+        + icon_svg("collapse")
+        + "</button>",
+        html,
+        count=1,
+        flags=re.DOTALL,
+    )
     html = html.replace("Execution Queue & Operations Hub", "Operations")
     html = html.replace("Operations & Execution Governance Hub", "Operations")
     html = html.replace("Portfolio Performance vs Index Benchmark", "Performance")

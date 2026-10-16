@@ -15,7 +15,10 @@ import requests
 from pydantic import ValidationError
 
 from execution import sync_sec_filing_inventory as sync
-from filings.sec_submissions_inventory import parse_sec_submissions_inventory
+from filings.sec_submissions_inventory import (
+    SecFilingInventoryEntry,
+    parse_sec_submissions_inventory,
+)
 from provenance.issuer_registry_bootstrap import (
     BootstrapRequest,
     bootstrap_issuer_reporting_registry,
@@ -107,7 +110,7 @@ def test_mixed_inventory_applies_real_duty_bindings_and_exact_replay(
                 recorded_at=STAMP - timedelta(days=1),
             ),
         )
-    forms = ["10-K", "8-K", "UPLOAD", "424B5", "4"] + (["NEW-FORM"] if unknown else [])
+    forms = ["10-K", "8-K", "SEC STAFF ACTION", "424B5", "4"] + (["NEW-FORM"] if unknown else [])
     root = _root(forms)
     fetched: list[str] = []
 
@@ -228,7 +231,7 @@ def test_mixed_inventory_applies_real_duty_bindings_and_exact_replay(
         scope = SecInventoryScopeManifest.model_validate_json(payload)
         assert scope.claim_basis == "software_derived"
         assert scope.clock_basis == "first_local_manifest_capture"
-        assert scope.policy_version == "governed-reporting-package-scope@4"
+        assert scope.policy_version == "governed-reporting-package-scope@6"
         assert scope.source_issuer_id == "sec-cik:0000001001"
         assert all(item.filing.issuer_id == scope.issuer_id for item in scope.filings)
         parsed = parse_sec_submissions_inventory(
@@ -242,15 +245,26 @@ def test_mixed_inventory_applies_real_duty_bindings_and_exact_replay(
             parsed=parsed,
             source_inputs=scope.source_inputs,
             expected_dispositions=expected_dispositions,
-            policy_version="governed-reporting-package-scope@4",
+            policy_version="governed-reporting-package-scope@6",
         )
+        old_scope = scope.model_copy(
+            update={"policy_version": "governed-reporting-package-scope@4"}
+        )
+        assert hashlib.sha256(old_scope.encoded()).hexdigest() != digest
+        with pytest.raises(ValueError, match="complete authoritative inputs"):
+            old_scope.verify_reconstruction(
+                parsed=parsed,
+                source_inputs=scope.source_inputs,
+                expected_dispositions=expected_dispositions,
+                policy_version="governed-reporting-package-scope@6",
+            )
         # Reconstruction refuses omitted accessions or substituted parent hashes.
         with pytest.raises(ValueError, match="complete authoritative inputs"):
             scope.model_copy(update={"filings": scope.filings[:-1]}).verify_reconstruction(
                 parsed=parsed,
                 source_inputs=scope.source_inputs,
                 expected_dispositions=expected_dispositions,
-                policy_version="governed-reporting-package-scope@4",
+                policy_version="governed-reporting-package-scope@6",
             )
         altered_sources = (scope.source_inputs[0].model_copy(update={"blob_sha256": "a" * 64}),)
         with pytest.raises(ValueError, match="complete authoritative inputs"):
@@ -258,7 +272,7 @@ def test_mixed_inventory_applies_real_duty_bindings_and_exact_replay(
                 parsed=parsed,
                 source_inputs=altered_sources,
                 expected_dispositions=expected_dispositions,
-                policy_version="governed-reporting-package-scope@4",
+                policy_version="governed-reporting-package-scope@6",
             )
         # A self-consistent reason/disposition pair still cannot change owner policy.
         changed_disposition = scope.filings[0].model_copy(
@@ -273,7 +287,7 @@ def test_mixed_inventory_applies_real_duty_bindings_and_exact_replay(
                 parsed=parsed,
                 source_inputs=scope.source_inputs,
                 expected_dispositions=expected_dispositions,
-                policy_version="governed-reporting-package-scope@4",
+                policy_version="governed-reporting-package-scope@6",
             )
         payload_fields = scope.model_dump()
         payload_fields["root_source_observation_id"] = "history-observation"
@@ -394,3 +408,208 @@ def test_mixed_inventory_applies_real_duty_bindings_and_exact_replay(
             assert conn.execute(
                 "SELECT COUNT(*) FROM evidence_source_observations WHERE source_kind='sec_inventory_scope_derived'"
             ).fetchone() == (2,)
+
+
+def test_staff_action_policy_refresh_appends_complete_revision_without_rewriting_partial(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database = migrated_db(tmp_path / "policy-refresh.db")
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (user_id,ticker,name,list_type) VALUES ('bhanu','ACME','Acme','evaluation')"
+        )
+        conn.commit()
+        bootstrap_issuer_reporting_registry(
+            conn,
+            raw_body=b'{"0":{"cik_str":1001,"ticker":"ACME","title":"Acme"}}',
+            request=BootstrapRequest(
+                source_url="https://www.sec.gov/files/company_tickers.json",
+                blob_root=tmp_path / "blobs",
+                apply=True,
+                recorded_at=STAMP - timedelta(days=1),
+            ),
+        )
+    root = _root(["SEC STAFF ACTION"])
+
+    def fetch(_session: requests.Session, url: str, _agent: str) -> bytes:
+        assert url == "https://data.sec.gov/submissions/CIK0000001001.json"
+        return root
+
+    monkeypatch.setattr(sync, "_fetch", fetch)
+    monkeypatch.setattr(sync, "_utc_now", lambda: STAMP)
+    monkeypatch.setattr(sync, "datetime", _Clock)
+    monkeypatch.setattr(sync, "sec_user_agent", lambda: "synthetic contact@example.test")
+    monkeypatch.setattr(sync, "PROJECT_ROOT", tmp_path)
+    args = [
+        "--db",
+        str(database),
+        "--ticker",
+        "ACME",
+        "--cik",
+        "1001",
+        "--revision",
+        "1",
+        "--blob-root",
+        str(tmp_path / "blobs"),
+        "--package-checkpoint-root",
+        str(tmp_path / "checkpoints"),
+        "--apply",
+    ]
+    with monkeypatch.context() as old_policy:
+        old_policy.setattr(
+            sync, "_PACKAGE_SCOPE_POLICY_VERSION", "governed-reporting-package-scope@4"
+        )
+        old_policy.setattr(
+            sync,
+            "EXTERNAL_OR_ADMINISTRATIVE_FORMS",
+            sync.EXTERNAL_OR_ADMINISTRATIVE_FORMS - {"SEC STAFF ACTION"},
+        )
+        assert sync.main(args) == 0
+    partial = json.loads(capsys.readouterr().out)
+    assert partial["complete"] is False
+    assert partial["unclassified_form_types"] == ["SEC STAFF ACTION"]
+    with sqlite3.connect(database) as conn:
+        old_snapshot = conn.execute("SELECT * FROM source_inventory_snapshots").fetchone()
+    args[args.index("--revision") + 1] = "2"
+    assert sync.main(args) == 0
+    complete = json.loads(capsys.readouterr().out)
+    assert complete["complete"] is True
+    assert complete["inventory_only_filing_count"] == 1
+    assert complete["package_eligible_filing_count"] == 0
+    assert complete["scope_manifest_sha256"] != partial["scope_manifest_sha256"]
+    with sqlite3.connect(database) as conn:
+        assert (
+            conn.execute(
+                "SELECT * FROM source_inventory_snapshots WHERE snapshot_id=?",
+                (partial["snapshot_id"],),
+            ).fetchone()
+            == old_snapshot
+        )
+        assert conn.execute(
+            "SELECT completion_status FROM source_inventory_snapshot_seals ORDER BY rowid"
+        ).fetchall() == [("incomplete",), ("complete",)]
+        assert conn.execute("SELECT COUNT(*) FROM expected_documents").fetchone() == (0,)
+    for result in (partial, complete):
+        digest = result["scope_manifest_sha256"]
+        body = (tmp_path / "blobs" / digest[:2] / digest).read_bytes()
+        assert hashlib.sha256(body).hexdigest() == digest
+        scope = SecInventoryScopeManifest.model_validate_json(body)
+        assert scope.source_inputs[0].blob_sha256 == hashlib.sha256(root).hexdigest()
+        assert len(scope.filings) == 1
+        assert scope.filings[0].filing.form_type == "SEC STAFF ACTION"
+
+
+@pytest.mark.parametrize("form", ["10-12B", "10-12B/A"])
+def test_registration_package_applies_exact_sec_financial_duty_without_periodic_anchor(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    form: str,
+) -> None:
+    from tests import test_sync_sec_filing_inventory_packages as package_fixtures
+
+    _bodies: Callable[[SecFilingInventoryEntry], tuple[str, bytes, str, bytes]] = getattr(
+        package_fixtures, "_bodies"
+    )
+
+    database = migrated_db(tmp_path / "registration.db")
+    with sqlite3.connect(database) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (user_id,ticker,name,list_type) VALUES ('bhanu','ACME','Acme','evaluation')"
+        )
+        conn.commit()
+        bootstrap_issuer_reporting_registry(
+            conn,
+            raw_body=b'{"0":{"cik_str":1001,"ticker":"ACME","title":"Acme"}}',
+            request=BootstrapRequest(
+                source_url="https://www.sec.gov/files/company_tickers.json",
+                blob_root=tmp_path / "blobs",
+                apply=True,
+                recorded_at=STAMP - timedelta(days=1),
+            ),
+        )
+    root_payload = json.loads(_root([form]))
+    root_payload["filings"]["recent"]["primaryDocument"] = ["registration.htm"]
+    root = json.dumps(root_payload).encode()
+    filing = parse_sec_submissions_inventory(
+        cik="1001", ticker="ACME", primary_body=root, historical=()
+    ).filings[0]
+    index_url, index_body, manifest_url, manifest_body = _bodies(filing)
+    manifest_body = manifest_body.replace(b">8-K<", b">" + form.encode() + b"<")
+    bodies = {
+        "https://data.sec.gov/submissions/CIK0000001001.json": root,
+        index_url: index_body,
+        manifest_url: manifest_body,
+    }
+    fetched: list[str] = []
+
+    def fetch(_session: requests.Session, url: str, _agent: str) -> bytes:
+        fetched.append(url)
+        return bodies[url]
+
+    monkeypatch.setattr(sync, "_fetch", fetch)
+    monkeypatch.setattr(sync, "_utc_now", lambda: STAMP)
+    monkeypatch.setattr(sync, "datetime", _Clock)
+    monkeypatch.setattr(sync, "sec_user_agent", lambda: "synthetic contact@example.test")
+    monkeypatch.setattr(sync, "PROJECT_ROOT", tmp_path)
+    assert (
+        sync.main(
+            [
+                "--db",
+                str(database),
+                "--ticker",
+                "ACME",
+                "--cik",
+                "1001",
+                "--revision",
+                "1",
+                "--blob-root",
+                str(tmp_path / "blobs"),
+                "--package-checkpoint-root",
+                str(tmp_path / "checkpoints"),
+                "--apply",
+            ]
+        )
+        == 0
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert result["complete"] is True
+    assert result["package_eligible_filing_count"] == 1
+    assert result["inventory_only_filing_count"] == 0
+    assert result["package_failure_count"] == 0
+    assert set(fetched) == set(bodies)
+    with sqlite3.connect(database) as conn:
+        rows = conn.execute(
+            "SELECT expected.form_type,expected.document_type,expected.period_end,"
+            "duty.authority_kind,duty.document_family,duty.completeness_rule "
+            "FROM expected_documents expected "
+            "JOIN expected_document_obligation_bindings binding USING(expected_document_id) "
+            "JOIN source_obligation_revisions duty ON duty.obligation_revision_id=binding.source_obligation_revision_id "
+            "ORDER BY expected.document_type"
+        ).fetchall()
+        assert rows == [
+            (
+                form,
+                "filing",
+                None,
+                "sec_edgar",
+                "issuer_financial_statements",
+                "regulator_inventory",
+            ),
+            (
+                form,
+                "sec_exhibit",
+                None,
+                "sec_edgar",
+                "issuer_financial_statements",
+                "regulator_inventory",
+            ),
+        ]
+        assert conn.execute(
+            "SELECT COUNT(*) FROM source_obligation_revisions WHERE document_family='issuer_financial_statements' AND authority_kind='issuer_publisher'"
+        ).fetchone() == (1,)
+        assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone() == (0,)

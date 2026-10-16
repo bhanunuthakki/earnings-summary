@@ -7,7 +7,7 @@ import json
 import re
 import shutil
 import subprocess
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -244,7 +244,8 @@ def test_counterread_home_survives_collapsed_and_mobile_sidebar_rules() -> None:
     assert ".app-sidebar.is-collapsed .sidebar-logo" in html
     assert ".app-sidebar.is-collapsed .sidebar-brand" in html
     assert "flex-direction: column" in html
-    assert ".sidebar-collapse-toggle, .nav-layer-title" in html
+    assert ".nav-layer-title, .sidebar-cmd-text, .nav-text" in html
+    assert 'id="workOsAppSidebarToggle"' in html
     assert ".sidebar-brand button, .nav-layer-title" not in html
     assert ".sidebar-home" in html
     assert "min-block-size: var(--touch-target-size)" in html
@@ -573,10 +574,11 @@ def test_work_os_routed_peeks_have_one_safe_full_page_host_and_deep_link_contrac
 def test_work_os_full_brief_and_threshold_return_contracts_are_routed() -> None:
     html = render_work_os_shell()
 
-    assert "function workOsBriefUrl(ticker, origin, focusId)" in html
+    assert "function workOsBriefUrl(ticker, origin, focusId, artifactId, sectionId)" in html
     assert "work_os_brief" in html
     assert "workOsBriefReader" in html
-    assert "window.openWorkOsBriefReader(briefTicker, { fromHistory: true })" in html
+    assert "window.openWorkOsBriefReader(briefTicker, {" in html
+    assert "params.get('work_os_brief_artifact')" in html
     assert "if (briefReaderOverlay) briefReaderOverlay.close();" in html
     assert "function workOsOpenThresholdReview(ticker)" in html
     assert "'/advisor/sizing-intents/' + encodeURIComponent(safeTicker)" in html
@@ -945,6 +947,13 @@ def test_full_brief_is_transient_reader_state_not_persistent_navigation() -> Non
     assert "attachShadow" in html
     assert "report_reader_payload.v1" in html
     assert "content.innerHTML = payload.body_html" in html
+    assert 'id="work-os-dcf-runtime"' in html
+    assert "window.initDcfEditor(content.querySelector('.dcf-edit'), {" in html
+    assert "scope: root, ticker: artifact.ticker" in html
+    assert html.index(
+        "workOsDisposeReaderDcf();",
+        html.index("onBeforeClose: function () {", html.index("const briefReaderOverlay")),
+    ) < html.index("workOsBriefLookupSequence += 1;")
     assert 'id="workOsBriefReaderBack"' in html
     assert 'id="workOsBriefReaderDecision"' in html
     assert 'id="workOsBriefReaderSections"' in html
@@ -1171,12 +1180,14 @@ def test_company_desk_identity_ticker_uses_the_display_role_without_changing_sha
     assert 'class="k-ticker-symbol t-mono" id="deskTicker"' not in html
 
 
-def test_full_brief_reader_has_a_resolved_modal_stacking_token() -> None:
-    """The reader toolbar must stay above sticky app chrome and the scrim."""
+def test_full_brief_reader_preserves_application_navigation() -> None:
+    """The reader uses the app content area and leaves its navigation usable."""
     html = render_work_os_shell()
 
     assert "--z-modal: 300;" in html
-    assert ".work-os-reader { position: fixed; inset: 0; z-index: var(--z-modal);" in html
+    assert "inset-inline-start: var(--sidebar-width); z-index: var(--z-scrim);" in html
+    assert 'role="region"' in html
+    assert "modal: false, priority: window.CCOverlay.PRIORITY.PALETTE" in html
 
 
 def test_cockpit_hydration_does_not_construct_company_desk() -> None:
@@ -1596,9 +1607,11 @@ def test_company_switch_keeps_url_and_rendered_identity_in_sync() -> None:
     assert "if (!committed) return false;" in html
     assert "window.navigateTo('screen-workspace'" in switch_runtime
     assert "workOsWriteCompanyContext(requested, 'company-desk', options);" in switch_runtime
-    assert switch_runtime.index(
-        "workOsWriteCompanyContext(requested, 'company-desk', options);"
-    ) < switch_runtime.index("window.navigateTo('screen-workspace'")
+    assert (
+        switch_runtime.index("window.navigateTo('screen-workspace'")
+        < switch_runtime.index("await workOsRenderCompanyDesk(requested)")
+        < switch_runtime.index("workOsWriteCompanyContext(requested, 'company-desk', options);")
+    )
 
 
 def test_company_identity_is_only_committed_by_the_atomic_desk_transition() -> None:
@@ -1722,7 +1735,22 @@ def test_company_context_playground_change_updates_url_and_history_restores_it()
 _STAMP_RX = re.compile(r'data-generated-at="([^"]+)"')
 
 
-def test_shell_render_is_memoized_within_the_thirty_second_bucket() -> None:
+@pytest.fixture
+def shell_clock(monkeypatch: pytest.MonkeyPatch) -> list[datetime]:
+    clock = [datetime(2026, 8, 7, 12, 0, 5, tzinfo=UTC)]
+
+    class FixedClock:
+        @staticmethod
+        def now(_zone: object) -> datetime:
+            return clock[0]
+
+    monkeypatch.setattr("pipeline.work_os_shell.datetime", FixedClock)
+    return clock
+
+
+def test_shell_render_is_memoized_within_the_thirty_second_bucket(
+    shell_clock: list[datetime],
+) -> None:
     clear_work_os_shell_render_cache()
     try:
         first = render_work_os_shell_result()
@@ -1737,11 +1765,15 @@ def test_shell_render_is_memoized_within_the_thirty_second_bucket() -> None:
         pinned_again = render_work_os_shell_result(generated_at=datetime(2026, 8, 7, tzinfo=UTC))
         assert pinned_again.cache_state == "hit"
         assert pinned_again.html == pinned.html
+        shell_clock[0] += timedelta(seconds=30)
+        expired = render_work_os_shell_result()
+        assert expired.cache_state == "miss"
+        assert expired.html != first.html
     finally:
         clear_work_os_shell_render_cache()
 
 
-def test_implicit_renders_share_one_stamped_render_per_bucket() -> None:
+def test_implicit_renders_share_one_stamped_render_per_bucket(shell_clock: list[datetime]) -> None:
     clear_work_os_shell_render_cache()
     try:
         first = render_work_os_shell()

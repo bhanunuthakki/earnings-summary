@@ -54,7 +54,6 @@ from pipeline.document_completeness import (
     DocumentCompletenessStatus,
     document_completeness,
 )
-from pipeline.sec_xbrl import CIK_MAP
 from pipeline.sec_xbrl import ingest_for_ticker as ingest_sec_for_ticker
 from pipeline.segment_cache_audit import audit_ticker_cache, segment_cache_present
 from pipeline.source_policy import (
@@ -204,16 +203,9 @@ def _stage_fetch_sec_xbrl(
 ) -> StageResult:
     """Hit SEC companyfacts API + persist new accessions/financial_facts. Idempotent.
 
-    Skipped for tickers absent from CIK_MAP (e.g., FLKR ETF). Network failures
-    return FAILED with the error in notes — does not raise out of the DAG.
+    Collection policy and canonical issuer identity own eligibility. Network
+    failures return FAILED without stopping independent refresh stages.
     """
-    if ticker.upper() not in CIK_MAP:
-        return StageResult(
-            name=StageName.FETCH_SEC_XBRL,
-            status=StageStatus.SKIPPED,
-            rows_processed=0,
-            notes="no CIK in CIK_MAP",
-        )
     authorization = authorize_collection_target_in_connection(
         conn,
         ticker,

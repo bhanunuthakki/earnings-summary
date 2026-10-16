@@ -91,6 +91,14 @@ operation; it does not authorize a new write with a stale inventory.
 an explicit read-only database connection. The [Operations contract](operations_governance_surface.md#analysis-evidence-scope-planning-and-use)
 owns its manual interface. This change adds no scheduled work, provider activation,
 financial publication, or production-state change.
+The morning pipeline selects its database and artifact root independently.
+`execution/run_morning_pipeline.py --repo-root` names the artifact root; it
+defaults to the installed project root. `--db-path` names the database authority.
+Lifecycle reconciliation, document evidence and factor proxies receive the
+selected artifact root. Database placement does not select an artifact root.
+Checkpoint scope and invocation inputs bind both paths. A changed root cannot
+reuse a checkpoint from another artifact set. This contract does not start a
+pipeline or change scheduler activation.
 
 ## Stage sequence
 
@@ -146,6 +154,54 @@ The current retention defaults are:
 - seven days for rebuildable caches, including news and Python tool caches; and
 - 90 days for bounded pipeline telemetry (`stage_transitions`, `source_calls`, and
   `ingestion_runs`).
+
+Explicitly registered, verified, completed test files expire after seven days.
+New owned test sessions use `src/operations/temp_run_retention.py`. A per-run
+`.earnings-temp-run.json` receipt starts active. Successful closure records exact
+disposable paths and their hashes after test teardown. The seven-day window starts
+at completion, not creation. Pytest stores its default fixtures in that owned run
+root on Windows and seals it through its session-finish hook. Other hosts retain
+pytest's existing fixture cleanup; tests can opt in through
+`EARNINGS_SUMMARY_MANAGED_TEST_TEMPS=1`. Failed or interrupted sessions
+remain protected. Explicit user `--basetemp` paths are not claimed by this hook.
+The existing weekly cleaner discovers these receipts in both configured state
+and runtime `.tmp` roots, plus narrowly named `earnings-summary-*` runs under
+the Windows/user temporary roots. Unknown paths are inventoried, not registered
+by filename, age, or a passing command. Lifecycle receipts remain after retirement.
+Registration in `data/operations/artifact-retention.json` names each file, its
+allowed scope, SHA-256, family, completion status and recovery pins. A supervised
+operator may use a zero-day cutoff for the owner's immediate cleanup request.
+Unclassified files, active or failed attempts, changed bytes, links, database
+sidecars and pinned recovery material stay protected. Retirement writes a durable
+plan and result receipt before removing registered bytes. Original source
+documents, financial observation history and `portfolio_gc_archive.db` remain
+outside this cleanup.
+
+Backup files retain the latest verified, completed member per source and family.
+Daily database backup defaults are one portfolio snapshot and one cumulative
+archive snapshot. Snapshot and archive verification and both required uploads
+must finish before retention starts. Failed or unfinished attempts and explicit
+recovery pins keep their bytes and the last good backup. The weekly cleaner also
+discovers operational SQLite backups in state `data/backups`. A valid snapshot
+manifest, a sealed restore-readiness receipt, and a matching successful apply
+receipt must bind the exact bytes, canonical source and completed operation.
+Snapshot creation and a passed dry run do not establish operation completion.
+KPI repair and disposition purposes retain separate backup families per source.
+Failed attempts remain held until a later successful attempt proves recovery
+with the same backup, logical operation, manifest, review and executor bindings.
+Each cleanup run reads the current evidence again. It rechecks all evidence
+digests before retirement and before relying on a surviving backup. Operator
+catalog pins and holds take priority. Other legacy files require explicit catalog
+registration; calendar age or a filename is insufficient.
+
+Legacy temporary trees without ownership and completion evidence have no expiry
+date. The coverage receipt must keep their sizes and holds visible. A supervised
+review must classify their exact disposable files before registering them; active
+work, source clones and unresolved recovery copies must not become disposable
+because they are old. Registered completed test files clear on the first weekly
+pass after their seven-day completion window. Ordinary eligible files clear on
+the first pass after their 30-day window. These windows are not deadlines for
+unclassified files, source evidence or recovery holds.
 
 `execution/run_weekly_cleanup.py` and `execution/db_gc.py` are the executable
 allowlists and exact cutoff implementations. Their already-registered weekly jobs are

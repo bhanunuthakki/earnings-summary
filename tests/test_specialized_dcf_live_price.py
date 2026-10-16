@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +21,7 @@ import build_fintech_sotp as fintech
 import build_meli_platform_dcf as meli
 import build_nu_platform_dcf as nu
 
+from db_paths import db_path_context, resolve_db_path
 from dcf import specialized_price
 from dcf.persist import DcfRunRow
 from sources import price as price_source
@@ -219,8 +221,14 @@ def test_valid_live_observation_wins_even_when_fallback_is_invalid(
 
 
 def test_bank_entrypoint_uses_live_price_when_seed_is_missing(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
+    db = migrated_db(tmp_path / "state" / "facts.db")
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db))
+    monkeypatch.setattr(bank, "REPO", tmp_path / "artifacts")
+    monkeypatch.setattr(bank, "DEST", tmp_path / "artifacts" / "dcf" / "NU.xlsx")
     observed_at = datetime(2026, 8, 26, tzinfo=UTC)
     assumptions = bank.Assum()
     actuals = bank.Actuals(
@@ -282,6 +290,7 @@ def test_bank_entrypoint_uses_live_price_when_seed_is_missing(
         _mirror: bank.Mirror,
         price_observation: specialized_price.SpecializedPriceObservation | None,
     ) -> bool:
+        assert resolve_db_path(None) == db
         captured.append((model_actuals.price, price_observation))
         return True
 
@@ -408,12 +417,30 @@ def test_bank_global_assumption_receipt_records_database_authority(
 
 
 def test_fintech_global_assumption_receipt_records_degraded_capm_fallback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
 ) -> None:
     assumptions_path = tmp_path / "data/bank_assumptions/SOFI_sotp.json"
     assumptions_path.parent.mkdir(parents=True)
     assumptions_path.write_text(json.dumps({"derive_ke_capm": 1}), encoding="utf-8")
     monkeypatch.setattr(fintech, "REPO", tmp_path)
+
+    # Missing authority still gives a truthful degraded read; durable entrypoints
+    # require an existing explicit database before they can build artifacts.
+    load_assumptions: object = getattr(fintech, "_load")
+    assert callable(load_assumptions)
+    with db_path_context(tmp_path / "missing.db"):
+        degraded = cast("Callable[[str], fintech.Sotp]", load_assumptions)("SOFI")
+    assert degraded.global_assumption_source["status"] == "missing_database"
+    assert degraded.global_assumption_source["effective_fields"] == [
+        "risk_free_rate",
+        "equity_risk_premium",
+    ]
+    assert degraded.global_assumption_source["influences_calculation"] is True
+    assert degraded.ke == pytest.approx(0.043 + degraded.beta * 0.045)
+    db = migrated_db(tmp_path / "state" / "facts.db")
+    with sqlite3.connect(db) as conn:
+        conn.execute("DELETE FROM global_dcf_assumptions")
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db))
 
     captured: list[fintech.Sotp] = []
 
@@ -447,7 +474,7 @@ def test_fintech_global_assumption_receipt_records_degraded_capm_fallback(
     assert len(captured) == 1
     assumptions = captured[0]
 
-    assert assumptions.global_assumption_source["status"] == "missing_database"
+    assert assumptions.global_assumption_source["status"] == "seed_default"
     assert assumptions.global_assumption_source["effective_fields"] == [
         "risk_free_rate",
         "equity_risk_premium",
@@ -457,8 +484,14 @@ def test_fintech_global_assumption_receipt_records_degraded_capm_fallback(
 
 
 def test_nu_entrypoint_threads_one_observation_through_model_and_persistence(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    migrated_db: Callable[..., Path],
 ) -> None:
+    db = migrated_db(tmp_path / "state" / "facts.db")
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(db))
+    monkeypatch.setattr(nu, "REPO", tmp_path / "artifacts")
+    monkeypatch.setattr(nu, "DEST", tmp_path / "artifacts" / "dcf" / "NU.xlsx")
     observation = specialized_price.SpecializedPriceObservation(
         price=42.5,
         observed_at=datetime(2026, 8, 26, 3, 28, tzinfo=UTC),
@@ -499,6 +532,7 @@ def test_nu_entrypoint_threads_one_observation_through_model_and_persistence(
         _holdings: dict[str, object] | None,
         price_observation: specialized_price.SpecializedPriceObservation | None,
     ) -> bool:
+        assert resolve_db_path(None) == db
         captured.append((model_inputs.price, price_observation))
         return True
 

@@ -43,11 +43,12 @@ try:
 except ImportError:  # ``python -m execution.build_bank_dcf``
     from execution._lib import PROJECT_ROOT
 
-from db_paths import configured_db_path
+from db_paths import require_db_path, resolve_db_path
 from dcf.artifact_promotion import (
     ArtifactPromotion,
     live_path_from_env,
     promotion_from_env,
+    run_dcf_entrypoint,
 )
 from dcf.provenance import build_file_provenance, schema_supports_provenance
 from dcf.specialized_price import (
@@ -148,7 +149,9 @@ def load_actuals(ticker: str, s: Assum, override: dict[str, Any] | None = None) 
     if isinstance(raw_profile, list):
         profiles = cast("list[object]", raw_profile)
         raw_profile = profiles[0] if profiles else {}
-    prof = cast("dict[str, Any]", raw_profile) if isinstance(raw_profile, dict) else {}
+    if not isinstance(raw_profile, dict):
+        raise ValueError("FMP profile must be an object")
+    prof = cast("dict[str, Any]", raw_profile)
     i0, b0, b1 = inc[0], bal[0], bal[1]
     m = 1e6
 
@@ -216,8 +219,8 @@ def load_kpis(ticker: str) -> dict[str, float]:
     (the same value the break rule evaluates) rather than a stray interim print.
     Quarterly KPIs keep latest-by-period_end. Falls back to the period_end rule
     when the cadence column is absent (pre-0072 DB)."""
-    db = configured_db_path(REPO)
-    if not db.exists():
+    db = resolve_db_path(None, configured_root=REPO)
+    if db is None or not db.exists():
         return {}
     conn = connect_sqlite(db, role=SQLiteConnectionRole.READ_ONLY)
     conn.row_factory = sqlite3.Row
@@ -941,8 +944,8 @@ def load_assumptions(ticker: str) -> tuple[Assum, dict[str, Any]]:
     # wins for any field the name pins explicitly (HDB pins all three; NU pins
     # erp/tax to preserve its pre-global values). Degrades to the Assum literals
     # when the store is unavailable, so the workbook still builds bare.
-    global_loaded: Any = (
-        global_dcf.load_with_provenance(db_path=configured_db_path(REPO))
+    global_loaded = (
+        global_dcf.load_with_provenance(db_path=resolve_db_path(None, configured_root=REPO))
         if global_dcf is not None
         else None
     )
@@ -950,7 +953,7 @@ def load_assumptions(ticker: str) -> tuple[Assum, dict[str, Any]]:
         s.rf = global_loaded.assumptions.risk_free_rate
         s.erp = global_loaded.assumptions.equity_risk_premium
         s.tax = global_loaded.assumptions.tax_rate
-        s.global_assumption_source = cast("dict[str, object]", dict(global_loaded.source_record))
+        s.global_assumption_source = dict(global_loaded.source_record)
     else:
         s.global_assumption_source = {
             "role": "global_dcf_assumptions",
@@ -991,7 +994,7 @@ def persist_dcf_run(
 ) -> bool:
     """Best-effort upsert into dcf_runs so the brief's valuation panel reads the
     bank model's value/share. No-op without the DB / persist module."""
-    db = configured_db_path(REPO)
+    db = require_db_path(resolve_db_path(None, configured_root=REPO))
     if persist_mod is None or not db.exists():
         return False
     # Persist in USD so the brief's over/under compares like-for-like against the
@@ -1076,7 +1079,7 @@ def persist_dcf_run(
         return persist_mod.upsert(conn, row, artifact_promotion=artifact_promotion)
 
 
-def main() -> int:
+def _main_owned() -> int:
     s, actuals_ov = load_assumptions(T)
     a = load_actuals(T, s, actuals_ov)
     price_observation = resolve_specialized_price(
@@ -1128,6 +1131,10 @@ def main() -> int:
         f"= {m.value:.0f} (reporting M) -> {m.vps:.2f}/sh reporting -> ${m.vps_usd:.2f}/ADR USD"
     )
     return 0
+
+
+def main() -> int:
+    return run_dcf_entrypoint(REPO, T, _main_owned, owner="build-bank-dcf")
 
 
 if __name__ == "__main__":

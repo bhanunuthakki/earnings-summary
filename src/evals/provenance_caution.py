@@ -125,6 +125,10 @@ class CautionCase:
 # ---------------------------------------------------------------------------
 
 
+def _load_doc(path: Path) -> list[dict[str, object]]:
+    return load_golden_doc(path, PURPOSE)
+
+
 def _require_str(c: dict[str, object], key: str, label: str, errors: list[str]) -> str:
     v = c.get(key)
     if not isinstance(v, str) or not v.strip():
@@ -149,7 +153,7 @@ def load_caution_golden(path: Path) -> list[CautionCase]:
     errors: list[str] = []
     seen: set[str] = set()
     cases: list[CautionCase] = []
-    for i, c in enumerate(load_golden_doc(path, PURPOSE)):
+    for i, c in enumerate(_load_doc(path)):
         label = f"cases[{i}]"
         case_id = _require_str(c, "id", label, errors)
         if case_id in seen:

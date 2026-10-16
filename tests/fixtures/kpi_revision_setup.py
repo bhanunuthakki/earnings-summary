@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from pathlib import Path
 
+import pytest
+
+import pipeline.kpi_semantics as semantics_module
 from models.facts import Currency, Unit
 from pipeline.kpi_definition_revisions import (
     IssuerKpiDefinitionRevision,
@@ -30,6 +33,18 @@ from pipeline.kpi_semantics import (
 
 NOW = datetime(2026, 9, 6, 18, tzinfo=UTC)
 EFFECTIVE = datetime(2024, 1, 1, tzinfo=UTC)
+
+
+@pytest.fixture
+def semantic_recording_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use the historical database fixture's recording instant for its public writer."""
+
+    class FixtureDatetime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            return NOW.astimezone(tz)
+
+    monkeypatch.setattr(semantics_module, "datetime", FixtureDatetime)
 
 
 def revision_database(path: Path | None = None) -> sqlite3.Connection:
@@ -141,6 +156,8 @@ def revision_database(path: Path | None = None) -> sqlite3.Connection:
             accounting_basis TEXT NOT NULL,consolidation_scope TEXT NOT NULL,
             dimensions_json TEXT NOT NULL,unit_scale TEXT NOT NULL,
             source_row_label TEXT,source_column_header TEXT,source_value_text TEXT,
+            source_precision_json TEXT,
+            reported_period_start TEXT,
             status TEXT NOT NULL,reason_code TEXT,reviewed_by TEXT NOT NULL,
             knowledge_at TEXT NOT NULL,
             created_at TEXT NOT NULL DEFAULT '2026-09-06T18:00:00Z',

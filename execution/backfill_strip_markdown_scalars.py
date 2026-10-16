@@ -56,14 +56,14 @@ from collections import Counter
 from pathlib import Path
 from typing import cast
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_DIR))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from compute.holdings_sanitize import sanitize_holdings_scalars  # noqa: E402
-from llm.postprocess import strip_inline_markdown  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from compute.holdings_sanitize import sanitize_holdings_scalars
+from db_paths import configured_db_path, require_db_path
+from llm.postprocess import strip_inline_markdown
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # (table, id column, scalar column) triples swept in the DB.
 _DB_TARGETS: tuple[tuple[str, str, str], ...] = (
@@ -165,7 +165,7 @@ def main() -> int:
         "--db",
         type=Path,
         default=None,
-        help="SQLite DB path (default: <repo-root>/data/portfolio.db)",
+        help="Existing SQLite database (default: configured authority)",
     )
     parser.add_argument(
         "--holdings-dir",
@@ -180,11 +180,12 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    db_path = (args.db or (PROJECT_ROOT / "data" / "portfolio.db")).resolve()
-    holdings_dir = (args.holdings_dir or (PROJECT_ROOT / "micro_thesis" / "holdings")).resolve()
-    if not db_path.exists():
-        print(f"DB not found: {db_path}", file=sys.stderr)
+    try:
+        db_path = require_db_path(args.db or configured_db_path(PROJECT_ROOT))
+    except (OSError, RuntimeError) as exc:
+        print(f"[error] {exc}", file=sys.stderr)
         return 1
+    holdings_dir = (args.holdings_dir or (PROJECT_ROOT / "micro_thesis" / "holdings")).resolve()
 
     mode = "applying" if args.apply else "dry-run"
     print(f"{mode} markdown-scalar strip on {db_path}")

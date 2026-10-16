@@ -277,9 +277,8 @@ def test_scan_financial_line_item_path_with_dedup(conn: sqlite3.Connection) -> N
         )
     conn.commit()
     candidates = DecisionConditionTrigger().scan("NU", conn)
-    assert len(candidates) == 1
-    assert candidates[0].evidence["decision_id"] == decision_id
-    assert candidates[0].evidence["latest_value"] == 1.2  # reconciled to billions
+    assert candidates == []  # Legacy latest-document ranking is not canonical admission.
+    assert decision_id > 0
 
 
 # ---------------------------------------------------------------------------

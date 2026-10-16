@@ -16,6 +16,7 @@ from llm_artifact_store import (
     drain_dirty,
     history,
     mark_dirty,
+    quarter_index,
     read_artifact,
     read_current,
     upsert,
@@ -287,6 +288,140 @@ def test_upsert_stores_source_doc_ids(db: Path) -> None:
     assert art is not None
     assert art.source_doc_ids == [1, 2, 3]
     assert art.parent_artifact_ids == [10, 20]
+
+
+@pytest.mark.parametrize("json_only", [False, True])
+def test_corrupt_output_is_rejected_by_content_readers(
+    db: Path, caplog: pytest.LogCaptureFixture, json_only: bool
+) -> None:
+    artifact_id, _ = upsert(
+        UpsertRequest(
+            ticker="BKNG",
+            purpose="earnings_summary",
+            fiscal_period="2026-06-30",
+            content_md=None if json_only else "Original brief",
+            content_json={"claim": "original"} if json_only else None,
+            cache_inputs=["same inputs"],
+        ),
+        db_path=db,
+    )
+    column = "content_json" if json_only else "content_md"
+    tampered = '{"claim": "DO NOT LOG PAYLOAD"}' if json_only else "DO NOT LOG PAYLOAD"
+    with sqlite3.connect(db) as conn:
+        conn.execute(f"UPDATE llm_artifacts SET {column} = ? WHERE id = ?", (tampered, artifact_id))
+
+    assert (
+        read_current(
+            ticker="BKNG", purpose="earnings_summary", fiscal_period="2026-06-30", db_path=db
+        )
+        is None
+    )
+    assert read_artifact(artifact_id or 0, db_path=db) is None
+    assert (
+        history(ticker="BKNG", purpose="earnings_summary", fiscal_period="2026-06-30", db_path=db)
+        == []
+    )
+    assert quarter_index(ticker="BKNG", purpose="earnings_summary", db_path=db) == []
+    assert "output_checksum_mismatch" in caplog.text
+    assert "DO NOT LOG PAYLOAD" not in caplog.text
+
+
+@pytest.mark.parametrize("json_only", [False, True])
+def test_unchanged_inputs_repair_corrupt_output_without_erasing_history(
+    db: Path, json_only: bool
+) -> None:
+    req = UpsertRequest(
+        ticker="BKNG",
+        purpose="earnings_summary",
+        fiscal_period="2026-06-30",
+        content_md=None if json_only else "Verified brief",
+        content_json={"claim": "verified"} if json_only else None,
+        cache_inputs=["unchanged"],
+    )
+    old_id, _ = upsert(req, db_path=db)
+    column = "content_json" if json_only else "content_md"
+    tampered = '{"claim": "tampered"}' if json_only else "Tampered brief"
+    with sqlite3.connect(db) as conn:
+        conn.execute(f"UPDATE llm_artifacts SET {column} = ? WHERE id = ?", (tampered, old_id))
+        original_checksum = conn.execute(
+            "SELECT output_sha256 FROM llm_artifacts WHERE id = ?", (old_id,)
+        ).fetchone()[0]
+
+    new_id, hit = upsert(req, db_path=db)
+    assert not hit
+    assert new_id is not None and new_id != old_id
+    current = read_current(
+        ticker="BKNG", purpose="earnings_summary", fiscal_period="2026-06-30", db_path=db
+    )
+    assert current is not None and current.id == new_id
+    assert current.content_md == req.content_md
+    assert current.content_json == req.content_json
+    assert [
+        artifact.id
+        for artifact in history(
+            ticker="BKNG", purpose="earnings_summary", fiscal_period="2026-06-30", db_path=db
+        )
+    ] == [new_id]
+    assert upsert(req, db_path=db) == (new_id, True)
+    with sqlite3.connect(db) as conn:
+        retained = conn.execute(
+            f"SELECT {column}, output_sha256, superseded_by_id FROM llm_artifacts WHERE id = ?",
+            (old_id,),
+        ).fetchone()
+        assert retained == (tampered, original_checksum, new_id)
+        assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 2
+
+
+def test_json_only_checksum_uses_exact_stored_bytes(db: Path) -> None:
+    artifact_id, _ = upsert(
+        UpsertRequest(
+            ticker="BKNG", purpose="bear_case", content_md="", content_json={"claim": "é"}
+        ),
+        db_path=db,
+    )
+    assert read_artifact(artifact_id or 0, db_path=db) is not None
+    with sqlite3.connect(db) as conn:
+        # Equal decoded JSON is not equal to the exact persisted output.
+        conn.execute(
+            "UPDATE llm_artifacts SET content_json = ? WHERE id = ?",
+            ('{"claim":"é"}', artifact_id),
+        )
+    assert read_artifact(artifact_id or 0, db_path=db) is None
+
+
+def test_missing_checksum_stays_unverified_and_regenerates(db: Path) -> None:
+    req = UpsertRequest(ticker="BKNG", purpose="bear_case", content_md="Legacy brief")
+    old_id, _ = upsert(req, db_path=db)
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE llm_artifacts SET output_sha256 = NULL WHERE id = ?", (old_id,))
+    legacy = read_artifact(old_id or 0, db_path=db)
+    assert legacy is not None
+    assert legacy.output_sha256 is None
+    assert legacy.dirty
+    assert legacy.dirty_reason == "output_checksum_missing"
+    assert not artifact_is_fresh(legacy)
+    assert not artifact_is_reusable(legacy)
+    new_id, hit = upsert(req, db_path=db)
+    assert not hit and new_id != old_id
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT output_sha256, superseded_by_id FROM llm_artifacts WHERE id = ?", (old_id,)
+        ).fetchone() == (None, new_id)
+
+
+def test_dirty_queue_retains_corrupt_identity_without_payload(db: Path) -> None:
+    artifact_id, _ = upsert(
+        UpsertRequest(ticker="BKNG", purpose="bear_case", content_md="Original"), db_path=db
+    )
+    mark_dirty(ticker="BKNG", purposes=["bear_case"], reason="facts_changed", db_path=db)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE llm_artifacts SET content_md = ? WHERE id = ?", ("Tampered", artifact_id)
+        )
+    queued = drain_dirty(db_path=db)
+    assert len(queued) == 1 and queued[0].id == artifact_id
+    assert queued[0].content_md is None and queued[0].content_json is None
+    assert queued[0].dirty and queued[0].dirty_reason == "output_checksum_mismatch"
 
 
 # ---------------------------------------------------------------------------

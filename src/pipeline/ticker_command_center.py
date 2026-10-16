@@ -26,6 +26,7 @@ from alerts import AlertRow, QueuedActionRow, list_alerts, list_queued_actions_f
 from compute.thesis_evaluation_episodes import episode_history_source
 from dashboard import render_alert_card
 from dashboard.evidence_drawer import load_brief_provenance
+from db_paths import configured_db_path
 from pipeline.analysis_log import AnalysisLog, build_analysis_log
 from pipeline.artifact_inventory import Artifact, build_artifact_inventory
 from pipeline.freshness import freshness_verdict
@@ -190,7 +191,7 @@ class TickerCommandCenter:
 # --------------------------------------------------------------------------- #
 def build_ticker_command_center(repo_root: Path, ticker: str) -> TickerCommandCenter:
     t = ticker.upper()
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = configured_db_path(repo_root)
     conn: sqlite3.Connection | None = None
     if db_path.exists():
         conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
@@ -234,42 +235,60 @@ def _report_date_from_artifacts(artifacts: list[Artifact]) -> str | None:
 
 def _identity(conn: sqlite3.Connection | None, repo_root: Path, t: str) -> TickerIdentity:
     ident = TickerIdentity(ticker=t, last_build_at=_last_build_at(repo_root, t))
-    if conn is None:
-        return ident
-    if _has(conn, "tracked_companies"):
-        row = conn.execute(
-            "SELECT name, list_type FROM tracked_companies "
-            "WHERE UPPER(ticker)=? AND archived_at IS NULL LIMIT 1",
-            (t,),
-        ).fetchone()
-        if row is not None:
-            ident.name = row["name"]
-            ident.list_type = row["list_type"]
-    if _has(conn, "fmp_endpoint_status"):
-        row = conn.execute(
-            "SELECT MAX(last_pulled) AS lp FROM fmp_endpoint_status WHERE UPPER(ticker)=?",
-            (t,),
-        ).fetchone()
-        ident.last_fmp_at = str(row["lp"]) if row and row["lp"] else None
-    if _has(conn, "transcripts"):
-        transcripts = selected_transcripts_relation(conn).sql
-        row = conn.execute(
-            f"SELECT period_end FROM {transcripts} "  # nosec B608 -- trusted internal SQL shape; values remain bound
-            "WHERE UPPER(ticker)=? AND period_end IS NOT NULL "
-            "ORDER BY period_end DESC LIMIT 1",
-            (t,),
-        ).fetchone()
-        ident.last_transcript_period = (
-            str(row["period_end"])[:10] if row and row["period_end"] else None
-        )
-    if _has(conn, "thesis_evaluations"):
-        source = episode_history_source(conn)
-        row = conn.execute(
-            f"SELECT overall_status FROM {source.relation} WHERE UPPER(ticker)=? "
-            f"ORDER BY {source.latest_checked_column} DESC LIMIT 1",  # nosec B608 -- trusted closed relation
-            (t,),
-        ).fetchone()
-        ident.breach_status = row["overall_status"] if row else None
+    if conn is not None:
+        if _has(conn, "tracked_companies"):
+            row = conn.execute(
+                "SELECT name, list_type FROM tracked_companies "
+                "WHERE UPPER(ticker)=? AND archived_at IS NULL LIMIT 1",
+                (t,),
+            ).fetchone()
+            if row is not None:
+                ident.name = row["name"]
+                ident.list_type = row["list_type"]
+        if _has(conn, "fmp_endpoint_status"):
+            row = conn.execute(
+                "SELECT MAX(last_pulled) AS lp FROM fmp_endpoint_status WHERE UPPER(ticker)=?",
+                (t,),
+            ).fetchone()
+            ident.last_fmp_at = str(row["lp"]) if row and row["lp"] else None
+        if _has(conn, "transcripts"):
+            transcripts = selected_transcripts_relation(conn).sql
+            row = conn.execute(
+                f"SELECT period_end FROM {transcripts} "  # nosec B608 -- trusted internal SQL shape; values remain bound
+                "WHERE UPPER(ticker)=? AND period_end IS NOT NULL "
+                "ORDER BY period_end DESC LIMIT 1",
+                (t,),
+            ).fetchone()
+            ident.last_transcript_period = (
+                str(row["period_end"])[:10] if row and row["period_end"] else None
+            )
+        if _has(conn, "thesis_evaluations"):
+            source = episode_history_source(conn)
+            row = conn.execute(
+                f"SELECT overall_status FROM {source.relation} WHERE UPPER(ticker)=? "
+                f"ORDER BY {source.latest_checked_column} DESC LIMIT 1",  # nosec B608 -- trusted closed relation
+                (t,),
+            ).fetchone()
+            ident.breach_status = row["overall_status"] if row else None
+    if ident.name is None:
+        p = repo_root / "micro_thesis" / "holdings" / f"{t}.json"
+        if p.is_file():
+            try:
+                raw_parsed: object = json.loads(p.read_text(encoding="utf-8"))
+                if isinstance(raw_parsed, dict):
+                    data = cast("dict[str, object]", raw_parsed)
+                    name_val = data.get("name")
+                    if isinstance(name_val, str) and name_val.strip():
+                        ident.name = name_val.strip()
+                    status_val = data.get("_status")
+                    if (
+                        ident.list_type is None
+                        and isinstance(status_val, str)
+                        and status_val.strip()
+                    ):
+                        ident.list_type = status_val.strip()
+            except (OSError, ValueError):
+                pass
     return ident
 
 

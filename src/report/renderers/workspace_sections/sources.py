@@ -205,15 +205,15 @@ def _sources_tab(
                 path_cell = (
                     f'<a href="/source/{d.doc_id}" '
                     f'data-server-path="/source/{d.doc_id}" target="_blank" '
-                    f'rel="noopener" title="No observation version recorded for this '
+                    f'rel="noopener" title="Observation version not recorded or not uniquely identified for this '
                     f'document — legacy viewer or original source only">'
                     f"{_esc(d.file_path)}</a>"
                 )
-                version_cell = "not recorded"
+                version_cell = "not recorded or not uniquely identified"
             else:
                 path_cell = _esc(d.file_path)
                 version_cell = "—"
-            version_key = d.document_version_id or "not recorded"
+            version_key = d.document_version_id or "not recorded or not uniquely identified"
             data = (
                 lg.data_text(
                     f"{d.doc_type} {d.period_end or ''} {d.file_path} "

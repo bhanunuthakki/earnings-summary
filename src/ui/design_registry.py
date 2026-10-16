@@ -628,6 +628,7 @@ _BHA_89_TO_92_ADDITIONAL_EMITTERS = (
     "dashboard/evidence_drawer.py",
     "dashboard/feed.py",
     "execution/comments_server_work_os_routes.py",
+    "execution/comments_server_financial_evidence_routes.py",
     "pipeline/annual_letter_panel.py",
     "pipeline/analysis_styles.py",
     "pipeline/calibration_receipt.py",
@@ -697,6 +698,8 @@ _NONVISUAL_CENSUS_CLASSIFICATIONS = (
     "compute/soft_rule_evaluator.py",
     "decision_conditions.py",
     "decision_extractor.py",
+    "earnings_brief.py",  # Section-title placeholders are prompt text, not product markup.
+    "earnings_readout.py",  # Section-title placeholders are prompt text, not product markup.
     "etf_sources/nport.py",
     "execution/comments_server_panel_cache.py",
     "execution/design_route_canaries.py",
@@ -1046,12 +1049,12 @@ _MASTER_GEOMETRY_DIGESTS: Mapping[str, str] = MappingProxyType(
         "execution/build_earnings_calendar.py": "a2257779753cf8476f0ab93478569ffbd1d116856e596b46d12afcf8e45de114",  # pragma: allowlist secret
         "pipeline/analysis_styles.py": "75476869a35c0e1f08ba3faa1d35c1f08d5e506efe77ed3b1a52f33bc937942a",  # pragma: allowlist secret
         "pipeline/operations_styles.py": "137755c548ddc80fa25d51832b0b3de479a8c159864696f1deb10a5d34c10c5e",  # pragma: allowlist secret
-        "pipeline/portfolio_styles.py": "596388526bd3d0cc6c64747d990b57391cbd2be2d734fb3eb75a38e954b1e759",  # pragma: allowlist secret
+        "pipeline/portfolio_styles.py": "88bec250b02c80761ab69302703115750239037aafe2c903d488124141341904",  # pragma: allowlist secret
         "pipeline/research_panel_styles.py": "d96812258b5b52e07525a58768ff33de9b2a52fd54fdaf1cbbd2f813a4a4fcbe",  # pragma: allowlist secret
         # Work OS owns the existing Explore heading's token-sized title and top spacing.
-        "pipeline/work_os_styles.py": "4c47e7e8462ff4bb8413f1252cc57dc9aa5d85a29887bdbbcbcdf44a1deed264",  # pragma: allowlist secret
+        "pipeline/work_os_styles.py": "f69463a974adc26c6b9dc0e6230d539b312961bc004f81e31b8b63e75bc96c80",  # pragma: allowlist secret
         "report/renderers/workspace_charts.py": "e55dff6926088b1c08aa42dc69fad725a1f55c15d46a8d9f5c60e60f1773b13a",  # pragma: allowlist secret
-        "report/renderers/workspace_styles.py": "27eba0547bdad4a8bf4178452b7e8f5e8ba947a3f8d141ce05f4c5a4e90573a1",  # pragma: allowlist secret
+        "report/renderers/workspace_styles.py": "eefc919b64fe7ce4af879749c89de195f4a4979ea13d97b57a04b5616b94579a",  # pragma: allowlist secret
         "ui/cite_marks.py": "0c45d7eefb5ef340b1ec58036f32ec4042f69c41473850fc8624f4968e95783e",  # pragma: allowlist secret
         "ui/controls.py": "bd7e8e9ed70a1d975f01bc2138b996a859608739fb385760d34480d571bc491a",  # pragma: allowlist secret
         "ui/living_grid.py": "e95fb454ffbc17e2d248d48f9b5e7563ecd7383a063ad94e0b3ef9088dab4374",  # pragma: allowlist secret
@@ -1106,10 +1109,12 @@ _DYNAMIC_VISUAL_DIGESTS: Mapping[str, str] = MappingProxyType(
         "pipeline/source_viewers.py": "9be48b4c06a11e381d1b9df4c9baf49014cc84c387c0774c2200dac8053fa4bb",  # pragma: allowlist secret
         "pipeline/work_os_copilot.py": "46a2dc3469b3e57e8365049f250e60da96ba9ed8780043be11e8c4044eb1bf1d",  # pragma: allowlist secret
         "pipeline/provenance_panel.py": "084eb62653f0ea3583f0c8347e7b12626f8235b0498e3c4c3141b1723eec490c",  # pragma: allowlist secret
-        "pipeline/work_os_shell.py": "7449e57db7d43c7cf29d0c76f132667ff189f1170be72fe73aa2a350c56c346e",  # pragma: allowlist secret
+        # The shared reader mounts the current DCF owner; persisted scripts stay inert.
+        "pipeline/work_os_shell.py": "9b6cd0bf67b15f98683ade459c5051154ca92c85aeaf49d6ab1df5b384b1d622",  # pragma: allowlist secret
         "pipeline/work_os_runtime.js": "9f130216532bb0e7da89aec20d6a804eacb74799e5d74b4f2ce01ed03216ba83",  # pragma: allowlist secret
         "pipeline/work_os_styles.py": "dc8c2615add4455efea1095cb501f00b0fcbdcc29e0171a8abda4ea234c6a14a",  # pragma: allowlist secret
-        "report/renderers/charts_v2.py": "38895e26b31e240446d2cd93ebf38869df6a86bdcd3ad4ea8be9d040f4102f29",  # pragma: allowlist secret
+        # Growth suffixes compose the existing source chip; no new style writer.
+        "report/renderers/charts_v2.py": "dec718f5adcc84935ef99ad0e7e80041241840f09457b3b0a75176e949715a1a",  # pragma: allowlist secret
         # Offline projections embed only the canonical report stylesheet.
         "report/renderers/offline_document.py": "0ebbf3dcf61600b5327907412bff05b81628a4bd5b439e2fd683ee2736376a47",  # pragma: allowlist secret
         "report/renderers/workspace_html.py": "867b089ceac45baa3dd1f72d35e74feba80f1af19ae6b8c4f4bdeeb2a5d60c05",  # pragma: allowlist secret

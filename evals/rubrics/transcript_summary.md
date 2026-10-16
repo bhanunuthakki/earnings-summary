@@ -1,4 +1,4 @@
-# Rubric: transcript_summary (v1)
+# Rubric: transcript_summary (v2)
 
 Pass threshold: 0.70
 
@@ -36,11 +36,7 @@ facet toward 0.
 
 ## Facet: specificity — quantified deltas and named levers
 
-Claims must be specific: deltas quantified against the prior 2–4 quarters
-(not just YoY), the specific lever that moved named, secular vs cyclical vs
-one-off distinguished, and management spin called out where the framing
-diverges from the print. Hand-wavy direction-words ("strong growth
-continued") without magnitudes are misses.
+Claims must identify the economic mechanism, supplied evidence and plausible alternative cause. Quantify comparable deltas when the inputs permit. Cite qualitative disclosures when numbers are absent. Distinguish secular, cyclical and one-off causes. Unsupported precision is a miss; explicit missing evidence is valid.
 
 ## Facet: forward_setup — a concrete next-quarter check
 
@@ -58,3 +54,13 @@ impossible magnitudes are hard misses). Verbatim quotes, if present, appear
 in blockquote format with speaker attribution and earn their place (signal
 that paraphrase would lose); inline paraphrase must not masquerade as
 quotation.
+
+## Facet: exchange_and_context — bounded conclusions from available evidence
+
+Preserve guidance, consensus and owner expectations as distinct dated bars.
+Identify absent prior bars rather than reconstructing them. Classify an unanswered
+component only from the complete relevant exchange, including later responses.
+Unknown or selected transcript coverage must constrain avoidance/dropped-topic
+claims. Compare language with cited matching speaker, topic and context. Separate
+textual observation, management claim and analyst inference; do not infer motive.
+Public next checks must name a source, observable and investment consequence.

@@ -7,6 +7,7 @@ import sqlite3
 import subprocess
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -20,6 +21,26 @@ from user_state import notes
 
 PRIOR_HEAD = "0059_kpi_facts_restatement"
 ROSTER = build_roster_index(symbols=["NU", "MELI"], phrases={"nubank": "NU"})
+
+
+def _stub_updates(
+    monkeypatch: pytest.MonkeyPatch, updates: Callable[[], list[telegram.Update]]
+) -> None:
+    def get_updates(
+        token: str, offset: int | None = None, timeout: int = 50
+    ) -> list[telegram.Update]:
+        del token, offset, timeout
+        return updates()
+
+    monkeypatch.setattr(telegram, "get_updates", get_updates)
+
+
+def _stub_messages(monkeypatch: pytest.MonkeyPatch, sent: list[str]) -> None:
+    def send_message(token: str, chat_id: int, text: str, **kwargs: object) -> None:
+        del token, chat_id, kwargs
+        sent.append(text)
+
+    monkeypatch.setattr(telegram, "send_message", send_message)
 
 
 def _noop_tap(result: ingest.IngestResult, db_path: Path | str | None) -> int | None:
@@ -170,6 +191,7 @@ def test_runtime_configuration_binds_implicit_consumers_to_canonical_db(
     import db
 
     canonical = tmp_path / "canonical.db"
+    canonical.touch()
     monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(canonical))
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "previous.db")
 
@@ -307,7 +329,7 @@ def test_poll_once_ingests_text_and_advances_offset(
         telegram.Update(update_id=10, kind="text", chat_id=1, text="Nubank looks compelling"),
         telegram.Update(update_id=11, kind="text", chat_id=1, text="the market feels toppy"),
     ]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    _stub_updates(monkeypatch, lambda: updates)
     offset_path = tmp_path / "offset.json"
     counts = poller.poll_once(
         "tok",
@@ -327,7 +349,7 @@ def test_poll_once_dedups_on_replay(
     db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     updates = [telegram.Update(update_id=20, kind="text", chat_id=1, text="MELI looks cheap")]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    _stub_updates(monkeypatch, lambda: updates)
     offset_path = tmp_path / "offset.json"
     audio = tmp_path / "audio"
     poller.poll_once(
@@ -344,8 +366,13 @@ def test_poll_once_voice_downloads_lands_and_purges_audio(
     db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     updates = [telegram.Update(update_id=30, kind="voice", chat_id=1, voice_file_id="F1")]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
-    monkeypatch.setattr(telegram, "get_file_path", lambda token, file_id: "voice/f1.oga")
+    _stub_updates(monkeypatch, lambda: updates)
+
+    def get_file_path(token: str, file_id: str) -> str:
+        del token, file_id
+        return "voice/f1.oga"
+
+    monkeypatch.setattr(telegram, "get_file_path", get_file_path)
 
     def _download(token: str, file_path: str, dest: object) -> Path:
         out = Path(str(dest))
@@ -353,7 +380,12 @@ def test_poll_once_voice_downloads_lands_and_purges_audio(
         return out
 
     monkeypatch.setattr(telegram, "download_file", _download)
-    monkeypatch.setattr(transcribe, "transcribe", lambda path: "thinking about Nubank credit")
+
+    def transcribe_audio(path: Path | str) -> str:
+        del path
+        return "thinking about Nubank credit"
+
+    monkeypatch.setattr(transcribe, "transcribe", transcribe_audio)
     audio = tmp_path / "audio"
     counts = poller.poll_once(
         "t",
@@ -497,11 +529,9 @@ def test_poll_once_skips_bot_commands(
         telegram.Update(update_id=40, kind="text", chat_id=1, text="/start"),
         telegram.Update(update_id=41, kind="text", chat_id=1, text="Nubank looks good here"),
     ]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    _stub_updates(monkeypatch, lambda: updates)
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     counts = poller.poll_once(
         "tok",
         db_path=db_path,
@@ -523,11 +553,9 @@ def test_poll_once_review_command_replies_with_pre_analysis(
     """The coach's pings say "/review {ticker}" — the poller must answer that
     call-to-action in-channel instead of silently swallowing it."""
     updates = [telegram.Update(update_id=50, kind="text", chat_id=1, text="/review NU")]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    _stub_updates(monkeypatch, lambda: updates)
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     seen_calls: list[tuple[object, str, bool]] = []
 
     def _fake_reply_text(repo_root: object, text: str, *, plain: bool = False) -> str:
@@ -559,11 +587,9 @@ def test_poll_once_review_command_degrades_on_failure(
     db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     updates = [telegram.Update(update_id=51, kind="text", chat_id=1, text="/review BADTICKER")]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    _stub_updates(monkeypatch, lambda: updates)
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
 
     def _boom(repo_root: object, text: str, *, plain: bool = False) -> str:
         raise RuntimeError("cockpit unavailable")
@@ -610,11 +636,9 @@ def test_poll_once_redteam_list_command_replies_with_numbered_items(
     the same shape /review already gets."""
     _seed_red_team_item(db_path)
     updates = [telegram.Update(update_id=70, kind="text", chat_id=1, text="/redteam")]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    _stub_updates(monkeypatch, lambda: updates)
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     counts = poller.poll_once(
         "tok",
         db_path=db_path,
@@ -640,11 +664,9 @@ def test_poll_once_redteam_accept_command_responds_via_shared_state_machine(
 
     item_id = _seed_red_team_item(db_path)
     updates = [telegram.Update(update_id=71, kind="text", chat_id=1, text="/redteam 1 accept")]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    _stub_updates(monkeypatch, lambda: updates)
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     counts = poller.poll_once(
         "tok",
         db_path=db_path,
@@ -665,11 +687,9 @@ def test_poll_once_redteam_refute_without_text_asks_for_reasoning(
 ) -> None:
     _seed_red_team_item(db_path)
     updates = [telegram.Update(update_id=72, kind="text", chat_id=1, text="/redteam 1 refute")]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    _stub_updates(monkeypatch, lambda: updates)
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     poller.poll_once(
         "tok",
         db_path=db_path,
@@ -692,11 +712,9 @@ def test_poll_once_redteam_refute_with_text_writes_ledger(
             update_id=73, kind="text", chat_id=1, text="/redteam 1 refute Already hedged."
         )
     ]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    _stub_updates(monkeypatch, lambda: updates)
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     poller.poll_once(
         "tok",
         db_path=db_path,
@@ -715,17 +733,12 @@ def test_poll_once_redteam_second_defer_reports_escalation(
     db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _seed_red_team_item(db_path)
-    monkeypatch.setattr(
-        telegram,
-        "get_updates",
-        lambda token, offset=None, timeout=50: [
-            telegram.Update(update_id=74, kind="text", chat_id=1, text="/redteam 1 defer")
-        ],
+    _stub_updates(
+        monkeypatch,
+        lambda: [telegram.Update(update_id=74, kind="text", chat_id=1, text="/redteam 1 defer")],
     )
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     poller.poll_once(
         "tok",
         db_path=db_path,
@@ -738,12 +751,9 @@ def test_poll_once_redteam_second_defer_reports_escalation(
 
     # A second /redteam with a fresh listing re-numbers against the still-open
     # (deferred) item as #1 again; deferring it a second time must escalate.
-    monkeypatch.setattr(
-        telegram,
-        "get_updates",
-        lambda token, offset=None, timeout=50: [
-            telegram.Update(update_id=75, kind="text", chat_id=1, text="/redteam 1 defer")
-        ],
+    _stub_updates(
+        monkeypatch,
+        lambda: [telegram.Update(update_id=75, kind="text", chat_id=1, text="/redteam 1 defer")],
     )
     poller.poll_once(
         "tok",
@@ -762,11 +772,9 @@ def test_poll_once_redteam_out_of_range_index_replies_with_usage(
 ) -> None:
     _seed_red_team_item(db_path)
     updates = [telegram.Update(update_id=76, kind="text", chat_id=1, text="/redteam 9 accept")]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    _stub_updates(monkeypatch, lambda: updates)
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     poller.poll_once(
         "tok",
         db_path=db_path,
@@ -782,11 +790,9 @@ def test_poll_once_redteam_list_when_no_run_yet(
     db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     updates = [telegram.Update(update_id=77, kind="text", chat_id=1, text="/redteam")]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    _stub_updates(monkeypatch, lambda: updates)
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     poller.poll_once(
         "tok",
         db_path=db_path,
@@ -802,11 +808,9 @@ def test_poll_once_unknown_command_replies_instead_of_vanishing(
     db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     updates = [telegram.Update(update_id=60, kind="text", chat_id=1, text="/foobar")]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    _stub_updates(monkeypatch, lambda: updates)
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     counts = poller.poll_once(
         "tok",
         db_path=db_path,
@@ -834,11 +838,9 @@ def test_poll_once_answers_a_question(
     updates = [
         telegram.Update(update_id=80, kind="text", chat_id=1, text="What's my cost basis on MELI?")
     ]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    _stub_updates(monkeypatch, lambda: updates)
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     monkeypatch.setattr(
         "onmymind.respond.classify_capture_triage",
         _answer_now_triage,
@@ -859,9 +861,10 @@ def test_poll_once_answers_a_question(
     assert counts.get("landed") == 1
     assert any("cost basis is $1,240" in s for s in sent)  # the answer reached the thread
     musings = notes.list_notes(kind="musing", db_path=db_path)
-    assert (musings[0].context or {}).get("ledger_answer", {}).get("text") == (
-        "Your MELI cost basis is $1,240."
-    )
+    raw_answer = (musings[0].context or {}).get("ledger_answer", {})
+    assert isinstance(raw_answer, dict)
+    answer = cast("dict[str, object]", raw_answer)
+    assert answer.get("text") == "Your MELI cost basis is $1,240."
 
 
 def test_poll_once_musing_not_answered(
@@ -874,11 +877,9 @@ def test_poll_once_musing_not_answered(
     answer message — only the ordinary capture confirm."""
 
     updates = [telegram.Update(update_id=81, kind="text", chat_id=1, text="MELI looks cheap here")]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    _stub_updates(monkeypatch, lambda: updates)
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     monkeypatch.setattr(
         "onmymind.respond.classify_capture_triage",
         _plain_triage,
@@ -907,11 +908,9 @@ def test_poll_once_start_command_still_greets(
 ) -> None:
     """/start behavior is unchanged by the unknown-command reply."""
     updates = [telegram.Update(update_id=70, kind="text", chat_id=1, text="/start")]
-    monkeypatch.setattr(telegram, "get_updates", lambda token, offset=None, timeout=50: updates)
+    _stub_updates(monkeypatch, lambda: updates)
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     counts = poller.poll_once(
         "tok",
         db_path=db_path,
@@ -975,23 +974,21 @@ def _stub_reply_intent(monkeypatch: pytest.MonkeyPatch, intent: str) -> None:
     import onmymind.reply as reply_mod
     from onmymind.reply import ReplyVerdict
 
-    monkeypatch.setattr(reply_mod, "classify_reply", lambda c, r, **kw: ReplyVerdict(intent=intent))
+    def classify_reply(card_text: str, reply_text: str, **kwargs: object) -> ReplyVerdict:
+        del card_text, reply_text, kwargs
+        return ReplyVerdict(intent=intent)
+
+    monkeypatch.setattr(reply_mod, "classify_reply", classify_reply)
 
 
 def test_poll_once_card_reply_action_routes_through_core(
     db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     note_id = _seed_card(db_path, "RBRK monetizes data volume", 500)
-    monkeypatch.setattr(
-        telegram,
-        "get_updates",
-        lambda token, offset=None, timeout=50: [_reply_update(100, "dig into this", 500)],
-    )
+    _stub_updates(monkeypatch, lambda: [_reply_update(100, "dig into this", 500)])
     _stub_reply_intent(monkeypatch, "research")
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     counts = poller.poll_once(
         "tok",
         db_path=db_path,
@@ -1012,16 +1009,10 @@ def test_poll_once_card_reply_note_appends_owner_thread(
     db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     note_id = _seed_card(db_path, "NU keeps compounding", 501)
-    monkeypatch.setattr(
-        telegram,
-        "get_updates",
-        lambda token, offset=None, timeout=50: [_reply_update(101, "context: earnings 8/12", 501)],
-    )
+    _stub_updates(monkeypatch, lambda: [_reply_update(101, "context: earnings 8/12", 501)])
     _stub_reply_intent(monkeypatch, "note")
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     counts = poller.poll_once(
         "tok",
         db_path=db_path,
@@ -1046,16 +1037,10 @@ def test_poll_once_card_reply_chat_answers_via_shared_engine(
     capture answer tap uses — the reply text is answered, not just filed."""
 
     _seed_card(db_path, "NU keeps compounding", 502)
-    monkeypatch.setattr(
-        telegram,
-        "get_updates",
-        lambda token, offset=None, timeout=50: [_reply_update(102, "what changed since?", 502)],
-    )
+    _stub_updates(monkeypatch, lambda: [_reply_update(102, "what changed since?", 502)])
     _stub_reply_intent(monkeypatch, "question")
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
 
     def _stub(*_a: object, **_k: object) -> Iterator[dict[str, object]]:
         yield {"type": "final", "text": "Nothing material changed.", "route": "narrative"}
@@ -1080,10 +1065,9 @@ def test_poll_once_card_reply_unknown_message_id_falls_through(
     """A reply pointing at a message id no live note carries is NOT a card reply
     — it falls through to an ordinary capture (capture is never hijacked)."""
     _seed_card(db_path, "NU keeps compounding", 503)
-    monkeypatch.setattr(
-        telegram,
-        "get_updates",
-        lambda token, offset=None, timeout=50: [
+    _stub_updates(
+        monkeypatch,
+        lambda: [
             _reply_update(103, "Nubank looks compelling", 999)  # 999 stamped on no note
         ],
     )
@@ -1115,15 +1099,9 @@ def test_poll_once_card_reply_classifier_failure_degrades(
         raise RuntimeError("model down")
 
     monkeypatch.setattr(reply_mod, "classify_reply", _boom)
-    monkeypatch.setattr(
-        telegram,
-        "get_updates",
-        lambda token, offset=None, timeout=50: [_reply_update(105, "hmm", 504)],
-    )
+    _stub_updates(monkeypatch, lambda: [_reply_update(105, "hmm", 504)])
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     counts = poller.poll_once(
         "tok",
         db_path=db_path,
@@ -1142,11 +1120,7 @@ def test_poll_once_card_reply_send_failure_never_propagates(
     """A failing reply-send is suppressed — the routing already happened."""
     note_id = _seed_card(db_path, "old thought", 506)
     _stub_reply_intent(monkeypatch, "dismiss")
-    monkeypatch.setattr(
-        telegram,
-        "get_updates",
-        lambda token, offset=None, timeout=50: [_reply_update(107, "drop this", 506)],
-    )
+    _stub_updates(monkeypatch, lambda: [_reply_update(107, "drop this", 506)])
 
     def _boom_send(*a: object, **k: object) -> object:
         raise telegram.TelegramError("network down")
@@ -1201,11 +1175,13 @@ def _seed_coach_ping(db_path: Path, *, mid: int, class_: str = "calibration_find
 def _stub_coach_classify(monkeypatch: pytest.MonkeyPatch, intent: str) -> None:
     from capture import coach_reply
 
-    monkeypatch.setattr(
-        coach_reply,
-        "classify_reply",
-        lambda ping, text, **kw: coach_reply.ReplyVerdict(intent=intent),
-    )
+    def classify_reply(
+        ping: coach_reply.PingLike, text: str, **kwargs: object
+    ) -> coach_reply.ReplyVerdict:
+        del ping, text, kwargs
+        return coach_reply.ReplyVerdict(intent=intent)
+
+    monkeypatch.setattr(coach_reply, "classify_reply", classify_reply)
 
 
 def test_poll_once_coach_ping_reply_routes_and_never_double_lands(
@@ -1217,15 +1193,9 @@ def test_poll_once_coach_ping_reply_routes_and_never_double_lands(
     once, linked to the ping via ``context_json['coach_ping_id']``."""
     ping_id = _seed_coach_ping(db_path, mid=800)
     _stub_coach_classify(monkeypatch, "note")
-    monkeypatch.setattr(
-        telegram,
-        "get_updates",
-        lambda token, offset=None, timeout=50: [_reply_update(200, "thanks, seen it", 800)],
-    )
+    _stub_updates(monkeypatch, lambda: [_reply_update(200, "thanks, seen it", 800)])
     sent: list[str] = []
-    monkeypatch.setattr(
-        telegram, "send_message", lambda token, chat_id, text, **k: sent.append(text)
-    )
+    _stub_messages(monkeypatch, sent)
     counts = poller.poll_once(
         "tok",
         db_path=db_path,
@@ -1249,12 +1219,9 @@ def test_poll_once_ordinary_musing_with_no_recent_ping_untouched(
     """No coach ping in play at all (empty ``coach_pings``) — a plain musing
     must flow through the unchanged ordinary-capture path; ``coach_reply``
     dispatch is a pure no-op here (neither direct nor window mode matches)."""
-    monkeypatch.setattr(
-        telegram,
-        "get_updates",
-        lambda token, offset=None, timeout=50: [
-            telegram.Update(update_id=201, kind="text", chat_id=1, text="MELI still cheap")
-        ],
+    _stub_updates(
+        monkeypatch,
+        lambda: [telegram.Update(update_id=201, kind="text", chat_id=1, text="MELI still cheap")],
     )
     counts = poller.poll_once(
         "tok",
@@ -1279,14 +1246,15 @@ def test_poll_once_pending_reply_wins_over_coach_reply(
 
     _seed_coach_ping(db_path, mid=810)  # a live coach ping is ALSO in play
     pending_replies.stash(1, decision_nudge.FILL_IN_KIND, 1, db_path=db_path)
-    monkeypatch.setattr(
-        telegram,
-        "get_updates",
-        lambda token, offset=None, timeout=50: [
-            telegram.Update(update_id=202, kind="text", chat_id=1, text="conviction: high")
-        ],
+    _stub_updates(
+        monkeypatch,
+        lambda: [telegram.Update(update_id=202, kind="text", chat_id=1, text="conviction: high")],
     )
-    monkeypatch.setattr(decision_nudge, "handle_fill_in_reply", lambda *a, **k: None)
+
+    def handle_fill_in_reply(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+
+    monkeypatch.setattr(decision_nudge, "handle_fill_in_reply", handle_fill_in_reply)
     counts = poller.poll_once(
         "tok",
         db_path=db_path,
@@ -1312,12 +1280,9 @@ def test_poll_once_decision_draft_tap_failure_never_blocks_capture(
         raise RuntimeError("decision_draft_parse blew up")
 
     monkeypatch.setattr(decision_draft_mod, "parse_note", boom)
-    monkeypatch.setattr(
-        telegram,
-        "get_updates",
-        lambda token, offset=None, timeout=50: [
-            telegram.Update(update_id=300, kind="text", chat_id=1, text="added to NU today")
-        ],
+    _stub_updates(
+        monkeypatch,
+        lambda: [telegram.Update(update_id=300, kind="text", chat_id=1, text="added to NU today")],
     )
     counts = poller.poll_once(
         "tok",
@@ -1340,13 +1305,15 @@ def test_poll_once_decision_draft_tap_runs_after_landing(
     import capture.decision_draft as decision_draft_mod
 
     seen: list[int] = []
-    monkeypatch.setattr(
-        decision_draft_mod, "parse_note", lambda note_id, *, db_path: seen.append(note_id)
-    )
-    monkeypatch.setattr(
-        telegram,
-        "get_updates",
-        lambda token, offset=None, timeout=50: [
+
+    def parse_note(note_id: int, *, db_path: Path | str | None) -> None:
+        del db_path
+        seen.append(note_id)
+
+    monkeypatch.setattr(decision_draft_mod, "parse_note", parse_note)
+    _stub_updates(
+        monkeypatch,
+        lambda: [
             telegram.Update(update_id=301, kind="text", chat_id=1, text="added to MELI today")
         ],
     )

@@ -1558,3 +1558,50 @@ def test_breakrule_narrative_still_capped_at_1000() -> None:
             unit=Unit.PERCENT,
             narrative="x" * 1001,
         )
+
+
+def test_plain_kpi_persisted_evidence_retains_original_selected_inputs(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    payload = {
+        "ticker": "TEST",
+        "thesis": "cash flow",
+        "break_rules": [
+            {
+                "rule_id": "cash_below_100",
+                "kpi_name": "Cash flow",
+                "comparator": "lt",
+                "threshold": 100,
+                "unit": "millions",
+                "consecutive_periods": 2,
+                "narrative": "Cash flow below 100 million",
+            }
+        ],
+    }
+    (tmp_path / "TEST.json").write_text(json.dumps(payload), encoding="utf-8")
+    _seed_kpi(conn, "TEST", "Cash flow", [("2025-09-30", 90_000_000), ("2025-12-31", 80_000_000)])
+    conn.execute("UPDATE kpi_definitions SET unit='actual' WHERE ticker='TEST'")
+    conn.execute("UPDATE kpi_facts SET unit='actual',source_doc_id=id+10 WHERE ticker='TEST'")
+    conn.commit()
+    selected = conn.execute(
+        "SELECT id,kpi_definition_id,source_doc_id,value FROM kpi_facts WHERE ticker='TEST' ORDER BY period_end DESC"
+    ).fetchall()
+    verdict = evaluate_ticker_thesis(conn, ticker="TEST", holdings_dir=tmp_path)
+    evaluation = verdict.rule_evaluations[0]
+    assert evaluation.status is BreachStatus.BREACH
+    assert [point.value for point in evaluation.observations] == [Decimal(80), Decimal(90)]
+    assert evaluation.source_manifest is not None
+    assert evaluation.source_manifest["schema_version"] == "kpi_selected_inputs@1"
+    manifest_text = json.dumps(evaluation.source_manifest)
+    assert "80000000" in manifest_text and "90000000" in manifest_text
+    assert '"original_unit": "actual"' in manifest_text
+    for row in selected:
+        assert f'"fact_id": {row["id"]}' in manifest_text
+        assert f'"source_doc_id": {row["source_doc_id"]}' in manifest_text
+    persist_verdict(conn, verdict, run_id="selected-inputs")
+    stored = conn.execute(
+        "SELECT rule_evaluations_json FROM thesis_evaluations WHERE ticker='TEST'"
+    ).fetchone()
+    assert stored is not None
+    persisted = json.loads(str(stored[0]))[0]
+    assert persisted["source_manifest"] == evaluation.source_manifest

@@ -17,7 +17,13 @@ def test_brief_lookup_supersession_error_retry_and_reader_close() -> None:
     lookup = runtime.split("  window.openWorkOsBriefReader = async function", 1)[1].split(
         "  window.openFullBriefCanvas", 1
     )[0]
-    harness = (
+    disposer = (
+        "  let workOsReaderDcf = null;"
+        + runtime.split("  let workOsReaderDcf = null;", 1)[1].split(
+            "  function workOsRestoreRailPreference", 1
+        )[0]
+    )
+    harness = disposer + (
         r"""
 global.window={};
 let workOsBriefLookupSequence=0,workOsBriefLookupController=null;
@@ -40,8 +46,12 @@ window.openWorkOsBriefReader = async function
         + lookup
         + r"""
 (async()=>{
+  let disposed=0;
+  workOsReaderDcf={destroy(){disposed++;}};
   const a=window.openWorkOsBriefReader('A',{fromHistory:true});
+  if(disposed!==1 || workOsReaderDcf!==null)throw Error('lookup did not dispose current DCF editor');
   const b=window.openWorkOsBriefReader('B',{fromHistory:true});
+  if(disposed!==1)throw Error('disposed editor was destroyed twice');
   if(!pending[0].options.signal.aborted)throw Error('old lookup not aborted');
   pending[1].resolve(new Response(JSON.stringify({items:[{ticker:'B'}]})));await b;
   pending[0].resolve(new Response(JSON.stringify({items:[{ticker:'A'}]})));await a;
@@ -49,7 +59,9 @@ window.openWorkOsBriefReader = async function
   const failed=window.openWorkOsBriefReader('C',{fromHistory:true});
   pending[2].reject(Object.assign(new Error('unavailable'),{status:503}));await failed;
   if(!body.innerHTML.includes('data-work-os-brief-lookup-retry')||!retry)throw Error('no recovery UI');
+  workOsReaderDcf={destroy(){disposed++;}};
   const retried=retry();
+  if(disposed!==2 || workOsReaderDcf!==null)throw Error('retry retained previous DCF editor');
   await Promise.resolve();
   if(!pending[3].url.includes('ticker=C'))throw Error('retry lost ticker');
   pending[3].resolve(new Response(JSON.stringify({items:[]})));await Promise.resolve();await Promise.resolve();

@@ -1,0 +1,502 @@
+{
+  "review_note": "Reviewed exact preview governance suffix and reconstruction registrations on qualified pending selector988088ef. All current main4c/scanner/statement/LIFE/selector reviewed sources,186 semantic rows and authorities remain inherited. Six full feature/test blobs,27 inherited ASTs,eight input functions,13 scenario test functions58assertions remain exact. Previews remain incomplete or unaccepted,model_ready=False,allocation_eligible=False; no collection,financial/model writes,consumer adoption,scenario or operational acceptance. Only combined governance/reconstruction source hashes are updated. Actual selector squash-base acceptance remains pending.",
+  "schema_version": 1,
+  "sources": [
+    {
+      "path": "AGENTS.md",
+      "sha256": "b07df6d6f883230685362e26dd5ad2a496236d0fc9def9ecb2d0dc14b7b6b532"
+    },
+    {
+      "path": "DEFINITIONS.md",
+      "sha256": "0f464ce207a0892122f588b1466c10cd40b093adab4f5a8553eadf8f1ce433df"
+    },
+    {
+      "path": "directives/agent_host_operations.md",
+      "sha256": "9fbb44d9248d8b589798cfc54032c250eec304b4d5284d38e526505771a8b8e0"
+    },
+    {
+      "path": "directives/agent_implementation_traps.md",
+      "sha256": "76e6dae007a1448c3c4015acc90d5cd5c50663e8082999ebb4e53c2b6682f6c1"
+    },
+    {
+      "path": "directives/data_pipeline_dag.md",
+      "sha256": "bf84f51443bf63204574c378cc207d22b76f7374f258a86e6af8b9723adcd44e"
+    },
+    {
+      "path": "directives/data_provenance.md",
+      "sha256": "52c4fe893f7e7c1d0e9e9f2f4dda19a5e4a7b203e6e020097e7b927f2b7dbc3f"
+    },
+    {
+      "path": "directives/dcf_gsheets_setup.md",
+      "sha256": "d14ae3b692d4ce5278286c42b316e9e4eac49464b773bb5f45f99668977d531b"
+    },
+    {
+      "path": "directives/directive_manifest.json",
+      "sha256": "50250dbcdcfb0a887548b073c2ab7d834ba0bd4334093ebc528af82d61733265"
+    },
+    {
+      "path": "directives/etf_data.md",
+      "sha256": "6d82d88ee2785b27fe0876c9b2ca259e99a542e5f85890bb6c314fd89350fb70"
+    },
+    {
+      "path": "directives/folder_structure.md",
+      "sha256": "f14a474be797afe4d4a4027105c42b018fd2878cf4eaaa1dc33f259d02916ccd"
+    },
+    {
+      "path": "directives/holdings_json_schema.md",
+      "sha256": "e5541a7f71a1a659a2d2eb5dc3a4ebde8f4e82db66b1f8e7dff74446c20c18f8"
+    },
+    {
+      "path": "directives/ir_events_ingestion.md",
+      "sha256": "db912937aa0ca8415ca61438bbe00ced0635a9fc1b994731d904ced080a3412a"
+    },
+    {
+      "path": "directives/llm_calls.md",
+      "sha256": "d4f2641a6d83df11197a886e9d08d3e6288a68bcf242fbfc50bd928e229fdb1c"
+    },
+    {
+      "path": "directives/llm_evals.md",
+      "sha256": "4c712bcce01356017e99f4687ce99ff21af25a73727b82e428fa35bcdebb3f99"
+    },
+    {
+      "path": "directives/llm_quota_scheduling.md",
+      "sha256": "68be74e0220e8b4b093bd2433f7b1c90b88bb36f1e839fe75afec9f52b978cfe"
+    },
+    {
+      "path": "directives/micro_thesis_runbook.md",
+      "sha256": "f920e38f8a09414562587685cf0ac346c3f567237a34cfb30450d22aee71997c"
+    },
+    {
+      "path": "directives/micro_thesis_skill.md",
+      "sha256": "86b481de649b2f8559d52e002a2e790e6c758939db830243836964588cc60678"
+    },
+    {
+      "path": "directives/model_eval_loop.md",
+      "sha256": "2644d9e89caede490d44f050935a11e755160363fac41fa5f33b27898205efb9"
+    },
+    {
+      "path": "directives/next_dollar_model.md",
+      "sha256": "ee91917bde8a179a35417a25b6285b0af2888fd2e0f716db337f0440f3118788"
+    },
+    {
+      "path": "directives/operations_governance_surface.md",
+      "sha256": "55b4b86c155627f8237b8f66cf279370a8856a2aa1cb1b00fcdc841edcec22f7"
+    },
+    {
+      "path": "directives/post_earnings_readout.md",
+      "sha256": "fa33c9e5de78960699a95721af5121b6d05339a63eb0f15e44d7ae6d04ecb776"
+    },
+    {
+      "path": "directives/quarterly_refresh.md",
+      "sha256": "380e7b287e41802a7cbba091280ea33d8847b0fa2ce953e3853c2870e68c9581"
+    },
+    {
+      "path": "directives/report_comments_and_chat.md",
+      "sha256": "be8add723f9351e3ef76859cef19d68fe1d576f3c03c11f0940d3d45779d95a6"
+    },
+    {
+      "path": "execution/apply_issuer_fact_manifest.py",
+      "sha256": "f9c42250237ab53b4fdc0ce426c39fd9c4790b22ca0d669708898030c34ac751"
+    },
+    {
+      "path": "execution/audit_transcript_evidence.py",
+      "sha256": "8b5fbc28ab38f33448c56312609c13c301a885a74620e1412f671802c3daf236"
+    },
+    {
+      "path": "execution/backfill_transcripts.py",
+      "sha256": "a2390ca391ecc98ac0784a3849a334e5eb63e9b2058a369861021c294246e2b7"
+    },
+    {
+      "path": "execution/build_artifacts.py",
+      "sha256": "a99fa94de1960ad3eecf9d1c18de7ce3b8ab5cb42467f7a04e9330d7db065237"
+    },
+    {
+      "path": "execution/build_etf_workup.py",
+      "sha256": "57acc90e14973d296f213a16b1974d629322945bb09634476212eaa5e398b445"
+    },
+    {
+      "path": "execution/build_investment_decision_card.py",
+      "sha256": "0651d288e1193c3a1cfe7c40d6d120397677f0901204c1ec4418c8629c5ae755"
+    },
+    {
+      "path": "execution/build_meli_platform_dcf.py",
+      "sha256": "e841a99ecea2e7e7639aba785f365558bb6660ff7a48b25298b50e5a94a407ab"
+    },
+    {
+      "path": "execution/capture_expected_sec_documents.py",
+      "sha256": "6d3399cf5924b706aec54b42b1aad6e3eea54169b0dc0c775b0409c9c34c6cd8"
+    },
+    {
+      "path": "execution/capture_issuer_document_inventory.py",
+      "sha256": "bfee5f09d733ad99cccdbf425ff2ad71ca8d89879f4437488ebe83052916d0c0"
+    },
+    {
+      "path": "execution/comments_server.py",
+      "sha256": "b3c9a75c9e0f70598c81a2f7d7fa4faedcf965486d391c47529580a762646cde"
+    },
+    {
+      "path": "execution/comments_server_research_routes.py",
+      "sha256": "1222cd625b85832264af066ee47441e1a731e930bcfe601b5a90aadd273426b1"
+    },
+    {
+      "path": "execution/continue_companyfacts_statements.py",
+      "sha256": "77ba1ad6a83c6089d1987e52f57e90fff6550c2cd8c8618d4e7e502b8f027938"
+    },
+    {
+      "path": "execution/dcf_sheets.py",
+      "sha256": "b0532f9bfe56f69c8e9ac7a7ea0a0c39b00e3182fedca5d52ce0db4d9e3995e8"
+    },
+    {
+      "path": "execution/discover_ir_documents_all.py",
+      "sha256": "d0b462f8136ed16dba3da00f160409129449209064282e571631ef53c3dc17e6"
+    },
+    {
+      "path": "execution/fetch_etf_data.py",
+      "sha256": "7194247408fb45fab0f491096193765b34e25c2aae2431f025dc9fe3fcab8c60"
+    },
+    {
+      "path": "execution/fetch_etf_published_data.py",
+      "sha256": "c4c0e21468b87edd1759755553eedba177243bd272e05397994d651e697e633d"
+    },
+    {
+      "path": "execution/fetch_ir_documents.py",
+      "sha256": "b400a712dd0b67516f043bb0d598d1fd20703a1f0fb117ac5d2d354ca3939954"
+    },
+    {
+      "path": "execution/fetch_sec_xbrl.py",
+      "sha256": "7fc525033bbf105d5e4fbc4fffe429dba8765241d5929e7e8a276512f57c3e4e"
+    },
+    {
+      "path": "execution/generate_post_earnings_readouts.py",
+      "sha256": "750a023e18901c78b0783e61811d050359915e7c5621ef06e0a838e6490b177e"
+    },
+    {
+      "path": "execution/generate_pre_earnings_briefs.py",
+      "sha256": "ba7bb1087f176bb42de64c2c4a195e7acd04aa3166a2ff33e359ba2535e4aff2"
+    },
+    {
+      "path": "execution/get_portfolio_risk_matrix.py",
+      "sha256": "71e7f92f4ad21105c347238ea9b54aae07781f1456cd74dd672c3ee5f5aaaa23"
+    },
+    {
+      "path": "execution/ingest_sec_filing_xbrl.py",
+      "sha256": "4a0186f262739fdbdf3c87715bfeeae2468fda25f992e1d42198a50d01270bdf"
+    },
+    {
+      "path": "execution/ingest_transcripts.py",
+      "sha256": "d04cc4414ceeef643ee0c580fed2ea79055f3e2f8f5f0ef0f66fd7427b8f8cea"
+    },
+    {
+      "path": "execution/intake_documents.py",
+      "sha256": "d775f8117ae13db0d4825dbee2b40943b6858ed7efe4d1c488897029aff67492"
+    },
+    {
+      "path": "execution/manage_issuer_document_sources.py",
+      "sha256": "d4835228cd92836c4d36440a7c834b61c266d563e71b6b4f74fef008dfd99020"
+    },
+    {
+      "path": "execution/onboard_pending_tickers.py",
+      "sha256": "d77c4b24ec8df57b936d9c82ed0591dee404945a2faea95851bf75626f1836c7"
+    },
+    {
+      "path": "execution/onboard_ticker.py",
+      "sha256": "287ffbee126d35af201ca350723d57313c0f36f3ccb4c0cbffb343810bfe8fce"
+    },
+    {
+      "path": "execution/populate_research_snapshots.py",
+      "sha256": "0f94c4e4fcd51f24a45395e71892494d98de2dca43a34516b9e11322835b6795"
+    },
+    {
+      "path": "execution/populate_source_fact_plane.py",
+      "sha256": "97af39aedaba88a3931088bff356025219ba0acd6ca3ac60728be63643365192"
+    },
+    {
+      "path": "execution/prepare_cashflow_dcf.py",
+      "sha256": "538660442ebdddc9d2932bfc418fbec44038928fc5b01d4764996dfc1ba3a771"
+    },
+    {
+      "path": "execution/prepare_decision_brief.py",
+      "sha256": "1ab083db7557f1fcf02aa1a38ddbaaa538fa2bbd7c9ab1ce2d0fa6d40c45eee8"
+    },
+    {
+      "path": "execution/pressure_test_thesis.py",
+      "sha256": "11fc2dd7dd70a9a6bae430eec7fe0e4e5bfcd4f652f5e87c78762129f1eda500"
+    },
+    {
+      "path": "execution/produce_issuer_fact_manifest.py",
+      "sha256": "599a848c2a00c66794a5cc87c09a07d1a5b1b5f43fa4401a4871be719a15284f"
+    },
+    {
+      "path": "execution/refresh_dcf.py",
+      "sha256": "f4ad7282928d60f24941328628f6a8f688fecbfe4da4a03ec4d79576eee8f9d2"
+    },
+    {
+      "path": "execution/refresh_portfolio_risk_snapshot.py",
+      "sha256": "2b5535e14f5abd616a6a384753d5f2d5ad915c640fbb999747b1ab66304181d5"
+    },
+    {
+      "path": "execution/run_calibration_scorecard.py",
+      "sha256": "fa60248615d2c6946bc07d78f6ea46ccbd0bcea14fbcaf9cf1387790f17112bb"
+    },
+    {
+      "path": "execution/run_thesis_evaluator.py",
+      "sha256": "e147c93448504c97fb843adce34dc73e283af18aa7cd16ab5aeb77c04cce0557"
+    },
+    {
+      "path": "execution/run_weekly_model_eval.py",
+      "sha256": "f7eab292699fae268a2126c5f71de20943a7c8e4eed7be7ca30760ae2a1784ed"
+    },
+    {
+      "path": "execution/scan_ir_transcripts.py",
+      "sha256": "1f46b9403c44ab824f1eadbd7b761a84837bab32d86127e8c4cff36caffa7091"
+    },
+    {
+      "path": "execution/sqlite_bootstrap.py",
+      "sha256": "29fe2f4ee524e2eb1719735a33356d7f8a2e03d7ef9a7eefd968cd7cc4ca4a10"
+    },
+    {
+      "path": "execution/sync_sec_filing_inventory.py",
+      "sha256": "e507ad4e2553f096eeb5247a8666d0ae17390742e5334440b59e2a42d881a7b1"
+    },
+    {
+      "path": "execution/track_evaluation_names.py",
+      "sha256": "e8c153ddf82d9becf9f9bd431d7a686b56cad44f5630e8a969ef5add81a557bb"
+    },
+    {
+      "path": "execution/valuation_preflight.py",
+      "sha256": "c5837335c6912c5e23f70de5e9c5b9ab13d75101268fa1a0bd3c22ca3a05287f"
+    },
+    {
+      "path": "execution/verify_decision_brief.py",
+      "sha256": "83846f6ee5a55650e7c15ff5c5758f7321833199bea911f413496440af022256"
+    },
+    {
+      "path": "execution/verify_reconstruction_inventory.py",
+      "sha256": "a673b5847289f2c3dccc8aca1b307927d0af0d931aa2d8648881051d886ab3df"
+    },
+    {
+      "path": "reconstruction_manifest.json",
+      "sha256": "68bd603631c496aa7d7b1cebb6c8b981857f56fb296f9108af6587e141b0be0c"
+    },
+    {
+      "path": "scripts/check_investing_skill.py",
+      "sha256": "338a379ad65b967d6884cbc925fddd8715fe0fb0bb4186a3af6587e8cce35508"
+    },
+    {
+      "path": "src/advisor/skills/earnings-summary-investing/references/research-method.md",
+      "sha256": "86b1fbaa7412a4ccda9b017ed5eccdfb300a0c01caf7e9a23857c41256db4287"
+    },
+    {
+      "path": "src/advisor/skills/next-dollar-allocation/SKILL.md",
+      "sha256": "44337af89fe434b8e2d846bfa694dc1b05b2ee3d129d79e2024319f21b7e74d6"
+    },
+    {
+      "path": "src/advisor/skills/next-dollar-allocation/references/interfaces.md",
+      "sha256": "857d059b3961104c6252fed5abc86f750fc94bf7def573f3014ba1396f5215d4"
+    },
+    {
+      "path": "src/advisor/store.py",
+      "sha256": "1ca851ef6b9b12918669e59d159632b23ec6f30af48497c78e1f38df19bc7bd6"
+    },
+    {
+      "path": "src/allocation/book_risk.py",
+      "sha256": "d76f56786ad2e5ddd21a5016b599a4414a48c10abe29e0d496ccdf14a4c860ed"
+    },
+    {
+      "path": "src/allocation/what_if.py",
+      "sha256": "a5752220df9bb7c7b0d455a49c070bae35660782071c893d35deb81e4c149f83"
+    },
+    {
+      "path": "src/calibration_coach.py",
+      "sha256": "9c2e2f226c092856c8eb8e4378dc3d137a1dc865f449df12f452ca78fca4194d"
+    },
+    {
+      "path": "src/compute/company_description.py",
+      "sha256": "8eb864b73a2e0dbbbe530bc82feef583ce175d54e62af5f8d82e40947348919d"
+    },
+    {
+      "path": "src/compute/kpi_resolver.py",
+      "sha256": "68110a2766ac9a7f8da1d4270f3dad338ba5f1e33f4ebea0b602e3c4e75f915e"
+    },
+    {
+      "path": "src/compute/thesis_evaluator.py",
+      "sha256": "21a9efeacb30c5fe75f0408caf411c5751bd1d02c6b73bb7be105b6da78c6b29"
+    },
+    {
+      "path": "src/db.py",
+      "sha256": "4daa69e6e627f606382db6547c52b081f53dbf414890dd232718624a420208d2"
+    },
+    {
+      "path": "src/dcf/cashflow_inputs.py",
+      "sha256": "2af3f4911a2db932aade42187071f6dad6852b8abdf800ca4cd48c2506a8d876"
+    },
+    {
+      "path": "src/dcf/cashflow_refresh.py",
+      "sha256": "ceacdc0d9b1a91d7e046befb054de31a75322e822ba75e07a007ded8ec589b38"
+    },
+    {
+      "path": "src/dcf/cashflow_scenarios.py",
+      "sha256": "ec64ca12b35bce47a36b034a030f5b5e152fc75ed8e3c4dd2ef20f1bfe62e39a"
+    },
+    {
+      "path": "src/dcf/grade_evidence.py",
+      "sha256": "f9a1bf6b5ebac70a54e28d6c8cc23662d0c3195765933eb18bc9f1987cd7effa"
+    },
+    {
+      "path": "src/dcf/input_recipes.py",
+      "sha256": "78632ef14e1dddba8ffbf3a8fce918868278f221e3ffca61fa73d76c2a4c24c0"
+    },
+    {
+      "path": "src/dcf/readiness.py",
+      "sha256": "5b740363847764ae89bb847f702b0c5bcfbbab6d6cfcc701554890d6d9908ed0"
+    },
+    {
+      "path": "src/earnings_brief.py",
+      "sha256": "24d8816cefeb052909ddc828fe08def91044e74710f6469cd86b72057701cf77"
+    },
+    {
+      "path": "src/earnings_readout.py",
+      "sha256": "66863e116991888b99f46e4b810faad43de56a293a446a4b47a43a9b220e0b25"
+    },
+    {
+      "path": "src/etf_overlap.py",
+      "sha256": "5a19ad404188d21d8055b2e9213a41336555ee96b383d3b7101fd696b080b53f"
+    },
+    {
+      "path": "src/evals/capture_quality_specs.py",
+      "sha256": "37e7dfa3bc90097125b0f3bab44f95b370bcd50a3a0fef397d843da1bed13d1e"
+    },
+    {
+      "path": "src/evals/coverage.py",
+      "sha256": "970d3b1369d7a5dc6eec3e748ffa52f2cd5379c4bb42fb952d4ef7689690b467"
+    },
+    {
+      "path": "src/filings/xbrl_units.py",
+      "sha256": "b9f2fc5fbac15f9d7ac2fdef339b36783479aa8730a1adedf10ec6f5c9a2281c"
+    },
+    {
+      "path": "src/instrument_store.py",
+      "sha256": "a0da2f87bbbd6075aa33649ba34ab829fa776c5994d5db47a673f2f6f738c278"
+    },
+    {
+      "path": "src/integrations/portfolio_allocation.py",
+      "sha256": "34587f1f0439be5688de41320e1e4b5667b543d6c48605742264d471af91ca83"
+    },
+    {
+      "path": "src/integrations/portfolio_tracker_client.py",
+      "sha256": "6184c8768d17182b4575898e89388ed8056df0175dcc5fdbfe50b26fc00d2a68"
+    },
+    {
+      "path": "src/integrations/portfolio_tracker_v1.py",
+      "sha256": "04b84d26157474ea8549fb1d9de784f779167adb64f60ff7bb4c8458201b3308"
+    },
+    {
+      "path": "src/llm/calibration.py",
+      "sha256": "68c4bf0ed73282d77d247f166a4a335adab0b26a0863bc87232228e0867828ef"
+    },
+    {
+      "path": "src/llm/prompt_versions.py",
+      "sha256": "23c4910d86f0cc95d59974f3964d2a0eee22c64324c6565235399af076225424"
+    },
+    {
+      "path": "src/llm_artifact_store.py",
+      "sha256": "790bdfb259a6e48e625d2b5b40e0e05e6ded697c158191af14be23c05b13bf2f"
+    },
+    {
+      "path": "src/llm_client.py",
+      "sha256": "d0282669e53d0f59662c9d79079941b76ffbe6e603413a9af7630fb087737006"
+    },
+    {
+      "path": "src/pipeline/kpi_report_reference_resolver.py",
+      "sha256": "54935b31e0ce7c943e54378c4f7224f9e7b44f79f785501d2172429bde74a215"
+    },
+    {
+      "path": "src/pipeline/research_cockpit.py",
+      "sha256": "58862f50850a1d53cc8d327a375c665ab250274812358da1bbdc47ba39c3502a"
+    },
+    {
+      "path": "src/pipeline/work_os_evaluation.py",
+      "sha256": "47bc26f1cd7c0e1e0848ebade3583b04b5ee09a9db2bddae0ae37422ca5b7b70"
+    },
+    {
+      "path": "src/portfolio_risk_snapshot_store.py",
+      "sha256": "24162dd772425bd2719a6f307da3f4d025716d28d379f181b7789cb5e6680bd7"
+    },
+    {
+      "path": "src/provenance/fact_read_model.py",
+      "sha256": "c6e3d1d4215898c970a093c65d9c59c07fd9770da835c15a081d266087e9eaa3"
+    },
+    {
+      "path": "src/provenance/population_research_snapshots.py",
+      "sha256": "aeebd8c9c040f11224ded96503b03247fc0461b8be875d8695292ac437d8b2ea"
+    },
+    {
+      "path": "src/provenance/research_snapshot.py",
+      "sha256": "338312fca8fc597a346ac353e7cb6def056e115cf3b34f4887f81605e6ec5a8b"
+    },
+    {
+      "path": "src/quality/static_quality_gate.py",
+      "sha256": "60b47ca12c2e3ce2cbca785d85d628a20001eea846926b2c2b76f68593d56b24"
+    },
+    {
+      "path": "src/report/builder.py",
+      "sha256": "5b2278f4c9af37788d2af1e4fb318890ff0e127a6cef0233766b053937269400"
+    },
+    {
+      "path": "src/report/renderers/workspace_html.py",
+      "sha256": "c8853908c7422fa907c66d8418ccd1d2b086d3e5cee146c468f17fbf0251c361"
+    },
+    {
+      "path": "src/report/sections/bear_case.py",
+      "sha256": "1928fea0e48e1fb16fcbd3cd66d168bdac9415c6dd6252bcd19a8933f96ea453"
+    },
+    {
+      "path": "src/report/sections/thesis.py",
+      "sha256": "af03a01a29463485b166611cfd4e510fb319659f0767d0962d8477c596f055fc"
+    },
+    {
+      "path": "src/research/decision_brief.py",
+      "sha256": "a05ca193b9a93e0ddc165ee7e5e481d77e335b08374bfb6a6b756864ce9ee39b"
+    },
+    {
+      "path": "src/research/decision_brief_workflow.py",
+      "sha256": "81b542c4135d8563d029d80e82ec20bc09033001c9c247bb849b9c586bbaabd6"
+    },
+    {
+      "path": "src/research/investment_decision_card.py",
+      "sha256": "d565b0e100e91571a1bc24908d7ce1c6a2e072175fb402f2776c23725f85f1e9"
+    },
+    {
+      "path": "src/research/memo_claim_support.py",
+      "sha256": "d81315a2cd4b1b633ce75cc34cb1a5793793a17906b19d9b761531059ba9e1a6"
+    },
+    {
+      "path": "src/research/method_contract.py",
+      "sha256": "56daac43746a2aaca337f80b8dcc246db4753f512ad971616bf752825f016240"
+    },
+    {
+      "path": "src/research/proposal_approval.py",
+      "sha256": "5a5fb8de7826c485df63ecb419c581953ebad2acf687a05f3e77faca3b01c766"
+    },
+    {
+      "path": "src/research/thesis_artifact.py",
+      "sha256": "b827ed1fd24569fbde97dc464796c0c7859469843d460935c4b0efe24a567093"
+    },
+    {
+      "path": "src/sqlite_runtime.py",
+      "sha256": "98c31ae91fcbccdb698f4d8eab213c305a1b8b372b9aa7d24e8b598a83677687"
+    },
+    {
+      "path": "src/synthesis/lenses/_shared.py",
+      "sha256": "cd6bb47658c4996770932b4acce8fbb0ba085800d3316bd3089643db3e0c8c3b"
+    },
+    {
+      "path": "src/synthesis/lenses/five_min_reread.py",
+      "sha256": "bb2e9074df22c1db9a2cb411af9d4ad9d179d6d556da51aa061100109696f67c"
+    },
+    {
+      "path": "src/triggers/earnings_tone.py",
+      "sha256": "d1222237957fa7b91faae562e761bc77372c162d59f828b9650ae4ede7011ffe"
+    }
+  ]
+}

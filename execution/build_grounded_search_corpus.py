@@ -94,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--inventory requires --allow-unsealed-inventory")
     if args.inventory is None and args.allow_unsealed_inventory:
         parser.error("--allow-unsealed-inventory only applies to --inventory")
+    if args.coverage_inventory_keys and args.knowledge_cutoff is None:
+        parser.error("--coverage-inventory-key requires --knowledge-cutoff")
     if args.apply:
         resources = [
             "portfolio-db",
@@ -142,7 +144,17 @@ def _run_connected(args: argparse.Namespace, conn: sqlite3.Connection) -> int:
         )
     else:
         inventory, snapshot_ids = load_coverage_expected_document_inventory(
-            conn, tuple(args.coverage_inventory_keys)
+            conn,
+            tuple(args.coverage_inventory_keys),
+            knowledge_cutoff=args.knowledge_cutoff,
+            observed_through=args.recorded_at,
+        )
+        _event(
+            "grounded_search_reporting_projection",
+            knowledge_cutoff=inventory.knowledge_cutoff.isoformat(),
+            observed_through=inventory.observed_through.isoformat(),
+            source_inventory_snapshot_ids=list(snapshot_ids),
+            decisions=[item.model_dump(mode="json") for item in inventory.reporting_decisions],
         )
     request = CorpusBuildRequest(
         corpus_key=args.corpus_key,

@@ -31,6 +31,7 @@ from io import StringIO
 from pathlib import Path
 from typing import Any, cast
 
+from llm.prompt_versions import prompt_version_for
 from llm_client import generate_bear_case, is_hard_stop, load_ir_anchor
 from report.models import (
     BearCaseSection,
@@ -47,6 +48,7 @@ from report.sections._ts_signals import (
     format_signals_as_prompt_block,
     load_all_signals,
 )
+from research.method_contract import load_research_method
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -145,9 +147,10 @@ def build(
     # Cache the parsed JSON so other LLM calls (per-quarter summary, news,
     # pairwise SayDo) can cross-pollinate the analyst's named bear failure
     # modes via load_bear_anchor() — see llm_client.py.
-    _cache_bear_response(ticker, repo_root, response_text)
     try:
-        return _parse_response(response_text)
+        parsed = _parse_response(response_text)
+        _cache_bear_response(ticker, repo_root, response_text)
+        return parsed
     except (json.JSONDecodeError, ValueError) as exc:
         # A transient empty / unparseable LLM response must fail at SECTION
         # scope, not abort the whole multi-section build: one flaky §7 call
@@ -185,6 +188,14 @@ def _degraded_bear(ticker: str, detail: str) -> BearCaseSection:
     )
 
 
+def _research_contract() -> dict[str, object]:
+    """Legacy unmarked output cannot claim the current prompt method."""
+    return {
+        "prompt_version": prompt_version_for("bear_case"),
+        "method": load_research_method("company").as_dict(),
+    }
+
+
 def _read_cache(ticker: str, repo_root: Path, cache_ttl_days: int) -> BearCaseSection | None:
     """Read data/bear_case/<TICKER>.json if it exists and is younger than TTL.
 
@@ -204,6 +215,9 @@ def _read_cache(ticker: str, repo_root: Path, cache_ttl_days: int) -> BearCaseSe
     except OSError:
         return None
     try:
+        payload = _loads_first_json_object(raw)
+        if payload.get("_research_contract") != _research_contract():
+            return None
         return _parse_response(raw)
     except (json.JSONDecodeError, ValueError):
         # Corrupt cache — let the caller re-fetch.
@@ -216,6 +230,8 @@ def _cache_bear_response(ticker: str, repo_root: Path, response_text: str) -> No
     still renders from the parsed in-memory payload)."""
     try:
         payload = _loads_first_json_object(response_text)
+        _parse_response(response_text)
+        payload["_research_contract"] = _research_contract()
     except (json.JSONDecodeError, ValueError):
         return
     out_dir = repo_root / "data" / "bear_case"
@@ -386,7 +402,9 @@ def _parse_response(text: str) -> BearCaseSection:
     payload = _loads_first_json_object(text)
 
     raw_modes = payload.get("failure_modes")
-    failure_modes_raw = cast("list[Any]", raw_modes) if isinstance(raw_modes, list) else []
+    if not isinstance(raw_modes, list):
+        raise ValueError("failure_modes must be a list")
+    failure_modes_raw = cast("list[Any]", raw_modes)
     failure_modes = [FailureMode(**_coerce_failure_mode(fm)) for fm in failure_modes_raw]
     raw_flags = payload.get("out_of_scope_flags")
     flags = cast("list[Any]", raw_flags) if isinstance(raw_flags, list) else []
@@ -428,23 +446,44 @@ def _last_summaries(earnings: EarningsSection, n: int) -> list[str]:
 
 
 def _financials_md(financials: FinancialsSection) -> str:
-    if financials.status == SectionStatus.MISSING_DATA:
-        return "(not yet extracted)"
-    out = StringIO()
-    out.write(
-        "| Line item | "
-        + " | ".join(financials.quarter_labels)
-        + " | QoQ | YoY | 1Y CAGR | 3Y CAGR |\n"
+    """Keep source coordinates and units from the admitted report projection.
+
+    Legacy display rows cannot establish admission. Serialize the existing
+    typed projection in the report's bounded history window so equal numbers
+    with different metric, unit, period or scope cannot lose their identity.
+    """
+    projection = financials.canonical_financial_table
+    if projection is None:
+        return "(admitted financial evidence unavailable; legacy numeric rows withheld)"
+    quarters = set(financials.quarter_labels_full or financials.quarter_labels)
+    years = {str(year) for year in financials.annual_years}
+    selected = tuple(
+        cell if cell.available else cell.model_copy(update={"provenance": None})
+        for cell in projection.cells
+        if (cell.cadence == "quarterly" and cell.display_coordinate in quarters)
+        or (cell.cadence == "annual" and cell.display_coordinate in years)
     )
-    out.write("|" + "|".join(["---"] * (len(financials.quarter_labels) + 5)) + "|\n")
-    for li in financials.line_items:
-        cells = [li.line_item] + [_fmt(v, li.digits) for v in li.values]
-        cells.extend(
-            _pct(g)
-            for g in (li.growth.qoq, li.growth.yoy, li.growth.cagr_1y_ttm, li.growth.cagr_3y_ttm)
+    bounded = projection.model_copy(update={"cells": selected})
+    return (
+        "Canonical financial evidence at the recorded cutoff. Values use the "
+        "source unit_key and currency, not an inferred display scale. Rejected "
+        "cells are unavailable; preserve period, scope, basis and source identities.\n"
+        "```json\n"
+        + bounded.model_dump_json(
+            exclude={
+                "cells": {
+                    "__all__": {
+                        "provenance": {
+                            "canonical_payload": True,
+                            "relations": True,
+                            "observation": {"evidence", "derivation"},
+                        }
+                    }
+                }
+            }
         )
-        out.write("| " + " | ".join(cells) + " |\n")
-    return out.getvalue()
+        + "\n```"
+    )
 
 
 def _segments_md(segments: SegmentsSection) -> str:
@@ -458,10 +497,19 @@ def _segments_md(segments: SegmentsSection) -> str:
         if not group:
             continue
         out.write(f"\n**{label}**\n")
-        out.write("| Segment | " + " | ".join(segments.quarter_labels) + " | YoY |\n")
-        out.write("|" + "|".join(["---"] * (len(segments.quarter_labels) + 2)) + "|\n")
+        out.write("Source labels describe extraction origin, not canonical financial admission.\n")
+        out.write(
+            "| Segment | Unit | Source status | "
+            + " | ".join(segments.quarter_labels)
+            + " | YoY |\n"
+        )
+        out.write("|" + "|".join(["---"] * (len(segments.quarter_labels) + 4)) + "|\n")
         for s in group:
-            cells = [s.segment_name] + [_fmt(v, 0) for v in s.values] + [_pct(s.growth.yoy)]
+            cells = (
+                [s.segment_name, s.unit, s.source_label]
+                + [_fmt(v, 0) for v in s.values]
+                + [_pct(s.growth.yoy)]
+            )
             out.write("| " + " | ".join(cells) + " |\n")
     return out.getvalue()
 

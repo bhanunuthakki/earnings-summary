@@ -23,9 +23,8 @@ and routes everything ambiguous to a review YAML for the unchanged ``--write``
 flow. See ``scratch/plans/auto_kpi_seeding_plan.md``.
 
 Lives under ``scratch/`` per the project convention for one-shot tools.
-The dev DB / FMP cache live under the MAIN repo's ``data/`` directory
-(gitignored, never propagated into a worktree); this script discovers
-both by walking up from its own location.
+The database must be explicit or configured. Artifact roots select cached
+research inputs; they do not select the retained database.
 """
 
 from __future__ import annotations
@@ -51,6 +50,7 @@ _REPO_ROOT = _SCRATCH_DIR.parent
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
+from db_paths import configured_db_path, db_path_context, require_db_path  # noqa: E402
 from llm.anchors import load_thesis_anchor  # noqa: E402
 from llm_client import JSON_FENCE_RE, call_llm  # noqa: E402
 from user_state import registry  # noqa: E402
@@ -203,7 +203,7 @@ def _default_repo_root() -> Path:
 
 
 def _default_db_path(repo_root: Path) -> Path:
-    return repo_root / "data" / "portfolio.db"
+    return require_db_path(configured_db_path(_REPO_ROOT))
 
 
 def _default_fmp_dir(repo_root: Path) -> Path:
@@ -1504,7 +1504,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--db-path",
-        help="Override portfolio DB path (defaults to <repo_root>/data/portfolio.db).",
+        help="Existing database path (default: configured authority).",
     )
     parser.add_argument(
         "--fmp-dir",
@@ -1630,7 +1630,8 @@ def _run_write(args: argparse.Namespace) -> int:
         print("error: --write requires --in <yaml>", file=sys.stderr)
         return 2
     yaml_path = Path(cast("str", args.in_path))
-    db_path = Path(cast("str", args.db_path)) if args.db_path else None
+    repo_root = _resolve_repo_root(cast("str | None", args.repo_root))
+    db_path = Path(cast("str", args.db_path)) if args.db_path else _default_db_path(repo_root)
     try:
         summary = write_from_yaml(
             yaml_path,
@@ -1731,11 +1732,18 @@ def _run_auto(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = _build_parser().parse_args(argv)
-    if args.propose:
-        return _run_propose(args)
-    if args.auto:
-        return _run_auto(args)
-    return _run_write(args)
+    try:
+        database = require_db_path(args.db_path or configured_db_path(_REPO_ROOT))
+    except (OSError, RuntimeError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    args.db_path = str(database)
+    with db_path_context(database):
+        if args.propose:
+            return _run_propose(args)
+        if args.auto:
+            return _run_auto(args)
+        return _run_write(args)
 
 
 if __name__ == "__main__":

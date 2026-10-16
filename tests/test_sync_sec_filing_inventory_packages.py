@@ -214,6 +214,27 @@ def test_package_scope_classifies_observed_sec_forms() -> None:
     assert scope.unclassified == ()
 
 
+def test_sec_staff_action_is_inventory_only_without_classifying_unknown_staff_forms() -> None:
+    # SEC accession 9999999997-26-001009 is a Commission registration order,
+    # not an issuer report: /Archives/edgar/data/2090312/999999999726001009/filename1.pdf.
+    action = _filing("9999999997-26-001009", "filename1.pdf", form_type="SEC STAFF ACTION")
+    unknown = _filing("0000001001-25-000002", "unknown.htm", form_type="SEC STAFF NEW-FORM")
+
+    scope = sync.partition_filing_package_scope((action, unknown))
+    dispositions = sync.build_scope_dispositions(issuer_id=action.issuer_id, filing_scope=scope)
+
+    assert scope.package_eligible == ()
+    assert scope.inventory_only == (action,)
+    assert scope.unclassified == (unknown,)
+    by_accession = {item.filing.accession_number: item for item in dispositions}
+    retained = by_accession[action.accession_number]
+    assert retained.filing == action
+    assert retained.disposition == "inventory_only"
+    assert retained.reason_code == "outside_governed_reporting_policy"
+    assert by_accession[unknown.accession_number].reason_code == "unknown_sec_form"
+    assert sync.build_expected_documents(issuer_id=action.issuer_id, filings=(), packages=()) == ()
+
+
 def test_package_scope_classifies_legacy_sec_forms_as_inventory_only() -> None:
     issuer_or_registration = (
         "10-K405",
@@ -234,7 +255,6 @@ def test_package_scope_classifies_legacy_sec_forms_as_inventory_only() -> None:
         "SC TO-I/A",
         "SC TO-T",
         "SC TO-T/A",
-        "10-12B",
         "24F-2NT",
         "40FR12B",
         "485BPOS",
@@ -283,6 +303,8 @@ def test_package_scope_classifies_legacy_sec_forms_as_inventory_only() -> None:
 
 def test_package_scope_matches_closed_document_processing_policy() -> None:
     governed = (
+        "10-12B",
+        "10-12B/A",
         "10-K",
         "10-K/A",
         "10-Q",
@@ -876,7 +898,9 @@ def test_expected_documents_keep_accession_parentage_for_every_package_child(
     )
 
 
-@pytest.mark.parametrize("form_type", ["10-Q", "10-Q/A", "10-K", "10-K/A"])
+@pytest.mark.parametrize(
+    "form_type", ["10-Q", "10-Q/A", "10-K", "10-K/A", "20-F", "20-F/A", "40-F", "40-F/A"]
+)
 def test_periodic_sec_report_date_reaches_primary_and_financial_package_expectations(
     form_type: str,
 ) -> None:
@@ -939,11 +963,13 @@ def test_periodic_sec_report_date_reaches_primary_and_financial_package_expectat
     assert all(item.filing_at == datetime(2026, 8, 1) for item in documents)
 
 
+@pytest.mark.parametrize("form_type", ["10-Q", "20-F", "20-F/A", "40-F", "40-F/A"])
 @pytest.mark.parametrize("report_date", [None, "", "20260630", "2026-02-30", "2026-06-30Z"])
 def test_missing_or_invalid_periodic_report_date_never_becomes_filing_date(
     report_date: str | None,
+    form_type: str,
 ) -> None:
-    filing = _filing("0000001001-26-000001", "report.htm", form_type="10-Q").model_copy(
+    filing = _filing("0000001001-26-000001", "report.htm", form_type=form_type).model_copy(
         update={"filing_date": "2026-08-01", "report_date": report_date}
     )
     if report_date in (None, ""):
@@ -1062,3 +1088,25 @@ def test_expected_duties_refuse_inventory_only_roots_preserved_in_scope_manifest
             filings=(governed, registration, ownership),
             packages=(),
         )
+
+
+@pytest.mark.parametrize("form", ["10-12B", "10-12B/A"])
+def test_registration_financial_package_preserves_form_without_periodic_anchor(form: str) -> None:
+    filing = _filing("0000001001-25-000099", "registration.htm", form_type=form)
+    scope = sync.partition_filing_package_scope((filing,))
+    assert scope.package_eligible == (filing,)
+    assert scope.inventory_only == ()
+    expected = sync.build_expected_documents(
+        issuer_id=filing.issuer_id, filings=scope.package_eligible, packages=()
+    )
+    assert len(expected) == 1
+    assert expected[0].form_type == form
+    assert expected[0].document_type == "filing"
+    assert expected[0].period_end is None
+    assert classify_reporting_document(
+        source_kind="sec_filing", document_type="filing", form_type=form
+    ) == (
+        "governed_reporting",
+        "issuer_financial_statements",
+        "governed_registration_financial_package",
+    )

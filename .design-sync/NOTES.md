@@ -1,5 +1,16 @@
 # design-sync notes — earnings-summary
 
+## Current maintenance contract — 2026-10-03
+
+Tokens and controls are generated from `src/ui/` by `scripts/gen_design_tokens.py`
+and `scripts/gen_design_controls.py`. Run `scripts/check_design_sync.py` after
+regeneration. The controls generator retains the full canonical region and owns
+the marked React extension. Python now has searchable composite controls.
+Do not follow the historical hand-port instructions below. Remote upload remains
+an explicit, separate action. `design-system/README.md` owns current package commands.
+
+The dated entries below record implementation history, not current maintenance instructions.
+
 ## design-sync 2026-07-19 pass (spec applied; owner chose "flow to canonical")
 
 The 6-section design-sync spec was applied to the CANONICAL Python kit (owner
@@ -59,6 +70,6 @@ landed and where:
 
 ## Re-sync risks
 - `tokens.css` / `tokens.generated.ts` are generated from `src/ui/tokens.py` by `scripts/gen_design_tokens.py` (pytest-guarded). A tokens.py change without regeneration fails CI, but a regeneration without re-running /design-sync leaves the uploaded project on stale tokens — re-sync after any token change lands.
-- `controls.css` is a HAND-port of `src/ui/controls.py`'s `_CONTROLS_BODY` (verbatim, one comment fixed upstream in PR #930). Python-side kit changes do NOT flow automatically — diff on re-sync (the planned check-css-parity script from docs/design_system_react_port_plan.md Phase 2 T2.9 was not built yet).
+- Historical state (2026-07-19): `controls.css` was a HAND-port of `src/ui/controls.py`'s `_CONTROLS_BODY` (verbatim, one comment fixed upstream in PR #930). Python-side kit changes do NOT flow automatically — diff on re-sync (the planned check-css-parity script from docs/design_system_react_port_plan.md Phase 2 T2.9 was not built yet).
 - Playwright pin: cached chromium build 1223 ⇔ playwright 1.60.0 (installed in `.ds-sync/`). A browser-cache update needs the matching playwright version re-derived.
 - The conventions header (`conventions.md`) enumerates component names + tokens — re-validate against the built artifacts when components are added/renamed.

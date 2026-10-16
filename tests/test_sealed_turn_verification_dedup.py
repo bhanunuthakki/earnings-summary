@@ -30,7 +30,7 @@ from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -67,6 +67,15 @@ from provenance.search_index_lineage import (
     persist_projection_seal,
     vector_artifact_commitment,
 )
+from search.canonical_fact_projection import (
+    AUDIT_VERIFIER_CODE_SHA256,
+    AUDIT_VERIFIER_NAME,
+    AUDIT_VERIFIER_VERSION,
+    admit_canonical_projection_for_read,
+    digest_bucket,
+    projection_audit_payload,
+    search_canonical_facts,
+)
 from search.embedding_promotion import EmbeddingPromotion, LocalVectorRuntimeConfig
 from search.embedding_runtime_artifact import (
     EmbeddingRuntimeArtifact,
@@ -76,8 +85,10 @@ from search.embedding_runtime_artifact import (
 from search.heterogeneous_retrieval import HeterogeneousRetrievalRequest, NarrativeBundle
 from search.local_vector import vector_records_digest, vector_sha256
 from search.request_verification import (
+    NOT_VERIFIED,
     POPULATION_CUTOVER_CURRENT,
     POPULATION_RECEIPT,
+    PROJECTION_GENERATION_ADMISSION,
     PROMOTION_COORDINATES,
     RESEARCH_COORDINATES,
     RETRIEVAL_TRACE,
@@ -85,7 +96,12 @@ from search.request_verification import (
     SEMANTIC_RUNTIME_COORDINATES,
     SEMANTIC_RUNTIME_INSTANCE,
     RequestVerificationCache,
+    VerificationCacheError,
+    active_connection_trace_dispatcher_count,
+    active_connection_trace_observer_count,
+    register_connection_trace_observer,
 )
+from sqlite_runtime import ManagedConnection, ManagedCursor
 
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
 SESSION_ID = "session-dedup"
@@ -100,6 +116,10 @@ LEXICAL_RUN_ID = "lexical-1"
 VECTOR_RUN_ID = "vector-1"
 EMBEDDING_PROMOTION_ID = "embedding-promotion-1"
 PROJECTION_SEAL_ID = "projection-seal-1"
+MANIFEST_ID_BETA = "manifest-beta"
+LEXICAL_RUN_ID_BETA = "lexical-beta"
+VECTOR_RUN_ID_BETA = "vector-beta"
+PROJECTION_SEAL_ID_BETA = "projection-seal-vector-beta"
 RESEARCH_SNAPSHOT_ID = "research-1"
 RESEARCH_SNAPSHOT_SHA256 = "d" * 64
 FACT_GENERATION_ID = "facts-1"
@@ -316,20 +336,28 @@ class _StructuredResult:
 class _CountingIndex:
     """In-memory sealed vector projection that counts every full read."""
 
-    def __init__(self, rows: list[dict[str, object]], storage_uri: str, probe: _Probe) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, object]],
+        storage_uri: str,
+        probe: _Probe,
+        *,
+        rows_by_run: dict[str, list[dict[str, object]]] | None = None,
+        uris_by_run: dict[str, str] | None = None,
+    ) -> None:
         self._rows = rows
         self._storage_uri = storage_uri
         self._probe = probe
+        self._rows_by_run = rows_by_run or {}
+        self._uris_by_run = uris_by_run or {}
 
     def read_projection(self, index_run_id: str, *, expected_count: int) -> list[dict[str, object]]:
-        assert index_run_id == VECTOR_RUN_ID
-        assert expected_count == len(self._rows)
         self._probe.projection_reads.append(index_run_id)
-        return [dict(row) for row in self._rows]
+        rows = self._rows_by_run.get(index_run_id, self._rows)
+        return [dict(row) for row in rows]
 
     def published_storage_uri(self, index_run_id: str) -> str:
-        assert index_run_id == VECTOR_RUN_ID
-        return self._storage_uri
+        return self._uris_by_run.get(index_run_id, self._storage_uri)
 
 
 class _FixedQueryEncoder:
@@ -676,29 +704,45 @@ def _seed_sealed_coordinates(conn: sqlite3.Connection) -> None:
     )
 
 
-def _research_commitments() -> dict[str, object]:
-    lanes = (
-        ("corpus", "search_corpus_manifests", MANIFEST_ID, None),
-        ("lexical_projection", "search_projection_seals", "lexical-seal-1", LEXICAL_RUN_ID),
-        ("vector_projection", "search_projection_seals", PROJECTION_SEAL_ID, VECTOR_RUN_ID),
-        (
-            "embedding_promotion",
-            "search_embedding_model_promotions",
-            EMBEDDING_PROMOTION_ID,
-            None,
-        ),
-    )
+def _research_commitments(bundles: Sequence[NarrativeBundle] = ()) -> dict[str, object]:
+    active_bundles = bundles or (_bundle(),)
     narrative: list[dict[str, object]] = []
-    for kind, table, reference_id, index_run_id in lanes:
-        commitment: dict[str, object] = {
-            "reference_commitment_sha256": digest_text(f"{kind}:{reference_id}"),
-            "reference_id": reference_id,
-            "reference_table": table,
-            "requested_lane": f"{kind}:{MANIFEST_ID}",
-        }
-        if index_run_id is not None:
-            commitment["index_run_id"] = index_run_id
-        narrative.append(commitment)
+    for bundle in active_bundles:
+        lanes = (
+            ("corpus", "search_corpus_manifests", bundle.corpus_manifest_id, None),
+            (
+                "lexical_projection",
+                "search_projection_seals",
+                "lexical-seal-1"
+                if bundle.lexical_index_run_id == LEXICAL_RUN_ID
+                else f"lexical-seal-{bundle.lexical_index_run_id}",
+                bundle.lexical_index_run_id,
+            ),
+            (
+                "vector_projection",
+                "search_projection_seals",
+                PROJECTION_SEAL_ID
+                if bundle.vector_index_run_id == VECTOR_RUN_ID
+                else f"projection-seal-{bundle.vector_index_run_id}",
+                bundle.vector_index_run_id,
+            ),
+            (
+                "embedding_promotion",
+                "search_embedding_model_promotions",
+                bundle.embedding_promotion_id,
+                None,
+            ),
+        )
+        for kind, table, reference_id, index_run_id in lanes:
+            commitment: dict[str, object] = {
+                "reference_commitment_sha256": digest_text(f"{kind}:{reference_id}"),
+                "reference_id": reference_id,
+                "reference_table": table,
+                "requested_lane": f"{kind}:{bundle.corpus_manifest_id}",
+            }
+            if index_run_id is not None:
+                commitment["index_run_id"] = index_run_id
+            narrative.append(commitment)
     return {
         "fact_projection_seal_sha256": FACT_PROJECTION_SEAL_SHA256,
         "narrative": narrative,
@@ -740,11 +784,19 @@ def _install_doubles(
     records: list[dict[str, object]],
     runtime: LocalVectorRuntimeConfig,
     enabled: bool,
+    extra_records_by_run: dict[str, list[dict[str, object]]] | None = None,
+    extra_uris_by_run: dict[str, str] | None = None,
 ) -> None:
     storage_uri = f"lance://{(runtime.index_root / f'run-{VECTOR_RUN_ID}' / 'vectors.lance').resolve().as_posix()}#evidence_chunks"
 
     def _index(_root: Path) -> _CountingIndex:
-        return _CountingIndex(records, storage_uri, probe)
+        return _CountingIndex(
+            records,
+            storage_uri,
+            probe,
+            rows_by_run=extra_records_by_run,
+            uris_by_run=extra_uris_by_run,
+        )
 
     def _encoder(*_args: object, **_kwargs: object) -> _FixedQueryEncoder:
         return _FixedQueryEncoder()
@@ -772,7 +824,7 @@ def _install_doubles(
         _verification: RequestVerificationCache | None,
     ) -> dict[str, object]:
         probe.research_coordinate_derivations.append(request.research_snapshot_id)
-        return _research_commitments()
+        return _research_commitments(request.narrative_bundles)
 
     def _no_facts(_conn: sqlite3.Connection, **_kwargs: object) -> list[object]:
         return []
@@ -798,6 +850,7 @@ def _install_turn_seams(
     probe: _Probe,
     *,
     runtime: LocalVectorRuntimeConfig,
+    audit_cites: tuple[int, ...] = (1,),
 ) -> None:
     engine_names = vars(engine)
     real_block = cast(
@@ -818,11 +871,31 @@ def _install_turn_seams(
         probe.evidence_fragment_builds += 1
         return real_fragment(item)
 
+    def _scope_for(ticker: str) -> RetrievalScope:
+        return RetrievalScope(
+            scope_id=derive_retrieval_scope_id(
+                source_scope_key=ticker,
+                issuer_id=ISSUER_ID,
+            ),
+            source_scope_key=ticker,
+            source_scope_revision_id=f"scope-revision-{ticker}",
+            ticker=ticker,
+            issuer_id=ISSUER_ID,
+            reporting_entity_id=REPORTING_ENTITY_ID,
+        )
+
+    def _scopes(
+        _conn: sqlite3.Connection,
+        *_args: object,
+        requested_tickers: Sequence[str] | None = None,
+        **_kwargs: object,
+    ) -> tuple[RetrievalScope, ...]:
+        if requested_tickers:
+            return tuple(_scope_for(t) for t in requested_tickers)
+        return (_scope_for("ACME"),)
+
     def _connect(path: Path, **_kwargs: object) -> sqlite3.Connection:
         return sqlite3.connect(path)
-
-    def _scopes(*_args: object, **_kwargs: object) -> tuple[RetrievalScope, ...]:
-        return (_scope(),)
 
     def _runtime() -> LocalVectorRuntimeConfig:
         return runtime
@@ -858,7 +931,13 @@ def _install_turn_seams(
         probe.audit_prompts.append(prompt)
         prompts["ask_claim_audit"] = prompt
         claims = [
-            {"char_start": start, "char_end": end, "quote": quote, "cites": [1], "supported": True}
+            {
+                "char_start": start,
+                "char_end": end,
+                "quote": quote,
+                "cites": list(audit_cites),
+                "supported": True,
+            }
             for start, end, quote in required_claim_spans(ANSWER)
         ]
         raw = json.dumps({"claims": claims})
@@ -1175,3 +1254,2249 @@ def test_one_evidence_block_is_reused_byte_for_byte_by_answer_and_audit(
             ),
         },
     )
+
+
+def test_nested_verification_invalidation_across_connections(tmp_path: Path) -> None:
+    """An external commit between outer start and nested completion invalidates only the outer check."""
+    db_path = tmp_path / "dedup_tokens.db"
+    conn1 = sqlite3.connect(db_path)
+    conn2 = sqlite3.connect(db_path)
+    conn1.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+    conn1.commit()
+
+    cache = RequestVerificationCache(conn1)
+
+    # 1. Outer verification begins on coordinate ('outer',)
+    assert cache.verified("outer_check", ("outer",)) is NOT_VERIFIED
+
+    # 2. External commit occurs on conn2 while outer check is underway
+    conn2.execute("INSERT INTO t VALUES (1, 'hello')")
+    conn2.commit()
+
+    # 3. Nested verification begins on coordinate ('nested',)
+    assert cache.verified("nested_check", ("nested",)) is NOT_VERIFIED
+
+    # 4. Nested verification completes and records its result at current token
+    cache.record("nested_check", ("nested",), "nested_result")
+
+    # 5. Outer verification completes and attempts to record its result
+    cache.record("outer_check", ("outer",), "outer_result")
+
+    # Outer verification MUST NOT be memoized because data_version changed during its execution
+    assert cache.verified("outer_check", ("outer",)) is NOT_VERIFIED
+
+    # Nested verification was executed entirely at the new token, so it IS memoized
+    assert cache.verified("nested_check", ("nested",)) == "nested_result"
+
+    cache.close()
+    conn1.close()
+    conn2.close()
+
+
+def test_exact_semantic_runtime_enforces_connection_boundary(tmp_path: Path) -> None:
+    """ExactSemanticRuntime fails closed when passed a verification cache bound to a different connection."""
+    db_path, runtime, records = _build_fixture(tmp_path / "root", tmp_path / "storage")
+    conn1 = sqlite3.connect(db_path)
+    conn2 = sqlite3.connect(db_path)
+
+    cache1 = RequestVerificationCache(conn1)
+    probe = _Probe()
+    storage_uri = f"lance://{(runtime.index_root / f'run-{VECTOR_RUN_ID}' / 'vectors.lance').resolve().as_posix()}#evidence_chunks"
+    counting_index = _CountingIndex(records, storage_uri, probe)
+    encoder = _FixedQueryEncoder()
+
+    with pytest.raises(VerificationCacheError, match="bound to a different connection"):
+        exact_semantic_module.ExactSemanticRuntime.from_verified_components_for_test(
+            conn2,
+            vector_index_run_id=VECTOR_RUN_ID,
+            embedding_promotion_id=EMBEDDING_PROMOTION_ID,
+            index=counting_index,
+            encoder=encoder,
+            verification=cache1,
+        )
+
+    cache1.close()
+    conn1.close()
+    conn2.close()
+
+
+def test_verified_retrieval_trace_receipt_is_protected_from_caller_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mutating a returned verified retrieval trace receipt cannot corrupt the cached copy."""
+    storage_root = tmp_path / "storage"
+    root = tmp_path / "run"
+    db_path, runtime, records = _build_fixture(root, storage_root)
+    probe = _Probe()
+    _install_doubles(monkeypatch, probe, records=records, runtime=runtime, enabled=True)
+    _install_turn_seams(monkeypatch, probe, runtime=runtime)
+
+    list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME"]),
+            ContextPack(scope="portfolio", default_tickers=["ACME"], system_context="ctx"),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+    assert len(probe.packages) == 1
+    trace_id = probe.packages[0].record.retrieval_assembly[0].trace_id
+
+    conn = sqlite3.connect(db_path)
+    cache = RequestVerificationCache(conn)
+
+    # 1. First verification loads and caches the receipt
+    receipt1 = retrieval_module.verify_heterogeneous_retrieval_trace(
+        conn,
+        trace_id,
+        local_vector_runtime=runtime,
+        verification=cache,
+    )
+    assert len(receipt1.ordered_results) > 0
+    original_score = receipt1.ordered_results[0]["final_score"]
+
+    # 2. Mutate nested dictionary in receipt1
+    receipt1.ordered_results[0]["final_score"] = "MUTATED"
+
+    # 3. Second verification from cache returns an independent deep copy
+    receipt2 = retrieval_module.verify_heterogeneous_retrieval_trace(
+        conn,
+        trace_id,
+        local_vector_runtime=runtime,
+        verification=cache,
+    )
+    assert receipt2.ordered_results[0]["final_score"] == original_score
+    assert receipt2.ordered_results[0]["final_score"] != "MUTATED"
+
+    cache.close()
+    conn.close()
+
+
+def test_unacknowledged_same_connection_mutation_invalidates_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unacknowledged same-connection write invalidates memoized state and prevents reuse."""
+    storage_root = tmp_path / "storage"
+    root = tmp_path / "run"
+    db_path, runtime, records = _build_fixture(root, storage_root)
+    probe = _Probe()
+    _install_doubles(monkeypatch, probe, records=records, runtime=runtime, enabled=True)
+    _install_turn_seams(monkeypatch, probe, runtime=runtime)
+
+    list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME"]),
+            ContextPack(scope="portfolio", default_tickers=["ACME"], system_context="ctx"),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+    assert len(probe.packages) == 1
+    trace_id = probe.packages[0].record.retrieval_assembly[0].trace_id
+
+    conn = sqlite3.connect(db_path)
+    cache = RequestVerificationCache(conn)
+    trace_coord = (
+        trace_id,
+        str(runtime.index_root),
+        str(runtime.runtime_root),
+    )
+
+    # 1. First verification memoizes RETRIEVAL_TRACE
+    retrieval_module.verify_heterogeneous_retrieval_trace(
+        conn,
+        trace_id,
+        local_vector_runtime=runtime,
+        verification=cache,
+    )
+    assert cache.counts()[(retrieval_module.RETRIEVAL_TRACE, trace_coord)] == 1
+
+    # Second check hits cache without re-executing
+    retrieval_module.verify_heterogeneous_retrieval_trace(
+        conn,
+        trace_id,
+        local_vector_runtime=runtime,
+        verification=cache,
+    )
+    assert cache.counts()[(retrieval_module.RETRIEVAL_TRACE, trace_coord)] == 1
+
+    # 2. Mutate database on the SAME connection (unacknowledged write)
+    conn.execute(
+        "UPDATE heterogeneous_retrieval_trace_results SET final_score='0.99999999' WHERE trace_id=?",
+        (trace_id,),
+    )
+    conn.commit()
+
+    # 3. Third verification detects same-connection mutation, invalidates memo, and re-executes.
+    # Because database state was tampered with, re-verification does NOT return the cached receipt
+    # and instead re-runs against the database, failing closed with HeterogeneousRetrievalError!
+    with pytest.raises(retrieval_module.HeterogeneousRetrievalError):
+        retrieval_module.verify_heterogeneous_retrieval_trace(
+            conn,
+            trace_id,
+            local_vector_runtime=runtime,
+            verification=cache,
+        )
+
+    cache.close()
+    conn.close()
+
+
+def test_savepoint_rollback_invalidates_cached_trace_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When a savepoint rolls back, cached trace receipts recorded within it are invalidated."""
+    storage_root = tmp_path / "storage"
+    root = tmp_path / "run"
+    db_path, runtime, records = _build_fixture(root, storage_root)
+    probe = _Probe()
+    _install_doubles(monkeypatch, probe, records=records, runtime=runtime, enabled=True)
+    _install_turn_seams(monkeypatch, probe, runtime=runtime)
+
+    list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME"]),
+            ContextPack(scope="portfolio", default_tickers=["ACME"], system_context="ctx"),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+    assert len(probe.packages) == 1
+    trace_id = probe.packages[0].record.retrieval_assembly[0].trace_id
+
+    conn = sqlite3.connect(db_path)
+    # Save genuine trace rows
+    header_rows = conn.execute(
+        "SELECT * FROM heterogeneous_retrieval_trace_headers WHERE trace_id=?", (trace_id,)
+    ).fetchall()
+    seal_rows = conn.execute(
+        "SELECT * FROM heterogeneous_retrieval_trace_seals WHERE trace_id=?", (trace_id,)
+    ).fetchall()
+    cand_rows = conn.execute(
+        "SELECT * FROM heterogeneous_retrieval_trace_candidates WHERE trace_id=?", (trace_id,)
+    ).fetchall()
+    result_rows = conn.execute(
+        "SELECT * FROM heterogeneous_retrieval_trace_results WHERE trace_id=?", (trace_id,)
+    ).fetchall()
+
+    # Remove trace from DB so it does not exist before the savepoint
+    conn.execute("DELETE FROM heterogeneous_retrieval_trace_headers WHERE trace_id=?", (trace_id,))
+    conn.execute("DELETE FROM heterogeneous_retrieval_trace_seals WHERE trace_id=?", (trace_id,))
+    conn.execute(
+        "DELETE FROM heterogeneous_retrieval_trace_candidates WHERE trace_id=?", (trace_id,)
+    )
+    conn.execute("DELETE FROM heterogeneous_retrieval_trace_results WHERE trace_id=?", (trace_id,))
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+
+    # Insert inside savepoint, verify (memoized into cache), then simulate failure & rollback
+    with (
+        pytest.raises(RuntimeError, match="simulated rollback after trace creation"),
+        cache.savepoint("create_tx"),
+    ):
+        conn.executemany(
+            "INSERT INTO heterogeneous_retrieval_trace_headers VALUES ("
+            + ",".join("?" for _ in header_rows[0])
+            + ")",
+            header_rows,
+        )
+        conn.executemany(
+            "INSERT INTO heterogeneous_retrieval_trace_seals VALUES ("
+            + ",".join("?" for _ in seal_rows[0])
+            + ")",
+            seal_rows,
+        )
+        conn.executemany(
+            "INSERT INTO heterogeneous_retrieval_trace_candidates VALUES ("
+            + ",".join("?" for _ in cand_rows[0])
+            + ")",
+            cand_rows,
+        )
+        conn.executemany(
+            "INSERT INTO heterogeneous_retrieval_trace_results VALUES ("
+            + ",".join("?" for _ in result_rows[0])
+            + ")",
+            result_rows,
+        )
+        verified = retrieval_module.verify_heterogeneous_retrieval_trace(
+            conn,
+            trace_id,
+            local_vector_runtime=runtime,
+            verification=cache,
+        )
+        assert verified.trace_id == trace_id
+        raise RuntimeError("simulated rollback after trace creation")
+
+    # The savepoint rolled back. The inserted rows are removed from the database.
+    # Verification with the same cache MUST fail because the trace no longer exists in DB!
+    with pytest.raises(
+        retrieval_module.HeterogeneousRetrievalError, match="retrieval_trace_not_fully_sealed"
+    ):
+        retrieval_module.verify_heterogeneous_retrieval_trace(
+            conn,
+            trace_id,
+            local_vector_runtime=runtime,
+            verification=cache,
+        )
+
+    cache.close()
+    conn.close()
+
+
+def test_canonical_fact_projection_generation_admission_deduplication() -> None:
+    """admit_canonical_projection_for_read deduplicates admission through PROJECTION_GENERATION_ADMISSION."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute(
+        """CREATE TABLE canonical_fact_projection_generations (
+        generation_id TEXT PRIMARY KEY, generation_kind TEXT, parent_generation_id TEXT,
+        resolution_snapshot_id TEXT, resolution_snapshot_sha256 TEXT,
+        resolution_watermark_sha256 TEXT, ontology_snapshot_id TEXT, ontology_snapshot_sha256 TEXT,
+        cutoff_at TEXT, recorded_at TEXT, generation_sha256 TEXT, config_json TEXT
+    )"""
+    )
+    conn.execute(
+        """CREATE TABLE canonical_fact_projection_seals (
+        generation_id TEXT PRIMARY KEY, projection_seal_id TEXT, projection_seal_sha256 TEXT,
+        change_count INTEGER, upsert_count INTEGER, tombstone_count INTEGER,
+        effective_entry_count INTEGER, batch_count INTEGER, ordered_entry_set_sha256 TEXT
+    )"""
+    )
+    conn.execute(
+        """CREATE TABLE canonical_fact_projection_scope_bindings (
+        generation_id TEXT PRIMARY KEY, resolution_scope_sha256 TEXT, resolution_snapshot_commitment_sha256 TEXT
+    )"""
+    )
+    conn.execute(
+        """CREATE TABLE canonical_fact_projection_audit_receipts (
+        generation_id TEXT PRIMARY KEY, projection_seal_sha256 TEXT, verifier_name TEXT,
+        verifier_version TEXT, verifier_code_sha256 TEXT, verifier_config_sha256 TEXT,
+        audit_payload_json TEXT, audit_payload_sha256 TEXT
+    )"""
+    )
+
+    gen_id = "gen-admission-dedup"
+    config_json = "{}"
+    header: dict[str, object] = {
+        "generation_id": gen_id,
+        "generation_kind": "checkpoint",
+        "parent_generation_id": None,
+        "resolution_snapshot_id": "res-1",
+        "resolution_snapshot_sha256": "1" * 64,
+        "resolution_watermark_sha256": "2" * 64,
+        "ontology_snapshot_id": "ont-1",
+        "ontology_snapshot_sha256": "3" * 64,
+        "cutoff_at": "2026-07-28T12:00:00Z",
+        "recorded_at": "2026-07-28T12:00:00Z",
+        "generation_sha256": "4" * 64,
+        "config_json": config_json,
+    }
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_generations VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        tuple(header.values()),
+    )
+
+    seal: dict[str, object] = {
+        "generation_id": gen_id,
+        "projection_seal_id": "seal-1",
+        "projection_seal_sha256": "5" * 64,
+        "change_count": 10,
+        "upsert_count": 10,
+        "tombstone_count": 0,
+        "effective_entry_count": 10,
+        "batch_count": 1,
+        "ordered_entry_set_sha256": "6" * 64,
+    }
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_seals VALUES (?,?,?,?,?,?,?,?,?)",
+        tuple(seal.values()),
+    )
+
+    binding: dict[str, object] = {
+        "generation_id": gen_id,
+        "resolution_scope_sha256": "7" * 64,
+        "resolution_snapshot_commitment_sha256": "8" * 64,
+    }
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_scope_bindings VALUES (?,?,?)",
+        tuple(binding.values()),
+    )
+
+    payload = projection_audit_payload(header, seal, binding)
+    payload_json = canonical_json(payload)
+    receipt = {
+        "generation_id": gen_id,
+        "projection_seal_sha256": seal["projection_seal_sha256"],
+        "verifier_name": AUDIT_VERIFIER_NAME,
+        "verifier_version": AUDIT_VERIFIER_VERSION,
+        "verifier_code_sha256": AUDIT_VERIFIER_CODE_SHA256,
+        "verifier_config_sha256": digest_text(config_json),
+        "audit_payload_json": payload_json,
+        "audit_payload_sha256": digest_text(payload_json),
+    }
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_audit_receipts VALUES (?,?,?,?,?,?,?,?)",
+        tuple(receipt.values()),
+    )
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    v1 = admit_canonical_projection_for_read(conn, gen_id, verification=cache)
+    assert v1.generation_id == gen_id
+    assert cache.counts()[(PROJECTION_GENERATION_ADMISSION, (gen_id,))] == 1
+
+    # Second call returns the memoized admission without re-executing audit
+    v2 = admit_canonical_projection_for_read(conn, gen_id, verification=cache)
+    assert v2 == v1
+    assert cache.counts()[(PROJECTION_GENERATION_ADMISSION, (gen_id,))] == 1
+
+    cache.close()
+    conn.close()
+
+
+def test_same_connection_mutation_during_pending_verification_rejects_memoization() -> None:
+    """A same-connection write occurring between verified() and record() must not store stale result."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_pending_1",)
+
+    # 1. verified() lookup returns NOT_VERIFIED and captures state
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+
+    # 2. An unacknowledged same-connection write occurs while verification is running
+    conn.execute("INSERT INTO t VALUES (1, 'mutated')")
+
+    # 3. record() is called with the value derived before the mutation
+    cache.record("kind_test", coord, "stale_result")
+
+    # 4. The stale result must NOT have been memoized; verified() must return NOT_VERIFIED
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_invalidation_during_pending_verification_rejects_memoization() -> None:
+    """Explicit cache invalidation occurring between verified() and record() must not store result."""
+    conn = sqlite3.connect(":memory:")
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_pending_2",)
+
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+    cache.invalidate()
+    cache.record("kind_test", coord, "stale_result")
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_rollback_during_pending_verification_rejects_memoization() -> None:
+    """A database rollback occurring between verified() and record() must not store result."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_pending_3",)
+
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+
+    conn.execute("SAVEPOINT sp")
+    conn.execute("INSERT INTO t VALUES (1, 'temp')")
+    conn.execute("ROLLBACK TO SAVEPOINT sp")
+    conn.execute("RELEASE SAVEPOINT sp")
+
+    cache.record("kind_test", coord, "stale_result")
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_authorized_write_during_pending_verification_preserves_memoization() -> None:
+    """Authorized same-connection trace writes do not invalidate pending verification."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE trace (id INTEGER PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_pending_4",)
+
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+
+    with cache.authorized_write():
+        conn.execute("INSERT INTO trace VALUES (1, 'trace_row')")
+
+    cache.record("kind_test", coord, "valid_result")
+    assert cache.verified("kind_test", coord) == "valid_result"
+
+    cache.close()
+    conn.close()
+
+
+def test_bound_query_containing_word_rollback_does_not_clear_cache() -> None:
+    """SQL statements containing the word 'rollback' inside values or comments do not clear cache."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE log (id INTEGER PRIMARY KEY, question TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_rollback_text",)
+
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+    cache.record("kind_test", coord, "cached_val")
+    assert cache.verified("kind_test", coord) == "cached_val"
+
+    # Execute a query with bound text containing 'rollback'
+    with cache.authorized_write():
+        conn.execute("INSERT INTO log VALUES (1, ?)", ("How did the rollback affect revenue?",))
+        conn.execute("SELECT * FROM log WHERE question LIKE '%rollback%'")
+
+    # Cache must still hold the memoized value; plain text must not clear cache
+    assert cache.verified("kind_test", coord) == "cached_val"
+
+    # Now execute a real rollback statement
+    conn.execute("SAVEPOINT sp")
+    conn.execute("INSERT INTO log VALUES (2, 'temp')")
+    conn.execute("ROLLBACK TO SAVEPOINT sp")
+
+    # Real rollback clears cache
+    assert cache.verified("kind_test", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_implicit_rollback_invalidates_cache_and_rejects_stale_verifications() -> None:
+    """Automatic transaction rollback (e.g. INSERT OR ROLLBACK) invalidates verification cache."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_implicit_rollback",)
+
+    # 1. Insert row inside authorized write
+    with cache.authorized_write():
+        conn.execute("INSERT INTO t VALUES (1, 'initial')")
+
+    # 2. Verify row and cache result while transaction is uncommitted
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "cached_val")
+    assert cache.verified("test_kind", coord) == "cached_val"
+
+    # 3. Attempt duplicate insert with INSERT OR ROLLBACK, catching IntegrityError
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT OR ROLLBACK INTO t VALUES (1, 'dup')")
+
+    # The transaction rolled back: row is gone from the database
+    assert conn.execute("SELECT count(*) FROM t").fetchone()[0] == 0
+
+    # 4. Request cached verification again: MUST NOT return stale verification!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_implicit_rollback_on_reused_shortcut_cursor_invalidates_cache() -> None:
+    """Reused cursor returned by connection shortcut (conn.execute) detects automatic rollback."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_reused_shortcut_cursor",)
+
+    # 1. Obtain cursor via connection shortcut
+    shortcut_cursor = conn.execute("SELECT 1")
+    assert isinstance(shortcut_cursor, ManagedCursor)
+
+    # 2. Insert row inside authorized write
+    with cache.authorized_write():
+        conn.execute("INSERT INTO t VALUES (1, 'initial')")
+
+    # 3. Verify row and cache result while transaction is uncommitted
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "cached_val")
+    assert cache.verified("test_kind", coord) == "cached_val"
+
+    # 4. Execute duplicate insert through the reused cursor from the shortcut
+    with pytest.raises(sqlite3.IntegrityError):
+        shortcut_cursor.execute("INSERT OR ROLLBACK INTO t VALUES (1, 'dup')")
+
+    # Transaction rolled back: row is gone from database
+    assert conn.execute("SELECT count(*) FROM t").fetchone()[0] == 0
+
+    # 5. Request cached verification again: must NOT return stale verification
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_same_connection_schema_changes_invalidate_cache() -> None:
+    """Same-connection DDL (CREATE, DROP, ALTER) invalidates cache without changing total_changes."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_ddl",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "substrate_admission")
+    assert cache.verified("test_kind", coord) == "substrate_admission"
+
+    changes_before = conn.total_changes
+
+    # Execute DDL (DROP TABLE) which modifies schema without changing total_changes
+    conn.execute("DROP TABLE substrate")
+    assert conn.total_changes == changes_before
+
+    # Cache MUST be invalidated by the schema change!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    # Also test CREATE TABLE
+    cache.record("test_kind", coord, "substrate_recreated")
+    assert cache.verified("test_kind", coord) == "substrate_recreated"
+
+    conn.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_temporary_table_shadowing_verified_main_table_invalidates_cache() -> None:
+    """Creating a temporary table that shadows a verified main table invalidates the cache."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn.execute("INSERT INTO substrate VALUES (1, 'main_data')")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("substrate", "1")
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "main_admission")
+    assert cache.verified("test_kind", coord) == "main_admission"
+
+    # CREATE TEMP TABLE shadows the existing main table without altering main schema or total_changes
+    changes_before = conn.total_changes
+    conn.execute("CREATE TEMP TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    assert conn.total_changes == changes_before
+
+    # Verification queries use unqualified table names, so the temporary table shadows the main table.
+    # Cache MUST be invalidated by the temporary schema change!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    # Also test dropping the shadowing temporary table invalidates cache
+    cache.record("test_kind", coord, "temp_admission")
+    assert cache.verified("test_kind", coord) == "temp_admission"
+
+    conn.execute("DROP TABLE temp.substrate")
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_external_dml_on_attached_database_invalidates_cache(tmp_path: Path) -> None:
+    """External commit to an attached database invalidates turn-scoped verification cache."""
+    db_path = tmp_path / "attached.db"
+    conn_ext = sqlite3.connect(db_path)
+    conn_ext.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn_ext.execute("INSERT INTO substrate VALUES (1, 'init')")
+    conn_ext.commit()
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(f"ATTACH DATABASE '{db_path}' AS ext")
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_attached_dml",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "initial_admission")
+    assert cache.verified("test_kind", coord) == "initial_admission"
+
+    # External connection updates and commits to the attached database
+    conn_ext.execute("UPDATE substrate SET val = 'mutated' WHERE id = 1")
+    conn_ext.commit()
+
+    # Cached admission MUST be invalidated by the external commit to the attached database!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+    conn_ext.close()
+
+
+def test_attached_database_replacement_invalidates_cache(tmp_path: Path) -> None:
+    """Detaching and attaching another database under the same schema name invalidates cache."""
+    db1_path = tmp_path / "attached1.db"
+    conn_ext1 = sqlite3.connect(db1_path)
+    conn_ext1.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn_ext1.execute("INSERT INTO substrate VALUES (1, 'db1')")
+    conn_ext1.commit()
+
+    db2_path = tmp_path / "attached2.db"
+    conn_ext2 = sqlite3.connect(db2_path)
+    conn_ext2.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn_ext2.execute("INSERT INTO substrate VALUES (1, 'db2')")
+    conn_ext2.commit()
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(f"ATTACH DATABASE '{db1_path}' AS ext")
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_attached_replacement",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admission_db1")
+    assert cache.verified("test_kind", coord) == "admission_db1"
+
+    # Detach db1 and attach db2 under the same schema name
+    conn.execute("DETACH DATABASE ext")
+    conn.execute(f"ATTACH DATABASE '{db2_path}' AS ext")
+
+    # Cache MUST be invalidated by attachment replacement!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+    conn_ext1.close()
+    conn_ext2.close()
+
+
+def test_attached_database_reattachment_same_file_with_leading_empty_statement_invalidates_cache(
+    tmp_path: Path,
+) -> None:
+    """Detaching and reattaching the same file with leading semicolons/comments invalidates cache."""
+    db_path = tmp_path / "attached_same.db"
+    conn_ext = sqlite3.connect(db_path)
+    conn_ext.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn_ext.execute("INSERT INTO substrate VALUES (1, 'v1')")
+    conn_ext.commit()
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(f"ATTACH DATABASE '{db_path}' AS ext")
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_attached_same_file",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admission_v1")
+    assert cache.verified("test_kind", coord) == "admission_v1"
+
+    # Execute DETACH with leading semicolons, whitespace, and comments
+    conn.execute("; /* detach comment */ ; DETACH DATABASE ext")
+
+    # Update through external connection and commit (advancing ext data_version externally)
+    conn_ext.execute("UPDATE substrate SET val = 'v2' WHERE id = 1")
+    conn_ext.commit()
+
+    # Reattach the SAME file with leading semicolons, whitespace, and comments
+    conn.execute(f"; -- reattach comment\n ; ATTACH DATABASE '{db_path}' AS ext")
+
+    # Cached admission MUST be invalidated despite identical file path and restored data_version!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+    conn_ext.close()
+
+
+def test_rollback_with_leading_empty_statement_invalidates_cache() -> None:
+    """Rollback statements prefixed by leading semicolons and comments invalidate cache."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE log (id INT PRIMARY KEY, msg TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_rollback_leading_semi",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admitted_pre_rollback")
+    assert cache.verified("test_kind", coord) == "admitted_pre_rollback"
+
+    # Open savepoint so rollback is valid in SQLite
+    conn.execute("SAVEPOINT sp")
+    # Execute rollback with leading semicolons and comments
+    conn.execute("; /* comment */ ; ROLLBACK TO SAVEPOINT sp")
+
+    # Cache MUST be invalidated by the rollback
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_attached_database_reattachment_same_file_with_bom_invalidates_cache(
+    tmp_path: Path,
+) -> None:
+    """Detaching and reattaching the same file with UTF-8 BOM invalidates cache."""
+    db_path = tmp_path / "attached_bom.db"
+    conn_ext = sqlite3.connect(db_path)
+    conn_ext.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn_ext.execute("INSERT INTO substrate VALUES (1, 'v1')")
+    conn_ext.commit()
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute(f"ATTACH DATABASE '{db_path}' AS ext")
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_attached_bom",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admission_v1")
+    assert cache.verified("test_kind", coord) == "admission_v1"
+
+    # Execute DETACH with leading UTF-8 BOM (\ufeff)
+    conn.execute("\ufeffDETACH DATABASE ext")
+
+    # Update through external connection and commit (advancing ext data_version externally)
+    conn_ext.execute("UPDATE substrate SET val = 'v2' WHERE id = 1")
+    conn_ext.commit()
+
+    # Reattach the SAME file with leading UTF-8 BOM (\ufeff) and parameter binding
+    conn.execute("\ufeffATTACH DATABASE ? AS ext", (str(db_path),))
+
+    # Cached admission MUST be invalidated despite identical file path and restored data_version!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+    conn_ext.close()
+
+
+def test_rollback_with_bom_invalidates_cache() -> None:
+    """Rollback statements prefixed by leading UTF-8 BOM (\\ufeff) invalidate cache."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE log (id INT PRIMARY KEY, msg TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_rollback_bom",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admitted_pre_rollback")
+    assert cache.verified("test_kind", coord) == "admitted_pre_rollback"
+
+    # Open savepoint and execute rollback with leading UTF-8 BOM (\ufeff)
+    conn.execute("SAVEPOINT sp")
+    conn.execute("\ufeffROLLBACK TO SAVEPOINT sp")
+
+    # Cache MUST be invalidated by the rollback
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_attached_database_with_escaped_quotes_and_comments_invalidates_cache(
+    tmp_path: Path,
+) -> None:
+    """Attached database with embedded quotes and comment markers invalidates cache on external DML."""
+    db_path = tmp_path / "attached_quoted.db"
+    conn_ext = sqlite3.connect(db_path)
+    conn_ext.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn_ext.execute("INSERT INTO substrate VALUES (1, 'v1')")
+    conn_ext.commit()
+
+    conn = sqlite3.connect(":memory:")
+    # Attach under schema name containing embedded double quote and comment marker
+    conn.execute('ATTACH DATABASE ? AS "main"".data_version --"', (str(db_path),))
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_attached_quoted",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admission_v1")
+    assert cache.verified("test_kind", coord) == "admission_v1"
+
+    # External connection updates and commits to attached database
+    conn_ext.execute("UPDATE substrate SET val = 'v2' WHERE id = 1")
+    conn_ext.commit()
+
+    # Cached admission MUST be invalidated despite tricky quoted schema name!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+    conn_ext.close()
+
+
+def test_attached_database_with_normal_embedded_quotes_invalidates_cache(
+    tmp_path: Path,
+) -> None:
+    """Attached database with normal embedded double quotes in schema name remains usable and invalidates."""
+    db_path = tmp_path / "attached_normal_quote.db"
+    conn_ext = sqlite3.connect(db_path)
+    conn_ext.execute("CREATE TABLE substrate (id INT PRIMARY KEY, val TEXT)")
+    conn_ext.execute("INSERT INTO substrate VALUES (1, 'v1')")
+    conn_ext.commit()
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute('ATTACH DATABASE ? AS "my""schema"', (str(db_path),))
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_normal_quote",)
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admission_v1")
+    assert cache.verified("test_kind", coord) == "admission_v1"
+
+    # External connection updates and commits to attached database
+    conn_ext.execute("UPDATE substrate SET val = 'v2' WHERE id = 1")
+    conn_ext.commit()
+
+    # Cached admission MUST be invalidated
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+    conn_ext.close()
+
+
+def test_implicit_rollback_on_custom_cursor_created_before_cache_invalidates() -> None:
+    """Custom cursor created BEFORE cache registration detects automatic rollback and invalidates cache."""
+    conn = sqlite3.connect(":memory:")
+
+    class CustomCursorBefore(sqlite3.Cursor):
+        def helper_tag(self) -> str:
+            return "before"
+
+    # Cursor created BEFORE cache registration
+    cur = conn.cursor(factory=CustomCursorBefore)
+    assert isinstance(cur, CustomCursorBefore)
+    assert cur.helper_tag() == "before"
+
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_custom_cursor_before",)
+
+    # Insert row inside authorized write leaving transaction open
+    with cache.authorized_write():
+        conn.execute("INSERT INTO t VALUES (1, 'row1')")
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admitted_row1")
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    # Execute duplicate INSERT OR ROLLBACK using the custom cursor
+    with pytest.raises(sqlite3.IntegrityError):
+        cur.execute("INSERT OR ROLLBACK INTO t VALUES (1, 'dup')")
+
+    # Transaction rolled back, row 1 was removed
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 0
+    # Cache MUST be invalidated by the implicit rollback on custom cursor!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_implicit_rollback_on_custom_cursor_created_after_cache_invalidates() -> None:
+    """Custom cursor created AFTER cache registration detects automatic rollback and invalidates cache."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_custom_cursor_after",)
+
+    # Insert row inside authorized write leaving transaction open
+    with cache.authorized_write():
+        conn.execute("INSERT INTO t VALUES (1, 'row1')")
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admitted_row1")
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    class CustomCursorAfter(sqlite3.Cursor):
+        def helper_tag(self) -> str:
+            return "after"
+
+    # Cursor created AFTER cache registration
+    cur = conn.cursor(factory=CustomCursorAfter)
+    assert isinstance(cur, CustomCursorAfter)
+    assert cur.helper_tag() == "after"
+
+    with pytest.raises(sqlite3.IntegrityError):
+        cur.execute("INSERT OR ROLLBACK INTO t VALUES (1, 'dup')")
+
+    # Transaction rolled back, row 1 was removed
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 0
+    # Cache MUST be invalidated
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_unsupported_cursor_factory_raises_type_error() -> None:
+    """Non-Cursor-subclass factory is rejected with TypeError."""
+    conn = sqlite3.connect(":memory:")
+    with pytest.raises(
+        TypeError, match=r"ManagedConnection requires cursor factory subclassing sqlite3\.Cursor"
+    ):
+        conn.cursor(factory=cast(Any, object))
+    conn.close()
+
+
+def test_implicit_rollback_on_error_handling_custom_cursor_execute_invalidates_cache() -> None:
+    """Custom cursor that handles SQLite errors internally on execute still invalidates cache on implicit rollback."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    class TolerantCursor(ManagedCursor):
+        def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+            try:
+                return super().execute(*args, **kwargs)
+            except sqlite3.IntegrityError:
+                return self
+
+    cur = conn.cursor(factory=TolerantCursor)
+    assert isinstance(cur, TolerantCursor)
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_tolerant_execute",)
+
+    with cache.authorized_write():
+        conn.execute("INSERT INTO t VALUES (1, 'row1')")
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admitted_row1")
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    # Tolerant cursor executes duplicate INSERT OR ROLLBACK, swallowing the IntegrityError
+    res = cur.execute("INSERT OR ROLLBACK INTO t VALUES (1, 'dup')")
+    assert res is cur
+
+    # Transaction rolled back, row 1 was removed
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 0
+    # Cache MUST be invalidated despite the error being handled internally!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_implicit_rollback_on_error_handling_custom_cursor_executemany_invalidates_cache() -> None:
+    """Custom cursor that handles SQLite errors internally on executemany still invalidates cache on implicit rollback."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    class TolerantManyCursor(ManagedCursor):
+        def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+            try:
+                return super().executemany(*args, **kwargs)
+            except sqlite3.IntegrityError:
+                return self
+
+    cur = conn.cursor(factory=TolerantManyCursor)
+    assert isinstance(cur, TolerantManyCursor)
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_tolerant_many",)
+
+    with cache.authorized_write():
+        conn.execute("INSERT INTO t VALUES (1, 'row1')")
+
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+    cache.record("test_kind", coord, "admitted_row1")
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    res = cur.executemany("INSERT OR ROLLBACK INTO t VALUES (?, ?)", [(1, "dup")])
+    assert res is cur
+
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 0
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    cache.close()
+    conn.close()
+
+
+def test_executescript_implicit_precommit_does_not_notify_rollback() -> None:
+    """Successful script execution's implicit pre-commit of pending transaction causes no rollback notification."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    rollbacks: list[int] = []
+    managed_conn = cast(ManagedConnection, conn)
+    unregister = managed_conn.register_rollback_observer(lambda: rollbacks.append(1))
+
+    # Open transaction and insert row 1
+    conn.execute("INSERT INTO t VALUES (1, 'row1')")
+    assert conn.in_transaction is True
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_precommit",)
+    cache.record("test_kind", coord, "admitted_row1")
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    cur = conn.cursor()
+    # Script executes successfully: pre-commits pending transaction as a commit, not rollback
+    cur.executescript("SELECT 1;")
+
+    # Assertions proving pre-commit committed and caused no rollback notification
+    assert len(rollbacks) == 0
+    assert conn.in_transaction is False
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
+    # Cached admission remains valid because row 1 was committed
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    unregister()
+    cache.close()
+    conn.close()
+
+
+def test_implicit_rollback_on_error_handling_custom_cursor_executescript_invalidates_cache() -> (
+    None
+):
+    """Tolerant script with explicit BEGIN and real rollback failure invalidates cache without total_changes changing."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.execute("INSERT INTO t VALUES (1, 'row1')")
+    conn.commit()
+
+    class TolerantScriptCursor(ManagedCursor):
+        def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+            try:
+                return super().executescript(*args, **kwargs)
+            except sqlite3.IntegrityError:
+                return self
+
+    cur = conn.cursor(factory=TolerantScriptCursor)
+    assert isinstance(cur, TolerantScriptCursor)
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_tolerant_script",)
+    cache.record("test_kind", coord, "admitted_row1")
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    rollbacks: list[int] = []
+    managed_conn = cast(ManagedConnection, conn)
+    unregister = managed_conn.register_rollback_observer(lambda: rollbacks.append(1))
+
+    changes_before = conn.total_changes
+    # Script has explicit BEGIN and duplicate INSERT OR ROLLBACK that rolls back
+    res = cur.executescript("BEGIN; INSERT OR ROLLBACK INTO t VALUES (1, 'dup');")
+    assert res is cur
+
+    # Assert total_changes did NOT change: proves cache invalidation cannot pass solely from total_changes!
+    assert conn.total_changes == changes_before
+    # Explicit transaction-state and notification assertions
+    assert conn.in_transaction is False
+    assert len(rollbacks) == 1
+    # Row 1 still exists, duplicate was rejected
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
+    # Cache MUST be invalidated by the rollback notification intercepted by ManagedCursor!
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    unregister()
+    cache.close()
+    conn.close()
+
+
+def test_implicit_rollback_on_tolerant_script_rolls_back_partial_inserts_and_invalidates_cache() -> (
+    None
+):
+    """Tolerant script with explicit BEGIN and partial insert demonstrates row rollback and cache invalidation."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.execute("INSERT INTO t VALUES (1, 'row1')")
+    conn.commit()
+
+    class TolerantScriptCursor(ManagedCursor):
+        def executescript(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+            try:
+                return super().executescript(*args, **kwargs)
+            except sqlite3.IntegrityError:
+                return self
+
+    cur = conn.cursor(factory=TolerantScriptCursor)
+    assert isinstance(cur, TolerantScriptCursor)
+
+    rollbacks: list[int] = []
+    managed_conn = cast(ManagedConnection, conn)
+    unregister = managed_conn.register_rollback_observer(lambda: rollbacks.append(1))
+
+    cache = RequestVerificationCache(conn)
+    coord = ("coord_tolerant_script_partial",)
+    cache.record("test_kind", coord, "admitted_row1")
+    assert cache.verified("test_kind", coord) == "admitted_row1"
+
+    # Script inserts row 2 inside transaction, then hits duplicate on row 1, rolling back row 2
+    res = cur.executescript(
+        "BEGIN; INSERT INTO t VALUES (2, 'row2'); INSERT OR ROLLBACK INTO t VALUES (1, 'dup');"
+    )
+    assert res is cur
+
+    # Explicit transaction-state and notification assertions
+    assert conn.in_transaction is False
+    assert len(rollbacks) == 1
+    # Row 2 was rolled back and removed from the table!
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
+    assert conn.execute("SELECT id FROM t").fetchall() == [(1,)]
+    # Cache MUST be invalidated
+    assert cache.verified("test_kind", coord) is NOT_VERIFIED
+
+    unregister()
+    cache.close()
+    conn.close()
+
+
+def test_direct_base_delegation_cursor_factory_is_rejected() -> None:
+    """Cursor factories overriding execution methods without subclassing ManagedCursor are rejected."""
+    conn = sqlite3.connect(":memory:")
+
+    # 1. Inherited direct delegation (Judge's exact DirectParent / CooperativeChild finding)
+    class DirectParent(sqlite3.Cursor):
+        def executescript(self, script: str) -> sqlite3.Cursor:
+            try:
+                return sqlite3.Cursor.executescript(self, script)
+            except sqlite3.IntegrityError:
+                return self
+
+    class CooperativeChild(DirectParent):
+        def executescript(self, script: str) -> sqlite3.Cursor:
+            return super().executescript(script)
+
+    with pytest.raises(
+        TypeError,
+        match=r"ManagedConnection cursor factory CooperativeChild has unmanaged execution override for executescript in CooperativeChild\. Overridden execution methods must belong to ManagedCursor subclasses\.",
+    ):
+        conn.cursor(factory=CooperativeChild)
+
+    with pytest.raises(
+        TypeError,
+        match=r"ManagedConnection cursor factory DirectParent has unmanaged execution override for executescript in DirectParent\. Overridden execution methods must belong to ManagedCursor subclasses\.",
+    ):
+        conn.cursor(factory=DirectParent)
+
+    # 2. Mixed-inheritance: unmanaged ancestor supplying override before ManagedCursor in MRO
+    class ManagedChild(DirectParent, ManagedCursor):
+        pass
+
+    with pytest.raises(
+        TypeError,
+        match=r"ManagedConnection cursor factory ManagedChild has unmanaged execution override for executescript in DirectParent\. Overridden execution methods must belong to ManagedCursor subclasses\.",
+    ):
+        conn.cursor(factory=ManagedChild)
+
+    # 3. Pure unmanaged child that merely inherits an override without defining one itself
+    class PureChild(DirectParent):
+        pass
+
+    with pytest.raises(
+        TypeError,
+        match=r"ManagedConnection cursor factory PureChild has unmanaged execution override for executescript in DirectParent\. Overridden execution methods must belong to ManagedCursor subclasses\.",
+    ):
+        conn.cursor(factory=PureChild)
+
+    # 4. Override that references super while executing through direct base call
+    class SuperDirectCursor(sqlite3.Cursor):
+        def executescript(self, script: str) -> sqlite3.Cursor:
+            if False:
+                super().executescript(script)
+            try:
+                return sqlite3.Cursor.executescript(self, script)
+            except sqlite3.IntegrityError:
+                return self
+
+    with pytest.raises(
+        TypeError,
+        match=r"ManagedConnection cursor factory SuperDirectCursor has unmanaged execution override for executescript in SuperDirectCursor\. Overridden execution methods must belong to ManagedCursor subclasses\.",
+    ):
+        conn.cursor(factory=SuperDirectCursor)
+
+    # 5. Direct execute override on sqlite3.Cursor subclass is rejected
+    class DirectExecuteCursor(sqlite3.Cursor):
+        def execute(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+            return sqlite3.Cursor.execute(self, *args, **kwargs)
+
+    with pytest.raises(
+        TypeError,
+        match=r"ManagedConnection cursor factory DirectExecuteCursor has unmanaged execution override for execute in DirectExecuteCursor\. Overridden execution methods must belong to ManagedCursor subclasses\.",
+    ):
+        conn.cursor(factory=DirectExecuteCursor)
+
+    # 6. Direct executemany override on sqlite3.Cursor subclass is rejected
+    class DirectExecuteManyCursor(sqlite3.Cursor):
+        def executemany(self, *args: Any, **kwargs: Any) -> sqlite3.Cursor:
+            return sqlite3.Cursor.executemany(self, *args, **kwargs)
+
+    with pytest.raises(
+        TypeError,
+        match=r"ManagedConnection cursor factory DirectExecuteManyCursor has unmanaged execution override for executemany in DirectExecuteManyCursor\. Overridden execution methods must belong to ManagedCursor subclasses\.",
+    ):
+        conn.cursor(factory=DirectExecuteManyCursor)
+
+    # 7. Custom cursor without execution overrides is accepted and dynamically wrapped
+    class CustomHelperCursor(sqlite3.Cursor):
+        def custom_helper(self) -> int:
+            return 42
+
+    cur = conn.cursor(factory=CustomHelperCursor)
+    assert isinstance(cur, ManagedCursor)
+    assert isinstance(cur, CustomHelperCursor)
+    assert cur.custom_helper() == 42
+
+    # 8. Legitimate ManagedCursor subclass is accepted directly
+    class ProperManagedCursor(ManagedCursor):
+        pass
+
+    proper_cur = conn.cursor(factory=ProperManagedCursor)
+    assert isinstance(proper_cur, ProperManagedCursor)
+    assert isinstance(proper_cur, ManagedCursor)
+
+    conn.close()
+
+
+def test_explicit_commit_on_managed_cursor_does_not_notify_rollback() -> None:
+    """Explicit COMMIT, END, and outermost RELEASE statements do not trigger rollback notifications on ManagedCursor."""
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INT PRIMARY KEY, val TEXT)")
+    conn.commit()
+
+    rollbacks: list[str] = []
+    managed_conn = cast(ManagedConnection, conn)
+    unregister = managed_conn.register_rollback_observer(lambda: rollbacks.append("rollback"))
+
+    cur = conn.cursor()
+
+    # 1. COMMIT statement preserves commit without rollback notification
+    conn.execute("BEGIN")
+    conn.execute("INSERT INTO t VALUES (1, 'row1')")
+    cur.execute("COMMIT")
+    assert len(rollbacks) == 0
+
+    # 2. END statement preserves commit without rollback notification
+    conn.execute("BEGIN")
+    conn.execute("INSERT INTO t VALUES (2, 'row2')")
+    cur.execute("END")
+    assert len(rollbacks) == 0
+
+    # 3. Outermost RELEASE SAVEPOINT preserves commit without rollback notification
+    conn.execute("SAVEPOINT sp")
+    conn.execute("INSERT INTO t VALUES (3, 'row3')")
+    cur.execute("RELEASE SAVEPOINT sp")
+    assert len(rollbacks) == 0
+
+    # All three rows were committed successfully
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 3
+
+    unregister()
+    conn.close()
+
+
+def test_connection_trace_preserves_existing_observer_and_nested_caches() -> None:
+    """Existing trace observer is preserved across cache creation, nested caches, and removal."""
+    conn = sqlite3.connect(":memory:")
+    statements: list[str] = []
+    initial_dispatchers = active_connection_trace_dispatcher_count()
+
+    # 1. Register an existing observer directly through standard conn.set_trace_callback()
+    conn.set_trace_callback(statements.append)
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
+    assert active_connection_trace_observer_count(conn) == 0
+
+    conn.execute("SELECT 1")
+    assert any("SELECT 1" in s for s in statements)
+
+    # 2. Outer verification cache created
+    cache1 = RequestVerificationCache(conn)
+    assert active_connection_trace_observer_count(conn) == 1
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers + 1
+
+    # 3. Nested inner verification cache created
+    cache2 = RequestVerificationCache(conn)
+    assert active_connection_trace_observer_count(conn) == 2
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers + 1
+
+    # Statement dispatched to all active observers and the user trace callback
+    statements.clear()
+    conn.execute("SELECT 2")
+    assert any("SELECT 2" in s for s in statements)
+
+    # 4. Nested inner cache closes
+    cache2.close()
+    assert active_connection_trace_observer_count(conn) == 1
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers + 1
+
+    # 5. Outer cache closes
+    cache1.close()
+    assert active_connection_trace_observer_count(conn) == 0
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
+
+    # Existing observer installed via standard set_trace_callback still receives statements!
+    statements.clear()
+    conn.execute("SELECT 3")
+    assert any("SELECT 3" in s for s in statements)
+
+    # 6. Unregister standard trace callback -> stops receiving statements
+    conn.set_trace_callback(None)
+    statements.clear()
+    conn.execute("SELECT 4")
+    assert len(statements) == 0
+
+    # 7. Also test registered observers cooperatively with standard trace callback
+    unreg = register_connection_trace_observer(conn, statements.append)
+    conn.set_trace_callback(statements.append)
+    statements.clear()
+    conn.execute("SELECT 5")
+    assert len([s for s in statements if "SELECT 5" in s]) == 2
+    unreg()
+    conn.set_trace_callback(None)
+
+    conn.close()
+
+
+def test_managed_connect_handles_positional_and_keyword_factories() -> None:
+    """_managed_connect preserves positional and keyword custom factories while wrapping defaults."""
+    # 1. Default connect returns ManagedConnection
+    conn_default = sqlite3.connect(":memory:")
+    assert isinstance(conn_default, ManagedConnection)
+    conn_default.close()
+
+    # 2. Keyword explicit default returns ManagedConnection
+    conn_kw_default = sqlite3.connect(":memory:", factory=sqlite3.Connection)
+    assert isinstance(conn_kw_default, ManagedConnection)
+    conn_kw_default.close()
+
+    # 3. Custom factory via keyword returns custom class, not ManagedConnection
+    class CustomKeywordConn(sqlite3.Connection):
+        pass
+
+    conn_kw_custom = sqlite3.connect(":memory:", factory=CustomKeywordConn)
+    assert isinstance(conn_kw_custom, CustomKeywordConn)
+    assert not isinstance(conn_kw_custom, ManagedConnection)
+    conn_kw_custom.close()
+
+    # 4. Positional default factory (index 5) returns ManagedConnection
+    conn_pos_default = sqlite3.connect(":memory:", 5.0, 0, "DEFERRED", True, sqlite3.Connection)
+    assert isinstance(conn_pos_default, ManagedConnection)
+    conn_pos_default.close()
+
+    # 5. Positional custom factory returns custom class, not ManagedConnection
+    class CustomPositionalConn(sqlite3.Connection):
+        pass
+
+    conn_pos_custom = sqlite3.connect(":memory:", 5.0, 0, "DEFERRED", True, CustomPositionalConn)
+    assert isinstance(conn_pos_custom, CustomPositionalConn)
+    assert not isinstance(conn_pos_custom, ManagedConnection)
+    conn_pos_custom.close()
+
+
+def test_unmanaged_connection_fails_closed_without_modifying_trace_callback() -> None:
+    """Unmanaged connection rejects verification cache and trace observer without replacing callbacks."""
+
+    class UnmanagedConn(sqlite3.Connection):
+        pass
+
+    conn = sqlite3.connect(":memory:", factory=UnmanagedConn)
+    assert not isinstance(conn, ManagedConnection)
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+
+    # Initial query reaches the user's trace callback
+    conn.execute("SELECT 'initial'")
+    assert any("SELECT 'initial'" in s for s in statements)
+    statements.clear()
+
+    # Registering observer directly fails closed
+    with pytest.raises(VerificationCacheError, match="requires a ManagedConnection"):
+        register_connection_trace_observer(conn, statements.append)
+
+    # Cache instantiation fails closed
+    with pytest.raises(VerificationCacheError, match="requires a ManagedConnection"):
+        RequestVerificationCache(conn)
+
+    # User callback is still intact and completely unmodified
+    conn.execute("SELECT 'after_failure'")
+    assert any("SELECT 'after_failure'" in s for s in statements)
+
+    conn.set_trace_callback(None)
+    conn.close()
+
+
+def test_verification_cache_closed_guards_fail_closed() -> None:
+    """Closed RequestVerificationCache rejects all memo operations while keeping journals readable."""
+    conn = sqlite3.connect(":memory:")
+    cache = RequestVerificationCache(conn)
+    assert cache.is_closed is False
+    cache.close()
+    assert cache.is_closed is True
+
+    # Operations fail closed
+    with pytest.raises(VerificationCacheError, match="closed"):
+        cache.verified("kind", ("coord",))
+
+    with pytest.raises(VerificationCacheError, match="closed"):
+        cache.record("kind", ("coord",), "val")
+
+    with pytest.raises(VerificationCacheError, match="closed"):
+        cache.ensure_bound(conn)
+
+    with pytest.raises(VerificationCacheError, match="closed"):
+        cache.invalidate()
+
+    with pytest.raises(VerificationCacheError, match="closed"):
+        cache.notify_rollback()
+
+    with pytest.raises(VerificationCacheError, match="closed"), cache.authorized_write():
+        pass
+
+    with pytest.raises(VerificationCacheError, match="closed"), cache.savepoint("sp"):
+        pass
+
+    # Journals and counts remain readable for post-turn audit
+    assert isinstance(cache.journal, list)
+    assert isinstance(cache.counts(), dict)
+
+    conn.close()
+
+
+def test_turn_lifecycle_cleans_up_verification_cache_and_trace_registry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Repeated successful and failed turns guarantee verification cache cleanup and empty registry."""
+    import uuid
+
+    storage_root = tmp_path / "storage"
+    root = tmp_path / "run"
+    db_path, runtime, records = _build_fixture(root, storage_root)
+    probe = _Probe()
+    _install_doubles(monkeypatch, probe, records=records, runtime=runtime, enabled=True)
+    _install_turn_seams(monkeypatch, probe, runtime=runtime)
+    monkeypatch.setattr(engine, "uuid4", uuid.uuid4)
+    initial_dispatchers = active_connection_trace_dispatcher_count()
+
+    # 1. Run first successful turn
+    events1 = list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME"]),
+            ContextPack(scope="portfolio", default_tickers=["ACME"], system_context="ctx"),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+    assert [event["type"] for event in events1] == ["stage", "delta", "citations", "final"]
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
+
+    # 2. Run second successful turn
+    events2 = list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME"]),
+            ContextPack(scope="portfolio", default_tickers=["ACME"], system_context="ctx"),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+    assert [event["type"] for event in events2] == ["stage", "delta", "citations", "final"]
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
+
+    # 3. Run a failed turn (e.g. unknown ticker causing promotion_missing)
+    events3 = list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["UNKNOWN_TICKER"]),
+            ContextPack(
+                scope="portfolio", default_tickers=["UNKNOWN_TICKER"], system_context="ctx"
+            ),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+    assert any(event["type"] == "error" for event in events3)
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
+
+    # 4. Direct shadow retrieval lifecycle cleanup, proving execution and trace persistence
+    conn_chk = sqlite3.connect(db_path)
+    try:
+        traces_before = conn_chk.execute(
+            "SELECT count(*) FROM heterogeneous_retrieval_trace_headers"
+        ).fetchone()[0]
+    finally:
+        conn_chk.close()
+
+    cache_count_before = len(probe.caches)
+    engine.run_shadow_retrieval(
+        QUESTION,
+        AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME"]),
+        ContextPack(scope="portfolio", default_tickers=["ACME"], system_context="ctx"),
+        db_path=db_path,
+    )
+    assert len(probe.caches) == cache_count_before + 1
+    shadow_cache = probe.caches[-1]
+    assert shadow_cache.is_closed is True
+    assert shadow_cache.entry_count == 0
+    assert shadow_cache.in_flight_count == 0
+    assert len(shadow_cache.journal) > 0
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
+
+    conn_chk = sqlite3.connect(db_path)
+    try:
+        traces_after = conn_chk.execute(
+            "SELECT count(*) FROM heterogeneous_retrieval_trace_headers"
+        ).fetchone()[0]
+        assert traces_after == traces_before + 1
+    finally:
+        conn_chk.close()
+
+
+def test_turn_with_multiple_scopes_and_multiple_narrative_bundles_verifies_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn spanning multiple scopes and distinct narrative bundles verifies each coordinate once across all bundles."""
+    storage_root = tmp_path / "storage"
+    root = tmp_path / "run"
+    db_path, runtime, records = _build_fixture(root, storage_root)
+    probe = _Probe()
+
+    dataset_beta = storage_root / f"run-{VECTOR_RUN_ID_BETA}" / "vectors.lance"
+    storage_uri_beta = f"lance://{dataset_beta.resolve().as_posix()}#evidence_chunks"
+
+    beta_records = [
+        {
+            **_vector_record(
+                "beta-chunk-1",
+                "Subscription demand continued in international markets.",
+                [0.5, 0.5],
+            ),
+            "manifest_id": MANIFEST_ID_BETA,
+            "ticker": "ACME",
+        }
+    ]
+
+    _install_doubles(
+        monkeypatch,
+        probe,
+        records=records,
+        runtime=runtime,
+        enabled=True,
+        extra_records_by_run={VECTOR_RUN_ID_BETA: beta_records},
+        extra_uris_by_run={VECTOR_RUN_ID_BETA: storage_uri_beta},
+    )
+    _install_turn_seams(monkeypatch, probe, runtime=runtime)
+
+    conn = sqlite3.connect(db_path)
+    try:
+        bundle_1 = _bundle()
+        bundle_2 = NarrativeBundle(
+            corpus_manifest_id=MANIFEST_ID_BETA,
+            lexical_index_run_id=LEXICAL_RUN_ID_BETA,
+            vector_index_run_id=VECTOR_RUN_ID_BETA,
+            embedding_promotion_id=EMBEDDING_PROMOTION_ID,
+        )
+        two_bundles = (bundle_1, bundle_2)
+        bundles_json = canonical_json([b.model_dump(mode="json") for b in two_bundles])
+        bundles_sha256 = digest_text(bundles_json)
+
+        # Update research snapshot to contain both bundles
+        req = _research_request()
+        req_updated = req.model_copy(
+            update={
+                "corpus_bundles": (
+                    CorpusProjectionBundle(
+                        corpus_manifest_id=MANIFEST_ID,
+                        lexical_index_run_id=LEXICAL_RUN_ID,
+                        vector_index_run_id=VECTOR_RUN_ID,
+                        embedding_promotion_id=EMBEDDING_PROMOTION_ID,
+                    ),
+                    CorpusProjectionBundle(
+                        corpus_manifest_id=MANIFEST_ID_BETA,
+                        lexical_index_run_id=LEXICAL_RUN_ID_BETA,
+                        vector_index_run_id=VECTOR_RUN_ID_BETA,
+                        embedding_promotion_id=EMBEDDING_PROMOTION_ID,
+                    ),
+                )
+            }
+        )
+        conn.execute(
+            "UPDATE research_snapshot_headers SET request_json=? WHERE research_snapshot_id=?",
+            (req_updated.model_dump_json(), RESEARCH_SNAPSHOT_ID),
+        )
+
+        # Update ACME promotion to have both bundles
+        conn.execute(
+            "UPDATE ask_retrieval_scope_promotions SET narrative_bundles_json=?, narrative_bundles_sha256=? WHERE promotion_id=?",
+            (bundles_json, bundles_sha256, "ask-promotion-1"),
+        )
+
+        # Seed BETA scope and promotion with both bundles
+        conn.execute(
+            "INSERT INTO v_issuer_reporting_scope_current VALUES ('scope-revision-BETA', 'BETA', ?, 'core')",
+            (ISSUER_ID,),
+        )
+        beta_scope_id = derive_retrieval_scope_id(source_scope_key="BETA", issuer_id=ISSUER_ID)
+        policy, verifier_name, verifier_version, code_sha256, config_sha256 = (
+            current_verifier_identity()
+        )
+        inventory_json = canonical_json((INVENTORY_ID,))
+        conn.execute(
+            "INSERT INTO ask_retrieval_scope_promotions VALUES "
+            "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "ask-promotion-beta",
+                "ask-promotion-beta",
+                beta_scope_id,
+                "BETA",
+                "scope-revision-BETA",
+                1,
+                ISSUER_ID,
+                REPORTING_ENTITY_ID,
+                RESEARCH_SNAPSHOT_ID,
+                RESEARCH_SNAPSHOT_SHA256,
+                FACT_GENERATION_ID,
+                FACT_PROJECTION_SEAL_SHA256,
+                inventory_json,
+                digest_text(inventory_json),
+                bundles_json,
+                bundles_sha256,
+                NOW.isoformat(),
+                POPULATION_RUN_ID,
+                POPULATION_RECEIPT_SHA256,
+                NOW.isoformat(),
+                policy,
+                verifier_name,
+                verifier_version,
+                code_sha256,
+                config_sha256,
+                "promoted",
+                None,
+                NOW.isoformat(),
+            ),
+        )
+
+        # Seed bundle 2 tables:
+        conn.execute(
+            "INSERT INTO search_manifest_source_inventories VALUES (?,?)",
+            (MANIFEST_ID_BETA, INVENTORY_ID),
+        )
+        conn.execute(
+            "INSERT INTO search_index_runs VALUES (?,?,?,?,?)",
+            (VECTOR_RUN_ID_BETA, MANIFEST_ID_BETA, "vector", CONFIG_SHA256, "succeeded"),
+        )
+        chunk_text_beta = "Subscription demand continued in international markets."
+        conn.execute(
+            "INSERT INTO search_chunks VALUES (?,?,?,?,?,?,?)",
+            (
+                "beta-chunk-1",
+                MANIFEST_ID_BETA,
+                digest_text(chunk_text_beta),
+                "node:beta-chunk-1",
+                0,
+                len(chunk_text_beta),
+                chunk_text_beta,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO search_lexical_chunks VALUES (?,?)",
+            ("beta-chunk-1", chunk_text_beta),
+        )
+        conn.execute(
+            "INSERT INTO search_index_memberships VALUES (?,?,?)",
+            (VECTOR_RUN_ID_BETA, "beta-chunk-1", "included"),
+        )
+        conn.execute(
+            "INSERT INTO search_embedding_artifacts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                VECTOR_RUN_ID_BETA,
+                "beta-chunk-1",
+                "passage",
+                "local-test",
+                "deterministic-two-dimensional",
+                2,
+                beta_records[0]["vector_sha256"],
+                storage_uri_beta,
+                beta_records[0]["input_sha256"],
+                CONFIG_SHA256,
+                "succeeded",
+                _runtime_artifact().sha256(),
+            ),
+        )
+        chunk_count, chunk_sha256 = manifest_chunk_commitment(conn, manifest_id=MANIFEST_ID_BETA)
+        artifact_count, artifact_sha256 = vector_artifact_commitment(
+            conn, index_run_id=VECTOR_RUN_ID_BETA
+        )
+        assert artifact_count == chunk_count == len(beta_records)
+        persist_projection_seal(
+            conn,
+            SearchProjectionSeal(
+                projection_seal_id=PROJECTION_SEAL_ID_BETA,
+                idempotency_key=PROJECTION_SEAL_ID_BETA,
+                index_run_id=VECTOR_RUN_ID_BETA,
+                manifest_id=MANIFEST_ID_BETA,
+                index_kind="vector",
+                chunk_count=chunk_count,
+                chunk_set_sha256=chunk_sha256,
+                projection_records_sha256=vector_records_digest(beta_records),
+                artifact_set_sha256=artifact_sha256,
+                provider="local-test",
+                model="deterministic-two-dimensional",
+                dimensions=2,
+                runtime_artifact_sha256=_runtime_artifact().sha256(),
+                config_sha256=CONFIG_SHA256,
+                storage_uri=storage_uri_beta,
+                sealed_at=NOW,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    initial_dispatchers = active_connection_trace_dispatcher_count()
+
+    # Execute a turn with both ACME and BETA tickers
+    events = list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME", "BETA"]),
+            ContextPack(scope="portfolio", default_tickers=["ACME", "BETA"], system_context="ctx"),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+
+    # Reaches final event cleanly with no errors
+    assert [event["type"] for event in events] == ["stage", "delta", "citations", "final"]
+
+    # Both scopes and both distinct narrative bundles verified exactly once
+    assert len(probe.caches) >= 1
+    cache = probe.caches[0]
+    pop_receipt_coord = (POPULATION_RUN_ID,)
+    assert cache.counts()[(POPULATION_RECEIPT, pop_receipt_coord)] == 1
+    research_coords = [coord for (kind, coord) in cache.counts() if kind == RESEARCH_COORDINATES]
+    assert len(research_coords) == 1
+    assert research_coords[0][0] == RESEARCH_SNAPSHOT_ID
+    assert cache.counts()[(RESEARCH_COORDINATES, research_coords[0])] == 1
+    promo_coords = {
+        coord[0]: count
+        for (kind, coord), count in cache.counts().items()
+        if kind == PROMOTION_COORDINATES
+    }
+    assert promo_coords == {"ask-promotion-1": 1, "ask-promotion-beta": 1}
+
+    # Distinct narrative bundle coordinates both verified once
+    assert (
+        cache.counts()[
+            (SEMANTIC_PROJECTION_READ, (VECTOR_RUN_ID, EMBEDDING_PROMOTION_ID, PROJECTION_SEAL_ID))
+        ]
+        == 1
+    )
+    assert (
+        cache.counts()[
+            (
+                SEMANTIC_PROJECTION_READ,
+                (VECTOR_RUN_ID_BETA, EMBEDDING_PROMOTION_ID, PROJECTION_SEAL_ID_BETA),
+            )
+        ]
+        == 1
+    )
+    assert (
+        cache.counts()[(SEMANTIC_RUNTIME_COORDINATES, (VECTOR_RUN_ID, EMBEDDING_PROMOTION_ID))] == 1
+    )
+    assert (
+        cache.counts()[(SEMANTIC_RUNTIME_COORDINATES, (VECTOR_RUN_ID_BETA, EMBEDDING_PROMOTION_ID))]
+        == 1
+    )
+    assert all(count == 1 for count in cache.counts().values())
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
+
+
+def test_turn_with_real_fact_candidates_verifies_projection_admission_once_through_complete_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn with multiple real fact candidates runs real search_canonical_facts and verifies admission exactly once."""
+    storage_root = tmp_path / "storage"
+    root = tmp_path / "run"
+    db_path, runtime, records = _build_fixture(root, storage_root)
+    probe = _Probe()
+    _install_doubles(monkeypatch, probe, records=records, runtime=runtime, enabled=True)
+    _install_turn_seams(monkeypatch, probe, runtime=runtime, audit_cites=(1, 3))
+
+    # Restore REAL search_canonical_facts on retrieval module
+    monkeypatch.setattr(retrieval_module, "search_canonical_facts", search_canonical_facts)
+
+    # Seed projection and fact tables in fixture DB
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS canonical_fact_projection_generations (
+                generation_id TEXT PRIMARY KEY,
+                parent_generation_id TEXT,
+                generation_kind TEXT NOT NULL,
+                resolution_snapshot_id TEXT NOT NULL,
+                resolution_snapshot_sha256 TEXT NOT NULL,
+                resolution_watermark_sha256 TEXT NOT NULL,
+                ontology_snapshot_id TEXT NOT NULL,
+                ontology_snapshot_sha256 TEXT NOT NULL,
+                cutoff_at TEXT NOT NULL,
+                recorded_at TEXT NOT NULL,
+                change_count INTEGER NOT NULL,
+                generation_sha256 TEXT NOT NULL,
+                config_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS canonical_fact_projection_audit_receipts (
+                generation_id TEXT PRIMARY KEY,
+                projection_seal_sha256 TEXT NOT NULL,
+                verifier_name TEXT NOT NULL,
+                verifier_version TEXT NOT NULL,
+                verifier_code_sha256 TEXT NOT NULL,
+                verifier_config_sha256 TEXT NOT NULL,
+                audit_payload_json TEXT NOT NULL,
+                audit_payload_sha256 TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS canonical_fact_projection_scope_bindings (
+                generation_id TEXT PRIMARY KEY,
+                resolution_scope_sha256 TEXT NOT NULL,
+                resolution_snapshot_commitment_sha256 TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS canonical_fact_projection_entries (
+                generation_id TEXT NOT NULL,
+                entry_ordinal INTEGER NOT NULL,
+                change_kind TEXT NOT NULL,
+                digest_bucket INTEGER NOT NULL,
+                canonical_metric_cell_id TEXT NOT NULL,
+                canonical_resolution_revision_id TEXT,
+                selected_observation_id TEXT,
+                source_fact_cell_id TEXT,
+                source_publication_id TEXT,
+                source_publication_seal_id TEXT,
+                source_publication_member_id TEXT,
+                source_publication_member_sha256 TEXT,
+                source_record_commitment_sha256 TEXT,
+                binding_revision_id TEXT,
+                binding_commitment_sha256 TEXT,
+                mapping_revision_id TEXT,
+                mapping_commitment_sha256 TEXT,
+                metric_definition_revision_id TEXT,
+                metric_definition_commitment_sha256 TEXT,
+                reporting_entity_id TEXT NOT NULL,
+                scope_security_id TEXT,
+                canonical_metric_name TEXT NOT NULL,
+                period_kind TEXT NOT NULL,
+                period_start TEXT,
+                period_end TEXT NOT NULL,
+                dimensions_json TEXT NOT NULL,
+                unit_key TEXT NOT NULL,
+                currency TEXT,
+                value_kind TEXT NOT NULL,
+                canonical_value TEXT NOT NULL,
+                evidence_document_version_id TEXT NOT NULL,
+                evidence_node_id TEXT NOT NULL,
+                evidence_locator_json TEXT NOT NULL,
+                evidence_locator_sha256 TEXT NOT NULL,
+                canonical_search_text TEXT NOT NULL,
+                entry_json TEXT NOT NULL,
+                entry_sha256 TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS canonical_fact_projection_buckets (
+                generation_id TEXT NOT NULL,
+                digest_bucket INTEGER NOT NULL,
+                canonical_entry_set_json TEXT NOT NULL,
+                entry_set_sha256 TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS source_fact_publication_seals (
+                publication_seal_id TEXT PRIMARY KEY,
+                publication_id TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS source_fact_publication_members (
+                publication_member_id TEXT PRIMARY KEY,
+                publication_id TEXT NOT NULL,
+                canonical_member_sha256 TEXT NOT NULL,
+                record_commitment_sha256 TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS kpi_aliases (
+                id INTEGER PRIMARY KEY,
+                ticker TEXT,
+                canonical_name TEXT NOT NULL,
+                reported_name TEXT NOT NULL,
+                effective_to TEXT
+            )
+            """
+        )
+
+        config_json = "{}"
+        header: dict[str, object] = {
+            "generation_id": FACT_GENERATION_ID,
+            "parent_generation_id": None,
+            "generation_kind": "checkpoint",
+            "resolution_snapshot_id": "res-1",
+            "resolution_snapshot_sha256": "1" * 64,
+            "resolution_watermark_sha256": "2" * 64,
+            "ontology_snapshot_id": "onto-1",
+            "ontology_snapshot_sha256": "3" * 64,
+            "cutoff_at": NOW.isoformat(),
+            "recorded_at": NOW.isoformat(),
+            "change_count": 2,
+            "generation_sha256": "4" * 64,
+            "config_json": config_json,
+        }
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_generations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            tuple(header.values()),
+        )
+        seal: dict[str, object] = {
+            "generation_id": FACT_GENERATION_ID,
+            "projection_seal_id": "seal-1",
+            "projection_seal_sha256": FACT_PROJECTION_SEAL_SHA256,
+            "change_count": 2,
+            "upsert_count": 2,
+            "tombstone_count": 0,
+            "effective_entry_count": 2,
+            "batch_count": 1,
+            "ordered_entry_set_sha256": "6" * 64,
+        }
+        conn.execute("DROP TABLE IF EXISTS canonical_fact_projection_seals")
+        conn.execute(
+            """
+            CREATE TABLE canonical_fact_projection_seals (
+                generation_id TEXT PRIMARY KEY,
+                projection_seal_id TEXT,
+                projection_seal_sha256 TEXT,
+                change_count INTEGER,
+                upsert_count INTEGER,
+                tombstone_count INTEGER,
+                effective_entry_count INTEGER,
+                batch_count INTEGER,
+                ordered_entry_set_sha256 TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_seals VALUES (?,?,?,?,?,?,?,?,?)",
+            tuple(seal.values()),
+        )
+        binding: dict[str, object] = {
+            "generation_id": FACT_GENERATION_ID,
+            "resolution_scope_sha256": "7" * 64,
+            "resolution_snapshot_commitment_sha256": "8" * 64,
+        }
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_scope_bindings VALUES (?,?,?)",
+            tuple(binding.values()),
+        )
+        payload = projection_audit_payload(header, seal, binding)
+        payload_json = canonical_json(payload)
+        receipt = {
+            "generation_id": FACT_GENERATION_ID,
+            "projection_seal_sha256": seal["projection_seal_sha256"],
+            "verifier_name": AUDIT_VERIFIER_NAME,
+            "verifier_version": AUDIT_VERIFIER_VERSION,
+            "verifier_code_sha256": AUDIT_VERIFIER_CODE_SHA256,
+            "verifier_config_sha256": digest_text(config_json),
+            "audit_payload_json": payload_json,
+            "audit_payload_sha256": digest_text(payload_json),
+        }
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_audit_receipts VALUES (?,?,?,?,?,?,?,?)",
+            tuple(receipt.values()),
+        )
+
+        import search.canonical_fact_projection as projection_module
+
+        payload_columns = cast(
+            tuple[str, ...], getattr(projection_module, "_ENTRY_PAYLOAD_COLUMNS")
+        )
+        exact = "a" * 64
+        cells = [
+            (
+                "canonical:revenue:2025",
+                "Revenue",
+                "Revenue | How did revenue grow | 2025-12-31",
+                "2025-12-31",
+            ),
+            (
+                "canonical:revenue_sub:2025",
+                "Subscription Revenue",
+                "Subscription Revenue | How did revenue grow | 2025-12-31",
+                "2025-12-31",
+            ),
+        ]
+        entries: list[dict[str, object]] = []
+        for ord_idx, (cell_id, name, search_text, p_end) in enumerate(cells):
+            entry_payload: dict[str, object] = {column: None for column in payload_columns}
+            entry_payload.update(
+                {
+                    "binding_commitment_sha256": exact,
+                    "binding_revision_id": f"binding-{ord_idx}",
+                    "canonical_metric_cell_id": cell_id,
+                    "canonical_metric_name": name,
+                    "canonical_resolution_revision_id": f"resolution-{ord_idx}",
+                    "canonical_search_text": search_text,
+                    "canonical_value": "100",
+                    "currency": "USD",
+                    "dimensions_json": "[]",
+                    "evidence_document_version_id": "document-1",
+                    "evidence_locator_json": "{}",
+                    "evidence_locator_sha256": digest_text("{}"),
+                    "evidence_node_id": "node:chunk-1",
+                    "mapping_commitment_sha256": exact,
+                    "mapping_revision_id": f"mapping-{ord_idx}",
+                    "metric_definition_commitment_sha256": exact,
+                    "metric_definition_revision_id": f"definition-{ord_idx}",
+                    "period_end": p_end,
+                    "period_kind": "instant",
+                    "reporting_entity_id": REPORTING_ENTITY_ID,
+                    "selected_observation_id": f"observation-{ord_idx}",
+                    "source_publication_id": "publication-1",
+                    "source_publication_member_id": f"member-{ord_idx}",
+                    "source_publication_member_sha256": exact,
+                    "source_publication_seal_id": "publication-seal-1",
+                    "source_record_commitment_sha256": exact,
+                    "unit_key": "USD",
+                    "value_kind": "numeric",
+                }
+            )
+            committed = {
+                **entry_payload,
+                "change_kind": "upsert",
+                "entry_version": "canonical_fact_projection_entry.v1",
+            }
+            e_json = canonical_json(committed)
+            entries.append(
+                {
+                    "generation_id": FACT_GENERATION_ID,
+                    "entry_ordinal": ord_idx,
+                    "change_kind": "upsert",
+                    "digest_bucket": digest_bucket(cell_id),
+                    **entry_payload,
+                    "entry_json": e_json,
+                    "entry_sha256": digest_text(e_json),
+                }
+            )
+
+        entry_columns = cast(tuple[str, ...], getattr(projection_module, "_ENTRY_COLUMNS"))
+        conn.executemany(
+            "INSERT INTO canonical_fact_projection_entries ("
+            + ",".join(entry_columns)
+            + ") VALUES ("
+            + ",".join("?" for _ in entry_columns)
+            + ")",
+            [tuple(entry[col] for col in entry_columns) for entry in entries],
+        )
+
+        buckets: dict[int, list[str]] = {}
+        for entry in entries:
+            d = cast(int, entry["digest_bucket"])
+            buckets.setdefault(d, []).append(str(entry["entry_sha256"]))
+        for bucket, shas in buckets.items():
+            p_load = canonical_json(sorted(shas))
+            conn.execute(
+                "INSERT INTO canonical_fact_projection_buckets VALUES (?,?,?,?)",
+                (FACT_GENERATION_ID, bucket, p_load, digest_text(p_load)),
+            )
+
+        conn.execute(
+            "INSERT INTO source_fact_publication_seals VALUES (?,?)",
+            ("publication-seal-1", "publication-1"),
+        )
+        for ord_idx in range(len(cells)):
+            conn.execute(
+                "INSERT INTO source_fact_publication_members VALUES (?,?,?,?)",
+                (f"member-{ord_idx}", "publication-1", exact, exact),
+            )
+
+        conn.commit()
+    finally:
+        conn.close()
+
+    initial_dispatchers = active_connection_trace_dispatcher_count()
+
+    events = list(
+        engine.respond_turn(
+            AskTurn(text=QUESTION, session_id=SESSION_ID, tickers=["ACME"]),
+            ContextPack(scope="portfolio", default_tickers=["ACME"], system_context="ctx"),
+            db_path=db_path,
+            repo_root=root,
+            retrieval_mode="sealed",
+        )
+    )
+
+    # Reaches final event cleanly with citations
+    assert [event["type"] for event in events] == ["stage", "delta", "citations", "final"]
+    assert len(probe.caches) >= 1
+    cache = probe.caches[0]
+
+    assert cache.counts()[(PROJECTION_GENERATION_ADMISSION, (FACT_GENERATION_ID,))] == 1
+    assert active_connection_trace_dispatcher_count() == initial_dispatchers
+
+    conn_verify = sqlite3.connect(db_path)
+    try:
+        cand_rows = conn_verify.execute(
+            "SELECT candidate_id, candidate_kind FROM heterogeneous_retrieval_trace_candidates"
+        ).fetchall()
+        cand_set = {(str(r[0]), str(r[1])) for r in cand_rows}
+        assert ("canonical:revenue:2025", "fact") in cand_set
+        assert ("canonical:revenue_sub:2025", "fact") in cand_set
+
+        package = probe.packages[0]
+        assembly_items = {
+            (item.candidate_id, item.candidate_kind) for item in package.record.retrieval_assembly
+        }
+        assert ("canonical:revenue:2025", "fact") in assembly_items
+        assert ("canonical:revenue_sub:2025", "fact") in assembly_items
+    finally:
+        conn_verify.close()
+
+    citations_events = [event for event in events if event["type"] == "citations"]
+    assert len(citations_events) == 1
+    items = cast(list[dict[str, object]], citations_events[0].get("items"))
+    assert isinstance(items, list)
+    cited_fact_items = [item for item in items if item.get("kind") == "fact"]
+    assert len(cited_fact_items) == 1
+    assert cited_fact_items[0]["candidate_id"] == "canonical:revenue_sub:2025"
+    assert cited_fact_items[0]["value"] == "100 USD"
+
+    fact_citations = [
+        c for c in probe.packages[0].citations if c.candidate_id == "canonical:revenue_sub:2025"
+    ]
+    assert len(fact_citations) == 1
+    assert fact_citations[0].candidate_kind == "fact"

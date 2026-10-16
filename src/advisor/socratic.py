@@ -37,6 +37,7 @@ from typing import cast
 from advisor.context import AdvisorContext, build_advisor_context, calibration_block
 from advisor.memos import MemoResult, persist_memo
 from advisor.store import STANCES
+from dcf.input_evidence import SourceReadContext
 from identity import DEFAULT_USER_ID
 from llm.cli import is_hard_stop
 from llm_client import call_llm
@@ -295,12 +296,15 @@ def generate_questions(
     user_id: str = DEFAULT_USER_ID,
     api_url: str | None = None,
     ctx: AdvisorContext | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> SocraticPrelude:
     """Step 1: the 3-5 owner-first questions. Raises on hard stops AND on an
     unparseable completion — there is no degraded mode for a flow the owner
     is sitting in front of; the UI surfaces the error and offers retry."""
     t = ticker.upper()
-    context = ctx or build_advisor_context(repo_root, user_id=user_id, api_url=api_url)
+    context = ctx or build_advisor_context(
+        repo_root, user_id=user_id, api_url=api_url, source_context=source_context
+    )
     ctx_block = _ticker_context_block(context, t)
     premortem = _premortem_block(repo_root, t, api_url=api_url)
     prompt = _QUESTIONS_PROMPT.format(
@@ -345,6 +349,7 @@ def generate_decision_memo(
     user_id: str = DEFAULT_USER_ID,
     api_url: str | None = None,
     ctx: AdvisorContext | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> MemoResult:
     """Step 2: the decision memo from the owner's answers. Persists kind
     'socratic' with the parsed stance + horizon (P2.5's scoreable unit) plus
@@ -357,7 +362,9 @@ def generate_decision_memo(
         raise ValueError("at least one answer must be non-empty — the memo is owner-first")
     if horizon_days <= 0:
         raise ValueError("horizon_days must be positive")
-    context = ctx or build_advisor_context(repo_root, user_id=user_id, api_url=api_url)
+    context = ctx or build_advisor_context(
+        repo_root, user_id=user_id, api_url=api_url, source_context=source_context
+    )
     qa_lines = [
         f"Q{i + 1}: {q}\nA{i + 1}: {a.strip() or '(no answer)'}"
         for i, (q, a) in enumerate(zip(questions, answers, strict=True))

@@ -11,8 +11,17 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol, Self, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
+from filings.sec_submissions_inventory import SEC_REGISTRATION_FINANCIAL_FORMS
 from provenance.analysis_scope import AnalysisEvidenceScope, require_analysis_documents
 from runtime.deterministic import as_utc as _utc
 from runtime.deterministic import canonical_json_model as canonical_json
@@ -230,6 +239,22 @@ class ResearchSnapshotRequest(_Frozen):
     cutoff_at: datetime
     recorded_at: datetime
 
+    source_publication_reference_clock: Literal["cutoff_v1", "publication_created_v2"] = "cutoff_v1"
+
+    @model_serializer(mode="wrap")
+    def _serialize_request(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        # Reject bypassed Literal validation before any persistence.
+        if self.source_publication_reference_clock not in {"cutoff_v1", "publication_created_v2"}:
+            raise ValueError("unsupported source publication reference clock")
+        # Legacy requests must retain their exact JSON and immutable digest.
+        value = handler(self)
+        if not isinstance(value, dict):
+            raise ValueError("research request serialization must be an object")
+        result = cast(dict[str, object], value)
+        if self.source_publication_reference_clock == "cutoff_v1":
+            result.pop("source_publication_reference_clock", None)
+        return result
+
     @model_validator(mode="after")
     def _request_shape(self) -> Self:
         if not self.processing_snapshot_ids:
@@ -365,6 +390,8 @@ def _insert_exact(
 
 
 def _document_family(document_type: str, form_type: str) -> str:
+    if form_type.strip().upper() in SEC_REGISTRATION_FINANCIAL_FORMS:
+        return "issuer_financial_statements"
     value = f"{document_type} {form_type}".lower()
     if any(token in value for token in ("presentation", "slides", "deck")):
         return "issuer_presentations"
@@ -393,7 +420,9 @@ def _applicable_lanes(state: _DocumentState) -> set[ProcessingLane]:
         lanes.update(("xlsx_workbook", "xlsx_sheets", "xlsx_tables"))
     if "transcript" in descriptor:
         lanes.update(("transcript_turns", "transcript_speakers"))
-    if any(token in descriptor for token in ("10-k", "10-q", "20-f", "40-f", "xbrl")):
+    if state.form_type.strip().upper() in SEC_REGISTRATION_FINANCIAL_FORMS or any(
+        token in descriptor for token in ("10-k", "10-q", "20-f", "40-f", "xbrl")
+    ):
         lanes.add("filing_xbrl")
     return lanes
 
@@ -500,6 +529,7 @@ def _source_obligations(
     cutoff_at: datetime,
     observed_through: datetime,
     include_optional: bool,
+    financial_authority: Literal["sec_edgar", "issuer_publisher"] | None = None,
 ) -> tuple[sqlite3.Row, ...]:
     _require_columns(
         conn,
@@ -521,12 +551,25 @@ def _source_obligations(
     cutoff = _db_time(cutoff_at)
     observed = _db_time(observed_through)
     states = ("required", "optional") if include_optional else ("required",)
+    authority_sql = ""
+    authority_parameters: tuple[str, ...] = ()
+    if document_family == "issuer_financial_statements":
+        authority = financial_authority or "issuer_publisher"
+        _require_columns(conn, "source_obligation_revisions", {"authority_kind"})
+        authority_sql = "AND obligation.authority_kind=? "
+        authority_parameters = (authority,)
+        if authority == "sec_edgar":
+            _require_columns(conn, "source_obligation_revisions", {"completeness_rule"})
+            authority_sql += "AND obligation.completeness_rule=? "
+            authority_parameters += ("regulator_inventory",)
     rows = conn.execute(
         """
         SELECT * FROM source_obligation_revisions obligation
         WHERE obligation.issuer_id=?
           AND obligation.document_family=?
-          AND obligation.obligation_state IN """  # nosec B608 -- trusted internal SQL shape; values remain bound
+        """  # nosec B608 -- trusted internal SQL shape; values remain bound
+        + authority_sql
+        + "AND obligation.obligation_state IN "
         + f"({','.join('?' for _ in states)})"
         + """
           AND datetime(obligation.active_from)<=datetime(?)
@@ -545,6 +588,7 @@ def _source_obligations(
         (
             issuer_id,
             document_family,
+            *authority_parameters,
             *states,
             cutoff,
             cutoff,
@@ -589,6 +633,11 @@ def _derive_obligations(
                 cutoff_at=knowledge,
                 observed_through=observed,
                 include_optional=policy.include_optional_source_obligations,
+                financial_authority=(
+                    "sec_edgar"
+                    if document.form_type.strip().upper() in SEC_REGISTRATION_FINANCIAL_FORMS
+                    else None
+                ),
             )
             applicable = _applicable_lanes(document)
             for source in sources:
@@ -1595,12 +1644,18 @@ class _DefaultResearchReferenceVerifier:
                 cutoff=request.cutoff_at,
                 observed_through=request.recorded_at,
             )
+            if request.source_publication_reference_clock == "cutoff_v1":
+                publication_knowledge = request.cutoff_at
+            elif request.source_publication_reference_clock == "publication_created_v2":
+                publication_knowledge = verified.created_at
+            else:
+                raise ValueError("unsupported source publication reference clock")
             return VerifiedResearchReference(
                 requested_lane=requested_lane,
                 reference_table="source_fact_publication_seals",
                 reference_id=verified.publication_seal_id,
                 commitment_sha256=verified.member_set_sha256,
-                knowledge_at=request.cutoff_at,
+                knowledge_at=publication_knowledge,
                 recorded_at=max(verified.recorded_at, verified.sealed_at),
             )
         if requested_lane == "ontology_snapshot":
@@ -2334,6 +2389,8 @@ def _build_research_snapshot_with_verifier(
     *,
     verifier: _ResearchReferenceVerifier,
 ) -> ResearchSnapshotAdmission:
+    if request.source_publication_reference_clock not in {"cutoff_v1", "publication_created_v2"}:
+        raise ValueError("unsupported source publication reference clock")
     references = _verify_research_references(conn, request, verifier)
     request_json = canonical_json(request)
     members: list[dict[str, object]] = []

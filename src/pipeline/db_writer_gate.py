@@ -64,6 +64,12 @@ identifying the holder (pid, owner label, acquired_at, token), and a lock whose
 recorded pid is no longer alive is stale and gets broken. Acquisition blocks
 with a bounded timeout and then fails LOUD (``WriterGateHeldError``) — a chain
 step surfaces as a failed stage rather than silently extending its budget.
+The deadline bounds acquisition, not the holder's connection lifetime. The
+gate is not FIFO and cannot promise that a waiter succeeds under continuous
+contention. A timed-out caller must release its own resources and surface the
+blocked stage; it may retry after the live holder closes. Never evict a live
+holder to make the queue advance.
+
 Best-effort telemetry writers that must never raise (``log_call``, the LLM
 cost ledger, artifact upserts, budget alerts) catch that error, count the
 dropped write (``telemetry_health.record_dropped_write``), and WARN — a gate
@@ -329,9 +335,11 @@ def _release_path_gate(key: str, *, owner_tid: int) -> None:
         state.depths.pop(owner_tid, None)
         held = state.held
         state.held = None
-    if held is not None:
-        held.release()
-    state.inprocess.release()
+    try:
+        if held is not None:
+            held.release()
+    finally:
+        state.inprocess.release()
 
 
 # ---------------------------------------------------------------------------
@@ -434,16 +442,21 @@ def _acquire_writer_gate(
             except FileExistsError:
                 holder = _read_holder(lock_path)
                 holder_pid = holder.get("pid") if holder else None
-                if not (isinstance(holder_pid, int) and pid_is_alive(holder_pid)):
-                    # Stale: dead holder, or an unreadable payload — which,
-                    # because creation is atomic-with-payload, can only be
-                    # real corruption, never a half-written live lock.
-                    with suppress(OSError):
-                        lock_path.unlink()
-                    continue
-                if time.monotonic() >= deadline:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     raise WriterGateHeldError(lock_path, holder) from None
-                time.sleep(poll_s)
+                if not (isinstance(holder_pid, int) and pid_is_alive(holder_pid)):
+                    # Stale cleanup can fail (permissions, antivirus, a race).
+                    # It uses the same deadline as live-holder contention.
+                    try:
+                        lock_path.unlink()
+                    except FileNotFoundError:
+                        continue
+                    except OSError:
+                        pass
+                    else:
+                        continue
+                time.sleep(min(poll_s, remaining))
                 continue
             return _HeldGate(lock_path=lock_path, pid=os.getpid())
     finally:
@@ -480,14 +493,29 @@ def hold_writer_gate(
         return
     wait = WRITER_GATE_TIMEOUT_S if timeout_s is None else timeout_s
     claimed = _acquire_path_gate(key, owner=owner, timeout_s=wait, poll_s=poll_s)
-    if claimed:
-        _trace_event("enter", owner=owner, db_key=key)
+    entered = False
+    primary_error: BaseException | None = None
     try:
-        yield
-    finally:
         if claimed:
-            _trace_event("exit", owner=owner, db_key=key)
-        _release_path_gate(key, owner_tid=threading.get_ident())
+            _trace_event("enter", owner=owner, db_key=key)
+            entered = True
+        yield
+    except BaseException as error:
+        primary_error = error
+        raise
+    finally:
+        try:
+            try:
+                if entered:
+                    _trace_event("exit", owner=owner, db_key=key)
+            finally:
+                _release_path_gate(key, owner_tid=threading.get_ident())
+        except BaseException as cleanup_error:
+            if primary_error is None:
+                raise
+            primary_error.add_note(
+                f"writer gate cleanup also failed: {type(cleanup_error).__name__}"
+            )
 
 
 @dataclass(slots=True)
@@ -510,9 +538,11 @@ class WriterConnectionClaim:
         if self.released:
             return
         self.released = True
-        if self.claimed:
-            _trace_event("exit", owner=self.owner, db_key=self.key)
-        _release_path_gate(self.key, owner_tid=self.owner_tid)
+        try:
+            if self.claimed:
+                _trace_event("exit", owner=self.owner, db_key=self.key)
+        finally:
+            _release_path_gate(self.key, owner_tid=self.owner_tid)
 
 
 def claim_chain_writer_connection(
@@ -536,11 +566,19 @@ def claim_chain_writer_connection(
         return None
     wait = WRITER_GATE_TIMEOUT_S if timeout_s is None else timeout_s
     claimed = _acquire_path_gate(key, owner=owner, timeout_s=wait, poll_s=WRITER_GATE_POLL_S)
-    if claimed:
-        _trace_event("enter", owner=owner, db_key=key)
-    return WriterConnectionClaim(
+    claim = WriterConnectionClaim(
         key=key, owner=owner, owner_tid=threading.get_ident(), claimed=claimed
     )
+    try:
+        if claimed:
+            _trace_event("enter", owner=owner, db_key=key)
+    except BaseException as error:
+        try:
+            claim.release()
+        except BaseException as cleanup_error:
+            error.add_note(f"writer gate cleanup also failed: {type(cleanup_error).__name__}")
+        raise
+    return claim
 
 
 __all__ = [

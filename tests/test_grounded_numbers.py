@@ -9,13 +9,10 @@ no-false-positive behavior, and the canonical loader.
 from __future__ import annotations
 
 import sqlite3
-import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from synthesis.grounded_numbers import (  # noqa: E402
+from db_paths import db_path_context
+from synthesis.grounded_numbers import (
     GroundedNumbers,
     check_numeric_drift,
     load_grounded_numbers,
@@ -51,8 +48,8 @@ def test_dcf_line_formats_figures_of_record() -> None:
 
 
 def test_load_grounded_numbers_prefers_consolidated_run(tmp_path: Path) -> None:
-    (tmp_path / "data").mkdir()
-    conn = sqlite3.connect(str(tmp_path / "data" / "portfolio.db"))
+    fixture_db = tmp_path / "grounded_numbers.sqlite"
+    conn = sqlite3.connect(str(fixture_db))
     conn.executescript(
         """
         CREATE TABLE dcf_runs (
@@ -65,7 +62,8 @@ def test_load_grounded_numbers_prefers_consolidated_run(tmp_path: Path) -> None:
     )
     conn.commit()
     conn.close()
-    gn = load_grounded_numbers("NU", tmp_path)
+    with db_path_context(fixture_db):
+        gn = load_grounded_numbers("NU", tmp_path)
+        assert load_grounded_numbers("ZZ", tmp_path) is None
     assert gn is not None
     assert gn.npv_per_share == 20.88  # consolidated row, not the Brazil segment's 99
-    assert load_grounded_numbers("ZZ", tmp_path) is None

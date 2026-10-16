@@ -29,6 +29,7 @@ from typing import cast
 
 from calibration_guard import is_confident, rate_phrase, rate_phrase_ci
 from db_paths import require_db_path
+from dcf.input_evidence import SourceReadContext
 from dcf.readiness import load_valuation_readiness
 from decision_calibration import (
     CalibrationStats,
@@ -131,6 +132,8 @@ def _dcf_age_ok(dcf_date: str | None, *, max_age_days: int, today: datetime) -> 
 
 def _load_valuations(
     conn: sqlite3.Connection,
+    *,
+    source_context: SourceReadContext | None = None,
 ) -> tuple[dict[str, TickerValuation], dict[str, TickerValuation]]:
     """(holdings, candidates) valuation maps from the latest DCF run per ticker,
     joined with each name's tracked list and latest thesis verdict. Tickers
@@ -161,7 +164,13 @@ def _load_valuations(
         list_type = lists.get(t)
         if list_type is None or fv is None or px is None or fv <= 0 or px <= 0:
             continue
-        readiness = load_valuation_readiness(conn, t, as_of=datetime.now(UTC))
+        readiness = (
+            load_valuation_readiness(conn, t, as_of=datetime.now(UTC))
+            if source_context is None
+            else load_valuation_readiness(
+                conn, t, as_of=datetime.now(UTC), source_context=source_context
+            )
+        )
         val = TickerValuation(
             ticker=t,
             upside_pct=(fv / px - 1.0) * 100.0,
@@ -181,13 +190,15 @@ def _load_valuations(
 
 def load_valuations(
     conn: sqlite3.Connection,
+    *,
+    source_context: SourceReadContext | None = None,
 ) -> tuple[dict[str, TickerValuation], dict[str, TickerValuation]]:
     """Read amounts and their evidence in one caller-preserving read snapshot."""
     owns_snapshot = not conn.in_transaction
     try:
         if owns_snapshot:
             conn.execute("BEGIN")
-        return _load_valuations(conn)
+        return _load_valuations(conn, source_context=source_context)
     finally:
         if owns_snapshot and conn.in_transaction:
             conn.rollback()
@@ -252,6 +263,7 @@ def build_advisor_context(
     user_id: str = DEFAULT_USER_ID,
     api_url: str | None = None,
     db_path: Path | None = None,
+    source_context: SourceReadContext | None = None,
 ) -> AdvisorContext:
     """Fetch + assemble everything one memo run reads. Tracker failures
     degrade (the established client contract); DB reads tolerate missing
@@ -264,7 +276,7 @@ def build_advisor_context(
         holdings = portfolio_holdings(conn)
         verdicts = latest_verdicts(conn)
         dcf_gaps = latest_dcf_runs(conn)
-        holdings_val, candidates_val = load_valuations(conn)
+        holdings_val, candidates_val = load_valuations(conn, source_context=source_context)
     finally:
         conn.close()
     try:

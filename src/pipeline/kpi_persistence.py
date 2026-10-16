@@ -377,15 +377,24 @@ def _magnitude_guard_violation(
     kpi_definition_id: int,
     period_end: datetime,
     value: Decimal,
+    unit: Unit,
+    currency: Currency | None,
+    context: KpiSemanticContext,
+    fiscal_period_type: FiscalPeriodType,
 ) -> str | None:
-    """Return a reason for a >1000x jump versus either adjacent observation.
+    """Check adjacent comparable values without changing source storage.
 
     It deliberately does not apply monotonicity: that requires a declared
-    semantic invariant, never a name heuristic.
+    semantic invariant, never a name heuristic. Excluded neighbors are logged
+    as incomparable; absence of a magnitude finding does not admit a series.
     """
+    has_currency = any(row[1] == "currency" for row in conn.execute("PRAGMA table_info(kpi_facts)"))
+    currency_column = "currency" if has_currency else "NULL AS currency"
     rows = conn.execute(
-        "SELECT period_end, value FROM kpi_facts "
-        "WHERE ticker = ? AND kpi_definition_id = ? ORDER BY period_end",
+        f"SELECT id, period_end, fiscal_period_type, value, unit, {currency_column} FROM kpi_facts "  # nosec B608 -- closed column choice
+        "WHERE ticker = ? AND kpi_definition_id = ? AND NOT EXISTS "
+        "(SELECT 1 FROM kpi_facts successor WHERE successor.supersedes_id=kpi_facts.id) "
+        "ORDER BY period_end,id",
         (ticker.upper(), kpi_definition_id),
     ).fetchall()
     prev_v: Decimal | None = None
@@ -399,10 +408,65 @@ def _magnitude_guard_violation(
             if isinstance(row_pe_raw, datetime)
             else datetime.fromisoformat(str(row_pe_raw))
         )
+        if row_pe == period_end:
+            continue
+        reason: str | None = None
+        quarters = {"Q1", "Q2", "Q3", "Q4"}
+        if row["fiscal_period_type"] != fiscal_period_type.value and not (
+            row["fiscal_period_type"] in quarters and fiscal_period_type.value in quarters
+        ):
+            reason = "period_basis_incomparable"
+        if context.status is KpiSemanticStatus.ADMITTED:
+            neighbor = current_kpi_semantic_context(conn, kpi_fact_id=int(row["id"]))
+            if neighbor is None or neighbor.context.status is not KpiSemanticStatus.ADMITTED:
+                reason = "neighbor_not_source_qualified"
+            elif any(
+                getattr(neighbor.context, axis) != getattr(context, axis)
+                for axis in (
+                    "accounting_basis",
+                    "consolidation_scope",
+                    "dimensions",
+                    "period_role",
+                    "publication_lane",
+                )
+            ):
+                reason = "semantic_axes_differ"
+        if row["currency"] != (currency.value if currency is not None else None):
+            reason = "currency_incomparable"
+        try:
+            neighbor_unit = Unit(row["unit"])
+        except ValueError:
+            neighbor_unit = None
+        monetary = {Unit.ACTUAL, Unit.THOUSANDS, Unit.MILLIONS, Unit.BILLIONS}
+        neighbor_value = Decimal(str(row["value"]))
+        if neighbor_unit is unit:
+            comparable_value = neighbor_value
+        elif neighbor_unit is not None and neighbor_unit in monetary and unit in monetary:
+            comparable_value = convert_unit(neighbor_value, neighbor_unit, unit)
+        else:
+            comparable_value = None
+        if comparable_value is None:
+            reason = "units_incomparable"
+        if reason is not None:
+            log.info(
+                "KPI magnitude neighbor is incomparable",
+                extra={
+                    "event": "kpi_magnitude_neighbor_incomparable",
+                    "ticker": ticker.upper(),
+                    "kpi_definition_id": kpi_definition_id,
+                    "neighbor_fact_id": int(row["id"]),
+                    "neighbor_period_end": row_pe.date().isoformat(),
+                    "period_end": period_end.date().isoformat(),
+                    "reason_code": reason,
+                },
+            )
+            continue
+        if comparable_value is None:
+            raise RuntimeError("validated magnitude neighbor lost its numeric value")
         if row_pe < period_end:
-            prev_v, prev_pe = Decimal(str(row["value"])), row_pe.date().isoformat()
+            prev_v, prev_pe = comparable_value, row_pe.date().isoformat()
         elif row_pe > period_end and next_v is None:
-            next_v, next_pe = Decimal(str(row["value"])), row_pe.date().isoformat()
+            next_v, next_pe = comparable_value, row_pe.date().isoformat()
     if prev_v is not None and decimal_unit_jump(prev_v, value):
         return (
             f"unit discontinuity: {prev_v} at {prev_pe} -> {value} at "
@@ -703,6 +767,10 @@ def persist_kpi_value_at_exact_definition(
         kpi_definition_id=kpi_definition_id,
         period_end=period_end,
         value=value,
+        unit=unit,
+        currency=currency,
+        context=context,
+        fiscal_period_type=fiscal_period_type,
     )
     if violation is not None:
         raise ValueError(f"reviewed KPI value failed magnitude guard: {violation}")
@@ -868,6 +936,10 @@ def persist_manifest(
             kpi_definition_id=kpi_def_id,
             period_end=manifest.period_end,
             value=value,
+            unit=unit,
+            currency=kpi.currency,
+            context=semantic_context,
+            fiscal_period_type=manifest.fiscal_period_type,
         )
         if violation is not None:
             log.error(

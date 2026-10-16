@@ -668,13 +668,20 @@ def load_production_scopes(
 
 
 @contextmanager
-def _savepoint(conn: sqlite3.Connection, name: str):
+def _savepoint(
+    conn: sqlite3.Connection,
+    name: str,
+    *,
+    verification: RequestVerificationCache | None = None,
+):
     conn.execute(f"SAVEPOINT {name}")
     try:
         yield
     except Exception:
         conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
         conn.execute(f"RELEASE SAVEPOINT {name}")
+        if verification is not None:
+            verification.invalidate()
         raise
     conn.execute(f"RELEASE SAVEPOINT {name}")
 
@@ -1349,7 +1356,7 @@ def execute_sealed_retrieval_plan(
     if verification is not None:
         verification.ensure_bound(conn)
     receipts: list[HeterogeneousRetrievalReceipt] = []
-    with _savepoint(conn, "execute_sealed_ask_retrieval"):
+    with _savepoint(conn, "execute_sealed_ask_retrieval", verification=verification):
         conn.row_factory = sqlite3.Row
         _admit_common_current_population_cutover(
             conn,

@@ -10,7 +10,7 @@ Mocks LLM calls so the test suite doesn't need a live Claude binary. Verifies:
 
 from __future__ import annotations
 
-import importlib.util
+import importlib.util as importlib_util
 import json
 import sqlite3
 import sys
@@ -33,13 +33,13 @@ def _load_sweep() -> Any:
     infected by Unknown types from the dynamic load.
     """
     src = PROJECT_ROOT / "execution" / "run_model_eval_sweep.py"
-    spec = importlib.util.spec_from_file_location("run_model_eval_sweep", src)
+    spec = importlib_util.spec_from_file_location("run_model_eval_sweep", src)
     assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
+    mod = importlib_util.module_from_spec(spec)
     sys_src = str(PROJECT_ROOT / "src")
     if sys_src not in sys.path:
         sys.path.insert(0, sys_src)
-    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    spec.loader.exec_module(mod)
     return mod
 
 

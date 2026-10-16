@@ -158,6 +158,8 @@ class ExactSemanticRuntime:
         self._promotion = promotion
         self._exact_row_cap = exact_row_cap
         self._verification = verification
+        if self._verification is not None:
+            self._verification.ensure_bound(conn)
         self._require_verified_coordinates()
 
     @property
@@ -334,6 +336,7 @@ class ExactSemanticRuntime:
         if self._verification is None:
             self._verify_coordinates()
             return
+        self._verification.ensure_bound(self._conn)
         coordinate = (self._seal.index_run_id, self._promotion.promotion_id)
         memoized = self._verification.verified(SEMANTIC_RUNTIME_COORDINATES, coordinate)
         if memoized is NOT_VERIFIED:
@@ -380,6 +383,7 @@ class ExactSemanticRuntime:
             self._seal.projection_seal_id,
         )
         if self._verification is not None:
+            self._verification.ensure_bound(self._conn)
             memoized = self._verification.verified(SEMANTIC_PROJECTION_READ, coordinate)
             if memoized is not NOT_VERIFIED:
                 return cast(list[dict[str, object]], memoized)
@@ -442,6 +446,7 @@ class ExactSemanticRuntime:
                     "semantic external vector row differs from ledger artifact"
                 )
         if self._verification is not None:
+            self._verification.ensure_bound(self._conn)
             self._verification.record(SEMANTIC_PROJECTION_READ, coordinate, rows)
         return rows
 

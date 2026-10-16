@@ -55,6 +55,7 @@ import logging
 import re
 import sqlite3
 import urllib.parse
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -73,14 +74,21 @@ from pipeline.confidence import (
 from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import (
-    FINANCIAL_FACT,
     FactOverride,
     OverrideAction,
     active_scalar_override_map,
 )
 from provenance.selection import selected_transcripts_relation
+from sources.canonical_financial_series import (
+    FinancialCadence,
+    SeriesContinuity,
+    financial_metric_catalog,
+    read_financial_consumer_series,
+)
+from sources.report_financials import FinancialEvidenceReference
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 from timeseries.loaders import reader_tier_join_sql, reader_tier_rank_sql
+from ui.source_chip import financial_consumer_source, viewer_href
 
 log = logging.getLogger(__name__)
 
@@ -146,7 +154,7 @@ _TICKERISH_RX = re.compile(r"\b[A-Z][A-Z0-9.\-]{0,5}\b")
 # label); the NL name-match (`_fact_evidence`) is the FALLBACK, not the primary.
 _FACT_REF_KPI_RX = re.compile(r"\bkpi:([A-Za-z][A-Za-z0-9.\-]{0,9}):(\d{1,9})\b")
 _FACT_REF_FIN_RX = re.compile(
-    r"\bfin:([A-Za-z][A-Za-z0-9.\-]{0,9}):([a-z0-9_]{1,60}):([A-Za-z0-9]{1,8})\b"
+    r"\bfin:([A-Za-z][A-Za-z0-9.\-]{0,9}):([a-z0-9_]{1,60}):([A-Za-z0-9]{1,12})\b"
 )
 # fiscal_period_type tokens that name a single cadence (else default to the
 # quarterly series, matching `_fact_evidence`'s financial-facts filter).
@@ -283,6 +291,8 @@ class EvidenceItem:
     # None for NL-matched facts and every non-fact channel. Surfaced in the
     # chip payload so a follow-up can re-pin the exact series.
     fact_ref: str | None = None
+    canonical_reference: FinancialEvidenceReference | None = None
+    source_manifest: dict[str, object] | None = None
     # Structured popover header fields (the auditable "where did this come from"
     # anatomy): the issuer, the backing document's form (``10-K`` / ``10-Q`` /
     # ``transcript``), the newest data point's fiscal period (``Q4'25``), and
@@ -303,6 +313,10 @@ class EvidenceItem:
             "source_url": self.source_url,
             "confidence": self.confidence,
             "fact_ref": self.fact_ref,
+            "canonical_reference": self.canonical_reference.model_dump(mode="json")
+            if self.canonical_reference
+            else None,
+            "source_manifest": self.source_manifest,
             "ticker": self.ticker,
             "doc_type": self.doc_type,
             "period": self.period,
@@ -444,6 +458,43 @@ class StrictEvidenceConnection:
 
     def close(self) -> None:
         self._connection.close()
+
+    @property
+    def in_transaction(self) -> bool:
+        return self._connection.in_transaction
+
+    @property
+    def total_changes(self) -> int:
+        return self._connection.total_changes
+
+    def rollback(self) -> None:
+        try:
+            self._connection.rollback()
+        except sqlite3.Error as exc:
+            raise GroundingRetrievalError("grounded evidence rollback failed") from exc
+
+    @property
+    def row_factory(self) -> Callable[[sqlite3.Cursor, tuple[object, ...]], object] | None:
+        return self._connection.row_factory
+
+    @row_factory.setter
+    def row_factory(
+        self, factory: Callable[[sqlite3.Cursor, tuple[object, ...]], object] | None
+    ) -> None:
+        self._connection.row_factory = factory
+
+    def create_function(
+        self,
+        name: str,
+        narg: int,
+        func: Callable[..., str | int | float | bytes | None] | None,
+        *,
+        deterministic: bool = False,
+    ) -> None:
+        try:
+            self._connection.create_function(name, narg, func, deterministic=deterministic)
+        except sqlite3.Error as exc:
+            raise GroundingRetrievalError("grounded evidence function registration failed") from exc
 
 
 def _connect(db_path: Path, *, strict: bool = False) -> sqlite3.Connection | None:
@@ -703,6 +754,89 @@ def _fact_ref_kpi_item(
     return item
 
 
+def _financial_evidence_items(
+    conn: sqlite3.Connection, ticker: str, line_item: str, fpt: str, *, cutoff: datetime
+) -> list[dict[str, object]]:
+    """Each reported period owns its citation and exact immutable selection."""
+    normalized = fpt.upper()
+    cadence = (
+        FinancialCadence.ANNUAL
+        if normalized in {"FY", "ANNUAL"}
+        else FinancialCadence.REPORTED_TTM
+        if normalized == "TTM"
+        else FinancialCadence.QUARTERLY
+    )
+    handle = f"fin:{ticker}:{line_item}:{fpt}"
+    label = f"{ticker} · {line_item.replace('_', ' ').title()}"
+    if normalized not in {"FY", "ANNUAL", "TTM", "Q1", "Q2", "Q3", "Q4", "Q", "QUARTERLY"}:
+        reason = "unsupported_financial_cadence"
+        return [
+            {
+                "kind": "fact",
+                "label": label,
+                "text": f"{label}: unavailable ({reason})",
+                "doc_id": None,
+                "href": None,
+                "source_url": None,
+                "fact_ref": handle,
+                "ticker": ticker,
+                "source_manifest": {"status": "unavailable", "reason_code": reason},
+            }
+        ]
+    result = read_financial_consumer_series(
+        conn,
+        ticker,
+        line_item,
+        cutoff=cutoff,
+        cadence=cadence,
+        continuity=SeriesContinuity.WINDOWED,
+    )
+    if result.series.status != "available":
+        return [
+            {
+                "kind": "fact",
+                "label": label,
+                "text": f"{label}: unavailable ({result.series.reason_code})",
+                "doc_id": None,
+                "href": None,
+                "source_url": None,
+                "fact_ref": handle,
+                "ticker": ticker,
+                "source_manifest": result.manifest(),
+            }
+        ]
+    points = [
+        point
+        for point in reversed(result.points)
+        if normalized not in {"Q1", "Q2", "Q3", "Q4"}
+        or point.observation.fiscal_period == normalized
+    ][:_SERIES_POINTS]
+    out: list[dict[str, object]] = []
+    for point in points:
+        item = point.observation
+        source = financial_consumer_source(point, result)
+        out.append(
+            {
+                "kind": "fact",
+                "label": label,
+                "text": f"{label}: {item.fiscal_period} FY{item.fiscal_year} {_fmt_value(item.value)} {item.unit}; period {item.period_end.date().isoformat()}; document {item.document_version_id}; observation {item.observation_id}",
+                "doc_id": point.legacy_document_id,
+                "href": viewer_href(source),
+                "source_url": point.source_url,
+                "fact_ref": handle,
+                "ticker": ticker,
+                "period": item.period_end.date().isoformat(),
+                "value": str(item.value),
+                "canonical_reference": source.canonical_reference,
+                "source_manifest": {
+                    "observation": item.model_dump(mode="json"),
+                    "cutoff": result.series.cutoff.isoformat(),
+                },
+            }
+        )
+    return out
+
+
 def _fact_ref_fin_item(
     conn: sqlite3.Connection,
     ticker: str,
@@ -710,47 +844,16 @@ def _fact_ref_fin_item(
     fpt: str,
     issues_by_ticker: IssuesByTicker | None = None,
 ) -> dict[str, object] | None:
-    """Resolve a ``fin:{ticker}:{line_item}:{fpt}`` handle to its series."""
-    clauses = "ff.ticker = ? AND ff.line_item = ?"
-    params: list[object] = [ticker, line_item]
-    fpt_u = fpt.upper()
-    if fpt_u in _FIN_SPECIFIC_FPT:
-        clauses += " AND ff.fiscal_period_type = ?"
-        params.append(fpt_u)
-    else:
-        clauses += " AND ff.fiscal_period_type IN ('Q1','Q2','Q3','Q4')"
-    tier_rank, doc_join = _tier_bits(conn, "ff")
-    sql = (
-        "SELECT ff.period_end, ff.fiscal_period_type, ff.value, ff.unit, "
-        "ff.source_doc_id{conf} "
-        f"FROM financial_facts ff {doc_join} "
-        f"WHERE {clauses} "
-        f"ORDER BY ff.period_end DESC, {tier_rank} DESC, ff.id DESC LIMIT 64"
-    )
-    rows = _dedupe_series(_series_rows_conf(conn, sql, tuple(params)))
-    rows, ov_map = _overlay_fact_rows(conn, ticker, FINANCIAL_FACT, line_item, rows)
-    if not rows:
-        return None
-    label = line_item.replace("_", " ").title()
-    # ``item`` is the raw line_item (issues match on it), not the title-cased label.
-    item = _fact_item(
-        ticker,
-        label,
-        str(rows[0][3] or ""),
-        rows,
-        conn,
-        item=line_item,
-        issues_by_ticker=issues_by_ticker,
-        override_map=ov_map,
-    )
-    item["fact_ref"] = f"fin:{ticker}:{line_item}:{fpt}"
-    return item
+    items = _financial_evidence_items(conn, ticker, line_item, fpt, cutoff=datetime.now(UTC))
+    return items[0] if items else None
 
 
 def _fact_ref_evidence(
     conn: sqlite3.Connection,
     question: str,
     issues_by_ticker: IssuesByTicker | None = None,
+    *,
+    cutoff: datetime | None = None,
 ) -> list[dict[str, object]]:
     """The PK fast-path: every fact_ref token in ``question`` resolves its exact
     series directly, bypassing NL name-matching. The token names its own ticker
@@ -775,11 +878,13 @@ def _fact_ref_evidence(
         if key in seen_fin:
             continue
         seen_fin.add(key)
-        item = _fact_ref_fin_item(conn, key[0], key[1], key[2], issues_by_ticker)
-        if item is not None:
-            out.append(item)
+        out.extend(
+            _financial_evidence_items(
+                conn, key[0], key[1], key[2], cutoff=cutoff or datetime.now(UTC)
+            )
+        )
         if len(out) >= _MAX_FACT_ITEMS:
-            return out
+            break
     return out
 
 
@@ -788,6 +893,8 @@ def _fact_evidence(
     question_squashed: str,
     tickers: list[str],
     issues_by_ticker: IssuesByTicker | None = None,
+    *,
+    cutoff: datetime | None = None,
 ) -> list[dict[str, object]]:
     """Metric series the question names, newest first, with provenance."""
     found: list[dict[str, object]] = []
@@ -842,55 +949,28 @@ def _fact_evidence(
             )
             per_ticker += 1
 
-        # Financial line items: snake_case keys matched the same way.
-        try:
-            line_items = conn.execute(
-                "SELECT DISTINCT line_item FROM financial_facts WHERE ticker = ?", (ticker,)
-            ).fetchall()
-        except sqlite3.Error:
-            line_items = []
-        matched_fins = [
-            str(li[0])
-            for li in line_items
-            if _phrase_in(question_squashed, _squash(str(li[0]).replace("_", " ")))
-        ]
-        matched_fins.sort(key=len, reverse=True)
+        matched_fins = sorted(
+            (
+                key
+                for key, _count in financial_metric_catalog(conn, [ticker], include_legacy=True)
+                if _phrase_in(question_squashed, _squash(key.replace("_", " ")))
+            ),
+            key=len,
+            reverse=True,
+        )
         for line_item in matched_fins:
             if per_ticker >= _MAX_FACT_ITEMS_PER_TICKER:
                 break
-            fin_tier_rank, fin_doc_join = _tier_bits(conn, "ff")
-            rows = _dedupe_series(
-                _series_rows_conf(
-                    conn,
-                    "SELECT ff.period_end, ff.fiscal_period_type, ff.value, ff.unit, "
-                    "ff.source_doc_id{conf} "
-                    f"FROM financial_facts ff {fin_doc_join} "
-                    "WHERE ff.ticker = ? AND ff.line_item = ? "
-                    "AND ff.fiscal_period_type IN ('Q1','Q2','Q3','Q4') "
-                    f"ORDER BY ff.period_end DESC, {fin_tier_rank} DESC, ff.id DESC LIMIT 64",
-                    (ticker, line_item),
-                )
+            items = _financial_evidence_items(
+                conn, ticker, line_item, "quarterly", cutoff=cutoff or datetime.now(UTC)
             )
-            rows, ov_map = _overlay_fact_rows(conn, ticker, FINANCIAL_FACT, line_item, rows)
-            if not rows:
-                continue
-            label = line_item.replace("_", " ").title()
-            found.append(
-                _fact_item(
-                    ticker,
-                    label,
-                    str(rows[0][3] or ""),
-                    rows,
-                    conn,
-                    item=line_item,
-                    issues_by_ticker=issues_by_ticker,
-                    override_map=ov_map,
+            for item in items:
+                item["fact_ref"] = (
+                    None  # NL retrieval preserves the optional pinned-handle contract.
                 )
-            )
+            found.extend(items)
             per_ticker += 1
 
-        if len(found) >= _MAX_FACT_ITEMS:
-            break
     return found[:_MAX_FACT_ITEMS]
 
 
@@ -1425,6 +1505,9 @@ def gather_evidence(
         cached = turn_cache.get_gather(memo_key)
         if cached is not None:
             return cast("list[EvidenceItem]", cached)
+    # Reused evidence retains its original, explicit cutoff. A new retrieval
+    # gets a new cutoff after the TTL or evidence revision changes.
+    cutoff = datetime.now(UTC)
     try:
         named = _named_tracked_tickers(q, db_path)
         scope = [t.strip().upper() for t in scope_tickers if t.strip()]
@@ -1454,6 +1537,7 @@ def gather_evidence(
             raise GroundingRetrievalError("grounding database is unavailable")
         try:
             if conn is not None:
+                conn.execute("BEGIN")
                 # Unresolved validation issues for relevant fact tickers, parsed once
                 # (best-effort: {} when the table is absent) and shared across
                 # every fact item so a cross-source ⚠ disagreement reaches the
@@ -1465,12 +1549,14 @@ def gather_evidence(
                 # PK fast-path first: fact_ref tokens resolve the EXACT series
                 # and lead the fact channel; the NL name-match then fills the
                 # rest, deduped by label so a token doesn't double its metric.
-                ref_facts = _fact_ref_evidence(conn, q, issues_by_ticker)
+                ref_facts = _fact_ref_evidence(conn, q, issues_by_ticker, cutoff=cutoff)
                 raw.extend(ref_facts)
                 pinned = {str(it["label"]) for it in ref_facts}
                 raw.extend(
                     it
-                    for it in _fact_evidence(conn, question_squashed, tickers, issues_by_ticker)
+                    for it in _fact_evidence(
+                        conn, question_squashed, tickers, issues_by_ticker, cutoff=cutoff
+                    )
                     if str(it["label"]) not in pinned
                 )
             raw.extend(_filing_evidence(conn, repo_root, terms, tickers, strict=strict))
@@ -1482,6 +1568,7 @@ def gather_evidence(
 
         items: list[EvidenceItem] = []
         for i, item in enumerate(raw[:_MAX_ITEMS], start=1):
+            reference = item.get("canonical_reference")
             items.append(
                 EvidenceItem(
                     n=i,
@@ -1493,6 +1580,10 @@ def gather_evidence(
                     source_url=cast("str | None", item["source_url"]),
                     confidence=cast("float | None", item.get("confidence")),
                     fact_ref=cast("str | None", item.get("fact_ref")),
+                    canonical_reference=reference
+                    if isinstance(reference, FinancialEvidenceReference)
+                    else None,
+                    source_manifest=cast("dict[str, object] | None", item.get("source_manifest")),
                     ticker=cast("str | None", item.get("ticker")),
                     doc_type=cast("str | None", item.get("doc_type")),
                     period=cast("str | None", item.get("period")),
@@ -1517,6 +1608,11 @@ def gather_evidence(
 _MAX_NEW_ITEMS_PER_ROUND = 6
 _MAX_ITEMS_PER_NEED = 2
 _NEW_EVIDENCE_CHAR_BUDGET = 6000
+
+
+def _financial_selection_key(reference: FinancialEvidenceReference) -> str:
+    """A selected point is stable across follow-up read clocks."""
+    return reference.model_dump_json(exclude={"as_of"})
 
 
 def gather_requested_evidence(
@@ -1554,8 +1650,11 @@ def gather_requested_evidence(
             except Exception:
                 log.warning({"event": "ask_followup_pack_channel_failed"}, exc_info=True)
 
+        cutoff = datetime.now(UTC)
         conn = _connect(db_path)
         try:
+            if conn is not None:
+                conn.execute("BEGIN")
             # Parsed once, shared across this round's fact needs (see
             # gather_evidence); {} when conn/table is absent.
             issue_scope = list(
@@ -1581,7 +1680,11 @@ def gather_requested_evidence(
                     query_squashed = (
                         _squash(need.query) if need.query.strip() else _squash(question)
                     )
-                    raw.extend(_fact_evidence(conn, query_squashed, tickers, issues_by_ticker))
+                    raw.extend(
+                        _fact_evidence(
+                            conn, query_squashed, tickers, issues_by_ticker, cutoff=cutoff
+                        )
+                    )
                 elif need.kind == "filing":
                     for ticker in tickers:
                         paths = (
@@ -1607,7 +1710,15 @@ def gather_requested_evidence(
             if conn is not None:
                 conn.close()
 
-        seen_keys = {(it.kind, it.label) for it in existing}
+        seen_keys = {
+            (
+                it.kind,
+                _financial_selection_key(it.canonical_reference)
+                if it.canonical_reference
+                else it.label,
+            )
+            for it in existing
+        }
         seen_hrefs = {it.href for it in existing if it.href}
         start = max((it.n for it in existing), default=0) + 1
         out: list[EvidenceItem] = []
@@ -1616,13 +1727,20 @@ def gather_requested_evidence(
             kind = str(item["kind"])
             label = str(item["label"])
             href = cast("str | None", item["href"])
-            if (kind, label) in seen_keys or (href is not None and href in seen_hrefs):
+            reference = item.get("canonical_reference")
+            item_key = (
+                kind,
+                _financial_selection_key(reference)
+                if isinstance(reference, FinancialEvidenceReference)
+                else label,
+            )
+            if item_key in seen_keys or (href is not None and href in seen_hrefs):
                 continue
             text = str(item["text"])
             if len(text) > budget:
                 continue
             budget -= len(text)
-            seen_keys.add((kind, label))
+            seen_keys.add(item_key)
             if href is not None:
                 seen_hrefs.add(href)
             out.append(
@@ -1636,6 +1754,10 @@ def gather_requested_evidence(
                     source_url=cast("str | None", item["source_url"]),
                     confidence=cast("float | None", item.get("confidence")),
                     fact_ref=cast("str | None", item.get("fact_ref")),
+                    canonical_reference=reference
+                    if isinstance(reference, FinancialEvidenceReference)
+                    else None,
+                    source_manifest=cast("dict[str, object] | None", item.get("source_manifest")),
                     ticker=cast("str | None", item.get("ticker")),
                     doc_type=cast("str | None", item.get("doc_type")),
                     period=cast("str | None", item.get("period")),

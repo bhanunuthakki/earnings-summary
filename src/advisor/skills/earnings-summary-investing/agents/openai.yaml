@@ -1,0 +1,7 @@
+interface:
+  display_name: "Earnings Summary Investing"
+  short_description: "Investing research through this project's own routes"
+  default_prompt: "Use $earnings-summary-investing to research this company through the project's sources, thesis, earnings, and valuation routes."
+
+policy:
+  allow_implicit_invocation: true

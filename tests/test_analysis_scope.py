@@ -56,7 +56,7 @@ def add_expected(
     period: datetime | None = datetime(2025, 12, 31, tzinfo=UTC),
     form: str = "10-K",
     document_type: str = "filing",
-    filing_at: datetime = datetime(2026, 2, 10, tzinfo=UTC),
+    filing_at: datetime | None = datetime(2026, 2, 10, tzinfo=UTC),
     recorded_at: datetime = STAMP,
 ) -> ExpectedDocument:
     document = ExpectedDocument(
@@ -875,3 +875,146 @@ def test_analysis_clocks_require_explicit_time_zone(field: str, as_json: bool) -
             AnalysisScopeRequest.model_validate_json(json.dumps(values))
         else:
             AnalysisScopeRequest.model_validate(values)
+
+
+def test_unselected_old_primary_without_publication_time_refuses_selection(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn, _scope = scope_db(tmp_path, migrated_db)
+    add_expected(
+        conn,
+        "old-without-publication-time",
+        "0000000001-24-000001",
+        period=datetime(2023, 12, 31, tzinfo=UTC),
+        filing_at=None,
+    )
+    with pytest.raises(ValueError, match="unknown publication time"):
+        build_analysis_scope(conn, scope_request())
+
+
+def test_scoped_processing_uses_shared_reporting_policy(
+    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from provenance import population_document_processing as population
+    from provenance.reporting_document_scope import ReportingDocumentDecision
+
+    conn, scope = scope_db(tmp_path, migrated_db)
+    selected = ReportingDocumentDecision(
+        expected_document_id="expected-10k",
+        issuer_id="issuer-acme",
+        outcome="unresolved",
+        reason_code="financial_reporting_subject_witness_invalid",
+        coverage_status="captured",
+        document_version_id="document:expected-10k",
+    )
+
+    def reporting_scope(
+        _conn: sqlite3.Connection,
+        _cutoff: datetime,
+        _observed_through: datetime,
+        *,
+        expected_document_ids: tuple[str, ...] | None = None,
+    ) -> tuple[tuple[ReportingDocumentDecision, ...], dict[str, tuple[str, ...]], int]:
+        assert expected_document_ids == ("expected-10k",)
+        return (selected,), {}, 1
+
+    monkeypatch.setattr(population, "reporting_document_scope", reporting_scope)
+    document_scope: Callable[
+        ..., tuple[tuple[ReportingDocumentDecision, ...], dict[str, tuple[str, ...]], int]
+    ] = getattr(population, "_document_scope")
+    decisions, documents, incomplete = document_scope(conn, K, K, analysis_scope=scope)
+    assert decisions == (selected,)
+    assert documents == {}
+    assert incomplete == 0
+    conn.close()
+
+
+def test_research_commitments_bind_scope_and_publication_reference_clock(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    from provenance import population_research_snapshots as population
+
+    conn, scope = scope_db(tmp_path, migrated_db)
+    input_commitment: Callable[..., str] = getattr(population, "_population_input_commitment")
+    plan_commitment: Callable[..., str] = getattr(population, "_population_plan_commitment")
+    scoped = population.ResearchSnapshotPopulationRequest(
+        cutoff_at=K,
+        operation_recorded_at=K,
+        analysis_scope=scope,
+        source_publication_reference_clock="publication_created_v2",
+    )
+    unscoped = scoped.model_copy(update={"analysis_scope": None})
+    legacy_clock = scoped.model_copy(update={"source_publication_reference_clock": "cutoff_v1"})
+    requests = (scoped, unscoped, legacy_clock)
+    inputs = tuple(
+        input_commitment(
+            K,
+            ("issuer-acme",),
+            ("issuer-acme",),
+            [],
+            analysis_scope=request.analysis_scope,
+            source_publication_reference_clock=request.source_publication_reference_clock,
+        )
+        for request in requests
+    )
+    assert len(set(inputs)) == 3
+    plans = tuple(
+        plan_commitment(
+            request,
+            input_commitment="a" * 64,
+            selected_issuer_ids=("issuer-acme",),
+        )
+        for request in requests
+    )
+    assert len(set(plans)) == 3
+    conn.close()
+
+
+@pytest.mark.parametrize(
+    "historical_head",
+    ["0050_sec_companyfacts_fetch_receipts", "0055_kpi_definition_subject_bindings"],
+)
+def test_reconciled_migrations_preserve_both_historical_upgrade_paths(
+    tmp_path: Path, migrated_db: Callable[..., Path], historical_head: str
+) -> None:
+    def retain_row(database: Path) -> None:
+        with sqlite3.connect(database) as conn:
+            conn.execute("CREATE TABLE retained_migration_fixture(identity TEXT PRIMARY KEY)")
+            conn.execute("INSERT INTO retained_migration_fixture VALUES ('preserved')")
+            if historical_head == "0050_sec_companyfacts_fetch_receipts":
+                conn.execute(
+                    "INSERT INTO sec_companyfacts_fetch_receipts VALUES (?,?,?,?,?,?,?,?)",
+                    (
+                        "ACME",
+                        "0000000001",
+                        "a" * 64,
+                        "fixture-etag",
+                        None,
+                        "2026-10-01",
+                        "2026-10-01",
+                        "fixture-run",
+                    ),
+                )
+
+    database = migrated_db(
+        tmp_path / "reconciled.db", upgrade_from=historical_head, before_upgrade=retain_row
+    )
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchall() == [
+            ("0057_companyfacts_extractor_identity",)
+        ]
+        assert conn.execute("SELECT identity FROM retained_migration_fixture").fetchall() == [
+            ("preserved",)
+        ]
+        tables = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert {"current_fact_selection", "sec_companyfacts_fetch_receipts"} <= tables
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='index' "
+            "AND name='ix_observation_resolution_selected_observation'"
+        ).fetchone() == (1,)
+        if historical_head == "0050_sec_companyfacts_fetch_receipts":
+            assert conn.execute(
+                "SELECT ticker,etag FROM sec_companyfacts_fetch_receipts"
+            ).fetchall() == [("ACME", "fixture-etag")]

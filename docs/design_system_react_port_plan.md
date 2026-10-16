@@ -1,4 +1,9 @@
-# React Design-System Port — Execution Plan
+# React Design-System Port — Historical Execution Plan
+
+Status: implementation history from 2026-07-18. Current commands and generator
+ownership are in `design-system/README.md`; current semantics are in
+`directives/design_language.md` and executable `src/ui/` owners. Do not treat
+this plan's old token scales or hand-port steps as the current specification.
 
 **Target:** a standalone, esbuild-buildable React/TypeScript package mirroring the `src/ui/` design
 system, with a `dist/` consumable by the `/design-sync` skill (claude.ai/design), used as a

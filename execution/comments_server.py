@@ -54,12 +54,13 @@ from ask.retrieval_boot_state import (
     assess_ask_retrieval_boot_state_from_path,
     log_ask_retrieval_boot_state,
 )
+from db_paths import require_db_path
+from dcf.input_evidence import SourceReadContext
 from dispatch_registry import Registry
 from logging_config import (
     configure_logging,
 )
 from operations.models import OperationsRegistry
-from runtime.job_runtime import portfolio_db_path
 from runtime.secrets import load_project_env
 from server_runtime.access import (
     resolve_tailscale_ipv4,
@@ -102,6 +103,8 @@ def create_app(
     code_root: Path | None = None,
     chat_executor: concurrent.futures.Executor | None = None,
     server_origin: str | None = None,
+    source_context: SourceReadContext | None = None,
+    source_state_root: Path | None = None,
 ) -> Flask:
     """Wire the cockpit: build the shared context, then register every route family.
 
@@ -109,6 +112,12 @@ def create_app(
     module-level helpers all live in their own ``comments_server_*`` modules;
     this factory is the composition root.
     """
+    if source_state_root is not None:
+        child_context = SourceReadContext.for_sec_state_root(source_state_root)
+        if source_context is None:
+            source_context = child_context
+        elif source_context.content_roots != child_context.content_roots:
+            raise ValueError("source reader and child state root authorities differ")
     app = RedactingFlask(__name__)
     register_tracker_read_routes(app)
     ctx = build_server_context(
@@ -120,6 +129,8 @@ def create_app(
         code_root=code_root,
         chat_executor=chat_executor,
         server_origin=server_origin,
+        source_context=source_context,
+        source_state_root=source_state_root,
     )
     register_core_routes(app, ctx)
     register_work_os_routes(app, ctx)
@@ -141,8 +152,11 @@ def configure_runtime_db(repo_root: Path) -> Path:
     import db
 
     load_project_env(repo_root)
-    db_path = portfolio_db_path(repo_root)
-    db.set_db_path(db_path)
+    configured = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
+    if not configured:
+        raise RuntimeError("An explicit configured portfolio database is required")
+    db_path = require_db_path(configured)
+    db.set_db_path(db_path, state_root=repo_root)
     return db_path
 
 
@@ -151,6 +165,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--port", type=int, default=7421)
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument("--state-root", type=Path)
     parser.add_argument("--host")
     parser.add_argument(
         "--tailscale",
@@ -173,7 +188,15 @@ def main() -> int:
         file=sys.stderr,
     )
     origin_host = f"[{host}]" if ":" in host else host
-    app = create_app(repo_root, db_path=db_path, server_origin=f"http://{origin_host}:{args.port}")
+    app = create_app(
+        repo_root,
+        db_path=db_path,
+        server_origin=f"http://{origin_host}:{args.port}",
+        source_state_root=args.state_root,
+        source_context=SourceReadContext.for_sec_state_root(args.state_root)
+        if args.state_root
+        else None,
+    )
     # Log the sealed-plane reachability state once per boot: the production
     # scope registry, the retrieval mode, and the vector-runtime gate must be
     # explicit, never silently off. The probe never blocks serving — sealed

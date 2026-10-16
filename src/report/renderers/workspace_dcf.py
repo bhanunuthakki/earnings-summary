@@ -152,8 +152,29 @@ CSS = DCF_CSS
 # heatmap tints via color-mix over --ok/--bad tokens) so test_ui_controls passes.
 JS = r"""
 (function () {
-  var root = document.getElementById('dcf-edit');
-  if (!root) return;
+  var editors = new WeakMap();
+  window.initDcfEditor = function (root, options) {
+  if (!root) return null;
+  if (editors.has(root)) return editors.get(root);
+  options = options || {};
+  var scope = options.scope || document;
+  var listeners = new AbortController();
+  var destroyed = false;
+  var presentationTimers = new Set();
+  function later(callback) {
+    var timer = setTimeout(function () {
+      presentationTimers.delete(timer);
+      if (!destroyed) callback();
+    }, 1500);
+    presentationTimers.add(timer);
+  }
+  function listen(target, event, callback) {
+    target.addEventListener(event, callback, {signal: listeners.signal});
+  }
+  function control(id) {
+    // Inert shared bodies keep the publisher's reader-<digest>- ID namespace.
+    return root.querySelector('[id="' + id + '"], [id$="-' + id + '"]');
+  }
   function readJson(id) {
     var el = document.getElementById(id);
     if (!el) return null;
@@ -163,18 +184,25 @@ JS = r"""
   var SERVER_URL = /^https?:$/.test(window.location.protocol)
     ? window.location.origin
     : (boot.server_url || 'http://localhost:7421');
-  var MUTATION_HEADERS = window.__workspaceMutationHeaders || {'Content-Type': 'application/json'};
-  var TICKER = root.getAttribute('data-dcf-ticker') || boot.ticker;
+  var MUTATION_HEADERS = options.mutationHeaders || window.__workspaceMutationHeaders || {'Content-Type': 'application/json'};
+  function requestHeaders() {
+    return typeof MUTATION_HEADERS === 'function' ? MUTATION_HEADERS() : MUTATION_HEADERS;
+  }
+  var TICKER = options.ticker || root.getAttribute('data-dcf-ticker') || boot.ticker;
 
-  var elToggle = document.getElementById('dcf-edit-toggle');
-  var elBody = document.getElementById('dcf-edit-body');
-  var elStatus = document.getElementById('dcf-edit-status');
-  var elControls = document.getElementById('dcf-edit-controls');
-  var elScenarios = document.getElementById('dcf-edit-scenarios');
-  var elHeatmap = document.getElementById('dcf-edit-heatmap');
-  var elReset = document.getElementById('dcf-edit-reset');
-  var elSave = document.getElementById('dcf-edit-save');
-  var elRetry = document.getElementById('dcf-edit-retry');
+  var elToggle = control('dcf-edit-toggle');
+  var elBody = control('dcf-edit-body');
+  var elStatus = control('dcf-edit-status');
+  var elControls = control('dcf-edit-controls');
+  var elScenarios = control('dcf-edit-scenarios');
+  var elHeatmap = control('dcf-edit-heatmap');
+  var elReset = control('dcf-edit-reset');
+  var elSave = control('dcf-edit-save');
+  var elRetry = control('dcf-edit-retry'); // Older saved reports have no retry control.
+  var retryInstruction = elRetry ? 'Retry loading the model.'
+    : 'Close and reopen Edit assumptions to retry loading the model.';
+  if (!TICKER || !elToggle || !elBody || !elStatus || !elControls || !elScenarios
+      || !elHeatmap || !elReset || !elSave) return null;
   var loadController = null;
   var loadGeneration = 0;
   var INPUT_READ_TIMEOUT_MS = 15000;
@@ -183,10 +211,19 @@ JS = r"""
   var model = null;    // working copy with live edits
   var ready = false;
   var debounceTimer = null;
+  var editGeneration = 0;
+  var inputGeneration = 0;
+  var modelGeneration = 0;
+  var previewController = null;
+  var PREVIEW_TIMEOUT_MS = 15000;
+  var waccMode = 'override'; // Loading honors the workbook's current rate.
+  var waccOverride = false;
+  var dirty = false;
+  var saving = false;
 
   // Rate-like fields edit as percent (x100); the rest are raw numbers.
   var SCALARS = [
-    {key: 'wacc', label: 'WACC', pct: true, step: 0.1},
+    {key: 'wacc', label: 'WACC (preview only)', pct: true, step: 0.1},
     {key: 'near_op_margin', label: 'Near op margin', pct: true, step: 0.5},
     {key: 'terminal_op_margin', label: 'Term op margin', pct: true, step: 0.5},
     {key: 'exit_multiple', label: 'Exit multiple', pct: false, step: 0.5},
@@ -215,16 +252,21 @@ JS = r"""
   function fmtPct(x) { return (Number(x) * 100).toFixed(1) + '%'; }
   function fmtMult(x) { return Number(x).toFixed(1) + 'x'; }
 
-  // The CAPM derivation, identical to redesign.read_inputs: editing a driver
-  // re-derives WACC so the preview stays consistent (a direct WACC edit is a
-  // preview-only override that the durable save expresses via the drivers).
-  function deriveWacc(m) {
-    var ke = m.risk_free_rate + m.beta * m.equity_risk_premium;
-    var akd = m.cost_of_debt * (1 - m.tax_rate);
-    var mcap = m.current_price * m.diluted_shares_m;
-    var denom = mcap + m.total_debt_m;
-    var ew = denom > 0 ? mcap / denom : 1.0;
-    return ew * ke + (1 - ew) * akd;
+  function selectWaccMode(key) {
+    if (key === 'wacc') { waccMode = 'override'; waccOverride = true; }
+    else if (key === 'tax_rate' || DRIVERS.some(function (d) { return d.key === key; })) {
+      waccMode = 'drivers'; waccOverride = false;
+    }
+  }
+  function previewNote() {
+    return waccOverride ? ' · WACC override is preview-only; save uses drivers.' : '';
+  }
+  function invalidatePreview() {
+    editGeneration++;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = null;
+    if (previewController) previewController.abort();
+    previewController = null;
   }
 
   function numField(spec, value, onChange) {
@@ -236,7 +278,7 @@ JS = r"""
     inp.type = 'number';
     inp.step = String(spec.step);
     inp.value = spec.pct ? (Number(value) * 100).toFixed(2) : String(value);
-    inp.addEventListener('input', function () {
+    listen(inp, 'input', function () {
       var raw = parseFloat(inp.value);
       if (isNaN(raw)) return;
       onChange(spec.pct ? raw / 100 : raw);
@@ -274,7 +316,7 @@ JS = r"""
       if (model.terminal_method === opt) o.selected = true;
       sel.appendChild(o);
     });
-    sel.addEventListener('change', function () {
+    listen(sel, 'change', function () {
       model.terminal_method = sel.value;
       scheduleRecompute();
     });
@@ -286,6 +328,7 @@ JS = r"""
     SCALARS.forEach(function (spec) {
       var f = numField(spec, model[spec.key], function (v) {
         model[spec.key] = v;
+        selectWaccMode(spec.key);
         scheduleRecompute();
       });
       if (spec.key === 'wacc') waccInput = f.input;
@@ -302,8 +345,7 @@ JS = r"""
     DRIVERS.forEach(function (spec) {
       var f = numField(spec, model[spec.key], function (v) {
         model[spec.key] = v;
-        model.wacc = deriveWacc(model);
-        if (waccInput) waccInput.value = (model.wacc * 100).toFixed(2);
+        selectWaccMode(spec.key);
         scheduleRecompute();
       });
       inputsByKey[spec.key] = f.input;
@@ -338,7 +380,7 @@ JS = r"""
     var inp = document.createElement('input');
     inp.type = 'number'; inp.step = '0.5';
     inp.value = (Number(mapRef[name]) * 100).toFixed(2);
-    inp.addEventListener('input', function () {
+    listen(inp, 'input', function () {
       var raw = parseFloat(inp.value);
       if (isNaN(raw)) return;
       mapRef[name] = raw / 100;
@@ -424,58 +466,84 @@ JS = r"""
   }
 
   function recompute() {
-    if (!ready) return;
-    setStatus('Recomputing…');
-    fetch(SERVER_URL + '/api/dcf/recompute', {
+    if (!ready || destroyed) return;
+    var generation = editGeneration;
+    var controller = new AbortController();
+    previewController = controller;
+    var timedOut = false;
+    var timer = setTimeout(function () { timedOut = true; controller.abort(); }, PREVIEW_TIMEOUT_MS);
+    function current() { return generation === editGeneration && root.isConnected; }
+    setStatus((dirty ? 'Unsaved edits · ' : '') + 'Recomputing…' + previewNote());
+    return fetch(SERVER_URL + '/api/dcf/recompute', {
       method: 'POST',
-      headers: MUTATION_HEADERS,
-      body: JSON.stringify({inputs: model})
+      headers: requestHeaders(),
+      signal: controller.signal,
+      body: JSON.stringify({inputs: model, wacc_mode: waccMode})
     }).then(function (r) {
+      if (!current() || controller.signal.aborted) return null;
       return r.json().then(function (j) { return {ok: r.ok, status: r.status, body: j}; });
     }).then(function (res) {
+      if (!current() || controller.signal.aborted || !res) return;
       if (!res.ok) {
-        setStatus((res.body && res.body.error) || ('recompute failed (' + res.status + ')'), 'bad');
+        setStatus((dirty ? 'Unsaved edits · ' : '')
+          + ((res.body && res.body.error) || ('recompute failed (' + res.status + ')')), 'bad');
         return;
       }
+      model.wacc = res.body.wacc;
+      if (waccInput) waccInput.value = (model.wacc * 100).toFixed(2);
       renderScenarios(res.body);
       renderHeatmap(res.body.sensitivity);
       var ou = res.body.over_under_pct;
       if (ou !== null && ou !== undefined) {
         var pct = (ou * 100);
-        setStatus('Base ' + fmtMoney(res.body.fair_value_per_share_usd) + ' · '
+        setStatus((dirty ? 'Unsaved edits · ' : '') + 'Base ' + fmtMoney(res.body.fair_value_per_share_usd) + ' · '
           + (pct >= 0 ? 'over' : 'under') + ' by ' + Math.abs(pct).toFixed(0)
-          + '% vs price · WACC ' + fmtPct(res.body.wacc), '');
+          + '% vs price · WACC ' + fmtPct(res.body.wacc) + previewNote(), '');
       } else {
-        setStatus('Base ' + fmtMoney(res.body.fair_value_per_share_usd)
-          + ' · WACC ' + fmtPct(res.body.wacc), '');
+        setStatus((dirty ? 'Unsaved edits · ' : '') + 'Base ' + fmtMoney(res.body.fair_value_per_share_usd)
+          + ' · WACC ' + fmtPct(res.body.wacc) + previewNote(), '');
       }
     }).catch(function () {
-      setStatus('Research server offline — start comments_server to recompute.', 'bad');
+      if (!current() || (controller.signal.aborted && !timedOut)) return;
+      setStatus((dirty ? 'Unsaved edits · ' : '') + (timedOut
+        ? 'Preview timed out. Edit an assumption to try again.'
+        : 'Research server unavailable. Edit an assumption to try again.'), 'bad');
+    }).finally(function () {
+      clearTimeout(timer);
+      if (previewController === controller) previewController = null;
     });
   }
 
   function scheduleRecompute() {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(recompute, 280);
+    invalidatePreview(); // Invalidate before the debounce gap, not at dispatch.
+    inputGeneration++;
+    dirty = true;
+    setStatus('Unsaved edits · Recomputing…' + previewNote());
+    debounceTimer = setTimeout(function () { debounceTimer = null; recompute(); }, 280);
   }
 
   function cancelLoad() {
+    invalidatePreview();
     loadGeneration++;
     if (loadController) loadController.abort();
     loadController = null;
   }
   function load() {
+    if (destroyed) return;
     cancelLoad();
+    modelGeneration++;
+    inputGeneration++;
+    ready = false;
     var request = loadGeneration;
     var controller = new AbortController();
     loadController = controller;
     // This report may run from a file against its configured server origin.
     // Keep the deadline active through JSON body consumption, not only headers.
     var timer = setTimeout(function () { controller.abort(); }, INPUT_READ_TIMEOUT_MS);
-    elRetry.hidden = true;
+    if (elRetry) elRetry.hidden = true;
     setStatus('Loading model…');
     return fetch(SERVER_URL + '/api/dcf/inputs/' + encodeURIComponent(TICKER), {
-      headers: window.__workspaceMutationHeaders ? window.__workspaceMutationHeaders() : {},
+      headers: requestHeaders(),
       signal: controller.signal
     })
       .then(function (r) {
@@ -485,12 +553,14 @@ JS = r"""
       }).then(function (res) {
         if (request !== loadGeneration || controller.signal.aborted || !root.isConnected || !res) return;
         if (!res.ok || !res.body || !res.body.inputs) {
-          setStatus((res.body && res.body.error) || 'Could not load the model.', 'bad');
-          elRetry.hidden = false;
+          setStatus(((res.body && res.body.error) || 'Could not load the model.')
+            + (elRetry ? '' : ' ' + retryInstruction), 'bad');
+          if (elRetry) elRetry.hidden = false;
           return;
         }
         loaded = res.body.inputs;
         model = JSON.parse(JSON.stringify(loaded));
+        waccMode = 'override'; waccOverride = false; dirty = false;
         ready = true;
         buildControls();
         recompute();
@@ -500,17 +570,17 @@ JS = r"""
         }
       }).catch(function () {
         if (request !== loadGeneration || !root.isConnected) return;
-        setStatus(controller.signal.aborted
-          ? 'Model loading timed out. Retry loading the model.'
-          : 'Model could not load from the research server. Retry loading the model.', 'bad');
-        elRetry.hidden = false;
+        setStatus((controller.signal.aborted
+          ? 'Model loading timed out. '
+          : 'Model could not load from the research server. ') + retryInstruction, 'bad');
+        if (elRetry) elRetry.hidden = false;
       }).finally(function () {
         clearTimeout(timer);
         if (loadController === controller) loadController = null;
       });
   }
-  elRetry.addEventListener('click', load);
-  window.addEventListener('pagehide', cancelLoad);
+  if (elRetry) listen(elRetry, 'click', load);
+  listen(window, 'pagehide', cancelLoad);
 
   // --- Wave 5: KPI -> DCF driver injection ---------------------------------
   // A captured report value carries a "-> DCF" affordance
@@ -522,21 +592,18 @@ JS = r"""
   function applyInject(key, value, label) {
     if (!model || !(key in model)) { setStatus('No DCF input "' + key + '".', 'bad'); return; }
     model[key] = value;
-    if (DRIVERS.some(function (d) { return d.key === key; })) {
-      model.wacc = deriveWacc(model);
-      if (inputsByKey.wacc) inputsByKey.wacc.value = (model.wacc * 100).toFixed(2);
-    }
+    selectWaccMode(key);
     var inp = inputsByKey[key], spec = SPEC_BY_KEY[key];
     if (inp && spec) {
       inp.value = spec.pct ? (value * 100).toFixed(2) : String(value);
       inp.classList.add('dcf-injected');
-      setTimeout(function () { inp.classList.remove('dcf-injected'); }, 1500);
+      later(function () { inp.classList.remove('dcf-injected'); });
     }
     setStatus('Injected ' + (label || key) + ' — recomputing…', 'ok');
     scheduleRecompute();
   }
-  window.dcfSetDriver = function (key, value, label) {
-    if (isNaN(value)) return;
+  function setDriver(key, value, label) {
+    if (destroyed || isNaN(value)) return;
     if (elBody.hidden) { elBody.hidden = false; elToggle.setAttribute('aria-expanded', 'true'); }
     root.scrollIntoView({behavior: 'smooth', block: 'center'});
     if (ready && model) {
@@ -546,66 +613,111 @@ JS = r"""
       if (loaded === null) load();
       else setStatus('Loading model to inject ' + (label || key) + '…', 'warn');
     }
-  };
-  document.addEventListener('click', function (ev) {
+  }
+  listen(scope, 'click', function (ev) {
     var a = ev.target && ev.target.closest ? ev.target.closest('[data-dcf-inject]') : null;
     if (!a) return;
     ev.preventDefault();
-    window.dcfSetDriver(
+    setDriver(
       a.getAttribute('data-dcf-inject'),
       parseFloat(a.getAttribute('data-dcf-value')),
       a.getAttribute('data-dcf-label') || ''
     );
   });
 
-  elToggle.addEventListener('click', function () {
+  listen(elToggle, 'click', function () {
     var open = elBody.hidden;
     elBody.hidden = !open;
     elToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-    if (open && !ready && loaded === null) load();
-    if (!open) cancelLoad();
+    if (open) {
+      if (!ready && loaded === null) load();
+      else if (ready) recompute(); // Resume previews cancelled while the editor was closed.
+    } else cancelLoad();
   });
 
-  elReset.addEventListener('click', function () {
+  listen(elReset, 'click', function () {
     if (!loaded) return;
+    invalidatePreview();
+    inputGeneration++;
     model = JSON.parse(JSON.stringify(loaded));
+    waccMode = 'override'; waccOverride = false; dirty = false;
     buildControls();
     recompute();
   });
 
-  elSave.addEventListener('click', function () {
-    if (!ready) return;
+  listen(elSave, 'click', function () {
+    if (!ready || saving) return;
+    invalidatePreview();
+    var savedInputGeneration = inputGeneration;
+    var loadedGeneration = modelGeneration;
+    saving = true;
     CCAction.busy(elSave, 'Saving…');
     setStatus('Saving…');
     fetch(SERVER_URL + '/api/dcf/save', {
       method: 'POST',
-      headers: MUTATION_HEADERS,
+      headers: requestHeaders(),
       body: JSON.stringify({ticker: TICKER, inputs: model})
     }).then(function (r) {
       return r.json().then(function (j) { return {ok: r.ok, status: r.status, body: j}; });
     }).then(function (res) {
+      if (destroyed) return;
       if (!res.ok) {
+        saving = false;
         CCAction.release(elSave);
-        setStatus((res.body && res.body.error) || ('save failed (' + res.status + ')'), 'bad');
+        if (loadedGeneration === modelGeneration && root.isConnected) {
+          setStatus('Unsaved edits · ' + ((res.body && res.body.error)
+            || ('save failed (' + res.status + ')')), 'bad');
+        }
         return;
       }
-      // Adopt the canonical saved inputs (WACC re-derived from saved drivers) as
-      // the new reset baseline, then re-render from the persisted state.
-      if (res.body.inputs) {
-        loaded = res.body.inputs;
-        model = JSON.parse(JSON.stringify(loaded));
-        buildControls();
+      // An older save is a durable receipt for its captured inputs only.
+      if (loadedGeneration === modelGeneration && root.isConnected) {
+        if (res.body.inputs) loaded = res.body.inputs;
+        if (savedInputGeneration === inputGeneration) {
+          invalidatePreview(); // A reopened preview cannot replace the persisted receipt.
+          if (res.body.inputs) {
+            model = JSON.parse(JSON.stringify(loaded));
+            waccMode = 'override'; waccOverride = false; dirty = false;
+            buildControls();
+          }
+          if (res.body.sensitivity) { renderScenarios(res.body); renderHeatmap(res.body.sensitivity); }
+          setStatus(res.body.recovery_required
+            ? 'Saved to model. Backup cleanup failed; further saves require recovery.'
+            : 'Saved to model.', res.body.recovery_required ? 'warn' : 'ok');
+        } else {
+          dirty = true;
+          setStatus('Earlier inputs saved. Current edits are unsaved.' + previewNote()
+            + (res.body.recovery_required ? ' Backup cleanup failed; further saves require recovery.' : ''), 'warn');
+        }
       }
-      if (res.body.sensitivity) { renderScenarios(res.body); renderHeatmap(res.body.sensitivity); }
       CCAction.receipt(elSave, '✓ Saved');
-      setStatus('Saved to model ✓ · override ledger updated (Opus baseline untouched).', 'ok');
       // Saving again after further slider adjustments is the normal flow —
       // unlock once the receipt has registered rather than staying terminal.
-      setTimeout(function () { CCAction.release(elSave); }, 1500);
+      later(function () { saving = false; CCAction.release(elSave); });
     }).catch(function () {
+      if (destroyed) return;
+      saving = false;
       CCAction.release(elSave);
-      setStatus('Research server offline — could not save.', 'bad');
+      if (loadedGeneration === modelGeneration && root.isConnected) {
+        setStatus('Save not confirmed. Current edits remain unsaved. Reload the model to check.', 'bad');
+      }
     });
   });
+  function destroy() {
+    if (destroyed) return;
+    destroyed = true;
+    modelGeneration++;
+    cancelLoad();
+    listeners.abort();
+    presentationTimers.forEach(clearTimeout);
+    presentationTimers.clear();
+    editors.delete(root);
+  }
+  var handle = {destroy: destroy, setDriver: setDriver};
+  editors.set(root, handle);
+  return handle;
+  };
+  var standalone = window.initDcfEditor(document.getElementById('dcf-edit'));
+  if (standalone) window.dcfSetDriver = standalone.setDriver;
 })();
 """

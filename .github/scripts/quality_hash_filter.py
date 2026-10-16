@@ -85,9 +85,20 @@ _HASH64_MEMBER = re.compile(
 _ROADMAP_FREEZE_SOURCE_IDENTITY_MEMBER = re.compile(
     r'[ \t]*"source_identity"[ \t]*(?::|=)[ \t]*"[0-9a-f]{64}"[ \t]*,?[ \t]*(?:\r?\n)?\Z'
 )
-_MELI_SOURCE_FIXTURE = "tests/fixtures/meli_reported_tables/provenance.json"
+_MELI_SOURCE_FIXTURES = frozenset(
+    {
+        "tests/fixtures/meli_reported_tables/provenance.json",
+        "tests/fixtures/meli_reported_statements/provenance.json",
+    }
+)
 _MELI_SOURCE_DIGEST_MEMBER = re.compile(
     r'[ \t]*"(?:source_sha256|snippet_sha256|sha256)"[ \t]*(?::|=)[ \t]*"[0-9a-f]{64}"[ \t]*,?[ \t]*(?:\r?\n)?\Z'
+)
+_INVESTING_REVIEW_BASELINE = (
+    "src/advisor/skills/earnings-summary-investing/references/reviewed-sources.json"
+)
+_INVESTING_REVIEW_DIGEST_MEMBER = re.compile(
+    r'[ \t]*"sha256"[ \t]*(?::|=)[ \t]*"[0-9a-f]{64}"[ \t]*,?[ \t]*(?:\r?\n)?\Z'
 )
 
 
@@ -95,8 +106,10 @@ def is_quality_evidence_hash(filename: str, line: str) -> bool:
     """Return whether one exact allowed JSON member is generated digest metadata."""
 
     canonical_path = filename.replace(os.sep, "/")
-    if canonical_path == _MELI_SOURCE_FIXTURE:
+    if canonical_path in _MELI_SOURCE_FIXTURES:
         return _MELI_SOURCE_DIGEST_MEMBER.fullmatch(line) is not None
+    if canonical_path == _INVESTING_REVIEW_BASELINE:
+        return _INVESTING_REVIEW_DIGEST_MEMBER.fullmatch(line) is not None
     if canonical_path not in _CANONICAL_PATHS:
         return False
     if _HASH40_MEMBER.fullmatch(line) is not None or _HASH64_MEMBER.fullmatch(line) is not None:

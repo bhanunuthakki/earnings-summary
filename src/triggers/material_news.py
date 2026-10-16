@@ -980,7 +980,7 @@ class MaterialNewsTrigger:
             )
             return ""
 
-    def _classify(
+    def classify_news(
         self,
         *,
         ticker: str,
@@ -1034,3 +1034,10 @@ class MaterialNewsTrigger:
                 db_path=db_path,
             )
         return _scores_from_payload(payload, n_stories=n_stories)
+
+    _classify = classify_news
+
+
+# Public evaluation seams reuse the production types and threshold.
+NewsStory = _NewsStory
+RELEVANCE_THRESHOLD = _RELEVANCE_THRESHOLD

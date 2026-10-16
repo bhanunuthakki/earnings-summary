@@ -14,11 +14,20 @@ from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
-from typing import cast
+from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from models.facts import Unit
+from provenance.reporting_entity_registry import ReportingEntityRegistry
 from runtime.deterministic import table_or_view_exists as _table_exists
 
 
@@ -69,6 +78,28 @@ class KpiSemanticStatus(StrEnum):
     ADMITTED = "admitted"
     QUARANTINED = "quarantined"
     LEGACY_UNKNOWN = "legacy_unknown"
+
+
+class KpiSourcePrecision(BaseModel):
+    """Reviewed source precision, including wording inherited from a table.
+
+    This describes the reported value. It does not approve an uncertainty
+    interval or a numerical threshold comparison.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["exact", "approximate", "lower_bound", "upper_bound", "range", "unknown"]
+    qualifiers: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _wording(self) -> KpiSourcePrecision:
+        if any(not text.strip() or len(text) > 1024 for text in self.qualifiers):
+            raise ValueError("source precision qualifiers require retained source wording")
+        if self.kind == "exact" and self.qualifiers:
+            raise ValueError("exact source precision cannot carry uncertainty qualifiers")
+        if self.kind not in {"exact", "unknown"} and not self.qualifiers:
+            raise ValueError("nonexact source precision requires source qualifiers")
+        return self
 
 
 _ADMITTED_UNIT_SCALES_BY_PERSISTED_UNIT: Mapping[Unit, frozenset[KpiUnitScale]] = {
@@ -145,6 +176,7 @@ class KpiSemanticContext(BaseModel):
 
     metric_name_as_reported: str = Field(min_length=1, max_length=256)
     reported_period_end: date | None = None
+    reported_period_start: date | None = None
     period_role: KpiPeriodRole
     publication_lane: KpiPublicationLane
     accounting_basis: KpiAccountingBasis
@@ -154,8 +186,23 @@ class KpiSemanticContext(BaseModel):
     source_row_label: str | None = Field(default=None, max_length=512)
     source_column_header: str | None = Field(default=None, max_length=512)
     source_value_text: str | None = Field(default=None, min_length=1, max_length=80)
+    source_precision: KpiSourcePrecision | None = None
     status: KpiSemanticStatus
     reason_code: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @model_serializer(mode="wrap")
+    def _legacy_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        # Preserve hashes of earlier immutable review artifacts. Absence does
+        # not assert exactness; current exact-only consumers fail closed.
+        value = handler(self)
+        if not isinstance(value, dict):
+            raise TypeError("semantic context serializer must return an object")
+        payload = cast("dict[str, object]", value)
+        if self.source_precision is None:
+            payload.pop("source_precision", None)
+        if self.reported_period_start is None:
+            payload.pop("reported_period_start", None)
+        return payload
 
     @model_validator(mode="before")
     @classmethod
@@ -174,6 +221,11 @@ class KpiSemanticContext(BaseModel):
 
     @model_validator(mode="after")
     def _qualification_contract(self) -> KpiSemanticContext:
+        if self.reported_period_start is not None and (
+            self.reported_period_end is None
+            or self.reported_period_start > self.reported_period_end
+        ):
+            raise ValueError("reported period start requires a matching later period end")
         if self.status is KpiSemanticStatus.ADMITTED:
             if self.reported_period_end is None:
                 raise ValueError("source-qualified KPI facts require reported_period_end")
@@ -283,6 +335,7 @@ def _validate_definition_binding(
     definition_revision_id: str,
     context: KpiSemanticContext,
     knowledge_at: datetime,
+    recorded_at: datetime,
 ) -> None:
     if not _table_exists(conn, "kpi_definition_revisions"):
         raise ValueError("KPI definition revision table is unavailable")
@@ -384,6 +437,26 @@ def _validate_definition_binding(
     if str(definition_row["currency_disposition"]) != expected_disposition:
         raise ValueError("KPI definition revision currency disposition does not match the fact")
     fact_issuer = _fact_source_issuer(conn, source_doc_id=int(str(fact_row["source_doc_id"])))
+    if fact_issuer is not None and fact_issuer != str(definition_row["issuer_id"]):
+        try:
+            subject = ReportingEntityRegistry(conn).canonicalize_recorded_subject(
+                fact_issuer, knowledge_at=knowledge_at.astimezone(UTC)
+            )
+        except LookupError as exc:
+            raise ValueError("KPI definition revision and fact source issuer must agree") from exc
+        if (
+            subject.issuer_id != str(definition_row["issuer_id"])
+            or subject.reporting_entity_id != str(definition_row["reporting_entity_id"])
+            or subject.material_dissent
+        ):
+            raise ValueError("KPI definition revision and fact source issuer must agree")
+        binding = conn.execute(
+            "SELECT recorded_at FROM recorded_subject_binding_revisions WHERE binding_revision_id=?",
+            (subject.binding_revision_id,),
+        ).fetchone()
+        if binding is None or _database_datetime(binding[0]) > recorded_at:
+            raise ValueError("KPI semantic context predates its recorded subject binding")
+        fact_issuer = subject.issuer_id
     if fact_issuer is None or fact_issuer != str(definition_row["issuer_id"]):
         raise ValueError("KPI definition revision and fact source issuer must agree")
 
@@ -415,6 +488,11 @@ def _context_from_row(row: Mapping[str, object], *, has_lane: bool) -> KpiSemant
             if row["reported_period_end"] is not None
             else None
         ),
+        reported_period_start=(
+            date.fromisoformat(str(row["reported_period_start"]))
+            if "reported_period_start" in row and row["reported_period_start"] is not None
+            else None
+        ),
         period_role=role,
         publication_lane=(
             KpiPublicationLane(str(row["publication_lane"]))
@@ -435,6 +513,11 @@ def _context_from_row(row: Mapping[str, object], *, has_lane: bool) -> KpiSemant
             None
             if "source_value_text" not in row or row["source_value_text"] is None
             else str(row["source_value_text"])
+        ),
+        source_precision=(
+            KpiSourcePrecision.model_validate_json(str(row["source_precision_json"]))
+            if "source_precision_json" in row and row["source_precision_json"] is not None
+            else None
         ),
         status=KpiSemanticStatus(str(row["status"])),
         reason_code=None if row["reason_code"] is None else str(row["reason_code"]),
@@ -522,6 +605,10 @@ def persist_kpi_semantic_context(
         return None
     columns = _columns(conn, table)
     observed = knowledge_at or datetime.now(UTC)
+    if context.source_precision is not None and "source_precision_json" not in columns:
+        raise ValueError("KPI semantic context schema cannot store source precision")
+    if context.reported_period_start is not None and "reported_period_start" not in columns:
+        raise ValueError("KPI semantic context schema cannot store source period start")
     if observed.tzinfo is None:
         raise ValueError("semantic context knowledge_at must be timezone-aware")
     has_definition_binding = "kpi_definition_revision_id" in columns
@@ -594,6 +681,19 @@ def persist_kpi_semantic_context(
         if isinstance(kpi_definition_revision_id, _DefinitionBindingUnspecified)
         else kpi_definition_revision_id
     )
+    replay = (
+        current is not None
+        and current.context == context
+        and current.kpi_definition_revision_id == desired_definition_revision_id
+    )
+    # Use the exact stored recording clock for validation, including an unchanged replay.
+    created_at = datetime.now(UTC)
+    if replay and current is not None and "created_at" in columns:
+        created_at = _database_datetime(
+            conn.execute(
+                "SELECT created_at FROM kpi_fact_semantic_contexts WHERE id=?", (current.id,)
+            ).fetchone()[0]
+        )
     if desired_definition_revision_id is not None:
         _validate_definition_binding(
             conn,
@@ -601,12 +701,9 @@ def persist_kpi_semantic_context(
             definition_revision_id=desired_definition_revision_id,
             context=context,
             knowledge_at=observed,
+            recorded_at=created_at,
         )
-    if (
-        current is not None
-        and current.context == context
-        and current.kpi_definition_revision_id == desired_definition_revision_id
-    ):
+    if replay and current is not None:
         return current.id
     if not has_revisions and current is not None:
         raise ValueError("KPI fact semantic context conflicts with immutable persisted context")
@@ -632,6 +729,16 @@ def persist_kpi_semantic_context(
     if "source_value_text" in columns:
         field_names.append("source_value_text")
         payload.append(source_value_text)
+    if "source_precision_json" in columns:
+        field_names.append("source_precision_json")
+        payload.append(
+            context.source_precision.model_dump_json() if context.source_precision else None
+        )
+    if "reported_period_start" in columns:
+        field_names.append("reported_period_start")
+        payload.append(
+            context.reported_period_start.isoformat() if context.reported_period_start else None
+        )
     values: list[object] = [kpi_fact_id]
     insert_fields = ["kpi_fact_id"]
     if has_revisions:
@@ -650,6 +757,9 @@ def persist_kpi_semantic_context(
     if "knowledge_at" in columns:
         insert_fields.append("knowledge_at")
         values.append(observed.astimezone(UTC).isoformat().replace("+00:00", "Z"))
+    if "created_at" in columns:
+        insert_fields.append("created_at")
+        values.append(created_at.astimezone(UTC).isoformat().replace("+00:00", "Z"))
     if has_definition_binding:
         insert_fields.append("kpi_definition_revision_id")
         values.append(desired_definition_revision_id)

@@ -14,20 +14,18 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_DIR))
+from capture import poller, token_store
+from capture.matcher import load_roster
+from db_paths import require_db_path
+from runtime.secrets import load_project_env
 
-from capture import poller, token_store  # noqa: E402
-from capture.matcher import load_roster  # noqa: E402
-from runtime.job_runtime import portfolio_db_path  # noqa: E402
-from runtime.secrets import load_project_env  # noqa: E402
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def configure_runtime_db(repo_root: Path) -> Path:
@@ -35,8 +33,11 @@ def configure_runtime_db(repo_root: Path) -> Path:
     import db
 
     load_project_env(repo_root)
-    db_path = portfolio_db_path(repo_root)
-    db.set_db_path(db_path)
+    configured = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
+    if not configured:
+        raise RuntimeError("An explicit configured portfolio database is required")
+    db_path = require_db_path(configured)
+    db.set_db_path(db_path, state_root=repo_root)
     return db_path
 
 

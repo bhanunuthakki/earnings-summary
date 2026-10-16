@@ -3,10 +3,10 @@
 Dry-run is the default.  ``--apply`` takes one bounded, transactionally
 committed batch and advances the explicit checkpoint only after the database
 commit succeeds.  Unresolved material conflicts are preserved and reported;
-they are intentionally absent from canonical fact views.  Each apply batch
-also converges one bounded window of ``current_fact_selection`` toward the
-resolution ledger, so repeated runs keep the materialized selection exactly
-equal to the resolved views without unbounded scans.
+they are intentionally absent from canonical fact views.  The historical
+``current_fact_selection`` table is not used by canonical readers and is no
+longer maintained. Existing checkpoint selection cursors remain readable.
+Canonical selection stays with the immutable resolution ledger and resolved views.
 
 Registered as the daily ``backfill-financial-fact-resolutions`` scheduler task
 (``cron/backfill_financial_fact_resolutions.task.xml``).  The scheduled run

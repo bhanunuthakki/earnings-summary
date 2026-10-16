@@ -23,11 +23,14 @@ from tests.fixtures.kpi_revision_setup import (
     revision_database,
     semantic_fixture,
 )
+from tests.fixtures.kpi_revision_setup import semantic_recording_clock as semantic_recording_clock
 from tests.fixtures.prediction_grading import (
     PREDICTIONS_SCHEMA,
     admit_prediction_facts,
     prediction_database,
 )
+
+pytestmark = pytest.mark.usefixtures("semantic_recording_clock")
 
 
 def test_checkout_database_is_rejected_even_when_present(tmp_path: Path) -> None:

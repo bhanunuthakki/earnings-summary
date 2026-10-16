@@ -60,7 +60,7 @@ Use these seams for incremental cleanup rather than attempting a repository-wide
    with explicit minimal contexts and shared route-support code.
 3. Keep one canonical copy of byte-identical golden artifacts and test that all
    consuming flavors still render the same output.
-4. Treat the embedded runtime in `src/pipeline/work_os_shell.py` as its own
-   future extraction project; preserve browser behavior and golden coverage.
+4. Keep the extracted `src/pipeline/work_os_runtime.js` as the runtime owner.
+   `work_os_shell.py` loads that file. Preserve browser behavior and golden coverage.
 5. Before deleting apparently unused commands, prove transitive reachability
    from scripts, schedulers, tests, documentation, and Windows wrappers.

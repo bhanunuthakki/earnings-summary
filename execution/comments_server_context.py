@@ -61,6 +61,7 @@ from ask.store import AskSession as _AskSession
 from ask.store import ensure_session, get_session, rename_session
 from dashboard.inbox import collect_inbox, render_inbox_stream, schema_drift_notice
 from dashboard.upcoming import render_upcoming_strip
+from dcf.input_evidence import SourceReadContext
 from dispatch_registry import Registry
 from log_redact import redact
 from logging_config import get_correlation_id, set_correlation_id
@@ -95,6 +96,9 @@ class ServerContext:
     cockpit_memo_key_value: str
     declared_operations: OperationsRegistry
     operations_review_code_identity: str
+    operations_job_receipt_roots: dict[str, Path]
+    source_context: SourceReadContext | None
+    source_state_root: Path | None
     chat_pool: concurrent.futures.Executor
     chat_slots: threading.BoundedSemaphore
     panel_metrics: deque[dict[str, object]]
@@ -131,6 +135,8 @@ def build_server_context(
     code_root: Path | None = None,
     chat_executor: concurrent.futures.Executor | None = None,
     server_origin: str | None = None,
+    source_context: SourceReadContext | None = None,
+    source_state_root: Path | None = None,
 ) -> ServerContext:
     """Wire the app-scoped caches, registries, and helper closures."""
     app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_BYTES
@@ -160,6 +166,14 @@ def build_server_context(
     cockpit_memo_key_value = cockpit_data_memo_key(repo_root, resolved_db_path)
     app.config["COCKPIT_DATA_MEMO_KEY"] = cockpit_memo_key_value
     declared_operations = operations_registry or build_operations_registry(resolved_code_root)
+    operations_job_receipt_roots = {
+        step.job: (
+            resolved_db_path.parent.parent
+            if step.job == "prepare-kpi-semantic-review"
+            else resolved_code_root
+        )
+        for step in declared_operations.job_steps
+    }
     operations_review_code_identity = review_code_identity(resolved_code_root)
     app.config["CODE_ROOT"] = resolved_code_root
     app.config["OPERATIONS_REGISTRY"] = declared_operations
@@ -636,6 +650,9 @@ def build_server_context(
         cockpit_memo_key_value=cockpit_memo_key_value,
         declared_operations=declared_operations,
         operations_review_code_identity=operations_review_code_identity,
+        operations_job_receipt_roots=operations_job_receipt_roots,
+        source_context=source_context,
+        source_state_root=source_state_root,
         chat_pool=chat_pool,
         chat_slots=chat_slots,
         panel_metrics=panel_metrics,

@@ -176,6 +176,7 @@ def register_ops_routes(app: Flask, ctx: ServerContext) -> None:
             observed_at=datetime.now(UTC),
             scheduler_receipt_path=scheduler_receipt_path(repo_root),
             service_receipt_path=service_receipt_path(repo_root),
+            job_receipt_roots=ctx.operations_job_receipt_roots,
         )
         semantic_rows = scoped_kpi_definitions(
             operations_conn,

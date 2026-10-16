@@ -130,6 +130,8 @@ def test_execute_view_fills_definitions_and_render_titles_rows(db: Path) -> None
     )
     result = execute_view(spec, db_path=db)
     assert "top line" in result.definitions["fin:revenue"]
+    assert "FMP-normalized" not in result.definitions["fin:revenue"]
+    assert any("canonical_financial_schema_unavailable" in warning for warning in result.warnings)
     assert "interest-earning assets" in result.definitions["kpi:NIM"]
     html = render_view_fragment(result, include_chart=False)
     assert 'class="vx-label" title="' in html

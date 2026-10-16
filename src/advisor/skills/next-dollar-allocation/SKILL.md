@@ -1,6 +1,6 @@
 ---
 name: next-dollar-allocation
-description: Recommend the next capital-allocation move for the earnings-summary owner's portfolio, using current holdings, account taxes, saved goals and research. Use for next-dollar allocation, cash deployment, tax-aware rebalancing, or consolidating exploratory positions. Produces one preferred analyst plan using existing tools; does not execute trades.
+description: Recommend the next capital-allocation move for the earnings-summary owner's portfolio, using current holdings, account taxes, saved goals and research. Use for next-dollar allocation, cash deployment, tax-aware rebalancing, consolidating exploratory positions, or deciding whether to increase, reduce, or hold a position. Produces one preferred analyst plan using existing tools; does not execute trades.
 ---
 
 # Next-dollar allocation

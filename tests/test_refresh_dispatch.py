@@ -296,8 +296,11 @@ def test_cli_database_redirect_to_same_authority_executes(
         pytest.skip("Directory symlink creation is unavailable on this test host")
     executed: list[Path] = []
 
-    def executor(plan: Plan, *, project_root: Path, state_root: Path) -> int:
+    def executor(
+        plan: Plan, *, project_root: Path, state_root: Path, source_state_root: Path | None = None
+    ) -> int:
         del plan, project_root
+        assert source_state_root is None
         executed.append(state_root)
         return 0
 
@@ -479,3 +482,33 @@ def test_build_step_uses_workspace_renderer_with_enable_llm(tmp_path: Path) -> N
     assert "--renderer" in build_argv
     assert "workspace" in build_argv
     assert "--enable-llm" in build_argv
+
+
+@pytest.mark.parametrize("explicit_source", [False, True])
+def test_model_source_authority_is_separate_from_dispatch_data_root(
+    tmp_path: Path, explicit_source: bool
+) -> None:
+    runner = _MockRunner()
+    code = tmp_path / "code"
+    data = tmp_path / "output-state"
+    sources = tmp_path / "source-state"
+    plan = Plan(
+        ticker="ONON", mode="stale", skip_fmp=True, skip_fmp_reason="isolated", steps=("dcf",)
+    )
+    assert (
+        execute(
+            plan,
+            project_root=code,
+            state_root=data,
+            source_state_root=sources if explicit_source else None,
+            out=io.StringIO(),
+            runner=runner,
+        )
+        == 0
+    )
+    child = runner.calls[0]
+    assert child[child.index("--repo-root") + 1] == str(data)
+    if explicit_source:
+        assert child[child.index("--state-root") + 1] == str(sources)
+    else:
+        assert "--state-root" not in child

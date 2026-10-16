@@ -36,6 +36,7 @@ import report.renderers.workspace_sections.sources as sources_renderer
 import report.sections.financials as fin_section
 import report.sections.synthesis as synth_section
 from pipeline.source_viewers import (
+    load_document_version,
     load_document_version_by_legacy_id,
     render_fallback_page,
 )
@@ -107,7 +108,7 @@ def _versions_conn() -> sqlite3.Connection:
         [
             ("legacy-doc-42", 42, 1, "2026-05-01 10:00:00"),
             ("legacy-doc-43", 43, 1, "2026-05-02 10:00:00"),
-            # Two versions bound to doc 44 — the superseding v2 answers.
+            # Two versions bound to doc 44 do not identify the cited observation.
             ("legacy-doc-44-v1", 44, 1, "2026-05-03 10:00:00"),
             ("legacy-doc-44-v2", 44, 2, "2026-06-03 10:00:00"),
         ],
@@ -115,9 +116,9 @@ def _versions_conn() -> sqlite3.Connection:
     return conn
 
 
-def test_document_version_ids_resolves_and_picks_latest() -> None:
+def test_document_version_ids_resolves_only_unambiguous_bindings() -> None:
     resolved = document_version_ids(_versions_conn(), [42, 43, 44, 99])
-    assert resolved == {42: "legacy-doc-42", 43: "legacy-doc-43", 44: "legacy-doc-44-v2"}
+    assert resolved == {42: "legacy-doc-42", 43: "legacy-doc-43"}
 
 
 def test_document_version_ids_fail_closed_without_evidence_plane() -> None:
@@ -234,8 +235,11 @@ def test_sources_tab_keeps_legacy_link_with_explicit_degraded_state() -> None:
     assert 'data-server-path="/source/6827"' in html
     assert "/source/version/" not in html
     # The degraded state is visible in the row AND on the anchor.
-    assert ">not recorded</td>" in html
-    assert 'title="No observation version recorded for this document' in html
+    assert ">not recorded or not uniquely identified</td>" in html
+    assert (
+        'title="Observation version not recorded or not uniquely identified for this document'
+        in html
+    )
 
 
 def test_sources_tab_legacy_row_without_doc_id_stays_plain() -> None:
@@ -293,9 +297,9 @@ def test_cite_mark_popover_renders_the_degraded_state_in_both_mirrors() -> None:
     ]
     html = linkify("Management guided up [1].", payload)
     assert 'href="/source/43"' in html
-    assert "no observation version recorded" in html
+    assert "observation version not recorded or not uniquely identified" in html
     # The JS mirror must render the same phrase (byte-aligned semantics).
-    assert "no observation version recorded" in CITE_MARKS_JS
+    assert "observation version not recorded or not uniquely identified" in CITE_MARKS_JS
     assert "no_observation_version" in CITE_MARKS_JS
 
 
@@ -327,7 +331,7 @@ def test_chip_popover_links_the_chain_when_a_version_exists() -> None:
 
 def test_chip_popover_states_the_degraded_version_explicitly() -> None:
     html = source_chip_html(CellSource(source="llm_extracted", doc_type="llm_summary", doc_id=6827))
-    assert "observation version not recorded" in html
+    assert "observation version not recorded or not uniquely identified" in html
     assert "/source/version/" not in html
     assert "provenance chain" not in html
 
@@ -375,8 +379,8 @@ def test_financials_stamp_covers_all_chip_fields() -> None:
     assert a0 is not None and a0.document_version_id == "legacy-doc-43"
     assert k0 is not None and k0.document_version_id is None
     assert k1 is not None and k1.document_version_id == "legacy-doc-42"
-    # Superseding version answers for the document.
-    assert ak0 is not None and ak0.document_version_id == "legacy-doc-44-v2"
+    # Multiple versions do not establish which observation supplied this chip.
+    assert ak0 is not None and ak0.document_version_id is None
 
 
 def test_financials_stamp_is_a_noop_without_chips() -> None:
@@ -563,7 +567,7 @@ def test_fallback_view_states_the_degraded_chain_for_versionless_documents(
     _seed_fallback_db(db)
     html = render_fallback_page(db, 2)
     assert html is not None
-    assert "not recorded for this document" in html
+    assert "not recorded or not uniquely identified for this document" in html
     assert "full provenance chain unavailable" in html
     assert "source bytes" not in html
 
@@ -606,4 +610,57 @@ def test_fallback_view_fragment_mode_keeps_the_chain_state(tmp_path: Path, fragm
     assert f"version {_LEGACY_VERSION_ID}" in html
     degraded = render_fallback_page(db, 2, fragment=fragment)
     assert degraded is not None
-    assert "not recorded for this document" in degraded
+    assert "not recorded or not uniquely identified for this document" in degraded
+
+
+def test_legacy_source_does_not_claim_a_later_correction(tmp_path: Path) -> None:
+    db = tmp_path / "ambiguous-source.db"
+    _seed_fallback_db(db)
+    conn = sqlite3.connect(db)
+    try:
+        conn.execute(
+            "INSERT INTO evidence_source_observations "
+            "SELECT observation_id || '-correction', idempotency_key || '-correction', "
+            "source_kind, source_url, ?, source_published_at, filing_at, observed_at, "
+            "retrieved_at, retrieval_config_sha256, collector_code_version "
+            "FROM evidence_source_observations WHERE observation_id=?",
+            ("b" * 64, _FALLBACK_OBSERVATION_ID),
+        )
+        conn.execute(
+            "INSERT INTO evidence_document_versions (document_version_id, version_sequence, "
+            "issuer_id, ticker, document_type, form_type, accession_number, exhibit_id, "
+            "period_start, period_end, as_of_at, language, replaces_document_version_id, "
+            "legacy_document_id, observation_id, blob_sha256, recorded_at) "
+            "SELECT document_version_id || '-correction', 2, issuer_id, ticker, "
+            "document_type, form_type, accession_number, exhibit_id, period_start, "
+            "period_end, as_of_at, language, document_version_id, legacy_document_id, "
+            "observation_id || '-correction', ?, recorded_at FROM evidence_document_versions "
+            "WHERE document_version_id=?",
+            ("b" * 64, _LEGACY_VERSION_ID),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    assert load_document_version_by_legacy_id(db, _LEGACY_DOC_ID) is None
+    original = load_document_version(db, _LEGACY_VERSION_ID)
+    correction = load_document_version(db, _LEGACY_VERSION_ID + "-correction")
+    assert original is not None and original.blob_sha256 == "a" * 64
+    assert correction is not None and correction.blob_sha256 == "b" * 64
+    page = render_fallback_page(db, _LEGACY_DOC_ID)
+    assert page is not None
+    assert "not recorded or not uniquely identified" in page
+    assert "full provenance chain unavailable" in page
+    assert "source bytes" not in page
+
+
+def test_exact_observation_version_survives_legacy_chip_stamping() -> None:
+    conn = _versions_conn()
+    source = CellSource(
+        source="canonical_reported", doc_id=44, document_version_id="legacy-doc-44-v1"
+    )
+    row = QuarterlyLineItem(line_item="revenue", unit="USD", sources_full=[source])
+    _stamp_observation_versions(
+        conn, line_items=[row], annual_items=[], kpi_series=[], annual_kpi_series=[]
+    )
+    assert source.document_version_id == "legacy-doc-44-v1"
+    conn.close()

@@ -480,3 +480,31 @@ def test_cli_collision_preserves_existing_target_and_failed_stage_creates_no_tar
     with pytest.raises(install.SecureFileInstallError, match="secure_install_failed"):
         cli.main()
     assert not output.exists()
+
+
+def test_reviewed_sec_producer_preserves_source_and_population() -> None:
+    legacy = _legacy().model_copy(update={"primary_source": SourceType.SEC_XBRL})
+    segments = _segments().model_copy(update={"values": ()})
+    frame = _frame().model_copy(
+        update={
+            "expected": tuple(item for item in _frame().expected if item.kind is IssuerFactKind.KPI)
+        }
+    )
+    manifest = produce_issuer_fact_manifest(legacy, frame, segments, _reviewed_captures())
+    assert manifest.schema_version == "issuer_fact_manifest.v2"
+    assert (
+        manifest.expected
+        == produce_issuer_fact_manifest(_legacy(), frame, segments, _reviewed_captures()).expected
+    )
+
+
+def test_reviewed_sec_producer_rejects_unreviewed_segment_values() -> None:
+    legacy = _legacy().model_copy(update={"primary_source": SourceType.SEC_XBRL})
+    with pytest.raises(ValueError, match="SEC segment"):
+        produce_issuer_fact_manifest(legacy, _frame(), _segments(), _reviewed_captures())
+
+
+def test_unreviewed_sec_producer_still_rejects() -> None:
+    legacy = _legacy().model_copy(update={"primary_source": SourceType.SEC_XBRL})
+    with pytest.raises(ValueError, match="reviewed"):
+        produce_issuer_fact_manifest(legacy, _frame(), _segments())

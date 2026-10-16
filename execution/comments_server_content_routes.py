@@ -9,11 +9,13 @@ state.
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, cast
+from urllib.parse import urlencode
 
 from comments_server_evaluation_projection import resolve_work_os_evaluation_item
 from flask import (
@@ -27,6 +29,7 @@ from flask import (
 
 from integrations.portfolio_tracker_client import LivePortfolio
 from pipeline.work_os_briefs import (
+    build_brief_descriptor,
     build_brief_library,
     load_report_reader_payload,
     resolve_report_artifact,
@@ -34,6 +37,7 @@ from pipeline.work_os_briefs import (
 )
 from pipeline.work_os_company import build_company_desk
 from pipeline.work_os_decisions import build_decision_projection
+from report.artifacts import load_report_artifact_index
 
 
 class _TickerCommandCenter(Protocol):
@@ -77,6 +81,11 @@ def _parse_bbox_param(raw: str | None) -> tuple[float, float, float, float] | No
 
 
 def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
+    from comments_server_financial_evidence_routes import register_growth_evidence_routes
+
+    register_growth_evidence_routes(
+        app, get_read_db=context.get_read_db, safe_ticker=context.safe_ticker
+    )
     """Register read-only content routes without changing Flask contracts."""
     repo_root = context.repo_root
     db_path = context.db_path
@@ -472,6 +481,53 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             abort(404)
         return Response(html, mimetype="text/html")
 
+    @app.route("/api/peek/canonical-financial", methods=["GET"])
+    def peek_canonical_financial():
+        from pipeline.peeks import render_canonical_financial_peek
+        from pipeline.source_viewers import render_record_view
+        from sources.report_financials import FinancialEvidenceReference, read_financial_evidence
+
+        values = request.args.getlist("reference")
+        if (
+            not set(request.args) <= {"reference", "fragment"}
+            or len(values) != 1
+            or len(values[0]) > 4096
+            or ("fragment" in request.args and request.args.getlist("fragment") != ["1"])
+        ):
+            return Response("Invalid evidence reference.", status=400, mimetype="text/html")
+        try:
+            reference = FinancialEvidenceReference.model_validate_json(values[0])
+            if context.safe_ticker(reference.ticker) != reference.ticker:
+                raise ValueError("invalid ticker")
+        except ValueError:
+            return Response("Invalid evidence reference.", status=400, mimetype="text/html")
+        # The reference selects its complete table or series admission owner.
+        # Both preserve the request read snapshot and perform no writes.
+        try:
+            cell = read_financial_evidence(context.get_read_db(), reference)
+        except (OSError, RuntimeError, sqlite3.Error):
+            cell = None
+        if cell is None:
+            return Response(
+                render_record_view(
+                    "Evidence unavailable",
+                    "Evidence unavailable for this selection.",
+                    fragment=request.args.get("fragment") == "1",
+                ),
+                status=404,
+                mimetype="text/html",
+            )
+        response = Response(
+            render_record_view(
+                "Evidence for the selected value",
+                render_canonical_financial_peek(cell, reference),
+                fragment=request.args.get("fragment") == "1",
+            ),
+            mimetype="text/html",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @app.route("/api/ticker/<ticker>", methods=["GET"])
     def ticker_api(ticker: str):
         command_center = context.build_ticker_command_center(repo_root, ticker)
@@ -499,6 +555,18 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
             artifact_path = repo_root / artifact.standalone_path
             if not artifact_path.is_file():
                 abort(404)
+            if artifact.reader_mode == "shared_body" and request.args.get("standalone") != "1":
+                return redirect(
+                    "/?"
+                    + urlencode(
+                        {
+                            "ticker": validated,
+                            "work_os_brief": validated,
+                            "work_os_brief_artifact": artifact.artifact_id,
+                        }
+                    )
+                    + "#screen-workspace"
+                )
             return send_file(artifact_path)
         research_dir = repo_root / "output" / "research" / validated
         if not research_dir.exists():
@@ -506,7 +574,46 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         matches = sorted(research_dir.glob("*_workspace.html"))
         if not matches:
             abort(404)
+        artifact = next(
+            (
+                item
+                for item in load_report_artifact_index(repo_root).items
+                if item.ticker == validated
+                and item.workspace_sha256 == hashlib.sha256(matches[-1].read_bytes()).hexdigest()
+            ),
+            None,
+        )
+        if (
+            artifact
+            and artifact.reader_mode == "shared_body"
+            and request.args.get("standalone") != "1"
+        ):
+            return redirect(
+                "/?"
+                + urlencode(
+                    {
+                        "ticker": validated,
+                        "work_os_brief": validated,
+                        "work_os_brief_artifact": artifact.artifact_id,
+                    }
+                )
+                + "#screen-workspace"
+            )
         return send_file(matches[-1])
+
+    @app.route("/api/work-os/briefs/<artifact_id>", methods=["GET"])
+    def brief_descriptor_api(artifact_id: str):
+        artifact = resolve_report_artifact(repo_root, artifact_id)
+        if artifact is None:
+            abort(404)
+        response = Response(
+            build_brief_descriptor(
+                repo_root, artifact, conn=context.get_read_db()
+            ).model_dump_json(),
+            mimetype="application/json",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.route("/api/work-os/briefs", methods=["GET"])
     def brief_library_api():
@@ -601,7 +708,9 @@ def register_content_routes(app: Flask, context: ContentRouteContext) -> None:
         artifact = resolve_report_artifact(repo_root, artifact_id)
         if artifact is None:
             abort(404)
-        standalone_url = f"/reports/{artifact.ticker}?artifact_id={artifact.artifact_id}"
+        standalone_url = (
+            f"/reports/{artifact.ticker}?artifact_id={artifact.artifact_id}&standalone=1"
+        )
         if artifact.reader_mode != "shared_body" or artifact.body_path is None:
             return (
                 {

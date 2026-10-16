@@ -49,6 +49,7 @@ def _run(args: argparse.Namespace) -> int:
             issuer_ids=tuple(args.issuer_id),
             apply=args.apply,
             projection_mode=args.projection_mode,
+            source_publication_reference_clock=args.source_publication_reference_clock,
             input_commitment_sha256=args.input_commitment_sha256,
             plan_commitment_sha256=args.plan_commitment_sha256,
             analysis_scope=analysis_scope,
@@ -82,6 +83,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=("semantic", "lexical_only"),
         default="semantic",
         help="Explicit retrieval mode; semantic requires vector and promotion evidence.",
+    )
+    parser.add_argument(
+        "--source-publication-reference-clock",
+        choices=("cutoff_v1", "publication_created_v2"),
+        default="cutoff_v1",
+        help="Publication reference clock; v2 uses the verified publication creation time.",
     )
     parser.add_argument("--issuer-id", action="append", default=[])
     parser.add_argument("--input-commitment-sha256")

@@ -4,7 +4,7 @@ Every metric token the builder/results surface can carry a one-line
 definition tooltip:
 
   kpi:…  — from the ``kpi_definitions`` table (unit + source + notes)
-  fin:…  — a small curated glossary over the FMP-normalized line items,
+  fin:…  — a small curated glossary over the canonical reported line items,
            with a generic fallback for the long tail
   seg:…  — composed from the slice's dimension parts
   detail:… — family-specific language for source-backed legacy series whose
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 # Curated one-liners for the line items people actually pivot on. The long
 # tail falls back to a generic description naming the substrate.
 FIN_GLOSSARY: dict[str, str] = {
-    "revenue": "Total revenue as reported — FMP-normalized income-statement top line.",
+    "revenue": "Total revenue as reported — canonical reported income-statement top line; selected cells retain exact source evidence.",
     "cost_of_revenue": "Cost of revenue / cost of goods sold, as reported.",
     "gross_profit": "Revenue minus cost of revenue.",
     "operating_income": "Operating income (EBIT) — profit before interest and taxes.",
@@ -95,7 +95,7 @@ def fin_definition(line_item: str) -> str:
     if curated:
         return curated
     pretty = line_item.replace("_", " ")
-    return f"Financial line item '{pretty}' — FMP-normalized statement series (financial_facts)."
+    return f"Financial line item '{pretty}' — canonical reported financial concept; unavailable source admission produces no value."
 
 
 def seg_definition(dim_type: str, dim_name: str, key: str) -> str:

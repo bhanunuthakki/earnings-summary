@@ -157,6 +157,13 @@ def _fragment(title: str, meta_html: str, body: str) -> str:
     )
 
 
+def render_record_view(title: str, body: str, *, fragment: bool = False) -> str:
+    """Use the existing source-viewer chrome for already escaped retained evidence."""
+    if fragment:
+        return _fragment(title, "", body)
+    return _page(title, f'<span class="sv-title">{escape(title)}</span>', body)
+
+
 def _doc_meta_html(doc: SourceDocRow) -> str:
     bits = [f'<span class="sv-meta">doc #{doc.id} · {escape(doc.doc_type)}</span>']
     if doc.accession_number:
@@ -586,7 +593,7 @@ def render_fallback_page(db_path: Path, doc_id: int, *, fragment: bool = False) 
     else:
         rows += (
             '<div class="sv-sec-row"><div class="sv-sec-key">observation version</div>'
-            '<div class="sv-sec-val">not recorded for this document — full '
+            '<div class="sv-sec-val">not recorded or not uniquely identified for this document — full '
             "provenance chain unavailable</div></div>"
         )
     if fragment:
@@ -700,10 +707,11 @@ _DOCUMENT_VERSION_SQL = _DOCUMENT_VERSION_SELECT + "WHERE document.document_vers
 
 # The legacy-plane entry: report citations and older built reports address the
 # document by its ``documents.id``; this resolves that id to its Observation
-# Version (a superseding version answers for the document).
+# Version only when the binding is unambiguous.
 _DOCUMENT_VERSION_BY_LEGACY_SQL = (
     _DOCUMENT_VERSION_SELECT + "WHERE document.legacy_document_id=? "
-    "ORDER BY document.version_sequence DESC, document.recorded_at DESC LIMIT 1"
+    "AND (SELECT COUNT(*) FROM evidence_document_versions candidate "
+    "WHERE candidate.legacy_document_id=document.legacy_document_id)=1"
 )
 
 _DOCUMENT_VERSION_NODES_SQL = (
@@ -742,7 +750,7 @@ def load_document_version(db_path: Path, document_version_id: str) -> DocumentVe
 def load_document_version_by_legacy_id(
     db_path: Path, legacy_document_id: int
 ) -> DocumentVersionView | None:
-    """The Observation Version bound to one legacy ``documents.id``, or None.
+    """The unambiguous Observation Version bound to a legacy document, or None.
 
     The legacy ``/source/<doc_id>`` views and every already-built report cite
     documents by ``documents.id``; this resolves that id to the immutable

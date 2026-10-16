@@ -195,6 +195,7 @@ def test_runtime_configuration_binds_implicit_consumers_to_canonical_db(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     canonical = tmp_path / "canonical.db"
+    canonical.touch()
     monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(canonical))
     monkeypatch.setattr(db, "DB_PATH", tmp_path / "previous.db")
 

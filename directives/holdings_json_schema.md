@@ -387,3 +387,41 @@ and soft-rule results to `thesis_evaluations.soft_rule_results_json` (added
 in alembic migration `0053_thesis_evaluations_soft_rules`). Older rows
 without the soft column read as no soft rules evaluated, which the §2
 renderer treats as a silent default rather than a missing-data warning.
+
+## Source-bound calculated review rules
+
+A hard rule can add `metric_expression` and `require_adjacent_quarters: true`.
+Its `kpi_name` remains a display label when an expression is present. A soft
+predicate can use `type: "metric_threshold"` with `params.expression`,
+`comparator` (`lt`, `le`, `gt`, `ge` or equivalent symbols), a finite `threshold`,
+and `periods` (1–12). Adjacent-quarter checking defaults to true for this soft
+predicate. Existing hard rules retain their previous behavior unless opted in.
+
+Expressions have a closed `operation`: `level`, `ttm_ratio`, `yoy_pp`,
+`difference`, or `ttm_fcf_margin`. A level names its `source` (`financial` or
+`kpi`) and exact metric `name`. TTM ratios have `numerator` and `denominator`;
+YoY percentage-point changes have `input`; differences have `left` and `right`.
+TTM FCF margin uses canonical operating cash flow, signed negative capital
+expenditure and revenue. Ratios use sums of four admitted standalone quarters,
+not average margins. Cumulative cash flows require prior governed conversion;
+the evaluator never relabels YTD values as quarters. Monetary KPI rows without
+typed quarter durations cannot supply a TTM sum.
+
+`allow_mixed_basis: true` explicitly permits a reconciled non-GAAP numerator
+against a GAAP denominator. A difference can use `allow_distinct_entities: true`
+only when both level operands declare identical `required_dimensions` for
+`geography`, `lodging_category`, `measurement` and `window`. Admitted source
+coordinates must satisfy those requirements. Population checks, source bands,
+definition changes, missing quarters and unavailable evidence fail closed.
+Source manifests remain in persisted evaluation evidence.
+
+Compound soft predicates can add `require_same_period: true`. Fired children
+must have the same last quarter end; otherwise the result is unresolved.
+
+Optional `kpi_registry_candidates` is an array of objects with one `name` field.
+At persisted evaluation, only exact governed identities with at least eight
+admitted comparable quarterly observations enter the user inflection registry.
+New entries have no scalar threshold and are not thesis breakers. Existing
+owner settings remain unchanged. Pending disclosure and actual-source-cadence
+watches remain in the approved KPI tiers. These fields do not create a schedule
+or authorize an automatic trade.

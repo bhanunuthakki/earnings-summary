@@ -23,15 +23,16 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from earnings_brief import BRIEF_WINDOW_DAYS, generate_all  # noqa: E402
-from llm_client import is_hard_stop  # noqa: E402
-
 log = logging.getLogger("generate_pre_earnings_briefs")
 
 
 def main() -> int:
+    from db_paths import require_db_path, resolve_db_path
+    from earnings_brief import BRIEF_WINDOW_DAYS, generate_all
+    from llm_client import is_hard_stop
+
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db-path", type=Path, default=_REPO_ROOT / "data" / "portfolio.db")
+    parser.add_argument("--db-path", type=Path, default=None)
     parser.add_argument(
         "--window-days",
         type=int,
@@ -56,6 +57,10 @@ def main() -> int:
         help="regenerate even when a current artifact matches",
     )
     args = parser.parse_args()
+    try:
+        database_path = require_db_path(resolve_db_path(args.db_path, configured_root=_REPO_ROOT))
+    except (RuntimeError, FileNotFoundError) as exc:
+        parser.error(str(exc))
 
     logging.basicConfig(
         level=logging.INFO,
@@ -64,7 +69,7 @@ def main() -> int:
 
     try:
         tally = generate_all(
-            args.db_path,
+            database_path,
             _REPO_ROOT,
             today=args.as_of or datetime.now(UTC).date(),
             window_days=args.window_days,

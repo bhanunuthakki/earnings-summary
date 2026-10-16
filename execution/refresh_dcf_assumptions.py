@@ -26,9 +26,11 @@ from pydantic import TypeAdapter
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from compute.segment_cache import apply_overrides
 from db_paths import require_db_path
+from dcf.artifact_promotion import DcfRecoveryError, hold_dcf_artifacts, unique_staged_path
 from dcf.fiscal_periods import detect_fy_periods
 from llm.contracts import DCF_ASSUMPTIONS_SCHEMA, DcfAssumptionsPayload
 from llm.structured import call_llm_structured
+from runtime.job_runtime import JobAlreadyRunningError
 
 REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
 FMP = REPO / "data" / "historical" / "fmp"
@@ -308,27 +310,37 @@ def main() -> int:
     data = cast("dict[str, object]", result.model_dump(mode="json"))
     data["_segment_keys"] = SEG_KEYS
 
-    cache_path = REPO / "data" / "dcf_assumptions" / f"{TICKER}.json"
-    existing_raw: object = (
-        json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
-    )
-    if not isinstance(existing_raw, dict):
-        raise ValueError(f"{cache_path} must contain a JSON object")
-    existing = cast("dict[str, object]", existing_raw)
-    prior_redesign = existing.get("redesign")
-    if isinstance(prior_redesign, dict) and "dcf_debt_scope" in prior_redesign:
-        # Deterministic owner/governance input: the LLM schema neither selects
-        # nor rewrites the liability perimeter used by the equity bridge.
-        data["dcf_debt_scope"] = prior_redesign["dcf_debt_scope"]
-    existing["redesign"] = data
-    existing.setdefault("narrative", result.narrative)
+    try:
+        with hold_dcf_artifacts(REPO, TICKER, owner="dcf-assumptions", wait_s=0):
+            cache_path = REPO / "data" / "dcf_assumptions" / f"{TICKER}.json"
+            existing_raw: object = (
+                json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
+            )
+            if not isinstance(existing_raw, dict):
+                raise ValueError(f"{cache_path} must contain a JSON object")
+            existing = cast("dict[str, object]", existing_raw)
+            prior_redesign = existing.get("redesign")
+            if isinstance(prior_redesign, dict) and "dcf_debt_scope" in prior_redesign:
+                # Deterministic owner/governance input: the LLM schema neither selects
+                # nor rewrites the liability perimeter used by the equity bridge.
+                data["dcf_debt_scope"] = prior_redesign["dcf_debt_scope"]
+            existing["redesign"] = data
+            existing.setdefault("narrative", result.narrative)
 
-    from dcf.assumptions_doc import baseline_from_assumption_refresh
+            from dcf.assumptions_doc import baseline_from_assumption_refresh
 
-    existing["opus_baseline"] = baseline_from_assumption_refresh(data)
-    existing.pop("assumption_overrides", None)
-    cache_path.parent.mkdir(parents=True, exist_ok=True)
-    cache_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+            existing["opus_baseline"] = baseline_from_assumption_refresh(data)
+            existing.pop("assumption_overrides", None)
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            staged = unique_staged_path(cache_path, "assumptions-refresh")
+            staged.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+            os.replace(staged, cache_path)
+    except JobAlreadyRunningError:
+        print(f"BLOCKED\t{TICKER}\tdcf_writer_busy", file=sys.stderr)
+        return 75
+    except DcfRecoveryError:
+        print(f"BLOCKED\t{TICKER}\tdcf_recovery_required", file=sys.stderr)
+        return 2
     suggestion = result.valuation_model_suggestion
     print(
         f"OK\t{TICKER}\tvaluation_model={result.valuation_model}\t"

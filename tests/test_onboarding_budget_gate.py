@@ -9,16 +9,13 @@ from __future__ import annotations
 
 import json
 import sys
+from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 
 import pytest
 
 from execution import onboard_pending_tickers
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from pipeline.cadence_policy import (  # noqa: E402
+from pipeline.cadence_policy import (
     ESTIMATED_FMP_CALLS_PER_ONBOARD,
     check_onboarding_budget,
 )
@@ -79,12 +76,14 @@ def test_empty_pending_list_is_allowed() -> None:
     assert allowed is True
 
 
-def test_expected_budget_deferral_is_scheduler_success(
+@pytest.mark.parametrize("ipo_deferred", [False, True])
+def test_fmp_deferral_preserves_sec_onboarding_and_scheduler_success(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
+    ipo_deferred: bool,
 ) -> None:
-    """Quota capacity leaves durable work pending; it is not an outage."""
+    """FMP budget and IPO cadence never defer independent SEC acquisition."""
     pending = [("NU", "no_financial_facts")]
 
     def _pending(_db: Path) -> list[tuple[str, str]]:
@@ -93,7 +92,7 @@ def test_expected_budget_deferral_is_scheduler_success(
     def _backoff(
         rows: list[tuple[str, str]], _db: Path, _holdings: Path
     ) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-        return rows, []
+        return ([], rows) if ipo_deferred else (rows, [])
 
     monkeypatch.setattr(
         onboard_pending_tickers,
@@ -106,11 +105,39 @@ def test_expected_budget_deferral_is_scheduler_success(
         _backoff,
     )
     monkeypatch.setattr(onboard_pending_tickers, "_remaining_fmp_budget", lambda: 0)
+
+    def configure(*_args: object) -> None:
+        return None
+
+    def lock(*_args: object, **_kwargs: object) -> AbstractContextManager[None]:
+        return nullcontext()
+
+    monkeypatch.setattr(onboard_pending_tickers, "configure_runtime", configure)
     monkeypatch.setattr(onboard_pending_tickers, "_LOG_DIR", tmp_path)
+    monkeypatch.setattr(onboard_pending_tickers, "JobLock", lock)
+    calls: list[tuple[bool, bool]] = []
+
+    def onboard(ticker: str, reason: str, **kwargs: object) -> onboard_pending_tickers.TickerResult:
+        calls.append((bool(kwargs["skip_fmp"]), bool(kwargs["skip_sec"])))
+        return onboard_pending_tickers.TickerResult(
+            ticker,
+            reason,
+            (
+                onboard_pending_tickers.StageResult(
+                    "onboard_ticker", onboard_pending_tickers.StageOutcome.OK, 0, ""
+                ),
+            ),
+            0,
+        )
+
+    monkeypatch.setattr(onboard_pending_tickers, "onboard_one", onboard)
     monkeypatch.setattr(sys, "argv", ["onboard_pending_tickers.py", "--db", str(tmp_path / "x.db")])
 
     assert onboard_pending_tickers.main() == 0
     report = json.loads(capsys.readouterr().out)
-    assert report["deferred"] is True
-    assert report["defer_reason"] == "fmp_budget_gate"
+    assert calls == [(True, False)]
+    if ipo_deferred:
+        assert report["deferred"][0]["deferred"] == "fmp_recently_ipod_daily_cadence"
+    else:
+        assert report["fmp_deferred"]["reason"] == "fmp_budget_gate"
     assert report["pending_count"] == 1

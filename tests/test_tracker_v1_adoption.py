@@ -11,6 +11,7 @@ the legacy endpoints. Fully hermetic: no live provider, no network.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import cast
 
@@ -103,7 +104,9 @@ def _route_v1(monkeypatch: pytest.MonkeyPatch, routes: dict[str, object]) -> _V1
 
 def test_switch_off_by_default_keeps_legacy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("PORTFOLIO_TRACKER_V1_READS", raising=False)
-    assert tc._v1_reads_enabled() is False  # pyright: ignore[reportPrivateUsage]
+    switch: object = getattr(tc, "_v1_reads_enabled")
+    assert callable(switch)
+    assert cast("Callable[[], bool]", switch)() is False
 
     # Legacy path fails fast offline and envelope fields stay at defaults.
     def _refuse(url: str, **kwargs: object) -> _FakeResp:
@@ -126,11 +129,15 @@ def test_switch_off_by_default_keeps_legacy_path(monkeypatch: pytest.MonkeyPatch
 def test_live_portfolio_v1_adapts_positions_fixture(
     v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Official fixtures are independent observations. Align only this synthetic
+    # success case; never edit the vendored provider fixtures.
+    transactions = _fixture("transactions")
+    cast("dict[str, object]", transactions["meta"])["as_of"] = "2026-07-22"
     _route_v1(
         monkeypatch,
         {
-            "/api/v1/portfolio/positions": _fixture("positions"),
-            "/api/v1/transactions": _fixture("transactions"),
+            "/api/v1/portfolio-snapshot": _fixture("portfolio-snapshot"),
+            "/api/v1/transactions": transactions,
         },
     )
     live = tc.fetch_live_portfolio()
@@ -147,7 +154,7 @@ def test_live_portfolio_v1_adapts_positions_fixture(
     assert live.by_tax_treatment["tax_free"] == pytest.approx(13200.0)
     assert live.by_tax_treatment["taxable"] == pytest.approx(6800.0)
     assert live.by_tax_treatment["tax_deferred"] == pytest.approx(0.0)
-    # Envelope: as_of from the positions snapshot; flags from the txn read.
+    # Envelope: holdings date/freshness from the bulk snapshot, with transaction flags preserved.
     assert live.as_of == "2026-07-22"
     assert live.is_stale is False
     assert live.is_partial is False
@@ -179,7 +186,7 @@ def test_live_portfolio_v1_major_version_mismatch_fails_closed(
     _route_v1(
         monkeypatch,
         {
-            "/api/v1/portfolio/positions": _fixture("positions"),
+            "/api/v1/portfolio-snapshot": _fixture("portfolio-snapshot"),
             "/api/v1/transactions": txns,
         },
     )
@@ -606,7 +613,7 @@ def test_performance_v1_widens_when_probe_window_may_clip_history(
 
     tc.fetch_portfolio_analytics(only={"performance"})
 
-    assert router.starts == [None, tc._V1_WIDE_HISTORY_START, "2004-03-01"]  # pyright: ignore[reportPrivateUsage]
+    assert router.starts == [None, "2000-01-01", "2004-03-01"]
 
 
 def test_performance_v1_missing_observed_marker_returns_probe(
@@ -630,6 +637,12 @@ def test_performance_v1_missing_observed_marker_returns_probe(
 # ---------------------------------------------------------------------------
 
 
+def _parse_performance_payload(payload: dict[str, object]) -> tc.PerformanceSeries:
+    parser: object = getattr(tc, "_parse_performance")
+    assert callable(parser)
+    return cast("Callable[[dict[str, object]], tc.PerformanceSeries]", parser)(payload)
+
+
 def _rebase_basis(series: tc.PerformanceSeries) -> str:
     """The CORRECT basis discriminator, mirrored from the risk-snapshot stamp:
     a series starting before observation began is partly modeled walk-back."""
@@ -642,7 +655,7 @@ def _rebase_basis(series: tc.PerformanceSeries) -> str:
 def test_earliest_observed_date_parsed_on_legacy_shape() -> None:
     """The legacy payload carries earliest_observed_date at top level; it must
     reach the dataclass or downstream provenance cannot classify the basis."""
-    series = tc._parse_performance(  # pyright: ignore[reportPrivateUsage]
+    series = _parse_performance_payload(
         {
             "start_date": "2026-05-09",
             "end_date": "2026-07-24",
@@ -681,7 +694,7 @@ def test_backfill_flag_cannot_discriminate_walk_back_basis() -> None:
     practice. A stamp derived from it silently records 'observed' for a series
     that is 80% reconstructed. Only start_date vs earliest_observed_date
     separates them; this test fails if anyone swaps the comparison back."""
-    walk_back = tc._parse_performance(  # pyright: ignore[reportPrivateUsage]
+    walk_back = _parse_performance_payload(
         {
             "start_date": "2025-07-24",
             "end_date": "2026-07-24",
@@ -701,7 +714,7 @@ def test_rebase_basis_unknown_when_provider_omits_marker() -> None:
     """No marker means the basis is indeterminate, not observed — the client
     returns the probe window unrebased in that case, so defaulting to
     'observed' would assert a guarantee nobody verified."""
-    unmarked = tc._parse_performance(  # pyright: ignore[reportPrivateUsage]
+    unmarked = _parse_performance_payload(
         {
             "start_date": "2025-07-24",
             "end_date": "2026-07-24",
@@ -727,7 +740,7 @@ def test_unmarked_observation_raises_envelope_warning(
     analytics = tc.fetch_portfolio_analytics(only={"performance"})
 
     assert router.starts == [None]  # probe only; nothing to rebase onto
-    assert tc._UNMARKED_OBSERVATION_CODE in analytics.envelope_warnings  # pyright: ignore[reportPrivateUsage]
+    assert "performance_observation_start_unmarked" in analytics.envelope_warnings
 
 
 def test_marked_observation_adds_no_warning(
@@ -740,7 +753,7 @@ def test_marked_observation_adds_no_warning(
 
     analytics = tc.fetch_portfolio_analytics(only={"performance"})
 
-    assert tc._UNMARKED_OBSERVATION_CODE not in analytics.envelope_warnings  # pyright: ignore[reportPrivateUsage]
+    assert "performance_observation_start_unmarked" not in analytics.envelope_warnings
 
 
 def test_caller_owned_window_never_warns_about_observation(
@@ -755,7 +768,7 @@ def test_caller_owned_window_never_warns_about_observation(
     explicit = tc.fetch_portfolio_analytics(start_date="2025-09-01", only={"performance"})
     backfilled = tc.fetch_portfolio_analytics(include_backfill=True, only={"performance"})
 
-    code = tc._UNMARKED_OBSERVATION_CODE  # pyright: ignore[reportPrivateUsage]
+    code = "performance_observation_start_unmarked"
     assert code not in explicit.envelope_warnings
     assert code not in backfilled.envelope_warnings
 
@@ -770,7 +783,7 @@ def test_unmarked_code_implies_unknown_basis_but_not_conversely(
     forward: code emitted  => basis "unknown"      (must hold)
     reverse: basis "unknown" => code emitted       (must NOT hold)
     """
-    code = tc._UNMARKED_OBSERVATION_CODE  # pyright: ignore[reportPrivateUsage]
+    code = "performance_observation_start_unmarked"
 
     # Forward: no marker on the rebase path -> code emitted AND basis unknown.
     router = _PerfRouter(earliest_observed=None)
@@ -786,3 +799,229 @@ def test_unmarked_code_implies_unknown_basis_but_not_conversely(
     assert code not in explicit.envelope_warnings
     assert explicit.performance is not None
     assert _rebase_basis(explicit.performance) == "unknown"
+
+
+def test_live_portfolio_v1_disagreed_snapshots_fail_closed(
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _route_v1(
+        monkeypatch,
+        {
+            "/api/v1/portfolio-snapshot": _fixture("portfolio-snapshot"),
+            "/api/v1/transactions": _fixture("transactions"),
+        },
+    )
+    live = tc.fetch_live_portfolio()
+    assert not live.available
+    assert live.error is not None and "snapshot_date_mismatch" in live.error
+    assert legacy_guard == []
+
+
+def test_live_portfolio_v1_unknown_position_date_fails_closed(
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    positions = _fixture("portfolio-snapshot")
+    cast("dict[str, object]", positions["meta"])["as_of"] = None
+    _route_v1(
+        monkeypatch,
+        {
+            "/api/v1/portfolio-snapshot": positions,
+            "/api/v1/transactions": _fixture("transactions"),
+        },
+    )
+    live = tc.fetch_live_portfolio()
+    assert not live.available
+    assert live.error is not None and "snapshot_date_missing" in live.error
+    assert legacy_guard == []
+
+
+@pytest.mark.parametrize("currency", ["", "   "])
+def test_live_portfolio_v1_missing_currency_fails_closed(
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch, currency: str
+) -> None:
+    transactions = _fixture("transactions")
+    meta = cast("dict[str, object]", transactions["meta"])
+    meta["as_of"] = "2026-07-22"
+    meta["currency"] = currency
+    _route_v1(
+        monkeypatch,
+        {
+            "/api/v1/portfolio-snapshot": _fixture("portfolio-snapshot"),
+            "/api/v1/transactions": transactions,
+        },
+    )
+    live = tc.fetch_live_portfolio()
+    assert not live.available
+    assert live.error is not None and "snapshot_currency_missing" in live.error
+    assert legacy_guard == []
+
+
+def test_live_portfolio_v1_requests_transactions_through_selected_snapshot(
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    positions = _fixture("portfolio-snapshot")
+    requested_windows: list[str | None] = []
+
+    def snapshot_server(
+        self: requests.Session, url: str, params: object = None, timeout: object = None
+    ) -> _FakeResp:
+        if url.endswith("/api/v1/portfolio-snapshot"):
+            return _FakeResp(positions)
+        assert url.endswith("/api/v1/transactions")
+        assert isinstance(params, dict)
+        query = cast("dict[str, object]", params)
+        end = query.get("end_date")
+        assert end is None or isinstance(end, str)
+        requested_windows.append(end)
+        response = _fixture("transactions")
+        # The producer reports the query window end. Its default is today,
+        # which can be later than the selected positions snapshot.
+        selected_end = end or "2026-07-23"
+        response["end_date"] = selected_end
+        cast("dict[str, object]", response["meta"])["as_of"] = selected_end
+        return _FakeResp(response)
+
+    monkeypatch.setattr(requests.Session, "get", snapshot_server)
+    live = tc.fetch_live_portfolio()
+    assert live.available
+    assert live.as_of == "2026-07-22"
+    assert requested_windows == ["2026-07-22"]
+    assert legacy_guard == []
+
+
+def test_live_portfolio_v1_old_holdings_do_not_inherit_transaction_freshness(
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot = _fixture("portfolio-snapshot")
+    snapshot_meta = cast("dict[str, object]", snapshot["meta"])
+    snapshot_meta.update(
+        as_of="2026-06-01",
+        is_stale=True,
+        warnings=[{"code": "STALE_HOLDINGS", "message": "synthetic old holdings"}],
+    )
+    for account in cast("list[dict[str, object]]", snapshot["accounts"]):
+        if account["included_in_totals"]:
+            account["holdings_as_of"] = snapshot_meta["as_of"]
+    cast("dict[str, object]", snapshot["equity_fraction"])["holdings_as_of"] = snapshot_meta[
+        "as_of"
+    ]
+    positions = _fixture("positions")
+    positions["snapshot_date"] = snapshot_meta["as_of"]
+    transactions = _fixture("transactions")
+    transaction_meta = cast("dict[str, object]", transactions["meta"])
+    transaction_meta.update(as_of="2026-06-01", is_stale=False)
+    # The transaction producer evaluates age against its chosen window end.
+    # Fresh transaction metadata therefore cannot refresh an old holding.
+    router = _route_v1(
+        monkeypatch,
+        {
+            "/api/v1/portfolio/positions": positions,
+            "/api/v1/portfolio-snapshot": snapshot,
+            "/api/v1/transactions": transactions,
+        },
+    )
+    live = tc.fetch_live_portfolio()
+    assert live.available
+    assert live.as_of == "2026-06-01"
+    assert live.is_stale
+    assert "STALE_HOLDINGS" in live.envelope_warnings
+    assert any(url.endswith("/api/v1/portfolio-snapshot") for url in router.calls)
+    assert legacy_guard == []
+
+
+@pytest.mark.parametrize(
+    ("change", "expected_code"),
+    [
+        ("snapshot_currency_empty", "snapshot_currency_missing"),
+        ("transaction_currency_changed", "snapshot_currency_mismatch"),
+        ("transaction_accounts_changed", "snapshot_account_coverage_mismatch"),
+        ("transaction_account_duplicate", "snapshot_account_coverage_conflict"),
+        ("snapshot_accounts_conflict", "snapshot_account_coverage_conflict"),
+        ("snapshot_major_changed", "incompatible_schema_version"),
+        ("snapshot_freshness_missing", "schema_validation_error: meta.is_stale: missing"),
+    ],
+)
+def test_live_portfolio_v1_requires_snapshot_and_transaction_authority_agreement(
+    v1_on: None,
+    legacy_guard: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+    expected_code: str,
+) -> None:
+    snapshot = _fixture("portfolio-snapshot")
+    snapshot_meta = cast("dict[str, object]", snapshot["meta"])
+    transactions = _fixture("transactions")
+    transaction_meta = cast("dict[str, object]", transactions["meta"])
+    transaction_meta["as_of"] = snapshot_meta["as_of"]
+    if change == "snapshot_currency_empty":
+        snapshot_meta["currency"] = " "
+    elif change == "transaction_currency_changed":
+        transaction_meta["currency"] = "EUR"
+    elif change == "transaction_accounts_changed":
+        cast("dict[str, object]", transaction_meta["account_coverage"])["included_account_ids"] = [
+            1,
+            2,
+        ]
+    elif change == "transaction_account_duplicate":
+        cast("dict[str, object]", transaction_meta["account_coverage"])["included_account_ids"] = [
+            1,
+            2,
+            3,
+            3,
+        ]
+    elif change == "snapshot_accounts_conflict":
+        cast("dict[str, object]", snapshot_meta["account_coverage"])["excluded_account_ids"] = [
+            3,
+            4,
+        ]
+    elif change == "snapshot_major_changed":
+        snapshot_meta["schema_version"] = "2.0.0"
+    elif change == "snapshot_freshness_missing":
+        snapshot_meta.pop("is_stale")
+    _route_v1(
+        monkeypatch,
+        {
+            "/api/v1/portfolio-snapshot": snapshot,
+            "/api/v1/transactions": transactions,
+        },
+    )
+    live = tc.fetch_live_portfolio()
+    assert not live.available
+    assert live.error is not None and expected_code in live.error
+    assert legacy_guard == []
+
+
+def test_live_portfolio_v1_preserves_both_envelopes_and_two_request_bound(
+    v1_on: None, legacy_guard: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    snapshot = _fixture("portfolio-snapshot")
+    snapshot_meta = cast("dict[str, object]", snapshot["meta"])
+    snapshot_meta.update(
+        is_partial=True,
+        warnings=[{"code": "PARTIAL_COVERAGE", "message": "private account detail"}],
+    )
+    transactions = _fixture("transactions")
+    transaction_meta = cast("dict[str, object]", transactions["meta"])
+    transaction_meta.update(
+        as_of=snapshot_meta["as_of"],
+        is_stale=True,
+        is_partial=False,
+        warnings=[
+            {"code": "PARTIAL_COVERAGE", "message": "duplicate warning"},
+            {"code": "TRANSACTION_WARNING", "message": "private transaction detail"},
+        ],
+    )
+    router = _route_v1(
+        monkeypatch,
+        {
+            "/api/v1/portfolio-snapshot": snapshot,
+            "/api/v1/transactions": transactions,
+        },
+    )
+    live = tc.fetch_live_portfolio()
+    assert live.available and live.is_stale and live.is_partial
+    assert live.envelope_warnings == ["PARTIAL_COVERAGE", "TRANSACTION_WARNING"]
+    assert len(router.calls) == 2
+    assert router.calls[0].endswith("/api/v1/portfolio-snapshot")
+    assert router.calls[1].endswith("/api/v1/transactions")
+    assert legacy_guard == []

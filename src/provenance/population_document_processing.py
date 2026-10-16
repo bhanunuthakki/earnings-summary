@@ -36,6 +36,16 @@ from provenance.population_completeness import (
     digest_text,
     stream_population_artifact_set,
 )
+from provenance.reporting_document_scope import (
+    REPORTING_DOCUMENT_SELECTION_POLICY,
+    reporting_document_scope,
+)
+from provenance.reporting_document_scope import (
+    ReportingDocumentDecision as ReportingDocumentDecision,
+)
+from provenance.reporting_document_scope import (
+    classify_reporting_document as classify_reporting_document,
+)
 from provenance.reporting_entity_registry import (
     DocumentFamily,
     ReportingEntityRegistry,
@@ -56,10 +66,10 @@ from runtime.deterministic import sha256_joined_unit_sep as _digest
 
 _POLICY = DocumentProcessingPolicy(
     policy_name="complete_reporting_document_processing",
-    policy_version="1",
+    policy_version="2",
     include_optional_source_obligations=True,
 )
-_DOCUMENT_SELECTION_POLICY = "document-processing-terminal-at-k-observed-through-o.v1"
+_DOCUMENT_SELECTION_POLICY = REPORTING_DOCUMENT_SELECTION_POLICY
 _REPORTING_FAMILIES = (
     "annual_securities_report",
     "continuous_disclosure",
@@ -260,19 +270,6 @@ class DocumentProcessingOperationReceipt(_FrozenModel):
         if self.receipt_sha256 != _document_receipt_sha(self):
             raise ValueError("document operation receipt commitment does not match")
         return self
-
-
-class ReportingDocumentDecision(_FrozenModel):
-    """One explicit keep, safe exclusion, or unresolved classification."""
-
-    expected_document_id: str
-    issuer_id: str
-    outcome: Literal["governed_reporting", "excluded_supporting", "unresolved"]
-    reason_code: str
-    document_family: str | None = None
-    coverage_status: str
-    document_version_id: str | None = None
-    reporting_entity_id: str | None = None
 
 
 def build_document_processing_receipt(
@@ -997,131 +994,36 @@ def _document_scope(
     observed_through: datetime,
     *,
     analysis_scope: AnalysisEvidenceScope | None = None,
-) -> tuple[
-    tuple[ReportingDocumentDecision, ...],
-    dict[str, tuple[str, ...]],
-    int,
-]:
-    selected_ids: set[str] | None = None
-    if analysis_scope is not None:
-        require_analysis_documents(conn, analysis_scope, cutoff, observed_through)
-        selected_ids = {
-            entry.expected_document_id
-            for entry in resolve_analysis_coverage(conn, analysis_scope, cutoff, observed_through)
-            if entry.role == "research_document"
-        }
-    rows = conn.execute(
-        "SELECT expected.expected_document_id,expected.issuer_id,"
-        "expected.source_kind,expected.document_type,expected.form_type,"
-        "coverage.document_version_id,"
-        "COALESCE(coverage.coverage_status,'unassessed'),"
-        "canonical.reporting_entity_id,lifecycle.status,"
-        "lifecycle.expected_document_id "
-        "FROM expected_documents expected "
-        "JOIN source_inventory_snapshots inventory "
-        "ON inventory.snapshot_id=expected.snapshot_id "
-        "LEFT JOIN expected_document_lifecycle_revisions lifecycle "
-        "ON lifecycle.inventory_key=inventory.inventory_key "
-        "AND lifecycle.expected_document_key=expected.expected_document_key "
-        "AND datetime(lifecycle.knowledge_at)<=datetime(?) "
-        "AND datetime(lifecycle.recorded_at)<=datetime(?) "
-        "AND NOT EXISTS (SELECT 1 FROM expected_document_lifecycle_revisions newer_lifecycle "
-        "WHERE newer_lifecycle.inventory_key=lifecycle.inventory_key "
-        "AND newer_lifecycle.expected_document_key=lifecycle.expected_document_key "
-        "AND newer_lifecycle.revision>lifecycle.revision "
-        "AND datetime(newer_lifecycle.knowledge_at)<=datetime(?) "
-        "AND datetime(newer_lifecycle.recorded_at)<=datetime(?)) "
-        "LEFT JOIN source_coverage_assessments coverage "
-        "ON coverage.expected_document_id=expected.expected_document_id "
-        "AND datetime(coverage.knowledge_at)<=datetime(?) "
-        "AND datetime(coverage.recorded_at)<=datetime(?) "
-        "AND NOT EXISTS (SELECT 1 FROM source_coverage_assessments newer "
-        "WHERE newer.expected_document_id=coverage.expected_document_id "
-        "AND newer.revision>coverage.revision "
-        "AND datetime(newer.knowledge_at)<=datetime(?) "
-        "AND datetime(newer.recorded_at)<=datetime(?)) "
-        "LEFT JOIN v_evidence_document_versions_canonical canonical "
-        "ON canonical.document_version_id=coverage.document_version_id "
-        "WHERE datetime(expected.recorded_at)<=datetime(?) "
-        "ORDER BY expected.issuer_id,expected.expected_document_key",
-        (
-            _db_time(cutoff),
-            _db_time(observed_through),
-            _db_time(cutoff),
-            _db_time(observed_through),
-            _db_time(cutoff),
-            _db_time(observed_through),
-            _db_time(cutoff),
-            _db_time(observed_through),
-            _db_time(observed_through),
-        ),
-    ).fetchall()
-    grouped: dict[str, list[str]] = {}
-    decisions: list[ReportingDocumentDecision] = []
-    for row in rows:
-        if selected_ids is not None and str(row[0]) not in selected_ids:
-            continue
-        lifecycle_status = None if row[8] is None else str(row[8])
-        lifecycle_expected_id = None if row[9] is None else str(row[9])
-        if lifecycle_status is None:
-            outcome: Literal["governed_reporting", "excluded_supporting", "unresolved"] = (
-                "unresolved"
-            )
-            family = None
-            reason = "expected_document_lifecycle_missing"
-        elif lifecycle_status != "expected" or lifecycle_expected_id != str(row[0]):
-            outcome = "excluded_supporting"
-            family = None
-            reason = "expected_document_not_current"
-        else:
-            outcome, family, reason = classify_reporting_document(
-                source_kind=str(row["source_kind"]),
-                document_type=str(row["document_type"]),
-                form_type=None if row["form_type"] is None else str(row["form_type"]),
-            )
-        coverage_status = str(row[6])
-        document_version_id = None if row[5] is None else str(row[5])
-        reporting_entity_id = None if row[7] is None else str(row[7])
-        decision = ReportingDocumentDecision(
-            expected_document_id=str(row[0]),
-            issuer_id=str(row[1]),
-            outcome=outcome,
-            reason_code=reason,
-            document_family=family,
-            coverage_status=coverage_status,
-            document_version_id=document_version_id,
-            reporting_entity_id=reporting_entity_id,
-        )
-        decisions.append(decision)
-        if outcome != "governed_reporting":
-            continue
-        if coverage_status not in {"captured", "extracted", "indexed"}:
-            continue
-        if document_version_id is None:
-            raise ValueError("positive source coverage has no document version")
-        if reporting_entity_id is None:
-            raise ValueError("governed reporting document lacks a canonical reporting entity")
-        grouped.setdefault(str(row[1]), []).append(document_version_id)
-    incomplete_inventory_count = int(
-        conn.execute(
-            "SELECT COUNT(*) FROM source_inventory_snapshots inventory "
-            "WHERE datetime(inventory.recorded_at)<=datetime(?) "
-            "AND NOT EXISTS (SELECT 1 FROM source_inventory_snapshots newer "
-            "WHERE newer.inventory_key=inventory.inventory_key "
-            "AND newer.revision>inventory.revision "
-            "AND datetime(newer.recorded_at)<=datetime(?)) "
-            "AND NOT EXISTS (SELECT 1 FROM v_source_inventory_sealed_complete complete "
-            "WHERE complete.snapshot_id=inventory.snapshot_id)",
-            (_db_time(observed_through), _db_time(observed_through)),
-        ).fetchone()[0]
+) -> tuple[tuple[ReportingDocumentDecision, ...], dict[str, tuple[str, ...]], int]:
+    if analysis_scope is None:
+        return reporting_document_scope(conn, cutoff, observed_through)
+    require_analysis_documents(conn, analysis_scope, cutoff, observed_through)
+    selected_ids = {
+        entry.expected_document_id
+        for entry in resolve_analysis_coverage(conn, analysis_scope, cutoff, observed_through)
+        if entry.role == "research_document"
+    }
+    decisions, _documents, _incomplete = reporting_document_scope(
+        conn, cutoff, observed_through, expected_document_ids=tuple(sorted(selected_ids))
     )
+    selected_decisions = tuple(
+        decision for decision in decisions if decision.expected_document_id in selected_ids
+    )
+    grouped: dict[str, list[str]] = {}
+    for decision in selected_decisions:
+        if (
+            decision.outcome == "governed_reporting"
+            and decision.coverage_status in {"captured", "extracted", "indexed"}
+            and decision.document_version_id is not None
+        ):
+            grouped.setdefault(decision.issuer_id, []).append(decision.document_version_id)
     return (
-        tuple(decisions),
+        selected_decisions,
         {
             issuer_id: tuple(sorted(set(document_ids)))
             for issuer_id, document_ids in sorted(grouped.items())
         },
-        incomplete_inventory_count if analysis_scope is None else 0,
+        0,
     )
 
 
@@ -1198,6 +1100,16 @@ def _close_obligation(
     seal_disposition(conn, disposition_id, sealed_at=recorded_at)
 
 
+def _document_source_authority(
+    decision: ReportingDocumentDecision,
+) -> Literal["sec_edgar", "issuer_publisher"]:
+    if decision.reason_code == "governed_registration_financial_package":
+        return "sec_edgar"
+    if decision.document_family in {"operating_company_periodic", "continuous_disclosure"}:
+        return "sec_edgar"
+    return "issuer_publisher"
+
+
 def _ensure_document_family_obligations(
     conn: sqlite3.Connection,
     decisions: tuple[ReportingDocumentDecision, ...],
@@ -1206,7 +1118,7 @@ def _ensure_document_family_obligations(
 ) -> int:
     registry = ReportingEntityRegistry(conn)
     created = 0
-    scopes: set[tuple[str, str, str]] = set()
+    scopes: set[tuple[str, str, str, Literal["sec_edgar", "issuer_publisher"]]] = set()
     for decision in decisions:
         if decision.outcome != "governed_reporting" or decision.document_family is None:
             continue
@@ -1220,11 +1132,29 @@ def _ensure_document_family_obligations(
             if len(entity_rows) != 1:
                 continue
             entity_id = str(entity_rows[0][0])
-        scopes.add((decision.issuer_id, entity_id, decision.document_family))
-    for issuer_id, reporting_entity_id, family in sorted(scopes):
+        if decision.reason_code == "governed_registration_financial_package":
+            issuer = conn.execute(
+                "SELECT entity_kind FROM issuer_entities WHERE issuer_id=?",
+                (decision.issuer_id,),
+            ).fetchone()
+            if issuer is None or str(issuer[0]) != "operating_company":
+                raise ValueError("registration_financial_duty_requires_operating_company")
+        scopes.add(
+            (
+                decision.issuer_id,
+                entity_id,
+                decision.document_family,
+                _document_source_authority(decision),
+            )
+        )
+    for issuer_id, reporting_entity_id, family, authority_kind in sorted(scopes):
+        registration = authority_kind == "sec_edgar" and family == "issuer_financial_statements"
+        completeness_sql = "AND completeness_rule='regulator_inventory' " if registration else ""
         present = conn.execute(
             "SELECT 1 FROM source_obligation_revisions obligation "
             "WHERE issuer_id=? AND reporting_entity_id=? AND document_family=? "
+            "AND authority_kind=? "
+            f"{completeness_sql}"  # nosec B608 -- fixed optional predicate
             "AND obligation_state IN ('required','optional') "
             "AND datetime(active_from)<=datetime(?) "
             "AND (active_to IS NULL OR datetime(active_to)>datetime(?)) "
@@ -1239,6 +1169,7 @@ def _ensure_document_family_obligations(
                 issuer_id,
                 reporting_entity_id,
                 family,
+                authority_kind,
                 _db_time(cutoff),
                 _db_time(cutoff),
                 _db_time(cutoff),
@@ -1249,11 +1180,6 @@ def _ensure_document_family_obligations(
         ).fetchone()
         if present is not None:
             continue
-        authority_kind = (
-            "sec_edgar"
-            if family in {"operating_company_periodic", "continuous_disclosure"}
-            else "issuer_publisher"
-        )
         completeness_rule = (
             "regulator_inventory"
             if authority_kind == "sec_edgar"
@@ -1288,7 +1214,7 @@ def _ensure_document_family_obligations(
                 reason_details=(
                     (
                         "population_policy",
-                        "complete_reporting_document_processing@1",
+                        "complete_reporting_document_processing@2",
                     ),
                 ),
                 effective_at=cutoff,
@@ -1345,6 +1271,13 @@ def _ensure_expected_document_binding(
     if decision.reporting_entity_id is not None:
         entity_sql = "AND reporting_entity_id=? "
         parameters.append(decision.reporting_entity_id)
+    if decision.document_family == "issuer_financial_statements":
+        entity_sql += "AND authority_kind=? "
+        authority = _document_source_authority(decision)
+        parameters.append(authority)
+        if authority == "sec_edgar":
+            entity_sql += "AND completeness_rule=? "
+            parameters.append("regulator_inventory")
     rows = conn.execute(
         "SELECT obligation_revision_id,reporting_entity_id "
         "FROM source_obligation_revisions obligation "
@@ -1438,82 +1371,6 @@ def _raise_for_immutable_snapshot_blockers(
             "cannot seal document-processing snapshots while source "
             "inventory, classification, coverage, or binding blockers remain"
         )
-
-
-def classify_reporting_document(
-    *,
-    source_kind: str,
-    document_type: str,
-    form_type: str | None,
-) -> tuple[
-    Literal["governed_reporting", "excluded_supporting", "unresolved"],
-    str | None,
-    str,
-]:
-    """Classify the governed investor-reporting surface without deleting inventory."""
-
-    source = source_kind.strip().lower()
-    document = document_type.strip().lower()
-    form = (form_type or "").strip().upper()
-    if source == "sec_filing":
-        if document == "sec_financial_report":
-            return "excluded_supporting", None, "sec_xbrl_report_attachment"
-        if document != "filing":
-            return "excluded_supporting", None, "sec_supporting_artifact"
-        if form in {
-            "10-K",
-            "10-K/A",
-            "10-Q",
-            "10-Q/A",
-            "20-F",
-            "20-F/A",
-            "40-F",
-            "40-F/A",
-        }:
-            return (
-                "governed_reporting",
-                "operating_company_periodic",
-                "governed_periodic_filing",
-            )
-        if form in {"6-K", "6-K/A", "8-K", "8-K/A"}:
-            return (
-                "governed_reporting",
-                "continuous_disclosure",
-                "governed_current_report",
-            )
-        return "excluded_supporting", None, "sec_form_outside_reporting_policy"
-    if source == "earnings_call":
-        if document in {
-            "earnings_call",
-            "earnings_call_transcript",
-            "earnings_transcript",
-            "transcript",
-        }:
-            return (
-                "governed_reporting",
-                "issuer_earnings_materials",
-                "governed_earnings_call_transcript",
-            )
-        return "unresolved", None, "unclassified_earnings_call_artifact"
-    if source != "ir_document":
-        return "unresolved", None, "unknown_expected_document_source_kind"
-    ir_families = {
-        "annual_report": "issuer_financial_statements",
-        "financial_statement": "issuer_financial_statements",
-        "supplement": "issuer_financial_statements",
-        "earnings_material": "issuer_earnings_materials",
-        "earnings_release": "issuer_earnings_materials",
-        "press_release": "issuer_earnings_materials",
-        "earnings_transcript": "issuer_earnings_materials",
-        "transcript": "issuer_earnings_materials",
-        "investor_presentation": "issuer_presentations",
-        "presentation": "issuer_presentations",
-        "investor_update": "issuer_presentations",
-    }
-    family = ir_families.get(document)
-    if family is None:
-        return "unresolved", None, "unclassified_ir_reporting_document"
-    return "governed_reporting", family, "governed_ir_reporting_document"
 
 
 def _filing_xbrl_reference(

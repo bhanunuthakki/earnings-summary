@@ -38,6 +38,7 @@
     "folder_structure.md": {"class": "canonical", "summary": "Machine-checked repository topology contract.", "authority_domains": ["repository_topology"]},
     "fund_grade_build_2026_06.md": {"class": "history", "summary": "Completed fund-grade build record."},
     "gemini_backend.md": {"class": "runbook", "summary": "Gemini adapter setup and failure mechanics.", "governed_by": ["llm_calls.md"]},
+    "history/financial_narrative_grounding_audit_2026_10.md": {"class": "history", "summary": "Dated full-surface financial narrative grounding audit, local template repairs and remaining acceptance gaps."},
     "history/report_comments_and_chat_2026_06_2026_08.md": {"class": "history", "summary": "Superseded comments and chat design source."},
     "holdings_json_schema.md": {"class": "canonical", "summary": "Micro-thesis holdings schema contract.", "authority_domains": ["holdings_schema"]},
     "improvement_roadmap_2026_06.md": {"class": "history", "summary": "Superseded improvement roadmap."},

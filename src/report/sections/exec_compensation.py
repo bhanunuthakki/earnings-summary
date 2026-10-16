@@ -446,6 +446,13 @@ def _generate_alignment_narrative(
     return narrative
 
 
+def _alignment_amount(value: float | None, currency: str | None) -> str:
+    if value is None:
+        return "unavailable"
+    unit = currency or "currency unavailable"
+    return f"{unit} {value:,.2f}"
+
+
 def _alignment_prompt(
     ticker: str,
     rows: list[ExecCompRowModel],
@@ -461,15 +468,17 @@ def _alignment_prompt(
     for r in rows:
         pkg_lines.append(
             f"- {r.executive_name} ({r.role or '?'}): "
-            f"granted ${(r.total_comp_granted or 0) / 1e6:.1f}M / realized ${(r.total_comp_realized or 0) / 1e6:.1f}M. "
-            f"Metrics: {r.performance_metrics_summary or '(none disclosed)'}. "
+            f"granted {_alignment_amount(r.total_comp_granted, r.currency)} / "
+            f"realized {_alignment_amount(r.total_comp_realized, r.currency)}. "
+            f"Metrics: {r.performance_metrics_summary or '(disclosure unavailable in this report)'}. "
             f"Thesis-KPI match: {'YES' if r.metrics_have_thesis_kpi else 'NO'}."
         )
     insider_lines: list[str] = []
     for s in insider_signals[:10]:
         insider_lines.append(
             f"- {s.transaction_date} · {s.insider_name} ({s.role or '?'}): "
-            f"{s.transaction_type} {s.shares:,.0f} sh @ ${s.transaction_value or 0:,.0f}, "
+            f"{s.transaction_type} {s.shares:,.0f} shares, "
+            f"transaction value {_alignment_amount(s.transaction_value, None)}, "
             f"signal={s.signal_strength:.2f}, {s.rationale}"
         )
     thesis_str = (
@@ -486,7 +495,7 @@ Latest fiscal year NEO compensation:
 {chr(10).join(pkg_lines) if pkg_lines else "(no comp data available)"}
 
 Recent insider transactions (top {len(insider_signals[:10])} by conviction signal):
-{chr(10).join(insider_lines) if insider_lines else "(no recent insider activity)"}
+{chr(10).join(insider_lines) if insider_lines else "(insider activity data unavailable in this report)"}
 
 Write a 200-350 word analyst memo in markdown. Cover:
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -22,8 +22,14 @@ from pipeline.sec_xbrl import (
     CompanyFactsAccessionRecord,
     enumerate_companyfacts_accessions,
     insert_facts_from_companyfacts,
+    resolve_companyfacts_cik,
     upsert_accession_documents,
     upsert_companyfacts_snapshot_document,
+)
+from provenance.issuer_registry import IssuerRegistry, LegacyIssuerBindingRevision
+from provenance.issuer_registry_bootstrap import (
+    BootstrapRequest,
+    bootstrap_issuer_reporting_registry,
 )
 
 
@@ -158,6 +164,105 @@ def test_no_sec_filers_never_carry_a_cik() -> None:
 def test_ciks_are_ten_digit_zero_padded() -> None:
     for ticker, cik in CIK_MAP.items():
         assert len(cik) == 10 and cik.isdigit(), (ticker, cik)
+
+
+@pytest.fixture
+def registered_companyfacts_issuer(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> Generator[sqlite3.Connection, None, None]:
+    path = tmp_path / "registered-sec-companyfacts.db"
+    migrated_db(path)
+    database = sqlite3.connect(path)
+    database.execute(
+        "INSERT INTO tracked_companies (id, user_id, ticker, name, list_type, archived_at) "
+        "VALUES (1, 'bhanu', 'MBGL', 'Mobility Global', "
+        "'evaluation', NULL)"
+    )
+    bootstrap_issuer_reporting_registry(
+        database,
+        raw_body=json.dumps(
+            {"0": {"cik_str": 2090312, "ticker": "MBGL", "title": "Mobility Global"}}
+        ).encode(),
+        request=BootstrapRequest(
+            source_url="https://www.sec.gov/files/company_tickers.json",
+            blob_root=tmp_path / "issuer-blobs",
+            apply=True,
+            recorded_at=datetime(2026, 10, 1, tzinfo=UTC),
+        ),
+    )
+    try:
+        yield database
+    finally:
+        database.close()
+
+
+def test_companyfacts_resolves_unmapped_cik_from_canonical_registry(
+    registered_companyfacts_issuer: sqlite3.Connection,
+) -> None:
+    assert "MBGL" not in CIK_MAP
+    assert (
+        resolve_companyfacts_cik(
+            registered_companyfacts_issuer, " mbgl ", knowledge_at=datetime(2026, 10, 3, tzinfo=UTC)
+        )
+        == "0002090312"
+    )
+
+
+def test_companyfacts_rejects_canonical_cik_conflict_with_historical_pin(
+    registered_companyfacts_issuer: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(CIK_MAP, "MBGL", "0000000001")
+    with pytest.raises(ValueError, match="conflicts with the retained static pin"):
+        resolve_companyfacts_cik(
+            registered_companyfacts_issuer, "MBGL", knowledge_at=datetime(2026, 10, 3, tzinfo=UTC)
+        )
+
+
+def test_companyfacts_missing_authority_fails_before_http(conn: sqlite3.Connection) -> None:
+    with pytest.raises(ValueError, match="issuer authority is unavailable"):
+        resolve_companyfacts_cik(conn, "MBGL", knowledge_at=datetime(2026, 10, 3, tzinfo=UTC))
+
+
+@pytest.mark.parametrize("outcome", ["retired", "unresolved", "dissent"])
+def test_companyfacts_unusable_ticker_binding_cannot_fall_back_to_static_pin(
+    registered_companyfacts_issuer: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    database = registered_companyfacts_issuer
+    current = database.execute(
+        "SELECT binding_revision_id, issuer_id FROM legacy_issuer_binding_revisions "
+        "WHERE recorded_issuer_id='legacy-ticker:MBGL'"
+    ).fetchone()
+    stamp = datetime(2026, 10, 2, tzinfo=UTC)
+    IssuerRegistry(database).persist(
+        LegacyIssuerBindingRevision(
+            binding_revision_id="retired-mbgl-binding",
+            idempotency_key="retired-mbgl-binding",
+            recorded_issuer_id="legacy-ticker:MBGL",
+            revision=2,
+            outcome="selected"
+            if outcome == "dissent"
+            else ("retired" if outcome == "retired" else "unresolved"),
+            issuer_id=str(current[1]) if outcome == "dissent" else None,
+            decision_kind="deterministic",
+            material_dissent=outcome == "dissent",
+            reason_code="fixture_retirement",
+            reason_details=(("reason", "synthetic retirement"),),
+            effective_at=stamp,
+            knowledge_at=stamp,
+            recorded_at=stamp,
+            supersedes_binding_revision_id=str(current[0]),
+        )
+    )
+    monkeypatch.setitem(CIK_MAP, "MBGL", "0002090312")
+    message = (
+        "ticker has material identity dissent"
+        if outcome == "dissent"
+        else "ticker identity is unresolved"
+    )
+    with pytest.raises(ValueError, match=message):
+        resolve_companyfacts_cik(database, "MBGL", knowledge_at=datetime(2026, 10, 3, tzinfo=UTC))
 
 
 def test_period_span_months_handles_quarterly() -> None:

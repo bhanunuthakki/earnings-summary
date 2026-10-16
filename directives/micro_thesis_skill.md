@@ -1,12 +1,18 @@
 ---
 name: micro-thesis-tracker
-description: Use this skill when the user asks to run a monthly micro-thesis check, evaluate a specific holding's fundamentals, update the thesis ledger, or process a new earnings release / 10-Q / transcript for NU, MELI, NOW, VEEV, RBRK, WIX, NVO, GOOG, META, AMZN, or BN. Triggers include phrases like "run the thesis tracker," "monthly review," "did [TICKER] earnings break the thesis," "update KPIs for [TICKER]," "I added docs for [TICKER]," "process [TICKER] earnings," or when the user uploads or drops an earnings transcript, 10-Q, or earnings presentation into a source folder. Source documents live in micro_thesis/sources/<TICKER>/ subfolders. Do NOT use for pure valuation/price-trigger questions (those are handled by the Code's existing threshold matrix) or for new-name diligence (use a separate initiation skill).
+description: Micro-thesis monitoring mechanics for holdings in the canonical portfolio roster, including monthly reviews and earnings or filing updates. The project-owned earnings-summary-investing skill routes valuation, new-company evaluation and governed thesis amendments.
 ---
 
 # Micro-Thesis Tracker
 
 ## Purpose
 Monitor the Tier-1 KPIs for each concentrated satellite holding against the pre-defined micro-thesis. Output a Red/Yellow/Green verdict per holding, diff vs. prior period, and trigger Hold/Sell matrix review when a T1 metric breaks.
+
+This runbook supplies mechanics under the approved holdings schema. Use the
+project-owned [investing skill](../src/advisor/skills/earnings-summary-investing/SKILL.md)
+for routing and its [research method](../src/advisor/skills/earnings-summary-investing/references/research-method.md)
+for public moat checks, transcript analysis and investment implications.
+The method does not replace accepted KPI rules or the deterministic evaluator.
 
 ## When to use
 - Monthly cadence review ("run the monthly")
@@ -16,7 +22,9 @@ Monitor the Tier-1 KPIs for each concentrated satellite holding against the pre-
 - When user says "I added docs for [TICKER]" or "process [TICKER] earnings"
 
 ## Holdings coverage
-Per-holding KPI specs live in `micro_thesis/holdings/<TICKER>.json`. Currently covered: NU, MELI, NOW, VEEV, RBRK, WIX, NVO, GOOG, META, AMZN, BN.
+Resolve scope from the current canonical portfolio roster. Per-holding KPI specs
+live in `micro_thesis/holdings/<TICKER>.json`; file presence does not prove membership
+or approval. Evaluation hypotheses use the investing skill's evaluation path.
 
 Each JSON contains:
 - `thesis`: one-sentence core thesis
@@ -28,7 +36,8 @@ Each JSON contains:
 
 ## Source document folders
 
-Each holding has a drop folder at `micro_thesis/sources/<TICKER>/` for raw source documents. This is the primary data input mechanism — the user drops files here and invokes the skill.
+Each holding has an optional drop folder at `micro_thesis/sources/<TICKER>/`
+for owner-supplied documents. Use it alongside admitted project evidence.
 
 ```
 micro_thesis/sources/
@@ -41,56 +50,68 @@ micro_thesis/sources/
 └── ...
 ```
 
-**Accepted file types:** PDF, DOCX, TXT, HTML, CSV, XLSX, PPTX. No strict naming convention required — the user just needs to include the ticker and period somewhere in the filename for confirmation purposes.
+**Accepted file types:** PDF, DOCX, TXT, HTML, CSV, XLSX, PPTX. Confirm issuer and
+fiscal identity from the document and intake receipt, not its filename.
 
-**On invocation, always scan `micro_thesis/sources/<TICKER>/` first.** Sort files by modification date (newest first). Read each document and extract KPI values mapped in `holdings/<TICKER>.json`. When multiple documents cover the same period, cross-reference them (transcript commentary vs. 10-Q quantitative data vs. earnings deck visuals). Flag contradictions explicitly.
+Check admitted facts, transcripts, IR documents and relevant owner-supplied files
+through the investing routes. Cross-reference same-period evidence and retain
+conflicts. File modification time is an intake detail, not source authority,
+fiscal identity or a reason to supersede an observation.
 
-**Staleness rule:** If the newest file in a ticker's folder is >120 days old relative to the current date, warn the user that source docs may be stale and offer to supplement via web search.
+**Freshness:** Compare the covered fiscal periods, disclosure cadence and requested
+cutoff with the latest expected issuer package. A recently modified old filing
+is still old evidence. Report missing current packages through typed receipts.
 
-**After processing:** Note which documents were consumed and their coverage. If a T1 KPI isn't found in any dropped document, flag it as a gap — don't silently fall through to web search without telling the user what's missing from their docs.
+**After processing:** Retain document identities, locators and coverage. Keep
+acquisition gaps separate from extraction or semantic-admission gaps.
 
 ## Workflow
 
 ### Step 1 — Scope
-Ask the user which mode:
-- **Full monthly** (all 11 names)
-- **Single name** (specify ticker)
-- **Post-earnings** (specify ticker + provide/confirm source docs)
-
-If scope is ambiguous, default to single-name with most recent earnings date.
+Use the owner's requested monthly, single-name or post-earnings scope. Resolve
+the current roster and exact fiscal period. Ask only when a missing scope choice
+would change the work. Do not select an arbitrary ticker or require an upload
+when supported public acquisition can supply the evidence.
 
 ### Step 2 — Data acquisition
-For each holding in scope, acquire T1 KPI values in this priority order:
-
-1. **Source folder documents** — scan `micro_thesis/sources/<TICKER>/` for all files. Read them newest-first. This is the highest-trust source. For each file processed, log what it contained and which KPIs it populated. If the user also uploaded documents directly in the conversation (not in the source folder), read those too and treat them at the same priority level.
-2. **Web search** — for publicly reported metrics not found in source folder docs, search issuer IR pages, press releases, and earnings slide decks. Cite sources. Only fall through to this step after explicitly telling the user which T1 KPIs were NOT found in their dropped docs.
-3. **Third-party datasets** — for the specific trackers listed below, attempt web fetch; if paywalled, ask user to provide:
-   - NVO: IQVIA weekly Rx data (GLP-1 US volume)
-   - MELI/NU: Similarweb or SensorTower app rankings (optional, T2)
-   - NOW/RBRK: Gartner MQ position (annual)
-4. **Explicitly flag missing data** — never guess or interpolate. If a T1 KPI is unavailable, the verdict is "Incomplete" until the user provides it.
-
-**When the source folder is empty:** If `micro_thesis/sources/<TICKER>/` has no files, tell the user: "No source docs found in micro_thesis/sources/[TICKER]/. Drop the transcript, 10-Q, and/or earnings deck there, or I'll work from web search only (qualitative signals will be weaker)."
+1. Read admitted T1 values and their provenance through the existing resolver.
+   Compare source definition, unit, scope, basis and fiscal period with the rule.
+2. For gaps, use the issuer acquisition/intake routes for filings, earnings
+   releases, slides and transcripts. Generic search discovers issuer sources;
+   it does not replace company-reported facts. An empty drop folder is not an
+   instruction to stop or ask the owner for files.
+3. Optional public third-party evidence can add context with its coverage and
+   limits. Do not require paywalled or private data as investor homework or
+   silently substitute a proxy into an accepted T1 rule.
+4. Keep missing, stale, conflicting and definition-incompatible inputs unresolved.
+   State the missing source or binding and the next supported public step.
+   Preserve confirmed breaches even when other inputs are unavailable.
 
 **Document intake summary:** Before proceeding to evaluation, output a brief intake log:
 ```
 📄 Sources ingested for [TICKER]:
-- [filename] (mod: [date]) — covered: [list of KPIs extracted]
-- [filename] (mod: [date]) — covered: [list of KPIs extracted]
-⚠️ Not found in docs: [list of T1 KPIs still missing]
-→ Supplementing via web search for: [list]
+- [document identity, publication date, fiscal period, locator] — covered: [KPIs]
+⚠️ Gaps: [missing package / fact / semantic binding]
+→ Public acquisition or unresolved evidence: [next step]
 ```
 
 ### Step 3 — Evaluation
 For each T1 KPI:
 - Record current value, prior quarter, YoY
-- Apply `break_conditions` from the JSON
+- Use the approved rule version and deterministic evaluator through the investing
+  route. Do not replace thresholds with management targets or a qualitative view.
 - Assign color: 🟢 Green (tracking thesis) / 🟡 Yellow (watch) / 🔴 Red (break)
 
 Holding-level verdict:
 - **Intact**: all T1 Green
 - **Watch**: any T1 Yellow, no Red
 - **Broken**: any T1 Red → triggers Hold/Sell matrix review
+- **Incomplete**: an essential rule input is unresolved and no breach is confirmed.
+  Show coverage with any confirmed result. Missing input is not a Green result.
+
+These are report dispositions, not permission to persist or override evaluator
+state. Qualitative moat/transcript findings can request review without changing
+an accepted numeric rule.
 
 ### Step 4 — Adversarial stress test (REQUIRED, always surfaced)
 
@@ -98,7 +119,9 @@ The adversarial loop is not optional and is not gated on verdict color. It runs 
 
 **Surfaces requiring the loop:**
 1. **Overall thesis verdict** — even Intact/Green verdicts must articulate the bear read. A "Green with no counter" is under-examined.
-2. **Say-Do attribution** — for any miss, mixed, or beat: explicitly contest whether the driver was Execution (management performance) vs. Exogenous (macro, FX, supply, one-offs). Both readings must be argued before the verdict is named.
+2. **Say-Do attribution** — when comparable dated prior guidance exists, test
+   execution against external causes such as macro, FX, supply or one-offs.
+   Otherwise state that the comparison is unavailable; do not manufacture a miss.
 3. **Valuation triggers / break-conditions** — for any T1 KPI within ~15% of its `break_condition` threshold, run the loop on whether the trigger is genuinely about to fire vs. a noisy single-print artifact. Also stress-test any trigger that *did* fire — false-positive risk matters.
 
 **Loop structure (use these exact field names):**
@@ -113,18 +136,23 @@ Resolution         : How the two sides reconcile + Net Conviction (High / Medium
                      AND the specific observable that would flip the verdict (e.g.
                      "two consecutive quarters of GMV growth <12%" or "RPO bookings
                      coverage drops below 1.0x").
-Sensitivity        : Quantified impact — if the primary read is wrong by ±X%, what
-                     happens to the verdict / valuation / trigger distance?
+Sensitivity        : Supported calculation/scenario for the affected assumption
+                     or trigger. If required inputs are absent, name the assumption
+                     to review and the missing input; do not invent ±X% or fair value.
 ```
 
 **Discipline:** A counter you cannot articulate is a gap in the analysis, not a sign of conviction. Push harder. If the only counter is "macro could deteriorate," reject it as too generic and find a name-specific one.
 
 Stress-test inputs as well as conclusions: if the source documents are sparse or stale, treat the conviction as Low even when the surface read looks Green.
 
+Conviction is an analyst assessment, not a calibrated probability. Apply the
+research method to material moat evidence and Q&A/language findings. A missing
+public mechanism test is unproven evidence, not an automatic thesis break.
+
 ### Step 5 — Output format
 
 ```
-## [TICKER] — [Verdict: Intact / Watch / Broken]
+## [TICKER] — [Verdict: Intact / Watch / Broken / Incomplete]
 **Thesis:** [one-line]
 **As of:** [date] | **Sources:** [10-Q / transcript / press release + links]
 
@@ -134,6 +162,8 @@ Stress-test inputs as well as conclusions: if the source documents are sparse or
 (every row carries an inline source tag: doc type, period, page/section)
 
 **Diff vs last review:** [what changed materially, with sources]
+[Include material moat evidence, complete-exchange unanswered components and
+comparable language changes here; label absent baselines or partial coverage.]
 
 **Adversarial Loop — Thesis Verdict**
 - Primary Thesis: ...
@@ -142,6 +172,7 @@ Stress-test inputs as well as conclusions: if the source documents are sparse or
 - Sensitivity: ...
 
 **Adversarial Loop — Say-Do Attribution**
+[When comparable dated prior guidance exists; otherwise state unavailable.]
 - Primary Thesis: [Execution vs. Exogenous read with quoted guidance vs. actual]
 - Strongest Counter: ...
 - Resolution (Net Conviction: H/M/L): ...
@@ -165,9 +196,13 @@ For full monthly, prepend a summary table:
 
 ## Output discipline
 - Terse. No filler. Data-first.
-- Never restate valuation triggers (those are in the Code, not this skill's scope).
+- Reference approved triggers when they explain the result; do not rewrite them.
 - Flag if a metric the user specified is actually lagging/vanity — offer the leading alternative.
-- If user asks for a holding not in coverage, offer to scaffold a new JSON.
+- Missing coverage routes through existing onboarding/evaluation mechanics;
+  do not make a new accepted thesis from a scaffold.
 
 ## Updating KPI specs
-When the user says "add [metric] to [ticker]" or "drop [metric]," edit the relevant `micro_thesis/holdings/<TICKER>.json` and confirm the change. Version the file with a `last_updated` field.
+Use the investing skill's governed thesis-revision path. Prepare the cited
+amendment and distinguish metric definition, narrative and break-rule changes.
+Persist only when the specific approval and supported versioned writer are
+available. A report recommendation does not authorize an ad hoc JSON/SQL edit.

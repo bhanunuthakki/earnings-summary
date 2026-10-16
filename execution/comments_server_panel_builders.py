@@ -39,6 +39,7 @@ def _panel_operations(ctx: ServerContext) -> Response | tuple[str, int]:
         observed_at=datetime.now(UTC),
         scheduler_receipt_path=scheduler_receipt_path(repo_root),
         service_receipt_path=service_receipt_path(repo_root),
+        job_receipt_roots=ctx.operations_job_receipt_roots,
     )
     return Response(
         render_operations_panel(
@@ -95,7 +96,7 @@ def _panel_performance_risk(ctx: ServerContext) -> Response | tuple[str, int]:
         )
     if fragment:
         return Response(
-            render_health_fragment(db_path, fragment, conn=get_read_db()),
+            render_health_fragment(db_path, fragment, repo_root=ctx.repo_root, conn=get_read_db()),
             mimetype="text/html",
         )
     return Response(
@@ -117,7 +118,7 @@ def _panel_portfolio_synthesis(ctx: ServerContext) -> Response | tuple[str, int]
     from pipeline.portfolio_panel import render_portfolio_synthesis_panel
 
     return Response(
-        render_portfolio_synthesis_panel(db_path, conn=get_read_db()),
+        render_portfolio_synthesis_panel(db_path, repo_root=ctx.repo_root, conn=get_read_db()),
         mimetype="text/html",
     )
 
@@ -136,7 +137,12 @@ def _panel_portfolio_risk(ctx: ServerContext) -> Response | tuple[str, int]:
     from pipeline.portfolio_panel import render_portfolio_risk_panel
 
     return Response(
-        render_portfolio_risk_panel(db_path=db_path, conn=get_read_db()),
+        render_portfolio_risk_panel(
+            db_path=db_path,
+            repo_root=ctx.repo_root,
+            conn=get_read_db(),
+            source_context=ctx.source_context,
+        ),
         mimetype="text/html",
     )
 
@@ -157,7 +163,7 @@ def _panel_portfolio_health(ctx: ServerContext) -> Response | tuple[str, int]:
     fragment = request.args.get("fragment")
     if fragment:
         return Response(
-            render_health_fragment(db_path, fragment, conn=get_read_db()),
+            render_health_fragment(db_path, fragment, repo_root=ctx.repo_root, conn=get_read_db()),
             mimetype="text/html",
         )
     user_id = DEFAULT_USER_ID
@@ -189,11 +195,15 @@ def _panel_portfolio_record(ctx: ServerContext) -> Response | tuple[str, int]:
         if fragment not in ("brief", "decisions", "research-items", "memos", "triggers"):
             abort(404)
         return Response(
-            render_portfolio_record_fragment(db_path, fragment, user_id=user_id),
+            render_portfolio_record_fragment(
+                db_path, fragment, user_id=user_id, source_context=ctx.source_context
+            ),
             mimetype="text/html",
         )
     return Response(
-        render_portfolio_record_panel(db_path, user_id=user_id, lazy=True),
+        render_portfolio_record_panel(
+            db_path, user_id=user_id, lazy=True, source_context=ctx.source_context
+        ),
         mimetype="text/html",
     )
 
@@ -544,7 +554,7 @@ def _panel_advisor_memos(ctx: ServerContext) -> Response | tuple[str, int]:
 
     user_id = DEFAULT_USER_ID
     return Response(
-        render_advisor_memos_panel(db_path, user_id=user_id),
+        render_advisor_memos_panel(db_path, user_id=user_id, source_context=ctx.source_context),
         mimetype="text/html",
     )
 

@@ -19,6 +19,34 @@ EXPECTED_DLL_SHA256 = (
 )
 
 
+def test_managed_target_imports_own_checkout_without_pythonpath(tmp_path: Path) -> None:
+    target = tmp_path / "check_import.py"
+    target.write_text(
+        "import sys\n"
+        "from pathlib import Path\n"
+        "from src.operations import artifact_retention\n"
+        "assert Path(artifact_retention.__file__).resolve() == Path(sys.argv[1]).resolve()\n",
+        encoding="utf-8",
+    )
+    environment = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(PROJECT_ROOT / "execution/sqlite_bootstrap.py"),
+            str(target),
+            str(PROJECT_ROOT / "src/operations/artifact_retention.py"),
+        ],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_vendored_sqlite_dll_matches_pinned_binary_hash() -> None:
     assert hashlib.sha256(DLL_PATH.read_bytes()).hexdigest() == EXPECTED_DLL_SHA256
 

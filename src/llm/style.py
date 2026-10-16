@@ -1,17 +1,9 @@
 """
 src/llm/style.py
 ----------------
-Cross-prompt presentation rules — the single source of truth for how LLM
-briefs format numbers.
-
-Today only the holding-scorecard's ``_HARD_RULES_BLOCK`` (in ``llm_client.py``)
-constrains the model's output shape, and only for two prompts. Every other
-brief generator — per-quarter summary, press release, presentation, event,
-recent developments, pairwise SayDo, bear case, scorecard pass A/B,
-valuation basis, earnings-tone diff, and the ~14 synthesis lenses —
-hand-rolls its prompt and inherits no consistent convention for decimals,
-magnitude suffixes, percentage-vs-bps disambiguation, or signed-delta
-direction.
+Shared presentation and financial-grounding instructions for LLM briefs.
+The inline brief prompts and lens composition helper use this source.
+Instruction delivery does not establish factual verification for a caller.
 
 This module exports:
 
@@ -28,9 +20,10 @@ This module exports:
     add this to ``cache_inputs`` so a block edit invalidates cached
     artifacts automatically (no manual ``prompt_version`` bump required).
 
-Pure-text prompts (qa_topics, saydo_filter, company_description,
-platform_diagram, transcript_metadata) skip the block — they rarely emit
-numbers and the prompt-budget cost (~600 chars) is not justified.
+This block carries factual-grounding rules as well as formatting. A prompt
+that can produce financial assertions must preserve this contract even when
+it emits no numbers. Historical callers that skip the block remain audit
+gaps; a pure-text output is not a waiver of financial grounding.
 
 Edit policy:
 - Tighten or extend the rules here; do NOT fork per-generator copies.
@@ -46,13 +39,30 @@ from __future__ import annotations
 
 import hashlib
 
+FINANCIAL_GROUNDING_BLOCK: str = """**Financial narrative grounding:**
+
+- Use the supplied verified facts and source corpus for financial assertions. Preserve the metric,
+  fiscal period, currency, unit/scale, reporting scope, accounting basis and source qualifications.
+  Distinguish reported actuals, management guidance, consensus estimates, calculations and assumptions.
+- A shorter research window changes coverage, not the accuracy of included facts. If required verified
+  evidence is missing, flag it early. Do not invent values, silently expand collection, or assume approval
+  for a lower-coverage response. Preserve the requested output schema when returning missing evidence.
+- Open-ended reasoning may use visibly labeled assumptions. Its factual anchors still need support.
+  Missing rows do not prove zero, no concentration, no change or complete disclosure.
+- Before completing the narrative, check each factual assertion against the supplied corpus, including
+  its financial meaning and qualifiers. Use the supplied calculations; do not substitute invented math.
+  Keep unsupported claims out of the answer. A source URL or matching number alone does not verify meaning.
+- Do not claim that your self-check certifies an output. The application must verify the complete output
+  before release or cache promotion and retain its source/claim evidence and verification disposition.
+"""
+
 # Global number-formatting rule for all brief generators.
 #
 # Mirrors the conventions a senior buy-side analyst would write to in a
 # memo: signed deltas, explicit comparison bases, magnitude suffixes on
 # levels, bps for sub-1pp moves. The block is prose-style (not a JSON
 # schema) so it composes cleanly with the existing markdown prompts.
-NUMBER_FORMATTING_BLOCK = """**Number formatting (apply consistently throughout):**
+NUMBER_FORMATTING_BLOCK: str = """**Number formatting (apply consistently throughout):**
 
 - Percentages: 1 decimal, "%" suffix, signed for deltas — "12.3%", "+5.2% YoY", "\u2212180 bps".
 - Use **bps** for sub-1pp moves ("+45 bps"), **pp** for 1pp+ rate-on-rate moves ("+1.2 pp NIM"),
@@ -65,6 +75,7 @@ NUMBER_FORMATTING_BLOCK = """**Number formatting (apply consistently throughout)
 - Every number carries a unit AND a comparison base where it's a change ("+12.3% YoY", not "+12.3%").
 - Distinguish levels (Revenue = $50.2B) from changes (Revenue growth = +12.3% YoY).
 """
+NUMBER_FORMATTING_BLOCK += "\n" + FINANCIAL_GROUNDING_BLOCK
 
 
 def compose_brief_prompt(body: str) -> str:
@@ -101,6 +112,7 @@ def style_block_cache_token() -> str:
 
 
 __all__ = [
+    "FINANCIAL_GROUNDING_BLOCK",
     "NUMBER_FORMATTING_BLOCK",
     "compose_brief_prompt",
     "style_block_cache_token",

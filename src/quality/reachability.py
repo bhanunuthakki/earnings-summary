@@ -232,7 +232,8 @@ _SKIP_TOP_LEVEL = {
     "scratch",
 }
 _PY_RE = re.compile(
-    r"(?:[\w./\\:-]*python(?:3)?(?:\.exe)?|py(?:\.exe)?)\s+"
+    r"(?<![\w./\\:-])"
+    r"(?:[\w./\\:-]*python(?:3)?(?:\.exe)?|(?:[\w./\\:-]*[/\\])?py(?:\.exe)?)\s+"
     r"(?:-u\s+)?(?:-m\s+)?([\w./\\-]+(?:\.py)?)",
     re.IGNORECASE,
 )

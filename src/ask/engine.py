@@ -1199,6 +1199,7 @@ def _shadow_retrieval(
         role=SQLiteConnectionRole.WRITER,
         schema_preflight=True,
     )
+    verification: RequestVerificationCache | None = None
     try:
         scopes = load_production_scopes(
             conn,
@@ -1233,7 +1234,20 @@ def _shadow_retrieval(
         conn.rollback()
         log.warning({"event": "ask_shadow_retrieval_failed"}, exc_info=True)
     finally:
+        if verification is not None:
+            verification.close()
         conn.close()
+
+
+def run_shadow_retrieval(
+    text: str,
+    turn: AskTurn,
+    pack: ContextPack,
+    *,
+    db_path: Path,
+) -> None:
+    """Execute verified shadow retrieval plan and persist trace without changing prompt."""
+    _shadow_retrieval(text, turn, pack, db_path=db_path)
 
 
 def _sealed_or_shadow_narrative_events(
@@ -1278,6 +1292,7 @@ def _sealed_or_shadow_narrative_events(
             role=SQLiteConnectionRole.WRITER,
             schema_preflight=True,
         )
+        verification: RequestVerificationCache | None = None
         try:
             scopes = load_production_scopes(
                 conn,
@@ -1326,6 +1341,8 @@ def _sealed_or_shadow_narrative_events(
             conn.rollback()
             raise
         finally:
+            if verification is not None:
+                verification.close()
             conn.close()
 
         fragments, evidence_block = _sealed_evidence_block(evidence)
@@ -2064,5 +2081,6 @@ __all__ = [
     "fold_events",
     "respond_turn",
     "route_turn",
+    "run_shadow_retrieval",
     "sanitize_history",
 ]

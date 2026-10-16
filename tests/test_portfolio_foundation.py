@@ -288,9 +288,13 @@ def test_report_surfaces_lagging_account_ids_without_not_held_copy(
 ) -> None:
     from integrations.portfolio_position import PortfolioPositionResult, PositionProvenance
     from report.models import ReportSpec, SectionStatus
-    from report.renderers.markdown import _portfolio_position  # pyright: ignore[reportPrivateUsage]
+    from report.renderers import markdown as markdown_renderer
     from report.renderers.workspace_sections.position import _position_tab
     from report.sections import portfolio_position
+
+    render_position: object = getattr(markdown_renderer, "_portfolio_position")
+    assert callable(render_position)
+    _portfolio_position = cast("Callable[[StringIO, ReportSpec], None]", render_position)
 
     def lagging_position(_ticker: str) -> PortfolioPositionResult:
         return PortfolioPositionResult(
@@ -1860,7 +1864,11 @@ def test_report_source_unavailable_preserves_supplied_history(
     assert section.history_error == "closed decisions unavailable"
 
     from report.models import ReportSpec
-    from report.renderers.markdown import _portfolio_position  # pyright: ignore[reportPrivateUsage]
+    from report.renderers import markdown as markdown_renderer
+
+    render_position: object = getattr(markdown_renderer, "_portfolio_position")
+    assert callable(render_position)
+    _portfolio_position = cast("Callable[[StringIO, ReportSpec], None]", render_position)
 
     markdown = StringIO()
     _portfolio_position(
@@ -3011,14 +3019,19 @@ def test_operations_snapshot_projects_portfolio_tracker_receipt_states(tmp_path:
 @pytest.mark.parametrize("stale_plane", ["listener", "scheduler", "refresh"])
 def test_operations_panel_does_not_greenwash_stale_runtime_planes(stale_plane: str) -> None:
     from operations.models import PortfolioTrackerRuntimeObservation
-    from pipeline.operations_panel import (  # pyright: ignore[reportPrivateUsage]
-        _portfolio_tracker_evidence,  # pyright: ignore[reportPrivateUsage]
-    )
+    from pipeline import operations_panel
     from runtime.portfolio_tracker import (
         ListenerObservation,
         RefreshEvidence,
         RuntimeReceipt,
         SchedulerEvidence,
+    )
+
+    evidence_reader: object = getattr(operations_panel, "_portfolio_tracker_evidence")
+    assert callable(evidence_reader)
+    _portfolio_tracker_evidence = cast(
+        "Callable[[PortfolioTrackerRuntimeObservation], operations_panel.EvidenceView]",
+        evidence_reader,
     )
 
     observed = datetime(2026, 8, 20, 12, 20, tzinfo=UTC)
@@ -3054,7 +3067,7 @@ def test_operations_panel_does_not_greenwash_stale_runtime_planes(stale_plane: s
         receipt=receipt,
     )
 
-    evidence = _portfolio_tracker_evidence(observation)  # pyright: ignore[reportPrivateUsage]
+    evidence = _portfolio_tracker_evidence(observation)
 
     assert evidence.tone == "warn"
     assert "stale planes" in evidence.state
@@ -3063,13 +3076,18 @@ def test_operations_panel_does_not_greenwash_stale_runtime_planes(stale_plane: s
 
 def test_operations_panel_does_not_greenwash_read_only_refresh_probe() -> None:
     from operations.models import PortfolioTrackerRuntimeObservation
-    from pipeline.operations_panel import (  # pyright: ignore[reportPrivateUsage]
-        _portfolio_tracker_evidence,  # pyright: ignore[reportPrivateUsage]
-    )
+    from pipeline import operations_panel
     from runtime.portfolio_tracker import (
         ListenerObservation,
         RefreshEvidence,
         RuntimeReceipt,
+    )
+
+    evidence_reader: object = getattr(operations_panel, "_portfolio_tracker_evidence")
+    assert callable(evidence_reader)
+    _portfolio_tracker_evidence = cast(
+        "Callable[[PortfolioTrackerRuntimeObservation], operations_panel.EvidenceView]",
+        evidence_reader,
     )
 
     observed = datetime(2026, 8, 20, 12, tzinfo=UTC)
@@ -3188,3 +3206,47 @@ def test_operations_snapshot_uses_daily_refresh_cadence_for_scheduler_and_refres
     )
 
     assert snapshot.portfolio_tracker_runtime.state == expected_state
+
+
+@pytest.mark.parametrize(
+    ("transaction_as_of", "expected_error"),
+    [
+        ("2026-08-20", None),
+        ("2026-08-19", "snapshot_date_mismatch"),
+        (None, "snapshot_date_missing"),
+    ],
+)
+def test_position_history_retains_only_agreed_snapshot(
+    transaction_as_of: str | None,
+    expected_error: str | None,
+) -> None:
+    from integrations.portfolio_position import PortfolioPositionAdapter
+    from integrations.portfolio_tracker_v1 import TransactionV1, V1Meta
+
+    payload = json.loads(
+        (Path(__file__).parent / "fixtures/tracker_v1/transactions.json").read_text()
+    )
+    payload["meta"]["as_of"] = transaction_as_of
+    meta = V1Meta.model_validate(payload["meta"])
+    transaction = TransactionV1.model_validate(payload["transactions"][0]).model_copy(
+        update={"ticker": "MELI"}
+    )
+
+    class HistoryClient(_Client):
+        def get_all_transactions(self) -> V1Fetch[list[TransactionV1]]:
+            return V1Fetch(
+                available=True, endpoint="/api/v1/transactions", data=[transaction], meta=meta
+            )
+
+    client = HistoryClient(
+        V1Fetch(available=True, endpoint="/health", data=_health()),
+        V1Fetch(available=True, endpoint="/positions", data=_positions()),
+    )
+    result = PortfolioPositionAdapter(client).resolve("MELI")
+    assert result.state == "held"
+    assert result.history_state == "partial"
+    if expected_error is None:
+        assert len(result.recent_transactions) == 1
+    else:
+        assert result.recent_transactions == []
+        assert result.history_error is not None and expected_error in result.history_error

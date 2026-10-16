@@ -14,10 +14,9 @@ import sys
 from pathlib import Path
 from typing import Protocol, cast
 
-CODE_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(CODE_ROOT / "src"))
-
-import db  # noqa: E402
+import db
+from db_paths import require_db_path
+from runtime.secrets import load_project_env
 
 
 class _IndexManager(Protocol):
@@ -29,7 +28,7 @@ class _IndexManager(Protocol):
     TRANSCRIPTS_PROCESSED_DIR: str
 
 
-class _ProcessIrDocuments(Protocol):
+class ProcessIrDocuments(Protocol):
     PROJECT_ROOT: Path
     CACHE_DIR: Path
     index_manager: _IndexManager
@@ -37,19 +36,21 @@ class _ProcessIrDocuments(Protocol):
     def main(self) -> None: ...
 
 
-def _load_processor() -> _ProcessIrDocuments:
+def _load_processor() -> ProcessIrDocuments:
     module = importlib.import_module("process_ir_documents")
     required = ("PROJECT_ROOT", "CACHE_DIR", "index_manager", "main")
     if not all(hasattr(module, name) for name in required):
         raise RuntimeError(
             "process_ir_documents module does not satisfy the state adapter contract"
         )
-    return cast("_ProcessIrDocuments", module)
+    return cast("ProcessIrDocuments", module)
 
 
-def _bind_state(processor: _ProcessIrDocuments, state_root: Path) -> None:
+def bind_state(
+    processor: ProcessIrDocuments, state_root: Path, db_path: Path | None = None
+) -> None:
     cache_dir = state_root / ".tmp"
-    db.set_db_path(state_root / "data" / "portfolio.db")
+    db.set_db_path(db_path or db.DB_PATH, state_root=state_root)
     processor.PROJECT_ROOT = state_root
     processor.CACHE_DIR = cache_dir
     processor.index_manager.PROJECT_ROOT = str(state_root)
@@ -66,13 +67,20 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ticker", required=True)
     parser.add_argument("--repo-root", type=Path, required=True)
+    parser.add_argument("--db", type=Path)
+    parser.add_argument("--regenerate-missing", action="store_true")
     args = parser.parse_args(argv)
 
+    state_root = args.repo_root.resolve()
+    load_project_env(state_root)
+    database = require_db_path(args.db)
     processor = _load_processor()
-    _bind_state(processor, args.repo_root.resolve())
+    bind_state(processor, state_root, database)
     original_argv = sys.argv
     try:
         sys.argv = ["process_ir_documents.py", "--ticker", args.ticker]
+        if args.regenerate_missing:
+            sys.argv.append("--regenerate-missing")
         processor.main()
     finally:
         sys.argv = original_argv
