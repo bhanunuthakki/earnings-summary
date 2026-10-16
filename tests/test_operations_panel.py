@@ -981,9 +981,9 @@ def test_jobs_have_attention_filter_search_and_responsive_cards(tmp_path: Path) 
     assert "data-operations-results" in html
     assert 'aria-live="polite"' in html
     assert ":focus-visible" in html
-    # The manifest-owned semantic-review producer is a truthful primary
-    # Operations card, bringing the declared Scheduler fleet to 46 tasks.
-    assert html.count('data-operations-task-card="true"') == 46
+    # The manual-only backfill has no Scheduler or Operations task card.
+    # The retained manifest declares 45 tasks, including semantic review.
+    assert html.count('data-operations-task-card="true"') == 45
     assert "monthly_p3_refresh" not in html
     assert "@media (max-width:" in html
     assert "min-block-size:var(--touch-target-size)" in html
