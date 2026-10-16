@@ -141,9 +141,7 @@ def test_stale_dead_holder_lock_is_broken(tmp_path: Path) -> None:
     assert not gate.exists()
 
 
-@pytest.mark.parametrize(
-    "successor_pid", [os.getpid(), 999999], ids=["same-process", "other-process"]
-)
+@pytest.mark.parametrize("successor_pid", [os.getpid(), 999999], ids=["current", "other"])
 def test_release_never_removes_a_successors_lock(tmp_path: Path, successor_pid: int) -> None:
     db = tmp_path / "portfolio.db"
     with hold_writer_gate(db, owner="suspended"):
