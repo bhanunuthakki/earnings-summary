@@ -48,13 +48,22 @@ from provenance.research_snapshot import (
     seal_processing_snapshot,
     verify_processing_snapshot,
 )
+from provenance.search_index_lineage import load_projection_seal, verify_ledger_projection_seal
 from provenance.source_coverage import (
     ExpectedDocument as CoverageExpectedDocument,
 )
 from provenance.source_coverage import SourceCoverageLedger, SourceInventorySnapshot
 from provenance.source_fact_publication import PublicationVerificationError
+from search import local_vector as vector_module
+from search.local_vector import (
+    ResumableVectorIndexBuilder,
+    VectorBuildCheckpointStore,
+    VectorBuildRequest,
+    VectorDocument,
+)
 from tests import test_document_processing_evidence as document_fixtures
 from tests import test_filing_xbrl_extraction_ledger as filing_fixtures
+from tests import test_local_vector as vector_fixtures
 from tests.test_filing_xbrl_extraction_ledger import (
     STAMP,
 )
@@ -2203,5 +2212,94 @@ def test_registration_financial_obligation_selection_excludes_publisher_and_wron
         conn.execute("DELETE FROM source_obligation_revisions WHERE obligation_key='registration'")
         with pytest.raises(ValueError, match="lacks an applicable source obligation"):
             selected("sec_edgar")
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("aware", [False, True], ids=["naive-UTC", "aware-UTC"])
+def test_real_vector_seal_clock_is_normalized_without_rewriting_its_commitment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, aware: bool
+) -> None:
+    make_connection: Callable[[], sqlite3.Connection] = getattr(vector_fixtures, "_conn")
+    make_request: Callable[[], VectorBuildRequest] = getattr(vector_fixtures, "_request")
+    make_documents: Callable[[], list[VectorDocument]] = getattr(
+        vector_fixtures, "_resumable_documents"
+    )
+    conn = make_connection()
+    sealed_utc = T1 + timedelta(microseconds=123456)
+    completed = sealed_utc if aware else sealed_utc.replace(tzinfo=None)
+    monkeypatch.setattr(vector_module, "_now", lambda: completed)
+    try:
+        vector_request = make_request()
+        if aware:
+            vector_request = vector_request.model_copy(
+                update={"started_at": vector_request.started_at.replace(tzinfo=UTC)}
+            )
+        documents = make_documents()
+        conn.executescript(
+            "CREATE TABLE search_corpus_manifests "
+            "(manifest_id TEXT PRIMARY KEY,knowledge_cutoff TEXT,recorded_at TEXT);"
+        )
+        conn.execute(
+            "INSERT INTO search_corpus_manifests VALUES (?,?,?)",
+            (vector_request.manifest_id, T1.isoformat(), T1.isoformat()),
+        )
+        conn.executemany(
+            "INSERT INTO search_chunks VALUES (?,?,?)",
+            [(item.chunk_id, item.manifest_id, item.input_sha256) for item in documents],
+        )
+        conn.commit()
+        result = ResumableVectorIndexBuilder(
+            conn,
+            vector_fixtures.FakeEncoder(),
+            vector_fixtures.StagedFakeIndex(),
+            VectorBuildCheckpointStore(tmp_path / "vector-state.json"),
+        ).build(
+            vector_request,
+            total_documents=len(documents),
+            document_batches=lambda after: [
+                [item] for item in documents if after is None or item.chunk_id > after
+            ],
+        )
+        assert result.outcome == "succeeded"
+        seal = load_projection_seal(conn, index_run_id=vector_request.index_run_id)
+        assert seal is not None
+        assert (seal.sealed_at.tzinfo is not None) is aware
+        verify_ledger_projection_seal(conn, seal)
+        before = conn.execute("SELECT * FROM search_projection_seals").fetchall()
+        request = _research_request("processing-unused").model_copy(
+            update={"recorded_at": sealed_utc + timedelta(minutes=1)}
+        )
+        reference = _DefaultResearchReferenceVerifier().verify(
+            conn,
+            requested_lane=f"vector_projection:{vector_request.manifest_id}",
+            reference_id=vector_request.index_run_id,
+            cutoff_at=T1,
+            request=request,
+        )
+        assert reference.knowledge_at == T1
+        assert reference.recorded_at == sealed_utc
+        assert reference.recorded_at.tzinfo == UTC
+        expected_commitment = hashlib.sha256(
+            json.dumps(
+                seal.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode()
+        ).hexdigest()
+        assert reference.commitment_sha256 == expected_commitment
+        assert conn.execute("SELECT * FROM search_projection_seals").fetchall() == before
+        with pytest.raises(ValueError, match="vector projection seal is absent at cutoff"):
+            _DefaultResearchReferenceVerifier().verify(
+                conn,
+                requested_lane=f"vector_projection:{vector_request.manifest_id}",
+                reference_id=vector_request.index_run_id,
+                cutoff_at=T1,
+                request=request.model_copy(
+                    update={"recorded_at": sealed_utc - timedelta(microseconds=1)}
+                ),
+            )
+        assert conn.execute("SELECT * FROM search_projection_seals").fetchall() == before
     finally:
         conn.close()

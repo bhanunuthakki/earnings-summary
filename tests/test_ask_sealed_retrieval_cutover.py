@@ -1,13 +1,16 @@
 # pyright: reportPrivateUsage=false
 from __future__ import annotations
 
+import json
 import sqlite3
-from datetime import UTC, datetime
+from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
 import pytest
 
+import ask.engine as engine
 import ask.sealed_retrieval as sealed
 from ask.audit_store import canonical_json, digest_text
 from ask.sealed_retrieval import (
@@ -20,7 +23,13 @@ from ask.sealed_retrieval import (
     derive_retrieval_scope_id,
     execute_sealed_retrieval_plan,
 )
+from provenance.fact_plane_v2 import FactCellV2, ReportedFactObservationV2
 from provenance.population_completeness import PopulationTemporalScope
+from provenance.source_fact_publication import record_commitment
+from provenance.source_fact_repository import ReportedSourceFact, SourceFactRepository
+from search.heterogeneous_retrieval import HeterogeneousRetrievalReceipt
+from tests.test_source_fact_repository import STAMP as FACT_STAMP
+from tests.test_source_fact_repository import make_publication, seed_foundation
 
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
 POPULATION_RUN_ID = "population-run:test"
@@ -658,6 +667,232 @@ def test_verifier_artifact_hash_is_line_ending_insensitive(tmp_path: Path) -> No
         "src/ask/sealed_retrieval.py",
         "src/provenance/population_completeness.py",
         "src/provenance/research_snapshot.py",
+        "src/provenance/fact_read_model.py",
+        "src/provenance/source_fact_publication.py",
         "src/search/exact_semantic.py",
         "src/search/heterogeneous_retrieval.py",
     } == paths
+
+
+@pytest.fixture
+def published_fact_context(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> Iterator[tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row]]:
+    """Real source publication plus an isolated, preverified projection adapter input.
+
+    Projection/trace admission is tested separately. This fixture tests that the
+    final prompt adapter reuses the sealed source owner and keeps its context.
+    """
+    path = migrated_db(tmp_path / "fact-context.db")
+    conn = sqlite3.connect(path)
+    seed_foundation(conn)
+    publication = make_publication()
+    original = publication.reported_facts[0]
+    cell = FactCellV2.model_validate(
+        {
+            **original.cell.model_dump(mode="json"),
+            "unit_key": "USD_millions",
+            "semantic_key_sha256": None,
+        }
+    )
+    observation = ReportedFactObservationV2.model_validate(
+        {**original.observation.model_dump(mode="json"), "precision": "3"}
+    )
+    publication = publication.model_copy(
+        update={"reported_facts": (ReportedSourceFact(cell=cell, observation=observation),)}
+    )
+    SourceFactRepository(conn).publish(publication)
+    conn.execute(
+        "CREATE TEMP TABLE canonical_fact_projection_generations AS "
+        "SELECT * FROM main.canonical_fact_projection_generations WHERE 0"
+    )
+    conn.execute(
+        "CREATE TEMP TABLE canonical_fact_projection_entries AS "
+        "SELECT * FROM main.canonical_fact_projection_entries WHERE 0"
+    )
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_generations (generation_id) VALUES ('generation')"
+    )
+    payload: dict[str, object] = {
+        "canonical_metric_cell_id": "canonical-revenue",
+        "canonical_metric_name": "Revenue",
+        "canonical_search_text": "Revenue | Exact selected revenue definition",
+        "canonical_resolution_revision_id": "resolution-selected",
+        "change_kind": "upsert",
+        "metric_definition_revision_id": "definition-selected-2",
+        "metric_definition_commitment_sha256": "b" * 64,
+        "binding_revision_id": "binding-selected",
+        "binding_commitment_sha256": "c" * 64,
+        "selected_observation_id": observation.observation_id,
+        "source_fact_cell_id": cell.fact_cell_id,
+        "source_record_commitment_sha256": record_commitment(
+            conn, "fact_observation", observation.observation_id
+        ),
+        "reporting_entity_id": cell.reporting_entity_id,
+        "scope_security_id": cell.scope_security_id,
+        "period_kind": cell.period_kind,
+        "period_start": cell.period_start.isoformat() if cell.period_start else None,
+        "period_end": cell.period_end.isoformat(),
+        "dimensions_json": "[]",
+        "unit_key": cell.unit_key,
+        "currency": cell.currency,
+        "canonical_value": "100",
+        "value_kind": "numeric",
+        "evidence_document_version_id": observation.document_version_id,
+        "evidence_node_id": observation.evidence_node_id,
+        "evidence_locator_json": canonical_json(observation.source_locator.root),
+        "evidence_locator_sha256": observation.source_locator_sha256,
+    }
+    entry_json = canonical_json(payload)
+    entry = {
+        **payload,
+        "generation_id": "generation",
+        "entry_ordinal": 0,
+        "entry_json": entry_json,
+        "entry_sha256": digest_text(entry_json),
+    }
+    columns = tuple(entry)
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_entries ("
+        + ",".join(columns)
+        + ") VALUES ("
+        + ",".join("?" for _ in columns)
+        + ")",
+        tuple(entry[column] for column in columns),
+    )
+    conn.commit()
+    conn.row_factory = sqlite3.Row
+    candidate = conn.execute(
+        "SELECT 'canonical-revenue' AS candidate_id, ? AS source_commitment_sha256",
+        (digest_text(entry_json),),
+    ).fetchone()
+    receipt = HeterogeneousRetrievalReceipt(
+        trace_id="trace",
+        trace_sha256="a" * 64,
+        research_snapshot_id="research",
+        research_snapshot_sha256="a" * 64,
+        fact_generation_id="generation",
+        fact_projection_seal_sha256="a" * 64,
+        candidate_count=1,
+        result_count=1,
+        ordered_results=(),
+        recorded_at=FACT_STAMP,
+    )
+    try:
+        yield conn, receipt, candidate
+    finally:
+        conn.close()
+
+
+def test_fact_prompt_preserves_verified_financial_context(
+    published_fact_context: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row],
+) -> None:
+    conn, receipt, candidate = published_fact_context
+    item = sealed._fact_item(
+        conn, receipt, candidate, {"result_ordinal": 0, "final_score": "1"}, n=1, cutoff=FACT_STAMP
+    )
+    assert item.text.splitlines()[0] == "Revenue: 100 USD USD_millions (2026-07-27)"
+    assert item.value == "100 USD USD_millions"
+    assert '"unit_key":"USD_millions"' in item.text
+    assert '"currency":"USD"' in item.text
+    assert '"accounting_basis":"us_gaap"' in item.text
+    assert '"consolidation_scope":"consolidated"' in item.text
+    assert '"period_kind":"duration"' in item.text
+    assert '"period_start":"2025-07-27T12:00:00Z"' in item.text
+    assert '"period_end":"2026-07-27T12:00:00Z"' in item.text
+    assert '"fiscal_year":2026' in item.text
+    assert '"fiscal_period":"FY"' in item.text
+    assert '"precision":"3"' in item.text
+    assert '"decimals":"-6"' in item.text
+    assert '"observation_kind":"reported"' in item.text
+    assert '"revision_kind":"initial"' in item.text
+    assert '"metric_definition_revision_id":"definition-selected-2"' in item.text
+    assert '"binding_revision_id":"binding-selected"' in item.text
+    assert '"explicit_member_name":"CloudMember"' in item.text
+    assert '"actual_guidance_consensus_status":"unavailable"' in item.text
+    assert '"scale":"unavailable"' in item.text
+    assert "does not establish complete decision-grade financial context" in item.text
+    assert "storage_uri" not in item.text
+    fragments, block = engine._sealed_evidence_block((item,))
+    assert item.text in fragments[0]
+    assert block == fragments[0]
+
+
+@pytest.mark.parametrize(
+    ("column", "replacement"),
+    [
+        ("source_fact_cell_id", "wrong-cell"),
+        ("evidence_node_id", "wrong-node"),
+        ("evidence_locator_sha256", "f" * 64),
+        ("reporting_entity_id", "wrong-entity"),
+        ("scope_security_id", "wrong-security"),
+        ("unit_key", "USD"),
+        ("currency", "EUR"),
+        ("period_start", "2024-07-27T12:00:00Z"),
+        ("canonical_value", "200"),
+        ("source_record_commitment_sha256", "f" * 64),
+    ],
+)
+def test_fact_context_rejects_projection_source_mismatch(
+    published_fact_context: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row],
+    column: str,
+    replacement: str,
+) -> None:
+    conn, receipt, _ = published_fact_context
+    row = conn.execute("SELECT * FROM canonical_fact_projection_entries").fetchone()
+    payload = json.loads(str(row["entry_json"]))
+    payload[column] = replacement
+    entry_json = canonical_json(payload)
+    # This unit adapter input has a fresh projection commitment. Its source
+    # coordinates must still match the independently admitted publication.
+    conn.execute(
+        f"UPDATE canonical_fact_projection_entries SET {column}=?,entry_json=?,entry_sha256=?",
+        (replacement, entry_json, digest_text(entry_json)),
+    )
+    candidate = conn.execute(
+        "SELECT 'canonical-revenue' AS candidate_id, ? AS source_commitment_sha256",
+        (digest_text(entry_json),),
+    ).fetchone()
+    with pytest.raises(PromotionVerificationError, match="selected fact context"):
+        sealed._fact_item(
+            conn,
+            receipt,
+            candidate,
+            {"result_ordinal": 0, "final_score": "1"},
+            n=1,
+            cutoff=FACT_STAMP,
+        )
+
+
+@pytest.mark.parametrize("column", ["metric_definition_revision_id", "binding_revision_id"])
+def test_fact_context_rejects_revision_substitution_under_selected_commitment(
+    published_fact_context: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row],
+    column: str,
+) -> None:
+    conn, receipt, candidate = published_fact_context
+    conn.execute(f"UPDATE canonical_fact_projection_entries SET {column}='newer-unselected'")
+    with pytest.raises(PromotionVerificationError, match="selected fact context"):
+        sealed._fact_item(
+            conn,
+            receipt,
+            candidate,
+            {"result_ordinal": 0, "final_score": "1"},
+            n=1,
+            cutoff=FACT_STAMP,
+        )
+
+
+def test_fact_context_rejects_source_unavailable_at_selected_cutoff(
+    published_fact_context: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row],
+) -> None:
+    conn, receipt, candidate = published_fact_context
+    with pytest.raises(PromotionVerificationError, match="selected fact context"):
+        sealed._fact_item(
+            conn,
+            receipt,
+            candidate,
+            {"result_ordinal": 0, "final_score": "1"},
+            n=1,
+            cutoff=FACT_STAMP - timedelta(seconds=1),
+        )

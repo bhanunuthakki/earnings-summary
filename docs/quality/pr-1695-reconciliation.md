@@ -78,11 +78,11 @@ byte, and browser page errors are absent. These fixtures prove rendering parity,
 not live data readiness, real-user latency or canonical-host throughput.
 
 Architecture and duplication baselines use unchanged scanners for the combined
-source population: 1,451 modules and 551,842 noncomment lines. Exact duplication
+source population: 1,451 modules and 552,061 noncomment lines. Exact duplication
 is 4 groups / 158 lines versus main's 6 / 238. Near duplication is 147 groups /
 9,867 lines versus main's 162 / 11,266. The largest dependency cycle falls from
 25 modules to 16; maximum internal fan-out falls from 137 to 40. Source size is
-2,845 noncomment lines above main after retaining the PR's runtime changes.
+3,064 noncomment lines above main after retaining the PR's runtime changes.
 No module path, size-threshold crossing or cycle membership is new relative to
 the parent union. One existing pair of cache reservation methods crosses the
 fixed near-match threshold (0.848947 to 0.856842) after both carry their build
@@ -249,8 +249,78 @@ no application fixtures or database.
 The aggregate CI gate requires the Windows job for code changes. Its JUnit
 receipt must contain each exact case once, with no skip, failure or error.
 Missing or malformed receipts fail the gate. Receipts are retained for seven
-days. Native results and complete CI on the new commit are still pending.
+days. The first hosted run passed four cases and failed one fixture readiness check.
+That fixture exposed its PID file before the write completed. It now publishes
+the complete PID by atomic rename. Process termination assertions are unchanged.
+A fresh native run and complete exact-head CI are required.
 This is a tested **no surface change** disposition under
 `directives/operations_governance_surface.md`: application routes, Operations
 actions, scheduler registration and production host authority stay unchanged.
 Hosted Windows evidence does not prove deployment or canonical-host parity.
+
+## Real search integration repairs
+
+A disposable synthetic fixture now exercises the source owners together instead
+of replacing admission, corpus and vector boundaries. It exposed five concrete
+interoperability defects:
+
+- Source coverage and population processing used different deterministic binding
+  delimiters. Population processing now creates the source owner's identity. It
+  preserves exact historical bindings and their bytes, and accepts the original
+  source clock only when it matches the authoritative document recording clock.
+  Payload changes, arbitrary old clocks and future visibility still fail closed.
+- Retrieval population constructed reporting reasons locally. The strict corpus
+  builder requires the canonical reporting projection. The caller now passes
+  that projection unchanged and requires every positive governed document to
+  match the selected issuer, binding, document, family and reporting entity.
+  An extra governed document cannot silently expand the accepted scope.
+- Vector seals record naive UTC timestamps. Research admission now normalizes
+  that clock before comparison with aware UTC. The stored seal and its
+  commitment stay unchanged; a future seal remains inadmissible.
+- Identity population preserves an earlier valid binding. Its verifier
+  incorrectly required the new cutoff exactly. The verifier now uses the
+  existing latest-visible selection at knowledge and observation cutoffs.
+  Later invalid revisions remain blocking. No immutable binding is rewritten.
+- Sealed Ask dropped the unit when currency was present and omitted verified
+  financial context. It now retains literal unit and currency, full fiscal
+  dates, exact definition and binding revisions, source observation, locator,
+  basis, scope and recorded precision. The source owner verifies the selected
+  publication before model context is assembled; substitutions block the trace.
+  Shared publications are verified once per bounded batch. Answer and auditor
+  retain identical fragments and hashes. Native records lack separate
+  actual/guidance/consensus and scale fields. These remain explicitly unavailable;
+  reported status, currency and decimals cannot supply those missing meanings.
+  The source-read owners now participate in retrieval verifier identity, so
+  a changed owner invalidates an earlier promotion.
+
+Focused regressions reproduce the original faults through their public owners.
+The final fixture receipt and exact-head release checks remain separate proof.
+The fixture uses public pinned embedding weights, a fixed synthetic corpus and
+an exact evaluation-bound human approval. Approval covers that fixture only.
+No production model or provider policy changes. Synthetic relevance results do
+not establish issuer coverage, general financial retrieval quality or production
+latency.
+
+The frozen integration source adds 219 noncomment production lines relative to
+`05edde2e`. Module count, size buckets, duplication groups and dependency cycles
+are unchanged. Canonical reachability is complete with zero production unknown
+or unresolved edges. All 189 disposition decisions retain their fingerprints
+and targets; only source provenance hashes change.
+
+A fresh server measurement against the same main source and synthetic fixture
+preserves exact rows and response content except generated timestamps. Cold
+median completion is 15.810 ms on main and 7.336 ms on the integration source;
+builds remain three versus one and SQL statements 566 versus 71. Warm medians
+are 0.968 and 0.983 ms, with zero SQL and builds. No warm gain is claimed.
+This remains a three-response server measurement, distinct from browser
+readiness and live host throughput.
+
+The genuine fixture passes all seven source-plane verifiers and real lexical
+and semantic qualification. Cutover remains **HOLD**: the established parity
+gate requires a non-empty legacy universe. Its only accepted legacy bridge
+requires SEC CompanyFacts coordinates; this exact fixture is issuer HTML.
+No SEC locator, parity receipt or immutable observation was fabricated.
+The evaluation, approved model, original source and observations remain
+unchanged. The full promoted Ask answer/auditor/persistence driver is therefore
+not executed and is not claimed as proof. This is a fixture limitation under
+the retained migration contract, not permission to bypass it.

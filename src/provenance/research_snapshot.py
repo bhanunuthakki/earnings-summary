@@ -1847,7 +1847,7 @@ class _DefaultResearchReferenceVerifier:
             reference_id=seal.projection_seal_id,
             commitment_sha256=_digest(seal),
             knowledge_at=_parse_time(manifest[0]),
-            recorded_at=max(_parse_time(manifest[1]), seal.sealed_at),
+            recorded_at=max(_parse_time(manifest[1]), _utc(seal.sealed_at)),
             attributes={
                 "dimensions": seal.dimensions,
                 "manifest_id": seal.manifest_id,

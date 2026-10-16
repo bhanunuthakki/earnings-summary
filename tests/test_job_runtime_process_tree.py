@@ -317,12 +317,14 @@ def test_windows_kill_on_close_job_terminates_process_and_descendant(tmp_path: P
     """Exercise nested assignment when the test host already belongs to a job."""
     gate = tmp_path / "spawn-child"
     child_pid_file = tmp_path / "child.pid"
+    # Existence is the readiness signal below; publish the complete PID atomically.
     code = (
         "import pathlib, subprocess, sys, time; "
         "gate=pathlib.Path(sys.argv[1]); out=pathlib.Path(sys.argv[2]); "
         "\nwhile not gate.exists(): time.sleep(0.01); "
         "\nchild=subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
-        "out.write_text(str(child.pid), encoding='ascii'); time.sleep(60)"
+        "out.with_suffix('.tmp').write_text(str(child.pid), encoding='ascii'); "
+        "out.with_suffix('.tmp').replace(out); time.sleep(60)"
     )
     # The venv launcher must not create its interpreter before job assignment.
     parent = subprocess.Popen(

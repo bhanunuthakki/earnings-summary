@@ -611,14 +611,8 @@ def verify_identity_scope(
         if str(current[5]) != "selected":
             failures.append(recorded_id)
             continue
-        if _parse_time(
-            conn.execute(
-                "SELECT knowledge_at FROM recorded_subject_binding_revisions "
-                "WHERE binding_revision_id=?",
-                (str(current[0]),),
-            ).fetchone()[0]
-        ) != _utc(scope.knowledge_cutoff):
-            raise ValueError("identity binding knowledge clock drift")
+        # The as-of selector already enforces K/O on the latest visible row.
+        # Preserved authoritative bindings retain their original knowledge clock.
         selected.append((recorded_id, str(current[0]), validated[1]))
     artifact = stream_population_artifact_set(
         conn,
@@ -668,7 +662,7 @@ def verify_identity_scope(
                 for recorded_id, binding_id, reporting_entity_id in selected
             ],
         ),
-        "temporal_policy": "knowledge_at<=K;recorded_at<=O;binding_knowledge_at=K",
+        "temporal_policy": "knowledge_at<=K;recorded_at<=O",
     }
     return _plane_verification(
         expected=len(recorded_ids),

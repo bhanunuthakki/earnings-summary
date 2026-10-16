@@ -43,6 +43,7 @@ from search.corpus_builder import (
     CorpusBuildRequest,
     ExpectedDocument,
     build_grounded_search_corpus,
+    load_coverage_expected_document_inventory,
 )
 from search.embedding_promotion import PURPOSE, LocalVectorRuntimeConfig
 from search.exact_semantic import MAX_EXACT_VECTOR_ROWS, ExactSemanticRuntime
@@ -61,7 +62,6 @@ _REPORTING_FAMILIES = (
     "operating_company_periodic",
 )
 _POSITIVE_COVERAGE = frozenset({"captured", "extracted", "indexed"})
-_QUARANTINED_COVERAGE = frozenset({"quarantined", "unsupported"})
 
 
 class _FrozenModel(BaseModel):
@@ -779,21 +779,26 @@ def _scope_plan(
     cutoff_at: datetime,
     observed_through: datetime,
 ) -> _ScopePlan:
-    expected: list[ExpectedDocument] = []
+    expected_keys: list[str] = []
+    expected: tuple[ExpectedDocument, ...] = ()
+    inventory_keys: set[str] = set()
     inventory_ids: set[str] = set()
     inventory_commitments: dict[str, str] = {}
     family_documents: dict[str, set[str]] = {}
     commitment_rows: list[dict[str, object]] = []
+    bound_documents: set[tuple[str, str | None, str, str]] = set()
     reasons: set[str] = set()
+    reporting_decisions: list[dict[str, object]] = []
     for obligation in obligations:
         rows = conn.execute(
             "SELECT binding.expected_document_id,binding.document_family,"
             "expected.expected_document_key,expected.snapshot_id,"
             "assessment.coverage_status,assessment.document_version_id,"
-            "assessment.reason_code,assessment.assessment_id "
+            "assessment.reason_code,assessment.assessment_id,inventory.inventory_key "
             "FROM expected_document_obligation_bindings binding "
             "JOIN expected_documents expected "
             "ON expected.expected_document_id=binding.expected_document_id "
+            "JOIN source_inventory_snapshots inventory ON inventory.snapshot_id=expected.snapshot_id "
             "LEFT JOIN source_coverage_assessments assessment "
             "ON assessment.expected_document_id=expected.expected_document_id "
             "AND datetime(assessment.knowledge_at)<=datetime(?) "
@@ -835,29 +840,23 @@ def _scope_plan(
             inventory_ids.add(snapshot_id)
             status = None if row[4] is None else str(row[4])
             document_version_id = None if row[5] is None else str(row[5])
-            if status in _POSITIVE_COVERAGE and document_version_id is not None:
-                membership_status: Literal["included", "missing", "quarantined"] = "included"
-                family_documents.setdefault(obligation.document_family, set()).add(
-                    document_version_id
-                )
-            elif status in _QUARANTINED_COVERAGE:
-                membership_status = "quarantined"
+            expected_keys.append(str(row[2]))
+            inventory_keys.add(str(row[8]))
+            if status not in _POSITIVE_COVERAGE:
                 document_version_id = None
-            else:
-                membership_status = "missing"
-                document_version_id = None
-            expected.append(
-                ExpectedDocument(
-                    expected_document_key=str(row[2]),
-                    document_version_id=document_version_id,
-                    membership_status=membership_status,
-                    reason=f"coverage:{status or 'absent'}:{row[6] or 'assessment_missing'}",
+            bound_documents.add(
+                (
+                    str(row[0]),
+                    document_version_id,
+                    obligation.document_family,
+                    obligation.reporting_entity_id,
                 )
             )
             commitment_rows.append(
                 {
                     "assessment_id": None if row[7] is None else str(row[7]),
                     "coverage_status": status,
+                    "coverage_reason_code": None if row[6] is None else str(row[6]),
                     "document_family": str(row[1]),
                     "document_version_id": document_version_id,
                     "expected_document_id": str(row[0]),
@@ -866,8 +865,7 @@ def _scope_plan(
                     "snapshot_id": snapshot_id,
                 }
             )
-    keys = [item.expected_document_key for item in expected]
-    if len(keys) != len(set(keys)):
+    if len(expected_keys) != len(set(expected_keys)):
         reasons.add("expected_document_identity_conflict")
     for snapshot_id in sorted(inventory_ids):
         inventory_commitment = _inventory_commitment(
@@ -879,12 +877,56 @@ def _scope_plan(
             reasons.add("source_inventory_incomplete")
         else:
             inventory_commitments[snapshot_id] = inventory_commitment
-    if not expected and not reasons:
+    if not expected_keys and not reasons:
         reasons.add("expected_document_binding_missing")
+    if not reasons:
+        try:
+            projection, projected_snapshots = load_coverage_expected_document_inventory(
+                conn,
+                tuple(sorted(inventory_keys)),
+                knowledge_cutoff=cutoff_at,
+                observed_through=observed_through,
+            )
+            if set(projected_snapshots) != inventory_ids:
+                reasons.add("source_inventory_scope_changed")
+            else:
+                expected = projection.expected_documents
+                reporting_decisions = [
+                    decision.model_dump(mode="json") for decision in projection.reporting_decisions
+                ]
+                active_families = {obligation.document_family for obligation in obligations}
+                for decision in projection.reporting_decisions:
+                    if (
+                        decision.outcome == "governed_reporting"
+                        and decision.coverage_status in _POSITIVE_COVERAGE
+                        and (
+                            decision.issuer_id != issuer_id
+                            or (
+                                decision.expected_document_id,
+                                decision.document_version_id,
+                                decision.document_family,
+                                decision.reporting_entity_id,
+                            )
+                            not in bound_documents
+                        )
+                    ):
+                        reasons.add("expected_document_binding_missing")
+                        continue
+                    if (
+                        decision.outcome == "governed_reporting"
+                        and decision.document_family in active_families
+                        and decision.coverage_status in _POSITIVE_COVERAGE
+                        and decision.document_version_id is not None
+                    ):
+                        family_documents.setdefault(str(decision.document_family), set()).add(
+                            decision.document_version_id
+                        )
+        except (ValueError, sqlite3.Error):
+            reasons.add("reporting_projection_unavailable")
     return _ScopePlan(
         issuer_id=issuer_id,
         obligations=obligations,
-        expected_documents=tuple(sorted(expected, key=lambda item: item.expected_document_key)),
+        expected_documents=expected,
         source_inventory_snapshot_ids=tuple(sorted(inventory_ids)),
         source_inventory_commitments=dict(sorted(inventory_commitments.items())),
         family_document_ids={
@@ -901,6 +943,7 @@ def _scope_plan(
                     ),
                 ),
                 "inventory_commitments": dict(sorted(inventory_commitments.items())),
+                "reporting_decisions": reporting_decisions,
                 "obligations": [
                     item.model_dump(mode="json")
                     for item in sorted(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
 from datetime import datetime
 from typing import Literal, Self, cast
@@ -62,6 +63,7 @@ from provenance.research_snapshot import (
     seal_processing_snapshot,
 )
 from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import sha256_joined_nul
 from runtime.deterministic import sha256_joined_unit_sep as _digest
 
 _POLICY = DocumentProcessingPolicy(
@@ -1313,7 +1315,7 @@ def _ensure_expected_document_binding(
         separators=(",", ":"),
         ensure_ascii=False,
     )
-    binding_id = "expected-obligation-binding:" + _digest(
+    binding_id = "expected-obligation-binding:" + sha256_joined_nul(
         decision.expected_document_id,
         obligation_revision_id,
     )
@@ -1340,8 +1342,52 @@ def _ensure_expected_document_binding(
         (decision.expected_document_id,),
     ).fetchone()
     if existing is not None:
-        if tuple(existing) != values:
+        # Source coverage owns the NUL-delimited identity. Retain bindings made
+        # by the population owner's historical unit-separator identity as-is.
+        known_binding_ids = {
+            binding_id,
+            "expected-obligation-binding:"
+            + _digest(decision.expected_document_id, obligation_revision_id),
+        }
+        if (
+            existing[0] not in known_binding_ids
+            or existing[1] != existing[0]
+            or tuple(existing[2:9]) != values[2:9]
+        ):
             raise ValueError("expected document binding replay changed immutable values")
+        source_clock_replay = False
+        try:
+            clocks = tuple(_parse_time(value) for value in existing[9:])
+            if clocks != (_utc(cutoff), _utc(cutoff), _utc(recorded_at)):
+                source = conn.execute(
+                    "SELECT recorded_at FROM expected_documents "
+                    "WHERE expected_document_id=? AND issuer_id=?",
+                    (decision.expected_document_id, decision.issuer_id),
+                ).fetchone()
+                if source is None:
+                    raise ValueError("expected document source clock is unavailable")
+                source_clock = _parse_time(source[0])
+                # SourceCoverageLedger binds at the ExpectedDocument's original
+                # recording clock. A later population run must preserve it.
+                if (
+                    clocks != (source_clock,) * 3
+                    or source_clock > _utc(cutoff)
+                    or source_clock > _utc(recorded_at)
+                ):
+                    raise ValueError("expected document source clock differs")
+                source_clock_replay = True
+        except (TypeError, ValueError):
+            raise ValueError("expected document binding replay changed immutable values") from None
+        if existing[0] != binding_id or source_clock_replay:
+            logging.getLogger(__name__).info(
+                {
+                    "event": "expected_document_binding_replay",
+                    "legacy_binding_id": existing[0] != binding_id,
+                    "source_recording_clock_replay": source_clock_replay,
+                }
+            )
+        # Other historical population clocks still require their exact original
+        # operation tuple; ordering alone cannot prove an immutable replay.
         return False
     conn.execute(
         "INSERT INTO expected_document_obligation_bindings "
