@@ -219,3 +219,37 @@ canonical query fragments. Reviewed, issue-specific annotations describe those
 exact boundaries. All four edited Python syntax trees are identical before and
 after the annotations. Bandit 1.9.4 passes against the unchanged baseline. The
 scanner, global skips and global baseline remain unchanged.
+
+## Browser path and native Windows coverage
+
+Two independent Opus 5.5 reviews of `05edde2e` scored the work 81/100 and
+found no blocking source defect. The second review included actual browser-path
+evidence. The owner's required score remains unmet; these reviews do not
+authorize merge.
+
+Chromium exercised the real Cockpit-to-Evaluation path for 80 synthetic task
+cycles across 1440- and 390-pixel widths. Cold builders fell from two to one,
+and SQL statements fell from 397 to 73. Warm SQL fell from six to zero.
+Useful-content readiness stayed near 76–78 ms for Cockpit and 23 ms for
+Evaluation. This fixture shows less backend work, with no material browser
+timing gain. The readiness check uses exact fixture rows and two animation
+frames; it is not physical paint or production throughput. The earlier
+three-route server benchmark also requested `/api/panel/overview`, which the
+native initial Cockpit path does not request. Output parity passed. All owned
+browser/server processes stopped and both listeners closed.
+
+Two isolated native Windows attempts produced no recoverable test result.
+Their pass/fail/skip counts remain unknown. Both temporary scopes were removed
+and cleanup found zero matching processes. The earlier successful writer probe
+does not establish the separate process-tree integration cases.
+
+The CI workflow now runs those five original cases on a disposable hosted
+Windows runner with Python 3.13. It loads no application fixtures or database.
+The aggregate CI gate requires the Windows job for code changes. Its JUnit
+receipt must contain each exact case once, with no skip, failure or error.
+Missing or malformed receipts fail the gate. Receipts are retained for seven
+days. Native results and complete CI on the new commit are still pending.
+This is a tested **no surface change** disposition under
+`directives/operations_governance_surface.md`: application routes, Operations
+actions, scheduler registration and production host authority stay unchanged.
+Hosted Windows evidence does not prove deployment or canonical-host parity.
