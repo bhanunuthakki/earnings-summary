@@ -2,6 +2,23 @@
   "canonical_module": "src/runtime/deterministic.py",
   "generated_at": "2026-10-09T15:00:01.249634+00:00",
   "generated_commit": "f9cf291b425aaeef444fc9d4951770b8cb5211cc",
+  "reconciliation": {
+    "scope": "Refresh five changed retained source captures, preserve their historical originals, and disposition six upstream financial hash/validator boundaries. Runtime and test definitions are unchanged.",
+    "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
+    "updated_sites": [
+      "execution/extract_company_description.py:103:_resolve_tickers",
+      "execution/extract_platform_diagram.py:105:_resolve_tickers",
+      "execution/extract_segment_definitions.py:98:_resolve_tickers",
+      "execution/fetch_sec_xbrl.py:183:_resolve_tickers",
+      "src/filings/inline_xbrl_processor.py:237:canonical_json",
+      "src/research/decision_brief.py:620:_sha",
+      "src/provenance/companyfacts_statement_continuation.py:93:_sha",
+      "src/provenance/evidence_native_candidates.py:401:_sha256",
+      "src/provenance/meli_reported_statements.py:124:_sha",
+      "src/provenance/reviewed_sec_financial_tables.py:53:_sha",
+      "src/provenance/financial_derivations.py:71:_digest"
+    ]
+  },
   "schema_version": "1",
   "sites": [
     {
@@ -996,10 +1013,42 @@
       "canonical_extra": null,
       "canonical_target": null,
       "disposition": "retained",
-      "end_line": 109,
+      "end_line": 118,
       "family": "tickers",
       "file": "execution/extract_company_description.py",
-      "line": 93,
+      "historical_captures": [
+        {
+          "canonical_extra": null,
+          "canonical_target": null,
+          "capture_commit": "f9cf291b425aaeef444fc9d4951770b8cb5211cc",
+          "capture_status": "historical retained implementation superseded by the integrated main behavior",
+          "disposition": "retained",
+          "end_line": 109,
+          "family": "tickers",
+          "file": "execution/extract_company_description.py",
+          "line": 93,
+          "name": "_resolve_tickers",
+          "referenced": {
+            "SQLiteConnectionRole": {
+              "import_module": "sqlite_runtime",
+              "import_name": "SQLiteConnectionRole"
+            },
+            "connect_sqlite": {
+              "import_module": "sqlite_runtime",
+              "import_name": "connect_sqlite"
+            },
+            "db": {
+              "import_module": "db",
+              "import_name": "db"
+            }
+          },
+          "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+          "scope": "module",
+          "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) \u2014 these\n    # are the names that auto-produce briefs and therefore need a \u00a72 company\n    # description. Watchlist names are a holding pen; if you want to backfill\n    # one, pass it explicitly via `--ticker`.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+          "unresolved": []
+        }
+      ],
+      "line": 103,
       "name": "_resolve_tickers",
       "referenced": {
         "SQLiteConnectionRole": {
@@ -1015,9 +1064,10 @@
           "import_name": "db"
         }
       },
-      "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+      "retained_reason": "Retain the governed roster boundary: this CLI accepts an already-resolved database path, selects BRIEFED_LIST_TYPES (portfolio and evaluation), and permits an explicit ticker. Its authority and list-type scope differ from active-roster and SEC collection selectors. Main removed the checkout-default database inference; the previous capture is preserved as history, not labeled as a canonical collapse.",
       "scope": "module",
-      "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) \u2014 these\n    # are the names that auto-produce briefs and therefore need a \u00a72 company\n    # description. Watchlist names are a holding pen; if you want to backfill\n    # one, pass it explicitly via `--ticker`.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+      "source": "def _resolve_tickers(db_path: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) \u2014 these\n    # are the names that auto-produce briefs and therefore need a \u00a72 company\n    # description. Watchlist names are a holding pen; if you want to backfill\n    # one, pass it explicitly via `--ticker`.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+      "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
       "unresolved": []
     },
     {
@@ -1136,10 +1186,42 @@
       "canonical_extra": null,
       "canonical_target": null,
       "disposition": "retained",
-      "end_line": 110,
+      "end_line": 119,
       "family": "tickers",
       "file": "execution/extract_platform_diagram.py",
-      "line": 95,
+      "historical_captures": [
+        {
+          "canonical_extra": null,
+          "canonical_target": null,
+          "capture_commit": "f9cf291b425aaeef444fc9d4951770b8cb5211cc",
+          "capture_status": "historical retained implementation superseded by the integrated main behavior",
+          "disposition": "retained",
+          "end_line": 110,
+          "family": "tickers",
+          "file": "execution/extract_platform_diagram.py",
+          "line": 95,
+          "name": "_resolve_tickers",
+          "referenced": {
+            "SQLiteConnectionRole": {
+              "import_module": "sqlite_runtime",
+              "import_name": "SQLiteConnectionRole"
+            },
+            "connect_sqlite": {
+              "import_module": "sqlite_runtime",
+              "import_name": "connect_sqlite"
+            },
+            "db": {
+              "import_module": "db",
+              "import_name": "db"
+            }
+          },
+          "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+          "scope": "module",
+          "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) \u2014 these\n    # are the names that auto-produce briefs and therefore need a \u00a72 platform\n    # diagram. Watchlist names are a holding pen; backfill explicitly via --ticker.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+          "unresolved": []
+        }
+      ],
+      "line": 105,
       "name": "_resolve_tickers",
       "referenced": {
         "SQLiteConnectionRole": {
@@ -1155,9 +1237,10 @@
           "import_name": "db"
         }
       },
-      "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+      "retained_reason": "Retain the governed roster boundary: this CLI accepts an already-resolved database path and selects BRIEFED_LIST_TYPES (portfolio and evaluation), with an explicit-ticker bypass. Its selection policy differs from the active-roster and SEC collection paths. Main removed checkout-default database inference; retain the previous capture as history without claiming a canonical collapse.",
       "scope": "module",
-      "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) \u2014 these\n    # are the names that auto-produce briefs and therefore need a \u00a72 platform\n    # diagram. Watchlist names are a holding pen; backfill explicitly via --ticker.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+      "source": "def _resolve_tickers(db_path: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    # `--all` is scoped to BRIEFED_LIST_TYPES (portfolio + evaluation) \u2014 these\n    # are the names that auto-produce briefs and therefore need a \u00a72 platform\n    # diagram. Watchlist names are a holding pen; backfill explicitly via --ticker.\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.BRIEFED_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+      "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
       "unresolved": []
     },
     {
@@ -1192,10 +1275,42 @@
       "canonical_extra": null,
       "canonical_target": null,
       "disposition": "retained",
-      "end_line": 100,
+      "end_line": 109,
       "family": "tickers",
       "file": "execution/extract_segment_definitions.py",
-      "line": 88,
+      "historical_captures": [
+        {
+          "canonical_extra": null,
+          "canonical_target": null,
+          "capture_commit": "f9cf291b425aaeef444fc9d4951770b8cb5211cc",
+          "capture_status": "historical retained implementation superseded by the integrated main behavior",
+          "disposition": "retained",
+          "end_line": 100,
+          "family": "tickers",
+          "file": "execution/extract_segment_definitions.py",
+          "line": 88,
+          "name": "_resolve_tickers",
+          "referenced": {
+            "SQLiteConnectionRole": {
+              "import_module": "sqlite_runtime",
+              "import_name": "SQLiteConnectionRole"
+            },
+            "connect_sqlite": {
+              "import_module": "sqlite_runtime",
+              "import_name": "connect_sqlite"
+            },
+            "db": {
+              "import_module": "db",
+              "import_name": "db"
+            }
+          },
+          "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+          "scope": "module",
+          "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+          "unresolved": []
+        }
+      ],
+      "line": 98,
       "name": "_resolve_tickers",
       "referenced": {
         "SQLiteConnectionRole": {
@@ -1211,9 +1326,10 @@
           "import_name": "db"
         }
       },
-      "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+      "retained_reason": "Retain the active-roster selector: this CLI accepts an already-resolved database path and uses ACTIVE_LIST_TYPES, which differs from the briefed-company roster used by the description and diagram CLIs. Main removed checkout-default database inference. Preserve the previous capture as history; a shared selector must retain this distinct list-type policy.",
       "scope": "module",
-      "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+      "source": "def _resolve_tickers(db_path: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+      "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
       "unresolved": []
     },
     {
@@ -1327,10 +1443,70 @@
       "canonical_extra": null,
       "canonical_target": null,
       "disposition": "retained",
-      "end_line": 270,
+      "end_line": 268,
       "family": "tickers",
       "file": "execution/fetch_sec_xbrl.py",
-      "line": 182,
+      "historical_captures": [
+        {
+          "canonical_extra": null,
+          "canonical_target": null,
+          "capture_commit": "f9cf291b425aaeef444fc9d4951770b8cb5211cc",
+          "capture_status": "historical retained implementation superseded by the integrated main behavior",
+          "disposition": "retained",
+          "end_line": 270,
+          "family": "tickers",
+          "file": "execution/fetch_sec_xbrl.py",
+          "line": 182,
+          "name": "_resolve_tickers",
+          "referenced": {
+            "ArtifactKind": {
+              "import_module": "pipeline.source_policy",
+              "import_name": "ArtifactKind"
+            },
+            "CIK_MAP": {
+              "import_module": "pipeline.sec_xbrl",
+              "import_name": "CIK_MAP"
+            },
+            "CollectionSource": {
+              "import_module": "pipeline.source_policy",
+              "import_name": "CollectionSource"
+            },
+            "CollectionTarget": {
+              "import_module": "pipeline.source_policy",
+              "import_name": "CollectionTarget"
+            },
+            "ListType": {
+              "import_module": "models.companies",
+              "import_name": "ListType"
+            },
+            "NO_SEC_FILERS": {
+              "import_module": "pipeline.sec_xbrl",
+              "import_name": "NO_SEC_FILERS"
+            },
+            "instrument_allows_artifact": {
+              "import_module": "pipeline.source_policy",
+              "import_name": "instrument_allows_artifact"
+            },
+            "select_collection_targets": {
+              "import_module": "pipeline.source_policy",
+              "import_name": "select_collection_targets"
+            },
+            "sys": {
+              "import_module": "sys",
+              "import_name": "sys"
+            },
+            "tracked_companies_for_user": {
+              "import_module": "pipeline.queries",
+              "import_name": "tracked_companies_for_user"
+            }
+          },
+          "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+          "scope": "module",
+          "source": "def _resolve_tickers(args: argparse.Namespace, conn: sqlite3.Connection) -> list[str]:\n    \"\"\"Automatic research-company scope, bounded by stored role and instrument.\"\"\"\n\n    try:\n        if args.ticker:\n            tracked = tracked_companies_for_user(conn, list_types=frozenset(ListType))\n        else:\n            tracked = tracked_companies_for_user(conn)\n    except sqlite3.Error:\n        # No governed roster means no authorized network scope.\n        return []\n    requested_ticker = args.ticker.upper() if args.ticker else None\n    candidates = [\n        CollectionTarget(\n            ticker=company.ticker,\n            coverage_role=company.list_type,\n            requested=requested_ticker is not None,\n        )\n        for company in tracked\n        if requested_ticker is None or company.ticker.upper() == requested_ticker\n    ]\n    if requested_ticker is not None and not candidates:\n        candidates = [\n            CollectionTarget(\n                ticker=requested_ticker,\n                coverage_role=ListType.NONE,\n                requested=True,\n            )\n        ]\n    selection = select_collection_targets(\n        tuple(candidates),\n        source=CollectionSource.SEC,\n        artifact_kind=ArtifactKind.COMPANY_FACTS,\n    )\n    for item in selection.denied:\n        sys.stderr.write(\n            json.dumps(\n                {\n                    \"event\": \"source_collection_policy_denied\",\n                    \"ticker\": item.target.ticker,\n                    \"coverage_role\": item.target.coverage_role.value,\n                    \"source\": CollectionSource.SEC.value,\n                    \"artifact_kind\": ArtifactKind.COMPANY_FACTS.value,\n                    \"reason\": item.decision.reason.value,\n                },\n                sort_keys=True,\n            )\n            + \"\\n\"\n        )\n    instruments = {company.ticker.upper(): company.instrument_type for company in tracked}\n    allowed: list[str] = []\n    for item in selection.allowed:\n        if instrument_allows_artifact(\n            instruments.get(item.target.ticker),\n            source=CollectionSource.SEC,\n            artifact_kind=ArtifactKind.COMPANY_FACTS,\n        ):\n            allowed.append(item.target.ticker)\n        else:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"source_collection_instrument_denied\",\n                        \"ticker\": item.target.ticker,\n                        \"instrument_type\": instruments.get(item.target.ticker),\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    for ticker in allowed:\n        if ticker in NO_SEC_FILERS:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"sec_no_filer_disposition\",\n                        \"ticker\": ticker,\n                        \"disposition\": \"documented_non_filer\",\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    uncovered = sorted(t for t in allowed if t not in CIK_MAP and t not in NO_SEC_FILERS)\n    if uncovered:\n        sys.stderr.write(\n            json.dumps({\"event\": \"sec_cik_map_stale\", \"tickers_missing_cik\": uncovered}) + \"\\n\"\n        )\n    return [ticker for ticker in allowed if ticker in CIK_MAP]",
+          "unresolved": []
+        }
+      ],
+      "line": 183,
       "name": "_resolve_tickers",
       "referenced": {
         "ArtifactKind": {
@@ -1374,9 +1550,10 @@
           "import_name": "tracked_companies_for_user"
         }
       },
-      "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+      "retained_reason": "Retain the SEC collection-authorization boundary: stored coverage role and instrument type determine allowed COMPANY_FACTS requests, explicit requests have their own policy, and documented NO_SEC_FILERS are excluded. Main now resolves canonical issuer identity during ingestion instead of rejecting authorized issuers absent from CIK_MAP. This is collection policy, not a generic roster helper; preserve the old static-map capture as history.",
       "scope": "module",
-      "source": "def _resolve_tickers(args: argparse.Namespace, conn: sqlite3.Connection) -> list[str]:\n    \"\"\"Automatic research-company scope, bounded by stored role and instrument.\"\"\"\n\n    try:\n        if args.ticker:\n            tracked = tracked_companies_for_user(conn, list_types=frozenset(ListType))\n        else:\n            tracked = tracked_companies_for_user(conn)\n    except sqlite3.Error:\n        # No governed roster means no authorized network scope.\n        return []\n    requested_ticker = args.ticker.upper() if args.ticker else None\n    candidates = [\n        CollectionTarget(\n            ticker=company.ticker,\n            coverage_role=company.list_type,\n            requested=requested_ticker is not None,\n        )\n        for company in tracked\n        if requested_ticker is None or company.ticker.upper() == requested_ticker\n    ]\n    if requested_ticker is not None and not candidates:\n        candidates = [\n            CollectionTarget(\n                ticker=requested_ticker,\n                coverage_role=ListType.NONE,\n                requested=True,\n            )\n        ]\n    selection = select_collection_targets(\n        tuple(candidates),\n        source=CollectionSource.SEC,\n        artifact_kind=ArtifactKind.COMPANY_FACTS,\n    )\n    for item in selection.denied:\n        sys.stderr.write(\n            json.dumps(\n                {\n                    \"event\": \"source_collection_policy_denied\",\n                    \"ticker\": item.target.ticker,\n                    \"coverage_role\": item.target.coverage_role.value,\n                    \"source\": CollectionSource.SEC.value,\n                    \"artifact_kind\": ArtifactKind.COMPANY_FACTS.value,\n                    \"reason\": item.decision.reason.value,\n                },\n                sort_keys=True,\n            )\n            + \"\\n\"\n        )\n    instruments = {company.ticker.upper(): company.instrument_type for company in tracked}\n    allowed: list[str] = []\n    for item in selection.allowed:\n        if instrument_allows_artifact(\n            instruments.get(item.target.ticker),\n            source=CollectionSource.SEC,\n            artifact_kind=ArtifactKind.COMPANY_FACTS,\n        ):\n            allowed.append(item.target.ticker)\n        else:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"source_collection_instrument_denied\",\n                        \"ticker\": item.target.ticker,\n                        \"instrument_type\": instruments.get(item.target.ticker),\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    for ticker in allowed:\n        if ticker in NO_SEC_FILERS:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"sec_no_filer_disposition\",\n                        \"ticker\": ticker,\n                        \"disposition\": \"documented_non_filer\",\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    uncovered = sorted(t for t in allowed if t not in CIK_MAP and t not in NO_SEC_FILERS)\n    if uncovered:\n        sys.stderr.write(\n            json.dumps({\"event\": \"sec_cik_map_stale\", \"tickers_missing_cik\": uncovered}) + \"\\n\"\n        )\n    return [ticker for ticker in allowed if ticker in CIK_MAP]",
+      "source": "def _resolve_tickers(args: argparse.Namespace, conn: sqlite3.Connection) -> list[str]:\n    \"\"\"Automatic research-company scope, bounded by stored role and instrument.\"\"\"\n\n    try:\n        if args.ticker:\n            tracked = tracked_companies_for_user(conn, list_types=frozenset(ListType))\n        else:\n            tracked = tracked_companies_for_user(conn)\n    except sqlite3.Error:\n        # No governed roster means no authorized network scope.\n        return []\n    requested_ticker = args.ticker.upper() if args.ticker else None\n    candidates = [\n        CollectionTarget(\n            ticker=company.ticker,\n            coverage_role=company.list_type,\n            requested=requested_ticker is not None,\n        )\n        for company in tracked\n        if requested_ticker is None or company.ticker.upper() == requested_ticker\n    ]\n    if requested_ticker is not None and not candidates:\n        candidates = [\n            CollectionTarget(\n                ticker=requested_ticker,\n                coverage_role=ListType.NONE,\n                requested=True,\n            )\n        ]\n    selection = select_collection_targets(\n        tuple(candidates),\n        source=CollectionSource.SEC,\n        artifact_kind=ArtifactKind.COMPANY_FACTS,\n    )\n    for item in selection.denied:\n        sys.stderr.write(\n            json.dumps(\n                {\n                    \"event\": \"source_collection_policy_denied\",\n                    \"ticker\": item.target.ticker,\n                    \"coverage_role\": item.target.coverage_role.value,\n                    \"source\": CollectionSource.SEC.value,\n                    \"artifact_kind\": ArtifactKind.COMPANY_FACTS.value,\n                    \"reason\": item.decision.reason.value,\n                },\n                sort_keys=True,\n            )\n            + \"\\n\"\n        )\n    instruments = {company.ticker.upper(): company.instrument_type for company in tracked}\n    allowed: list[str] = []\n    for item in selection.allowed:\n        if instrument_allows_artifact(\n            instruments.get(item.target.ticker),\n            source=CollectionSource.SEC,\n            artifact_kind=ArtifactKind.COMPANY_FACTS,\n        ):\n            allowed.append(item.target.ticker)\n        else:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"source_collection_instrument_denied\",\n                        \"ticker\": item.target.ticker,\n                        \"instrument_type\": instruments.get(item.target.ticker),\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    for ticker in allowed:\n        if ticker in NO_SEC_FILERS:\n            sys.stderr.write(\n                json.dumps(\n                    {\n                        \"event\": \"sec_no_filer_disposition\",\n                        \"ticker\": ticker,\n                        \"disposition\": \"documented_non_filer\",\n                    },\n                    sort_keys=True,\n                )\n                + \"\\n\"\n            )\n    # Canonical issuer resolution occurs before HTTP inside ingestion. A missing\n    # historical static pin cannot silently discard an authorized new company.\n    return [ticker for ticker in allowed if ticker not in NO_SEC_FILERS]",
+      "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
       "unresolved": []
     },
     {
@@ -2361,19 +2538,43 @@
       "canonical_extra": null,
       "canonical_target": null,
       "disposition": "retained",
-      "end_line": 166,
+      "end_line": 238,
       "family": "json",
       "file": "src/filings/inline_xbrl_processor.py",
-      "line": 165,
+      "historical_captures": [
+        {
+          "canonical_extra": null,
+          "canonical_target": null,
+          "capture_commit": "f9cf291b425aaeef444fc9d4951770b8cb5211cc",
+          "capture_status": "historical retained implementation superseded by the integrated main behavior",
+          "disposition": "retained",
+          "end_line": 166,
+          "family": "json",
+          "file": "src/filings/inline_xbrl_processor.py",
+          "line": 165,
+          "name": "canonical_json",
+          "referenced": {
+            "_canonical": {
+              "source": "def _canonical(value: object) -> str:\n    return json.dumps(value, sort_keys=True, separators=(\",\", \":\"), ensure_ascii=False)"
+            }
+          },
+          "retained_reason": "delegating or non-dumps method",
+          "scope": "method",
+          "source": "def canonical_json(self) -> str:\n        return _canonical(self.model_dump(mode=\"json\"))",
+          "unresolved": []
+        }
+      ],
+      "line": 237,
       "name": "canonical_json",
       "referenced": {
         "_canonical": {
           "source": "def _canonical(value: object) -> str:\n    return json.dumps(value, sort_keys=True, separators=(\",\", \":\"), ensure_ascii=False)"
         }
       },
-      "retained_reason": "delegating or non-dumps method",
+      "retained_reason": "Retain the processor-lock model boundary: canonical_json serializes this closed execution contract with mode=\"json\" and exclude_none=True before applying the canonical serializer. Omitting absent optional fields is part of the reviewed processor artifact identity. Preserve the earlier include-None capture as history; do not relabel that semantic change as a byte-equivalent collapse.",
       "scope": "method",
-      "source": "def canonical_json(self) -> str:\n        return _canonical(self.model_dump(mode=\"json\"))",
+      "source": "def canonical_json(self) -> str:\n        return _canonical(self.model_dump(mode=\"json\", exclude_none=True))",
+      "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
       "unresolved": []
     },
     {
@@ -4020,6 +4221,27 @@
     },
     {
       "canonical_extra": null,
+      "canonical_target": null,
+      "disposition": "retained",
+      "end_line": 94,
+      "family": "sha",
+      "file": "src/provenance/companyfacts_statement_continuation.py",
+      "line": 93,
+      "name": "_sha",
+      "referenced": {
+        "hashlib": {
+          "import_module": "hashlib",
+          "import_name": "hashlib"
+        }
+      },
+      "retained_reason": "Retain the CompanyFacts continuation identity contract: str inputs are UTF-8 encoded and bytes inputs are hashed verbatim. The same boundary hashes canonical request text, immutable downloaded payload bytes, source-entry text, and output receipts. No single existing canonical target has that exact str-or-bytes dispatch; using a generic JSON hash would change financial evidence identities.",
+      "scope": "module",
+      "source": "def _sha(value: str | bytes) -> str:\n    return hashlib.sha256(value.encode() if isinstance(value, str) else value).hexdigest()",
+      "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
+      "unresolved": []
+    },
+    {
+      "canonical_extra": null,
       "canonical_target": "canonical_json_ascii",
       "disposition": "collapsed",
       "end_line": 1288,
@@ -4169,6 +4391,27 @@
       "retained_reason": "same parse semantics as parse_iso8601_named with a different RuntimeError message contract",
       "scope": "module",
       "source": "def _datetime(value: object, name: str) -> datetime:\n    if isinstance(value, datetime):\n        return value\n    if isinstance(value, str):\n        try:\n            return datetime.fromisoformat(value.replace(\"Z\", \"+00:00\"))\n        except ValueError as error:\n            raise RuntimeError(f\"{name} must be an ISO-8601 datetime\") from error\n    raise RuntimeError(f\"{name} must be a datetime\")",
+      "unresolved": []
+    },
+    {
+      "canonical_extra": null,
+      "canonical_target": null,
+      "disposition": "retained",
+      "end_line": 405,
+      "family": "sha",
+      "file": "src/provenance/evidence_native_candidates.py",
+      "line": 401,
+      "name": "_sha256",
+      "referenced": {
+        "re": {
+          "import_module": "re",
+          "import_name": "re"
+        }
+      },
+      "retained_reason": "Retain this evidence-input validator rather than treating its family name as a hash function: it normalizes case, requires exactly 64 hexadecimal characters, and raises a field-named ValueError. It validates the expected immutable source-byte digest before reading evidence. A future require_sha256 adapter must preserve normalization and the exact contextual error contract.",
+      "scope": "module",
+      "source": "def _sha256(value: str, name: str) -> str:\n    normalized = value.lower()\n    if not re.fullmatch(r\"[0-9a-f]{64}\", normalized):\n        raise ValueError(f\"{name} must be a lowercase SHA-256 digest\")\n    return normalized",
+      "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
       "unresolved": []
     },
     {
@@ -4411,6 +4654,31 @@
       "retained_reason": null,
       "scope": "module",
       "source": "def _digest(value: object) -> str:\n    return hashlib.sha256(_canonical_json(value).encode()).hexdigest()",
+      "unresolved": []
+    },
+    {
+      "canonical_extra": null,
+      "canonical_target": null,
+      "disposition": "retained",
+      "end_line": 72,
+      "family": "sha",
+      "file": "src/provenance/financial_derivations.py",
+      "line": 71,
+      "name": "_digest",
+      "referenced": {
+        "canonical_json": {
+          "import_module": "provenance.metric_ontology",
+          "import_name": "canonical_json"
+        },
+        "hashlib": {
+          "import_module": "hashlib",
+          "import_name": "hashlib"
+        }
+      },
+      "retained_reason": "Retain the reviewed financial-derivation identity boundary: it hashes the metric-ontology canonical_json representation, which is model-aware, to bind the immutable formula and operand graph. Replacing that domain serialization with a plain text or generic JSON hash could change derived Observation Versions. A separate adoption must prove model serialization and formula/operand receipt parity, not merely the SHA-256 primitive.",
+      "scope": "module",
+      "source": "def _digest(value: object) -> str:\n    return hashlib.sha256(canonical_json(value).encode()).hexdigest()",
+      "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
       "unresolved": []
     },
     {
@@ -4799,6 +5067,22 @@
       "retained_reason": "delegating or non-dumps method",
       "scope": "method",
       "source": "def canonical_json(self) -> str:\n        return _canonical_model_json(self)",
+      "unresolved": []
+    },
+    {
+      "canonical_extra": null,
+      "canonical_target": "sha256_text",
+      "disposition": "retained",
+      "end_line": 125,
+      "family": "sha",
+      "file": "src/provenance/meli_reported_statements.py",
+      "line": 124,
+      "name": "_sha",
+      "referenced": {},
+      "retained_reason": "Retain the MELI reported-statement identity boundary at the frozen source revision: UTF-8 text hashes bind reviewed source definitions, extractor configuration/output, source cells, Observation Versions, and completeness receipts. Its primitive matches sha256_text (mapped and checked by the oracle); this inventory-only reconciliation preserves existing recipe identities and does not change their serialization or concatenation inputs.",
+      "scope": "module",
+      "source": "def _sha(value: str) -> str:\n    return hashlib.sha256(value.encode()).hexdigest()",
+      "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
       "unresolved": []
     },
     {
@@ -5553,6 +5837,22 @@
     },
     {
       "canonical_extra": null,
+      "canonical_target": "sha256_text",
+      "disposition": "retained",
+      "end_line": 54,
+      "family": "sha",
+      "file": "src/provenance/reviewed_sec_financial_tables.py",
+      "line": 53,
+      "name": "_sha",
+      "referenced": {},
+      "retained_reason": "Retain the reviewed SEC financial-table identity boundary at the frozen source revision: explicit UTF-8 hashing binds review approval, source definitions, run/node IDs, Observation Versions, and extraction seals. The primitive matches sha256_text (mapped and checked by the oracle), while serialization and field concatenation remain owned by the versioned financial recipe. No runtime adoption is claimed by this inventory update.",
+      "scope": "module",
+      "source": "def _sha(value: str) -> str:\n    return hashlib.sha256(value.encode(\"utf-8\")).hexdigest()",
+      "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
+      "unresolved": []
+    },
+    {
+      "canonical_extra": null,
       "canonical_target": null,
       "disposition": "retained",
       "end_line": 59,
@@ -5991,6 +6291,22 @@
       "retained_reason": "time body matches no canonical pattern",
       "scope": "module",
       "source": "def _parse_datetime(v: object) -> datetime | None:\n    if isinstance(v, datetime):\n        return v\n    if isinstance(v, str):\n        try:\n            return datetime.fromisoformat(v)\n        except ValueError:\n            return None\n    return None",
+      "unresolved": []
+    },
+    {
+      "canonical_extra": null,
+      "canonical_target": "sha256_bytes",
+      "disposition": "retained",
+      "end_line": 621,
+      "family": "sha",
+      "file": "src/research/decision_brief.py",
+      "line": 620,
+      "name": "_sha",
+      "referenced": {},
+      "retained_reason": "Retain the decision-brief byte-identity boundary at the frozen source revision: it hashes raw source/artifact bytes, workspace bytes, context-review bytes, and selector-NUL-text blocks. The primitive is byte-equivalent to sha256_bytes (mapped and checked by the oracle), but this inventory reconciliation does not change the financially versioned artifact entrypoint. A later mechanical adoption must preserve those exact input bytes.",
+      "scope": "module",
+      "source": "def _sha(raw: bytes) -> str:\n    return hashlib.sha256(raw).hexdigest()",
+      "source_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
       "unresolved": []
     },
     {
@@ -7326,10 +7642,10 @@
     },
     "sha": {
       "collapsed": 66,
-      "mappable": 79,
-      "module": 122,
-      "retained": 66,
-      "total": 132
+      "mappable": 82,
+      "module": 128,
+      "retained": 72,
+      "total": 138
     },
     "tables": {
       "collapsed": 31,

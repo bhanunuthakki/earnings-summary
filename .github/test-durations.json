@@ -319,10 +319,6 @@
       "seconds": 4.21,
       "shard": "8"
     },
-    "tests/test_ask_retrieval_boot_state.py": {
-      "seconds": 0.025,
-      "shard": "3"
-    },
     "tests/test_ask_retrieval_scope_registry.py": {
       "seconds": 1.2,
       "shard": "1"
@@ -493,7 +489,7 @@
     },
     "tests/test_bounded_source_reader.py": {
       "seconds": 0.015,
-      "shard": "1 overflow"
+      "shard": "2 overflow"
     },
     "tests/test_brief_provenance_log.py": {
       "seconds": 1.8,
@@ -1761,7 +1757,7 @@
     },
     "tests/test_financials_kpi_query_budget.py": {
       "seconds": 0.021,
-      "shard": "4"
+      "shard": "3"
     },
     "tests/test_financials_kpi_resolution.py": {
       "seconds": 1.5,
@@ -2813,7 +2809,7 @@
     },
     "tests/test_onboarding_state_authority.py": {
       "seconds": 0.006,
-      "shard": "8"
+      "shard": "6 overflow"
     },
     "tests/test_onmymind_feed.py": {
       "seconds": 3.86,
@@ -2833,7 +2829,7 @@
     },
     "tests/test_onon_provenance.py": {
       "seconds": 0.005,
-      "shard": "3 overflow"
+      "shard": "8"
     },
     "tests/test_ooxml_native_inventory.py": {
       "seconds": 2.0,
@@ -3645,7 +3641,7 @@
     },
     "tests/test_research_snapshot_publication_clock.py": {
       "seconds": 0.003,
-      "shard": "8 overflow"
+      "shard": "3 overflow"
     },
     "tests/test_research_tables.py": {
       "seconds": 13.74,
@@ -3825,7 +3821,7 @@
     },
     "tests/test_scenario_acceptance.py": {
       "seconds": 0.02,
-      "shard": "7"
+      "shard": "4"
     },
     "tests/test_scenario_prior.py": {
       "seconds": 2.1,
@@ -3889,7 +3885,7 @@
     },
     "tests/test_search_runtime_installed_probes.py": {
       "seconds": 0.02,
-      "shard": "6"
+      "shard": "7"
     },
     "tests/test_sec_6k_fetch.py": {
       "seconds": 1.6,
@@ -3933,7 +3929,7 @@
     },
     "tests/test_sec_financial_classification.py": {
       "seconds": 0.019,
-      "shard": "2 overflow"
+      "shard": "6"
     },
     "tests/test_sec_former_ticker_bootstrap.py": {
       "seconds": 1.2,
@@ -4821,7 +4817,7 @@
     },
     "tests/test_xbrl_units.py": {
       "seconds": 0.01,
-      "shard": "6 overflow"
+      "shard": "1 overflow"
     },
     "tests/test_xbrl_value_classify.py": {
       "seconds": 2.0,
@@ -4838,17 +4834,17 @@
   },
   "shard_timings_seconds": {
     "1": 280.58,
-    "1 overflow": 280.589,
+    "1 overflow": 280.584,
     "2": 280.582,
-    "2 overflow": 280.589,
-    "3": 280.586,
-    "3 overflow": 280.585,
-    "4": 280.582,
+    "2 overflow": 280.585,
+    "3": 280.582,
+    "3 overflow": 280.583,
+    "4": 280.581,
     "5": 280.582,
-    "6": 280.586,
-    "6 overflow": 280.59,
+    "6": 280.585,
+    "6 overflow": 280.586,
     "7": 280.582,
-    "8": 280.586,
-    "8 overflow": 280.583
+    "8": 280.585,
+    "8 overflow": 280.58
   }
 }

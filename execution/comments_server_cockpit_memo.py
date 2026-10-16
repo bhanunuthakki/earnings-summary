@@ -13,9 +13,10 @@ fragment with an ETag versus JSON hydrations with ``no-store``).
 Staleness contract (validation contract VAL-SERVE-020): the memo TTL matches
 the panel cache's 30s, and every entry carries its ``data_as_of`` monotonic
 stamp plus the derived ``expires_at`` deadline so a response-cache entry fed
-from a memo hit can expire with the memo's data clock. The pre-change bound —
-no served cockpit data older than 30s at response time — is therefore
-preserved exactly rather than widened to memo-TTL + response-TTL.
+from either a memo hit or a new build cannot extend that deadline. Cached
+snapshots expire 30s after the build reservation, including build time. A
+slow direct result can still be returned to its caller, but an expired result
+is not published to either cache.
 
 Fail-closed degradation: a build failure never publishes (the exception
 propagates exactly as before, the reservation is abandoned), and a caller that
@@ -57,7 +58,7 @@ class CockpitDataEntry:
     (``CockpitRow`` itself is a frozen dataclass)."""
 
     rows: dict[str, tuple[CockpitRow, ...]]
-    data_as_of: float  # monotonic clock at publish — the entry's data clock
+    data_as_of: float  # monotonic clock before the builder starts reading
     expires_at: float  # data_as_of + TTL, in the same monotonic clock
 
 
@@ -74,6 +75,7 @@ class CockpitDataReservation:
 
     key: str
     generation: int
+    data_as_of: float
     ready: threading.Event = field(repr=False, compare=False)
 
 
@@ -158,7 +160,7 @@ class CockpitDataMemo:
                     ready = threading.Event()
                     generation = self._generation
                     self._in_flight[key] = _InFlight(generation, ready)
-                    return CockpitDataReservation(key, generation, ready)
+                    return CockpitDataReservation(key, generation, now, ready)
                 ready = in_flight.ready
             remaining = deadline - time.monotonic()
             if remaining <= 0 or not ready.wait(timeout=remaining):
@@ -169,12 +171,11 @@ class CockpitDataMemo:
     ) -> CockpitDataEntry:
         """Store a successful build and release same-key waiters.
 
-        The data clock is the publish time: the builder read the database and
-        the disk caches before this moment, so ``data_as_of`` is the latest
-        instant the data is guaranteed to reflect — the same anchor a fresh
-        build would have had.
+        Age starts when the build is reserved, before any database or cache
+        read. A slow build consumes its TTL instead of receiving a fresh TTL
+        when it finishes. Expired results release waiters without publication.
         """
-        data_as_of = time.monotonic()
+        data_as_of = reservation.data_as_of
         entry = CockpitDataEntry(
             rows={role: tuple(role_rows) for role, role_rows in rows.items()},
             data_as_of=data_as_of,
@@ -186,7 +187,7 @@ class CockpitDataMemo:
                 return entry
             ready = in_flight.ready
             self._in_flight.pop(reservation.key, None)
-            if reservation.generation == self._generation:
+            if reservation.generation == self._generation and time.monotonic() < entry.expires_at:
                 if len(self._entries) >= self._max_entries:
                     oldest_key = min(self._entries, key=lambda k: self._entries[k].data_as_of)
                     self._entries.pop(oldest_key, None)

@@ -61,7 +61,10 @@ Protocol (the run lock's hardened house style): the lock file sits next to the
 database, is claimed atomically by ``os.link`` of a fully written temp file
 (so a lock file is never observed half-written), carries a JSON payload
 identifying the holder (pid, owner label, acquired_at, token), and a lock whose
-recorded pid is no longer alive is stale and gets broken. Acquisition blocks
+recorded pid is no longer alive is stale and gets broken. A persistent native
+OS guard serializes every claim, stale identity/liveness recheck, replacement,
+and token-checked release. Its descriptor is closed after each short transition;
+the guard file stays in place so contenders always lock the same inode. Acquisition blocks
 with a bounded timeout and then fails LOUD (``WriterGateHeldError``) — a chain
 step surfaces as a failed stage rather than silently extending its budget.
 The deadline bounds acquisition, not the holder's connection lifetime. The
@@ -97,6 +100,7 @@ open took the lock file itself or rode an enclosing claim). Together they prove
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import sys
@@ -158,9 +162,10 @@ def _gate_key(db_path: str | os.PathLike[str]) -> str | None:
 
 
 def _read_holder(lock_path: Path) -> dict[str, object] | None:
+    """Missing/malformed is explicit stale evidence; unreadable stays unknown."""
     try:
         parsed: object = json.loads(lock_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (FileNotFoundError, ValueError):
         return None
     return cast("dict[str, object]", parsed) if isinstance(parsed, dict) else None
 
@@ -171,15 +176,19 @@ class _HeldGate:
 
     lock_path: Path
     pid: int
+    token: str
 
     def release(self) -> None:
-        holder = _read_holder(self.lock_path)
-        # Only remove a lock file this process still owns — never clobber a
-        # successor that legitimately broke our lock while we were suspended.
-        if holder is not None and holder.get("pid") != self.pid:
-            return
-        with suppress(OSError):
-            self.lock_path.unlink()
+        with _ownership_transition_guard(
+            self.lock_path, deadline=time.monotonic() + WRITER_GATE_TIMEOUT_S
+        ):
+            holder = _read_holder(self.lock_path)
+            # Compare the exact claim under the same guard used by takeover.
+            # A successor in this process may have the same PID, but not token.
+            if holder is None or holder.get("pid") != self.pid or holder.get("token") != self.token:
+                return
+            with suppress(FileNotFoundError):
+                self.lock_path.unlink()
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +419,41 @@ def trace_writer_connection(
 # ---------------------------------------------------------------------------
 
 
+@contextmanager
+def _ownership_transition_guard(lock_path: Path, *, deadline: float) -> Generator[None]:
+    """Serialize claim/recheck/unlink with one persistent, crash-released OS lock.
+
+    Never delete the guard inode: a replacement would permit two independent
+    native locks. All acquisition waits share the writer's existing deadline.
+    """
+    guard_path = lock_path.with_name(f"{lock_path.name}.guard")
+    descriptor = os.open(guard_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        while True:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as error:
+                if error.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise WriterGateHeldError(lock_path, _read_holder(lock_path)) from None
+                time.sleep(min(WRITER_GATE_POLL_S, remaining))
+            else:
+                break
+        yield
+    finally:
+        # Closing releases the byte-range lock/flock even after an exception.
+        os.close(descriptor)
+
+
 def _acquire_writer_gate(
     lock_path: Path,
     *,
@@ -419,13 +463,14 @@ def _acquire_writer_gate(
 ) -> _HeldGate:
     """Claim ``lock_path`` or raise ``WriterGateHeldError`` within ``timeout_s``."""
     lock_path.parent.mkdir(parents=True, exist_ok=True)
+    token = uuid4().hex
     payload = json.dumps(
         {
             "pid": os.getpid(),
             "owner": owner,
             "acquired_at": now_naive_utc().isoformat(),
             "argv": sys.argv,
-            "token": uuid4().hex,
+            "token": token,
         }
     )
     deadline = time.monotonic() + max(0.0, timeout_s)
@@ -437,28 +482,35 @@ def _acquire_writer_gate(
     tmp_path.write_text(payload, encoding="utf-8")
     try:
         while True:
-            try:
-                os.link(tmp_path, lock_path)
-            except FileExistsError:
-                holder = _read_holder(lock_path)
-                holder_pid = holder.get("pid") if holder else None
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise WriterGateHeldError(lock_path, holder) from None
-                if not (isinstance(holder_pid, int) and pid_is_alive(holder_pid)):
-                    # Stale cleanup can fail (permissions, antivirus, a race).
-                    # It uses the same deadline as live-holder contention.
-                    try:
-                        lock_path.unlink()
-                    except FileNotFoundError:
-                        continue
-                    except OSError:
-                        pass
-                    else:
-                        continue
-                time.sleep(min(poll_s, remaining))
-                continue
-            return _HeldGate(lock_path=lock_path, pid=os.getpid())
+            with _ownership_transition_guard(lock_path, deadline=deadline):
+                try:
+                    os.link(tmp_path, lock_path)
+                except FileExistsError:
+                    # Read identity and liveness only while ownership changes
+                    # are excluded. A pre-guard observation is never authority.
+                    holder = _read_holder(lock_path)
+                    holder_pid = holder.get("pid") if holder else None
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise WriterGateHeldError(lock_path, holder) from None
+                    if not (isinstance(holder_pid, int) and pid_is_alive(holder_pid)):
+                        try:
+                            lock_path.unlink()
+                        except FileNotFoundError:
+                            pass
+                        except OSError:
+                            pass
+                        else:
+                            # Retain the guard through replacement: a second
+                            # stale contender must observe this new live claim.
+                            os.link(tmp_path, lock_path)
+                            return _HeldGate(lock_path, os.getpid(), token)
+                else:
+                    return _HeldGate(lock_path, os.getpid(), token)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise WriterGateHeldError(lock_path, _read_holder(lock_path)) from None
+            time.sleep(min(poll_s, remaining))
     finally:
         with suppress(OSError):
             tmp_path.unlink()

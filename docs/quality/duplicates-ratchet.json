@@ -1,8 +1,8 @@
 {
   "schema_version": "1",
   "scoped_revision": "WORKTREE",
-  "commit_hash": "87079c30a031573e8fb3d58128bf732ec6fa505a",
-  "source_hash": "6f2d904f5afcbd731b7f00e9a2ddc35a3da782fb2c130eab08c5f2e9891fb39c",
+  "commit_hash": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
+  "source_hash": "9b1f5e6a261bf4a493a62a202f8ef2339d4147aadc073950682106974748b5a8",
   "scanner_hash": "3e5eeae4a510bfc41990c977ec0d327f0ae945ba849766b82534e0efa043bdf1",
   "parser_version": "python-ast-normalized-v1",
   "python_version": "3.14.7",
@@ -10,8 +10,8 @@
     "min_ast_nodes": 20,
     "min_body_lines": 15
   },
-  "files_scanned": 1452,
-  "functions_scanned": 15711,
+  "files_scanned": 1451,
+  "functions_scanned": 15706,
   "exact_groups": [
     {
       "group_id": "exact-289a3c306c99e6b3",
@@ -462,6 +462,31 @@
           "body_lines": 19,
           "ast_nodes": 79,
           "normalized_hash": "710e022bb4c625ff84d0df7650956443f0c0c3db550e313fb4151e2d6dca62e1"
+        }
+      ]
+    },
+    {
+      "group_id": "near-135e4df19c86ee0a",
+      "similarity": 0.856842,
+      "duplicated_loc": 51,
+      "functions": [
+        {
+          "path": "execution/comments_server_cockpit_memo.py",
+          "qualified_name": "CockpitDataMemo.get_or_reserve",
+          "lineno": 145,
+          "end_lineno": 167,
+          "body_lines": 22,
+          "ast_nodes": 212,
+          "normalized_hash": "36628c29cca55991b52e16e7a6c4734cb74b2c5d5f6585b91bb4325281be57dc"
+        },
+        {
+          "path": "execution/comments_server_panel_cache.py",
+          "qualified_name": "PanelResponseCache.get_or_reserve",
+          "lineno": 81,
+          "end_lineno": 110,
+          "body_lines": 29,
+          "ast_nodes": 240,
+          "normalized_hash": "e0c733c35c917bfdbdaff0c27df891dde2a898c371a601f732793c42b4d3fc48"
         }
       ]
     },
@@ -1296,31 +1321,6 @@
           "body_lines": 21,
           "ast_nodes": 107,
           "normalized_hash": "0fcf686c086d879e65211ddb375708fa023d1f99adec426d88d800614a1c075c"
-        }
-      ]
-    },
-    {
-      "group_id": "near-4c841d008c9ecb1f",
-      "similarity": 0.908367,
-      "duplicated_loc": 32,
-      "functions": [
-        {
-          "path": "src/pipeline/sec_xbrl.py",
-          "qualified_name": "_atomic_write_bytes",
-          "lineno": 1987,
-          "end_lineno": 2003,
-          "body_lines": 16,
-          "ast_nodes": 117,
-          "normalized_hash": "3aa8798bf720ee3ece7285f596368da2fa6c6100222fa5f74939ba708eb70a9f"
-        },
-        {
-          "path": "src/provenance/sec_companyfacts_binding_backfill.py",
-          "qualified_name": "_write_checkpoint",
-          "lineno": 624,
-          "end_lineno": 643,
-          "body_lines": 16,
-          "ast_nodes": 122,
-          "normalized_hash": "aa6845a575c9b585bece5d8463e01fff48ce8e51108611f9de132ed3c17ea73e"
         }
       ]
     },
@@ -2900,6 +2900,31 @@
       ]
     },
     {
+      "group_id": "near-b7a0d5a5af6936bc",
+      "similarity": 0.908367,
+      "duplicated_loc": 32,
+      "functions": [
+        {
+          "path": "src/pipeline/sec_xbrl.py",
+          "qualified_name": "_atomic_write_bytes",
+          "lineno": 2101,
+          "end_lineno": 2117,
+          "body_lines": 16,
+          "ast_nodes": 117,
+          "normalized_hash": "3aa8798bf720ee3ece7285f596368da2fa6c6100222fa5f74939ba708eb70a9f"
+        },
+        {
+          "path": "src/provenance/sec_companyfacts_binding_backfill.py",
+          "qualified_name": "_write_checkpoint",
+          "lineno": 624,
+          "end_lineno": 643,
+          "body_lines": 16,
+          "ast_nodes": 122,
+          "normalized_hash": "aa6845a575c9b585bece5d8463e01fff48ce8e51108611f9de132ed3c17ea73e"
+        }
+      ]
+    },
+    {
       "group_id": "near-b857657e116a231b",
       "similarity": 0.876124,
       "duplicated_loc": 41,
@@ -3781,9 +3806,9 @@
     "duplicated_loc": 158
   },
   "near_miss_totals": {
-    "groups": 146,
-    "participating_functions": 236,
-    "duplicated_loc": 9816
+    "groups": 147,
+    "participating_functions": 238,
+    "duplicated_loc": 9867
   },
   "definitions": {
     "eligible_function": "at least 20 AST nodes and at least 15 physical body lines",

@@ -352,6 +352,8 @@ def register_views_discovery_routes(app: Flask, ctx: ServerContext) -> None:
         argv = managed_python_argv(
             repo_root,
             repo_root / "execution" / "discovery_build.py",
+            "--db",
+            str(db_path),
             "--tickers",
             ",".join(tickers),
             "--repo-root",

@@ -30,6 +30,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -42,6 +43,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "execution"))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import comments_server
+import comments_server_cockpit_memo as memo_module
 import comments_server_context
 import comments_server_panel_cache as panel_cache_module
 from comments_server_cockpit_memo import (
@@ -497,3 +499,72 @@ def test_work_os_hydrations_keep_no_store_and_never_emit_etag(
         assert "ETag" not in resp.headers, path
         assert resp.headers.get("X-Panel-Cache") == "hit", path
         assert resp.headers.get("Server-Timing"), path
+
+
+def test_slow_build_consumes_memo_lifetime(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = [10.0]
+    monkeypatch.setattr(memo_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    memo = CockpitDataMemo(ttl_seconds=30.0)
+    reservation = memo.get_or_reserve("rows")
+    assert isinstance(reservation, CockpitDataReservation)
+    clock[0] = 25.0
+    entry = memo.publish(reservation, {"portfolio": []})
+    assert entry.data_as_of == 10.0
+    assert entry.expires_at == 40.0
+    clock[0] = 41.0
+    assert isinstance(memo.get_or_reserve("rows"), CockpitDataReservation)
+    assert memo.entry_count() == 0
+
+
+def test_expired_build_releases_waiters_without_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = [10.0]
+    monkeypatch.setattr(memo_module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    memo = CockpitDataMemo(ttl_seconds=30.0)
+    reservation = memo.get_or_reserve("rows")
+    assert isinstance(reservation, CockpitDataReservation)
+    clock[0] = 41.0
+    entry = memo.publish(reservation, {"portfolio": []})
+    assert entry.expires_at == 40.0
+    assert memo.entry_count() == 0
+    assert reservation.ready.is_set()
+    assert isinstance(memo.get_or_reserve("rows"), CockpitDataReservation)
+
+
+def test_expired_response_is_not_published_and_releases_waiters(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(panel_cache_module, "time", SimpleNamespace(monotonic=lambda: 41.0))
+    cache = PanelResponseCache(ttl_seconds=30, max_entries=4)
+    reservation = cache.get_or_reserve("panel")
+    assert isinstance(reservation, panel_cache_module.PanelCacheReservation)
+    cache.store(
+        reservation,
+        PanelCacheEntry(body=b"old", content_type="text/html", etag="old", expires_at=40.0),
+    )
+    assert reservation.ready.is_set()
+    assert not getattr(cache, "_entries")
+    assert isinstance(cache.get_or_reserve("panel"), panel_cache_module.PanelCacheReservation)
+
+
+def test_slow_cold_build_cannot_receive_a_new_response_cache_lifetime(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = [10.0]
+    timer = SimpleNamespace(monotonic=lambda: clock[0])
+    for module in (memo_module, panel_cache_module, comments_server_context):
+        monkeypatch.setattr(module, "time", timer)
+    calls: list[int] = []
+
+    def slow_build(conn: sqlite3.Connection, root: Path) -> dict[str, list[Any]]:
+        rows = build_cockpit_rows(conn, root)
+        calls.append(1)
+        clock[0] += 31.0
+        return rows
+
+    patch_server_seam(monkeypatch, "build_cockpit_rows", slow_build)
+    for _ in range(2):
+        assert client.get("/api/panel/overview").status_code == 200
+        assert _memo_of(client.application).entry_count() == 0
+    assert len(calls) == 2

@@ -40,11 +40,14 @@ identifies the caller as required by SEC's policy.
 from __future__ import annotations
 
 import hashlib
+import importlib.metadata
 import json
 import logging
 import os
 import re
 import sqlite3
+import stat
+import sys
 import tempfile
 import time
 from collections import Counter
@@ -52,6 +55,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal, NamedTuple, Self, cast
 
@@ -67,6 +71,7 @@ from models.documents import (
 )
 from models.facts import Currency, FiscalPeriodType, Unit
 from models.validation import Severity, ValidationRule
+from operations.kpi_repair_receipts import repair_executor_code_sha256
 from pipeline import locators
 from pipeline.confidence import score_confidence
 from pipeline.kpi_persistence import record_validation_issue
@@ -176,32 +181,141 @@ def _fetch_receipt_extractor_column_present(conn: sqlite3.Connection) -> bool:
     )
 
 
-def companyfacts_extractor_sha256() -> str:
-    """Bind repeat-skip authority to retained extractor code and active tag specs.
+def _companyfacts_source_manifest(repo_root: Path) -> tuple[tuple[str, int, int, int], ...]:
+    """Bound the approved runtime files and detect in-process source replacement."""
+    members = [repo_root / "requirements.lock"]
+    for directory in ("src", "execution", "alembic/versions"):
+        paths = tuple((repo_root / directory).rglob("*.py"))
+        if not paths:
+            raise CompanyFactsContractError("CompanyFacts runtime source root is unavailable")
+        members.extend(paths)
+    if len(members) > 4096:
+        raise CompanyFactsContractError("CompanyFacts runtime source count exceeds its bound")
+    manifest: list[tuple[str, int, int, int]] = []
+    total_bytes = 0
+    for member in sorted(members):
+        try:
+            member_stat = member.lstat()
+            if not stat.S_ISREG(member_stat.st_mode) or (
+                getattr(member_stat, "st_file_attributes", 0)
+                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            ):
+                raise OSError("source member is not a regular file")
+        except OSError:
+            raise CompanyFactsContractError(
+                "CompanyFacts runtime source member is unavailable"
+            ) from None
+        total_bytes += member_stat.st_size
+        if member_stat.st_size > 4 * 1024 * 1024 or total_bytes > 64 * 1024 * 1024:
+            raise CompanyFactsContractError("CompanyFacts runtime source bytes exceed their bound")
+        manifest.append(
+            (
+                member.relative_to(repo_root).as_posix(),
+                member_stat.st_size,
+                member_stat.st_mtime_ns,
+                member_stat.st_ctime_ns,
+            )
+        )
+    return tuple(manifest)
 
-    Source hashes automatically invalidate receipts when parsing, admission, or
-    provenance code changes. The active ladders also bind runtime spec overrides.
+
+# Capture source metadata at module load, before the first ticker can pin a
+# digest. An edited checkout must restart rather than hash new source bytes
+# while it continues to execute previously loaded code.
+_COMPANYFACTS_SOURCE_ROOT = Path(__file__).resolve().parents[2]
+_COMPANYFACTS_IMPORT_MANIFEST = _companyfacts_source_manifest(_COMPANYFACTS_SOURCE_ROOT)
+
+
+@lru_cache(maxsize=4)
+def _companyfacts_pinned_source_identity(
+    repo_root: Path,
+) -> tuple[str, tuple[tuple[str, int, int, int], ...]]:
+    """Pin loaded-source identity for one process; never silently hot-reload it.
+
+    Reuse the existing conservative runtime-artifact owner instead of maintaining
+    an import list. It includes dynamic imports and future runtime dependencies.
+    Only the approved lock file supplies dependency configuration; private/runtime
+    files and credentials are outside these source roots.
     """
-    source_root = Path(__file__).resolve().parents[1]
-    sources = (
-        "pipeline/sec_xbrl.py",
-        "pipeline/restatement_detector.py",
-        "pipeline/locators.py",
-        "provenance/sec_companyfacts_capture.py",
-        "provenance/sec_companyfacts_fact_matcher.py",
-        "provenance/financial_fact_resolution.py",
-        "models/facts.py",
-    )
-    material = {
-        "protocol": "sec-companyfacts-extractor.v1",
-        "sources": {
-            name: hashlib.sha256((source_root / name).read_bytes()).hexdigest() for name in sources
-        },
-        "ladders": [(item.line_item, item.kind, item.sign, item.rungs) for item in TAG_LADDERS],
-    }
-    return hashlib.sha256(
+    before = _companyfacts_source_manifest(repo_root)
+    if repo_root == _COMPANYFACTS_SOURCE_ROOT and before != _COMPANYFACTS_IMPORT_MANIFEST:
+        raise CompanyFactsContractError(
+            "CompanyFacts runtime changed after import; restart required"
+        )
+    try:
+        material = {
+            "runtime_source_sha256": repair_executor_code_sha256(repo_root),
+            "requirements_lock_sha256": hashlib.sha256(
+                (repo_root / "requirements.lock").read_bytes()
+            ).hexdigest(),
+            "python_version": sys.version,
+            "sqlite_version": sqlite3.sqlite_version,
+            "installed_dependencies": sorted(
+                (distribution.name, distribution.version)
+                for distribution in importlib.metadata.distributions()
+            ),
+        }
+    except OSError:
+        raise CompanyFactsContractError(
+            "CompanyFacts runtime source artifact is unavailable"
+        ) from None
+    if before != _companyfacts_source_manifest(repo_root):
+        raise CompanyFactsContractError(
+            "CompanyFacts runtime changed while pinning; restart required"
+        )
+    digest = hashlib.sha256(
         json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    return digest, before
+
+
+def _companyfacts_source_artifact_sha256(repo_root: Path) -> str:
+    digest, pinned_manifest = _companyfacts_pinned_source_identity(repo_root)
+    if pinned_manifest != _companyfacts_source_manifest(repo_root):
+        raise CompanyFactsContractError(
+            "CompanyFacts runtime changed after loading; restart required"
+        )
+    return digest
+
+
+def companyfacts_extractor_sha256(conn: sqlite3.Connection) -> str:
+    """Bind skips to complete runtime source, live schema, and active tag specs.
+
+    The large static artifact is hashed once per process. Any in-place source or
+    lock-file replacement fails closed until restart. Unrelated runtime source
+    changes conservatively require one reprocessing pass after restart. Active
+    specs and schema remain per-call inputs, so live schema/config changes cannot
+    reuse a prior completion identity.
+    """
+    schema = conn.execute(
+        "SELECT type,name,tbl_name,sql FROM sqlite_master "
+        "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name LIMIT 4097"
+    ).fetchall()
+    if len(schema) > 4096:
+        raise CompanyFactsContractError("CompanyFacts schema count exceeds its bound")
+    schema_json = json.dumps([tuple(row) for row in schema], separators=(",", ":"))
+    if len(schema_json.encode()) > 32 * 1024 * 1024:
+        raise CompanyFactsContractError("CompanyFacts schema bytes exceed their bound")
+    source_sha256 = _companyfacts_source_artifact_sha256(_COMPANYFACTS_SOURCE_ROOT)
+    schema_sha256 = hashlib.sha256(schema_json.encode()).hexdigest()
+    material = {
+        "protocol": "sec-companyfacts-extractor.v2",
+        "runtime_source_artifact_sha256": source_sha256,
+        "schema_sha256": schema_sha256,
+        "ladders": [(item.line_item, item.kind, item.sign, item.rungs) for item in TAG_LADDERS],
+    }
+    digest = hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    log.info(
+        {
+            "event": "sec_companyfacts_extractor_identity",
+            "runtime_source_artifact_sha256": source_sha256,
+            "schema_sha256": schema_sha256,
+            "extractor_sha256": digest,
+        }
+    )
+    return digest
 
 
 def load_companyfacts_fetch_receipt(
@@ -2409,7 +2523,7 @@ def ingest_for_ticker(
         # Narrowed binding for the skip closure above, which cannot inherit the
         # flow-narrowed type of `cik`.
         normalized_cik: str = cik
-        extractor_sha256 = companyfacts_extractor_sha256()
+        extractor_sha256 = companyfacts_extractor_sha256(conn)
         receipt_row = load_companyfacts_fetch_receipt(conn, ticker=normalized_ticker)
         validators = receipt_row.validators if receipt_row is not None else None
 

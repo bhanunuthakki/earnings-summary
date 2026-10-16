@@ -363,7 +363,7 @@ def register_viewspec_ask_routes(app: Flask, ctx: ServerContext) -> None:
                 rerender_workspace,  # sibling execution/ module
             )
 
-            rerender_workspace(symbol, repo_root)
+            rerender_workspace(symbol, repo_root, db_path=db_path)
         except Exception:
             pass  # the card itself is persisted; a stale workspace HTML self-heals on the next build
         return {

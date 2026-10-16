@@ -8,10 +8,8 @@ they are intentionally absent from canonical fact views.  The historical
 longer maintained. Existing checkpoint selection cursors remain readable.
 Canonical selection stays with the immutable resolution ledger and resolved views.
 
-Registered as the daily ``backfill-financial-fact-resolutions`` scheduler task
-(``cron/backfill_financial_fact_resolutions.task.xml``).  The scheduled run
-omits ``--db`` so the configured runtime database authority is used, exactly
-like every other portfolio-writer job.
+This remains an explicit manual operation. No scheduler task is added by this
+change. Omit ``--db`` only when the runtime database authority is configured.
 """
 
 from __future__ import annotations

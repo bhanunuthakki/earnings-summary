@@ -29,7 +29,10 @@ class _StartupApp:
 
 @pytest.mark.parametrize("explicit_source", [False, True])
 def test_main_starts_server_without_internal_requests(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, explicit_source: bool
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    explicit_source: bool,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     app = _StartupApp()
     expected_db_path = tmp_path / "data" / "portfolio.db"
@@ -63,5 +66,7 @@ def test_main_starts_server_without_internal_requests(
     patch_server_seam(monkeypatch, "configure_runtime_db", _configure_runtime_db)
     patch_server_seam(monkeypatch, "create_app", _create_app)
 
-    assert comments_server.main() == 0
+    with caplog.at_level("INFO"):
+        assert comments_server.main() == 0
+    assert "ask_retrieval_readiness deferred_to_request=true fail_closed=true" in caplog.text
     assert app.run_args == ("127.0.0.1", 7421, False, True)

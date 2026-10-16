@@ -12,6 +12,7 @@ import queue
 import sqlite3
 import sys
 import threading
+import time
 from collections import deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -381,10 +382,9 @@ def build_server_context(
         """
         lookup = cockpit_memo.get_or_reserve(cockpit_memo_key_value)
         if isinstance(lookup, CockpitDataHit):
-            # Record the memo's data clock so the response entry this rows
-            # dict feeds cannot outlive it: the pre-memo bound (no served
-            # cockpit data older than the 30s TTL at response time) holds
-            # exactly, instead of widening to memo-TTL + response-TTL.
+            # Reuse the build-start deadline. Rendering or publishing a
+            # response must not add a second TTL to this snapshot. A slow
+            # direct build can return its result, but is not cached after expiry.
             g.cockpit_memo_expires_at = lookup.entry.expires_at
             return {role: list(role_rows) for role, role_rows in lookup.entry.rows.items()}
         if isinstance(lookup, CockpitDataReservation):
@@ -394,13 +394,17 @@ def build_server_context(
             except BaseException:
                 cockpit_memo.abandon(lookup)
                 raise
-            cockpit_memo.publish(lookup, rows)
+            entry = cockpit_memo.publish(lookup, rows)
+            g.cockpit_memo_expires_at = entry.expires_at
             g.pop("cockpit_memo_reservation", None)
             return rows
         assert isinstance(lookup, CockpitDataBusy)
         # Bounded wait expired or the in-flight bound is occupied: degrade to
         # a direct, unpublished build with unchanged semantics.
-        return build_cockpit_rows(conn, repo_root)
+        build_started_at = time.monotonic()
+        rows = build_cockpit_rows(conn, repo_root)
+        g.cockpit_memo_expires_at = build_started_at + cockpit_memo.ttl_seconds
+        return rows
 
     def overview_fragment_response() -> Response:
         """Build the legacy Overview fragment for compatible live drill-throughs."""

@@ -50,10 +50,6 @@ except ImportError:  # pragma: no cover - install hint
 
 from comments_server_tracker_routes import register_tracker_read_routes
 
-from ask.retrieval_boot_state import (
-    assess_ask_retrieval_boot_state_from_path,
-    log_ask_retrieval_boot_state,
-)
 from db_paths import require_db_path
 from dcf.input_evidence import SourceReadContext
 from dispatch_registry import Registry
@@ -197,14 +193,9 @@ def main() -> int:
         if args.state_root
         else None,
     )
-    # Log the sealed-plane reachability state once per boot: the production
-    # scope registry, the retrieval mode, and the vector-runtime gate must be
-    # explicit, never silently off. The probe never blocks serving — sealed
-    # turns themselves remain the fail-closed gate.
-    try:
-        log_ask_retrieval_boot_state(assess_ask_retrieval_boot_state_from_path(db_path))
-    except Exception:
-        LOGGER.exception("ask_retrieval_boot_state assessment failed")
+    # Each Ask request checks its own sealed evidence coordinates. Avoid a
+    # second registry/database traversal on the server's startup path.
+    LOGGER.info("ask_retrieval_readiness deferred_to_request=true fail_closed=true")
     # Flask's built-in dev server is fine here — this is a single-user
     # localhost tool, not a production service.
     app.run(host=host, port=args.port, debug=False, threaded=True)

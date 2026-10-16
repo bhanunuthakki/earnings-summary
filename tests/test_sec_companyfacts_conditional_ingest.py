@@ -61,6 +61,16 @@ ACCESSION_THREE = "0000000001-26-000003"
 RETRIEVAL_LATER = STAMP + timedelta(hours=1)
 
 
+@pytest.fixture(autouse=True)
+def isolated_extractor_runtime_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use controlled source bytes, independent of edits in the shared checkout."""
+    root = tmp_path / "runtime-artifact"
+    _source_fixture(root)
+    source_manifest: Callable[[Path], object] = getattr(sec_xbrl, "_companyfacts_source_manifest")
+    monkeypatch.setattr(sec_xbrl, "_COMPANYFACTS_SOURCE_ROOT", root)
+    monkeypatch.setattr(sec_xbrl, "_COMPANYFACTS_IMPORT_MANIFEST", source_manifest(root))
+
+
 def _database(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
@@ -859,13 +869,13 @@ def test_changed_extractor_reprocesses_identical_payload_before_skip(
         ingest_for_ticker(conn, ticker="ACME", project_root=tmp_path, local_payload=first)
         original = load_companyfacts_fetch_receipt(conn, ticker="ACME")
         assert original is not None
-        assert original.extractor_sha256 == sec_xbrl.companyfacts_extractor_sha256()
+        assert original.extractor_sha256 == sec_xbrl.companyfacts_extractor_sha256(conn)
         if transport == "legacy_identity":
             conn.execute("UPDATE sec_companyfacts_fetch_receipts SET extractor_sha256=NULL")
             conn.commit()
         else:
             monkeypatch.setattr(sec_xbrl, "TAG_LADDERS", tuple(reversed(sec_xbrl.TAG_LADDERS)))
-            assert sec_xbrl.companyfacts_extractor_sha256() != original.extractor_sha256
+            assert sec_xbrl.companyfacts_extractor_sha256(conn) != original.extractor_sha256
         parses = _CallCounter(
             monkeypatch, sec_xbrl, "parse_companyfacts_body", sec_xbrl.parse_companyfacts_body
         )
@@ -894,7 +904,7 @@ def test_changed_extractor_reprocesses_identical_payload_before_skip(
             assert calls[1] is None
         updated = load_companyfacts_fetch_receipt(conn, ticker="ACME")
         assert updated is not None
-        assert updated.extractor_sha256 == sec_xbrl.companyfacts_extractor_sha256()
+        assert updated.extractor_sha256 == sec_xbrl.companyfacts_extractor_sha256(conn)
         stable = ingest_for_ticker(
             conn,
             ticker="ACME",
@@ -908,3 +918,120 @@ def test_changed_extractor_reprocesses_identical_payload_before_skip(
         assert walks.calls == 1
     finally:
         conn.close()
+
+
+def _source_fixture(root: Path) -> None:
+    for name in (
+        "src/pipeline/sec_xbrl.py",
+        "src/pipeline/confidence.py",
+        "execution/fetch_sec_xbrl.py",
+        "alembic/versions/0001_schema.py",
+    ):
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# synthetic runtime source\n", encoding="utf-8")
+    (root / "requirements.lock").write_text("# synthetic dependency lock\n", encoding="utf-8")
+
+
+def test_extractor_source_identity_covers_omitted_dependency_and_requires_restart(
+    tmp_path: Path,
+) -> None:
+    _source_fixture(tmp_path)
+    source_identity: Callable[[Path], str] = getattr(
+        sec_xbrl, "_companyfacts_source_artifact_sha256"
+    )
+    clear_pin: Callable[[], None] = getattr(
+        getattr(sec_xbrl, "_companyfacts_pinned_source_identity"), "cache_clear"
+    )
+    baseline = source_identity(tmp_path)
+    (tmp_path / "src/pipeline/confidence.py").write_text(
+        "# changed confidence policy\n", encoding="utf-8"
+    )
+    with pytest.raises(sec_xbrl.CompanyFactsContractError, match="restart required"):
+        source_identity(tmp_path)
+    # A fresh process loads the new source and establishes a different identity.
+    clear_pin()
+    assert source_identity(tmp_path) != baseline
+    (tmp_path / "requirements.lock").unlink()
+    with pytest.raises(sec_xbrl.CompanyFactsContractError, match="unavailable"):
+        source_identity(tmp_path)
+    clear_pin()
+
+
+def test_extractor_static_source_digest_is_reused_and_future_modules_are_covered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _source_fixture(tmp_path)
+    source_identity: Callable[[Path], str] = getattr(
+        sec_xbrl, "_companyfacts_source_artifact_sha256"
+    )
+    clear_pin: Callable[[], None] = getattr(
+        getattr(sec_xbrl, "_companyfacts_pinned_source_identity"), "cache_clear"
+    )
+    calls = 0
+    real_digest = sec_xbrl.repair_executor_code_sha256
+
+    def counted_digest(root: Path) -> str:
+        nonlocal calls
+        calls += 1
+        return real_digest(root)
+
+    monkeypatch.setattr(sec_xbrl, "repair_executor_code_sha256", counted_digest)
+    baseline = source_identity(tmp_path)
+    assert source_identity(tmp_path) == baseline
+    assert source_identity(tmp_path) == baseline
+    assert calls == 1
+    (tmp_path / "src/new_dependency.py").write_text("# new runtime dependency\n", encoding="utf-8")
+    with pytest.raises(sec_xbrl.CompanyFactsContractError, match="restart required"):
+        source_identity(tmp_path)
+    assert calls == 1
+    clear_pin()
+    assert source_identity(tmp_path) != baseline
+    assert calls == 2
+    clear_pin()
+
+
+def test_extractor_identity_binds_live_schema(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _database(tmp_path, migrated_db, "extractor-schema.db")
+    try:
+        baseline = sec_xbrl.companyfacts_extractor_sha256(conn)
+        conn.execute("CREATE TABLE synthetic_schema_change(value TEXT)")
+        assert sec_xbrl.companyfacts_extractor_sha256(conn) != baseline
+    finally:
+        conn.close()
+
+
+def test_extractor_refuses_source_changed_before_first_ticker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _source_fixture(tmp_path)
+    source_manifest: Callable[[Path], object] = getattr(sec_xbrl, "_companyfacts_source_manifest")
+    source_identity: Callable[[Path], str] = getattr(
+        sec_xbrl, "_companyfacts_source_artifact_sha256"
+    )
+    monkeypatch.setattr(sec_xbrl, "_COMPANYFACTS_SOURCE_ROOT", tmp_path)
+    monkeypatch.setattr(sec_xbrl, "_COMPANYFACTS_IMPORT_MANIFEST", source_manifest(tmp_path))
+    (tmp_path / "src/pipeline/confidence.py").write_text(
+        "# edited after import\n", encoding="utf-8"
+    )
+    with pytest.raises(sec_xbrl.CompanyFactsContractError, match="after import; restart required"):
+        source_identity(tmp_path)
+
+
+def test_extractor_source_identity_refuses_linked_source_member(tmp_path: Path) -> None:
+    _source_fixture(tmp_path)
+    target = tmp_path / "linked-source.py"
+    target.write_text("# outside the approved runtime source roots\n", encoding="utf-8")
+    source = tmp_path / "src/pipeline/confidence.py"
+    source.unlink()
+    try:
+        source.symlink_to(target)
+    except OSError:
+        pytest.skip("source symlinks are unavailable")
+    source_identity: Callable[[Path], str] = getattr(
+        sec_xbrl, "_companyfacts_source_artifact_sha256"
+    )
+    with pytest.raises(sec_xbrl.CompanyFactsContractError, match="unavailable"):
+        source_identity(tmp_path)

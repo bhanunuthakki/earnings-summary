@@ -110,6 +110,7 @@ from ask.store import append_turn as _store_append_turn
 from ask.store import assert_user_turn_is_tail as _store_assert_user_tail
 from ask.store import load_recent_history as _store_load_history
 from ask.store import load_turns as _store_load_turns
+from db_paths import require_db_path
 from dispatch_registry import Registry, RegistryConflict
 from llm.cli import call_llm
 from llm.prompt_registry import PromptTemplate, register
@@ -161,7 +162,9 @@ def _full_verdict_enabled() -> bool:
     return os.environ.get("REVIEW_FULL_VERDICT", "1").strip().lower() not in _FULL_VERDICT_OFF
 
 
-def run_chat_command(repo_root: Path, message: str, registry: Registry | None) -> str | None:
+def run_chat_command(
+    repo_root: Path, message: str, registry: Registry | None, *, db_path: Path | None = None
+) -> str | None:
     """Dispatch one deterministic command. Returns the reply text, or None
     when the message isn't a recognized command (the engine then routes it
     normally)."""
@@ -173,7 +176,7 @@ def run_chat_command(repo_root: Path, message: str, registry: Registry | None) -
         return _review_command(repo_root, text, registry)
     if low.startswith("/discovery"):
         return (
-            _discovery_command(repo_root, text, registry)
+            _discovery_command(repo_root, text, registry, db_path=db_path)
             if registry is not None
             else ("Commands aren't available on this surface — try /help in the report chat.")
         )
@@ -253,7 +256,9 @@ def _review_command(repo_root: Path, text: str, registry: Registry | None) -> st
     return reply + _start_full_verdict_job(repo_root, ticker, at_price, registry)
 
 
-def _discovery_command(repo_root: Path, text: str, registry: Registry) -> str:
+def _discovery_command(
+    repo_root: Path, text: str, registry: Registry, *, db_path: Path | None = None
+) -> str:
     """Deterministic ``/discovery`` chat commands (P5.4).
 
     /discovery list             — top live candidates with why-surfaced
@@ -264,7 +269,6 @@ def _discovery_command(repo_root: Path, text: str, registry: Registry) -> str:
     """
     from discovery.store import BUILDABLE_STATUSES, list_candidates, set_status
 
-    db_path = repo_root / "data" / "portfolio.db"
     parts = text.split()
     verb = parts[1].lower() if len(parts) > 1 else "list"
     arg = parts[2].upper() if len(parts) > 2 else ""
@@ -273,6 +277,13 @@ def _discovery_command(repo_root: Path, text: str, registry: Registry) -> str:
         "/discovery dismiss <TICKER> | /discovery build <TICKER>. "
         "The full queue lives under Research -> Discovery."
     )
+    try:
+        db_path = require_db_path(db_path)
+    except (RuntimeError, OSError):
+        return (
+            "The discovery queue isn't available: the configured portfolio database is unavailable. "
+            + usage
+        )
     try:
         live = list_candidates(db_path=db_path)
     except Exception:
@@ -332,6 +343,8 @@ def _discovery_command(repo_root: Path, text: str, registry: Registry) -> str:
         argv = [
             *managed_python_prefix(repo_root),
             str(repo_root / "execution" / "discovery_build.py"),
+            "--db",
+            str(db_path),
             "--tickers",
             arg,
             "--repo-root",
@@ -663,7 +676,11 @@ def respond_turn(
         )
 
     if route == ROUTE_COMMAND:
-        reply = run_chat_command(repo_root, text, registry) if registry is not None else None
+        reply = (
+            run_chat_command(repo_root, text, registry, db_path=db_path)
+            if registry is not None
+            else None
+        )
         if reply is None:
             reply = "Commands aren't available on this surface — try /help in the report chat."
         yield {"type": "delta", "text": reply}

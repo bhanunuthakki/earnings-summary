@@ -238,9 +238,9 @@ def test_actual_head_is_supported() -> None:
             )
             for line in lines
         ]
-    # Retain main's 155 test seams plus the Windows held-handle and writer-gate regressions.
-    # No production gap is admitted.
-    assert len(graph.unknown_edges) == 157
+    # Retain main's 155 test seams, the Windows held-handle child and three
+    # writer-gate regression children. No production gap is admitted.
+    assert len(graph.unknown_edges) == 159
     assert [
         edge for edge in graph.unknown_edges if edge.source == "tests/test_db_writer_gate.py"
     ] == [
@@ -250,9 +250,10 @@ def test_actual_head_is_supported() -> None:
             kind="unknown",
             evidence="subprocess/runpy expression",
             confidence="low",
-            line=296,
+            line=line,
             unknown=True,
         )
+        for line in (299, 463, 564)
     ]
     assert [
         edge

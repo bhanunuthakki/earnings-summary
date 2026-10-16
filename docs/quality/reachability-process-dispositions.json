@@ -132,8 +132,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "build_one runs only the three fixed managed-Python onboard, build, and card scripts.",
-      "fingerprint": "1eceb602743268232131406a18b6ea4057e3b6f89b1dfdcfec22831504565c47",
-      "line": 58,
+      "fingerprint": "684ad287e2cc9c84723619a651677f6156b7f151b5c3dea1d7718fdef647d217",
+      "line": 60,
       "path": "execution/discovery_build.py",
       "targets": [
         "execution/onboard_ticker.py",
@@ -873,8 +873,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Same operator-supplied command in no-owner/no-deadline branch; now forwards optional stdout/stderr. It is not a closed internal Python target.",
-      "fingerprint": "48e98902689fc6ff8e5bd45406c04bcca3f8e66485acaa1cb2651d918e08e5da",
-      "line": 934,
+      "fingerprint": "00545b2c7eb19fec1a4c727a7552d126a337b1b8203d7f6a6ab6632b1eeedbe5",
+      "line": 933,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -883,8 +883,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Old single Popen becomes two branches: no redirection and stdout/stderr redirection. Both retain command/cwd/env/suspended-create flags and owned job-tree lifecycle; each requires a separate disposition.",
-      "fingerprint": "c867f9f51575b1bb9319d60060511578ac7765f4cb5a72ef336b0b3d46c1f614",
-      "line": 941,
+      "fingerprint": "3b20c85ce792e38e8f59994c7cfe015cf6afbe2c29be27b77b8045f7c08e7be8",
+      "line": 940,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -893,8 +893,8 @@
     {
       "disposition": "operator_supplied_process",
       "evidence": "Old single Popen becomes two branches: no redirection and stdout/stderr redirection. Both retain command/cwd/env/suspended-create flags and owned job-tree lifecycle; each requires a separate disposition.",
-      "fingerprint": "6ce1ab8e9576082efabd60f8dec62995fbc73c96844bd57e0078cb727b35e2a6",
-      "line": 943,
+      "fingerprint": "0fd5cdeeb0413001003546e14023f1dbc2f039d4f3da74ae5f83af158d212676",
+      "line": 942,
       "path": "src/runtime/job_runtime.py",
       "targets": [
         "operator-supplied command argv"
@@ -985,7 +985,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "85c1972e1d3a4cc641f4d40e70a4790d115efaa643debb44d7834f79c53bdde1",
+      "source_sha256": "7a7643a8c023443a489f7e6b69d89bd762f07a28109b7c56c1c1c80425eef2eb",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

@@ -51,9 +51,9 @@ from clock import now_naive_utc
 
 LOCK_SUFFIX = ".write.lock"
 
-_STILL_ACTIVE = 259
-_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-_ERROR_ACCESS_DENIED = 5
+_PROCESS_SYNCHRONIZE = 0x100000
+_ERROR_INVALID_PARAMETER = 87
+_WAIT_OBJECT_0 = 0
 
 
 class RunLockHeldError(RuntimeError):
@@ -89,28 +89,36 @@ def _pid_alive(pid: int) -> bool:
         return False
     if sys.platform == "win32":
         import ctypes
+        from ctypes import wintypes
 
-        # use_last_error=True + ctypes.get_last_error() is the ONLY reliable
-        # way to read Win32 error state through ctypes: plain
-        # kernel32.GetLastError() can be clobbered by ctypes' own internal
-        # API calls between the failing call and the query, misreading a LIVE
-        # holder as dead and breaking its lock (2026-08-03 adversarial
-        # review, #6).
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        handle = kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-        if not handle:
-            # Access denied means the process exists but is not ours — alive.
-            return ctypes.get_last_error() == _ERROR_ACCESS_DENIED
         try:
-            code = ctypes.c_ulong()
-            ok = kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
-            return bool(ok) and code.value == _STILL_ACTIVE
-        finally:
-            kernel32.CloseHandle(handle)
+            # Full-width HANDLE declarations are required on 64-bit Windows.
+            # Only a signaled process handle proves exit; unknown API results
+            # and access/load/query failures must retain ownership.
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+            kernel32.OpenProcess.restype = wintypes.HANDLE
+            kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+            kernel32.WaitForSingleObject.restype = wintypes.DWORD
+            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+            kernel32.CloseHandle.restype = wintypes.BOOL
+            handle = kernel32.OpenProcess(_PROCESS_SYNCHRONIZE, False, pid)
+            if not handle:
+                return ctypes.get_last_error() != _ERROR_INVALID_PARAMETER
+            try:
+                exited = kernel32.WaitForSingleObject(handle, 0) == _WAIT_OBJECT_0
+            finally:
+                closed = kernel32.CloseHandle(handle)
+            return not exited or not closed
+        except Exception:
+            # Probe errors cannot grant authority to replace a live owner.
+            return True
     try:
         os.kill(pid, 0)
-    except OSError:
+    except ProcessLookupError:
         return False
+    except (PermissionError, OSError):
+        return True
     return True
 
 
@@ -118,7 +126,7 @@ def _read_holder(lock_path: Path) -> dict[str, object] | None:
     try:
         raw = lock_path.read_text(encoding="utf-8")
         parsed = json.loads(raw)
-    except (OSError, ValueError):
+    except (FileNotFoundError, ValueError):
         return None
     # cast at the validated JSON boundary (repo convention).
     return cast(dict[str, object], parsed) if isinstance(parsed, dict) else None

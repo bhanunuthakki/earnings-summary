@@ -139,15 +139,18 @@ def test_stale_dead_holder_lock_is_broken(tmp_path: Path) -> None:
     assert not gate.exists()
 
 
-def test_release_never_removes_a_successors_lock(tmp_path: Path) -> None:
+@pytest.mark.parametrize("successor_pid", [os.getpid(), 999999])
+def test_release_never_removes_a_successors_lock(tmp_path: Path, successor_pid: int) -> None:
     db = tmp_path / "portfolio.db"
     with hold_writer_gate(db, owner="suspended"):
         gate = writer_gate_path_for(db)
         gate.write_text(
-            json.dumps({"pid": 999999, "owner": "successor", "acquired_at": "x"}),
+            json.dumps(
+                {"pid": successor_pid, "owner": "successor", "acquired_at": "x", "token": "new"}
+            ),
             encoding="utf-8",
         )
-    # The suspended holder saw a foreign pid and left the file alone.
+    # Even a same-process successor has its own token and must remain owned.
     assert json.loads(gate.read_text(encoding="utf-8"))["owner"] == "successor"
 
 
@@ -374,3 +377,254 @@ def test_body_failure_stays_primary_when_trace_cleanup_also_fails(
     assert caught.value is primary
     assert any("OSError" in note for note in getattr(primary, "__notes__", []))
     assert not writer_gate_path_for(db).exists()
+
+
+_STALE_CONTENDER = r"""
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from pipeline import db_writer_gate as gate
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+root, tag = Path(sys.argv[1]), sys.argv[2]
+db = root / "two-contenders.db"
+lock = gate.writer_gate_path_for(db)
+real_unlink, real_open, real_read = Path.unlink, os.open, gate._read_holder
+paused = False
+
+def wait_for(name):
+    deadline = time.monotonic() + 15
+    while not (root / name).exists():
+        if time.monotonic() >= deadline:
+            raise RuntimeError("synthetic coordination deadline")
+        time.sleep(0.005)
+
+def unlink(path, missing_ok=False):
+    global paused
+    if path == lock and not paused:
+        paused = True
+        (root / (tag + "-at-delete")).touch()
+        wait_for(tag + "-allow-delete")
+    return real_unlink(path, missing_ok=missing_ok)
+
+def opened(path, *args, **kwargs):
+    if tag == "B" and os.fspath(path).endswith(".guard"):
+        (root / "B-at-guard").touch()
+    return real_open(path, *args, **kwargs)
+
+def read_holder(path):
+    holder = real_read(path)
+    if tag == "B" and holder and isinstance(holder.get("pid"), int):
+        if holder["pid"] > 0 and holder["pid"] != os.getpid():
+            (root / "B-saw-live-holder").touch()
+    return holder
+
+Path.unlink, os.open, gate._read_holder = unlink, opened, read_holder
+os.environ[gate.CHAIN_WRITER_DB_ENV] = str(db)
+os.environ["EARNINGS_SUMMARY_WRITER_GATE_TRACE"] = str(root / "writer-events.jsonl")
+with gate.chain_writer_scope(db):
+    conn = connect_sqlite(db, role=SQLiteConnectionRole.WRITER, schema_preflight=False)
+    try:
+        (root / (tag + "-writer-open")).touch()
+        wait_for(tag + "-allow-close")
+        conn.execute("INSERT INTO sample VALUES (?)", (tag,))
+        conn.commit()
+    finally:
+        conn.close()
+"""
+
+
+def _wait_for_signal(paths: tuple[Path, ...], processes: list[subprocess.Popen[bytes]]) -> Path:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        for path in paths:
+            if path.exists():
+                return path
+        assert all(process.poll() is None for process in processes), "contender exited early"
+        time.sleep(0.005)
+    pytest.fail(f"missing synthetic signal: {[path.name for path in paths]}")
+
+
+def test_stale_takeover_serializes_two_real_contenders(tmp_path: Path) -> None:
+    """Pause contender B at the exact stale-delete race, then let A claim first."""
+    db = tmp_path / "two-contenders.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE sample (value TEXT)")
+    gate = writer_gate_path_for(db)
+    gate.write_text(json.dumps({"pid": -1, "token": "dead-owner"}), encoding="utf-8")
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    processes: list[subprocess.Popen[bytes]] = []
+
+    def start(tag: str) -> None:
+        processes.append(
+            subprocess.Popen(
+                [sys.executable, "-c", _STALE_CONTENDER, str(tmp_path), tag],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+            )
+        )
+
+    try:
+        start("A")
+        _wait_for_signal((tmp_path / "A-at-delete",), processes)
+        start("B")
+        # Old code reaches unlink with stale evidence. Correct code queues on
+        # A's OS guard and must read ownership again after that guard is free.
+        _wait_for_signal((tmp_path / "B-at-delete", tmp_path / "B-at-guard"), processes)
+        (tmp_path / "A-allow-delete").touch()
+        _wait_for_signal((tmp_path / "A-writer-open",), processes)
+        (tmp_path / "B-allow-delete").touch()
+        observed = _wait_for_signal(
+            (tmp_path / "B-writer-open", tmp_path / "B-saw-live-holder"), processes
+        )
+        assert observed.name == "B-saw-live-holder", "B removed A's new live claim"
+        assert not (tmp_path / "B-writer-open").exists()
+        (tmp_path / "A-allow-close").touch()
+        _wait_for_signal((tmp_path / "B-writer-open",), processes[1:])
+        (tmp_path / "B-allow-close").touch()
+        for process in processes:
+            assert process.wait(timeout=5) == 0
+        rows = [
+            json.loads(line) for line in (tmp_path / "writer-events.jsonl").read_text().splitlines()
+        ]
+        opened: set[int] = set()
+        for row in sorted(rows, key=lambda item: item["t"]):
+            if row["event"] == "writer_open":
+                assert not opened, "writer-role lifetimes overlapped across processes"
+                opened.add(row["pid"])
+            elif row["event"] == "writer_close":
+                opened.remove(row["pid"])
+        assert not opened
+        with sqlite3.connect(db) as conn:
+            assert conn.execute("SELECT value FROM sample ORDER BY value").fetchall() == [
+                ("A",),
+                ("B",),
+            ]
+        assert not gate.exists()
+    finally:
+        for tag in ("A", "B"):
+            (tmp_path / (tag + "-allow-delete")).touch()
+            (tmp_path / (tag + "-allow-close")).touch()
+        for process in processes:
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
+
+
+def test_transition_guard_denial_fails_closed_then_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "denied-guard.db"
+    gate = writer_gate_path_for(db)
+    real_open = os.open
+
+    def denied_open(path: str | os.PathLike[str], flags: int, mode: int = 0o777) -> int:
+        if os.fspath(path).endswith(".guard"):
+            raise PermissionError("controlled guard access denial")
+        return real_open(path, flags, mode)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "open", denied_open)
+        with (
+            pytest.raises(PermissionError, match="controlled guard access denial"),
+            hold_writer_gate(db, owner="denied", timeout_s=0.05),
+        ):
+            pytest.fail("guard denial must not grant ownership")
+    assert not gate.exists()
+    assert not list(tmp_path.glob("*.tmp"))
+    with hold_writer_gate(db, owner="recovered", timeout_s=0.1):
+        pass
+    assert not gate.exists()
+
+
+def test_busy_transition_guard_uses_writer_deadline_and_releases_after_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db, ready = tmp_path / "busy-guard.db", tmp_path / "guard-ready"
+    code = """import sys, time
+from pathlib import Path
+from pipeline import db_writer_gate as gate
+lock = gate.writer_gate_path_for(sys.argv[1])
+with gate._ownership_transition_guard(lock, deadline=time.monotonic()+5):
+    Path(sys.argv[2]).touch()
+    sys.stdin.buffer.read(1)
+"""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    process = subprocess.Popen(
+        [sys.executable, "-c", code, str(db), str(ready)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    monkeypatch.setattr(db_writer_gate, "WRITER_GATE_TIMEOUT_S", 0.05)
+    try:
+        _wait_for_signal((ready,), [process])
+        started = time.monotonic()
+        with (
+            pytest.raises(WriterGateHeldError),
+            hold_writer_gate(db, owner="waiting", timeout_s=0.05),
+        ):
+            pytest.fail("busy transition guard must not grant ownership")
+        assert 0.04 <= time.monotonic() - started < 1.0
+        assert process.poll() is None
+        assert not writer_gate_path_for(db).exists()
+        process.kill()
+        process.wait(timeout=5)
+        with hold_writer_gate(db, owner="after-crash", timeout_s=0.1):
+            pass
+        assert not writer_gate_path_for(db).exists()
+        assert len(list(tmp_path.glob("*.guard"))) == 1
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
+        for stream in (process.stdin, process.stdout, process.stderr):
+            if stream is not None:
+                stream.close()
+
+
+@pytest.mark.parametrize("error", [PermissionError("denied"), OSError("unknown owner read")])
+def test_unreadable_gate_owner_is_never_evicted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: OSError
+) -> None:
+    db = tmp_path / "unreadable-owner.db"
+    gate = writer_gate_path_for(db)
+    original = json.dumps({"pid": os.getpid(), "owner": "live", "token": "live-token"})
+    gate.write_text(original, encoding="utf-8")
+    real_read = Path.read_text
+
+    def read_text(path: Path, encoding: str | None = None, errors: str | None = None) -> str:
+        if path == gate:
+            raise error
+        return real_read(path, encoding=encoding, errors=errors)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_text", read_text)
+        with (
+            pytest.raises(OSError),
+            hold_writer_gate(db, owner="unknown-contender", timeout_s=0.05),
+        ):
+            pytest.fail("unreadable ownership must not authorize takeover")
+    assert gate.read_text(encoding="utf-8") == original
+    with (
+        pytest.raises(WriterGateHeldError),
+        hold_writer_gate(db, owner="known-live-contender", timeout_s=0),
+    ):
+        pytest.fail("the known live holder must remain owned")
+    assert gate.read_text(encoding="utf-8") == original
+    gate.write_text(json.dumps({"pid": -1, "token": "now-proved-dead"}), encoding="utf-8")
+    with hold_writer_gate(db, owner="after-proved-death", timeout_s=0.1):
+        pass
+    assert not gate.exists()

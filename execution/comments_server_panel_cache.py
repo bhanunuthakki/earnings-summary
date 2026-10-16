@@ -118,7 +118,9 @@ class PanelResponseCache:
                 return
             ready = in_flight.ready
             self._in_flight.pop(reservation.key, None)
-            if reservation.generation == self._generation:
+            if reservation.generation == self._generation and (
+                entry.expires_at is None or time.monotonic() < entry.expires_at
+            ):
                 if len(self._entries) >= self._max_entries:
                     oldest_key = min(self._entries, key=lambda key: self._entries[key][0])
                     self._entries.pop(oldest_key, None)

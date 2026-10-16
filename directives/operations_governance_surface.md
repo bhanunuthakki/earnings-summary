@@ -71,20 +71,24 @@ unchanged and resolves the machine-visible `EARNINGS_SUMMARY_DB_PATH` as before.
 Evidence: `.tmp/valid/exec-lib/` (per-command `--help` and functional before/after
 transcripts byte-identical against `.tmp/portfolio_bench.db`; the six
 checkout-default refusal transcripts; env-only vs explicit-flag output equality),
-`tests/test_execution_lib.py` (new legacy-help reproduction, raw-formatter,
-Evidence: `tests/test_execution_lib.py` (legacy-help reproduction, raw-formatter,
+`tests/test_execution_lib.py` (legacy-help reproduction, raw-formatter,
 `require_db_path` refusal, and no-own-bootstrap tests), and the unchanged
 `tests/test_source_calls_routes.py`, `tests/test_provenance_coverage_report.py`,
 `tests/test_audit_transcript_evidence.py`, `tests/test_expire_stale_research.py`.
 
 ### Report citation anchors resolve the Observation Version chain (2026-10-12)
-Disposition: **no surface change** (reader-facing citation routing in the workspace report and the read-only source viewers; not an operator workflow). Report citation anchors now resolve the full provenance chain wherever the cited document has an Observation Version: the Sources-tab document rows route their citation link to `/source/version/<document_version_id>` and render a visible per-row Observation Version column; synthesis-lens cite-mark chips route their href the same way; fact-cell source-chip popovers state the Observation Version and link the chain beside the existing in-app viewer and original-source links. A cited document WITHOUT an Observation Version keeps its legacy `/source/<doc_id>` viewer link and carries the explicit "not recorded" degraded state on every surface (Sources-tab row and anchor title, cite-mark popover meta in both the Python and JS mirrors, chip popover row) — never a silently partial chain. The legacy `/source/<doc_id>` fallback view (documents with no in-app viewer, including every already-built report's hrefs) resolves the cited document's Observation Version through the same evidence-plane reader the `/source/version/<id>` route uses and embeds the identical chain rows, or states the absence explicitly. Resolution is one batched read-only query per section build; no existing route changes shape, no route is added, and unknown versions/nodes keep their honest 404s. No operator action, alert, panel, scheduler task, managed service, mutable state, or network call changed. Evidence: `tests/test_report_citation_version_chain.py` (resolver latest-version pick and fail-closed behavior; Sources-tab routing + degraded state; cite-mark payload routing + popover degraded state in both mirrors; chip popover chain link vs degraded state; the financials section stamping pass; the fallback view's embedded chain, explicit degraded state, fragment parity, and the by-legacy-id loader's honest 404s), the regenerated and reviewed `tests/golden/workspace/` panes (sources table column/routing, chip popovers, scripts mirror), and `scripts/check_design_sync.py` green with the updated `pipeline/source_viewers.py` dynamic-visual digest (existing `sv-*` classes only, no new visual vocabulary).
+Disposition: **no surface change** (reader-facing citation routing in the workspace report and the read-only source viewers; not an operator workflow). Report citation anchors now resolve the full provenance chain wherever the cited document has an Observation Version: the Sources-tab document rows route their citation link to `/source/version/<document_version_id>` and render a visible per-row Observation Version column; synthesis-lens cite-mark chips route their href the same way; fact-cell source-chip popovers state the Observation Version and link the chain beside the existing in-app viewer and original-source links. A cited document WITHOUT an Observation Version keeps its legacy `/source/<doc_id>` viewer link and carries the explicit "not recorded" degraded state on every surface (Sources-tab row and anchor title, cite-mark popover meta in both the Python and JS mirrors, chip popover row) — never a silently partial chain. The legacy `/source/<doc_id>` fallback view (documents with no in-app viewer, including every already-built report's hrefs) resolves the cited document's Observation Version through the same evidence-plane reader the `/source/version/<id>` route uses and embeds the identical chain rows, or states the absence explicitly. Resolution is one batched read-only query per section build; no existing route changes shape, no route is added, and unknown versions/nodes keep their honest 404s. No operator action, alert, panel, scheduler task, managed service, mutable state, or network call changed. Evidence: `tests/test_report_citation_version_chain.py` (exact admitted-version preservation, unique legacy binding, and fail-closed behavior; Sources-tab routing + degraded state; cite-mark payload routing + popover degraded state in both mirrors; chip popover chain link vs degraded state; the financials section stamping pass; the fallback view's embedded chain, explicit degraded state, fragment parity, and the by-legacy-id loader's honest 404s), the regenerated and reviewed `tests/golden/workspace/` panes (sources table column/routing, chip popovers, scripts mirror), and `scripts/check_design_sync.py` green with the updated `pipeline/source_viewers.py` dynamic-visual digest (existing `sv-*` classes only, no new visual vocabulary).
 
-### Sealed citation source-version viewer route (2026-10-08)
-Disposition: **no surface change** (read-only product viewer route; not an operator workflow). The cockpit now serves `GET /source/version/<document_version_id>` (with the sealed lane's `?node=<evidence_node_id>` locator and the existing `?fragment=1` peek shape) through the new `pipeline.source_viewers.render_document_version_page`. It resolves one immutable evidence-ledger coordinate — `evidence_document_versions` + `evidence_source_observations` + `evidence_nodes` + `search_chunks` + the canonical fact projection entries bound to the cited node — and renders the issuer, fiscal period, source-document identity (form/document type, accession, source URL, blob sha256), the cited node locator, the observation version (document version id/sequence, observation id, observed/retrieved/recorded times, supersede link), and every reported fact (metric, value, unit, currency, period, locator). An unknown document version, an unknown node, or a node belonging to a different document version returns an honest 404; nothing is fabricated. It reads only append-only evidence tables on one READ_ONLY connection, adds no operator action, alert, panel, scheduler task, managed service, mutable state, or network call, and changes no existing route. The sealed plane's emitted href shape (`src/ask/sealed_retrieval.py` `_narrative_item` / `_fact_item`) is unchanged. Evidence: `tests/test_source_version_routes.py` (fixture corpus resolves to 200 with every displayed field reconciling to the immutable fixture observation; unknown version / unknown node / cross-version node 404; href-template coupling to the sealed lane) and the reconciliation artifacts under `.tmp/search-validation/source-version-val-search-00{2,3}-*.json`; `services.yaml:commands.source-version-validate` reproduces them.
+### Sealed Ask retrieval readiness
 
-### Sealed Ask retrieval boot-state probe (2026-10-07)
-Disposition: **no surface change** (internal boot-time telemetry inside the existing cockpit entrypoint). `execution/comments_server.py main()` now logs one structured `ask_retrieval_boot_state` line per boot, assessed by the new `src/ask/retrieval_boot_state.py`: the resolved `ASK_RETRIEVAL_MODE` (default `grounded`, unchanged), the committed production scope registry state validated against the live frozen cohort (`config/ask_retrieval_production_scopes.json` — missing / invalid commitment / cohort-mismatch / cohort-underivable / valid, with scope count), and the local vector-runtime gate state (`EVIDENCE_VECTOR_RUNTIME_ENABLED` unset/0/1 with the `EVIDENCE_VECTOR_INDEX_ROOT`/`EVIDENCE_VECTOR_RUNTIME_ROOT` roots and their on-disk presence). The probe opens one READ_ONLY connection after `create_app` succeeds, never raises (any probe failure is itself logged), never mutates state, and never blocks serving; per-turn readiness remains the fail-closed gate that serves an Ask turn. A boot that explicitly selects sealed mode while the plane is not config-ready logs at ERROR; default grounded boots log at INFO. No alert, action, panel, route, scheduler task, or managed service changed, and no new operator action is supported. Evidence: `tests/test_ask_retrieval_boot_state.py` (typed missing/commitment-tampered/cohort-mismatch/cohort-underivable registry states, enabled/disabled/invalid vector-runtime states, invalid mode reported not raised, default mode still grounded, ERROR-vs-INFO severity selection, one read-only connection via the db-path helper), plus captured bench-DB cockpit boots under `.tmp/search-validation/` (`boot-grounded.log` — INFO, registry missing, runtime disabled; `boot-sealed.log` — ERROR, same typed state with `ASK_RETRIEVAL_MODE=sealed`).
+Disposition: **no additional operator surface**. Startup emits the cheap
+`ask_retrieval_readiness deferred_to_request=true fail_closed=true` event. It
+does not open the financial database, derive a cohort, inspect vector storage,
+or start a background worker. Actual sealed requests retain the typed registry,
+cohort, vector-runtime and evidence checks. A missing or invalid prerequisite
+remains a visible request failure; startup telemetry does not claim readiness.
+The unused boot-assessment helper and its dedicated tests are removed.
+Evidence: startup non-probing tests and actual-request fail-closed retrieval tests.
 
 ### Cross-process daily-brief writer gate (2026-10-07)
 Disposition: **no surface change** (internal execution change inside an existing scheduled job). The 06:30 daily-brief pool's single-writer guarantee now holds across the driver AND its writer-capable step subprocesses, not just the driver's threads: `src/pipeline/db_writer_gate.py` serializes actual write transactions per resolved database path with a process-safe advisory gate (an atomic `os.link` claim with holder payload, stale-holder breaking, a bounded 120 s wait and per-thread re-entrancy — never the whole-job production run lock, which stays a run-scope one-per-host claim), and every chain participant (driver skip/completed-build windows, thesis-evaluator run accounting and episode alerts, commitments matching, DCF refresh and the five specialized DCF builders, artifact sync and provenance) takes that gate around its real write windows while reads and compute stay ungated. This entry's original claim covered the chain's EXPLICIT windows only; the auxiliary connections opened by best-effort writers inside the same chain were closed at the connection seam by the follow-up entry below, which also corrects this scope statement. The driver hands the resolved database path to each child entrypoint explicitly (`--db` / `--db-path`, plus `EARNINGS_SUMMARY_DB_PATH` for the in-process builder legs), so no child can derive a checkout-local `data/portfolio.db`; `refresh_dcf.apply_edits` deliberately stays on SQLite's busy timeout because it serves the cockpit's `/api/dcf/save` request path, which is not a chain child of the daily pool. Pool width, per-ticker step order, per-step 600 s timeouts, summary keys, exit codes and the scheduler task are unchanged; the pool benchmark's measured overlap survives (2.75× median, 96 σ beyond observed noise on the same stubbed fixture). No alert, action, panel, route, scheduler task, or managed service changed, and no new operator action is supported. Evidence: `tests/test_db_writer_gate.py` (gate claim/hold/break/re-entrancy contract), `tests/test_daily_fetch_brief_cross_process_writers.py` (real width-3 driver with real step subprocesses over a disposable migrated database: the writer-gate trace shows a maximum of one open writer window per database path across processes, chain order intact, no lock-timeout self-contention, evaluator run records and `dcf_runs` rows landed, the env-configured database outside `repo/data` reaches every child argv with no checkout-local database created, and two real concurrent refresh children serialize their gated windows), and the unchanged `tests/test_daily_fetch_brief_pool.py` / `tests/test_daily_fetch_brief_gates.py`.
@@ -1115,39 +1119,18 @@ and identity-mismatch decisions. `tests/test_job_runtime_process_tree.py` retain
 the Windows held-handle and process-tree checks. Local tests do not establish
 deployment or a successful future scheduled run.
 
-### Scheduled financial-fact resolution backfill
+### Manual financial-fact resolution backfill
 
-`earnings-summary\backfill_financial_fact_resolutions` (daily 07:45,
-`cron/backfill_financial_fact_resolutions.task.xml`) registers the previously
-manual-only resolution-ledger backfill CLI as a scheduled task, replacing the
-manual-only execution path. The wrapper invokes
-`execution/backfill_financial_fact_resolutions.py --apply --batch-size 500`
-with no `--db`, so the job resolves the configured runtime database authority
-exactly like every other portfolio-writer job; the targeted
-`--fact-table/--fact-row-id` repair mode remains deliberately internal-only
-with its own `targeted-fact-resolution` lock owner. Each run takes one
-bounded, transactionally committed capture/resolve batch with its explicit
-`.tmp/financial-fact-resolution-cutover/state.json` checkpoint (dry-run stays
-the CLI default and writes nothing). The unconsumed `current_fact_selection`
-materialization is no longer maintained. Its historical migration remains valid,
-and old checkpoint selection cursors remain readable. Canonical selection uses
-the immutable resolution ledger and established resolved views. The job is
-deterministic local database work with no LLM leg, so no
-`directives/llm_quota_scheduling.md` window applies.
+`execution/backfill_financial_fact_resolutions.py` remains a manual bounded
+observation/resolution operation. Dry-run is the default. Apply uses the explicit
+configured database, existing transaction boundary, and durable checkpoint.
+The unused selection mirror and its convergence scan are retired. Historical
+checkpoint fields remain readable. Canonical selection stays with the immutable
+ledger and resolved views. No daily writer task or wrapper is added.
 
-Operations surface disposition: `primary surface`. The canonical manifest owns
-this task, so the existing dynamic Jobs projection shows its declaration, daily
-cadence, registered identity, latest attempt, and failure state; the standard
-job-runtime health receipt remains the run's truthful evidence. The wrapper
-keeps the coarse `portfolio-db` write set: the job is a proven-bounded, purely
-local database batch with no external I/O, so it joins `db-gc` and
-`weekly-validation` in the reviewed coarse-mutex classifications instead of
-getting a narrow lane. No new dashboard control, provider, or operator action
-is added. Tests: `tests/test_current_fact_selection.py`
-(bounded/checkpointed/idempotent semantics, no unused-cache writes,
-canonical selection parity), `tests/test_scheduler_manifest.py` (manifest and
-artifact coverage), and `tests/test_job_runtime.py` (reviewed write-set
-classification and coarse-mutex whitelist).
+Operations surface disposition: **no additional scheduled writer**. A future
+scheduled backfill needs its own workload, overlap, source and activation review.
+
 ### Investing workflow maintenance and brief inputs
 
 Disposition: **no Operations surface change**. The internal post-earnings CLI
@@ -1606,13 +1589,23 @@ Disposition: **no new operator surface**. The combined branch preserves the curr
 `main` database authority, source-root forwarding, cached host evidence, financial
 evidence views and scheduler receipt roots through the extracted route modules.
 The migration merge retains both historical revision chains. CompanyFacts receipt
-reuse also requires the current extractor identity. Missing legacy identities force
-reprocessing. Report fact chips retain their exact admitted document version; an
+reuse also requires the full runtime source, dependency, active ladder and schema
+identity. Missing legacy identities force reprocessing. Source replacement within
+the process requires a restart; unknown identities cannot prove a completed input. Report fact chips retain their exact admitted document version; an
 ambiguous legacy document identity does not select the latest version.
+
+Discovery commands, build children and card rendering use the selected database
+independently of the source state root. The two discovery/card CLIs use the
+shared `execution/_lib.py` bootstrap; their obsolete per-file path-mutation
+allowlist entries are removed. This changes internal authority forwarding and
+bootstrap mechanics only. Existing actions and approval boundaries remain.
+Cockpit cached snapshots expire 30 seconds after build reservation. Slow direct
+results can return to the requesting caller, but expired results enter neither
+the data memo nor the response cache.
 
 The unused `current_fact_selection` mirror writes and convergence scan are
 retired. Its historical schema and checkpoint fields remain readable. Canonical
 reads still use the established resolved views, so stale preparation rows cannot
-change selected facts. The existing bounded backfill still serves observation
-capture and resolution convergence. No scheduler is activated,
+change selected facts. The existing manual bounded backfill still serves observation
+capture and resolution convergence. No scheduler task is added or activated,
 no database is migrated, and no application is deployed by this source merge.

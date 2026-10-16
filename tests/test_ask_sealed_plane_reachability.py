@@ -1,11 +1,11 @@
 """VAL-SEARCH-001: sealed Ask fails closed truthfully when the substrate is absent.
 
-Everything here is hermetic and synthetic: fixture-driven boot/config
-diagnostics plus a fixture-driven sealed turn against pytest-local fixture
+Everything here is hermetic and synthetic: fixture-driven request checks
+plus a sealed turn against pytest-local fixture
 databases. No live Ask or Claude turn, no SEC or source fetch, no portfolio
 or bench database, and no sealed-retrieval reachability claim — these tests
 pin that a sealed selection with the required registry/vector substrate
-absent is reported truthfully at boot, fails closed per turn, never silently
+absent fails closed per turn, never silently
 falls back to another retrieval lane, and never emits a successful-looking
 answer. The production default stays ``grounded`` (VAL-SEARCH-010).
 
@@ -30,10 +30,6 @@ import ask.engine as engine
 from ask.audit_store import canonical_json
 from ask.context import ContextPack
 from ask.engine import AskTurn
-from ask.retrieval_boot_state import (
-    assess_ask_retrieval_boot_state,
-    log_ask_retrieval_boot_state,
-)
 from ask.sealed_retrieval import derive_production_scope_registry
 from ask.store import ensure_session, load_turns
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -88,7 +84,7 @@ _FALLBACK_LANES = (
 
 
 # The minimal live-cohort fixture ``derive_production_scope_registry`` reads
-# (mirrors tests/test_ask_retrieval_boot_state.py's registry fixture; defined
+# (defined
 # locally so this module owns its own hermetic fixture helpers).
 _REGISTRY_SCHEMA = """
 CREATE TABLE v_issuer_reporting_scope_current (
@@ -200,90 +196,6 @@ def test_fixture_db_carries_no_sealed_plane_substrate(
                 **_substrate_absent_fixture_configuration(registry_path),
                 "ask_store_db": "hermetic migrated fixture DB (alembic head, pytest tmp)",
                 "absent_substrate_components": counts,
-            },
-        },
-    )
-
-
-def test_substrate_absent_boot_state_names_the_missing_substrate_and_claims_no_readiness(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Boot diagnostics for the substrate-absent fixture state stay typed and
-    truthful, and the sealed-selected line logs at ERROR, never at INFO."""
-
-    _reset_env(monkeypatch)
-    registry_path = tmp_path / "absent-registry.json"
-    fixture_conn = _registry_db()
-
-    grounded = assess_ask_retrieval_boot_state(fixture_conn, registry_path=registry_path)
-    assert grounded.retrieval_mode == "grounded"
-    assert grounded.mode_valid is True
-    assert grounded.registry_status == "missing"
-    assert str(registry_path) in grounded.registry_detail
-    assert "does not exist" in grounded.registry_detail
-    assert grounded.vector_runtime_status == "disabled"
-    assert "EVIDENCE_VECTOR_RUNTIME_ENABLED" in grounded.vector_runtime_detail
-    assert grounded.sealed_plane_ready is False
-
-    with caplog.at_level(logging.INFO, logger="ask.retrieval_boot_state"):
-        log_ask_retrieval_boot_state(grounded)
-    grounded_records = [
-        record for record in caplog.records if "ask_retrieval_boot_state" in record.getMessage()
-    ]
-    assert grounded_records and grounded_records[-1].levelno == logging.INFO
-    grounded_line = grounded_records[-1].getMessage()
-
-    caplog.clear()
-    monkeypatch.setenv(_ASK_MODE_ENV, "sealed")
-    sealed = assess_ask_retrieval_boot_state(fixture_conn, registry_path=registry_path)
-    assert sealed.retrieval_mode == "sealed"
-    assert sealed.registry_status == "missing"
-    assert sealed.vector_runtime_status == "disabled"
-    assert sealed.sealed_plane_ready is False
-
-    with caplog.at_level(logging.INFO, logger="ask.retrieval_boot_state"):
-        log_ask_retrieval_boot_state(sealed)
-    sealed_records = [
-        record for record in caplog.records if "ask_retrieval_boot_state" in record.getMessage()
-    ]
-    assert sealed_records and sealed_records[-1].levelno == logging.ERROR
-    sealed_line = sealed_records[-1].getMessage()
-
-    claim_markers_found: list[str] = []
-    for line in (grounded_line, sealed_line):
-        assert "registry_status=missing" in line
-        assert "vector_runtime_status=disabled" in line
-        claim_markers_found.extend(marker for marker in _READINESS_CLAIM_MARKERS if marker in line)
-    assert claim_markers_found == []
-
-    _record_artifact(
-        "sealed-plane-val-search-001-boot-state.json",
-        {
-            "assertion": "VAL-SEARCH-001",
-            "feature": "sealed-plane-reachability",
-            "recorded_at": datetime.now(UTC).isoformat(),
-            "scope_note": _SCOPE_NOTE,
-            "fixture_state": "substrate absent: registry file missing, vector runtime env unset",
-            "fixture": _substrate_absent_fixture_configuration(registry_path),
-            "grounded_default_boot": {
-                "state": grounded.model_dump(mode="json"),
-                "level": "INFO",
-                "message": grounded_line,
-            },
-            "sealed_selected_boot": {
-                "state": sealed.model_dump(mode="json"),
-                "level": "ERROR",
-                "message": sealed_line,
-            },
-            "negative_check": {
-                "readiness_claim_markers_searched": list(_READINESS_CLAIM_MARKERS),
-                "readiness_claim_markers_found": claim_markers_found,
-                "note": (
-                    "both boot lines name the missing substrate and carry no "
-                    "readiness claim; the sealed-selected line logs at ERROR"
-                ),
             },
         },
     )
