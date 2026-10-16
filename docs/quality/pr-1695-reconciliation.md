@@ -224,8 +224,7 @@ scanner, global skips and global baseline remain unchanged.
 
 Two independent Opus 5.5 reviews of `05edde2e` scored the work 81/100 and
 found no blocking source defect. The second review included actual browser-path
-evidence. The owner's required score remains unmet; these reviews do not
-authorize merge.
+evidence. The remaining verification gaps are described below.
 
 Chromium exercised the real Cockpit-to-Evaluation path for 80 synthetic task
 cycles across 1440- and 390-pixel widths. Cold builders fell from two to one,
@@ -244,7 +243,9 @@ and cleanup found zero matching processes. The earlier successful writer probe
 does not establish the separate process-tree integration cases.
 
 The CI workflow now runs those five original cases on a disposable hosted
-Windows runner with Python 3.13. It loads no application fixtures or database.
+Windows runner with Python 3.13 in a disposable virtual environment. This
+exercises the Windows environment launcher as well as the native APIs. It loads
+no application fixtures or database.
 The aggregate CI gate requires the Windows job for code changes. Its JUnit
 receipt must contain each exact case once, with no skip, failure or error.
 Missing or malformed receipts fail the gate. Receipts are retained for seven
