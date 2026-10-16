@@ -26689,16 +26689,16 @@
     "reconstruction": 141,
     "registry": 59
   },
-  "tracked_tree_hash": "bc82596c02061dd3677ad7728b33e6deab56a26eca8d4b0725a326243ff7dd3f",
-  "revision": "3fcb897e3785449e9c9b9e9a8f9a8138a7b97c24",
+  "tracked_tree_hash": "3c915427737f1a043da31b02b9509b5fea02b38712b6a64aa5566e743ab69d36",
+  "revision": "da6f98802ee45f4e3a8729eda6259cb6931ff70a",
   "worktree_dirty": false,
-  "reachability_graph_hash": "224059bcbaf7c036218a813aaf65ac653f496db3c2f37e28fed96958e5099be1",
+  "reachability_graph_hash": "344f95b73fd3b5f57f606eb3e483e468d72879c466c9a0f90fd87f7272c2faf6",
   "graph_parser": {
     "name": "ast+xml+literal-scanner",
     "version": "1.3.0",
     "python": ">=3.11",
-    "source_sha256": "7a7643a8c023443a489f7e6b69d89bd762f07a28109b7c56c1c1c80425eef2eb",
-    "dispositions_sha256": "5645cd2a5e2026c92cb44ac377650deede4012f3019ff0374b9d673f3b0e86a2"
+    "source_sha256": "56b2239ee09a657266a617fcb504ff5730f89937ef425471db56036f04d4d837",
+    "dispositions_sha256": "c964a5bb60cd9276eeb341a89f071d95c3ce72d1d5ab6777bcf646cd5d780d8f"
   },
   "coverage": {
     "candidates": 963,
