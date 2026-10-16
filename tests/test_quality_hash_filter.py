@@ -400,7 +400,7 @@ CANONICAL_HELPERS_BASELINE = "docs/quality/canonical-helpers.json"
 GROUNDED_SEARCH_ORACLE = "tests/test_grounded_search_foundation.py"
 
 
-@pytest.mark.parametrize("key", ("generated_commit", "source_commit"))
+@pytest.mark.parametrize("key", ("generated_commit", "source_commit", "capture_commit"))
 @pytest.mark.parametrize("delimiter", (":", "="))
 def test_reconciliation_hashes_are_path_and_schema_specific(key: str, delimiter: str) -> None:
     digest = hashlib.sha1(b"public reconciliation commit", usedforsecurity=False).hexdigest()

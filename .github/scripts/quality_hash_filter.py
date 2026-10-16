@@ -102,7 +102,7 @@ _INVESTING_REVIEW_DIGEST_MEMBER = re.compile(
     r'[ \t]*"sha256"[ \t]*(?::|=)[ \t]*"[0-9a-f]{64}"[ \t]*,?[ \t]*(?:\r?\n)?\Z'
 )
 _CANONICAL_HELPERS_COMMIT_MEMBER = re.compile(
-    r'[ \t]*"(?:generated_commit|source_commit)"[ \t]*(?::|=)[ \t]*"[0-9a-f]{40}"[ \t]*,?[ \t]*(?:\r?\n)?\Z'
+    r'[ \t]*"(?:generated_commit|source_commit|capture_commit)"[ \t]*(?::|=)[ \t]*"[0-9a-f]{40}"[ \t]*,?[ \t]*(?:\r?\n)?\Z'
 )
 _GROUNDED_SEARCH_DIGEST_ASSIGNMENT = re.compile(
     r'[ \t]*expected_bundle_sha256[ \t]*=[ \t]*"[0-9a-f]{64}"[ \t]*(?:\r?\n)?\Z'
