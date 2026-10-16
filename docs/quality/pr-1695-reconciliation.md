@@ -51,7 +51,7 @@ search, and less code sprawl. This is source integration, not deployment.
 Targeted source, migration, cache, citation, concurrency and recovery tests use
 explicit disposable databases. Search tests exclude live providers. The project
 format, lint, changed-file strict typing, suppression and design-sync checks
-remain enabled. Whole-tree quality ceilings only decrease.
+remain enabled. Static diagnostic and suppression ceilings only decrease.
 
 The first broad local test run passed 2,391 tests before stopping at one stale
 CI timing-table coverage failure. Retained timing samples from both parents are
@@ -67,7 +67,7 @@ Its in-progress graph manifest held correctly; the frozen manifest then
 passed all 81 reachability tests. There are zero production unknown or
 unresolved edges and zero graph diagnostics. Changed-file strict checks
 pass; the complete static gate passes at lower exact ceilings (2,810 files,
-2,050 inherited diagnostics and 1,856 inherited suppressions).
+2,050 inherited diagnostics and 1,854 inherited suppressions).
 Golden and CI-helper comparison checks then passed 138 tests. The golden change is limited to accurate missing-or-
 ambiguous version wording in source rows and citation popovers.
 
@@ -324,3 +324,33 @@ The evaluation, approved model, original source and observations remain
 unchanged. The full promoted Ask answer/auditor/persistence driver is therefore
 not executed and is not claimed as proof. This is a fixture limitation under
 the retained migration contract, not permission to bypass it.
+
+The architecture receipt is deliberately remeasured under the existing
+receipt-refresh contract. Its only aggregate increase is the 219 noncomment
+lines required by these source-owner repairs. Scanner identity, module count,
+size buckets, cycle shapes, fan-out ceiling and duplication baseline stay
+unchanged. This is an explicit reviewed increase, not a claim that code size
+fell. Two inherited test-only private-access directives were removed when the
+required suppression gate rejected their changed files. Typed test seams
+replace them; no suppression exception or error ceiling is added.
+
+A second 80-cycle browser comparison uses the repaired runtime at `bf00d333`.
+The same real shell, Flask handlers, JavaScript, synthetic rows and readiness
+checks pass at both widths. Cold builders remain two versus one and SQL397
+versus73; warm SQL remains six versus zero. Desktop cold/warm Cockpit medians
+are 65.0/48.3 ms on main and 69.8/61.3 ms on the repaired runtime. Narrow
+medians are 79.4/66.0 ms and 71.3/53.2 ms. Evaluation remains near22 ms.
+The direction differs by width; these ten-sample groups do not establish a
+consistent browser speed gain or a causal regression. Both process groups
+stopped, both listeners closed, and fixture bytes and row payloads match.
+
+The owning suppression inventory measures 1,854 remaining suppressions, down
+from1,856. The test-subsystem ceiling decreases from921 to919 to retain that
+cleanup. No diagnostic ceiling increases. The reachability expectation for
+the unchanged native child invocation moves from line328 to330 because atomic
+PID publication adds two fixture lines; its target and assertions remain.
+
+The complete owning static-quality gate passes on the frozen integration
+source: 2,810 retained files, 2,050 inherited Pyright diagnostics and1,854
+suppressions at exact descending subsystem ceilings. Changed owning files
+also pass strict checks. This does not claim that inherited debt is zero.

@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Deterministic corpus and semantic-runtime population gates."""
 
 from __future__ import annotations
@@ -8,6 +7,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -24,6 +24,7 @@ from provenance.issuer_registry import IssuerEntity, IssuerRegistry
 from provenance.population_completeness import PopulationTemporalScope
 from provenance.population_retrieval_runtime import (
     RetrievalRuntimePopulationRequest,
+    SemanticCanaryReceipt,
     populate_retrieval_runtime,
     verify_retrieval_runtime,
 )
@@ -45,6 +46,24 @@ from search.corpus_builder import (
     load_coverage_expected_document_inventory,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+
+class _SemanticCanaryCall(Protocol):
+    """Typed access to the exact semantic canary seam under test."""
+
+    def __call__(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        manifest_id: str,
+        vector_index_run_id: str,
+        embedding_promotion_id: str,
+        runtime_root: Path,
+        exact_row_cap: int,
+    ) -> SemanticCanaryReceipt: ...
+
+
+_verify_semantic_canary = cast(_SemanticCanaryCall, vars(population)["_verify_semantic_canary"])
 
 STAMP = datetime(2026, 7, 29, 12, 0, tzinfo=UTC)
 SHA = hashlib.sha256(b"retrieval-runtime-test").hexdigest()
@@ -664,7 +683,7 @@ def test_semantic_canary_requires_and_receipts_exact_grounded_seed(
     _FakeSemanticRuntime.candidate_ids = ("chunk-b",)
 
     with pytest.raises(ValueError, match="grounded seed chunk"):
-        population._verify_semantic_canary(
+        _verify_semantic_canary(
             conn,
             manifest_id="manifest",
             vector_index_run_id="vector",
@@ -674,7 +693,7 @@ def test_semantic_canary_requires_and_receipts_exact_grounded_seed(
         )
 
     _FakeSemanticRuntime.candidate_ids = ("chunk-b", "chunk-a")
-    receipt = population._verify_semantic_canary(
+    receipt = _verify_semantic_canary(
         conn,
         manifest_id="manifest",
         vector_index_run_id="vector",

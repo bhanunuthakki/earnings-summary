@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "82bf9753dd9218761c9b44a8f47c2d744a31d82d",
+  "scoped_commit": "bf00d333b9cad32db0c14b6ee8a3d34763c04b03",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "dbbffc24ab4aaa4fe7fc0da7577a621cb90591bb8e3e104edab1a9b95cb44cbf",
+  "source_sha256": "1af22da86367336ba01a21c347b064a28ae1e14ba9c03cebbd9fa68b0da33fa0",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1451,
-    "total_noncomment_loc": 551842,
+    "total_noncomment_loc": 552061,
     "modules_over_1000_loc": 104,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -7512,11 +7512,11 @@
         "path": "src/ask/sealed_retrieval.py",
         "module": "ask.sealed_retrieval",
         "lines": {
-          "physical": 1673,
-          "nonblank": 1549,
-          "noncomment": 1546
+          "physical": 1826,
+          "nonblank": 1697,
+          "noncomment": 1690
         },
-        "internal_fan_out": 8,
+        "internal_fan_out": 11,
         "responsibilities": [
           "database",
           "filesystem",
@@ -16604,9 +16604,9 @@
         "path": "src/provenance/population_document_processing.py",
         "module": "provenance.population_document_processing",
         "lines": {
-          "physical": 2356,
-          "nonblank": 2222,
-          "noncomment": 2222
+          "physical": 2402,
+          "nonblank": 2268,
+          "noncomment": 2262
         },
         "internal_fan_out": 8,
         "responsibilities": [
@@ -16620,9 +16620,9 @@
         "path": "src/provenance/population_identity.py",
         "module": "provenance.population_identity",
         "lines": {
-          "physical": 722,
-          "nonblank": 675,
-          "noncomment": 675
+          "physical": 716,
+          "nonblank": 669,
+          "noncomment": 667
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -16667,9 +16667,9 @@
         "path": "src/provenance/population_retrieval_runtime.py",
         "module": "provenance.population_retrieval_runtime",
         "lines": {
-          "physical": 1310,
-          "nonblank": 1230,
-          "noncomment": 1230
+          "physical": 1353,
+          "nonblank": 1273,
+          "noncomment": 1273
         },
         "internal_fan_out": 7,
         "responsibilities": [

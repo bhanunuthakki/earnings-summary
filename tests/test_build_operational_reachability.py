@@ -269,7 +269,7 @@ def test_actual_head_is_supported() -> None:
             line=line,
             unknown=True,
         )
-        for line in (233, 328)
+        for line in (233, 330)
     ]
     assert (
         GraphEdge(

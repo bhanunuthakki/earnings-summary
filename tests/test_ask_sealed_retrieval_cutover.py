@@ -1,12 +1,11 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import json
 import sqlite3
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 import pytest
 
@@ -16,8 +15,10 @@ from ask.audit_store import canonical_json, digest_text
 from ask.sealed_retrieval import (
     PromotionVerificationError,
     ReadyRetrievalScope,
+    RetrievalPromotion,
     RetrievalReadiness,
     RetrievalScope,
+    SealedEvidenceItem,
     assess_retrieval_readiness,
     build_sealed_retrieval_plan,
     derive_retrieval_scope_id,
@@ -30,6 +31,49 @@ from provenance.source_fact_repository import ReportedSourceFact, SourceFactRepo
 from search.heterogeneous_retrieval import HeterogeneousRetrievalReceipt
 from tests.test_source_fact_repository import STAMP as FACT_STAMP
 from tests.test_source_fact_repository import make_publication, seed_foundation
+
+
+class _AdmitCutoverCall(Protocol):
+    def __call__(self, conn: sqlite3.Connection, *, promotion: RetrievalPromotion) -> None: ...
+
+
+class _IndexRootCall(Protocol):
+    def __call__(
+        self, conn: sqlite3.Connection, *, vector_index_run_id: str, configured_root: Path
+    ) -> None: ...
+
+
+class _FactItemCall(Protocol):
+    def __call__(
+        self,
+        conn: sqlite3.Connection,
+        receipt: HeterogeneousRetrievalReceipt,
+        candidate: sqlite3.Row,
+        result: dict[str, object],
+        *,
+        n: int,
+        cutoff: datetime,
+    ) -> SealedEvidenceItem: ...
+
+
+# Keep internal seams typed for tests without exporting application APIs.
+_promotion_from_row = cast(
+    Callable[[sqlite3.Row], RetrievalPromotion], vars(sealed)["_promotion_from_row"]
+)
+_promotion_values = cast(
+    Callable[[RetrievalPromotion], tuple[object, ...]], vars(sealed)["_promotion_values"]
+)
+_promotion_insert_sql = cast(str, vars(sealed)["_PROMOTION_INSERT_SQL"])
+_admit_current_population_cutover = cast(
+    _AdmitCutoverCall, vars(sealed)["_admit_current_population_cutover"]
+)
+_verify_index_root = cast(_IndexRootCall, vars(sealed)["_verify_index_root"])
+_canonical_artifact_sha256 = cast(Callable[[Path], str], vars(sealed)["_canonical_artifact_sha256"])
+_fact_item = cast(_FactItemCall, vars(sealed)["_fact_item"])
+_evidence_block = cast(
+    Callable[[Sequence[SealedEvidenceItem]], tuple[tuple[str, ...], str]],
+    vars(engine)["_sealed_evidence_block"],
+)
 
 NOW = datetime(2026, 7, 28, 12, tzinfo=UTC)
 POPULATION_RUN_ID = "population-run:test"
@@ -154,7 +198,7 @@ def test_multi_issuer_requires_common_cutoff_and_builds_exact_requests() -> None
     ready_scopes = tuple(
         ReadyRetrievalScope(
             scope=_scope(str(row["source_scope_key"])),
-            promotion=sealed._promotion_from_row(row),
+            promotion=_promotion_from_row(row),
         )
         for row in rows
     )
@@ -277,7 +321,7 @@ def test_exact_promotion_replay_revalidates_current_readiness(
         (_scope_id("AAA"),),
     ).fetchone()
     assert row is not None
-    promotion = sealed._promotion_from_row(row)
+    promotion = _promotion_from_row(row)
     verified: list[str] = []
 
     def verify(
@@ -305,7 +349,7 @@ def test_insert_conflict_replay_is_revalidated_and_reported_exactly(
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT * FROM ask_retrieval_scope_promotions").fetchone()
     assert row is not None
-    promotion = sealed._promotion_from_row(row)
+    promotion = _promotion_from_row(row)
     conn.execute("DELETE FROM ask_retrieval_scope_promotions")
     verified: list[str] = []
 
@@ -319,8 +363,8 @@ def test_insert_conflict_replay_is_revalidated_and_reported_exactly(
         verified.append(stored.promotion_id)
         if len(verified) == 1:
             connection.execute(
-                sealed._PROMOTION_INSERT_SQL,
-                sealed._promotion_values(stored),
+                _promotion_insert_sql,
+                _promotion_values(stored),
             )
 
     monkeypatch.setattr(sealed, "verify_retrieval_promotion", insert_during_verification)
@@ -343,7 +387,7 @@ def test_stale_exact_promotion_replay_fails_closed(
     conn.row_factory = sqlite3.Row
     row = conn.execute("SELECT * FROM ask_retrieval_scope_promotions").fetchone()
     assert row is not None
-    promotion = sealed._promotion_from_row(row)
+    promotion = _promotion_from_row(row)
 
     def stale(*_args: object, **_kwargs: object) -> None:
         raise PromotionVerificationError(
@@ -370,7 +414,7 @@ def test_execution_rechecks_current_promotion_before_retrieval(
     assert row is not None
     ready = ReadyRetrievalScope(
         scope=_scope("AAA"),
-        promotion=sealed._promotion_from_row(row),
+        promotion=_promotion_from_row(row),
     )
     plan = build_sealed_retrieval_plan(
         RetrievalReadiness(
@@ -414,7 +458,7 @@ def test_execution_current_admits_every_planned_scope_before_retrieval(
     ready_scopes = tuple(
         ReadyRetrievalScope(
             scope=_scope(str(row["source_scope_key"])),
-            promotion=sealed._promotion_from_row(row),
+            promotion=_promotion_from_row(row),
         )
         for row in rows
     )
@@ -467,9 +511,9 @@ def test_live_ask_requires_current_population_cutover_receipt() -> None:
     assert row is not None
 
     with pytest.raises(PromotionVerificationError, match="population_cutover_missing"):
-        sealed._admit_current_population_cutover(
+        _admit_current_population_cutover(
             conn,
-            promotion=sealed._promotion_from_row(row),
+            promotion=_promotion_from_row(row),
         )
 
 
@@ -521,7 +565,7 @@ def test_live_ask_admits_exact_verified_population_cutover(
     conn.row_factory = sqlite3.Row
     promotion_row = conn.execute("SELECT * FROM ask_retrieval_scope_promotions").fetchone()
     assert promotion_row is not None
-    promotion = sealed._promotion_from_row(promotion_row)
+    promotion = _promotion_from_row(promotion_row)
 
     class _VerifiedReceipt:
         receipt_set_sha256 = receipt_sha
@@ -539,7 +583,7 @@ def test_live_ask_admits_exact_verified_population_cutover(
             return _VerifiedReceipt()
 
     monkeypatch.setattr(sealed, "PopulationCompletenessLedger", _Ledger)
-    sealed._admit_current_population_cutover(conn, promotion=promotion)
+    _admit_current_population_cutover(conn, promotion=promotion)
 
 
 def test_same_cutoff_newer_population_run_invalidates_old_promotion(
@@ -591,7 +635,7 @@ def test_same_cutoff_newer_population_run_invalidates_old_promotion(
     conn.row_factory = sqlite3.Row
     promotion_row = conn.execute("SELECT * FROM ask_retrieval_scope_promotions").fetchone()
     assert promotion_row is not None
-    promotion = sealed._promotion_from_row(promotion_row)
+    promotion = _promotion_from_row(promotion_row)
 
     class _VerifiedReceipt:
         receipt_set_sha256 = POPULATION_RECEIPT_SHA256
@@ -610,7 +654,7 @@ def test_same_cutoff_newer_population_run_invalidates_old_promotion(
 
     monkeypatch.setattr(sealed, "PopulationCompletenessLedger", _Ledger)
     with pytest.raises(PromotionVerificationError, match="population_cutover_stale"):
-        sealed._admit_current_population_cutover(conn, promotion=promotion)
+        _admit_current_population_cutover(conn, promotion=promotion)
 
 
 def test_vector_projection_must_be_under_configured_index_root(
@@ -631,7 +675,7 @@ def test_vector_projection_must_be_under_configured_index_root(
         ),
     )
     with pytest.raises(ValueError, match="escapes configured index root"):
-        sealed._verify_index_root(
+        _verify_index_root(
             conn,
             vector_index_run_id="vector-1",
             configured_root=allowed,
@@ -656,7 +700,7 @@ def test_verifier_artifact_hash_is_line_ending_insensitive(tmp_path: Path) -> No
     crlf = tmp_path / "crlf.py"
     lf.write_bytes(b"one\ntwo\n")
     crlf.write_bytes(b"one\r\ntwo\r\n")
-    assert sealed._canonical_artifact_sha256(lf) == sealed._canonical_artifact_sha256(crlf)
+    assert _canonical_artifact_sha256(lf) == _canonical_artifact_sha256(crlf)
     manifest = sealed.current_verifier_manifest()
     artifacts = cast(list[dict[str, object]], manifest["artifacts"])
     paths = {str(item["path"]) for item in artifacts}
@@ -789,7 +833,7 @@ def test_fact_prompt_preserves_verified_financial_context(
     published_fact_context: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row],
 ) -> None:
     conn, receipt, candidate = published_fact_context
-    item = sealed._fact_item(
+    item = _fact_item(
         conn, receipt, candidate, {"result_ordinal": 0, "final_score": "1"}, n=1, cutoff=FACT_STAMP
     )
     assert item.text.splitlines()[0] == "Revenue: 100 USD USD_millions (2026-07-27)"
@@ -814,7 +858,7 @@ def test_fact_prompt_preserves_verified_financial_context(
     assert '"scale":"unavailable"' in item.text
     assert "does not establish complete decision-grade financial context" in item.text
     assert "storage_uri" not in item.text
-    fragments, block = engine._sealed_evidence_block((item,))
+    fragments, block = _evidence_block((item,))
     assert item.text in fragments[0]
     assert block == fragments[0]
 
@@ -855,7 +899,7 @@ def test_fact_context_rejects_projection_source_mismatch(
         (digest_text(entry_json),),
     ).fetchone()
     with pytest.raises(PromotionVerificationError, match="selected fact context"):
-        sealed._fact_item(
+        _fact_item(
             conn,
             receipt,
             candidate,
@@ -873,7 +917,7 @@ def test_fact_context_rejects_revision_substitution_under_selected_commitment(
     conn, receipt, candidate = published_fact_context
     conn.execute(f"UPDATE canonical_fact_projection_entries SET {column}='newer-unselected'")
     with pytest.raises(PromotionVerificationError, match="selected fact context"):
-        sealed._fact_item(
+        _fact_item(
             conn,
             receipt,
             candidate,
@@ -888,7 +932,7 @@ def test_fact_context_rejects_source_unavailable_at_selected_cutoff(
 ) -> None:
     conn, receipt, candidate = published_fact_context
     with pytest.raises(PromotionVerificationError, match="selected fact context"):
-        sealed._fact_item(
+        _fact_item(
             conn,
             receipt,
             candidate,
