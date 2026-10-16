@@ -29,15 +29,15 @@ import sqlite3
 from dataclasses import dataclass
 
 from clock import now_iso_space_seconds as _now_iso
+from models.documents import SOURCE_QUALITY_TIER_RANK
 from runtime.deterministic import table_exists_or_false as _has_table
-from timeseries.loaders import SOURCE_QUALITY_TIER_RANK
 
 log = logging.getLogger(__name__)
 
 
 def _tier_rank(tier: object) -> int:
     """Canonical source-quality rank (higher wins); unknown / None → 0.
-    Shares ``timeseries.loaders.SOURCE_QUALITY_TIER_RANK`` so the authority a
+    Shares ``models.documents.SOURCE_QUALITY_TIER_RANK`` so the authority a
     disagreement is graded against is the same row the loaders surface."""
     if not isinstance(tier, str):
         return 0

@@ -708,8 +708,9 @@ _DOCUMENT_VERSION_SQL = _DOCUMENT_VERSION_SELECT + "WHERE document.document_vers
 # The legacy-plane entry: report citations and older built reports address the
 # document by its ``documents.id``; this resolves that id to its Observation
 # Version only when the binding is unambiguous.
+# B608 review: SELECT and WHERE are module constants; the legacy document ID stays bound.
 _DOCUMENT_VERSION_BY_LEGACY_SQL = (
-    _DOCUMENT_VERSION_SELECT + "WHERE document.legacy_document_id=? "
+    _DOCUMENT_VERSION_SELECT + "WHERE document.legacy_document_id=? "  # nosec B608
     "AND (SELECT COUNT(*) FROM evidence_document_versions candidate "
     "WHERE candidate.legacy_document_id=document.legacy_document_id)=1"
 )

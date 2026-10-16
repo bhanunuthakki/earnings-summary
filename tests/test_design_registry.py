@@ -9,13 +9,10 @@ from __future__ import annotations
 
 import ast
 import re
-import sys
 from dataclasses import FrozenInstanceError, is_dataclass
 from pathlib import Path
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ui import design_registry as registry
 from ui.controls import controls_css
@@ -119,8 +116,9 @@ def test_registry_is_frozen_typed_and_complete() -> None:
         entry = next(item for item in registry.VISUAL_EMITTER_MANIFEST if item.path == producer)
         assert entry.disposition is registry.EmitterDisposition.NONVISUAL
         assert producer not in registry.REGISTERED
-    assert len(registry.REGISTERED) == 114
-    assert len(registry.VISUAL_EMITTER_MANIFEST) == 161
+    # The retired key-metrics renderer no longer contributes an emitter.
+    assert len(registry.REGISTERED) == 113
+    assert len(registry.VISUAL_EMITTER_MANIFEST) == 160
     calculation_evidence = next(
         entry
         for entry in registry.VISUAL_EMITTER_MANIFEST
@@ -137,7 +135,7 @@ def test_registry_is_frozen_typed_and_complete() -> None:
         if entry.path == "operations/backup_observer.py"
     )
     assert backup_observer.disposition is registry.EmitterDisposition.NONVISUAL
-    assert len(registry.GOVERNED) == 135
+    assert len(registry.GOVERNED) == 134
     assert (
         frozenset(
             {

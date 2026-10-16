@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "3fcb897e3785449e9c9b9e9a8f9a8138a7b97c24",
+  "scoped_commit": "82bf9753dd9218761c9b44a8f47c2d744a31d82d",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "a397c56ef3658df4790bd8f83c7dda5716ad140cbac5622a41527389a8a6ce6e",
+  "source_sha256": "dbbffc24ab4aaa4fe7fc0da7577a621cb90591bb8e3e104edab1a9b95cb44cbf",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1451,
-    "total_noncomment_loc": 551945,
+    "total_noncomment_loc": 551842,
     "modules_over_1000_loc": 104,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -12598,9 +12598,9 @@
         "path": "src/models/documents.py",
         "module": "models.documents",
         "lines": {
-          "physical": 177,
-          "nonblank": 152,
-          "noncomment": 133
+          "physical": 193,
+          "nonblank": 166,
+          "noncomment": 140
         },
         "internal_fan_out": 0,
         "responsibilities": [],
@@ -12611,14 +12611,14 @@
         "path": "src/models/facts.py",
         "module": "models.facts",
         "lines": {
-          "physical": 424,
-          "nonblank": 352,
-          "noncomment": 311
+          "physical": 459,
+          "nonblank": 385,
+          "noncomment": 344
         },
         "internal_fan_out": 0,
         "responsibilities": [],
-        "public_functions": 0,
-        "fully_annotated_public_functions": 0
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
       },
       {
         "path": "src/models/fmp_payloads.py",
@@ -14379,17 +14379,17 @@
         "path": "src/pipeline/locators.py",
         "module": "pipeline.locators",
         "lines": {
-          "physical": 395,
-          "nonblank": 347,
-          "noncomment": 336
+          "physical": 360,
+          "nonblank": 314,
+          "noncomment": 303
         },
         "internal_fan_out": 4,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 11,
-        "fully_annotated_public_functions": 11
+        "public_functions": 10,
+        "fully_annotated_public_functions": 10
       },
       {
         "path": "src/pipeline/managed_ir_sources.py",
@@ -14963,11 +14963,11 @@
         "path": "src/pipeline/sec_xbrl.py",
         "module": "pipeline.sec_xbrl",
         "lines": {
-          "physical": 3122,
-          "nonblank": 2881,
-          "noncomment": 2703
+          "physical": 3006,
+          "nonblank": 2766,
+          "noncomment": 2592
         },
-        "internal_fan_out": 17,
+        "internal_fan_out": 15,
         "responsibilities": [
           "database",
           "filesystem",
@@ -15107,8 +15107,8 @@
         "path": "src/pipeline/source_viewers.py",
         "module": "pipeline.source_viewers",
         "lines": {
-          "physical": 1084,
-          "nonblank": 968,
+          "physical": 1085,
+          "nonblank": 969,
           "noncomment": 916
         },
         "internal_fan_out": 5,
@@ -16809,9 +16809,9 @@
         "path": "src/provenance/sec_companyfacts_capture.py",
         "module": "provenance.sec_companyfacts_capture",
         "lines": {
-          "physical": 746,
-          "nonblank": 658,
-          "noncomment": 657
+          "physical": 753,
+          "nonblank": 665,
+          "noncomment": 664
         },
         "internal_fan_out": 4,
         "responsibilities": [
@@ -18536,8 +18536,8 @@
         "path": "src/report/sections/_common.py",
         "module": "report.sections._common",
         "lines": {
-          "physical": 224,
-          "nonblank": 185,
+          "physical": 225,
+          "nonblank": 186,
           "noncomment": 180
         },
         "internal_fan_out": 3,
@@ -21345,11 +21345,11 @@
         "path": "src/timeseries/loaders.py",
         "module": "timeseries.loaders",
         "lines": {
-          "physical": 2032,
-          "nonblank": 1890,
-          "noncomment": 1853
+          "physical": 2018,
+          "nonblank": 1877,
+          "noncomment": 1847
         },
-        "internal_fan_out": 11,
+        "internal_fan_out": 12,
         "responsibilities": [
           "database",
           "network"

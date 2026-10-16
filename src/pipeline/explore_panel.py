@@ -120,7 +120,7 @@ def tier_graded_baseline(db_path: Path, tickers: list[str]) -> list[tuple[str, s
             GROUP BY kd.name, kd.threshold_tier
             ORDER BY CASE kd.threshold_tier WHEN 'tier_1_break' THEN 0 ELSE 1 END,
                      n DESC, name ASC
-            """,
+            """,  # nosec B608 -- only '?' placeholders are interpolated; tickers remain bound
             tuple(symbols),
         ).fetchall()
     except sqlite3.Error:

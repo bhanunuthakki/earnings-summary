@@ -15,9 +15,9 @@ search, and less code sprawl. This is source integration, not deployment.
   Independently merged search features have one implementation in the combined
   tree.
 - Reuse SEC completion receipts only when issuer, raw content and extractor
-  fingerprints agree. The identity covers the transitive extractor import closure, governed
-  dynamic adapter subtree, referenced vendor dependencies, active metric ladders
-  and database schema. Unrelated UI files do not invalidate SEC receipts. Missing
+  fingerprints agree. The identity covers the transitive extractor import closure,
+  referenced vendor dependencies, active metric ladders and database schema.
+  Shared domain helpers keep IR discovery and PDF parsing outside that closure. Unrelated UI files do not invalidate SEC receipts. Missing
   inputs, linked source files, unknown loaders and relevant in-process source
   replacement fail closed. An obsolete conditional response forces a fresh fetch.
 - Stamp report fact chips with the exact admitted document version. A legacy
@@ -78,11 +78,11 @@ byte, and browser page errors are absent. These fixtures prove rendering parity,
 not live data readiness, real-user latency or canonical-host throughput.
 
 Architecture and duplication baselines use unchanged scanners for the combined
-source population: 1,451 modules and 551,945 noncomment lines. Exact duplication
+source population: 1,451 modules and 551,842 noncomment lines. Exact duplication
 is 4 groups / 158 lines versus main's 6 / 238. Near duplication is 147 groups /
 9,867 lines versus main's 162 / 11,266. The largest dependency cycle falls from
 25 modules to 16; maximum internal fan-out falls from 137 to 40. Source size is
-2,948 noncomment lines above main after retaining the PR's runtime changes.
+2,845 noncomment lines above main after retaining the PR's runtime changes.
 No module path, size-threshold crossing or cycle membership is new relative to
 the parent union. One existing pair of cache reservation methods crosses the
 fixed near-match threshold (0.848947 to 0.856842) after both carry their build
@@ -113,8 +113,8 @@ SQL statements fall from 156 to 65. Fixture setup is outside timing.
 
 | Condition | Samples | Main median | Reconciled median | Main empirical p95 | Reconciled empirical p95 |
 |---|---:|---:|---:|---:|---:|
-| New in-memory connection | 30 | 3.646 ms | 2.439 ms | 4.101 ms | 2.974 ms |
-| Reused connection | 60 | 2.591 ms | 1.608 ms | 3.164 ms | 2.160 ms |
+| New in-memory connection | 30 | 3.336 ms | 2.159 ms | 3.752 ms | 2.479 ms |
+| Reused connection | 60 | 2.392 ms | 1.463 ms | 2.751 ms | 1.830 ms |
 
 These local samples measure one controlled reader and its exact output parity.
 They do not establish live issuer coverage, browser task latency, production
@@ -138,9 +138,9 @@ all network is denied. Sparse enrichment remains explicitly unavailable.
 Thirty cold cycles show three cockpit builds becoming one, with 566 SQL
 statements becoming 71. Real cockpit rows and overview HTML match exactly;
 hydration JSON differs only in its generated timestamp. Sixty warm cycles have
-zero builds and zero SQL in both variants. Main cold median/p95 is 15.394/16.128 ms; the frozen candidate is
-7.450/8.246 ms. Warm medians are 0.896/0.958 ms respectively; no warm
-improvement is claimed. These are local server completion measurements, not browser paint
+zero builds and zero SQL in both variants. Main cold median/p95 is
+14.505/16.493 ms; the frozen candidate is 6.323/6.536 ms. Warm medians
+are 0.890/0.873 ms respectively; no material warm improvement is claimed. These are local server completion measurements, not browser paint
 or live-host throughput.
 
 ## Native writer verification
@@ -157,19 +157,40 @@ native protocol evidence, not a production pipeline or deployment test.
 
 ## Narrow extractor identity cost
 
-The final closure contains 95 owned Python files (1,713,142 bytes) and twenty
-active vendor distributions. Thirty cold calls have a 711.748 ms median and
-741.009 ms empirical p95. This cost occurs lazily at first SEC use, with no
-source scan at module import. Sixty warm calls have a 5.944 ms median and
-7.126 ms empirical p95, versus 29.956/34.691 ms for the preceding conservative
-whole-runtime identity. Cold cost increases; repeated cost and unrelated-code
-invalidation decrease. Warm calls perform zero full-source digests. The identity
-retains full schema hashing, so a schema migration conservatively invalidates
-prior receipts. Source, dependency, schema and active-ladder evidence remain
-attributable. Thirty-five focused tests pass; the earlier related pipeline,
-capture and matcher batch passed 113 tests. Writer and liveness coverage passed
-275 tests with five separate native-Windows suite skips, supplemented by the
-native protocol evidence above.
+The final closure contains 35 owned Python files (722,473 bytes) and twelve
+active vendor distributions. Shared tier ranks and table-cell locators now live
+in existing domain-model owners. Existing imports reexport the same objects.
+SEC uses the small validation store directly. These changes remove accidental
+IR discovery, PDF parsing and heavy loader dependencies. They also remove the
+IR-specific dynamic registry checker: 114 net production lines are deleted,
+with no new module or dependency.
+
+Thirty cold calls have a 452.602 ms median and 501.878 ms empirical p95. Sixty
+warm calls have a 1.927 ms median and 2.037 ms empirical p95. The previous
+95-file closure measured 711.748/741.009 ms cold and 5.944/7.126 ms warm.
+Discovery remains lazy; module import does not scan the source tree. Warm calls
+perform zero full-source digests. Full schema hashing remains conservative.
+The real-repository regression computes and hashes the actual closure, including
+required capture, issuer, confidence and resolution owners, and rejects unrelated
+IR, PDF, loader and KPI-persistence imports. The 256-file ceiling fails closed.
+Narrowing, compatibility, locator, confidence, calibration, timeseries and
+validation coverage passed 117 tests. Capture and onboarding coverage passed
+38 tests after the replay correction below.
+
+## Follow-up review and full-matrix corrections
+
+Opus 5.5 scored commit `82bf9753` 77/100. It confirmed the earlier material
+fixes but found unnecessary extractor complexity and incomplete final evidence.
+The narrowed import boundaries above address that source finding. Final
+exact-head CI and a new independent review are still required before merge.
+
+The first full CI matrix found worker-specific writer-test parameter names,
+stale renderer-registry counts, and an exact-observation SEC replay conflict.
+Stable parameter names preserve both writer cases. Registry counts reflect the
+retired key-metrics renderer. Exact SEC replays now reuse the original primary
+link; later observations append retrieval links. Immutable IDs and uniqueness
+constraints remain unchanged. Regression coverage checks row equality and
+foreign-key integrity. These fixes are source changes, not production mutations.
 
 ## Credential-scan metadata reconciliation
 
@@ -181,3 +202,20 @@ path. The global key allowlist and detector set are unchanged. All 930 filter
 tests pass, including actual detector subprocess checks that adjacent synthetic
 credentials and identical hashes under unrelated paths still fail. The search
 compatibility oracle keeps its exact digest value. No runtime source changed.
+
+## Security scan corrections
+
+The runtime dependency audit found CVE-2026-59951 in `mcp` 1.28.1. The owning
+requirement now requires `mcp>=1.30.0,<2`; the hashed lock changes only that
+package and its two hashes. The maintainer identifies 1.30.0 as the patched
+1.x release: https://github.com/modelcontextprotocol/python-sdk/security/advisories/GHSA-84m7-p3x7-pcfv .
+The final runtime audit covers 92 packages with zero known vulnerabilities.
+The four-package design inventory also has zero known vulnerabilities. Its
+intentional Linux/Windows wheel hashes prevent a Mac install-based audit; the
+pinned inventory audit uses `--disable-pip --no-deps`, while CI checks Linux.
+
+Six Bandit B608 findings contain only bound values, placeholder counts or closed
+canonical query fragments. Reviewed, issue-specific annotations describe those
+exact boundaries. All four edited Python syntax trees are identical before and
+after the annotations. Bandit 1.9.4 passes against the unchanged baseline. The
+scanner, global skips and global baseline remain unchanged.

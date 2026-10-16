@@ -793,7 +793,7 @@ class _KpiReadContext:
             SELECT * FROM ranked
             WHERE rn_series = 1 OR (doc_present AND rn_chip = 1)
             ORDER BY period_end ASC
-            """
+            """  # nosec B608 -- closed canonical relation/semantic/order clauses; values remain bound
 
     def series_only_sql(
         self, *, period_types: tuple[str, ...], definition_ids: tuple[int, ...]
@@ -822,7 +822,7 @@ class _KpiReadContext:
             )
             SELECT period_end, value, unit, name FROM ranked
             WHERE rn = 1 ORDER BY period_end ASC
-            """
+            """  # nosec B608 -- closed canonical relation/semantic/order clauses; values remain bound
 
     def chip_sources_sql(
         self, *, period_types: tuple[str, ...], definition_ids: tuple[int, ...]
@@ -855,7 +855,7 @@ class _KpiReadContext:
                   AND kf.fiscal_period_type IN ({placeholders})
             )
             SELECT * FROM ranked WHERE rn = 1
-            """
+            """  # nosec B608 -- closed canonical relation/semantic/order clauses; values remain bound
 
     def merged_series_rows(
         self,

@@ -1589,9 +1589,11 @@ Disposition: **no new operator surface**. The combined branch preserves the curr
 `main` database authority, source-root forwarding, cached host evidence, financial
 evidence views and scheduler receipt roots through the extracted route modules.
 The migration merge retains both historical revision chains. CompanyFacts receipt
-reuse also requires the bounded transitive extractor import closure, governed
-IR adapter subtree, active vendor dependencies, metric ladders and full schema
-identity. Missing legacy identities force reprocessing. Relevant source replacement
+reuse also requires the bounded transitive extractor import closure, active
+vendor dependencies, metric ladders and full schema identity. Shared tier ranks
+and table-cell locators live with their domain models. SEC ingestion imports
+neither IR discovery nor PDF parsing; unrelated adapter changes do not invalidate
+its receipts. Missing legacy identities force reprocessing. Relevant source replacement
 within the process requires a restart; unrelated UI changes do not invalidate SEC
 receipts. Closure discovery is lazy; module import does not scan the source tree.
 Unknown loaders fail closed. Report fact chips retain their exact admitted document version; an

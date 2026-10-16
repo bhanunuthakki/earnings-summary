@@ -155,11 +155,12 @@ def document_version_ids(conn: sqlite3.Connection, doc_ids: Iterable[int | None]
     ids = sorted({int(doc_id) for doc_id in doc_ids if doc_id is not None})
     if not ids or not has_table(conn, "evidence_document_versions"):
         return {}
+    # B608 review: marks contains only '?' placeholders; integer document IDs stay bound.
     marks = ",".join("?" * len(ids))
     try:
         rows = conn.execute(
             "SELECT legacy_document_id, MIN(document_version_id) "
-            f"FROM evidence_document_versions WHERE legacy_document_id IN ({marks}) "
+            f"FROM evidence_document_versions WHERE legacy_document_id IN ({marks}) "  # nosec B608
             "GROUP BY legacy_document_id HAVING COUNT(*)=1",
             ids,
         ).fetchall()

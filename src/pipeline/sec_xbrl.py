@@ -79,16 +79,15 @@ from models.documents import (
     SourceType,
     tier_for_source_type,
 )
-from models.facts import Currency, FiscalPeriodType, Unit
+from models.facts import Currency, FiscalPeriodType, Unit, table_cell_locator
 from models.validation import Severity, ValidationRule
-from pipeline import locators
 from pipeline.confidence import score_confidence
-from pipeline.kpi_persistence import record_validation_issue
 from pipeline.restatement_detector import (
     FinancialFactSchemaProfile,
     insert_with_restatement_detection,
     probe_financial_fact_schema,
 )
+from pipeline.validation_issue_store import record_issue
 from provenance.financial_fact_resolution import (
     capture_fact_row_observation,
 )
@@ -190,16 +189,12 @@ def _fetch_receipt_extractor_column_present(conn: sqlite3.Connection) -> bool:
     )
 
 
-# The IR discovery registry is the only nonliteral import in the owned closure.
-# Include its complete package so new registered adapters cannot escape the pin.
-_COMPANYFACTS_DYNAMIC_IMPORT_PACKAGES = {"ir_pipeline.discover": "ir_pipeline/discover"}
 _COMPANYFACTS_SOURCE_ROOT = Path(__file__).resolve().parents[2]
 
 
 class _CompanyFactsSourceClosure(NamedTuple):
     members: tuple[str, ...]
     absent_initializers: tuple[str, ...]
-    dynamic_packages: tuple[str, ...]
     external_modules: tuple[str, ...]
 
 
@@ -208,7 +203,6 @@ def _companyfacts_import_closure(repo_root: Path) -> _CompanyFactsSourceClosure:
     pending = ["pipeline.sec_xbrl"]
     members: set[str] = set()
     absent_initializers: set[str] = set()
-    dynamic_packages: set[str] = set()
     external: set[str] = set()
 
     def resolve(module: str) -> Path | None:
@@ -246,101 +240,6 @@ def _companyfacts_import_closure(repo_root: Path) -> _CompanyFactsSourceClosure:
                 prefix = "" if parts[0] in {"src", "execution"} else "src/"
                 absent_initializers.add(prefix + "/".join(parts[:length]) + "/__init__.py")
 
-    def governed_registry(tree: ast.Module, call: ast.Call, module: str) -> None:
-        # Support this exact literal registry and call shape. Other loaders need
-        # an explicit policy change; their targets must never escape the subtree.
-        registries = [
-            item
-            for item in tree.body
-            if isinstance(item, ast.AnnAssign)
-            and isinstance(item.target, ast.Name)
-            and item.target.id == "_ADAPTERS"
-        ]
-        functions = [
-            item
-            for item in tree.body
-            if isinstance(item, ast.FunctionDef) and item.name == "discover_documents"
-        ]
-        if len(registries) != 1 or len(functions) != 1:
-            raise CompanyFactsContractError("CompanyFacts dynamic registry shape is not governed")
-        registry = registries[0].value
-        if (
-            not isinstance(registry, ast.Dict)
-            or not registry.values
-            or any(
-                not isinstance(value, ast.Constant)
-                or not isinstance(value.value, str)
-                or not value.value.startswith(module + ".")
-                for value in registry.values
-            )
-            or any(
-                not isinstance(key, ast.Constant) or not isinstance(key.value, str)
-                for key in registry.keys
-            )
-        ):
-            raise CompanyFactsContractError(
-                "CompanyFacts dynamic registry target is outside its namespace"
-            )
-        function = functions[0]
-        assignments = [
-            item
-            for item in ast.walk(function)
-            if isinstance(item, ast.Assign)
-            and any(
-                isinstance(target, ast.Name) and target.id == "mod_name" for target in item.targets
-            )
-        ]
-        if (
-            [argument.arg for argument in (*function.args.posonlyargs, *function.args.args)]
-            != ["config"]
-            or function.args.vararg is not None
-            or function.args.kwarg is not None
-            or bool(function.args.kwonlyargs)
-            or call not in tuple(ast.walk(function))
-            or len(call.args) != 1
-            or call.keywords
-            or not isinstance(call.func, ast.Attribute)
-            or not isinstance(call.func.value, ast.Name)
-            or call.func.value.id != "importlib"
-            or call.func.attr != "import_module"
-            or not isinstance(call.args[0], ast.Name)
-            or call.args[0].id != "mod_name"
-            or len(assignments) != 1
-            or sum(
-                isinstance(item, ast.Name)
-                and item.id == "mod_name"
-                and isinstance(item.ctx, ast.Store)
-                for item in ast.walk(function)
-            )
-            != 1
-            or ast.unparse(assignments[0].value) != "_ADAPTERS.get(config.platform)"
-        ):
-            raise CompanyFactsContractError("CompanyFacts dynamic registry call is not governed")
-        parents = {
-            child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)
-        }
-        for reference in ast.walk(tree):
-            if not isinstance(reference, ast.Name) or reference.id != "_ADAPTERS":
-                continue
-            if isinstance(reference.ctx, ast.Store):
-                if parents.get(reference) is registries[0]:
-                    continue
-                raise CompanyFactsContractError(
-                    "CompanyFacts dynamic registry mutation is not governed"
-                )
-            parent = parents.get(reference)
-            if isinstance(parent, ast.Attribute) and parent.attr == "get":
-                continue
-            if (
-                isinstance(parent, ast.Call)
-                and isinstance(parent.func, ast.Name)
-                and parent.func.id == "sorted"
-            ):
-                continue
-            raise CompanyFactsContractError(
-                "CompanyFacts dynamic registry mutation is not governed"
-            )
-
     while pending:
         module = pending.pop()
         target = resolve(module)
@@ -354,7 +253,7 @@ def _companyfacts_import_closure(repo_root: Path) -> _CompanyFactsSourceClosure:
             raise CompanyFactsContractError("CompanyFacts import closure exceeds its bound")
         try:
             _companyfacts_source_manifest(
-                repo_root, _CompanyFactsSourceClosure((relative,), (), (), ())
+                repo_root, _CompanyFactsSourceClosure((relative,), (), ())
             )
             tree = ast.parse(target.read_bytes(), filename=relative)
         except (OSError, SyntaxError, ValueError):
@@ -418,24 +317,11 @@ def _companyfacts_import_closure(repo_root: Path) -> _CompanyFactsSourceClosure:
                         "CompanyFacts relative dynamic import is not governed"
                     )
                 add(node.args[0].value)
-            elif module in _COMPANYFACTS_DYNAMIC_IMPORT_PACKAGES:
-                governed_registry(tree, node, module)
-                package_path = "src/" + _COMPANYFACTS_DYNAMIC_IMPORT_PACKAGES[module]
-                dynamic_packages.add(package_path)
-                for path in (repo_root / package_path).rglob("*.py"):
-                    name = (
-                        path.relative_to(repo_root / "src")
-                        .with_suffix("")
-                        .as_posix()
-                        .replace("/", ".")
-                    )
-                    add(name.removesuffix(".__init__"))
             else:
                 raise CompanyFactsContractError("CompanyFacts dynamic import is not governed")
     return _CompanyFactsSourceClosure(
         tuple(sorted(members)),
         tuple(sorted(absent_initializers)),
-        tuple(sorted(dynamic_packages)),
         tuple(sorted(external)),
     )
 
@@ -444,10 +330,6 @@ def _companyfacts_source_manifest(
     repo_root: Path, closure: _CompanyFactsSourceClosure
 ) -> tuple[tuple[str, int, int, int], ...]:
     members = set(closure.members)
-    for package in closure.dynamic_packages:
-        members.update(
-            path.relative_to(repo_root).as_posix() for path in (repo_root / package).rglob("*.py")
-        )
     if len(members) > 256:
         raise CompanyFactsContractError("CompanyFacts import closure exceeds its bound")
     # Check each parent once. A directory swapped for a link must not reuse the
@@ -581,7 +463,9 @@ def companyfacts_extractor_sha256(conn: sqlite3.Connection) -> str:
     """Bind skips to the extractor import closure, live schema, and active specs.
 
     Source/vendor identity is lazy and cached for this process. Relevant source
-    edits require restart. Unrelated UI/execution files and installed packages
+    edits require restart. The owned import closure is limited to 256 files;
+    its real-repository regression checks that bound and its SEC-only boundary.
+    Unrelated UI/execution files and installed packages
     do not invalidate receipts. The full schema stays conservative: any migration
     requires one reprocessing pass. Active specs and schema remain per-call inputs.
     """
@@ -1890,13 +1774,13 @@ def _flag_non_actual_unit(
     being persisted with a wrong unit. Best-effort — a missing validation_issues
     table (pre-0006 fixture) must never break ingest."""
     try:
-        record_validation_issue(
+        record_issue(
             conn,
             run_id=run_id,
             source_doc_id=source_doc_id,
             ticker=ticker,
-            severity=Severity.WARN,
-            rule=ValidationRule.UNIT_MISMATCH,
+            severity=Severity.WARN.value,
+            rule=ValidationRule.UNIT_MISMATCH.value,
             raw_value=(
                 f"{line_item} @ {period_end[:10]}: SEC unit_code '{unit_code}' "
                 f"resolved to non-standard unit '{resolved_unit}'"
@@ -2116,7 +2000,7 @@ def select_facts_from_companyfacts(
                     # §7); records the winning tag for the ladder pick. Row =
                     # the XBRL tag, column = the fact's own end date — both
                     # already local at this call site.
-                    locator = locators.table_cell_locator(
+                    locator = table_cell_locator(
                         section=None,
                         table_title=namespace,
                         row_label=tag_name,

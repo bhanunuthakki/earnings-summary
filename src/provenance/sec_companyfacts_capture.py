@@ -348,7 +348,14 @@ def record_companyfacts_unchanged_observation(
     created = 0
     replayed = 0
     created, replayed = _account(ledger.persist(observation).created, created, replayed)
-    link = _document_observation_link(request, observation, document, link_kind="retrieval")
+    link = _document_observation_link(
+        request,
+        observation,
+        document,
+        link_kind=(
+            "primary" if document.observation_id == observation.observation_id else "retrieval"
+        ),
+    )
     created, replayed = _account(link_ledger.persist_link(link).created, created, replayed)
     return SecCompanyFactsCaptureResult(
         blob_sha256=request.blob_sha256,

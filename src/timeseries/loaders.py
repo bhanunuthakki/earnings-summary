@@ -48,6 +48,7 @@ from compute.kpi_resolver import (
     semantic_series_identity_sql,
 )
 from compute.kpi_revision_shadow_census import verify_snapshot_evidence
+from models.documents import SOURCE_QUALITY_TIER_RANK as SOURCE_QUALITY_TIER_RANK
 from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import (
@@ -91,21 +92,6 @@ class SourcedObservation:
 
 
 DEFAULT_PERIOD_TYPES: tuple[str, ...] = ("Q1", "Q2", "Q3", "Q4")
-
-# Higher rank wins. Mirrors the documents.source_quality_tier enum
-# in migration 0053. Unknown tiers fall back to 0 (lowest).
-#
-# `s1_provisional` is audited data lifted from an S-1 before the issuer files
-# any 10-Q/10-K; it sits at rank 0 so a real FMP/SEC row always supersedes it
-# for the same logical key. (Rank 0 also happens to be the unknown-tier
-# fallback, but it's listed explicitly so the intent survives a refactor.)
-SOURCE_QUALITY_TIER_RANK: dict[str, int] = {
-    "sec_official": 4,
-    "fmp_normalized": 3,
-    "llm_extracted": 2,
-    "yfinance_fallback": 1,
-    "s1_provisional": 0,
-}
 
 
 def _resolve_db_path(repo_root: Path | None, db_path: Path | None) -> Path | None:

@@ -1067,35 +1067,6 @@ def test_unrelated_ui_execution_and_package_edits_do_not_cancel_receipts(
     clear_pin()
 
 
-def test_governed_dynamic_adapter_addition_requires_restart_and_changes_identity(
-    tmp_path: Path,
-) -> None:
-    _source_fixture(tmp_path)
-    (tmp_path / "src/pipeline/confidence.py").write_text(
-        "import ir_pipeline.discover\nscore = 1\n", encoding="utf-8"
-    )
-    package = tmp_path / "src/ir_pipeline/discover"
-    package.mkdir(parents=True)
-    (package / "__init__.py").write_text(
-        "import importlib\n_ADAPTERS: dict[str, str] = {'existing': 'ir_pipeline.discover.existing'}\ndef discover_documents(config):\n    mod_name = _ADAPTERS.get(config.platform)\n    return importlib.import_module(mod_name)\n",
-        encoding="utf-8",
-    )
-    (package / "existing.py").write_text("VALUE = 1\n", encoding="utf-8")
-    source_identity: Callable[[Path], str] = getattr(
-        sec_xbrl, "_companyfacts_source_artifact_sha256"
-    )
-    clear_pin: Callable[[], None] = getattr(
-        getattr(sec_xbrl, "_companyfacts_pinned_source_identity"), "cache_clear"
-    )
-    baseline = source_identity(tmp_path)
-    (package / "new_adapter.py").write_text("VALUE = 2\n", encoding="utf-8")
-    with pytest.raises(sec_xbrl.CompanyFactsContractError, match="restart required"):
-        source_identity(tmp_path)
-    clear_pin()
-    assert source_identity(tmp_path) != baseline
-    clear_pin()
-
-
 def test_unknown_dynamic_loader_refuses_identity(tmp_path: Path) -> None:
     _source_fixture(tmp_path)
     (tmp_path / "src/pipeline/confidence.py").write_text(
@@ -1225,29 +1196,82 @@ def test_live_vendor_without_distribution_authority_fails_closed(
         versions(("synthetic_unavailable_vendor",))
 
 
-@pytest.mark.parametrize("mutation", [False, True])
-def test_governed_dynamic_registry_rejects_outside_adapter_target(
-    tmp_path: Path, mutation: bool
-) -> None:
-    _source_fixture(tmp_path)
-    (tmp_path / "src/pipeline/confidence.py").write_text(
-        "import ir_pipeline.discover\nscore = 1\n", encoding="utf-8"
+def test_real_repository_extractor_closure_has_only_sec_runtime_dependencies() -> None:
+    """Check the actual graph; synthetic ingestion fixtures cannot prove this boundary."""
+    root = Path(__file__).resolve().parents[1]
+    closure: Callable[[Path], tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]] = getattr(
+        sec_xbrl, "_companyfacts_import_closure"
     )
-    package = tmp_path / "src/ir_pipeline/discover"
-    package.mkdir(parents=True)
-    (package / "__init__.py").write_text(
-        (
-            "import importlib\n_ADAPTERS: dict[str, str] = {'adapter': 'ir_pipeline.discover.existing'}\n_ADAPTERS = external_registry\ndef discover_documents(config):\n    mod_name = _ADAPTERS.get(config.platform)\n    return importlib.import_module(mod_name)\n"
-            if mutation
-            else "import importlib\n_ADAPTERS: dict[str, str] = {'adapter': 'outside_package.adapter'}\ndef discover_documents(config):\n    mod_name = _ADAPTERS.get(config.platform)\n    return importlib.import_module(mod_name)\n"
+    members, _, external_modules = closure(root)
+    assert {
+        "src/pipeline/sec_xbrl.py",
+        "src/pipeline/confidence.py",
+        "src/pipeline/validation_issue_store.py",
+        "src/credibility/observations.py",
+        "src/models/documents.py",
+        "src/models/facts.py",
+        "src/provenance/issuer_registry.py",
+        "src/provenance/financial_fact_resolution.py",
+        "src/provenance/sec_companyfacts_capture.py",
+    } <= set(members)
+    assert len(members) <= 256
+    assert not any(
+        member.startswith(("src/ir_pipeline/", "src/timeseries/", "src/compute/"))
+        or member in {"src/pipeline/locators.py", "src/pipeline/kpi_persistence.py"}
+        or "/pdf_" in member
+        for member in members
+    )
+    assert not {"playwright", "fitz", "pymupdf"} & set(external_modules)
+    assert {"pydantic", "requests"} <= set(external_modules)
+    assert (
+        len(
+            sec_xbrl.verifier_source_artifact_sha256(
+                {member: root / member for member in members}, file_count_limit=256
+            )
+        )
+        == 64
+    )
+
+
+def test_lightweight_domain_owners_preserve_locator_and_tier_reexports() -> None:
+    from credibility import observations
+    from models import documents, facts
+    from pipeline import locators
+    from timeseries import loaders
+
+    assert documents.SOURCE_QUALITY_TIER_RANK is loaders.SOURCE_QUALITY_TIER_RANK
+    assert documents.SOURCE_QUALITY_TIER_RANK is observations.SOURCE_QUALITY_TIER_RANK
+    assert documents.SOURCE_QUALITY_TIER_RANK == {
+        "sec_official": 4,
+        "fmp_normalized": 3,
+        "llm_extracted": 2,
+        "yfinance_fallback": 1,
+        "s1_provisional": 0,
+    }
+    assert facts.table_cell_locator is locators.table_cell_locator
+    locator = facts.table_cell_locator(
+        section=None,
+        table_title="us-gaap",
+        row_label="Revenues",
+        column_header="2026-06-30",
+        json_path="facts.us-gaap.Revenues.units.USD[0]",
+        accession_number=ACCESSION_ONE,
+        cell_value_as_extracted="120",
+    )
+    assert locator == facts.FactLocator(
+        section=None,
+        json_path="facts.us-gaap.Revenues.units.USD[0]",
+        accession_number=ACCESSION_ONE,
+        locator_version=2,
+        kind=facts.LocatorKind.FMP_JSON_TABLE,
+        table_cell=facts.TableCellRef(
+            section=None,
+            table_title="us-gaap",
+            row_label="Revenues",
+            row_axis_path=[],
+            column_header="2026-06-30",
+            cell_value_as_extracted="120",
+            json_path="facts.us-gaap.Revenues.units.USD[0]",
         ),
-        encoding="utf-8",
+        verbatim_snippet="120",
     )
-    source_identity: Callable[[Path], str] = getattr(
-        sec_xbrl, "_companyfacts_source_artifact_sha256"
-    )
-    with pytest.raises(
-        sec_xbrl.CompanyFactsContractError,
-        match="mutation is not governed" if mutation else "outside its namespace",
-    ):
-        source_identity(tmp_path)
