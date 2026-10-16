@@ -379,3 +379,41 @@ The clock correction adds 43lines only in the existing Ask owner. Module
 count, fan-out ceiling, cycle shapes, size buckets and duplication measures
 stay unchanged. The unchanged owning static gate again passes at 2,810 files,
 2,050 inherited diagnostics and 1,854 suppressions.
+
+
+## Follow-up to the independent source review
+
+The independent Opus 5.5 review of `77d2334f` returned 82/100 and no blocking
+defect. All 22 CI jobs passed on that exact source, including all five native
+Windows process-tree cases. The owner's acceptance threshold remains separate;
+that score did not authorize merge.
+
+The review identified an availability error in retrieval scope planning.
+An inventory can contain a positively governed document from a family whose
+obligation is no longer selected. That extra document must not block an active
+family's run. Scope planning now distinguishes those additional documents from
+selected expected documents. A selected document still must match the exact
+issuer, entity, family and document version. A mismatch reports
+`reporting_document_scope_widened`; an absent obligation binding retains
+`expected_document_binding_missing`. The canonical reporting projection remains
+unchanged. The real projection regression fails on the earlier source and the
+15 owning tests pass with the correction.
+
+The Ask adapter now has one fact path. Its internal emitter requires the
+selected entry, source bundle and recording bound that production already
+supplies. The former single-fact fallback is removed. Real-source regressions
+now call the production batch adapter; only trace admission is doubled for
+the isolated preverified trace fixture. Two published facts prove ranked
+output order and one verification of their shared publication. Reordered,
+missing and invalid owner results block the complete response. A malformed
+result with neither bundle nor failure now raises the typed verification
+error instead of a raw `KeyError`. Literal unit semantics remain usable;
+separate unavailable scale and status fields remain unavailable. All 93
+owning context, route and cache tests pass, with strict checks clean.
+This proves the adapter boundary, not full retrieval promotion or LLM quality.
+
+The follow-up reduces production source by five noncomment lines relative to
+`77d2334f`: 552,099 lines across the same 1,451 modules. Module-size buckets,
+maximum fan-out, dependency cycles and duplicate measures do not regress.
+The unchanged architecture and duplication gate passes. Its baseline and
+scanner are unchanged.

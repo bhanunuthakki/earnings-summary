@@ -12,6 +12,7 @@ import pytest
 
 import ask.engine as engine
 import ask.sealed_retrieval as sealed
+import provenance.fact_read_model as fact_reader
 from ask.audit_store import canonical_json, digest_text
 from ask.sealed_retrieval import (
     PromotionVerificationError,
@@ -26,17 +27,23 @@ from ask.sealed_retrieval import (
     execute_sealed_retrieval_plan,
 )
 from provenance.fact_plane_v2 import FactCellV2, ReportedFactObservationV2
-from provenance.fact_read_model import FactReadModel
+from provenance.fact_read_model import FactReadModel, ProvenanceBundleRead
 from provenance.population_completeness import PopulationTemporalScope
 from provenance.source_fact_publication import (
     PublicationVerificationError,
+    VerifiedSourceFactPublication,
     record_commitment,
     verify_source_fact_publication,
 )
 from provenance.source_fact_repository import ReportedSourceFact, SourceFactRepository
 from search.heterogeneous_retrieval import HeterogeneousRetrievalReceipt
 from tests.test_source_fact_repository import STAMP as FACT_STAMP
-from tests.test_source_fact_repository import make_publication, seed_foundation
+from tests.test_source_fact_repository import (
+    make_cell,
+    make_publication,
+    make_report,
+    seed_foundation,
+)
 
 
 class _AdmitCutoverCall(Protocol):
@@ -47,19 +54,6 @@ class _IndexRootCall(Protocol):
     def __call__(
         self, conn: sqlite3.Connection, *, vector_index_run_id: str, configured_root: Path
     ) -> None: ...
-
-
-class _FactItemCall(Protocol):
-    def __call__(
-        self,
-        conn: sqlite3.Connection,
-        receipt: HeterogeneousRetrievalReceipt,
-        candidate: sqlite3.Row,
-        result: dict[str, object],
-        *,
-        n: int,
-        cutoff: datetime,
-    ) -> SealedEvidenceItem: ...
 
 
 # Keep internal seams typed for tests without exporting application APIs.
@@ -75,7 +69,6 @@ _admit_current_population_cutover = cast(
 )
 _verify_index_root = cast(_IndexRootCall, vars(sealed)["_verify_index_root"])
 _canonical_artifact_sha256 = cast(Callable[[Path], str], vars(sealed)["_canonical_artifact_sha256"])
-_fact_item = cast(_FactItemCall, vars(sealed)["_fact_item"])
 _evidence_block = cast(
     Callable[[Sequence[SealedEvidenceItem]], tuple[tuple[str, ...], str]],
     vars(engine)["_sealed_evidence_block"],
@@ -731,6 +724,7 @@ class _FactContextClocks:
     observation_knowledge_at: datetime | None = None
     recorded_at: datetime = FACT_STAMP
     observed_through: datetime = FACT_STAMP
+    fact_count: int = 1
 
 
 @pytest.fixture
@@ -798,6 +792,27 @@ def published_fact_context(
             ),
         }
     )
+    if clocks.fact_count == 2:
+        extra_cell = FactCellV2.model_validate(
+            {
+                **make_cell("batch", period_end=FACT_STAMP - timedelta(days=1)).model_dump(
+                    mode="json"
+                ),
+                "unit_key": "USD_millions",
+                "semantic_key_sha256": None,
+            }
+        )
+        publication = publication.model_copy(
+            update={
+                "reported_facts": (
+                    *publication.reported_facts,
+                    ReportedSourceFact(
+                        cell=extra_cell,
+                        observation=make_report(extra_cell, "batch", numeric_value="200"),
+                    ),
+                )
+            }
+        )
     SourceFactRepository(conn).publish(publication)
     conn.execute(
         "CREATE TEMP TABLE canonical_fact_projection_generations AS "
@@ -812,58 +827,62 @@ def published_fact_context(
         "(generation_id,cutoff_at,recorded_at) VALUES ('generation',?,?)",
         (FACT_STAMP.isoformat(), clocks.observed_through.isoformat()),
     )
-    payload: dict[str, object] = {
-        "canonical_metric_cell_id": "canonical-revenue",
-        "canonical_metric_name": "Revenue",
-        "canonical_search_text": "Revenue | Exact selected revenue definition",
-        "canonical_resolution_revision_id": "resolution-selected",
-        "change_kind": "upsert",
-        "metric_definition_revision_id": "definition-selected-2",
-        "metric_definition_commitment_sha256": "b" * 64,
-        "binding_revision_id": "binding-selected",
-        "binding_commitment_sha256": "c" * 64,
-        "selected_observation_id": observation.observation_id,
-        "source_fact_cell_id": cell.fact_cell_id,
-        "source_record_commitment_sha256": record_commitment(
-            conn, "fact_observation", observation.observation_id
-        ),
-        "reporting_entity_id": cell.reporting_entity_id,
-        "scope_security_id": cell.scope_security_id,
-        "period_kind": cell.period_kind,
-        "period_start": cell.period_start.isoformat() if cell.period_start else None,
-        "period_end": cell.period_end.isoformat(),
-        "dimensions_json": "[]",
-        "unit_key": cell.unit_key,
-        "currency": cell.currency,
-        "canonical_value": "100",
-        "value_kind": "numeric",
-        "evidence_document_version_id": observation.document_version_id,
-        "evidence_node_id": observation.evidence_node_id,
-        "evidence_locator_json": canonical_json(observation.source_locator.root),
-        "evidence_locator_sha256": observation.source_locator_sha256,
-    }
-    entry_json = canonical_json(payload)
-    entry = {
-        **payload,
-        "generation_id": "generation",
-        "entry_ordinal": 0,
-        "entry_json": entry_json,
-        "entry_sha256": digest_text(entry_json),
-    }
-    columns = tuple(entry)
-    conn.execute(
-        "INSERT INTO canonical_fact_projection_entries ("
-        + ",".join(columns)
-        + ") VALUES ("
-        + ",".join("?" for _ in columns)
-        + ")",
-        tuple(entry[column] for column in columns),
-    )
+    for ordinal, fact in enumerate(publication.reported_facts):
+        cell, observation = fact.cell, fact.observation
+        payload: dict[str, object] = {
+            "canonical_metric_cell_id": "canonical-revenue"
+            if ordinal == 0
+            else "canonical-revenue-batch",
+            "canonical_metric_name": "Revenue",
+            "canonical_search_text": "Revenue | Exact selected revenue definition",
+            "canonical_resolution_revision_id": "resolution-selected",
+            "change_kind": "upsert",
+            "metric_definition_revision_id": "definition-selected-2",
+            "metric_definition_commitment_sha256": "b" * 64,
+            "binding_revision_id": "binding-selected",
+            "binding_commitment_sha256": "c" * 64,
+            "selected_observation_id": observation.observation_id,
+            "source_fact_cell_id": cell.fact_cell_id,
+            "source_record_commitment_sha256": record_commitment(
+                conn, "fact_observation", observation.observation_id
+            ),
+            "reporting_entity_id": cell.reporting_entity_id,
+            "scope_security_id": cell.scope_security_id,
+            "period_kind": cell.period_kind,
+            "period_start": cell.period_start.isoformat() if cell.period_start else None,
+            "period_end": cell.period_end.isoformat(),
+            "dimensions_json": "[]",
+            "unit_key": cell.unit_key,
+            "currency": cell.currency,
+            "canonical_value": str(observation.numeric_value),
+            "value_kind": "numeric",
+            "evidence_document_version_id": observation.document_version_id,
+            "evidence_node_id": observation.evidence_node_id,
+            "evidence_locator_json": canonical_json(observation.source_locator.root),
+            "evidence_locator_sha256": observation.source_locator_sha256,
+        }
+        entry_json = canonical_json(payload)
+        entry = {
+            **payload,
+            "generation_id": "generation",
+            "entry_ordinal": ordinal,
+            "entry_json": entry_json,
+            "entry_sha256": digest_text(entry_json),
+        }
+        columns = tuple(entry)
+        conn.execute(
+            "INSERT INTO canonical_fact_projection_entries ("
+            + ",".join(columns)
+            + ") VALUES ("
+            + ",".join("?" for _ in columns)
+            + ")",
+            tuple(entry[column] for column in columns),
+        )
     conn.commit()
     conn.row_factory = sqlite3.Row
     candidate = conn.execute(
-        "SELECT 'canonical-revenue' AS candidate_id, ? AS source_commitment_sha256",
-        (digest_text(entry_json),),
+        "SELECT canonical_metric_cell_id AS candidate_id, entry_sha256 AS source_commitment_sha256 "
+        "FROM canonical_fact_projection_entries ORDER BY entry_ordinal LIMIT 1"
     ).fetchone()
     receipt = HeterogeneousRetrievalReceipt(
         trace_id="trace",
@@ -883,11 +902,213 @@ def published_fact_context(
         conn.close()
 
 
+def _load_fact_items(
+    conn: sqlite3.Connection,
+    receipt: HeterogeneousRetrievalReceipt,
+    candidates: Sequence[sqlite3.Row],
+    *,
+    cutoff: datetime,
+    start_number: int = 1,
+    results: tuple[dict[str, object], ...] | None = None,
+) -> tuple[SealedEvidenceItem, ...]:
+    """Exercise the production batch adapter with only trace admission doubled.
+
+    TEMP trace and projection rows are preverified adapter inputs. Native source
+    publications, batch admission, context checks and evidence DTOs are real.
+    This does not prove full retrieval promotion or sealed Ask readiness.
+    """
+    conn.executescript(
+        """
+        CREATE TEMP TABLE heterogeneous_retrieval_trace_headers (
+            trace_id TEXT, cutoff_at TEXT
+        );
+        CREATE TEMP TABLE heterogeneous_retrieval_trace_results (
+            trace_id TEXT, result_ordinal INTEGER, candidate_ordinal INTEGER
+        );
+        CREATE TEMP TABLE heterogeneous_retrieval_trace_candidates (
+            trace_id TEXT, candidate_ordinal INTEGER, candidate_kind TEXT,
+            candidate_id TEXT, source_commitment_sha256 TEXT
+        );
+        """
+    )
+    ordered_results = results or tuple(
+        {"result_ordinal": index, "final_score": str(len(candidates) - index)}
+        for index in range(len(candidates))
+    )
+    trace_receipt = receipt.model_copy(
+        update={
+            "candidate_count": len(candidates),
+            "result_count": len(candidates),
+            "ordered_results": ordered_results,
+        }
+    )
+    conn.execute(
+        "INSERT INTO heterogeneous_retrieval_trace_headers VALUES (?,?)",
+        (receipt.trace_id, cutoff.isoformat()),
+    )
+    for index, (candidate, result) in enumerate(zip(candidates, ordered_results, strict=True)):
+        conn.execute(
+            "INSERT INTO heterogeneous_retrieval_trace_results VALUES (?,?,?)",
+            (receipt.trace_id, result["result_ordinal"], index),
+        )
+        conn.execute(
+            "INSERT INTO heterogeneous_retrieval_trace_candidates VALUES (?,?,?,?,?)",
+            (
+                receipt.trace_id,
+                index,
+                "fact",
+                candidate["candidate_id"],
+                candidate["source_commitment_sha256"],
+            ),
+        )
+
+    def preverified_trace(
+        source_conn: sqlite3.Connection, requested_trace_id: str, **_kwargs: object
+    ) -> HeterogeneousRetrievalReceipt:
+        assert source_conn is conn
+        assert requested_trace_id == receipt.trace_id
+        return trace_receipt
+
+    with pytest.MonkeyPatch.context() as trace_admission:
+        trace_admission.setattr(sealed, "verify_heterogeneous_retrieval_trace", preverified_trace)
+        return sealed.load_verified_trace_evidence(
+            conn, receipt.trace_id, start_number=start_number
+        )
+
+
+def _load_fact_item(
+    conn: sqlite3.Connection,
+    receipt: HeterogeneousRetrievalReceipt,
+    candidate: sqlite3.Row,
+    result: dict[str, object],
+    *,
+    n: int,
+    cutoff: datetime,
+) -> SealedEvidenceItem:
+    return _load_fact_items(
+        conn, receipt, (candidate,), cutoff=cutoff, start_number=n, results=(result,)
+    )[0]
+
+
+@pytest.mark.parametrize(
+    "published_fact_context", [_FactContextClocks(fact_count=2)], indirect=True
+)
+def test_fact_batch_keeps_rank_order_and_verifies_shared_publication_once(
+    published_fact_context: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn, receipt, _ = published_fact_context
+    # Rank differs from projection order. Both observations belong to the same
+    # real immutable publication and share its complete verification.
+    candidates = conn.execute(
+        "SELECT canonical_metric_cell_id AS candidate_id, entry_sha256 AS source_commitment_sha256 "
+        "FROM canonical_fact_projection_entries ORDER BY entry_ordinal DESC"
+    ).fetchall()
+    verifications: list[tuple[str, datetime]] = []
+
+    def counted_verification(
+        source_conn: sqlite3.Connection,
+        *,
+        publication_id: str,
+        cutoff: datetime,
+        observed_through: datetime | None = None,
+    ) -> VerifiedSourceFactPublication:
+        verifications.append((publication_id, cutoff))
+        return verify_source_fact_publication(
+            source_conn,
+            publication_id=publication_id,
+            cutoff=cutoff,
+            observed_through=observed_through,
+        )
+
+    monkeypatch.setattr(fact_reader, "verify_source_fact_publication", counted_verification)
+    items = _load_fact_items(conn, receipt, candidates, cutoff=FACT_STAMP, start_number=7)
+    assert tuple(item.candidate_id for item in items) == (
+        "canonical-revenue-batch",
+        "canonical-revenue",
+    )
+    assert tuple(item.n for item in items) == (7, 8)
+    assert tuple(item.result_ordinal for item in items) == (0, 1)
+    assert tuple(item.value for item in items) == ("200 USD USD_millions", "100 USD USD_millions")
+    contexts = tuple(
+        json.loads(item.text.split("Verified financial context: ", 1)[1]) for item in items
+    )
+    assert tuple(context["selected_observation_id"] for context in contexts) == (
+        "observation-batch",
+        "observation-1",
+    )
+    assert verifications == [("publication-1", FACT_STAMP)]
+    fragments, block = _evidence_block(items)
+    assert len(fragments) == 2
+    assert all(item.text in fragment for item, fragment in zip(items, fragments, strict=True))
+    assert block == "\n\n".join(fragments)
+
+
+@pytest.mark.parametrize(
+    "published_fact_context", [_FactContextClocks(fact_count=2)], indirect=True
+)
+@pytest.mark.parametrize("fault", ["reordered", "missing_result", "missing_bundle"])
+def test_fact_batch_rejects_malformed_owner_results_without_partial_evidence(
+    published_fact_context: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row],
+    monkeypatch: pytest.MonkeyPatch,
+    fault: str,
+) -> None:
+    conn, receipt, _ = published_fact_context
+    candidates = conn.execute(
+        "SELECT canonical_metric_cell_id AS candidate_id, entry_sha256 AS source_commitment_sha256 "
+        "FROM canonical_fact_projection_entries ORDER BY entry_ordinal"
+    ).fetchall()
+    real_batch = FactReadModel.provenance_bundles
+
+    def malformed_batch(
+        reader: FactReadModel, observation_ids: tuple[str, ...], *, cutoff: datetime
+    ) -> tuple[ProvenanceBundleRead, ...]:
+        reads = real_batch(reader, observation_ids, cutoff=cutoff)
+        assert len(reads) == 2
+        assert all(read.bundle is not None and read.failure is None for read in reads)
+        if fault == "reordered":
+            return tuple(reversed(reads))
+        if fault == "missing_result":
+            return reads[:1]
+        # The owner schema forbids this state. Check the adapter's defensive
+        # boundary if a reader defect returns neither bundle nor failure.
+        return (reads[0], reads[1].model_copy(update={"bundle": None}))
+
+    monkeypatch.setattr(FactReadModel, "provenance_bundles", malformed_batch)
+    with pytest.raises(PromotionVerificationError, match="selected fact context") as failure:
+        _load_fact_items(conn, receipt, candidates, cutoff=FACT_STAMP)
+    assert failure.value.reason_code == "trace_verification_failed"
+
+
+def test_fact_batch_rejects_real_source_admission_failure(
+    published_fact_context: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row],
+) -> None:
+    conn, receipt, candidate = published_fact_context
+    conn.execute(
+        "CREATE TEMP TABLE source_fact_publication_members AS "
+        "SELECT * FROM main.source_fact_publication_members WHERE 0"
+    )
+    reads = FactReadModel(conn).provenance_bundles(("observation-1",), cutoff=FACT_STAMP)
+    assert reads[0].bundle is None
+    assert reads[0].failure is not None
+    assert reads[0].failure.reason_code == "record_not_in_sealed_publication"
+    with pytest.raises(PromotionVerificationError, match="selected fact context") as failure:
+        _load_fact_item(
+            conn,
+            receipt,
+            candidate,
+            {"result_ordinal": 0, "final_score": "1"},
+            n=1,
+            cutoff=FACT_STAMP,
+        )
+    assert failure.value.reason_code == "trace_verification_failed"
+
+
 def test_fact_prompt_preserves_verified_financial_context(
     published_fact_context: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row],
 ) -> None:
     conn, receipt, candidate = published_fact_context
-    item = _fact_item(
+    item = _load_fact_item(
         conn, receipt, candidate, {"result_ordinal": 0, "final_score": "1"}, n=1, cutoff=FACT_STAMP
     )
     assert item.text.splitlines()[0] == "Revenue: 100 USD USD_millions (2026-07-27)"
@@ -910,6 +1131,11 @@ def test_fact_prompt_preserves_verified_financial_context(
     assert '"explicit_member_name":"CloudMember"' in item.text
     assert '"actual_guidance_consensus_status":"unavailable"' in item.text
     assert '"scale":"unavailable"' in item.text
+    assert (
+        "Preserve the explicit reported unit and its literal meaning, including USD_millions"
+        in item.text
+    )
+    assert "does not erase scale expressed in the unit" in item.text
     assert "does not establish complete decision-grade financial context" in item.text
     assert "storage_uri" not in item.text
     fragments, block = _evidence_block((item,))
@@ -953,7 +1179,7 @@ def test_fact_context_rejects_projection_source_mismatch(
         (digest_text(entry_json),),
     ).fetchone()
     with pytest.raises(PromotionVerificationError, match="selected fact context"):
-        _fact_item(
+        _load_fact_item(
             conn,
             receipt,
             candidate,
@@ -971,7 +1197,7 @@ def test_fact_context_rejects_revision_substitution_under_selected_commitment(
     conn, receipt, candidate = published_fact_context
     conn.execute(f"UPDATE canonical_fact_projection_entries SET {column}='newer-unselected'")
     with pytest.raises(PromotionVerificationError, match="selected fact context"):
-        _fact_item(
+        _load_fact_item(
             conn,
             receipt,
             candidate,
@@ -986,7 +1212,7 @@ def test_fact_context_rejects_source_unavailable_at_selected_cutoff(
 ) -> None:
     conn, receipt, candidate = published_fact_context
     with pytest.raises(PromotionVerificationError, match="selected fact context"):
-        _fact_item(
+        _load_fact_item(
             conn,
             receipt,
             candidate,
@@ -1016,7 +1242,7 @@ def test_selected_fact_context_preserves_distinct_knowledge_and_observation_cloc
     )
     assert owner.cutoff == FACT_STAMP
     assert owner.recorded_at == observed
-    item = _fact_item(
+    item = _load_fact_item(
         conn, receipt, candidate, {"result_ordinal": 0, "final_score": "1"}, n=1, cutoff=FACT_STAMP
     )
     assert item.value == "100 USD USD_millions"
@@ -1052,7 +1278,7 @@ def test_inherited_fact_context_uses_verified_head_clock_not_ancestor_or_query_t
     receipt = receipt.model_copy(
         update={"fact_generation_id": "head", "recorded_at": FACT_STAMP + timedelta(days=1)}
     )
-    item = _fact_item(
+    item = _load_fact_item(
         conn, receipt, candidate, {"result_ordinal": 0, "final_score": "1"}, n=1, cutoff=FACT_STAMP
     )
     context = json.loads(item.text.split("Verified financial context: ", 1)[1])
@@ -1089,7 +1315,7 @@ def test_fact_context_rejects_source_just_outside_exact_projection_clocks(
     # A later query time cannot widen the immutable projection's observation bound.
     receipt = receipt.model_copy(update={"recorded_at": FACT_STAMP + timedelta(days=1)})
     with pytest.raises(PromotionVerificationError, match="selected fact context"):
-        _fact_item(
+        _load_fact_item(
             conn,
             receipt,
             candidate,
@@ -1118,7 +1344,7 @@ def test_fact_context_rejects_invalid_head_clock_coordinates(
         (replacement.isoformat(),),
     )
     with pytest.raises(PromotionVerificationError, match="selected fact context"):
-        _fact_item(
+        _load_fact_item(
             conn,
             receipt,
             candidate,
@@ -1169,7 +1395,7 @@ def test_fact_context_checks_cell_and_observation_knowledge_independently(
     assert (bundle.cell.knowledge_at > FACT_STAMP) == (future_field == "cell")
     assert (bundle.observation.knowledge_at > FACT_STAMP) == (future_field == "observation")
     with pytest.raises(PromotionVerificationError, match="selected fact context"):
-        _fact_item(
+        _load_fact_item(
             conn,
             receipt,
             candidate,

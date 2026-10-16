@@ -1483,7 +1483,7 @@ def load_verified_trace_evidence(
         )
         bundles = {read.observation_id: read.bundle for read in reads if read.bundle is not None}
         if tuple(read.observation_id for read in reads) != observation_ids or any(
-            read.failure is not None for read in reads
+            read.failure is not None or read.bundle is None for read in reads
         ):
             raise ValueError("selected fact context lacks sealed source admission")
     except (FactAdmissionError, ValueError, RuntimeError, sqlite3.Error) as exc:
@@ -1676,31 +1676,22 @@ def _fact_item(
     *,
     n: int,
     cutoff: datetime,
-    entry: sqlite3.Row | None = None,
-    source_bundle: ProvenanceBundle | None = None,
-    observed_through: datetime | None = None,
+    entry: sqlite3.Row,
+    source_bundle: ProvenanceBundle,
+    observed_through: datetime,
 ) -> SealedEvidenceItem:
-    row = _fact_entry(conn, receipt, candidate) if entry is None else entry
+    row = entry
     document = _document_metadata(
         conn, document_version_id=str(row["evidence_document_version_id"])
     )
     try:
-        observed = (
-            _fact_context_observed_through(conn, receipt, cutoff=cutoff)
-            if observed_through is None
-            else observed_through
-        )
-        if source_bundle is None:
-            source_bundle = FactReadModel(conn).provenance_bundle(
-                str(row["selected_observation_id"]), cutoff=observed
-            )
         context = _verified_fact_context(
             conn,
             row,
             source_bundle,
             source_observation_id=str(document["source_observation_id"]),
             knowledge_cutoff=cutoff,
-            observed_through=observed,
+            observed_through=observed_through,
         )
     except (FactAdmissionError, ValueError, RuntimeError, sqlite3.Error) as exc:
         raise PromotionVerificationError(
@@ -1838,8 +1829,10 @@ def _verified_fact_context(
         "actual_guidance_consensus_status": "unavailable",
         "scale": "unavailable",
         "context_limitations": (
-            "Native source records do not separately encode actual/guidance/consensus or scale. "
-            "Do not infer those qualifiers from reported status, currency, unit, or decimals. "
+            "Preserve the explicit reported unit and its literal meaning, including USD_millions. "
+            "A separate scale field is unavailable; this does not erase scale expressed in the unit. "
+            "Do not infer an additional scale or actual/guidance/consensus status from currency, "
+            "decimals, or reported observation status. Preserve unknown accounting context as unknown. "
             "Unsupported qualifier claims remain unavailable; this context does not establish "
             "complete decision-grade financial context."
         ),

@@ -632,7 +632,7 @@ def test_positive_reporting_projection_requires_exact_obligation_scope(scope_err
             ),
         )
         assert result.lexical_manifest_count == 0
-        assert result.failed_reason_counts == {"expected_document_binding_missing": 1}
+        assert result.failed_reason_counts == {"reporting_document_scope_widened": 1}
         assert conn.execute("SELECT COUNT(*) FROM search_corpus_manifests").fetchone()[0] == 0
     finally:
         conn.close()
@@ -762,8 +762,9 @@ def test_population_stops_at_first_failed_issuer_without_advancing_cursor(
     assert result.last_issuer_id is None
 
 
+@pytest.mark.parametrize("include_expired_family", [False, True])
 def test_real_reporting_inventory_populates_exact_canonical_lexical_projection(
-    tmp_path: Path, migrated_db: Callable[..., Path]
+    tmp_path: Path, migrated_db: Callable[..., Path], include_expired_family: bool
 ) -> None:
     database = migrated_db(tmp_path / "retrieval.db")
     conn = connect_sqlite(database, role=SQLiteConnectionRole.WRITER)
@@ -885,7 +886,110 @@ def test_real_reporting_inventory_populates_exact_canonical_lexical_projection(
             ),
         )
         assert extraction.documents_extracted == 1
+        extra_components: tuple[InventoryComponentImport, ...] = ()
+        extra_expected: tuple[ExpectedDocumentImport, ...] = ()
         cutoff = extraction.run_at + timedelta(seconds=1)
+        if include_expired_family:
+            release_raw = b"<html><body><h1>Earnings release</h1><p>Revenue and customer demand improved in the reported year.</p></body></html>"
+            release_path = tmp_path / "earnings.html"
+            release_path.write_bytes(release_raw)
+            release_digest = hashlib.sha256(release_raw).hexdigest()
+            ledger.persist(
+                ContentBlob(
+                    sha256=release_digest,
+                    byte_size=len(release_raw),
+                    media_type="text/html",
+                    storage_uri=release_path.as_uri(),
+                    recorded_at=STAMP,
+                )
+            )
+            ledger.persist(
+                SourceObservation(
+                    observation_id="release-source",
+                    idempotency_key="release-source",
+                    source_kind="issuer",
+                    source_url="https://synthetic.invalid/earnings",
+                    blob_sha256=release_digest,
+                    source_published_at=STAMP,
+                    filing_at=None,
+                    accepted_at=None,
+                    observed_at=STAMP,
+                    retrieved_at=STAMP,
+                    retrieval_config_sha256=SHA,
+                    collector_code_version="synthetic@1",
+                )
+            )
+            ledger.persist(
+                DocumentVersion(
+                    document_version_id="release-document",
+                    document_key="SYNTH:earnings",
+                    version_sequence=1,
+                    observation_id="release-source",
+                    blob_sha256=release_digest,
+                    issuer_id="issuer",
+                    ticker="SYNTH",
+                    document_type="earnings_release",
+                    form_type="release",
+                    language="en",
+                    recorded_at=STAMP,
+                )
+            )
+            conn.commit()
+            release_extraction = backfill_fulltext_evidence(
+                conn,
+                FullTextBackfillRequest(
+                    repo_root=tmp_path,
+                    content_roots=(tmp_path,),
+                    apply=True,
+                    document_version_id="release-document",
+                    source_lane="evidence_native",
+                ),
+            )
+            assert release_extraction.documents_extracted == 1
+            cutoff = max(cutoff, release_extraction.run_at + timedelta(seconds=1))
+            registry.persist(
+                SourceObligationRevision(
+                    obligation_revision_id="expired-obligation",
+                    idempotency_key="expired-obligation",
+                    obligation_key="expired-obligation",
+                    revision=1,
+                    issuer_id="issuer",
+                    reporting_entity_id="entity",
+                    authority_kind="issuer_publisher",
+                    document_family="issuer_earnings_materials",
+                    obligation_state="optional",
+                    completeness_rule="publisher_surface_exhaustion",
+                    active_from=STAMP,
+                    active_to=cutoff + timedelta(seconds=1),
+                    decision_kind="deterministic",
+                    reason_code="finite_synthetic_source",
+                    reason_details=(("scope", "captured family expires after inventory sealing"),),
+                    effective_at=STAMP,
+                    knowledge_at=STAMP,
+                    recorded_at=STAMP,
+                )
+            )
+            extra_components = (
+                InventoryComponentImport(
+                    component_key="earnings",
+                    component_kind="primary",
+                    source_url="https://synthetic.invalid/earnings",
+                    source_observation_id="release-source",
+                    outcome="succeeded",
+                    ordinal=1,
+                ),
+            )
+            extra_expected = (
+                ExpectedDocumentImport(
+                    expected_document_key="earnings",
+                    source_kind="ir_document",
+                    document_type="earnings_release",
+                    form_type="release",
+                    source_url="https://synthetic.invalid/earnings",
+                    expectation_basis="authoritative",
+                ),
+            )
+        conn.commit()
         inventory_result = reconcile_source_coverage(
             conn,
             SourceCoverageImport(
@@ -913,6 +1017,7 @@ def test_real_reporting_inventory_populates_exact_canonical_lexical_projection(
                         outcome="succeeded",
                         ordinal=0,
                     ),
+                    *extra_components,
                 ),
                 expected_documents=(
                     ExpectedDocumentImport(
@@ -923,11 +1028,14 @@ def test_real_reporting_inventory_populates_exact_canonical_lexical_projection(
                         source_url="https://synthetic.invalid/presentation",
                         expectation_basis="authoritative",
                     ),
+                    *extra_expected,
                 ),
                 apply=True,
             ),
         )
         conn.commit()
+        if include_expired_family:
+            cutoff += timedelta(seconds=2)
         canonical, snapshots = load_coverage_expected_document_inventory(
             conn,
             ("inventory",),
@@ -935,6 +1043,7 @@ def test_real_reporting_inventory_populates_exact_canonical_lexical_projection(
             observed_through=cutoff,
         )
         assert snapshots == (inventory_result.snapshot_id,)
+        assert len(canonical.expected_documents) == (2 if include_expired_family else 1)
         assert canonical.expected_documents[0].reason == (
             "reporting:governed_ir_reporting_document:coverage:extracted"
         )
@@ -954,18 +1063,24 @@ def test_real_reporting_inventory_populates_exact_canonical_lexical_projection(
         assert result.ready_issuer_count == 0
         assert result.issuer_results[0].reason_codes == ("retrieval_qualification_not_run",)
         assert conn.execute("SELECT COUNT(*) FROM search_chunks").fetchone()[0] > 0
-        membership = conn.execute(
+        memberships = conn.execute(
             "SELECT expected_document_key,document_version_id,membership_status,reason "
-            "FROM search_corpus_document_memberships"
-        ).fetchone()
-        assert tuple(membership) == (
-            "presentation",
-            "document",
-            "included",
-            canonical.expected_documents[0].reason,
-        )
-        forged = canonical.expected_documents[0].model_copy(
-            update={"reason": "coverage:captured:invented"}
+            "FROM search_corpus_document_memberships ORDER BY expected_document_key"
+        ).fetchall()
+        assert [tuple(row) for row in memberships] == [
+            (
+                item.expected_document_key,
+                item.document_version_id,
+                item.membership_status,
+                item.reason,
+            )
+            for item in canonical.expected_documents
+        ]
+        forged = tuple(
+            item.model_copy(update={"reason": "coverage:captured:invented"})
+            if item.expected_document_key == "presentation"
+            else item
+            for item in canonical.expected_documents
         )
         with pytest.raises(ValueError, match="exact governed reporting projection"):
             build_grounded_search_corpus(
@@ -976,7 +1091,7 @@ def test_real_reporting_inventory_populates_exact_canonical_lexical_projection(
                     selector_code_version="test@1",
                     recorded_at=cutoff,
                     knowledge_cutoff=cutoff,
-                    expected_documents=(forged,),
+                    expected_documents=forged,
                     source_inventory_snapshot_ids=snapshots,
                     required_extractor_names=("fulltext-evidence-backfill",),
                     apply=False,

@@ -895,29 +895,33 @@ def _scope_plan(
                     decision.model_dump(mode="json") for decision in projection.reporting_decisions
                 ]
                 active_families = {obligation.document_family for obligation in obligations}
+                bound_expected_ids = {document[0] for document in bound_documents}
                 for decision in projection.reporting_decisions:
                     if (
-                        decision.outcome == "governed_reporting"
-                        and decision.coverage_status in _POSITIVE_COVERAGE
-                        and (
-                            decision.issuer_id != issuer_id
-                            or (
-                                decision.expected_document_id,
-                                decision.document_version_id,
-                                decision.document_family,
-                                decision.reporting_entity_id,
-                            )
-                            not in bound_documents
-                        )
+                        decision.outcome != "governed_reporting"
+                        or decision.coverage_status not in _POSITIVE_COVERAGE
                     ):
-                        reasons.add("expected_document_binding_missing")
+                        continue
+                    # An unselected family can share the inventory. A selected
+                    # expected document must still match its exact family and entity.
+                    if (
+                        decision.document_family not in active_families
+                        and decision.expected_document_id not in bound_expected_ids
+                    ):
                         continue
                     if (
-                        decision.outcome == "governed_reporting"
-                        and decision.document_family in active_families
-                        and decision.coverage_status in _POSITIVE_COVERAGE
-                        and decision.document_version_id is not None
+                        decision.issuer_id != issuer_id
+                        or (
+                            decision.expected_document_id,
+                            decision.document_version_id,
+                            decision.document_family,
+                            decision.reporting_entity_id,
+                        )
+                        not in bound_documents
                     ):
+                        reasons.add("reporting_document_scope_widened")
+                        continue
+                    if decision.document_version_id is not None:
                         family_documents.setdefault(str(decision.document_family), set()).add(
                             decision.document_version_id
                         )
