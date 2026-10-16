@@ -42,3 +42,16 @@ def test_verifier_identity_rejects_noncanonical_logical_names(
     source.write_text("pass\n", encoding="utf-8")
     with pytest.raises(ValueError, match="logical name"):
         verifier_source_artifact_sha256({logical_name: source})
+
+
+def test_verifier_identity_keeps_default_bound_and_allows_explicit_import_closure(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.py"
+    source.write_text("POLICY = 1\n", encoding="utf-8")
+    members = {f"closure/member-{index}.py": source for index in range(65)}
+    with pytest.raises(ValueError, match="file count"):
+        verifier_source_artifact_sha256(members)
+    assert verifier_source_artifact_sha256(members, file_count_limit=256)
+    with pytest.raises(ValueError, match="file-count limit"):
+        verifier_source_artifact_sha256(members, file_count_limit=257)

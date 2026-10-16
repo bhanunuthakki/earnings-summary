@@ -8,6 +8,7 @@ lives in ``tests/test_daily_fetch_brief_cross_process_writers.py``.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import sqlite3
@@ -16,6 +17,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -613,10 +615,12 @@ def test_unreadable_gate_owner_is_never_evicted(
     with monkeypatch.context() as patch:
         patch.setattr(Path, "read_text", read_text)
         with (
-            pytest.raises(OSError),
+            pytest.raises(WriterGateHeldError) as caught,
             hold_writer_gate(db, owner="unknown-contender", timeout_s=0.05),
         ):
             pytest.fail("unreadable ownership must not authorize takeover")
+    assert caught.value.holder["ownership_state"] == "unknown"
+    assert caught.value.holder["read_error_type"] == type(error).__name__
     assert gate.read_text(encoding="utf-8") == original
     with (
         pytest.raises(WriterGateHeldError),
@@ -628,3 +632,146 @@ def test_unreadable_gate_owner_is_never_evicted(
     with hold_writer_gate(db, owner="after-proved-death", timeout_s=0.1):
         pass
     assert not gate.exists()
+
+
+@pytest.mark.parametrize("recovery", [True, False])
+def test_unknown_gate_read_waits_for_recovery_or_shared_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recovery: bool
+) -> None:
+    db = tmp_path / "read-recovery.db"
+    gate = writer_gate_path_for(db)
+    original = json.dumps({"pid": -1, "token": "proved-dead-but-unreadable"})
+    gate.write_text(original, encoding="utf-8")
+    real_read = Path.read_text
+    attempts = 0
+
+    def read_text(path: Path, encoding: str | None = None, errors: str | None = None) -> str:
+        nonlocal attempts
+        if path == gate:
+            attempts += 1
+            if not recovery or attempts <= 2:
+                raise PermissionError("controlled sharing violation")
+        return real_read(path, encoding=encoding, errors=errors)
+
+    started = time.monotonic()
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_text", read_text)
+        if recovery:
+            with hold_writer_gate(db, owner="after-readable", timeout_s=0.08, poll_s=0.005):
+                assert attempts >= 3
+        else:
+            with (
+                pytest.raises(WriterGateHeldError) as caught,
+                hold_writer_gate(db, owner="blocked", timeout_s=0.05, poll_s=0.005),
+            ):
+                pytest.fail("unknown owner cannot be replaced")
+            assert caught.value.holder["ownership_state"] == "unknown"
+            assert 0.04 <= time.monotonic() - started < 0.5
+    if not recovery:
+        assert gate.read_text(encoding="utf-8") == original
+    else:
+        assert not gate.exists()
+    assert attempts >= 3
+
+
+@pytest.mark.parametrize("recovery", [True, False])
+def test_gate_release_retries_unknown_read_without_losing_primary_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recovery: bool
+) -> None:
+    db = tmp_path / "release-read.db"
+    gate = writer_gate_path_for(db)
+    real_read = Path.read_text
+    original_error = ValueError("controlled body failure")
+    attempts = 0
+    monkeypatch.setattr(db_writer_gate, "WRITER_GATE_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(db_writer_gate, "WRITER_GATE_POLL_S", 0.005)
+
+    def read_text(path: Path, encoding: str | None = None, errors: str | None = None) -> str:
+        nonlocal attempts
+        if path == gate:
+            attempts += 1
+            if not recovery or attempts <= 2:
+                raise PermissionError("controlled close sharing violation")
+        return real_read(path, encoding=encoding, errors=errors)
+
+    with pytest.raises(ValueError) as caught, hold_writer_gate(db, owner="releasing"):
+        monkeypatch.setattr(Path, "read_text", read_text)
+        raise original_error
+    assert caught.value is original_error
+    assert attempts >= 3
+    if recovery:
+        assert not gate.exists()
+    else:
+        assert gate.exists()
+        assert any(
+            "WriterGateHeldError" in note for note in getattr(original_error, "__notes__", [])
+        )
+
+
+@pytest.mark.parametrize(
+    "case", ["success", "body", "not_acquired", "unlock", "body_unlock", "close", "body_close"]
+)
+def test_windows_transition_guard_explicit_unlock_and_error_precedence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    events: list[tuple[str, int]] = []
+    primary = ValueError("controlled guard body failure")
+    cleanup = OSError("controlled guard cleanup failure")
+
+    def locking(_descriptor: int, mode: int, count: int) -> None:
+        assert count == 1
+        events.append(("locking", mode))
+        if case == "not_acquired" and mode == 1:
+            raise OSError(errno.EACCES, "controlled contention")
+        if case in {"unlock", "body_unlock"} and mode == 2:
+            raise cleanup
+
+    def close(_descriptor: int) -> None:
+        events.append(("close", 17))
+        if case in {"close", "body_close"}:
+            raise cleanup
+
+    def opened(_path: object, _flags: int, _mode: int) -> int:
+        return 17
+
+    def seek(_descriptor: int, offset: int, _whence: int) -> int:
+        events.append(("seek", offset))
+        return offset
+
+    monkeypatch.setitem(
+        sys.modules, "msvcrt", SimpleNamespace(LK_NBLCK=1, LK_UNLCK=2, locking=locking)
+    )
+    monkeypatch.setattr(
+        db_writer_gate,
+        "os",
+        SimpleNamespace(
+            **{**vars(os), "name": "nt", "open": opened, "close": close, "lseek": seek}
+        ),
+    )
+
+    def action() -> None:
+        with getattr(db_writer_gate, "_ownership_transition_guard")(
+            tmp_path / "native.lock", deadline=time.monotonic()
+        ):
+            events.append(("body", 0))
+            if case in {"body", "body_unlock", "body_close"}:
+                raise primary
+
+    if case == "not_acquired":
+        with pytest.raises(WriterGateHeldError):
+            action()
+        assert events == [("locking", 1), ("close", 17)]
+        return
+    if case in {"body", "body_unlock", "body_close"}:
+        with pytest.raises(ValueError) as caught:
+            action()
+        assert caught.value is primary
+        if case != "body":
+            assert any("OSError" in note for note in getattr(primary, "__notes__", []))
+    elif case in {"unlock", "close"}:
+        with pytest.raises(OSError) as caught:
+            action()
+        assert caught.value is cleanup
+    else:
+        action()
+    assert events == [("locking", 1), ("body", 0), ("seek", 0), ("locking", 2), ("close", 17)]

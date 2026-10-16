@@ -66,9 +66,8 @@ def isolated_extractor_runtime_artifact(tmp_path: Path, monkeypatch: pytest.Monk
     """Use controlled source bytes, independent of edits in the shared checkout."""
     root = tmp_path / "runtime-artifact"
     _source_fixture(root)
-    source_manifest: Callable[[Path], object] = getattr(sec_xbrl, "_companyfacts_source_manifest")
     monkeypatch.setattr(sec_xbrl, "_COMPANYFACTS_SOURCE_ROOT", root)
-    monkeypatch.setattr(sec_xbrl, "_COMPANYFACTS_IMPORT_MANIFEST", source_manifest(root))
+    monkeypatch.setattr(sec_xbrl, "_COMPANYFACTS_IMPORT_STARTED_AT_NS", time.time_ns())
 
 
 def _database(
@@ -921,16 +920,17 @@ def test_changed_extractor_reprocesses_identical_payload_before_skip(
 
 
 def _source_fixture(root: Path) -> None:
-    for name in (
-        "src/pipeline/sec_xbrl.py",
-        "src/pipeline/confidence.py",
-        "execution/fetch_sec_xbrl.py",
-        "alembic/versions/0001_schema.py",
-    ):
+    files = {
+        "src/pipeline/sec_xbrl.py": "from pipeline.confidence import score\n",
+        "src/pipeline/confidence.py": "score = 1\n",
+        "src/ui/unrelated.py": "# unrelated UI source\n",
+        "execution/fetch_sec_xbrl.py": "# unrelated execution adapter\n",
+        "alembic/versions/0001_schema.py": "# migration source is separate from live schema\n",
+    }
+    for name, body in files.items():
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("# synthetic runtime source\n", encoding="utf-8")
-    (root / "requirements.lock").write_text("# synthetic dependency lock\n", encoding="utf-8")
+        path.write_text(body, encoding="utf-8")
 
 
 def test_extractor_source_identity_covers_omitted_dependency_and_requires_restart(
@@ -952,7 +952,7 @@ def test_extractor_source_identity_covers_omitted_dependency_and_requires_restar
     # A fresh process loads the new source and establishes a different identity.
     clear_pin()
     assert source_identity(tmp_path) != baseline
-    (tmp_path / "requirements.lock").unlink()
+    (tmp_path / "src/pipeline/confidence.py").unlink()
     with pytest.raises(sec_xbrl.CompanyFactsContractError, match="unavailable"):
         source_identity(tmp_path)
     clear_pin()
@@ -969,19 +969,23 @@ def test_extractor_static_source_digest_is_reused_and_future_modules_are_covered
         getattr(sec_xbrl, "_companyfacts_pinned_source_identity"), "cache_clear"
     )
     calls = 0
-    real_digest = sec_xbrl.repair_executor_code_sha256
+    real_digest = sec_xbrl.verifier_source_artifact_sha256
 
-    def counted_digest(root: Path) -> str:
+    def counted_digest(files: Mapping[str, Path], *, file_count_limit: int = 64) -> str:
         nonlocal calls
         calls += 1
-        return real_digest(root)
+        return real_digest(files, file_count_limit=file_count_limit)
 
-    monkeypatch.setattr(sec_xbrl, "repair_executor_code_sha256", counted_digest)
+    monkeypatch.setattr(sec_xbrl, "verifier_source_artifact_sha256", counted_digest)
     baseline = source_identity(tmp_path)
     assert source_identity(tmp_path) == baseline
     assert source_identity(tmp_path) == baseline
     assert calls == 1
     (tmp_path / "src/new_dependency.py").write_text("# new runtime dependency\n", encoding="utf-8")
+    assert source_identity(tmp_path) == baseline
+    (tmp_path / "src/pipeline/confidence.py").write_text(
+        "import new_dependency\nscore = 1\n", encoding="utf-8"
+    )
     with pytest.raises(sec_xbrl.CompanyFactsContractError, match="restart required"):
         source_identity(tmp_path)
     assert calls == 1
@@ -1007,12 +1011,11 @@ def test_extractor_refuses_source_changed_before_first_ticker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _source_fixture(tmp_path)
-    source_manifest: Callable[[Path], object] = getattr(sec_xbrl, "_companyfacts_source_manifest")
     source_identity: Callable[[Path], str] = getattr(
         sec_xbrl, "_companyfacts_source_artifact_sha256"
     )
     monkeypatch.setattr(sec_xbrl, "_COMPANYFACTS_SOURCE_ROOT", tmp_path)
-    monkeypatch.setattr(sec_xbrl, "_COMPANYFACTS_IMPORT_MANIFEST", source_manifest(tmp_path))
+    monkeypatch.setattr(sec_xbrl, "_COMPANYFACTS_IMPORT_STARTED_AT_NS", time.time_ns())
     (tmp_path / "src/pipeline/confidence.py").write_text(
         "# edited after import\n", encoding="utf-8"
     )
@@ -1034,4 +1037,217 @@ def test_extractor_source_identity_refuses_linked_source_member(tmp_path: Path) 
         sec_xbrl, "_companyfacts_source_artifact_sha256"
     )
     with pytest.raises(sec_xbrl.CompanyFactsContractError, match="unavailable"):
+        source_identity(tmp_path)
+
+
+def test_unrelated_ui_execution_and_package_edits_do_not_cancel_receipts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _source_fixture(tmp_path)
+    source_identity: Callable[[Path], str] = getattr(
+        sec_xbrl, "_companyfacts_source_artifact_sha256"
+    )
+    clear_pin: Callable[[], None] = getattr(
+        getattr(sec_xbrl, "_companyfacts_pinned_source_identity"), "cache_clear"
+    )
+    baseline = source_identity(tmp_path)
+    (tmp_path / "src/ui/unrelated.py").write_text("# UI redesign\n", encoding="utf-8")
+    (tmp_path / "execution/fetch_sec_xbrl.py").write_text("# CLI redesign\n", encoding="utf-8")
+    assert source_identity(tmp_path) == baseline
+    original_owners = sec_xbrl.importlib.metadata.packages_distributions
+
+    def with_unrelated_package() -> dict[str, list[str]]:
+        return dict(original_owners(), unrelated_ui_vendor=["unrelated-ui-vendor"])
+
+    monkeypatch.setattr(
+        sec_xbrl.importlib.metadata, "packages_distributions", with_unrelated_package
+    )
+    clear_pin()
+    assert source_identity(tmp_path) == baseline
+    clear_pin()
+
+
+def test_governed_dynamic_adapter_addition_requires_restart_and_changes_identity(
+    tmp_path: Path,
+) -> None:
+    _source_fixture(tmp_path)
+    (tmp_path / "src/pipeline/confidence.py").write_text(
+        "import ir_pipeline.discover\nscore = 1\n", encoding="utf-8"
+    )
+    package = tmp_path / "src/ir_pipeline/discover"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        "import importlib\n_ADAPTERS: dict[str, str] = {'existing': 'ir_pipeline.discover.existing'}\ndef discover_documents(config):\n    mod_name = _ADAPTERS.get(config.platform)\n    return importlib.import_module(mod_name)\n",
+        encoding="utf-8",
+    )
+    (package / "existing.py").write_text("VALUE = 1\n", encoding="utf-8")
+    source_identity: Callable[[Path], str] = getattr(
+        sec_xbrl, "_companyfacts_source_artifact_sha256"
+    )
+    clear_pin: Callable[[], None] = getattr(
+        getattr(sec_xbrl, "_companyfacts_pinned_source_identity"), "cache_clear"
+    )
+    baseline = source_identity(tmp_path)
+    (package / "new_adapter.py").write_text("VALUE = 2\n", encoding="utf-8")
+    with pytest.raises(sec_xbrl.CompanyFactsContractError, match="restart required"):
+        source_identity(tmp_path)
+    clear_pin()
+    assert source_identity(tmp_path) != baseline
+    clear_pin()
+
+
+def test_unknown_dynamic_loader_refuses_identity(tmp_path: Path) -> None:
+    _source_fixture(tmp_path)
+    (tmp_path / "src/pipeline/confidence.py").write_text(
+        "import importlib\ndef load(name):\n    return importlib.import_module(name)\n",
+        encoding="utf-8",
+    )
+    source_identity: Callable[[Path], str] = getattr(
+        sec_xbrl, "_companyfacts_source_artifact_sha256"
+    )
+    with pytest.raises(sec_xbrl.CompanyFactsContractError, match="dynamic import is not governed"):
+        source_identity(tmp_path)
+
+
+def test_new_package_initializer_requires_restart(tmp_path: Path) -> None:
+    _source_fixture(tmp_path)
+    source_identity: Callable[[Path], str] = getattr(
+        sec_xbrl, "_companyfacts_source_artifact_sha256"
+    )
+    baseline = source_identity(tmp_path)
+    assert baseline
+    (tmp_path / "src/pipeline/__init__.py").write_text("POLICY = 2\n", encoding="utf-8")
+    with pytest.raises(sec_xbrl.CompanyFactsContractError, match="restart required"):
+        source_identity(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "loader",
+    [
+        "import importlib\nimportlib.import_module('.adapter', package='pipeline')\n",
+        "from importlib.util import spec_from_file_location as make_spec\nmake_spec('module', 'file.py')\n",
+        "from importlib.machinery import SourceFileLoader as Loader\nLoader('module', 'file.py')\n",
+    ],
+)
+def test_unsupported_dynamic_import_forms_fail_closed(tmp_path: Path, loader: str) -> None:
+    _source_fixture(tmp_path)
+    (tmp_path / "src/pipeline/confidence.py").write_text(loader, encoding="utf-8")
+    source_identity: Callable[[Path], str] = getattr(
+        sec_xbrl, "_companyfacts_source_artifact_sha256"
+    )
+    with pytest.raises(sec_xbrl.CompanyFactsContractError, match="not governed"):
+        source_identity(tmp_path)
+
+
+def test_warm_source_identity_rejects_replaced_parent_link(tmp_path: Path) -> None:
+    _source_fixture(tmp_path)
+    source_identity: Callable[[Path], str] = getattr(
+        sec_xbrl, "_companyfacts_source_artifact_sha256"
+    )
+    assert source_identity(tmp_path)
+    package = tmp_path / "src/pipeline"
+    moved = tmp_path / "same-source-files"
+    package.rename(moved)
+    try:
+        package.symlink_to(moved, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory links are unavailable")
+    with pytest.raises(sec_xbrl.CompanyFactsContractError, match="parent is unavailable"):
+        source_identity(tmp_path)
+
+
+def test_vendor_identity_excludes_inactive_extras_and_unrelated_distributions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FixtureDistribution(sec_xbrl.importlib.metadata.Distribution):
+        def __init__(self, name: str, version: str, requirements: list[str]) -> None:
+            self.fixture_name = name
+            self.fixture_version = version
+            self.fixture_requirements = requirements
+
+        @property
+        def version(self) -> str:
+            return self.fixture_version
+
+        @property
+        def requires(self) -> list[str]:
+            return self.fixture_requirements
+
+    distributions = {
+        "extractor-vendor": FixtureDistribution(
+            "extractor-vendor", "1", ["semantic-dependency>=1", "unused-ui-vendor; extra == 'dev'"]
+        ),
+        "semantic-dependency": FixtureDistribution("semantic-dependency", "1", []),
+        "unused-ui-vendor": FixtureDistribution("unused-ui-vendor", "1", []),
+    }
+    requested: list[str] = []
+
+    def distribution(name: str) -> sec_xbrl.importlib.metadata.Distribution:
+        requested.append(name)
+        return distributions[name]
+
+    def owners() -> dict[str, list[str]]:
+        return {
+            "synthetic_extractor_vendor": ["extractor-vendor"],
+            "unused_ui_vendor": ["unused-ui-vendor"],
+        }
+
+    monkeypatch.setattr(sec_xbrl.importlib.metadata, "distribution", distribution)
+    monkeypatch.setattr(sec_xbrl.importlib.metadata, "packages_distributions", owners)
+    versions: Callable[[tuple[str, ...]], dict[str, object]] = getattr(
+        sec_xbrl, "_companyfacts_dependency_versions"
+    )
+    baseline = versions(("synthetic_extractor_vendor",))
+    assert "unused-ui-vendor" not in requested
+    distributions["unused-ui-vendor"] = FixtureDistribution("unused-ui-vendor", "2", [])
+    assert versions(("synthetic_extractor_vendor",)) == baseline
+    distributions["semantic-dependency"] = FixtureDistribution("semantic-dependency", "2", [])
+    assert versions(("synthetic_extractor_vendor",)) != baseline
+
+
+def test_live_vendor_without_distribution_authority_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    versions: Callable[[tuple[str, ...]], dict[str, object]] = getattr(
+        sec_xbrl, "_companyfacts_dependency_versions"
+    )
+
+    def no_distribution_owners() -> dict[str, list[str]]:
+        return {}
+
+    monkeypatch.setattr(
+        sec_xbrl.importlib.metadata, "packages_distributions", no_distribution_owners
+    )
+    absent = versions(("synthetic_unavailable_vendor",))
+    assert absent["missing_external_modules"] == ("synthetic_unavailable_vendor",)
+    monkeypatch.setitem(sys.modules, "synthetic_unavailable_vendor", sec_xbrl)
+    with pytest.raises(sec_xbrl.CompanyFactsContractError, match="lacks distribution authority"):
+        versions(("synthetic_unavailable_vendor",))
+
+
+@pytest.mark.parametrize("mutation", [False, True])
+def test_governed_dynamic_registry_rejects_outside_adapter_target(
+    tmp_path: Path, mutation: bool
+) -> None:
+    _source_fixture(tmp_path)
+    (tmp_path / "src/pipeline/confidence.py").write_text(
+        "import ir_pipeline.discover\nscore = 1\n", encoding="utf-8"
+    )
+    package = tmp_path / "src/ir_pipeline/discover"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text(
+        (
+            "import importlib\n_ADAPTERS: dict[str, str] = {'adapter': 'ir_pipeline.discover.existing'}\n_ADAPTERS = external_registry\ndef discover_documents(config):\n    mod_name = _ADAPTERS.get(config.platform)\n    return importlib.import_module(mod_name)\n"
+            if mutation
+            else "import importlib\n_ADAPTERS: dict[str, str] = {'adapter': 'outside_package.adapter'}\ndef discover_documents(config):\n    mod_name = _ADAPTERS.get(config.platform)\n    return importlib.import_module(mod_name)\n"
+        ),
+        encoding="utf-8",
+    )
+    source_identity: Callable[[Path], str] = getattr(
+        sec_xbrl, "_companyfacts_source_artifact_sha256"
+    )
+    with pytest.raises(
+        sec_xbrl.CompanyFactsContractError,
+        match="mutation is not governed" if mutation else "outside its namespace",
+    ):
         source_identity(tmp_path)

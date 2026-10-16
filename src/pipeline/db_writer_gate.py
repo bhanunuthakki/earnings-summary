@@ -170,6 +170,14 @@ def _read_holder(lock_path: Path) -> dict[str, object] | None:
     return cast("dict[str, object]", parsed) if isinstance(parsed, dict) else None
 
 
+def _holder_context(lock_path: Path) -> dict[str, object] | None:
+    """Return read evidence; an unavailable read never means a stale owner."""
+    try:
+        return _read_holder(lock_path)
+    except OSError as error:
+        return {"ownership_state": "unknown", "read_error_type": type(error).__name__}
+
+
 @dataclass(slots=True)
 class _HeldGate:
     """A claimed writer-gate lock file. Release exactly once."""
@@ -179,16 +187,28 @@ class _HeldGate:
     token: str
 
     def release(self) -> None:
-        with _ownership_transition_guard(
-            self.lock_path, deadline=time.monotonic() + WRITER_GATE_TIMEOUT_S
-        ):
-            holder = _read_holder(self.lock_path)
-            # Compare the exact claim under the same guard used by takeover.
-            # A successor in this process may have the same PID, but not token.
-            if holder is None or holder.get("pid") != self.pid or holder.get("token") != self.token:
-                return
-            with suppress(FileNotFoundError):
-                self.lock_path.unlink()
+        deadline = time.monotonic() + WRITER_GATE_TIMEOUT_S
+        while True:
+            with _ownership_transition_guard(self.lock_path, deadline=deadline):
+                holder = _holder_context(self.lock_path)
+                if holder is None:
+                    return
+                if holder.get("ownership_state") != "unknown":
+                    # Never remove a successor, including one with the same PID.
+                    if holder.get("pid") != self.pid or holder.get("token") != self.token:
+                        return
+                    try:
+                        self.lock_path.unlink()
+                    except FileNotFoundError:
+                        return
+                    except OSError as error:
+                        holder = {**holder, "release_error_type": type(error).__name__}
+                    else:
+                        return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise WriterGateHeldError(self.lock_path, holder) from None
+            time.sleep(min(WRITER_GATE_POLL_S, remaining))
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +301,7 @@ def _path_state(key: str) -> _PathGateState:
 
 def _fail_loud(key: str) -> None:
     lock_path = Path(key).with_name(Path(key).name + WRITER_GATE_SUFFIX)
-    raise WriterGateHeldError(lock_path, _read_holder(lock_path)) from None
+    raise WriterGateHeldError(lock_path, _holder_context(lock_path)) from None
 
 
 def _acquire_path_gate(
@@ -428,6 +448,8 @@ def _ownership_transition_guard(lock_path: Path, *, deadline: float) -> Generato
     """
     guard_path = lock_path.with_name(f"{lock_path.name}.guard")
     descriptor = os.open(guard_path, os.O_CREAT | os.O_RDWR, 0o600)
+    acquired = False
+    primary_error: BaseException | None = None
     try:
         while True:
             try:
@@ -444,14 +466,38 @@ def _ownership_transition_guard(lock_path: Path, *, deadline: float) -> Generato
                     raise
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise WriterGateHeldError(lock_path, _read_holder(lock_path)) from None
+                    raise WriterGateHeldError(lock_path, _holder_context(lock_path)) from None
                 time.sleep(min(WRITER_GATE_POLL_S, remaining))
             else:
+                acquired = True
                 break
         yield
+    except BaseException as error:
+        primary_error = error
+        raise
     finally:
-        # Closing releases the byte-range lock/flock even after an exception.
-        os.close(descriptor)
+        cleanup_error: BaseException | None = None
+        try:
+            if acquired and os.name == "nt":
+                import msvcrt
+
+                # CRT regions must be unlocked before close; close remains a
+                # last-resort release when explicit unlock itself fails.
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        except BaseException as error:
+            cleanup_error = error
+        try:
+            os.close(descriptor)
+        except BaseException as error:
+            if cleanup_error is None:
+                cleanup_error = error
+            else:
+                cleanup_error.add_note(f"guard close also failed: {type(error).__name__}")
+        if cleanup_error is not None:
+            if primary_error is None:
+                raise cleanup_error
+            primary_error.add_note(f"guard cleanup also failed: {type(cleanup_error).__name__}")
 
 
 def _acquire_writer_gate(
@@ -488,12 +534,15 @@ def _acquire_writer_gate(
                 except FileExistsError:
                     # Read identity and liveness only while ownership changes
                     # are excluded. A pre-guard observation is never authority.
-                    holder = _read_holder(lock_path)
+                    holder = _holder_context(lock_path)
                     holder_pid = holder.get("pid") if holder else None
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise WriterGateHeldError(lock_path, holder) from None
-                    if not (isinstance(holder_pid, int) and pid_is_alive(holder_pid)):
+                    unknown = holder is not None and holder.get("ownership_state") == "unknown"
+                    if not unknown and not (
+                        isinstance(holder_pid, int) and pid_is_alive(holder_pid)
+                    ):
                         try:
                             lock_path.unlink()
                         except FileNotFoundError:
@@ -509,7 +558,7 @@ def _acquire_writer_gate(
                     return _HeldGate(lock_path, os.getpid(), token)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise WriterGateHeldError(lock_path, _read_holder(lock_path)) from None
+                raise WriterGateHeldError(lock_path, _holder_context(lock_path)) from None
             time.sleep(min(poll_s, remaining))
     finally:
         with suppress(OSError):

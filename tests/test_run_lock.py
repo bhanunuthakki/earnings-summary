@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -143,10 +144,11 @@ def test_unknown_owner_read_cannot_remove_run_lock(
 
     with monkeypatch.context() as patch:
         patch.setattr(Path, "read_text", read_text)
-        with pytest.raises(OSError):
+        with pytest.raises(run_lock.RunLockHeldError) as caught:
             run_lock.acquire_run_lock(db, owner="contender", timeout_s=0)
-        with pytest.raises(OSError):
-            lock.release()
+        assert caught.value.holder["ownership_state"] == "unknown"
+        with pytest.raises(run_lock.RunLockHeldError):
+            lock.release(timeout_s=0.01, poll_s=0.002)
     assert path.read_bytes() == original
     lock.release()
     assert not path.exists()
@@ -239,3 +241,74 @@ def test_windows_probe_api_failure_retains_owner_then_recovers(
             patch.setattr(kernel.CloseHandle, "result", 0)
         assert run_lock.pid_is_alive(12345) is True
     assert run_lock.pid_is_alive(12345) is False
+
+
+@pytest.mark.parametrize("recovery", [True, False])
+@pytest.mark.parametrize("operation", ["acquire", "release"])
+def test_run_lock_unknown_read_has_bounded_retry_and_recovery(
+    db: Path, monkeypatch: pytest.MonkeyPatch, recovery: bool, operation: str
+) -> None:
+    lock = run_lock.acquire_run_lock(db, owner="live-owner", timeout_s=0)
+    path = run_lock.lock_path_for(db)
+    if operation == "acquire":
+        path.write_text(json.dumps({"pid": -1, "token": "dead-owner"}), encoding="utf-8")
+    original = path.read_bytes()
+    real_read = Path.read_text
+    attempts = 0
+
+    def read_text(target: Path, encoding: str | None = None, errors: str | None = None) -> str:
+        nonlocal attempts
+        if target == path:
+            attempts += 1
+            if not recovery or attempts <= 2:
+                raise PermissionError("controlled sharing violation")
+        return real_read(target, encoding=encoding, errors=errors)
+
+    def action() -> None:
+        if operation == "acquire":
+            run_lock.acquire_run_lock(db, owner="recovered", timeout_s=0.05, poll_s=0.005).release()
+        else:
+            lock.release(timeout_s=0.05, poll_s=0.005)
+
+    started = time.monotonic()
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_text", read_text)
+        if recovery:
+            action()
+        else:
+            with pytest.raises(run_lock.RunLockHeldError) as caught:
+                action()
+            assert caught.value.holder["ownership_state"] == "unknown"
+            assert 0.04 <= time.monotonic() - started < 0.5
+    assert attempts >= 3
+    if recovery:
+        assert not path.exists()
+    else:
+        assert path.read_bytes() == original
+
+
+def test_run_lock_body_error_stays_primary_after_unknown_cleanup_deadline(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = run_lock.lock_path_for(db)
+    primary = ValueError("controlled body failure")
+    real_read, real_release = Path.read_text, run_lock.RunLock.release
+
+    def read_text(target: Path, encoding: str | None = None, errors: str | None = None) -> str:
+        if target == path:
+            raise PermissionError("controlled release sharing violation")
+        return real_read(target, encoding=encoding, errors=errors)
+
+    def bounded_release(lock: run_lock.RunLock) -> None:
+        real_release(lock, timeout_s=0.01, poll_s=0.002)
+
+    monkeypatch.setattr(run_lock.RunLock, "release", bounded_release)
+    with (
+        pytest.raises(ValueError) as caught,
+        run_lock.hold_run_lock(db, owner="body-failure", timeout_s=0),
+    ):
+        monkeypatch.setattr(Path, "read_text", read_text)
+        raise primary
+    assert caught.value is primary
+    assert path.exists()
+    assert any("RunLockHeldError" in note for note in getattr(primary, "__notes__", []))

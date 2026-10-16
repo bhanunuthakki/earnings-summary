@@ -15,9 +15,10 @@ search, and less code sprawl. This is source integration, not deployment.
   Independently merged search features have one implementation in the combined
   tree.
 - Reuse SEC completion receipts only when issuer, raw content and extractor
-  fingerprints agree. The identity covers the existing full runtime-artifact
-  owner, dependency lock and installed versions, active metric ladders, and
-  database schema. Missing inputs, linked source files and in-process source
+  fingerprints agree. The identity covers the transitive extractor import closure, governed
+  dynamic adapter subtree, referenced vendor dependencies, active metric ladders
+  and database schema. Unrelated UI files do not invalidate SEC receipts. Missing
+  inputs, linked source files, unknown loaders and relevant in-process source
   replacement fail closed. An obsolete conditional response forces a fresh fetch.
 - Stamp report fact chips with the exact admitted document version. A legacy
   document ID resolves only when its version is unique. Ambiguous and missing
@@ -32,8 +33,11 @@ search, and less code sprawl. This is source integration, not deployment.
   original failure and retain safe cleanup error types. A live writer is not
   evicted. A persistent operating-system guard serializes stale takeover and
   token-checked release. Unreadable holder metadata and unknown process state
-  retain ownership. Acquisition remains bounded; holder lifetime and FIFO
-  fairness are not guaranteed.
+  retain ownership. Transient ownership-read failures retry within the same
+  deadline, then return a typed lock-held error with an explicit unknown state.
+  Cleanup retries preserve the original error. Windows explicitly unlocks each
+  acquired guard before close. Acquisition remains bounded; holder lifetime and
+  FIFO fairness are not guaranteed.
 - Start memo and response-cache age before the data build. Expired builds
   return directly without entering either cache. Remove the redundant startup
   retrieval probe; actual requests retain fail-closed readiness checks.
@@ -74,11 +78,11 @@ byte, and browser page errors are absent. These fixtures prove rendering parity,
 not live data readiness, real-user latency or canonical-host throughput.
 
 Architecture and duplication baselines use unchanged scanners for the combined
-source population: 1,451 modules and 551,579 noncomment lines. Exact duplication
+source population: 1,451 modules and 551,945 noncomment lines. Exact duplication
 is 4 groups / 158 lines versus main's 6 / 238. Near duplication is 147 groups /
 9,867 lines versus main's 162 / 11,266. The largest dependency cycle falls from
 25 modules to 16; maximum internal fan-out falls from 137 to 40. Source size is
-2,582 noncomment lines above main after retaining the PR's runtime changes.
+2,948 noncomment lines above main after retaining the PR's runtime changes.
 No module path, size-threshold crossing or cycle membership is new relative to
 the parent union. One existing pair of cache reservation methods crosses the
 fixed near-match threshold (0.848947 to 0.856842) after both carry their build
@@ -95,8 +99,9 @@ final source against the original goal is required before merge. Its score is
 advisory evidence; tests and merge rules still govern acceptance.
 
 No production database, installed application, live scheduler or provider policy
-was changed. Production timing, native Windows behavior and live sealed retrieval
-remain outside the evidence from this Mac source-integration task.
+was changed. Production timing and live sealed retrieval remain outside this
+source-integration task. Native Windows proof is limited to the writer protocol
+checks described below.
 
 ## Controlled report benchmark
 
@@ -116,13 +121,52 @@ They do not establish live issuer coverage, browser task latency, production
 throughput or a population percentile. Fixture source SHA-256 is
 `92da02b435bc48fa2194abce264efd24baaa78d53069b8e440b84880857512d8`.
 
-## Extractor identity cost
+## Further review corrections and evidence
 
-The actual source tree contains 1,510 Python files plus its dependency lock
-(26,637,130 bytes). The full static source digest runs once per process. On an
-in-memory synthetic schema, 30 cold identity calls had a 218.394 ms median
-(273.386 ms empirical p95). Sixty warm calls had a 29.956 ms median
-(34.691 ms empirical p95) and zero full-source hashing calls. Paired metadata
-scans preserve exactly the same manifest while reducing median time from
-36.120 to 30.355 ms. These are local component measurements, not production
-ingestion throughput.
+The next Opus review confirmed the earlier blockers were resolved but scored the
+source 76/100. It identified broad invalidation of SEC receipts and immediate
+failure on an unreadable holder file. The extractor identity is now scoped to its
+owned import closure. The writer retries unknown reads within its deadline.
+Native Windows evidence and final exact-head CI remain separate acceptance
+checks; local test passes do not establish deployment.
+
+A separate server benchmark uses twenty synthetic equities and the same database
+bytes for main and this branch. It completes the real overview, portfolio and
+evaluation Flask responses with real cockpit builders and SQL. App and fixture
+setup are outside timing. External tracker data is a typed synthetic adapter;
+all network is denied. Sparse enrichment remains explicitly unavailable.
+Thirty cold cycles show three cockpit builds becoming one, with 566 SQL
+statements becoming 71. Real cockpit rows and overview HTML match exactly;
+hydration JSON differs only in its generated timestamp. Sixty warm cycles have
+zero builds and zero SQL in both variants. Main cold median/p95 is 15.394/16.128 ms; the frozen candidate is
+7.450/8.246 ms. Warm medians are 0.896/0.958 ms respectively; no warm
+improvement is claimed. These are local server completion measurements, not browser paint
+or live-host throughput.
+
+## Native writer verification
+
+The managed Windows Python 3.13.11 interpreter ran copied, hash-matched writer,
+run-lock and clock source with only temporary synthetic lock paths. The native
+probe passed live/invalid PID checks, a 0.152-second live-holder timeout, killed-
+holder recovery, sixty mutually exclusive windows from three contenders over a
+stale claim, and repeated guard unlock/reacquisition. The harness distinguishes
+Windows launcher PIDs from actual interpreter PIDs. Every test interpreter and
+launcher stopped, the exact owned directory was removed, and a final read-only
+postcheck found no task resources. No database was created or opened. This is
+native protocol evidence, not a production pipeline or deployment test.
+
+## Narrow extractor identity cost
+
+The final closure contains 95 owned Python files (1,713,142 bytes) and twenty
+active vendor distributions. Thirty cold calls have a 711.748 ms median and
+741.009 ms empirical p95. This cost occurs lazily at first SEC use, with no
+source scan at module import. Sixty warm calls have a 5.944 ms median and
+7.126 ms empirical p95, versus 29.956/34.691 ms for the preceding conservative
+whole-runtime identity. Cold cost increases; repeated cost and unrelated-code
+invalidation decrease. Warm calls perform zero full-source digests. The identity
+retains full schema hashing, so a schema migration conservatively invalidates
+prior receipts. Source, dependency, schema and active-ladder evidence remain
+attributable. Thirty-five focused tests pass; the earlier related pipeline,
+capture and matcher batch passed 113 tests. Writer and liveness coverage passed
+275 tests with five separate native-Windows suite skips, supplemented by the
+native protocol evidence above.

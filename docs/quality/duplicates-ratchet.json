@@ -1,8 +1,8 @@
 {
   "schema_version": "1",
   "scoped_revision": "WORKTREE",
-  "commit_hash": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
-  "source_hash": "9b1f5e6a261bf4a493a62a202f8ef2339d4147aadc073950682106974748b5a8",
+  "commit_hash": "3fcb897e3785449e9c9b9e9a8f9a8138a7b97c24",
+  "source_hash": "a397c56ef3658df4790bd8f83c7dda5716ad140cbac5622a41527389a8a6ce6e",
   "scanner_hash": "3e5eeae4a510bfc41990c977ec0d327f0ae945ba849766b82534e0efa043bdf1",
   "parser_version": "python-ast-normalized-v1",
   "python_version": "3.14.7",
@@ -11,7 +11,7 @@
     "min_body_lines": 15
   },
   "files_scanned": 1451,
-  "functions_scanned": 15706,
+  "functions_scanned": 15713,
   "exact_groups": [
     {
       "group_id": "exact-289a3c306c99e6b3",
@@ -2900,31 +2900,6 @@
       ]
     },
     {
-      "group_id": "near-b7a0d5a5af6936bc",
-      "similarity": 0.908367,
-      "duplicated_loc": 32,
-      "functions": [
-        {
-          "path": "src/pipeline/sec_xbrl.py",
-          "qualified_name": "_atomic_write_bytes",
-          "lineno": 2101,
-          "end_lineno": 2117,
-          "body_lines": 16,
-          "ast_nodes": 117,
-          "normalized_hash": "3aa8798bf720ee3ece7285f596368da2fa6c6100222fa5f74939ba708eb70a9f"
-        },
-        {
-          "path": "src/provenance/sec_companyfacts_binding_backfill.py",
-          "qualified_name": "_write_checkpoint",
-          "lineno": 624,
-          "end_lineno": 643,
-          "body_lines": 16,
-          "ast_nodes": 122,
-          "normalized_hash": "aa6845a575c9b585bece5d8463e01fff48ce8e51108611f9de132ed3c17ea73e"
-        }
-      ]
-    },
-    {
       "group_id": "near-b857657e116a231b",
       "similarity": 0.876124,
       "duplicated_loc": 41,
@@ -3271,6 +3246,31 @@
           "body_lines": 31,
           "ast_nodes": 139,
           "normalized_hash": "5f0b3bff1a4a0945a3fe12cf81558ff42c99b925668cb913a165bf70ab3c97ff"
+        }
+      ]
+    },
+    {
+      "group_id": "near-d3413be9c75fc385",
+      "similarity": 0.908367,
+      "duplicated_loc": 32,
+      "functions": [
+        {
+          "path": "src/pipeline/sec_xbrl.py",
+          "qualified_name": "_atomic_write_bytes",
+          "lineno": 2399,
+          "end_lineno": 2415,
+          "body_lines": 16,
+          "ast_nodes": 117,
+          "normalized_hash": "3aa8798bf720ee3ece7285f596368da2fa6c6100222fa5f74939ba708eb70a9f"
+        },
+        {
+          "path": "src/provenance/sec_companyfacts_binding_backfill.py",
+          "qualified_name": "_write_checkpoint",
+          "lineno": 624,
+          "end_lineno": 643,
+          "body_lines": 16,
+          "ast_nodes": 122,
+          "normalized_hash": "aa6845a575c9b585bece5d8463e01fff48ce8e51108611f9de132ed3c17ea73e"
         }
       ]
     },

@@ -39,6 +39,7 @@ identifies the caller as required by SEC's policy.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.metadata
 import json
@@ -60,7 +61,16 @@ from pathlib import Path
 from typing import Literal, NamedTuple, Self, cast
 
 import requests
+from packaging.requirements import Requirement
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# Anchor source loading before the extractor's other repository imports.
+from provenance.verifier_identity import (
+    SOURCE_ARTIFACT_IMPORT_STARTED_AT_NS as _COMPANYFACTS_IMPORT_STARTED_AT_NS,
+)
+from provenance.verifier_identity import verifier_source_artifact_sha256
+
+# isort: split
 
 from credibility.observations import FINANCIAL_FACTS, record_restatement_observation
 from models.documents import (
@@ -71,7 +81,6 @@ from models.documents import (
 )
 from models.facts import Currency, FiscalPeriodType, Unit
 from models.validation import Severity, ValidationRule
-from operations.kpi_repair_receipts import repair_executor_code_sha256
 from pipeline import locators
 from pipeline.confidence import score_confidence
 from pipeline.kpi_persistence import record_validation_issue
@@ -181,97 +190,387 @@ def _fetch_receipt_extractor_column_present(conn: sqlite3.Connection) -> bool:
     )
 
 
-def _companyfacts_source_manifest(repo_root: Path) -> tuple[tuple[str, int, int, int], ...]:
-    """Bound the approved runtime files and detect in-process source replacement."""
-    members = [repo_root / "requirements.lock"]
-    for directory in ("src", "execution", "alembic/versions"):
-        paths = tuple((repo_root / directory).rglob("*.py"))
-        if not paths:
-            raise CompanyFactsContractError("CompanyFacts runtime source root is unavailable")
-        members.extend(paths)
-    if len(members) > 4096:
-        raise CompanyFactsContractError("CompanyFacts runtime source count exceeds its bound")
+# The IR discovery registry is the only nonliteral import in the owned closure.
+# Include its complete package so new registered adapters cannot escape the pin.
+_COMPANYFACTS_DYNAMIC_IMPORT_PACKAGES = {"ir_pipeline.discover": "ir_pipeline/discover"}
+_COMPANYFACTS_SOURCE_ROOT = Path(__file__).resolve().parents[2]
+
+
+class _CompanyFactsSourceClosure(NamedTuple):
+    members: tuple[str, ...]
+    absent_initializers: tuple[str, ...]
+    dynamic_packages: tuple[str, ...]
+    external_modules: tuple[str, ...]
+
+
+def _companyfacts_import_closure(repo_root: Path) -> _CompanyFactsSourceClosure:
+    """Follow owned static/lazy imports; unknown dynamic loaders fail closed."""
+    pending = ["pipeline.sec_xbrl"]
+    members: set[str] = set()
+    absent_initializers: set[str] = set()
+    dynamic_packages: set[str] = set()
+    external: set[str] = set()
+
+    def resolve(module: str) -> Path | None:
+        parts = module.split(".")
+        base = repo_root if parts[0] in {"src", "execution"} else repo_root / "src"
+        for candidate in (
+            base.joinpath(*parts).with_suffix(".py"),
+            base.joinpath(*parts) / "__init__.py",
+        ):
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def add(module: str, *, required: bool = True) -> None:
+        if not module:
+            return
+        target = resolve(module)
+        if target is None:
+            top = module.split(".", 1)[0]
+            if (repo_root / "src" / top).exists() or top in {"src", "execution"}:
+                namespace_root = repo_root if top in {"src", "execution"} else repo_root / "src"
+                if required and not (namespace_root / module.replace(".", "/")).is_dir():
+                    raise CompanyFactsContractError("CompanyFacts owned import is unavailable")
+            elif required and top not in sys.stdlib_module_names:
+                external.add(top)
+            return
+        pending.append(module)
+        parts = module.split(".")
+        for length in range(1, len(parts)):
+            package = ".".join(parts[:length])
+            initializer = resolve(package)
+            if initializer is not None and initializer.name == "__init__.py":
+                pending.append(package)
+            else:
+                prefix = "" if parts[0] in {"src", "execution"} else "src/"
+                absent_initializers.add(prefix + "/".join(parts[:length]) + "/__init__.py")
+
+    def governed_registry(tree: ast.Module, call: ast.Call, module: str) -> None:
+        # Support this exact literal registry and call shape. Other loaders need
+        # an explicit policy change; their targets must never escape the subtree.
+        registries = [
+            item
+            for item in tree.body
+            if isinstance(item, ast.AnnAssign)
+            and isinstance(item.target, ast.Name)
+            and item.target.id == "_ADAPTERS"
+        ]
+        functions = [
+            item
+            for item in tree.body
+            if isinstance(item, ast.FunctionDef) and item.name == "discover_documents"
+        ]
+        if len(registries) != 1 or len(functions) != 1:
+            raise CompanyFactsContractError("CompanyFacts dynamic registry shape is not governed")
+        registry = registries[0].value
+        if (
+            not isinstance(registry, ast.Dict)
+            or not registry.values
+            or any(
+                not isinstance(value, ast.Constant)
+                or not isinstance(value.value, str)
+                or not value.value.startswith(module + ".")
+                for value in registry.values
+            )
+            or any(
+                not isinstance(key, ast.Constant) or not isinstance(key.value, str)
+                for key in registry.keys
+            )
+        ):
+            raise CompanyFactsContractError(
+                "CompanyFacts dynamic registry target is outside its namespace"
+            )
+        function = functions[0]
+        assignments = [
+            item
+            for item in ast.walk(function)
+            if isinstance(item, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "mod_name" for target in item.targets
+            )
+        ]
+        if (
+            [argument.arg for argument in (*function.args.posonlyargs, *function.args.args)]
+            != ["config"]
+            or function.args.vararg is not None
+            or function.args.kwarg is not None
+            or bool(function.args.kwonlyargs)
+            or call not in tuple(ast.walk(function))
+            or len(call.args) != 1
+            or call.keywords
+            or not isinstance(call.func, ast.Attribute)
+            or not isinstance(call.func.value, ast.Name)
+            or call.func.value.id != "importlib"
+            or call.func.attr != "import_module"
+            or not isinstance(call.args[0], ast.Name)
+            or call.args[0].id != "mod_name"
+            or len(assignments) != 1
+            or sum(
+                isinstance(item, ast.Name)
+                and item.id == "mod_name"
+                and isinstance(item.ctx, ast.Store)
+                for item in ast.walk(function)
+            )
+            != 1
+            or ast.unparse(assignments[0].value) != "_ADAPTERS.get(config.platform)"
+        ):
+            raise CompanyFactsContractError("CompanyFacts dynamic registry call is not governed")
+        parents = {
+            child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)
+        }
+        for reference in ast.walk(tree):
+            if not isinstance(reference, ast.Name) or reference.id != "_ADAPTERS":
+                continue
+            if isinstance(reference.ctx, ast.Store):
+                if parents.get(reference) is registries[0]:
+                    continue
+                raise CompanyFactsContractError(
+                    "CompanyFacts dynamic registry mutation is not governed"
+                )
+            parent = parents.get(reference)
+            if isinstance(parent, ast.Attribute) and parent.attr == "get":
+                continue
+            if (
+                isinstance(parent, ast.Call)
+                and isinstance(parent.func, ast.Name)
+                and parent.func.id == "sorted"
+            ):
+                continue
+            raise CompanyFactsContractError(
+                "CompanyFacts dynamic registry mutation is not governed"
+            )
+
+    while pending:
+        module = pending.pop()
+        target = resolve(module)
+        if target is None:
+            raise CompanyFactsContractError("CompanyFacts extractor source is unavailable")
+        relative = target.relative_to(repo_root).as_posix()
+        if relative in members:
+            continue
+        members.add(relative)
+        if len(members) > 256:
+            raise CompanyFactsContractError("CompanyFacts import closure exceeds its bound")
+        try:
+            _companyfacts_source_manifest(
+                repo_root, _CompanyFactsSourceClosure((relative,), (), (), ())
+            )
+            tree = ast.parse(target.read_bytes(), filename=relative)
+        except (OSError, SyntaxError, ValueError):
+            raise CompanyFactsContractError(
+                "CompanyFacts import source is unavailable or invalid"
+            ) from None
+        loader_aliases = {"__import__"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    add(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if any(
+                    alias.name in {"SourceFileLoader", "spec_from_file_location", "exec", "eval"}
+                    for alias in node.names
+                ):
+                    raise CompanyFactsContractError("CompanyFacts source loader is not governed")
+                package = (
+                    module.split(".") if target.name == "__init__.py" else module.split(".")[:-1]
+                )
+                base = (
+                    ".".join(
+                        package[: len(package) - node.level + 1]
+                        + ([node.module] if node.module else [])
+                    )
+                    if node.level
+                    else node.module or ""
+                )
+                add(base)
+                for alias in node.names:
+                    add(base + "." + alias.name, required=False)
+                    if node.module == "importlib" and alias.name == "import_module":
+                        loader_aliases.add(alias.asname or alias.name)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            loader = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else ""
+            )
+            if loader in {"exec", "eval", "SourceFileLoader", "spec_from_file_location"}:
+                raise CompanyFactsContractError("CompanyFacts source loader is not governed")
+            if loader != "import_module" and loader not in loader_aliases:
+                continue
+            if (
+                node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                if node.args[0].value.startswith("."):
+                    raise CompanyFactsContractError(
+                        "CompanyFacts relative dynamic import is not governed"
+                    )
+                if loader in loader_aliases and (
+                    len(node.args) > 4 or any(keyword.arg == "level" for keyword in node.keywords)
+                ):
+                    raise CompanyFactsContractError(
+                        "CompanyFacts relative dynamic import is not governed"
+                    )
+                add(node.args[0].value)
+            elif module in _COMPANYFACTS_DYNAMIC_IMPORT_PACKAGES:
+                governed_registry(tree, node, module)
+                package_path = "src/" + _COMPANYFACTS_DYNAMIC_IMPORT_PACKAGES[module]
+                dynamic_packages.add(package_path)
+                for path in (repo_root / package_path).rglob("*.py"):
+                    name = (
+                        path.relative_to(repo_root / "src")
+                        .with_suffix("")
+                        .as_posix()
+                        .replace("/", ".")
+                    )
+                    add(name.removesuffix(".__init__"))
+            else:
+                raise CompanyFactsContractError("CompanyFacts dynamic import is not governed")
+    return _CompanyFactsSourceClosure(
+        tuple(sorted(members)),
+        tuple(sorted(absent_initializers)),
+        tuple(sorted(dynamic_packages)),
+        tuple(sorted(external)),
+    )
+
+
+def _companyfacts_source_manifest(
+    repo_root: Path, closure: _CompanyFactsSourceClosure
+) -> tuple[tuple[str, int, int, int], ...]:
+    members = set(closure.members)
+    for package in closure.dynamic_packages:
+        members.update(
+            path.relative_to(repo_root).as_posix() for path in (repo_root / package).rglob("*.py")
+        )
+    if len(members) > 256:
+        raise CompanyFactsContractError("CompanyFacts import closure exceeds its bound")
+    # Check each parent once. A directory swapped for a link must not reuse the
+    # same target file's unchanged metadata during a warm-cache read.
+    parents = {
+        parent
+        for relative in members | set(closure.absent_initializers)
+        for parent in (repo_root / relative).parents
+        if parent != repo_root and repo_root in parent.parents
+    }
+    for parent in parents:
+        try:
+            parent_stat = parent.lstat()
+        except OSError:
+            raise CompanyFactsContractError("CompanyFacts source parent is unavailable") from None
+        if not stat.S_ISDIR(parent_stat.st_mode) or (
+            getattr(parent_stat, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        ):
+            raise CompanyFactsContractError("CompanyFacts source parent is unavailable")
     manifest: list[tuple[str, int, int, int]] = []
     total_bytes = 0
-    for member in sorted(members):
+    for relative in sorted(members | set(closure.absent_initializers)):
+        member = repo_root / relative
         try:
             member_stat = member.lstat()
-            if not stat.S_ISREG(member_stat.st_mode) or (
-                getattr(member_stat, "st_file_attributes", 0)
-                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-            ):
-                raise OSError("source member is not a regular file")
+        except FileNotFoundError:
+            if relative in closure.absent_initializers:
+                manifest.append((relative, -1, 0, 0))
+                continue
+            raise CompanyFactsContractError("CompanyFacts source member is unavailable") from None
         except OSError:
-            raise CompanyFactsContractError(
-                "CompanyFacts runtime source member is unavailable"
-            ) from None
+            raise CompanyFactsContractError("CompanyFacts source member is unavailable") from None
+        if not stat.S_ISREG(member_stat.st_mode) or (
+            getattr(member_stat, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        ):
+            raise CompanyFactsContractError("CompanyFacts source member is unavailable")
         total_bytes += member_stat.st_size
-        if member_stat.st_size > 4 * 1024 * 1024 or total_bytes > 64 * 1024 * 1024:
-            raise CompanyFactsContractError("CompanyFacts runtime source bytes exceed their bound")
+        if member_stat.st_size > 4 * 1024 * 1024 or total_bytes > 32 * 1024 * 1024:
+            raise CompanyFactsContractError("CompanyFacts source bytes exceed their bound")
         manifest.append(
-            (
-                member.relative_to(repo_root).as_posix(),
-                member_stat.st_size,
-                member_stat.st_mtime_ns,
-                member_stat.st_ctime_ns,
-            )
+            (relative, member_stat.st_size, member_stat.st_mtime_ns, member_stat.st_ctime_ns)
         )
     return tuple(manifest)
 
 
-# Capture source metadata at module load, before the first ticker can pin a
-# digest. An edited checkout must restart rather than hash new source bytes
-# while it continues to execute previously loaded code.
-_COMPANYFACTS_SOURCE_ROOT = Path(__file__).resolve().parents[2]
-_COMPANYFACTS_IMPORT_MANIFEST = _companyfacts_source_manifest(_COMPANYFACTS_SOURCE_ROOT)
+def _companyfacts_dependency_versions(modules: tuple[str, ...]) -> dict[str, object]:
+    """Pin imported vendor distributions and active declared runtime dependencies."""
+    owners = importlib.metadata.packages_distributions()
+    module_owners = {module: tuple(sorted(owners.get(module, ()))) for module in modules}
+    missing = tuple(module for module, names in module_owners.items() if not names)
+    if any(module in sys.modules for module in missing):
+        raise CompanyFactsContractError(
+            "CompanyFacts live vendor import lacks distribution authority"
+        )
+    pending = [(name, ()) for names in module_owners.values() for name in names]
+    evaluated: set[tuple[str, tuple[str, ...]]] = set()
+    versions: dict[str, str | None] = {}
+    while pending:
+        raw_name, extras = pending.pop()
+        name = re.sub(r"[-_.]+", "-", raw_name).lower()
+        if (name, extras) in evaluated:
+            continue
+        evaluated.add((name, extras))
+        if len(evaluated) > 256:
+            raise CompanyFactsContractError("CompanyFacts vendor closure exceeds its bound")
+        try:
+            distribution = importlib.metadata.distribution(name)
+        except importlib.metadata.PackageNotFoundError:
+            versions[name] = None
+            continue
+        versions[name] = distribution.version
+        for declaration in distribution.requires or ():
+            requirement = Requirement(declaration)
+            if requirement.marker is None or any(
+                requirement.marker.evaluate({"extra": extra}) for extra in ("", *extras)
+            ):
+                pending.append((requirement.name, tuple(sorted(requirement.extras))))
+    return {
+        "module_owners": module_owners,
+        "missing_external_modules": missing,
+        "distributions": versions,
+    }
 
 
 @lru_cache(maxsize=4)
 def _companyfacts_pinned_source_identity(
     repo_root: Path,
-) -> tuple[str, tuple[tuple[str, int, int, int], ...]]:
-    """Pin loaded-source identity for one process; never silently hot-reload it.
-
-    Reuse the existing conservative runtime-artifact owner instead of maintaining
-    an import list. It includes dynamic imports and future runtime dependencies.
-    Only the approved lock file supplies dependency configuration; private/runtime
-    files and credentials are outside these source roots.
-    """
-    before = _companyfacts_source_manifest(repo_root)
-    if repo_root == _COMPANYFACTS_SOURCE_ROOT and before != _COMPANYFACTS_IMPORT_MANIFEST:
+) -> tuple[str, tuple[tuple[str, int, int, int], ...], _CompanyFactsSourceClosure]:
+    """Pin the lazy extractor closure; subsequent relevant edits require restart."""
+    closure = _companyfacts_import_closure(repo_root)
+    before = _companyfacts_source_manifest(repo_root, closure)
+    if repo_root == _COMPANYFACTS_SOURCE_ROOT and any(
+        max(row[2], row[3]) > _COMPANYFACTS_IMPORT_STARTED_AT_NS for row in before
+    ):
         raise CompanyFactsContractError(
             "CompanyFacts runtime changed after import; restart required"
         )
     try:
         material = {
-            "runtime_source_sha256": repair_executor_code_sha256(repo_root),
-            "requirements_lock_sha256": hashlib.sha256(
-                (repo_root / "requirements.lock").read_bytes()
-            ).hexdigest(),
+            "runtime_source_sha256": verifier_source_artifact_sha256(
+                {name: repo_root / name for name in closure.members}, file_count_limit=256
+            ),
             "python_version": sys.version,
             "sqlite_version": sqlite3.sqlite_version,
-            "installed_dependencies": sorted(
-                (distribution.name, distribution.version)
-                for distribution in importlib.metadata.distributions()
-            ),
+            "dependencies": _companyfacts_dependency_versions(closure.external_modules),
         }
-    except OSError:
-        raise CompanyFactsContractError(
-            "CompanyFacts runtime source artifact is unavailable"
-        ) from None
-    if before != _companyfacts_source_manifest(repo_root):
+    except (OSError, ValueError):
+        raise CompanyFactsContractError("CompanyFacts source artifact is unavailable") from None
+    if before != _companyfacts_source_manifest(repo_root, closure):
         raise CompanyFactsContractError(
             "CompanyFacts runtime changed while pinning; restart required"
         )
     digest = hashlib.sha256(
         json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
-    return digest, before
+    return digest, before, closure
 
 
 def _companyfacts_source_artifact_sha256(repo_root: Path) -> str:
-    digest, pinned_manifest = _companyfacts_pinned_source_identity(repo_root)
-    if pinned_manifest != _companyfacts_source_manifest(repo_root):
+    digest, pinned_manifest, closure = _companyfacts_pinned_source_identity(repo_root)
+    if pinned_manifest != _companyfacts_source_manifest(repo_root, closure):
         raise CompanyFactsContractError(
             "CompanyFacts runtime changed after loading; restart required"
         )
@@ -279,13 +578,12 @@ def _companyfacts_source_artifact_sha256(repo_root: Path) -> str:
 
 
 def companyfacts_extractor_sha256(conn: sqlite3.Connection) -> str:
-    """Bind skips to complete runtime source, live schema, and active tag specs.
+    """Bind skips to the extractor import closure, live schema, and active specs.
 
-    The large static artifact is hashed once per process. Any in-place source or
-    lock-file replacement fails closed until restart. Unrelated runtime source
-    changes conservatively require one reprocessing pass after restart. Active
-    specs and schema remain per-call inputs, so live schema/config changes cannot
-    reuse a prior completion identity.
+    Source/vendor identity is lazy and cached for this process. Relevant source
+    edits require restart. Unrelated UI/execution files and installed packages
+    do not invalidate receipts. The full schema stays conservative: any migration
+    requires one reprocessing pass. Active specs and schema remain per-call inputs.
     """
     schema = conn.execute(
         "SELECT type,name,tbl_name,sql FROM sqlite_master "
@@ -299,7 +597,7 @@ def companyfacts_extractor_sha256(conn: sqlite3.Connection) -> str:
     source_sha256 = _companyfacts_source_artifact_sha256(_COMPANYFACTS_SOURCE_ROOT)
     schema_sha256 = hashlib.sha256(schema_json.encode()).hexdigest()
     material = {
-        "protocol": "sec-companyfacts-extractor.v2",
+        "protocol": "sec-companyfacts-extractor.v3",
         "runtime_source_artifact_sha256": source_sha256,
         "schema_sha256": schema_sha256,
         "ladders": [(item.line_item, item.kind, item.sign, item.rungs) for item in TAG_LADDERS],

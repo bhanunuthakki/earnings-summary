@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "7c4182a539a35e2be45f16adf0b02a6f6cb74228",
+  "scoped_commit": "3fcb897e3785449e9c9b9e9a8f9a8138a7b97c24",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "9b1f5e6a261bf4a493a62a202f8ef2339d4147aadc073950682106974748b5a8",
+  "source_sha256": "a397c56ef3658df4790bd8f83c7dda5716ad140cbac5622a41527389a8a6ce6e",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1451,
-    "total_noncomment_loc": 551579,
+    "total_noncomment_loc": 551945,
     "modules_over_1000_loc": 104,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -13681,9 +13681,9 @@
         "path": "src/pipeline/db_writer_gate.py",
         "module": "pipeline.db_writer_gate",
         "lines": {
-          "physical": 650,
-          "nonblank": 561,
-          "noncomment": 525
+          "physical": 699,
+          "nonblank": 607,
+          "noncomment": 571
         },
         "internal_fan_out": 2,
         "responsibilities": [
@@ -14963,9 +14963,9 @@
         "path": "src/pipeline/sec_xbrl.py",
         "module": "pipeline.sec_xbrl",
         "lines": {
-          "physical": 2824,
-          "nonblank": 2594,
-          "noncomment": 2421
+          "physical": 3122,
+          "nonblank": 2881,
+          "noncomment": 2703
         },
         "internal_fan_out": 17,
         "responsibilities": [
@@ -17089,9 +17089,9 @@
         "path": "src/provenance/verifier_identity.py",
         "module": "provenance.verifier_identity",
         "lines": {
-          "physical": 57,
-          "nonblank": 49,
-          "noncomment": 49
+          "physical": 64,
+          "nonblank": 55,
+          "noncomment": 55
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -19468,9 +19468,9 @@
         "path": "src/run_lock.py",
         "module": "run_lock",
         "lines": {
-          "physical": 229,
-          "nonblank": 197,
-          "noncomment": 175
+          "physical": 261,
+          "nonblank": 227,
+          "noncomment": 207
         },
         "internal_fan_out": 1,
         "responsibilities": [

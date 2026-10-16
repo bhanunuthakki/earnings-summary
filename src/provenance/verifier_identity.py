@@ -4,18 +4,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import Mapping
 from pathlib import Path
+
+SOURCE_ARTIFACT_IMPORT_STARTED_AT_NS = time.time_ns()
 
 _MAX_FILES = 64
 _MAX_FILE_BYTES = 4 * 1024 * 1024
 _MAX_TOTAL_BYTES = 32 * 1024 * 1024
 
 
-def verifier_source_artifact_sha256(files: Mapping[str, Path]) -> str:
+def verifier_source_artifact_sha256(
+    files: Mapping[str, Path], *, file_count_limit: int = _MAX_FILES
+) -> str:
     """Hash an explicit verifier closure without persisting physical paths."""
 
-    if not files or len(files) > _MAX_FILES:
+    if not 1 <= file_count_limit <= 256:
+        raise ValueError("verifier source artifact file-count limit is outside its bound")
+    if not files or len(files) > file_count_limit:
         raise ValueError("verifier source artifact file count is outside its bound")
     members: list[dict[str, object]] = []
     total_bytes = 0
