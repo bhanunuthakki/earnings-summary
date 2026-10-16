@@ -78,11 +78,11 @@ byte, and browser page errors are absent. These fixtures prove rendering parity,
 not live data readiness, real-user latency or canonical-host throughput.
 
 Architecture and duplication baselines use unchanged scanners for the combined
-source population: 1,451 modules and 552,061 noncomment lines. Exact duplication
+source population: 1,451 modules and 552,104 noncomment lines. Exact duplication
 is 4 groups / 158 lines versus main's 6 / 238. Near duplication is 147 groups /
 9,867 lines versus main's 162 / 11,266. The largest dependency cycle falls from
 25 modules to 16; maximum internal fan-out falls from 137 to 40. Source size is
-3,064 noncomment lines above main after retaining the PR's runtime changes.
+3,107 noncomment lines above main after retaining the PR's runtime changes.
 No module path, size-threshold crossing or cycle membership is new relative to
 the parent union. One existing pair of cache reservation methods crosses the
 fixed near-match threshold (0.848947 to 0.856842) after both carry their build
@@ -301,7 +301,7 @@ No production model or provider policy changes. Synthetic relevance results do
 not establish issuer coverage, general financial retrieval quality or production
 latency.
 
-The frozen integration source adds 219 noncomment production lines relative to
+Candidate `13292451` adds 219 noncomment production lines relative to
 `05edde2e`. Module count, size buckets, duplication groups and dependency cycles
 are unchanged. Canonical reachability is complete with zero production unknown
 or unresolved edges. All 189 disposition decisions retain their fingerprints
@@ -326,8 +326,8 @@ not executed and is not claimed as proof. This is a fixture limitation under
 the retained migration contract, not permission to bypass it.
 
 The architecture receipt is deliberately remeasured under the existing
-receipt-refresh contract. Its only aggregate increase is the 219 noncomment
-lines required by these source-owner repairs. Scanner identity, module count,
+receipt-refresh contract. Candidate `13292451` adds 219 noncomment lines for
+source-owner repairs. The final clock correction adds 43 more, for 262 total. Scanner identity, module count,
 size buckets, cycle shapes, fan-out ceiling and duplication baseline stay
 unchanged. This is an explicit reviewed increase, not a claim that code size
 fell. Two inherited test-only private-access directives were removed when the
@@ -354,3 +354,28 @@ The complete owning static-quality gate passes on the frozen integration
 source: 2,810 retained files, 2,050 inherited Pyright diagnostics and1,854
 suppressions at exact descending subsystem ceilings. Changed owning files
 also pass strict checks. This does not claim that inherited debt is zero.
+
+## Final context-clock and fixture correction
+
+Full CI on `13292451` passed20 jobs, including all five native Windows cases,
+and failed the source-version fixture shard plus the aggregate gate. That
+fixture manually constructs projection rows and already replaces trace
+admission. Its route-only source-context double now preserves the real emitter,
+inherited-generation lookup, HTTP route and persisted mapping assertions.
+All eight route tests pass. It is not native source-admission evidence.
+
+Review also found that the new context adapter collapsed knowledge cutoff K
+and recording cutoff O. It now reads the exact verified projection head's O,
+including inherited entries, and requires selected cell and observation
+knowledge at or before K and recording at or before O. Query time cannot
+widen these bounds. The source owner still verifies the selected publication
+and exact commitments. Context carries both cutoffs and observation clocks;
+relation metadata is excluded. Real published dual-clock regressions and
+microsecond boundary failures pass. No FactReadModel API, schema or temporal
+policy changes. A new exact-head CI run and independent review are required.
+
+The final frozen runtime measures 552,104 noncomment lines across 1,451 modules.
+The clock correction adds 43lines only in the existing Ask owner. Module
+count, fan-out ceiling, cycle shapes, size buckets and duplication measures
+stay unchanged. The unchanged owning static gate again passes at 2,810 files,
+2,050 inherited diagnostics and 1,854 suppressions.

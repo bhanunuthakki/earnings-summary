@@ -8,7 +8,9 @@ fixture citation to HTTP 200 and expose the issuer, fiscal period, source
 document identity, cited locator, observation version, and reported fact value
 matching the fixture's immutable observation version. The real fact emitter
 also runs against that migrated projection schema, including a fact generation
-that inherits its entry from an ancestor. An unknown document version, an
+that inherits its entry from an ancestor. That route-only emitter test doubles
+trace verification and source-context admission; it does not prove sealed fact
+admission. An unknown document version, an
 unknown node, or a node from a different document version must 404 honestly.
 
 No live sealed Ask turn, real Claude call, SEC/source request, portfolio or bench
@@ -121,11 +123,11 @@ _CLAIM_ORDINAL = 0
 _CITATION_NUMBER = 1
 # The sealed item's rendered value appends the currency/unit token; the stored
 # observation value is the bare canonical value.
-_CITATION_VALUE = "1234.5 USD"
+_CITATION_VALUE = "1234.5 USD USD_millions"
 _DISPLAY_NORMALIZATION = (
     "rendered fact value equals the stored canonical value exactly; the citation "
-    "record's '1234.5 USD' value is the bare canonical value plus its currency "
-    "token (no rounding, scaling, or reformatting)"
+    "record's '1234.5 USD USD_millions' value appends both the currency and literal "
+    "unit (no rounding, scaling, or reformatting)"
 )
 
 
@@ -814,10 +816,13 @@ def test_cited_fact_claim_reconciles_to_the_immutable_observation(
     assert json.loads(fact_row["fact-locator"]) == _FACT_LOCATOR
 
     # The stored reported value equals the cited value after only the documented
-    # display normalization (the citation appends the currency token).
+    # display normalization (the citation preserves the currency and literal unit).
     assert fact_row["fact-value"] == _METRIC_VALUE
     assert citation["value"] == _CITATION_VALUE
-    assert f"{fact_row['fact-value']} {fact_row['fact-currency']}" == _CITATION_VALUE
+    assert (
+        f"{fact_row['fact-value']} {fact_row['fact-currency']} {fact_row['fact-unit']}"
+        == _CITATION_VALUE
+    )
     assert _METRIC_VALUE in entry.claim_text
 
     _record_artifact(
@@ -942,6 +947,56 @@ def test_fact_emitter_reconciles_to_its_source_version_route(
             "verify_heterogeneous_retrieval_trace",
             verify_fixture_trace,
         )
+
+        # This manually seeded route fixture has no native publication graph.
+        # Keep the emitter/query/route real; double only source-context admission.
+        @dataclass(frozen=True)
+        class RouteOnlyBundle:
+            observation_id: str
+
+        @dataclass(frozen=True)
+        class RouteOnlyBundleRead:
+            observation_id: str
+            bundle: RouteOnlyBundle
+            failure: None = None
+
+        class RouteOnlySourceContext:
+            def __init__(self, source_conn: sqlite3.Connection) -> None:
+                assert source_conn is conn
+
+            def provenance_bundles(
+                self, observation_ids: tuple[str, ...], *, cutoff: datetime
+            ) -> tuple[RouteOnlyBundleRead, ...]:
+                assert observation_ids == ("fact-observation-acme-1",)
+                assert cutoff == receipt.recorded_at
+                return (
+                    RouteOnlyBundleRead(observation_ids[0], RouteOnlyBundle(observation_ids[0])),
+                )
+
+        context_calls: list[str] = []
+        context_note = "Route-only fixture context; source admission is not exercised."
+
+        def fixture_source_context(
+            source_conn: sqlite3.Connection,
+            selected_entry: sqlite3.Row,
+            bundle: RouteOnlyBundle,
+            *,
+            source_observation_id: str,
+            knowledge_cutoff: datetime,
+            observed_through: datetime,
+        ) -> str:
+            assert source_conn is conn
+            assert knowledge_cutoff == observed_through == receipt.recorded_at
+            assert bundle.observation_id == selected_entry["selected_observation_id"]
+            assert selected_entry["canonical_metric_cell_id"] == _METRIC_CELL_ID
+            assert selected_entry["evidence_document_version_id"] == _DOCUMENT_VERSION_ID
+            assert selected_entry["evidence_node_id"] == _FACT_NODE_ID
+            assert source_observation_id == _OBSERVATION_ID
+            context_calls.append(bundle.observation_id)
+            return context_note
+
+        monkeypatch.setattr(sealed_retrieval, "FactReadModel", RouteOnlySourceContext)
+        monkeypatch.setattr(sealed_retrieval, "_verified_fact_context", fixture_source_context)
         cutoff_at = "2026-01-15 14:05:00"
         conn.execute(
             "INSERT INTO heterogeneous_retrieval_trace_headers "
@@ -1017,7 +1072,11 @@ def test_fact_emitter_reconciles_to_its_source_version_route(
     assert emitted == repeated
     assert emitted.kind == "fact"
     assert emitted.label == f"{_TICKER} · {_METRIC_NAME} · {_PERIOD_END}"
-    assert emitted.text == f"{_METRIC_NAME}: {_CITATION_VALUE} ({_PERIOD_END})"
+    assert context_calls == ["fact-observation-acme-1"] * 2
+    assert emitted.text == (
+        f"{_METRIC_NAME}: {_CITATION_VALUE} ({_PERIOD_END})"
+        f"\nVerified financial context: {context_note}"
+    )
     assert emitted.value == _CITATION_VALUE
     assert emitted.period == _PERIOD_END
     assert emitted.locator == _FACT_LOCATOR
@@ -1045,7 +1104,10 @@ def test_fact_emitter_reconciles_to_its_source_version_route(
     assert fact_row["fact-currency"] == _METRIC_CURRENCY
     assert fact_row["fact-period-end"] == emitted.period
     assert json.loads(fact_row["fact-locator"]) == emitted.locator
-    assert f"{fact_row['fact-value']} {fact_row['fact-currency']}" == emitted.value
+    assert (
+        f"{fact_row['fact-value']} {fact_row['fact-currency']} {fact_row['fact-unit']}"
+        == emitted.value
+    )
 
     _record_artifact(
         "sealed-fact-citation-val-search-017-reconciliation.json",
@@ -1054,7 +1116,8 @@ def test_fact_emitter_reconciles_to_its_source_version_route(
             "feature": "sealed-fact-citation-emitter",
             "scope_note": (
                 "Hermetic migrated fixture only: no bench DB, live retrieval, real trace "
-                "verification or reseal, promotion, corpus, schema/migration change, or "
+                "verification, native source-context admission, reseal, promotion, corpus, "
+                "schema/migration change, or "
                 "production claim."
             ),
             "selection": {

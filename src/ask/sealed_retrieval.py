@@ -1471,12 +1471,15 @@ def load_verified_trace_evidence(
     # The source owner verifies shared publications once for this bounded batch.
     # No context or partial answer is returned when any selected fact is inadmissible.
     try:
+        observed_through = (
+            _fact_context_observed_through(conn, receipt, cutoff=cutoff) if fact_entries else cutoff
+        )
         observation_ids = tuple(
             dict.fromkeys(str(row["selected_observation_id"]) for row in fact_entries.values())
         )
         reads = FactReadModel(conn).provenance_bundles(
             observation_ids,
-            cutoff=cutoff,
+            cutoff=observed_through,
         )
         bundles = {read.observation_id: read.bundle for read in reads if read.bundle is not None}
         if tuple(read.observation_id for read in reads) != observation_ids or any(
@@ -1509,6 +1512,7 @@ def load_verified_trace_evidence(
                 cutoff=cutoff,
                 entry=fact_entries[index],
                 source_bundle=bundles[str(fact_entries[index]["selected_observation_id"])],
+                observed_through=observed_through,
             )
         else:
             raise PromotionVerificationError(
@@ -1601,6 +1605,27 @@ def _narrative_item(
     )
 
 
+def _fact_context_observed_through(
+    conn: sqlite3.Connection,
+    receipt: HeterogeneousRetrievalReceipt,
+    *,
+    cutoff: datetime,
+) -> datetime:
+    """Use the verified projection head's observation bound, including inherited entries."""
+
+    head = conn.execute(
+        "SELECT cutoff_at,recorded_at FROM canonical_fact_projection_generations "
+        "WHERE generation_id=?",
+        (receipt.fact_generation_id,),
+    ).fetchone()
+    if head is None:
+        raise ValueError("selected fact context projection head is missing")
+    observed = _datetime(head["recorded_at"])
+    if _datetime(head["cutoff_at"]) != _utc(cutoff) or observed < _utc(cutoff):
+        raise ValueError("selected fact context projection clocks differ")
+    return observed
+
+
 def _fact_entry(
     conn: sqlite3.Connection,
     receipt: HeterogeneousRetrievalReceipt,
@@ -1653,18 +1678,29 @@ def _fact_item(
     cutoff: datetime,
     entry: sqlite3.Row | None = None,
     source_bundle: ProvenanceBundle | None = None,
+    observed_through: datetime | None = None,
 ) -> SealedEvidenceItem:
     row = _fact_entry(conn, receipt, candidate) if entry is None else entry
     document = _document_metadata(
         conn, document_version_id=str(row["evidence_document_version_id"])
     )
     try:
+        observed = (
+            _fact_context_observed_through(conn, receipt, cutoff=cutoff)
+            if observed_through is None
+            else observed_through
+        )
         if source_bundle is None:
             source_bundle = FactReadModel(conn).provenance_bundle(
-                str(row["selected_observation_id"]), cutoff=cutoff
+                str(row["selected_observation_id"]), cutoff=observed
             )
         context = _verified_fact_context(
-            conn, row, source_bundle, source_observation_id=str(document["source_observation_id"])
+            conn,
+            row,
+            source_bundle,
+            source_observation_id=str(document["source_observation_id"]),
+            knowledge_cutoff=cutoff,
+            observed_through=observed,
         )
     except (FactAdmissionError, ValueError, RuntimeError, sqlite3.Error) as exc:
         raise PromotionVerificationError(
@@ -1714,6 +1750,8 @@ def _verified_fact_context(
     bundle: ProvenanceBundle,
     *,
     source_observation_id: str,
+    knowledge_cutoff: datetime,
+    observed_through: datetime,
 ) -> str:
     """Preserve admitted context for the exact selected projection, never a newer fact."""
 
@@ -1735,6 +1773,10 @@ def _verified_fact_context(
     )
     if (
         evidence is None
+        or _utc(cell.knowledge_at) > _utc(knowledge_cutoff)
+        or _utc(observation.knowledge_at) > _utc(knowledge_cutoff)
+        or _utc(cell.recorded_at) > _utc(observed_through)
+        or _utc(observation.recorded_at) > _utc(observed_through)
         or cell.fact_cell_id != entry["source_fact_cell_id"]
         or observation.observation_id != entry["selected_observation_id"]
         or cell.reporting_entity_id != entry["reporting_entity_id"]
@@ -1758,6 +1800,10 @@ def _verified_fact_context(
     # Native v2 records preserve reported/derived and revision kind. They do not
     # encode actual/guidance/consensus or a separate scale. Never invent them.
     context = {
+        "knowledge_cutoff": knowledge_cutoff.isoformat(),
+        "observed_through": observed_through.isoformat(),
+        "observation_knowledge_at": observation.knowledge_at.isoformat(),
+        "observation_recorded_at": observation.recorded_at.isoformat(),
         "metric_definition_revision_id": entry["metric_definition_revision_id"],
         "metric_definition_commitment_sha256": entry["metric_definition_commitment_sha256"],
         "metric_definition_context": entry["canonical_search_text"],

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable, Iterator, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Protocol, cast
@@ -25,8 +26,13 @@ from ask.sealed_retrieval import (
     execute_sealed_retrieval_plan,
 )
 from provenance.fact_plane_v2 import FactCellV2, ReportedFactObservationV2
+from provenance.fact_read_model import FactReadModel
 from provenance.population_completeness import PopulationTemporalScope
-from provenance.source_fact_publication import record_commitment
+from provenance.source_fact_publication import (
+    PublicationVerificationError,
+    record_commitment,
+    verify_source_fact_publication,
+)
 from provenance.source_fact_repository import ReportedSourceFact, SourceFactRepository
 from search.heterogeneous_retrieval import HeterogeneousRetrievalReceipt
 from tests.test_source_fact_repository import STAMP as FACT_STAMP
@@ -718,8 +724,18 @@ def test_verifier_artifact_hash_is_line_ending_insensitive(tmp_path: Path) -> No
     } == paths
 
 
+@dataclass(frozen=True)
+class _FactContextClocks:
+    knowledge_at: datetime = FACT_STAMP
+    cell_knowledge_at: datetime | None = None
+    observation_knowledge_at: datetime | None = None
+    recorded_at: datetime = FACT_STAMP
+    observed_through: datetime = FACT_STAMP
+
+
 @pytest.fixture
 def published_fact_context(
+    request: pytest.FixtureRequest,
     tmp_path: Path,
     migrated_db: Callable[..., Path],
 ) -> Iterator[tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row]]:
@@ -728,6 +744,10 @@ def published_fact_context(
     Projection/trace admission is tested separately. This fixture tests that the
     final prompt adapter reuses the sealed source owner and keeps its context.
     """
+    clocks = cast(_FactContextClocks, getattr(request, "param", _FactContextClocks()))
+    cell_knowledge = clocks.cell_knowledge_at or clocks.knowledge_at
+    observation_knowledge = clocks.observation_knowledge_at or clocks.knowledge_at
+    publication_knowledge = max(cell_knowledge, observation_knowledge)
     path = migrated_db(tmp_path / "fact-context.db")
     conn = sqlite3.connect(path)
     seed_foundation(conn)
@@ -738,13 +758,45 @@ def published_fact_context(
             **original.cell.model_dump(mode="json"),
             "unit_key": "USD_millions",
             "semantic_key_sha256": None,
+            "knowledge_at": cell_knowledge,
+            "recorded_at": clocks.recorded_at,
+            "dimensions": tuple(
+                dimension.model_copy(update={"recorded_at": clocks.recorded_at})
+                for dimension in original.cell.dimensions
+            ),
         }
     )
     observation = ReportedFactObservationV2.model_validate(
-        {**original.observation.model_dump(mode="json"), "precision": "3"}
+        {
+            **original.observation.model_dump(mode="json"),
+            "precision": "3",
+            "knowledge_at": observation_knowledge,
+            "recorded_at": clocks.recorded_at,
+        }
     )
     publication = publication.model_copy(
-        update={"reported_facts": (ReportedSourceFact(cell=cell, observation=observation),)}
+        update={
+            "created_at": publication_knowledge,
+            "recorded_at": clocks.recorded_at,
+            "reported_facts": (ReportedSourceFact(cell=cell, observation=observation),),
+            "extraction_seals": tuple(
+                seal.model_copy(update={"recorded_at": clocks.recorded_at})
+                for seal in publication.extraction_seals
+            ),
+            "resolutions": tuple(
+                resolution.model_copy(
+                    update={
+                        "knowledge_cutoff": publication_knowledge,
+                        "recorded_at": clocks.recorded_at,
+                        "candidates": tuple(
+                            candidate.model_copy(update={"recorded_at": clocks.recorded_at})
+                            for candidate in resolution.candidates
+                        ),
+                    }
+                )
+                for resolution in publication.resolutions
+            ),
+        }
     )
     SourceFactRepository(conn).publish(publication)
     conn.execute(
@@ -756,7 +808,9 @@ def published_fact_context(
         "SELECT * FROM main.canonical_fact_projection_entries WHERE 0"
     )
     conn.execute(
-        "INSERT INTO canonical_fact_projection_generations (generation_id) VALUES ('generation')"
+        "INSERT INTO canonical_fact_projection_generations "
+        "(generation_id,cutoff_at,recorded_at) VALUES ('generation',?,?)",
+        (FACT_STAMP.isoformat(), clocks.observed_through.isoformat()),
     )
     payload: dict[str, object] = {
         "canonical_metric_cell_id": "canonical-revenue",
@@ -939,4 +993,187 @@ def test_fact_context_rejects_source_unavailable_at_selected_cutoff(
             {"result_ordinal": 0, "final_score": "1"},
             n=1,
             cutoff=FACT_STAMP - timedelta(seconds=1),
+        )
+
+
+@pytest.mark.parametrize(
+    "published_fact_context",
+    [
+        _FactContextClocks(
+            recorded_at=FACT_STAMP + timedelta(hours=2),
+            observed_through=FACT_STAMP + timedelta(hours=2),
+        )
+    ],
+    indirect=True,
+)
+def test_selected_fact_context_preserves_distinct_knowledge_and_observation_clocks(
+    published_fact_context: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row],
+) -> None:
+    conn, receipt, candidate = published_fact_context
+    observed = FACT_STAMP + timedelta(hours=2)
+    owner = verify_source_fact_publication(
+        conn, publication_id="publication-1", cutoff=FACT_STAMP, observed_through=observed
+    )
+    assert owner.cutoff == FACT_STAMP
+    assert owner.recorded_at == observed
+    item = _fact_item(
+        conn, receipt, candidate, {"result_ordinal": 0, "final_score": "1"}, n=1, cutoff=FACT_STAMP
+    )
+    assert item.value == "100 USD USD_millions"
+    context = json.loads(item.text.split("Verified financial context: ", 1)[1])
+    assert context["knowledge_cutoff"] == FACT_STAMP.isoformat()
+    assert context["observed_through"] == observed.isoformat()
+    assert context["observation_knowledge_at"] == FACT_STAMP.isoformat()
+    assert context["observation_recorded_at"] == observed.isoformat()
+    assert "relations" not in context
+    assert "derivation" not in context
+
+
+@pytest.mark.parametrize(
+    "published_fact_context",
+    [
+        _FactContextClocks(
+            recorded_at=FACT_STAMP + timedelta(hours=2),
+            observed_through=FACT_STAMP + timedelta(hours=2),
+        )
+    ],
+    indirect=True,
+)
+def test_inherited_fact_context_uses_verified_head_clock_not_ancestor_or_query_time(
+    published_fact_context: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row],
+) -> None:
+    conn, receipt, candidate = published_fact_context
+    head_observed = FACT_STAMP + timedelta(hours=3)
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_generations "
+        "(generation_id,parent_generation_id,cutoff_at,recorded_at) VALUES (?,?,?,?)",
+        ("head", "generation", FACT_STAMP.isoformat(), head_observed.isoformat()),
+    )
+    receipt = receipt.model_copy(
+        update={"fact_generation_id": "head", "recorded_at": FACT_STAMP + timedelta(days=1)}
+    )
+    item = _fact_item(
+        conn, receipt, candidate, {"result_ordinal": 0, "final_score": "1"}, n=1, cutoff=FACT_STAMP
+    )
+    context = json.loads(item.text.split("Verified financial context: ", 1)[1])
+    assert context["observed_through"] == head_observed.isoformat()
+    assert context["observation_recorded_at"] == (FACT_STAMP + timedelta(hours=2)).isoformat()
+    assert context["knowledge_cutoff"] == FACT_STAMP.isoformat()
+
+
+@pytest.mark.parametrize(
+    "published_fact_context",
+    [
+        _FactContextClocks(
+            knowledge_at=FACT_STAMP + timedelta(microseconds=1),
+            recorded_at=FACT_STAMP + timedelta(hours=2),
+            observed_through=FACT_STAMP + timedelta(hours=2),
+        ),
+        _FactContextClocks(
+            recorded_at=FACT_STAMP + timedelta(hours=2, microseconds=1),
+            observed_through=FACT_STAMP + timedelta(hours=2),
+        ),
+    ],
+    ids=["knowledge_one_microsecond_after_K", "recorded_one_microsecond_after_O"],
+    indirect=True,
+)
+def test_fact_context_rejects_source_just_outside_exact_projection_clocks(
+    published_fact_context: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row],
+) -> None:
+    conn, receipt, candidate = published_fact_context
+    observed = FACT_STAMP + timedelta(hours=2)
+    with pytest.raises(PublicationVerificationError):
+        verify_source_fact_publication(
+            conn, publication_id="publication-1", cutoff=FACT_STAMP, observed_through=observed
+        )
+    # A later query time cannot widen the immutable projection's observation bound.
+    receipt = receipt.model_copy(update={"recorded_at": FACT_STAMP + timedelta(days=1)})
+    with pytest.raises(PromotionVerificationError, match="selected fact context"):
+        _fact_item(
+            conn,
+            receipt,
+            candidate,
+            {"result_ordinal": 0, "final_score": "1"},
+            n=1,
+            cutoff=FACT_STAMP,
+        )
+
+
+@pytest.mark.parametrize(
+    ("column", "replacement"),
+    [
+        ("cutoff_at", FACT_STAMP + timedelta(microseconds=1)),
+        ("recorded_at", FACT_STAMP - timedelta(microseconds=1)),
+    ],
+    ids=["head_K_differs_from_trace_K", "head_O_precedes_K"],
+)
+def test_fact_context_rejects_invalid_head_clock_coordinates(
+    published_fact_context: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row],
+    column: str,
+    replacement: datetime,
+) -> None:
+    conn, receipt, candidate = published_fact_context
+    conn.execute(
+        f"UPDATE canonical_fact_projection_generations SET {column}=?",
+        (replacement.isoformat(),),
+    )
+    with pytest.raises(PromotionVerificationError, match="selected fact context"):
+        _fact_item(
+            conn,
+            receipt,
+            candidate,
+            {"result_ordinal": 0, "final_score": "1"},
+            n=1,
+            cutoff=FACT_STAMP,
+        )
+
+
+@pytest.mark.parametrize(
+    ("published_fact_context", "future_field"),
+    [
+        (
+            _FactContextClocks(
+                cell_knowledge_at=FACT_STAMP + timedelta(microseconds=1),
+                recorded_at=FACT_STAMP + timedelta(hours=2),
+                observed_through=FACT_STAMP + timedelta(hours=2),
+            ),
+            "cell",
+        ),
+        (
+            _FactContextClocks(
+                observation_knowledge_at=FACT_STAMP + timedelta(microseconds=1),
+                recorded_at=FACT_STAMP + timedelta(hours=2),
+                observed_through=FACT_STAMP + timedelta(hours=2),
+            ),
+            "observation",
+        ),
+    ],
+    ids=["only_cell_knowledge_after_K", "only_observation_knowledge_after_K"],
+    indirect=["published_fact_context"],
+)
+def test_fact_context_checks_cell_and_observation_knowledge_independently(
+    published_fact_context: tuple[sqlite3.Connection, HeterogeneousRetrievalReceipt, sqlite3.Row],
+    future_field: str,
+) -> None:
+    conn, receipt, candidate = published_fact_context
+    observed = FACT_STAMP + timedelta(hours=2)
+    # The actual source writer and reader accept this graph at its own clocks.
+    owner = verify_source_fact_publication(
+        conn,
+        publication_id="publication-1",
+        cutoff=FACT_STAMP + timedelta(microseconds=1),
+        observed_through=observed,
+    )
+    assert owner.created_at == FACT_STAMP + timedelta(microseconds=1)
+    bundle = FactReadModel(conn).provenance_bundle("observation-1", cutoff=observed)
+    assert (bundle.cell.knowledge_at > FACT_STAMP) == (future_field == "cell")
+    assert (bundle.observation.knowledge_at > FACT_STAMP) == (future_field == "observation")
+    with pytest.raises(PromotionVerificationError, match="selected fact context"):
+        _fact_item(
+            conn,
+            receipt,
+            candidate,
+            {"result_ordinal": 0, "final_score": "1"},
+            n=1,
+            cutoff=FACT_STAMP,
         )
