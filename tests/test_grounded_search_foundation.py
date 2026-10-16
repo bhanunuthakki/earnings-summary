@@ -496,10 +496,8 @@ def test_legacy_ask_trace_bundle_digest_is_byte_compatible() -> None:
         observed_at=datetime(2026, 7, 27, 6),
         retrieved_at=datetime(2026, 7, 27, 7),
     )
-    assert (
-        ask_item_bundle_sha256(item)
-        == "81d90d9a8c060841b41c26934f4381a41acf2b023cdfdfc45f7148997fc8037a"
-    )
+    expected_bundle_sha256 = "81d90d9a8c060841b41c26934f4381a41acf2b023cdfdfc45f7148997fc8037a"
+    assert ask_item_bundle_sha256(item) == expected_bundle_sha256
 
 
 def test_expected_missing_membership_and_seal_are_auditable_and_immutable(tmp_path: Path) -> None:

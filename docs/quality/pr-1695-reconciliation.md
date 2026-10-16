@@ -170,3 +170,14 @@ attributable. Thirty-five focused tests pass; the earlier related pipeline,
 capture and matcher batch passed 113 tests. Writer and liveness coverage passed
 275 tests with five separate native-Windows suite skips, supplemented by the
 native protocol evidence above.
+
+## Credential-scan metadata reconciliation
+
+The full credential scanner identified two Git commit identifiers in the helper
+ledger and the fixed grounded-search compatibility digest as false positives.
+The existing filter now recognizes only those two forty-hex metadata fields at
+the exact ledger path and the complete named digest assignment at the exact test
+path. The global key allowlist and detector set are unchanged. All 928 filter
+tests pass, including actual detector subprocess checks that adjacent synthetic
+credentials and identical hashes under unrelated paths still fail. The search
+compatibility oracle keeps its exact digest value. No runtime source changed.

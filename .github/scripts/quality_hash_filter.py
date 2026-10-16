@@ -1,6 +1,7 @@
 """Narrow detect-secrets filter for generated quality-evidence hashes.
 
-This suppresses scanner false positives for schema-defined digest members only.
+This suppresses scanner false positives for schema-defined digest members and
+one named compatibility-test digest assignment.
 detect-secrets may normalize a JSON colon to an equals sign during its eager
 second scan; that exact equivalent is accepted solely for the same JSON paths.
 This filter neither validates evidence integrity nor authorizes credentials or
@@ -100,16 +101,26 @@ _INVESTING_REVIEW_BASELINE = (
 _INVESTING_REVIEW_DIGEST_MEMBER = re.compile(
     r'[ \t]*"sha256"[ \t]*(?::|=)[ \t]*"[0-9a-f]{64}"[ \t]*,?[ \t]*(?:\r?\n)?\Z'
 )
+_CANONICAL_HELPERS_COMMIT_MEMBER = re.compile(
+    r'[ \t]*"(?:generated_commit|source_commit)"[ \t]*(?::|=)[ \t]*"[0-9a-f]{40}"[ \t]*,?[ \t]*(?:\r?\n)?\Z'
+)
+_GROUNDED_SEARCH_DIGEST_ASSIGNMENT = re.compile(
+    r'[ \t]*expected_bundle_sha256[ \t]*=[ \t]*"[0-9a-f]{64}"[ \t]*(?:\r?\n)?\Z'
+)
 
 
 def is_quality_evidence_hash(filename: str, line: str) -> bool:
-    """Return whether one exact allowed JSON member is generated digest metadata."""
+    """Return whether one exact allowed line contains non-secret digest metadata."""
 
     canonical_path = filename.replace(os.sep, "/")
     if canonical_path in _MELI_SOURCE_FIXTURES:
         return _MELI_SOURCE_DIGEST_MEMBER.fullmatch(line) is not None
     if canonical_path == _INVESTING_REVIEW_BASELINE:
         return _INVESTING_REVIEW_DIGEST_MEMBER.fullmatch(line) is not None
+    if canonical_path == "docs/quality/canonical-helpers.json":
+        return _CANONICAL_HELPERS_COMMIT_MEMBER.fullmatch(line) is not None
+    if canonical_path == "tests/test_grounded_search_foundation.py":
+        return _GROUNDED_SEARCH_DIGEST_ASSIGNMENT.fullmatch(line) is not None
     if canonical_path not in _CANONICAL_PATHS:
         return False
     if _HASH40_MEMBER.fullmatch(line) is not None or _HASH64_MEMBER.fullmatch(line) is not None:
