@@ -95,8 +95,9 @@ extractor closure, stale-lock takeover risk, helper inventory drift and smaller
 cache/boot/database issues. These are addressed before final acceptance.
 The proposed daily backfill task is removed; the bounded CLI stays manual.
 Its specific findings drove the corrections above. A separate review of the
-final source against the original goal is required before merge. Its score is
-advisory evidence; tests and merge rules still govern acceptance.
+final source against the original goal is required before merge. The owner
+requires an independent Opus 5.5 score above 85/100. That score cannot waive
+failed tests or merge rules.
 
 No production database, installed application, live scheduler or provider policy
 was changed. Production timing and live sealed retrieval remain outside this
@@ -417,3 +418,59 @@ The follow-up reduces production source by five noncomment lines relative to
 maximum fan-out, dependency cycles and duplicate measures do not regress.
 The unchanged architecture and duplication gate passes. Its baseline and
 scanner are unchanged.
+
+
+The independent Opus 5.5 review of `c6982c36` returned 83/100 with no blocking
+defect. Its two wording and documentation findings are addressed below.
+
+The corpus authority remains the exact governed reporting projection. Active
+acquisition obligations determine the required family canaries; they do not
+remove otherwise eligible archived reporting documents. The additional
+expired-family document remains an included, searchable corpus member. Its
+source identity and selection disposition remain committed. A real lexical
+query now verifies that the retained earnings document can be retrieved with
+its exact source URL. This does not claim semantic qualification of every
+inactive family. Filtering those canonical members would change the existing
+corpus contract, whose owner rejects incomplete projection inputs.
+
+The financial context warning refers to the selected fact's own `unit_key`.
+It no longer places a fixed unit example into every fact's context.
+
+
+A new CompanyFacts fixture exposed an actual legacy/canonical parity fault.
+The legacy writer records fiscal civil dates as SQLite midnight text, while
+parity accepted only a bare date or a timezone-aware timestamp. The legacy
+boundary now accepts only its exact midnight date formats. It does not infer
+a timezone for other naive times, and it does not change canonical timestamp
+or knowledge/recording-cutoff requirements. No persisted value is rewritten.
+The old source fails three new regressions; all 23 owning tests pass after
+correction, including fiscal-day mismatch and naive-timestamp rejection.
+The unchanged scanner measures 552,105 noncomment lines after this fix, one
+above the prior reviewed baseline and 3,108 above main. The baseline refresh
+records this correction explicitly. Module counts, size buckets, dependency
+cycles, fan-out and duplicate ceilings do not change.
+
+## Larger synthetic performance probe
+
+A predeclared fixture contains 50 portfolio companies, 50 evaluation companies
+and USD 500,000 of portfolio value. Main and candidate use the same fixture
+bytes and produce the same rows and responses, apart from generated timestamps.
+Thirty cold server cycles reduce the median from 55.42 to 16.46 ms, SQL
+statements from 2,646 to 231, and cockpit builds from three to one. Sixty warm
+cycles remain similar at 0.933 and 0.911 ms, with no SQL or cockpit build.
+
+Eighty actual Chromium Cockpit-to-Evaluation cycles cover widths of 1440 and
+390 pixels. Cold Cockpit medians improve from 100.55 to 87.55 ms on desktop
+and from 98.50 to 88.80 ms at the narrow width. Evaluation navigation improves
+from 40.95 to 24.05 ms and from 41.30 to 24.65 ms. Warm navigation remains
+similar. Each cycle checks the exact rows and portfolio value, then waits for
+two animation frames. Browser interception disables the HTTP cache. No script
+or external network error occurs. The test servers and listeners are stopped.
+
+These observations concern a fixed synthetic task. They do not measure physical
+paint, largest contentful paint, production coverage or general throughput.
+The candidate snapshot contains `c6982c36` and the selected-unit wording fix.
+It predates the fiscal-date correction, which is outside this browser path.
+The retained source hashes define that scope; the measurements do not establish
+whole-tree equivalence with a later commit. The initial fixture row-count
+assertion errors are retained. They occurred before the timing loops.

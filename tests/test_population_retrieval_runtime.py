@@ -45,6 +45,7 @@ from search.corpus_builder import (
     build_grounded_search_corpus,
     load_coverage_expected_document_inventory,
 )
+from search.grounded import HybridRetriever, SearchFilter
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
@@ -1076,6 +1077,24 @@ def test_real_reporting_inventory_populates_exact_canonical_lexical_projection(
             )
             for item in canonical.expected_documents
         ]
+        if include_expired_family:
+            # Canonical archive membership is broader than the active acquisition
+            # obligations; its retained reporting source is actually searchable.
+            manifest_id = result.issuer_results[0].manifest_id
+            assert manifest_id is not None
+            release_hits = HybridRetriever(conn).search(
+                "revenue",
+                manifest_id,
+                filters=SearchFilter(
+                    issuer_id="issuer", form_types=("release",), knowledge_cutoff=cutoff
+                ),
+                limit=10,
+            )
+            assert release_hits
+            assert all(hit.document_version_id == "release-document" for hit in release_hits)
+            assert all(
+                hit.source_url == "https://synthetic.invalid/earnings" for hit in release_hits
+            )
         forged = tuple(
             item.model_copy(update={"reason": "coverage:captured:invented"})
             if item.expected_document_key == "presentation"

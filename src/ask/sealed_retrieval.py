@@ -1829,7 +1829,7 @@ def _verified_fact_context(
         "actual_guidance_consensus_status": "unavailable",
         "scale": "unavailable",
         "context_limitations": (
-            "Preserve the explicit reported unit and its literal meaning, including USD_millions. "
+            "Preserve this fact's explicit unit_key and its literal meaning. "
             "A separate scale field is unavailable; this does not erase scale expressed in the unit. "
             "Do not infer an additional scale or actual/guidance/consensus status from currency, "
             "decimals, or reported observation status. Preserve unknown accounting context as unknown. "

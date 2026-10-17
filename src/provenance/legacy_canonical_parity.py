@@ -1038,7 +1038,7 @@ def _compare(
         if projection.value_kind == "numeric"
         else projection.canonical_value
     )
-    legacy_period = _date_period(payload.get("period_end"))
+    legacy_period = _date_period(payload.get("period_end"), legacy_sqlite_date=True)
     canonical_period = _date_period(projection.period_end)
     legacy_unit = _required_text(payload.get("unit"), "legacy unit")
     canonical_unit = _required_text(projection.unit_key, "canonical unit")
@@ -1224,7 +1224,7 @@ def _exact_decimal_text(value: object) -> str:
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
-def _date_period(value: object) -> date:
+def _date_period(value: object, *, legacy_sqlite_date: bool = False) -> date:
     if value is None:
         raise ParityContractError("period_end is missing")
     text = str(value)
@@ -1235,6 +1235,14 @@ def _date_period(value: object) -> date:
     except ValueError as exc:
         raise ParityContractError("period_end is not ISO-8601") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:
+        # The legacy writer stores fiscal civil dates as SQLite midnight text.
+        # This is a date representation, never an inferred timestamp timezone.
+        if (
+            legacy_sqlite_date
+            and text[:10] == parsed.date().isoformat()
+            and text[10:] in {" 00:00:00", " 00:00:00.000000"}
+        ):
+            return parsed.date()
         raise ParityContractError("timestamp period_end must be timezone-aware")
     return parsed.astimezone(UTC).date()
 

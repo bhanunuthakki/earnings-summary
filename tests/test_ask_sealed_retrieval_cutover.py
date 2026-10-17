@@ -1131,10 +1131,7 @@ def test_fact_prompt_preserves_verified_financial_context(
     assert '"explicit_member_name":"CloudMember"' in item.text
     assert '"actual_guidance_consensus_status":"unavailable"' in item.text
     assert '"scale":"unavailable"' in item.text
-    assert (
-        "Preserve the explicit reported unit and its literal meaning, including USD_millions"
-        in item.text
-    )
+    assert "Preserve this fact's explicit unit_key and its literal meaning" in item.text
     assert "does not erase scale expressed in the unit" in item.text
     assert "does not establish complete decision-grade financial context" in item.text
     assert "storage_uri" not in item.text
