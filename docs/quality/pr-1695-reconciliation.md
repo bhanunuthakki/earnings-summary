@@ -95,9 +95,9 @@ extractor closure, stale-lock takeover risk, helper inventory drift and smaller
 cache/boot/database issues. These are addressed before final acceptance.
 The proposed daily backfill task is removed; the bounded CLI stays manual.
 Its specific findings drove the corrections above. A separate review of the
-final source against the original goal is required before merge. The owner
-requires an independent Opus 5.5 score above 85/100. That score cannot waive
-failed tests or merge rules.
+final source against the original goal is required before merge. Independent
+review cannot waive failed tests or merge rules. The owner's acceptance
+decision remains outside the reviewed source artifact.
 
 No production database, installed application, live scheduler or provider policy
 was changed. Production timing and live sealed retrieval remain outside this
