@@ -35,6 +35,7 @@ from compute.thesis_evaluator import HoldingsSpec
 from identity import DEFAULT_USER_ID
 from research.proposals import ResearchProposal, create_proposal, get_proposal
 from run_lock import hold_run_lock
+from runtime.deterministic import canonical_json as _canonical_json
 from user_state._db import now_iso, open_conn
 
 ProposalStatus: TypeAlias = Literal["pending", "approved", "rejected", "superseded"]
@@ -45,10 +46,6 @@ KpiTargetPath: TypeAlias = Literal["/tier_1_kpis", "/tier_2_kpis", "/tier_3_kpis
 _TICKER_RE = re.compile(r"[A-Z0-9][A-Z0-9.-]{0,23}")
 _TARGET_FILE_RE = re.compile(r"micro_thesis/holdings/([A-Z0-9][A-Z0-9.-]{0,23})\.json")
 _MAX_HOLDINGS_BYTES = 2_000_000
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 def _sha256_bytes(value: bytes) -> str:

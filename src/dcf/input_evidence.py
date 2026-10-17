@@ -43,6 +43,7 @@ from provenance.sec_package_subject_witness import (
     SecPackageSubjectWitnessError,
     verify_sec_package_subject_witness,
 )
+from runtime.deterministic import as_utc as _utc
 
 
 class InputEvidenceError(ValueError):
@@ -350,10 +351,6 @@ def canonical_digest(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     ).hexdigest()
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _time(raw: object) -> datetime:

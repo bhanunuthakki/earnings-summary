@@ -13,16 +13,130 @@ import hashlib
 import json
 import logging
 import math
+import sqlite3
 import subprocess
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import TypeVar, cast
+from uuid import uuid4
 
 from calibration_guard import wilson_interval
 from llm.calibration import CalibrationScore, record_score
+from llm.cli import is_hard_stop
+from llm.structured import StructuredParseError
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# eval_runs / eval_case_results writes (folded in from the former
+# ``evals.store``; alembic 0083).
+#
+# Unlike the production telemetry writers (llm_call_ledger, calibration), this
+# store is LOUD: an eval run you can't persist should fail the harness with a
+# pointer at the migration, not silently drop scores. ``--no-persist`` on the
+# CLI is the deliberate way to run without a migrated DB.
+# ---------------------------------------------------------------------------
+
+_RUN_INSERT = """
+INSERT INTO eval_runs(
+    run_id, purpose, mode, prompt_version, model, judge_model,
+    golden_set_sha, n_cases, n_pass, avg_score,
+    started_at, finished_at, git_sha, notes
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+"""
+
+_CASE_INSERT = """
+INSERT INTO eval_case_results(
+    eval_run_id, case_id, question, expected_json, actual_json,
+    passed, score, failure_stage, judge_verdict, judge_rationale,
+    prompt_text, response_text, latency_ms, created_at
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+"""
+
+
+def write_run(summary: EvalRunSummary, *, db_path: Path) -> int:
+    """Insert the run row + every case row in one transaction. Returns the
+    eval_runs id. Raises RuntimeError with a migration hint when the tables
+    are missing; lets other sqlite errors propagate (loud by design)."""
+    if not Path(db_path).exists():
+        raise RuntimeError(f"eval store: DB not found at {db_path}")
+    conn = connect_sqlite(
+        db_path,
+        role=SQLiteConnectionRole.WRITER,
+        # The eval store is intentionally compatible with its introducing
+        # 0083 schema so historical/replay fixtures remain writable. Table
+        # presence below is the narrow contract this module enforces.
+        schema_preflight=False,
+    )
+    try:
+        try:
+            cur = conn.execute(
+                _RUN_INSERT,
+                (
+                    summary.run_id,
+                    summary.purpose,
+                    summary.mode,
+                    summary.prompt_version,
+                    summary.model,
+                    summary.judge_model,
+                    summary.golden_set_sha,
+                    summary.n_cases,
+                    summary.n_pass,
+                    summary.avg_score,
+                    summary.started_at.isoformat(),
+                    summary.finished_at.isoformat() if summary.finished_at else None,
+                    summary.git_sha,
+                    summary.notes,
+                ),
+            )
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc):
+                raise RuntimeError(
+                    "eval store: eval_runs table missing â€” run `alembic upgrade head` "
+                    "(migration 0083_eval_runs), or pass --no-persist."
+                ) from exc
+            raise
+        run_db_id = int(cur.lastrowid or 0)
+        for case in summary.cases:
+            _insert_case(conn, run_db_id, case, summary)
+        conn.commit()
+        return run_db_id
+    finally:
+        conn.close()
+
+
+def _insert_case(
+    conn: sqlite3.Connection,
+    run_db_id: int,
+    case: CaseResult,
+    summary: EvalRunSummary,
+) -> None:
+    conn.execute(
+        _CASE_INSERT,
+        (
+            run_db_id,
+            case.case_id,
+            case.question,
+            case.expected_json,
+            case.actual_json,
+            1 if case.passed else 0,
+            # NULL, not 0.0, for judge-infra cases: "not measured" must stay
+            # distinguishable from a real measured zero in the DB.
+            float(case.score) if case.score is not None else None,
+            case.failure_stage,
+            case.judge_verdict,
+            case.judge_rationale,
+            case.prompt_text,
+            case.response_text,
+            case.latency_ms,
+            (summary.finished_at or summary.started_at).isoformat(),
+        ),
+    )
 
 
 class EvalAbortError(RuntimeError):
@@ -275,6 +389,140 @@ def sha256_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+load_golden_doc = load_golden_document
+
+
+_GradedCase = TypeVar("_GradedCase")
+
+
+def grade_recall_set_case(
+    *,
+    purpose: str,
+    case_id: str,
+    ticker: str,
+    expected: frozenset[str],
+    also_valid: frozenset[str],
+    produce: Callable[[], list[str]],
+    produce_label: str,
+    normalize: Callable[[str], str],
+    pass_recall: float,
+) -> CaseResult:
+    """Shared recall grader for closed-set token/ticker suggestions.
+
+    Wraps one ``produce`` call in the shared abort semantics (a
+    ``StructuredParseError`` is an extraction-quality failure scored 0 at
+    stage ``call``; a hard stop aborts the run instead of scoring 0s), then
+    scores recall of the must-have set, reporting precision over the
+    acceptable set (expected plus ``also_valid``) in the rationale.
+    """
+    t0 = time.monotonic()
+    try:
+        returned_raw = produce()
+    except StructuredParseError as exc:
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        return CaseResult(
+            case_id=case_id,
+            question=f"{purpose}/{case_id} ({ticker})",
+            passed=False,
+            score=0.0,
+            expected_json=dumps_compact(sorted(expected)),
+            actual_json=None,
+            failure_stage="call",
+            judge_rationale=f"{produce_label} returned unusable JSON twice: {exc}",
+            latency_ms=latency_ms,
+        )
+    except Exception as exc:
+        if is_hard_stop(exc):
+            raise EvalAbortError(
+                f"{purpose} hard stop on case {case_id}: {type(exc).__name__}: {exc} — "
+                "aborting instead of scoring 0s."
+            ) from exc
+        raise
+    latency_ms = int((time.monotonic() - t0) * 1000)
+
+    returned = frozenset(normalize(t) for t in returned_raw if t.strip())
+    hits = returned & expected
+    recall = len(hits) / len(expected) if expected else 0.0
+    acceptable = expected | also_valid
+    precision = len(returned & acceptable) / len(returned) if returned else 0.0
+    passed = recall >= pass_recall
+    missed = sorted(expected - returned)
+    off = sorted(returned - acceptable)
+    return CaseResult(
+        case_id=case_id,
+        question=f"{purpose}/{case_id} ({ticker})",
+        passed=passed,
+        score=recall,
+        expected_json=dumps_compact(sorted(expected)),
+        actual_json=dumps_compact(sorted(returned)),
+        failure_stage=None if passed else "mismatch",
+        judge_rationale=(
+            f"recall={recall:.2f} precision={precision:.2f}"
+            + (f"; missed {missed}" if missed else "")
+            + (f"; off-thesis {off}" if off else "")
+        ),
+        latency_ms=latency_ms,
+    )
+
+
+def run_golden_eval(
+    *,
+    purpose: str,
+    golden_path: Path,
+    code_root: Path,
+    cases: Sequence[_GradedCase],
+    grade_case: Callable[[_GradedCase], CaseResult],
+    prompt_version: str,
+    model: str,
+    limit: int | None = None,
+) -> EvalRunSummary:
+    """Shared mode-A run orchestration for the golden-set graders.
+
+    Grades each already-validated case in order, retries the first case once
+    when its call failed (a second failure aborts the run — a down transport
+    is not prompt quality), logs one graded event per case, and returns the
+    summary without persisting (the caller decides). ``cases`` come from the
+    caller's own golden loader; ``limit`` truncates them.
+    """
+    selected = list(cases)
+    if limit is not None:
+        selected = selected[: max(0, limit)]
+    summary = EvalRunSummary(
+        run_id=uuid4().hex,
+        purpose=purpose,
+        mode="live",
+        prompt_version=prompt_version,
+        model=model,
+        judge_model=None,  # deterministic, hand-picked ground truth — no judge layer
+        golden_set_sha=sha256_file(golden_path),
+        started_at=now_naive_utc(),
+        git_sha=resolve_git_sha(code_root),
+    )
+    for i, case in enumerate(selected):
+        result = grade_case(case)
+        if i == 0 and result.failure_stage == "call":
+            retry = grade_case(case)
+            if retry.failure_stage == "call":
+                raise EvalAbortError(
+                    f"{purpose}: the first case errored twice ({result.judge_rationale}) — "
+                    "transport looks down; aborting instead of scoring 0s."
+                )
+            result = retry
+        summary.cases.append(result)
+        log.info(
+            {
+                "event": "eval_case_graded",
+                "purpose": purpose,
+                "case_id": result.case_id,
+                "passed": result.passed,
+                "score": result.score,
+                "failure_stage": result.failure_stage,
+            }
+        )
+    summary.finished_at = now_naive_utc()
+    return summary
+
+
 def resolve_git_sha(repo_root: Path) -> str | None:
     """Best-effort short sha of the code under eval. None when git is
     unavailable (the run is still valid — just less comparable)."""
@@ -297,8 +545,6 @@ def persist_summary(summary: EvalRunSummary, *, db_path: Path) -> int:
     into prompt_calibration_scores (scored_by='auto:eval_harness'). Returns
     the eval_runs row id. Raises on eval-table write failure (loud by
     design); the calibration bridge stays best-effort (its own contract)."""
-    from evals import store
-
     if summary.mode == "capture_audit":
         # Defense in depth: capture-audit judge prompts embed private production
         # exchanges. Keep only capture IDs, hashes, scores, verdicts, and
@@ -310,7 +556,7 @@ def persist_summary(summary: EvalRunSummary, *, db_path: Path) -> int:
             case.judge_verdict = None
             case.judge_rationale = None
 
-    run_db_id = store.write_run(summary, db_path=db_path)
+    run_db_id = write_run(summary, db_path=db_path)
     avg = summary.avg_score
     if avg is not None:
         record_score(

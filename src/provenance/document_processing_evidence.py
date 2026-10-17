@@ -11,7 +11,7 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
@@ -27,6 +27,9 @@ from provenance.fulltext_extractor_identity import (
 )
 from provenance.ocr_extraction import normalize_extracted_text
 from provenance.pdf_table_extraction import PdfTableExtractionArtifact
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import canonical_json as _canonical_json
+from runtime.deterministic import content_sha256_or_text as _digest
 
 DocumentProcessingLane = Literal[
     "html_native_hierarchy",
@@ -161,26 +164,6 @@ class _Derived:
     native_scope_json: str
     knowledge_at: datetime
     members: tuple[_NativeMember, ...]
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-
-
-def _digest(value: str | object) -> str:
-    encoded = value if isinstance(value, str) else _canonical_json(value)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
-def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 def _datetime(value: object, field: str) -> datetime:

@@ -11,6 +11,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import cast
+from xml.etree import ElementTree
 
 CODE_PREFIXES = (
     "src/",
@@ -83,6 +84,7 @@ DESIGN_FILES = {
 DESIGN_FILE_PATTERNS = ("scripts/gen_design_*.py", "tests/test_design_*.py")
 CONDITIONAL_JOBS = {
     "fast-signal": "code",
+    "windows-native": "code",
     "tests": "code",
     "design": "design",
     "quality": "python",
@@ -91,6 +93,15 @@ CONDITIONAL_JOBS = {
 }
 TERMINAL_SUCCESS_RESULTS = {"success", "skipped"}
 DiagnosticFingerprint = tuple[str, str, str]
+WINDOWS_NATIVE_CASES = frozenset(
+    {
+        "test_windows_exited_process_with_held_handle_is_dead_and_lock_is_recoverable[0]",
+        "test_windows_exited_process_with_held_handle_is_dead_and_lock_is_recoverable[259]",
+        "test_windows_kill_on_close_job_terminates_process_and_descendant",
+        "test_managed_child_is_suspended_assigned_resumed_and_kills_descendant",
+        "test_managed_deadline_kills_live_worker_and_descendant",
+    }
+)
 
 # Canonical test-shard label order. The `tests` matrix `include` list in
 # ci.yml and `.github/test-durations.json`'s `labels` must both match this
@@ -507,6 +518,7 @@ def _verify_command(args: argparse.Namespace) -> int:
         "changes": args.changes_result,
         "public-boundary": args.public_boundary_result,
         "fast-signal": args.fast_signal_result,
+        "windows-native": args.windows_native_result,
         "tests": args.tests_result,
         "design": args.design_result,
         "quality": args.quality_result,
@@ -524,6 +536,23 @@ def _verify_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _verify_windows_native(junit: Path) -> int:
+    """Reject missing, duplicate, skipped or failed cases in pytest's own receipt."""
+    try:
+        cases = ElementTree.parse(junit).findall(".//testcase")
+    except (OSError, ElementTree.ParseError) as error:
+        print(f"::error::Native Windows receipt unavailable: {type(error).__name__}")
+        return 1
+    names = Counter(case.get("name", "") for case in cases)
+    if names != Counter(WINDOWS_NATIVE_CASES) or any(
+        child.tag in {"skipped", "failure", "error"} for case in cases for child in case
+    ):
+        print("::error::Each of the five native Windows cases must pass exactly once.")
+        return 1
+    print("All five native Windows process-tree cases passed.")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -537,6 +566,8 @@ def _build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--design", type=_parse_bool, required=True)
     for job_name in ("changes", "public-boundary", *CONDITIONAL_JOBS):
         verify.add_argument(f"--{job_name}-result", required=True)
+    native = subparsers.add_parser("verify-windows-native")
+    native.add_argument("--junit", type=Path, required=True)
     subparsers.add_parser("pyright-count")
     pyright_diff = subparsers.add_parser("pyright-diff")
     pyright_diff.add_argument("--base-json", type=Path, required=True)
@@ -563,6 +594,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _select_tests_command(args)
     if args.command == "durations-report":
         return _durations_report_command(args)
+    if args.command == "verify-windows-native":
+        return _verify_windows_native(args.junit)
     return _verify_command(args)
 
 

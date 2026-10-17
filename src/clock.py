@@ -29,6 +29,13 @@ def now_iso() -> str:
     return now_naive_utc().isoformat()
 
 
+def now_iso_space_seconds() -> str:
+    """Current UTC instant as ``YYYY-MM-DD HH:MM:SS`` — the space-separated,
+    second-precision stored-stamp format used by credibility observations and
+    fact overrides."""
+    return now_naive_utc().isoformat(sep=" ", timespec="seconds")
+
+
 def to_naive_utc(dt: datetime) -> datetime:
     """Normalize a possibly-aware ``datetime`` to naive-UTC.
 

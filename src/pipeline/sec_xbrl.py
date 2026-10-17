@@ -39,12 +39,16 @@ identifies the caller as required by SEC's policy.
 
 from __future__ import annotations
 
+import ast
 import hashlib
+import importlib.metadata
 import json
 import logging
 import os
 import re
 import sqlite3
+import stat
+import sys
 import tempfile
 import time
 from collections import Counter
@@ -52,11 +56,21 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from functools import lru_cache
 from pathlib import Path
 from typing import Literal, NamedTuple, Self, cast
 
 import requests
+from packaging.requirements import Requirement
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# Anchor source loading before the extractor's other repository imports.
+from provenance.verifier_identity import (
+    SOURCE_ARTIFACT_IMPORT_STARTED_AT_NS as _COMPANYFACTS_IMPORT_STARTED_AT_NS,
+)
+from provenance.verifier_identity import verifier_source_artifact_sha256
+
+# isort: split
 
 from credibility.observations import FINANCIAL_FACTS, record_restatement_observation
 from models.documents import (
@@ -65,14 +79,15 @@ from models.documents import (
     SourceType,
     tier_for_source_type,
 )
-from models.facts import Currency, FiscalPeriodType, Unit
+from models.facts import Currency, FiscalPeriodType, Unit, table_cell_locator
 from models.validation import Severity, ValidationRule
-from pipeline import locators
 from pipeline.confidence import score_confidence
-from pipeline.kpi_persistence import record_validation_issue
 from pipeline.restatement_detector import (
+    FinancialFactSchemaProfile,
     insert_with_restatement_detection,
+    probe_financial_fact_schema,
 )
+from pipeline.validation_issue_store import record_issue
 from provenance.financial_fact_resolution import (
     capture_fact_row_observation,
 )
@@ -82,13 +97,520 @@ from provenance.sec_companyfacts_capture import (
     CompanyFactsContractError,
     CompanyFactsPayload,
     SecCompanyFactsCaptureRequest,
+    SecCompanyFactsUnchangedObservationRequest,
+    VerifiedCompanyFactsPayload,
     capture_sec_companyfacts,
+    companyfacts_document_version_present,
     parse_companyfacts_body,
+    record_companyfacts_unchanged_observation,
     supported_companyfacts_accessions,
 )
+from runtime.deterministic import table_exists as _has_table
 from sec_identity import sec_user_agent
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Per-ticker SEC CompanyFacts fetch receipts (folded in from the former
+# ``pipeline.sec_companyfacts_fetch_receipts``).
+#
+# One row per ticker in ``sec_companyfacts_fetch_receipts`` (alembic 0050)
+# records the last COMPLETED companyfacts ingest: the payload content identity
+# (``payload_sha256`` — the receipt is keyed on content, never on a
+# timestamp-bearing run id, per the pipeline DAG's repeat-safety contract), the
+# HTTP validators (``etag`` / ``last_modified``) SEC served with those bytes,
+# replayed as ``If-None-Match`` / ``If-Modified-Since`` on the next conditional
+# GET, and the retrieval/commit clocks and the completing run id.
+#
+# The row is written inside the SAME write transaction as the snapshot
+# registration and the fact walk, so a receipt row exists exactly when that
+# payload's ingest committed. An interrupted or failed ingest leaves no receipt,
+# so a retry reprocesses only the incomplete tickers; a completed ticker's
+# receipt plus its content digest is the resumable skip authority.
+#
+# The table is optional by design: synthetic fixtures that predate 0050 simply
+# have no validators and degrade to an unconditional GET. Receipts without an
+# extractor identity must reprocess the retained bytes before they can skip.
+# ---------------------------------------------------------------------------
+
+_RECEIPTS_TABLE = "sec_companyfacts_fetch_receipts"
+
+
+@dataclass(frozen=True)
+class CompanyFactsValidators:
+    """Conditional-GET validators from the last completed fetch of a ticker."""
+
+    etag: str | None
+    last_modified: str | None
+
+    @property
+    def present(self) -> bool:
+        """True when at least one validator can seed a conditional request."""
+        return bool(self.etag) or bool(self.last_modified)
+
+
+@dataclass(frozen=True)
+class CompanyFactsFetchReceipt:
+    """The completed-ingest receipt for one ticker's last companyfacts payload."""
+
+    ticker: str
+    normalized_cik: str
+    payload_sha256: str
+    etag: str | None
+    last_modified: str | None
+    payload_fetched_at: datetime
+    ingest_completed_at: datetime
+    run_id: str
+    extractor_sha256: str | None = None
+
+    @property
+    def validators(self) -> CompanyFactsValidators:
+        return CompanyFactsValidators(etag=self.etag, last_modified=self.last_modified)
+
+
+def fetch_receipts_table_present(conn: sqlite3.Connection) -> bool:
+    """True when the 0050 receipts table exists on this connection's schema."""
+
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (_RECEIPTS_TABLE,),
+        ).fetchone()
+    except sqlite3.Error:
+        return False
+    return row is not None
+
+
+def _fetch_receipt_extractor_column_present(conn: sqlite3.Connection) -> bool:
+    return any(
+        str(row[1]) == "extractor_sha256"
+        for row in conn.execute("PRAGMA table_info(sec_companyfacts_fetch_receipts)")
+    )
+
+
+_COMPANYFACTS_SOURCE_ROOT = Path(__file__).resolve().parents[2]
+
+
+class _CompanyFactsSourceClosure(NamedTuple):
+    members: tuple[str, ...]
+    absent_initializers: tuple[str, ...]
+    external_modules: tuple[str, ...]
+
+
+def _companyfacts_import_closure(repo_root: Path) -> _CompanyFactsSourceClosure:
+    """Follow owned static/lazy imports; unknown dynamic loaders fail closed."""
+    pending = ["pipeline.sec_xbrl"]
+    members: set[str] = set()
+    absent_initializers: set[str] = set()
+    external: set[str] = set()
+
+    def resolve(module: str) -> Path | None:
+        parts = module.split(".")
+        base = repo_root if parts[0] in {"src", "execution"} else repo_root / "src"
+        for candidate in (
+            base.joinpath(*parts).with_suffix(".py"),
+            base.joinpath(*parts) / "__init__.py",
+        ):
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def add(module: str, *, required: bool = True) -> None:
+        if not module:
+            return
+        target = resolve(module)
+        if target is None:
+            top = module.split(".", 1)[0]
+            if (repo_root / "src" / top).exists() or top in {"src", "execution"}:
+                namespace_root = repo_root if top in {"src", "execution"} else repo_root / "src"
+                if required and not (namespace_root / module.replace(".", "/")).is_dir():
+                    raise CompanyFactsContractError("CompanyFacts owned import is unavailable")
+            elif required and top not in sys.stdlib_module_names:
+                external.add(top)
+            return
+        pending.append(module)
+        parts = module.split(".")
+        for length in range(1, len(parts)):
+            package = ".".join(parts[:length])
+            initializer = resolve(package)
+            if initializer is not None and initializer.name == "__init__.py":
+                pending.append(package)
+            else:
+                prefix = "" if parts[0] in {"src", "execution"} else "src/"
+                absent_initializers.add(prefix + "/".join(parts[:length]) + "/__init__.py")
+
+    while pending:
+        module = pending.pop()
+        target = resolve(module)
+        if target is None:
+            raise CompanyFactsContractError("CompanyFacts extractor source is unavailable")
+        relative = target.relative_to(repo_root).as_posix()
+        if relative in members:
+            continue
+        members.add(relative)
+        if len(members) > 256:
+            raise CompanyFactsContractError("CompanyFacts import closure exceeds its bound")
+        try:
+            _companyfacts_source_manifest(
+                repo_root, _CompanyFactsSourceClosure((relative,), (), ())
+            )
+            tree = ast.parse(target.read_bytes(), filename=relative)
+        except (OSError, SyntaxError, ValueError):
+            raise CompanyFactsContractError(
+                "CompanyFacts import source is unavailable or invalid"
+            ) from None
+        loader_aliases = {"__import__"}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    add(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if any(
+                    alias.name in {"SourceFileLoader", "spec_from_file_location", "exec", "eval"}
+                    for alias in node.names
+                ):
+                    raise CompanyFactsContractError("CompanyFacts source loader is not governed")
+                package = (
+                    module.split(".") if target.name == "__init__.py" else module.split(".")[:-1]
+                )
+                base = (
+                    ".".join(
+                        package[: len(package) - node.level + 1]
+                        + ([node.module] if node.module else [])
+                    )
+                    if node.level
+                    else node.module or ""
+                )
+                add(base)
+                for alias in node.names:
+                    add(base + "." + alias.name, required=False)
+                    if node.module == "importlib" and alias.name == "import_module":
+                        loader_aliases.add(alias.asname or alias.name)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            loader = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else ""
+            )
+            if loader in {"exec", "eval", "SourceFileLoader", "spec_from_file_location"}:
+                raise CompanyFactsContractError("CompanyFacts source loader is not governed")
+            if loader != "import_module" and loader not in loader_aliases:
+                continue
+            if (
+                node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                if node.args[0].value.startswith("."):
+                    raise CompanyFactsContractError(
+                        "CompanyFacts relative dynamic import is not governed"
+                    )
+                if loader in loader_aliases and (
+                    len(node.args) > 4 or any(keyword.arg == "level" for keyword in node.keywords)
+                ):
+                    raise CompanyFactsContractError(
+                        "CompanyFacts relative dynamic import is not governed"
+                    )
+                add(node.args[0].value)
+            else:
+                raise CompanyFactsContractError("CompanyFacts dynamic import is not governed")
+    return _CompanyFactsSourceClosure(
+        tuple(sorted(members)),
+        tuple(sorted(absent_initializers)),
+        tuple(sorted(external)),
+    )
+
+
+def _companyfacts_source_manifest(
+    repo_root: Path, closure: _CompanyFactsSourceClosure
+) -> tuple[tuple[str, int, int, int], ...]:
+    members = set(closure.members)
+    if len(members) > 256:
+        raise CompanyFactsContractError("CompanyFacts import closure exceeds its bound")
+    # Check each parent once. A directory swapped for a link must not reuse the
+    # same target file's unchanged metadata during a warm-cache read.
+    parents = {
+        parent
+        for relative in members | set(closure.absent_initializers)
+        for parent in (repo_root / relative).parents
+        if parent != repo_root and repo_root in parent.parents
+    }
+    for parent in parents:
+        try:
+            parent_stat = parent.lstat()
+        except OSError:
+            raise CompanyFactsContractError("CompanyFacts source parent is unavailable") from None
+        if not stat.S_ISDIR(parent_stat.st_mode) or (
+            getattr(parent_stat, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        ):
+            raise CompanyFactsContractError("CompanyFacts source parent is unavailable")
+    manifest: list[tuple[str, int, int, int]] = []
+    total_bytes = 0
+    for relative in sorted(members | set(closure.absent_initializers)):
+        member = repo_root / relative
+        try:
+            member_stat = member.lstat()
+        except FileNotFoundError:
+            if relative in closure.absent_initializers:
+                manifest.append((relative, -1, 0, 0))
+                continue
+            raise CompanyFactsContractError("CompanyFacts source member is unavailable") from None
+        except OSError:
+            raise CompanyFactsContractError("CompanyFacts source member is unavailable") from None
+        if not stat.S_ISREG(member_stat.st_mode) or (
+            getattr(member_stat, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        ):
+            raise CompanyFactsContractError("CompanyFacts source member is unavailable")
+        total_bytes += member_stat.st_size
+        if member_stat.st_size > 4 * 1024 * 1024 or total_bytes > 32 * 1024 * 1024:
+            raise CompanyFactsContractError("CompanyFacts source bytes exceed their bound")
+        manifest.append(
+            (relative, member_stat.st_size, member_stat.st_mtime_ns, member_stat.st_ctime_ns)
+        )
+    return tuple(manifest)
+
+
+def _companyfacts_dependency_versions(modules: tuple[str, ...]) -> dict[str, object]:
+    """Pin imported vendor distributions and active declared runtime dependencies."""
+    owners = importlib.metadata.packages_distributions()
+    module_owners = {module: tuple(sorted(owners.get(module, ()))) for module in modules}
+    missing = tuple(module for module, names in module_owners.items() if not names)
+    if any(module in sys.modules for module in missing):
+        raise CompanyFactsContractError(
+            "CompanyFacts live vendor import lacks distribution authority"
+        )
+    pending = [(name, ()) for names in module_owners.values() for name in names]
+    evaluated: set[tuple[str, tuple[str, ...]]] = set()
+    versions: dict[str, str | None] = {}
+    while pending:
+        raw_name, extras = pending.pop()
+        name = re.sub(r"[-_.]+", "-", raw_name).lower()
+        if (name, extras) in evaluated:
+            continue
+        evaluated.add((name, extras))
+        if len(evaluated) > 256:
+            raise CompanyFactsContractError("CompanyFacts vendor closure exceeds its bound")
+        try:
+            distribution = importlib.metadata.distribution(name)
+        except importlib.metadata.PackageNotFoundError:
+            versions[name] = None
+            continue
+        versions[name] = distribution.version
+        for declaration in distribution.requires or ():
+            requirement = Requirement(declaration)
+            if requirement.marker is None or any(
+                requirement.marker.evaluate({"extra": extra}) for extra in ("", *extras)
+            ):
+                pending.append((requirement.name, tuple(sorted(requirement.extras))))
+    return {
+        "module_owners": module_owners,
+        "missing_external_modules": missing,
+        "distributions": versions,
+    }
+
+
+@lru_cache(maxsize=4)
+def _companyfacts_pinned_source_identity(
+    repo_root: Path,
+) -> tuple[str, tuple[tuple[str, int, int, int], ...], _CompanyFactsSourceClosure]:
+    """Pin the lazy extractor closure; subsequent relevant edits require restart."""
+    closure = _companyfacts_import_closure(repo_root)
+    before = _companyfacts_source_manifest(repo_root, closure)
+    if repo_root == _COMPANYFACTS_SOURCE_ROOT and any(
+        max(row[2], row[3]) > _COMPANYFACTS_IMPORT_STARTED_AT_NS for row in before
+    ):
+        raise CompanyFactsContractError(
+            "CompanyFacts runtime changed after import; restart required"
+        )
+    try:
+        material = {
+            "runtime_source_sha256": verifier_source_artifact_sha256(
+                {name: repo_root / name for name in closure.members}, file_count_limit=256
+            ),
+            "python_version": sys.version,
+            "sqlite_version": sqlite3.sqlite_version,
+            "dependencies": _companyfacts_dependency_versions(closure.external_modules),
+        }
+    except (OSError, ValueError):
+        raise CompanyFactsContractError("CompanyFacts source artifact is unavailable") from None
+    if before != _companyfacts_source_manifest(repo_root, closure):
+        raise CompanyFactsContractError(
+            "CompanyFacts runtime changed while pinning; restart required"
+        )
+    digest = hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return digest, before, closure
+
+
+def _companyfacts_source_artifact_sha256(repo_root: Path) -> str:
+    digest, pinned_manifest, closure = _companyfacts_pinned_source_identity(repo_root)
+    if pinned_manifest != _companyfacts_source_manifest(repo_root, closure):
+        raise CompanyFactsContractError(
+            "CompanyFacts runtime changed after loading; restart required"
+        )
+    return digest
+
+
+def companyfacts_extractor_sha256(conn: sqlite3.Connection) -> str:
+    """Bind skips to the extractor import closure, live schema, and active specs.
+
+    Source/vendor identity is lazy and cached for this process. Relevant source
+    edits require restart. The owned import closure is limited to 256 files;
+    its real-repository regression checks that bound and its SEC-only boundary.
+    Unrelated UI/execution files and installed packages
+    do not invalidate receipts. The full schema stays conservative: any migration
+    requires one reprocessing pass. Active specs and schema remain per-call inputs.
+    """
+    schema = conn.execute(
+        "SELECT type,name,tbl_name,sql FROM sqlite_master "
+        "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name LIMIT 4097"
+    ).fetchall()
+    if len(schema) > 4096:
+        raise CompanyFactsContractError("CompanyFacts schema count exceeds its bound")
+    schema_json = json.dumps([tuple(row) for row in schema], separators=(",", ":"))
+    if len(schema_json.encode()) > 32 * 1024 * 1024:
+        raise CompanyFactsContractError("CompanyFacts schema bytes exceed their bound")
+    source_sha256 = _companyfacts_source_artifact_sha256(_COMPANYFACTS_SOURCE_ROOT)
+    schema_sha256 = hashlib.sha256(schema_json.encode()).hexdigest()
+    material = {
+        "protocol": "sec-companyfacts-extractor.v3",
+        "runtime_source_artifact_sha256": source_sha256,
+        "schema_sha256": schema_sha256,
+        "ladders": [(item.line_item, item.kind, item.sign, item.rungs) for item in TAG_LADDERS],
+    }
+    digest = hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    log.info(
+        {
+            "event": "sec_companyfacts_extractor_identity",
+            "runtime_source_artifact_sha256": source_sha256,
+            "schema_sha256": schema_sha256,
+            "extractor_sha256": digest,
+        }
+    )
+    return digest
+
+
+def load_companyfacts_fetch_receipt(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+) -> CompanyFactsFetchReceipt | None:
+    """Return the ticker's completed-ingest receipt, or None when absent.
+
+    Absence is not an error state: it is exactly the 'this ticker has no
+    completed payload yet' signal that makes a retry reprocess the ticker.
+    """
+
+    if not fetch_receipts_table_present(conn):
+        return None
+    extractor_column = (
+        "extractor_sha256" if _fetch_receipt_extractor_column_present(conn) else "NULL"
+    )
+    row = conn.execute(
+        "SELECT ticker, normalized_cik, payload_sha256, etag, last_modified, "
+        f"payload_fetched_at, ingest_completed_at, run_id, {extractor_column} "
+        f"FROM {_RECEIPTS_TABLE} WHERE ticker = ?",  # nosec B608 -- fixed internal table name
+        (ticker.upper(),),
+    ).fetchone()
+    if row is None:
+        return None
+    return CompanyFactsFetchReceipt(
+        ticker=str(row[0]),
+        normalized_cik=str(row[1]),
+        payload_sha256=str(row[2]),
+        etag=None if row[3] is None else str(row[3]),
+        last_modified=None if row[4] is None else str(row[4]),
+        payload_fetched_at=datetime.fromisoformat(str(row[5])),
+        ingest_completed_at=datetime.fromisoformat(str(row[6])),
+        run_id=str(row[7]),
+        extractor_sha256=None if row[8] is None else str(row[8]),
+    )
+
+
+def record_companyfacts_ingest_receipt(
+    conn: sqlite3.Connection,
+    receipt: CompanyFactsFetchReceipt,
+) -> bool:
+    """Upsert one ticker's completion receipt; the caller owns the transaction.
+
+    Joins the ingest's write transaction so the receipt commits exactly when
+    (and only when) the snapshot registration and fact walk for the same
+    payload digest commit. Returns True when the receipt was written; False
+    when this schema predates the 0050 table — the ingest itself stays
+    correct (the next run simply reprocesses from bytes instead of skipping),
+    so an auxiliary-table absence must never fail a committed fact walk.
+    """
+
+    if not fetch_receipts_table_present(conn):
+        return False
+    has_extractor = _fetch_receipt_extractor_column_present(conn)
+    extractor_column = ", extractor_sha256" if has_extractor else ""
+    extractor_placeholder = ", ?" if has_extractor else ""
+    extractor_update = ", extractor_sha256 = excluded.extractor_sha256" if has_extractor else ""
+    values = (
+        receipt.ticker.upper(),
+        receipt.normalized_cik,
+        receipt.payload_sha256,
+        receipt.etag,
+        receipt.last_modified,
+        receipt.payload_fetched_at.isoformat(),
+        receipt.ingest_completed_at.isoformat(),
+        receipt.run_id,
+    )
+    conn.execute(
+        f"INSERT INTO {_RECEIPTS_TABLE} "  # nosec B608 -- fixed internal table name
+        "(ticker, normalized_cik, payload_sha256, etag, last_modified, "
+        f"payload_fetched_at, ingest_completed_at, run_id{extractor_column}) "
+        f"VALUES (?, ?, ?, ?, ?, ?, ?, ?{extractor_placeholder}) "
+        "ON CONFLICT(ticker) DO UPDATE SET "
+        "normalized_cik = excluded.normalized_cik, "
+        "payload_sha256 = excluded.payload_sha256, "
+        "etag = excluded.etag, "
+        "last_modified = excluded.last_modified, "
+        "payload_fetched_at = excluded.payload_fetched_at, "
+        "ingest_completed_at = excluded.ingest_completed_at, "
+        f"run_id = excluded.run_id{extractor_update}",
+        (*values, receipt.extractor_sha256) if has_extractor else values,
+    )
+    return True
+
+
+def refresh_companyfacts_receipt_validators(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    etag: str | None,
+    last_modified: str | None,
+    payload_fetched_at: datetime,
+) -> bool:
+    """Refresh a completed receipt's validators after an unchanged-payload GET.
+
+    A 200 whose bytes match the completed digest can still rotate the server's
+    ETag; storing the fresh validators keeps the next run's conditional GET
+    returning 304 instead of falling back to a full download. The caller owns
+    the transaction. Returns True when a receipt row was updated; False when
+    no receipt exists (the ticker then keeps its unconditional fetch shape).
+    """
+
+    if not fetch_receipts_table_present(conn):
+        return False
+    cursor = conn.execute(
+        f"UPDATE {_RECEIPTS_TABLE} "  # nosec B608 -- fixed internal table name
+        "SET etag = ?, last_modified = ?, payload_fetched_at = ? WHERE ticker = ?",
+        (etag, last_modified, payload_fetched_at.isoformat(), ticker.upper()),
+    )
+    return cursor.rowcount > 0
+
 
 # The units the SEC ladder legitimately persists: monetary/per_share values are
 # ACTUAL, share counts are COUNT. Anything else reaching the persist point is a
@@ -630,6 +1152,34 @@ class FetchedCompanyFacts(BaseModel):
     raw_body: bytes = Field(min_length=1)
     observed_at: datetime
     retrieved_at: datetime
+    # Conditional-GET validators the server served with these bytes (None when
+    # it served none); persisted on the fetch receipt and replayed as
+    # If-None-Match / If-Modified-Since on the next ingest.
+    etag: str | None = None
+    last_modified: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_clocks(self) -> Self:
+        if self.retrieved_at < self.observed_at:
+            raise ValueError("retrieved_at must not precede observed_at")
+        return self
+
+
+class CompanyFactsNotModified(BaseModel):
+    """A `304 Not Modified` response: no payload bytes exist to download.
+
+    The payload's content identity is the completed fetch receipt's digest —
+    the server confirmed the validators (ETag / Last-Modified) it issued with
+    those exact bytes still match.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_url: str = Field(min_length=1)
+    observed_at: datetime
+    retrieved_at: datetime
+    etag_sent: str | None = None
+    last_modified_sent: str | None = None
 
     @model_validator(mode="after")
     def _validate_clocks(self) -> Self:
@@ -646,20 +1196,47 @@ class SecCompanyFactsAuthenticationDeniedError(RuntimeError):
         super().__init__(f"SEC CompanyFacts authentication denied with HTTP {status_code}")
 
 
-def fetch_companyfacts(cik: str, *, timeout: int = 30) -> FetchedCompanyFacts:
-    """Hit /api/xbrl/companyfacts/CIK{cik}.json. CIK must be 10-digit zero-padded."""
+def fetch_companyfacts(
+    cik: str,
+    *,
+    timeout: int = 30,
+    validators: CompanyFactsValidators | None = None,
+) -> FetchedCompanyFacts | CompanyFactsNotModified:
+    """Hit /api/xbrl/companyfacts/CIK{cik}.json. CIK must be 10-digit zero-padded.
+
+    With `validators` from a completed fetch receipt the GET is conditional
+    (If-None-Match / If-Modified-Since): a `304 Not Modified` returns
+    ``CompanyFactsNotModified`` and no payload bytes are downloaded. Any other
+    success returns the exact bytes plus the fresh validators the server
+    served, so the caller can keep future runs conditional.
+    """
     url = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+    headers: dict[str, str] = {
+        "User-Agent": sec_user_agent(),
+        "Accept-Encoding": "gzip, deflate",
+    }
+    if validators is not None and validators.present:
+        if validators.etag:
+            headers["If-None-Match"] = validators.etag
+        if validators.last_modified:
+            headers["If-Modified-Since"] = validators.last_modified
     observed_at = datetime.now(UTC)
     response = requests.get(
         url,
-        headers={
-            "User-Agent": sec_user_agent(),
-            "Accept-Encoding": "gzip, deflate",
-        },
+        headers=headers,
         timeout=timeout,
     )
     if response.status_code in {401, 403}:
         raise SecCompanyFactsAuthenticationDeniedError(response.status_code)
+    if response.status_code == 304:
+        retrieved_at = datetime.now(UTC)
+        return CompanyFactsNotModified(
+            source_url=url,
+            observed_at=observed_at,
+            retrieved_at=retrieved_at,
+            etag_sent=validators.etag if validators is not None else None,
+            last_modified_sent=validators.last_modified if validators is not None else None,
+        )
     response.raise_for_status()
     retrieved_at = datetime.now(UTC)
     return FetchedCompanyFacts(
@@ -667,6 +1244,8 @@ def fetch_companyfacts(cik: str, *, timeout: int = 30) -> FetchedCompanyFacts:
         raw_body=response.content,
         observed_at=observed_at,
         retrieved_at=retrieved_at,
+        etag=response.headers.get("ETag") or None,
+        last_modified=response.headers.get("Last-Modified") or None,
     )
 
 
@@ -1137,11 +1716,21 @@ class SecIngestTimingReceipt(BaseModel):
         return self
 
 
+CompanyFactsIngestDisposition = Literal["ingested", "skipped_unchanged"]
+CompanyFactsSkipReason = Literal["not_modified", "digest_match"]
+
+
 @dataclass(frozen=True)
 class IngestStats:
     accessions_inserted: int
     facts_inserted: int
     timing: SecIngestTimingReceipt | None = None
+    # Conditional-ingest disposition: `skipped_unchanged` means the payload
+    # was proven identical to a completed ingest's content (a 304, or a
+    # downloaded body whose digest matches one) and no parse/fact-walk ran.
+    disposition: CompanyFactsIngestDisposition = "ingested"
+    skip_reason: CompanyFactsSkipReason | None = None
+    payload_sha256: str | None = None
 
 
 def _elapsed_ms(duration_ns: int) -> float:
@@ -1185,13 +1774,13 @@ def _flag_non_actual_unit(
     being persisted with a wrong unit. Best-effort — a missing validation_issues
     table (pre-0006 fixture) must never break ingest."""
     try:
-        record_validation_issue(
+        record_issue(
             conn,
             run_id=run_id,
             source_doc_id=source_doc_id,
             ticker=ticker,
-            severity=Severity.WARN,
-            rule=ValidationRule.UNIT_MISMATCH,
+            severity=Severity.WARN.value,
+            rule=ValidationRule.UNIT_MISMATCH.value,
             raw_value=(
                 f"{line_item} @ {period_end[:10]}: SEC unit_code '{unit_code}' "
                 f"resolved to non-standard unit '{resolved_unit}'"
@@ -1211,7 +1800,11 @@ def _flag_non_actual_unit(
 class _PendingFact(NamedTuple):
     """One resolved SEC fact ready to write, with the tiebreak key used to
     collapse multi-frame same-document collisions (see
-    ``_same_doc_pick_key``)."""
+    ``_same_doc_pick_key``).
+
+    Carries the SEC accession rather than a source_doc_id: selection runs
+    before the snapshot document exists; persistence resolves the accession
+    against the registered snapshot document."""
 
     pick_key: tuple[str, int, str, str, str]
     period_end: datetime
@@ -1219,8 +1812,42 @@ class _PendingFact(NamedTuple):
     value: Decimal
     currency: str | None
     unit: str
-    source_doc_id: int
+    accession: str
     locator_json: str | None
+
+
+@dataclass(frozen=True)
+class _PendingUnitFlag:
+    """A unit-sanity-guard hit deferred to the persistence phase.
+
+    The guard fires during selection, which runs before the write transaction
+    opens; the validation-issue row is written inside the persistence batch so
+    the flag never opens a transaction of its own."""
+
+    line_item: str
+    period_end: str
+    unit_code: str
+    resolved_unit: str
+    accession: str
+
+
+@dataclass(frozen=True)
+class CompanyFactsSelection:
+    """Deterministic ladder winners chosen from one payload, pre-persistence.
+
+    `ladders` preserves TAG_LADDERS order, and each tuple's facts are sorted
+    by (period_end, fiscal_period_type) exactly as the historical
+    (source_doc_id, end, fiscal_period_type) write key ordered them — every
+    supported accession of one ingest maps to the same aggregate snapshot
+    document, so the constant source_doc_id never influenced the order.
+    Row ids and restatement chains are therefore reproducible run to run.
+
+    Selection performs no database work at all: it is pure payload walking,
+    so the ingest's write transaction can open only for the bounded
+    persistence batch."""
+
+    ladders: tuple[tuple[LineItemLadder, tuple[_PendingFact, ...]], ...]
+    unit_flags: tuple[_PendingUnitFlag, ...]
 
 
 def _same_doc_pick_key(
@@ -1260,56 +1887,34 @@ def _same_doc_pick_key(
     return (filed, is_amendment, accession, start_key, frame)
 
 
-def insert_facts_from_companyfacts(
-    conn: sqlite3.Connection,
+def select_facts_from_companyfacts(
+    payload: dict[str, object],
     *,
     ticker: str,
-    payload: dict[str, object],
-    accession_to_doc_id: dict[str, int],
-    run_id: str = "sec_xbrl_ingest",
-    snapshot_root: Path | None = None,
+    supported_accessions: frozenset[str] | set[str],
     timing_sink: Callable[[FactAdmissionTimingPhase, int], None] | None = None,
     timing_phase_started: Callable[[FactAdmissionTimingPhase], None] | None = None,
     monotonic_ns: Callable[[], int] = time.perf_counter_ns,
-) -> int:
-    """Walk TAG_LADDERS; insert financial_facts, first rung winning per period.
+) -> CompanyFactsSelection:
+    """Walk TAG_LADDERS and pick each period's deterministic winner — no DB work.
 
-    ``run_id`` tags any ``UNIT_MISMATCH`` validation_issues the unit sanity guard
-    raises (a value whose resolved unit is neither ACTUAL nor COUNT); production
-    passes the ingest run's id, ad-hoc callers get a stable default."""
-    before_resolve: Callable[[int], None] | None = None
-    if snapshot_root is not None:
-        # Deferred import breaks the intentional matcher -> ladder dependency
-        # while keeping live admission at this boundary.
-        from provenance.sec_companyfacts_fact_matcher import (
-            CompanyFactsMatchContext,
-            match_companyfacts_fact_row,
-        )
+    Pure payload selection: it reads nothing from and writes nothing to the
+    connection, so the ingest runs it BEFORE opening its write transaction;
+    only the bounded persistence batch runs inside the transaction. The unit
+    sanity guard's validation-issue writes are deferred to persistence as
+    ``unit_flags``.
 
-        match_context = CompanyFactsMatchContext(snapshot_root)
-
-        def _capture_companyfacts_provenance(fact_row_id: int) -> None:
-            match_companyfacts_fact_row(
-                conn,
-                fact_row_id=fact_row_id,
-                blob_root=snapshot_root,
-                context=match_context,
-            )
-            capture_fact_row_observation(
-                conn,
-                fact_table="financial_facts",
-                fact_row_id=fact_row_id,
-                recorded_at=datetime.now(UTC),
-            )
-
-        before_resolve = _capture_companyfacts_provenance
-
+    `supported_accessions` is the set the ingest will map onto the aggregate
+    snapshot document; entries for accessions outside it are invisible, exactly
+    as the historical ``accession_to_doc_id`` membership filter was.
+    """
     facts_raw = payload.get("facts", {})
     if not isinstance(facts_raw, dict):
-        return 0
+        return CompanyFactsSelection(ladders=(), unit_flags=())
     facts_block = cast("dict[str, object]", facts_raw)
     fye_month = _infer_fye_month(payload)
-    inserted = 0
+    ladder_results: list[tuple[LineItemLadder, tuple[_PendingFact, ...]]] = []
+    unit_flags: list[_PendingUnitFlag] = []
     for ladder in TAG_LADDERS:
         if timing_phase_started is not None:
             timing_phase_started("tag_selection")
@@ -1318,14 +1923,18 @@ def insert_facts_from_companyfacts(
         # A key claimed by an earlier rung is invisible to later rungs, so the
         # pick is deterministic regardless of payload ordering.
         claimed: dict[tuple[str, str], int] = {}
-        # (source_doc_id, period_end, fiscal_period_type) -> the single fact we
-        # will write for that exact provenance 5-tuple. Multiple companyfacts
-        # entries can collapse onto one 5-tuple (a SEC accession reporting the
-        # same fiscal-period-end under two duration contexts); we keep only the
-        # deterministic winner (`_same_doc_pick_key`) instead of writing both and
-        # letting the second INSERT-OR-IGNORE trigger same-document correction
-        # churn. Inserts are deferred to after the ladder walk.
-        chosen: dict[tuple[int, str, str], _PendingFact] = {}
+        # (period_end, fiscal_period_type) -> the single fact we will write for
+        # that period. Multiple companyfacts entries can collapse onto one
+        # period (a SEC accession reporting the same fiscal-period-end under
+        # two duration contexts, or two accessions of the same aggregate
+        # snapshot document); we keep only the deterministic winner
+        # (`_same_doc_pick_key`) instead of writing both and letting the second
+        # INSERT-OR-IGNORE trigger same-document correction churn. One ingest
+        # writes every supported accession against the SAME aggregate snapshot
+        # document, so this key is exactly the historical
+        # (source_doc_id, period_end, fiscal_period_type) write key with its
+        # constant document id dropped.
+        chosen: dict[tuple[str, str], _PendingFact] = {}
         for rung_idx, (namespace, tag_name) in enumerate(ladder.rungs):
             namespace_facts_raw = facts_block.get(namespace)
             if not isinstance(namespace_facts_raw, dict):
@@ -1358,7 +1967,7 @@ def insert_facts_from_companyfacts(
                     if not accn_val:
                         continue
                     accn = str(accn_val)
-                    if accn not in accession_to_doc_id:
+                    if accn not in supported_accessions:
                         continue
                     end_val = entry.get("end")
                     if not end_val:
@@ -1391,7 +2000,7 @@ def insert_facts_from_companyfacts(
                     # §7); records the winning tag for the ladder pick. Row =
                     # the XBRL tag, column = the fact's own end date — both
                     # already local at this call site.
-                    locator = locators.table_cell_locator(
+                    locator = table_cell_locator(
                         section=None,
                         table_title=namespace,
                         row_label=tag_name,
@@ -1415,15 +2024,14 @@ def insert_facts_from_companyfacts(
                         Unit.COUNT.value if ladder.kind == "shares" else Unit.ACTUAL.value
                     )
                     if resolved_unit not in _SANE_SEC_UNITS:
-                        _flag_non_actual_unit(
-                            conn,
-                            run_id=run_id,
-                            ticker=ticker,
-                            line_item=ladder.line_item,
-                            period_end=end,
-                            unit_code=unit_code,
-                            resolved_unit=resolved_unit,
-                            source_doc_id=accession_to_doc_id[accn],
+                        unit_flags.append(
+                            _PendingUnitFlag(
+                                line_item=ladder.line_item,
+                                period_end=end,
+                                unit_code=unit_code,
+                                resolved_unit=resolved_unit,
+                                accession=accn,
+                            )
                         )
                         continue
                     for fpt_out in fpts:
@@ -1431,9 +2039,8 @@ def insert_facts_from_companyfacts(
                         claimed_by = claimed.setdefault(key, rung_idx)
                         if claimed_by != rung_idx:
                             continue  # an earlier rung already owns this period
-                        source_doc_id = accession_to_doc_id[accn]
                         pick_key = _same_doc_pick_key(entry, value)
-                        wkey = (source_doc_id, end, fpt_out.value)
+                        wkey = (end, fpt_out.value)
                         prev = chosen.get(wkey)
                         pending = _PendingFact(
                             pick_key=pick_key,
@@ -1442,7 +2049,7 @@ def insert_facts_from_companyfacts(
                             value=value,
                             currency=chosen_currency or None,
                             unit=resolved_unit,
-                            source_doc_id=source_doc_id,
+                            accession=accn,
                             locator_json=locator.to_json(),
                         )
                         if prev is not None:
@@ -1455,14 +2062,14 @@ def insert_facts_from_companyfacts(
                                     pending.value,
                                     pending.currency,
                                     pending.unit,
-                                    pending.source_doc_id,
+                                    pending.accession,
                                 ) != (
                                     prev.period_end,
                                     prev.fiscal_period_type,
                                     prev.value,
                                     prev.currency,
                                     prev.unit,
-                                    prev.source_doc_id,
+                                    prev.accession,
                                 ):
                                     raise ValueError(
                                         "CompanyFacts observations have identical SEC "
@@ -1472,12 +2079,82 @@ def insert_facts_from_companyfacts(
                         chosen[wkey] = pending
         if timing_sink is not None:
             timing_sink("tag_selection", max(0, monotonic_ns() - selection_started_ns))
-        # Ladder walk complete: emit each provenance 5-tuple's deterministic
-        # winner exactly once. sorted() fixes the insertion order independent of
-        # dict/payload iteration, so row ids and restatement observations are
-        # reproducible run to run.
-        for wkey in sorted(chosen):
-            pf = chosen[wkey]
+        ladder_results.append((ladder, tuple(chosen[wkey] for wkey in sorted(chosen))))
+    return CompanyFactsSelection(
+        ladders=tuple(ladder_results),
+        unit_flags=tuple(unit_flags),
+    )
+
+
+def persist_facts_from_companyfacts(
+    conn: sqlite3.Connection,
+    selection: CompanyFactsSelection,
+    *,
+    ticker: str,
+    accession_to_doc_id: Mapping[str, int],
+    run_id: str = "sec_xbrl_ingest",
+    snapshot_root: Path | None = None,
+    schema_profile: FinancialFactSchemaProfile | None = None,
+    timing_sink: Callable[[FactAdmissionTimingPhase, int], None] | None = None,
+    timing_phase_started: Callable[[FactAdmissionTimingPhase], None] | None = None,
+    monotonic_ns: Callable[[], int] = time.perf_counter_ns,
+) -> int:
+    """Persist a selection's facts — the bounded DB write batch of the ingest.
+
+    Writes each provenance 5-tuple's deterministic winner exactly once, in the
+    selection's fixed (ladder, period_end, fiscal_period_type) order, so row
+    ids and restatement observations are reproducible run to run. Runs inside
+    the caller's write transaction: no payload walking happens here.
+
+    `schema_profile` is the once-per-ingest column-presence probe result
+    (see ``probe_financial_fact_schema``); passing it removes the per-fact
+    ``PRAGMA table_info`` probes from this batch. When None it is computed
+    once for this batch (still not per fact).
+    """
+    before_resolve: Callable[[int], None] | None = None
+    if snapshot_root is not None:
+        # Deferred import breaks the intentional matcher -> ladder dependency
+        # while keeping live admission at this boundary.
+        from provenance.sec_companyfacts_fact_matcher import (
+            CompanyFactsMatchContext,
+            match_companyfacts_fact_row,
+        )
+
+        match_context = CompanyFactsMatchContext(snapshot_root)
+
+        def _capture_companyfacts_provenance(fact_row_id: int) -> None:
+            match_companyfacts_fact_row(
+                conn,
+                fact_row_id=fact_row_id,
+                blob_root=snapshot_root,
+                context=match_context,
+            )
+            capture_fact_row_observation(
+                conn,
+                fact_table="financial_facts",
+                fact_row_id=fact_row_id,
+                recorded_at=datetime.now(UTC),
+            )
+
+        before_resolve = _capture_companyfacts_provenance
+
+    profile = schema_profile if schema_profile is not None else probe_financial_fact_schema(conn)
+    for flag in selection.unit_flags:
+        _flag_non_actual_unit(
+            conn,
+            run_id=run_id,
+            ticker=ticker,
+            line_item=flag.line_item,
+            period_end=flag.period_end,
+            unit_code=flag.unit_code,
+            resolved_unit=flag.resolved_unit,
+            source_doc_id=accession_to_doc_id[flag.accession],
+        )
+    inserted = 0
+    for ladder, chosen in selection.ladders:
+        # Ladder walk already complete (see select_facts_from_companyfacts):
+        # emit each provenance 5-tuple's deterministic winner exactly once.
+        for pf in chosen:
             evidence_resolution_ns = 0
 
             def _record_evidence_resolution(duration_ns: int) -> None:
@@ -1499,7 +2176,7 @@ def insert_facts_from_companyfacts(
                     value=pf.value,
                     currency=pf.currency,
                     unit=pf.unit,
-                    source_doc_id=pf.source_doc_id,
+                    source_doc_id=accession_to_doc_id[pf.accession],
                     confidence=score_confidence(
                         tier=tier_for_source_type(SourceType.SEC_XBRL),
                         extracted_by="sec_xbrl",
@@ -1511,6 +2188,7 @@ def insert_facts_from_companyfacts(
                         _record_evidence_resolution if timing_sink is not None else None
                     ),
                     monotonic_ns=monotonic_ns,
+                    schema_profile=profile,
                 )
                 if new_id is not None:
                     inserted += 1
@@ -1533,13 +2211,47 @@ def insert_facts_from_companyfacts(
     return inserted
 
 
-def _has_table(conn: sqlite3.Connection, table: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-            (table,),
-        ).fetchone()
-        is not None
+def insert_facts_from_companyfacts(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    payload: dict[str, object],
+    accession_to_doc_id: dict[str, int],
+    run_id: str = "sec_xbrl_ingest",
+    snapshot_root: Path | None = None,
+    timing_sink: Callable[[FactAdmissionTimingPhase, int], None] | None = None,
+    timing_phase_started: Callable[[FactAdmissionTimingPhase], None] | None = None,
+    monotonic_ns: Callable[[], int] = time.perf_counter_ns,
+) -> int:
+    """Walk TAG_LADDERS; insert financial_facts, first rung winning per period.
+
+    Compatibility wrapper over the split selection + persistence phases
+    (``select_facts_from_companyfacts`` / ``persist_facts_from_companyfacts``):
+    selection is the pure payload walk, persistence is the bounded DB write
+    batch. Callers that own a transaction (the ingest driver) call the two
+    phases directly so the walk stays outside their write window.
+
+    ``run_id`` tags any ``UNIT_MISMATCH`` validation_issues the unit sanity guard
+    raises (a value whose resolved unit is neither ACTUAL nor COUNT); production
+    passes the ingest run's id, ad-hoc callers get a stable default."""
+    selection = select_facts_from_companyfacts(
+        payload,
+        ticker=ticker,
+        supported_accessions=frozenset(accession_to_doc_id),
+        timing_sink=timing_sink,
+        timing_phase_started=timing_phase_started,
+        monotonic_ns=monotonic_ns,
+    )
+    return persist_facts_from_companyfacts(
+        conn,
+        selection,
+        ticker=ticker,
+        accession_to_doc_id=accession_to_doc_id,
+        run_id=run_id,
+        snapshot_root=snapshot_root,
+        timing_sink=timing_sink,
+        timing_phase_started=timing_phase_started,
+        monotonic_ns=monotonic_ns,
     )
 
 
@@ -1620,6 +2332,75 @@ def _quarantine_contract_failure(
         }
     )
     return path
+
+
+def _completed_snapshot_payload_present(
+    conn: sqlite3.Connection,
+    *,
+    ticker: str,
+    normalized_cik: str,
+    digest: str,
+    snapshot_root: Path,
+    extractor_sha256: str,
+) -> bool:
+    """True when `digest` is a COMPLETED prior ingest of `ticker`, fully retained.
+
+    The skip precondition for the conditional ingest — an unchanged payload may
+    only skip reprocessing when every part of the completed capture it stands on
+    is verifiably present:
+
+    - the legacy snapshot ``documents`` row for the digest (registered and
+      fact-walked inside one committed transaction by the prior ingest), typed
+      exactly as this ticker's aggregate snapshot and pointing at the
+      deterministic content-addressed path;
+    - the retained snapshot bytes themselves on disk (a deleted snapshot file
+      forces the full path, which re-registers the bytes);
+    - a completed fetch receipt whose payload digest, issuer CIK and extractor
+      fingerprint match (legacy or missing extractor identities fail closed);
+    - on post-0231 schemas, the evidence document version for the digest.
+
+    Any drift fails closed: the caller reprocesses the payload from bytes.
+    """
+    snapshot_path = (snapshot_root.resolve() / digest[:2] / f"{digest}.json").resolve()
+    row = conn.execute(
+        "SELECT ticker, source_type, doc_type, file_path FROM documents WHERE sha256 = ?",
+        (digest,),
+    ).fetchone()
+    if row is None:
+        return False
+    if (str(row[0]), str(row[1]), str(row[2])) != (
+        ticker.upper(),
+        SourceType.SEC_XBRL.value,
+        DocType.SEC_COMPANYFACTS_SNAPSHOT.value,
+    ):
+        return False
+    if str(row[3]) != str(snapshot_path):
+        return False
+    if not snapshot_path.is_file():
+        return False
+    receipt = load_companyfacts_fetch_receipt(conn, ticker=ticker)
+    if (
+        receipt is None
+        or receipt.payload_sha256 != digest
+        or receipt.normalized_cik != normalized_cik
+        or receipt.extractor_sha256 != extractor_sha256
+    ):
+        return False
+    if not _has_table(conn, "evidence_document_versions"):
+        return True
+    try:
+        canonical_issuer = IssuerRegistry(conn).resolve_identifier(
+            "sec_cik",
+            normalized_cik,
+            knowledge_at=datetime.now(UTC),
+        )
+    except (ValueError, sqlite3.Error):
+        return False
+    return companyfacts_document_version_present(
+        conn,
+        issuer_id=canonical_issuer.issuer_id,
+        digest=digest,
+    )
 
 
 def resolve_companyfacts_cik(
@@ -1707,8 +2488,36 @@ def ingest_for_ticker(
     run_id: str = "sec_xbrl_ingest",
     timing_sink: Callable[[SecIngestTimingReceipt], None] | None = None,
     monotonic_ns: Callable[[], int] = time.perf_counter_ns,
+    local_payload: FetchedCompanyFacts | None = None,
 ) -> IngestStats:
     """End-to-end: fetch + immutable capture + documents + financial facts.
+
+    Conditional ingest: the last completed fetch's validators (ETag /
+    Last-Modified, from the per-ticker fetch receipt written in the same
+    transaction as the ingest) make the GET conditional; a ``304`` returns no
+    bytes at all. A downloaded body whose sha256 matches a completed ingest's
+    skips the pydantic re-parse and the fact re-walk even when the server
+    rotates its ETag. An unchanged payload is a positive capture-boundary
+    observation — one retrieval observation is recorded against the retained
+    digest, never silence — and the returned stats carry the
+    ``skipped_unchanged`` disposition plus the payload digest so receipts stay
+    explicit about what was skipped and why.
+
+    Resumption: a completed ticker's receipt commits only with its fact walk,
+    so an interrupted run leaves receipts exactly for the completed prefix; a
+    retry skips those tickers by receipt and content identity and reprocesses
+    only the incomplete ones.
+
+    The write transaction covers only the bounded persistence batch — snapshot
+    registration, evidence capture, the fact inserts, and the fetch-receipt
+    upsert. The payload parse and the full fact-walk selection run before it
+    opens, so no network wait, payload parsing, or ladder walking happens
+    while the write lock is held.
+
+    ``local_payload`` is the replay seam: exact response bytes already held
+    locally (a fixture replay, or re-ingesting retained snapshot bytes after a
+    database restore). When provided, no transport call is made and the digest
+    gate alone decides skip vs full ingest.
 
     ``run_id`` flows to the unit sanity guard (see
     :func:`insert_facts_from_companyfacts`); the fetch driver passes its
@@ -1729,6 +2538,7 @@ def ingest_for_ticker(
     }
     active_phase: SecIngestFailedPhase = "http_fetch"
     transaction_started = False
+    snapshot_root = project_root / "data" / "historical" / "sec" / "snapshots"
 
     def _record_phase(phase: str, duration_ns: int) -> None:
         durations_ns[phase] += max(0, duration_ns)
@@ -1774,14 +2584,197 @@ def ingest_for_ticker(
                 }
             )
 
+    def _emit_skip_receipt(
+        reason: CompanyFactsSkipReason,
+        digest: str,
+        *,
+        etag: str | None,
+        last_modified: str | None,
+    ) -> None:
+        log.info(
+            {
+                "event": "sec_companyfacts_unchanged_skip",
+                "ticker": normalized_ticker,
+                "disposition": "skipped_unchanged",
+                "reason": reason,
+                "payload_sha256": digest,
+                "etag": etag,
+                "last_modified": last_modified,
+            }
+        )
+
+    def _record_unchanged_retrieval(
+        *,
+        reason: CompanyFactsSkipReason,
+        digest: str,
+        source_url: str,
+        observed_at: datetime,
+        retrieved_at: datetime,
+        response_validators: tuple[str | None, str | None] | None,
+    ) -> IngestStats:
+        """Record one unchanged-payload retrieval and return the skip stats.
+
+        Writes exactly one small bounded batch inside its own transaction: the
+        retrieval observation (when the evidence chain is installed) plus a
+        fetch-receipt validator refresh when the server served new validators.
+        No parse, no walk, no new facts.
+        """
+        nonlocal active_phase, transaction_started
+        transaction_started = True
+        active_phase = "document_evidence_capture"
+        observation_started_ns = monotonic_ns()
+        try:
+            observation_ready = (
+                _has_table(conn, "evidence_source_observations")
+                and _has_table(conn, "evidence_document_versions")
+                and _has_table(conn, "evidence_document_observation_links")
+            )
+            if observation_ready:
+                canonical_issuer = IssuerRegistry(conn).resolve_identifier(
+                    "sec_cik",
+                    normalized_cik,
+                    knowledge_at=retrieved_at,
+                )
+                record_companyfacts_unchanged_observation(
+                    conn,
+                    SecCompanyFactsUnchangedObservationRequest(
+                        ticker=normalized_ticker,
+                        normalized_cik=normalized_cik,
+                        issuer_id=canonical_issuer.issuer_id,
+                        source_url=source_url,
+                        blob_sha256=digest,
+                        observed_at=observed_at,
+                        retrieved_at=retrieved_at,
+                    ),
+                )
+            else:
+                log.warning(
+                    {
+                        "event": "sec_companyfacts_legacy_provenance_path",
+                        "ticker": normalized_ticker,
+                        "reason": "evidence_binding_schema_not_installed",
+                    }
+                )
+            if response_validators is not None and (
+                response_validators[0] or response_validators[1]
+            ):
+                response_etag, response_last_modified = response_validators
+                refresh_companyfacts_receipt_validators(
+                    conn,
+                    ticker=normalized_ticker,
+                    etag=response_etag,
+                    last_modified=response_last_modified,
+                    payload_fetched_at=retrieved_at,
+                )
+        finally:
+            _record_phase(
+                "document_evidence_capture",
+                monotonic_ns() - observation_started_ns,
+            )
+
+        active_phase = "commit"
+        commit_started_ns = monotonic_ns()
+        try:
+            conn.commit()
+        finally:
+            _record_phase("commit", monotonic_ns() - commit_started_ns)
+        transaction_started = False
+
+        timing = _receipt("success", None)
+        _publish(timing)
+        response_etag = response_validators[0] if response_validators is not None else None
+        response_last_modified = response_validators[1] if response_validators is not None else None
+        _emit_skip_receipt(
+            reason,
+            digest,
+            etag=response_etag,
+            last_modified=response_last_modified,
+        )
+        return IngestStats(
+            accessions_inserted=0,
+            facts_inserted=0,
+            timing=timing,
+            disposition="skipped_unchanged",
+            skip_reason=reason,
+            payload_sha256=digest,
+        )
+
     try:
         cik = resolve_companyfacts_cik(conn, normalized_ticker, knowledge_at=datetime.now(UTC))
 
+        # Narrowed binding for the skip closure above, which cannot inherit the
+        # flow-narrowed type of `cik`.
+        normalized_cik: str = cik
+        extractor_sha256 = companyfacts_extractor_sha256(conn)
+        receipt_row = load_companyfacts_fetch_receipt(conn, ticker=normalized_ticker)
+        validators = receipt_row.validators if receipt_row is not None else None
+
+        fetched: FetchedCompanyFacts
         fetch_started_ns = monotonic_ns()
         try:
-            fetched = fetch_companyfacts(cik)
+            if local_payload is not None:
+                fetched = local_payload
+            else:
+                # Only send conditional headers when a completed receipt actually
+                # carries validators; the no-validator call shape stays exactly
+                # `fetch_companyfacts(cik)`.
+                if validators is not None and validators.present:
+                    fetch_result: FetchedCompanyFacts | CompanyFactsNotModified = (
+                        fetch_companyfacts(cik, validators=validators)
+                    )
+                else:
+                    fetch_result = fetch_companyfacts(cik)
+                if isinstance(fetch_result, CompanyFactsNotModified):
+                    # A 304 proves the payload still equals the receipt's digest.
+                    # It is only actionable when that completed payload is fully
+                    # retained; otherwise re-fetch the bytes unconditionally so
+                    # the full path can heal the capture.
+                    if receipt_row is not None and _completed_snapshot_payload_present(
+                        conn,
+                        ticker=normalized_ticker,
+                        normalized_cik=cik,
+                        digest=receipt_row.payload_sha256,
+                        snapshot_root=snapshot_root,
+                        extractor_sha256=extractor_sha256,
+                    ):
+                        return _record_unchanged_retrieval(
+                            reason="not_modified",
+                            digest=receipt_row.payload_sha256,
+                            source_url=fetch_result.source_url,
+                            observed_at=fetch_result.observed_at,
+                            retrieved_at=fetch_result.retrieved_at,
+                            response_validators=None,
+                        )
+                    refetched = fetch_companyfacts(cik)
+                    if isinstance(refetched, CompanyFactsNotModified):
+                        # An unconditional GET cannot legitimately answer 304;
+                        # fail closed rather than walking a payload we never saw.
+                        raise CompanyFactsContractError(
+                            "SEC answered 304 to an unconditional companyfacts GET"
+                        )
+                    fetched = refetched
+                else:
+                    fetched = fetch_result
         finally:
             _record_phase("http_fetch", monotonic_ns() - fetch_started_ns)
+
+        digest = hashlib.sha256(fetched.raw_body).hexdigest()
+        if _completed_snapshot_payload_present(
+            conn,
+            ticker=normalized_ticker,
+            normalized_cik=cik,
+            digest=digest,
+            snapshot_root=snapshot_root,
+            extractor_sha256=extractor_sha256,
+        ):
+            return _record_unchanged_retrieval(
+                reason="digest_match",
+                digest=digest,
+                source_url=fetched.source_url,
+                observed_at=fetched.observed_at,
+                retrieved_at=fetched.retrieved_at,
+                response_validators=(fetched.etag, fetched.last_modified),
+            )
 
         active_phase = "payload_parse"
         parse_started_ns = monotonic_ns()
@@ -1802,7 +2795,6 @@ def ingest_for_ticker(
                     raw_response_path=quarantine_path,
                 ) from None
             payload = _validated_legacy_payload(validated_payload)
-            digest = hashlib.sha256(fetched.raw_body).hexdigest()
             supported_accessions = supported_companyfacts_accessions(validated_payload)
             evidence_binding_ready = _has_table(
                 conn,
@@ -1821,8 +2813,48 @@ def ingest_for_ticker(
                     "SEC CompanyFacts ingestion requires migration "
                     "0231_legacy_document_evidence_bindings after fact cutover"
                 )
+            schema_profile = probe_financial_fact_schema(conn)
         finally:
             _record_phase("payload_parse", monotonic_ns() - parse_started_ns)
+
+        # Fact-walk selection is pure payload work: it runs BEFORE the write
+        # transaction opens, so the transaction below covers only the bounded
+        # persistence batch, never the full fact walk.
+        active_phase = "fact_admission"
+        active_fact_phase: FactAdmissionTimingPhase = "tag_selection"
+
+        def _mark_fact_phase(phase: FactAdmissionTimingPhase) -> None:
+            nonlocal active_fact_phase
+            active_fact_phase = phase
+
+        def _attribute_fact_phase_on_failure(phase_started_ns: int) -> None:
+            elapsed_ns = max(0, monotonic_ns() - phase_started_ns)
+            recorded_fact_ns = sum(
+                durations_ns[phase]
+                for phase in (
+                    "tag_selection",
+                    "fact_persistence_restatement",
+                    "evidence_capture_resolution",
+                )
+            )
+            _record_phase(
+                active_fact_phase,
+                max(0, elapsed_ns - recorded_fact_ns),
+            )
+
+        selection_started_ns = monotonic_ns()
+        try:
+            selection = select_facts_from_companyfacts(
+                payload,
+                ticker=ticker,
+                supported_accessions=supported_accessions,
+                timing_sink=_record_phase,
+                timing_phase_started=_mark_fact_phase,
+                monotonic_ns=monotonic_ns,
+            )
+        except Exception:
+            _attribute_fact_phase_on_failure(selection_started_ns)
+            raise
 
         transaction_started = True
         active_phase = "snapshot_registration"
@@ -1834,7 +2866,7 @@ def ingest_for_ticker(
                 digest=digest,
                 normalized_cik=cik,
                 raw_body=fetched.raw_body,
-                snapshot_root=project_root / "data" / "historical" / "sec" / "snapshots",
+                snapshot_root=snapshot_root,
                 fetched_at=fetched.retrieved_at,
             )
         finally:
@@ -1867,10 +2899,15 @@ def ingest_for_ticker(
                         raw_body=fetched.raw_body,
                         payload=validated_payload,
                         snapshot_document_id=snapshot_document_id,
-                        blob_root=(project_root / "data" / "historical" / "sec" / "snapshots"),
+                        blob_root=snapshot_root,
                         observed_at=fetched.observed_at,
                         retrieved_at=fetched.retrieved_at,
                     ),
+                    # The payload was parsed from these exact bytes one phase
+                    # ago; the attestation keeps the capture boundary's
+                    # bytes-vs-payload guarantee without a second full parse
+                    # inside the write transaction.
+                    payload_verified=VerifiedCompanyFactsPayload(validated_payload),
                 )
             else:
                 log.warning(
@@ -1887,48 +2924,53 @@ def ingest_for_ticker(
             )
 
         active_phase = "fact_admission"
-        active_fact_phase: FactAdmissionTimingPhase = "tag_selection"
-
-        def _mark_fact_phase(phase: FactAdmissionTimingPhase) -> None:
-            nonlocal active_fact_phase
-            active_fact_phase = phase
-
-        fact_admission_started_ns = monotonic_ns()
+        persistence_started_ns = monotonic_ns()
         try:
-            facts_inserted = insert_facts_from_companyfacts(
+            facts_inserted = persist_facts_from_companyfacts(
                 conn,
+                selection,
                 ticker=ticker,
-                payload=payload,
                 accession_to_doc_id=accession_to_doc_id,
                 run_id=run_id,
-                snapshot_root=(
-                    project_root / "data" / "historical" / "sec" / "snapshots"
-                    if exact_match_ready
-                    else None
-                ),
+                snapshot_root=(snapshot_root if exact_match_ready else None),
+                schema_profile=schema_profile,
                 timing_sink=_record_phase,
                 timing_phase_started=_mark_fact_phase,
                 monotonic_ns=monotonic_ns,
             )
         except Exception:
-            fact_admission_elapsed_ns = max(0, monotonic_ns() - fact_admission_started_ns)
-            recorded_fact_ns = sum(
-                durations_ns[phase]
-                for phase in (
-                    "tag_selection",
-                    "fact_persistence_restatement",
-                    "evidence_capture_resolution",
-                )
-            )
-            _record_phase(
-                active_fact_phase,
-                max(0, fact_admission_elapsed_ns - recorded_fact_ns),
-            )
+            _attribute_fact_phase_on_failure(persistence_started_ns)
             raise
 
         active_phase = "commit"
         commit_started_ns = monotonic_ns()
         try:
+            # The fetch receipt joins the ingest's own transaction: it commits
+            # exactly when (and only when) the snapshot registration and fact
+            # walk for this payload digest commit, making the receipt row the
+            # per-ticker completion record a retry can resume from. A schema
+            # without the receipts table keeps the committed fact walk and
+            # simply loses the skip/resumption optimization (logged).
+            if not record_companyfacts_ingest_receipt(
+                conn,
+                CompanyFactsFetchReceipt(
+                    ticker=normalized_ticker,
+                    normalized_cik=cik,
+                    payload_sha256=digest,
+                    etag=fetched.etag,
+                    last_modified=fetched.last_modified,
+                    payload_fetched_at=fetched.retrieved_at,
+                    ingest_completed_at=datetime.now(UTC),
+                    run_id=run_id,
+                    extractor_sha256=extractor_sha256,
+                ),
+            ):
+                log.warning(
+                    {
+                        "event": "sec_companyfacts_receipt_schema_absent",
+                        "ticker": normalized_ticker,
+                    }
+                )
             conn.commit()
         finally:
             _record_phase("commit", monotonic_ns() - commit_started_ns)
@@ -1959,4 +3001,6 @@ def ingest_for_ticker(
         accessions_inserted=(len(supported_accessions) if snapshot_registration.created else 0),
         facts_inserted=facts_inserted,
         timing=timing,
+        disposition="ingested",
+        payload_sha256=digest,
     )

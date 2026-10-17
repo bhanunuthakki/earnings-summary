@@ -44,6 +44,7 @@ from provenance.source_fact_stream import (
     register_source_fact_stream_functions,
     require_source_fact_stream_schema,
 )
+from runtime.deterministic import as_utc as _utc
 
 _UNSET_PUBLICATION_TIME = datetime(1970, 1, 1, tzinfo=UTC)
 
@@ -149,12 +150,6 @@ class PublicationReceipt(_FrozenModel):
     publication_event_sha256: str = Field(min_length=64, max_length=64)
     created_record_ids: tuple[str, ...]
     exact_replay: bool
-
-
-def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 def _sql_publication_payload_v1(*values: object) -> str:

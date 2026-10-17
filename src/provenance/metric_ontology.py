@@ -7,12 +7,15 @@ import json
 import sqlite3
 from collections.abc import Generator, Iterable
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from provenance.fact_read_model import FactAdmissionError, FactReadModel
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import canonical_json_model as canonical_json
+from runtime.deterministic import sha256_text as _digest
 
 Disposition = Literal[
     "exact",
@@ -28,27 +31,12 @@ PeriodKind = Literal["instant", "duration"]
 ValueKind = Literal["numeric", "text", "nil"]
 
 
-def canonical_json(value: object) -> str:
-    if isinstance(value, BaseModel):
-        value = value.model_dump(mode="json")
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-
-
 def sha256_json(value: object) -> str:
     return hashlib.sha256(canonical_json(value).encode()).hexdigest()
 
 
 def _sql_sha256(value: object) -> str:
     return hashlib.sha256(str(value).encode()).hexdigest()
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _time(value: datetime) -> str:
@@ -71,10 +59,6 @@ def _same_instant(left: object, right: object) -> bool:
 
 def _parse_db_time(value: object) -> datetime:
     return _utc(datetime.fromisoformat(str(value)))
-
-
-def _digest(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
 
 
 def _validate_digest(value: str) -> str:

@@ -557,7 +557,14 @@ def render_fallback_page(db_path: Path, doc_id: int, *, fragment: bool = False) 
     the link is never a dead end. The full-page route only reaches this when
     there is also no source_url to 302 to; ``fragment`` mode reaches it for
     ANY non-viewable doc (a peek fetch can't follow an external redirect), so
-    the metadata card's "original source ↗" link is the way out."""
+    the metadata card's "original source ↗" link is the way out.
+
+    Provenance state (VAL-CROSS-002(3)): when the document has an Observation
+    Version, the same full provenance chain the ``/source/version/<id>``
+    route serves is embedded below the metadata (one chain renderer, two
+    entry points — older built reports and direct ``/source/<doc_id>``
+    visits keep resolving the chain). When it does not, the absence is stated
+    explicitly — this page never presents a silently partial chain."""
     doc = load_document(db_path, doc_id)
     if doc is None:
         if fragment:
@@ -580,6 +587,15 @@ def render_fallback_page(db_path: Path, doc_id: int, *, fragment: bool = False) 
             else ""
         )
     )
+    version = load_document_version_by_legacy_id(db_path, doc_id)
+    if version is not None:
+        rows += _document_version_body(version, version.nodes, version.facts, wrap=False)
+    else:
+        rows += (
+            '<div class="sv-sec-row"><div class="sv-sec-key">observation version</div>'
+            '<div class="sv-sec-val">not recorded or not uniquely identified for this document — full '
+            "provenance chain unavailable</div></div>"
+        )
     if fragment:
         return _fragment(f"{doc.ticker} · {doc.doc_type}", _doc_meta_html(doc), rows)
     body = (
@@ -674,7 +690,7 @@ class DocumentVersionView:
     facts: tuple[DocumentVersionFact, ...]
 
 
-_DOCUMENT_VERSION_SQL = (
+_DOCUMENT_VERSION_SELECT = (
     "SELECT document.document_version_id,document.version_sequence,document.issuer_id,"
     "document.ticker,document.document_type,document.form_type,document.accession_number,"
     "document.exhibit_id,document.period_start,document.period_end,document.as_of_at,"
@@ -685,7 +701,18 @@ _DOCUMENT_VERSION_SQL = (
     "FROM evidence_document_versions document "
     "JOIN evidence_source_observations observation "
     "ON observation.observation_id=document.observation_id "
-    "WHERE document.document_version_id=?"
+)
+
+_DOCUMENT_VERSION_SQL = _DOCUMENT_VERSION_SELECT + "WHERE document.document_version_id=?"
+
+# The legacy-plane entry: report citations and older built reports address the
+# document by its ``documents.id``; this resolves that id to its Observation
+# Version only when the binding is unambiguous.
+# B608 review: SELECT and WHERE are module constants; the legacy document ID stays bound.
+_DOCUMENT_VERSION_BY_LEGACY_SQL = (
+    _DOCUMENT_VERSION_SELECT + "WHERE document.legacy_document_id=? "  # nosec B608
+    "AND (SELECT COUNT(*) FROM evidence_document_versions candidate "
+    "WHERE candidate.legacy_document_id=document.legacy_document_id)=1"
 )
 
 _DOCUMENT_VERSION_NODES_SQL = (
@@ -718,6 +745,27 @@ def load_document_version(db_path: Path, document_version_id: str) -> DocumentVe
     query error all return None so the route answers an honest 404 rather than
     inventing a provenance chain.
     """
+    return _open_document_version(db_path, _DOCUMENT_VERSION_SQL, (document_version_id,))
+
+
+def load_document_version_by_legacy_id(
+    db_path: Path, legacy_document_id: int
+) -> DocumentVersionView | None:
+    """The unambiguous Observation Version bound to a legacy document, or None.
+
+    The legacy ``/source/<doc_id>`` views and every already-built report cite
+    documents by ``documents.id``; this resolves that id to the immutable
+    evidence document version so those entry points can render the same full
+    provenance chain the ``/source/version/<id>`` route serves. Absent
+    binding, missing evidence plane, or a query error → None (the caller
+    renders the explicit degraded state, never a fabricated chain).
+    """
+    return _open_document_version(db_path, _DOCUMENT_VERSION_BY_LEGACY_SQL, (legacy_document_id,))
+
+
+def _open_document_version(
+    db_path: Path, sql: str, params: tuple[object, ...]
+) -> DocumentVersionView | None:
     if not db_path.exists():
         return None
     try:
@@ -726,15 +774,27 @@ def load_document_version(db_path: Path, document_version_id: str) -> DocumentVe
         return None
     conn.row_factory = sqlite3.Row
     try:
-        document = conn.execute(_DOCUMENT_VERSION_SQL, (document_version_id,)).fetchone()
+        document = conn.execute(sql, params).fetchone()
         if document is None:
             return None
-        node_rows = conn.execute(_DOCUMENT_VERSION_NODES_SQL, (document_version_id,)).fetchall()
-        fact_rows = conn.execute(_DOCUMENT_VERSION_FACTS_SQL, (document_version_id,)).fetchall()
+        node_rows = conn.execute(
+            _DOCUMENT_VERSION_NODES_SQL, (str(document["document_version_id"]),)
+        ).fetchall()
+        fact_rows = conn.execute(
+            _DOCUMENT_VERSION_FACTS_SQL, (str(document["document_version_id"]),)
+        ).fetchall()
     except sqlite3.Error:
         return None
     finally:
         conn.close()
+    return _build_document_version_view(document, node_rows, fact_rows)
+
+
+def _build_document_version_view(
+    document: sqlite3.Row,
+    node_rows: list[sqlite3.Row],
+    fact_rows: list[sqlite3.Row],
+) -> DocumentVersionView:
 
     nodes: dict[str, DocumentVersionNode] = {}
     node_order: list[str] = []
@@ -838,6 +898,8 @@ def _document_version_body(
     view: DocumentVersionView,
     nodes: tuple[DocumentVersionNode, ...],
     facts: tuple[DocumentVersionFact, ...],
+    *,
+    wrap: bool = True,
 ) -> str:
     ticker = view.ticker or "—"
     period = (
@@ -974,7 +1036,12 @@ def _document_version_body(
         + _sv_data_attr("retrieved-at", view.retrieved_at)
         + _sv_data_attr("recorded-at", view.recorded_at)
     )
-    return f'<div class="sv-fallback"{root_attrs}>' + "".join(rows) + "</div>"
+    rows_html = "".join(rows)
+    if not wrap:
+        # Hosted inside an existing sv-fallback container (the legacy
+        # /source/<doc_id> fallback page embedding the same chain rows).
+        return rows_html
+    return f'<div class="sv-fallback"{root_attrs}>' + rows_html + "</div>"
 
 
 def render_document_version_page(

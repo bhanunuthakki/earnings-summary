@@ -140,6 +140,7 @@ CITE_MARKS_JS = r"""
     }
     var meta = [];
     if (c.kind && !c.ticker) meta.push(esc(c.kind));
+    if (c.no_observation_version) meta.push('observation version not recorded or not uniquely identified');
     if (typeof c.confidence === 'number') {
       meta.push('confidence ' + Math.round(c.confidence * 100) + '%');
     }
@@ -339,6 +340,11 @@ def _cite_pop_html(item: CitationItem) -> str:
     kind = item.get("kind")
     if kind and not ticker:
         meta.append(_esc(kind))
+    if item.get("no_observation_version"):
+        # Explicit degraded state (VAL-CROSS-002(3)): the cited document has
+        # no uniquely identified Observation Version, so it resolves the legacy viewer,
+        # not the full provenance chain. Never rendered silently partial.
+        meta.append("observation version not recorded or not uniquely identified")
     conf = item.get("confidence")
     if isinstance(conf, (int, float)) and not isinstance(conf, bool):
         meta.append(f"confidence {round(conf * 100)}%")

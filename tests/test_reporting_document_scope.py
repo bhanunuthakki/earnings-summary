@@ -13,10 +13,22 @@ import pytest
 
 import provenance.population_document_processing as document_population
 import provenance.research_snapshot as research_snapshot
-import tests.test_grounded_ask_retrieval as ask_fixtures
-from provenance.evidence_ledger import DocumentVersion, EvidenceLedger
+from provenance.evidence_ledger import (
+    ContentBlob,
+    DocumentVersion,
+    EvidenceLedger,
+    EvidenceNode,
+    ExtractionRun,
+    SourceObservation,
+)
+from provenance.issuer_registry import IssuerEntity, IssuerRegistry
 from provenance.reporting_document_scope import ReportingDocumentDecision
-from provenance.reporting_entity_registry import ReportingEntityRegistry, SourceObligationRevision
+from provenance.reporting_entity_registry import (
+    EvidenceSubjectBindingRevision,
+    ReportingEntity,
+    ReportingEntityRegistry,
+    SourceObligationRevision,
+)
 from provenance.research_snapshot import (
     CorpusProjectionBundle,
     DocumentProcessingDisposition,
@@ -33,9 +45,13 @@ from provenance.source_coverage import (
     SourceCoverageLedger,
     SourceInventorySnapshot,
 )
-from provenance.source_expectation_lifecycle import (
+from provenance.source_coverage_reconcile import (
+    ExpectedDocumentImport,
     ExpectedDocumentLifecycle,
+    InventoryComponentImport,
+    SourceCoverageImport,
     persist_expected_document_lifecycle,
+    reconcile_source_coverage,
 )
 from provenance.source_inventory_seal import (
     InventoryComponent,
@@ -49,7 +65,214 @@ from search.corpus_builder import (
     build_grounded_search_corpus,
     load_coverage_expected_document_inventory,
 )
-from tests.test_grounded_ask_retrieval import STAMP, A, C
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+STAMP = datetime(2026, 7, 27, 6, 0, 0)
+A, B, C = "a" * 64, "b" * 64, "c" * 64
+
+
+def _conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> sqlite3.Connection:
+    path = tmp_path / "ask.db"
+    migrated_db(path)
+    conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER)
+    conn.row_factory = None
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def _seed_complete_corpus(conn: sqlite3.Connection) -> str:
+    IssuerRegistry(conn).persist(
+        IssuerEntity(
+            issuer_id="sec-cik:0000000001",
+            idempotency_key="issuer",
+            entity_kind="operating_company",
+            created_at=STAMP,
+        )
+    )
+    registry = ReportingEntityRegistry(conn)
+    registry.persist(
+        ReportingEntity(
+            reporting_entity_id="entity",
+            idempotency_key="entity",
+            issuer_id="sec-cik:0000000001",
+            reporting_entity_kind="legal_registrant",
+            display_name="Synthetic ACME",
+            created_at=STAMP,
+        )
+    )
+    registry.persist(
+        EvidenceSubjectBindingRevision(
+            binding_revision_id="subject",
+            idempotency_key="subject",
+            recorded_issuer_id="sec-cik:0000000001",
+            revision=1,
+            issuer_id="sec-cik:0000000001",
+            reporting_entity_id="entity",
+            outcome="selected",
+            decision_kind="manual",
+            material_dissent=False,
+            effective_at=STAMP,
+            knowledge_at=STAMP,
+            recorded_at=STAMP,
+            reason_code="synthetic_test_subject",
+            reason_details=(("scope", "test"),),
+        )
+    )
+    registry.persist(
+        SourceObligationRevision(
+            obligation_revision_id="duty",
+            idempotency_key="duty",
+            obligation_key="duty",
+            revision=1,
+            issuer_id="sec-cik:0000000001",
+            reporting_entity_id="entity",
+            authority_kind="sec_edgar",
+            document_family="operating_company_periodic",
+            obligation_state="required",
+            completeness_rule="regulator_inventory",
+            active_from=STAMP,
+            active_to=None,
+            decision_kind="manual",
+            effective_at=STAMP,
+            knowledge_at=STAMP,
+            recorded_at=STAMP,
+            reason_code="synthetic_test_duty",
+            reason_details=(("scope", "test"),),
+        )
+    )
+    ledger = EvidenceLedger(conn)
+    ledger.persist(
+        ContentBlob(
+            sha256=A,
+            byte_size=37,
+            media_type="text/plain",
+            storage_uri="file:///acme-10q.txt",
+            recorded_at=STAMP,
+        )
+    )
+    ledger.persist(
+        SourceObservation(
+            observation_id="obs",
+            idempotency_key="obs",
+            source_kind="sec_submissions",
+            source_url="https://sec.test/acme-10q",
+            blob_sha256=A,
+            source_published_at=STAMP,
+            filing_at=STAMP,
+            accepted_at=STAMP,
+            observed_at=STAMP,
+            retrieved_at=STAMP,
+            retrieval_config_sha256=B,
+            collector_code_version="collector@1",
+        )
+    )
+    ledger.persist(
+        DocumentVersion(
+            document_version_id="doc",
+            document_key="sec-cik:0000000001:accession",
+            version_sequence=1,
+            observation_id="obs",
+            blob_sha256=A,
+            issuer_id="sec-cik:0000000001",
+            ticker="ACME",
+            document_type="filing",
+            form_type="10-Q",
+            accession_number="0000000001-26-000001",
+            language="en",
+            recorded_at=STAMP,
+        )
+    )
+    ledger.persist(
+        ExtractionRun(
+            extraction_run_id="run",
+            idempotency_key="run",
+            document_version_id="doc",
+            input_sha256=A,
+            extractor_name="parser",
+            extractor_config_sha256=B,
+            extractor_code_version="parser@1",
+            output_sha256=C,
+            started_at=STAMP,
+            completed_at=STAMP,
+            outcome="succeeded",
+        )
+    )
+    ledger.persist(
+        EvidenceNode(
+            node_id="node",
+            evidence_key="sec-cik:0000000001:revenue",
+            revision=1,
+            extraction_run_id="run",
+            node_kind="passage",
+            text="Revenue increased 25 percent year over year.",
+            recorded_at=STAMP,
+        )
+    )
+    conn.commit()
+    coverage = reconcile_source_coverage(
+        conn,
+        SourceCoverageImport(
+            inventory_key="sec-cik:0000000001:submissions",
+            revision=1,
+            issuer_id="sec-cik:0000000001",
+            ticker="ACME",
+            source_kind="sec_submissions",
+            source_url="https://sec.test/submissions",
+            source_observation_id="obs",
+            outcome="succeeded",
+            authoritative=True,
+            retrieval_config_sha256=B,
+            collector_code_version="inventory@1",
+            started_at=STAMP,
+            completed_at=STAMP,
+            recorded_at=STAMP,
+            reconciled_at=STAMP,
+            components=(
+                InventoryComponentImport(
+                    component_key="primary",
+                    component_kind="primary",
+                    source_url="https://sec.test/submissions",
+                    source_observation_id="obs",
+                    outcome="succeeded",
+                    ordinal=0,
+                ),
+            ),
+            expected_documents=(
+                ExpectedDocumentImport(
+                    expected_document_key="sec-cik:0000000001:accession",
+                    source_kind="sec_filing",
+                    document_type="filing",
+                    form_type="10-Q",
+                    accession_number="0000000001-26-000001",
+                    expectation_basis="authoritative",
+                ),
+            ),
+            apply=True,
+        ),
+    )
+    inventory, snapshots = load_coverage_expected_document_inventory(
+        conn,
+        ("sec-cik:0000000001:submissions",),
+        knowledge_cutoff=STAMP,
+        observed_through=STAMP,
+    )
+    corpus = build_grounded_search_corpus(
+        conn,
+        CorpusBuildRequest(
+            corpus_key="sec-cik:0000000001:reporting",
+            revision=1,
+            selector_code_version="selector@1",
+            recorded_at=STAMP,
+            knowledge_cutoff=STAMP,
+            expected_documents=inventory.expected_documents,
+            source_inventory_snapshot_ids=snapshots,
+            required_extractor_names=("parser",),
+            apply=True,
+        ),
+    )
+    assert coverage.snapshot_id == snapshots[0]
+    return corpus.manifest_id
+
 
 KEY = "sec-cik:0000000001:submissions"
 ISSUER = "sec-cik:0000000001"
@@ -81,10 +304,6 @@ _document_scope: Callable[
 ] = getattr(document_population, "_document_scope")
 _verify_research_universe: UniverseVerifier = getattr(
     research_snapshot, "_verify_research_universe"
-)
-_conn: Callable[[Path, Callable[..., Path]], sqlite3.Connection] = getattr(ask_fixtures, "_conn")
-_seed_complete_corpus: Callable[[sqlite3.Connection], str] = getattr(
-    ask_fixtures, "_seed_complete_corpus"
 )
 
 
@@ -349,9 +568,19 @@ def test_captured_package_has_exact_reporting_set_and_acquisition_links(package:
         ),
     )
     digest = hashlib.sha256(b"{}").hexdigest()
+    scope_json = DocumentProcessingScope(document_version_ids=("doc",)).model_dump_json()
     conn.execute(
         "INSERT INTO document_processing_snapshot_headers VALUES (?,?,?,?,?,?,?,?)",
-        ("processing", "processing", "{}", digest, "{}", digest, STAMP, STAMP),
+        (
+            "processing",
+            "processing",
+            scope_json,
+            hashlib.sha256(scope_json.encode()).hexdigest(),
+            "{}",
+            digest,
+            STAMP,
+            STAMP,
+        ),
     )
     conn.execute(
         "INSERT INTO document_processing_snapshot_members VALUES (?,?,?,?,?,?,?,?)",

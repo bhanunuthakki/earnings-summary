@@ -1194,6 +1194,45 @@ def _stderr_tail(exc: BaseException, limit: int = 400) -> str:
     return stdout[-limit:] if stdout else ""
 
 
+def _engage_quota_breaker(info: FailureInfo) -> None:
+    """Engage the quota breaker, with the drop observable if the row is lost.
+
+    The breaker's persistence (``llm_circuit_breakers``) is a best-effort
+    write: inside the daily chain its WRITER connection is serialized per
+    resolved database path, and a writer-gate timeout loses the row. Losing it
+    silently would leave every process re-spawning doomed CLIs for hours with
+    no evidence why — so the drop is WARNED and counted (durable counter
+    beside the database) here at the call seam, and the caller still treats
+    the window as exhausted for THIS call (the raise/defer path is
+    unchanged).
+    """
+    from pipeline.db_writer_gate import WriterGateHeldError
+
+    try:
+        record_quota_exhausted(info)
+    except WriterGateHeldError as exc:
+        log.warning(
+            {
+                "event": "llm_quota_breaker_write_gate_timeout",
+                "kind": info.kind,
+                "error": str(exc)[:200],
+            }
+        )
+        try:
+            from db_paths import resolve_db_path
+            from telemetry_health import DROPPED_QUOTA_BREAKER_WRITE, record_dropped_write
+
+            path = resolve_db_path(None)
+            if path is not None:
+                record_dropped_write(
+                    DROPPED_QUOTA_BREAKER_WRITE,
+                    db_path=path,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+        except Exception:  # never escalate from a failure handler
+            log.debug({"event": "quota_breaker_drop_counter_failed"})
+
+
 def _call_claude(
     prompt: str,
     model: str = DEFAULT_MODEL,
@@ -1386,7 +1425,7 @@ def _call_claude(
             if last_info.kind == "usage_limit":
                 # Deterministic until the window resets — engage the breaker so
                 # every process fails fast instead of spawning doomed CLIs.
-                record_quota_exhausted(last_info)
+                _engage_quota_breaker(last_info)
                 break
             if attempt < retry_budget(last_info.kind):
                 delay = _RETRY_BASE_SECONDS * (2 ** (attempt - 1)) + random.uniform(0.0, 1.0)
@@ -2638,7 +2677,7 @@ def call_llm_with_web(
             # Engage the breaker here too. A grounding-required call raises
             # below; an explicit non-grounded call's plain fallback then fails
             # fast instead of spawning a second doomed subprocess.
-            record_quota_exhausted(web_info)
+            _engage_quota_breaker(web_info)
         if require_grounding:
             log.warning(
                 {

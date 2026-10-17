@@ -9,7 +9,6 @@ It never places, sizes, or transmits a broker trade.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from datetime import UTC, datetime
@@ -25,6 +24,7 @@ from compute.thesis_episode_attention import (
     get_attention,
     supersede_prior,
 )
+from runtime.deterministic import sha256_text as _sha256
 
 _ACTION_LABEL_MAX_LENGTH = 128
 _MAX_NOTE_LENGTH = 1000
@@ -162,10 +162,6 @@ class GovernedAlertActionReceipt(_FrozenModel):
     decision_id: int | None
     replacement_episode_id: str | None
     result_state: str
-
-
-def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _optional_digest(value: str | None) -> str | None:

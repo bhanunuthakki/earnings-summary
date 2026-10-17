@@ -28,6 +28,7 @@ from pydantic import (
 
 from models.facts import Unit
 from provenance.reporting_entity_registry import ReportingEntityRegistry
+from runtime.deterministic import table_or_view_exists as _table_exists
 
 
 class KpiPeriodRole(StrEnum):
@@ -283,15 +284,6 @@ class KpiSemanticContextRevision(BaseModel):
         if value.tzinfo is None:
             raise ValueError("semantic context knowledge_at must be timezone-aware")
         return value
-
-
-def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name=?", (name,)
-        ).fetchone()
-        is not None
-    )
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> frozenset[str]:

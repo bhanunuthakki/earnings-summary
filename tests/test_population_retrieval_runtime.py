@@ -1,24 +1,70 @@
-# pyright: reportPrivateUsage=false
 """Deterministic corpus and semantic-runtime population gates."""
 
 from __future__ import annotations
 
 import hashlib
 import sqlite3
-from datetime import UTC, datetime
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Protocol, cast
 
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 import provenance.population_retrieval_runtime as population
+from provenance.evidence_ledger import (
+    ContentBlob,
+    DocumentVersion,
+    EvidenceLedger,
+    SourceObservation,
+)
+from provenance.fulltext_backfill import FullTextBackfillRequest, backfill_fulltext_evidence
+from provenance.issuer_registry import IssuerEntity, IssuerRegistry
 from provenance.population_completeness import PopulationTemporalScope
 from provenance.population_retrieval_runtime import (
     RetrievalRuntimePopulationRequest,
+    SemanticCanaryReceipt,
     populate_retrieval_runtime,
     verify_retrieval_runtime,
 )
-from search.corpus_builder import CorpusBuildResult
+from provenance.reporting_entity_registry import (
+    EvidenceSubjectBindingRevision,
+    ReportingEntity,
+    ReportingEntityRegistry,
+    SourceObligationRevision,
+)
+from provenance.source_coverage_reconcile import (
+    ExpectedDocumentImport,
+    InventoryComponentImport,
+    SourceCoverageImport,
+    reconcile_source_coverage,
+)
+from search.corpus_builder import (
+    CorpusBuildResult,
+    build_grounded_search_corpus,
+    load_coverage_expected_document_inventory,
+)
+from search.grounded import HybridRetriever, SearchFilter
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+
+class _SemanticCanaryCall(Protocol):
+    """Typed access to the exact semantic canary seam under test."""
+
+    def __call__(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        manifest_id: str,
+        vector_index_run_id: str,
+        embedding_promotion_id: str,
+        runtime_root: Path,
+        exact_row_cap: int,
+    ) -> SemanticCanaryReceipt: ...
+
+
+_verify_semantic_canary = cast(_SemanticCanaryCall, vars(population)["_verify_semantic_canary"])
 
 STAMP = datetime(2026, 7, 29, 12, 0, tzinfo=UTC)
 SHA = hashlib.sha256(b"retrieval-runtime-test").hexdigest()
@@ -71,6 +117,7 @@ class _FakeSemanticRuntime:
 
 
 def _database(*, complete_inventory: bool = True) -> sqlite3.Connection:
+    """Metadata-only unit fixture; the real migrated owner path is tested below."""
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.executescript(
@@ -110,7 +157,13 @@ def _database(*, complete_inventory: bool = True) -> sqlite3.Connection:
             snapshot_id TEXT NOT NULL,
             expected_document_key TEXT NOT NULL,
             issuer_id TEXT NOT NULL,
-            recorded_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL,
+            source_kind TEXT NOT NULL DEFAULT 'sec_filing',
+            document_type TEXT NOT NULL DEFAULT 'filing',
+            form_type TEXT DEFAULT '10-Q',
+            period_end TEXT,
+            accession_number TEXT,
+            source_url TEXT
         );
         CREATE TABLE expected_document_obligation_bindings (
             expected_document_id TEXT PRIMARY KEY,
@@ -132,6 +185,31 @@ def _database(*, complete_inventory: bool = True) -> sqlite3.Connection:
             knowledge_at TEXT NOT NULL,
             recorded_at TEXT NOT NULL
         );
+        CREATE TABLE expected_document_lifecycle_revisions (
+            inventory_key TEXT NOT NULL,
+            expected_document_key TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            expected_document_id TEXT,
+            knowledge_at TEXT NOT NULL,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE VIEW v_source_inventory_sealed_complete AS
+            SELECT inventory.*, seal.sealed_at
+            FROM source_inventory_snapshots inventory
+            JOIN source_inventory_snapshot_seals seal ON seal.snapshot_id=inventory.snapshot_id
+            WHERE seal.completion_status='complete'
+              AND NOT EXISTS (
+                  SELECT 1 FROM source_inventory_snapshots newer
+                  WHERE newer.inventory_key=inventory.inventory_key
+                    AND newer.revision>inventory.revision
+              );
+        CREATE TABLE evidence_document_versions (
+            document_version_id TEXT PRIMARY KEY,
+            reporting_entity_id TEXT NOT NULL
+        );
+        CREATE VIEW v_evidence_document_versions_canonical AS
+            SELECT document_version_id, reporting_entity_id FROM evidence_document_versions;
         CREATE TABLE search_corpus_manifests (
             manifest_id TEXT PRIMARY KEY,
             corpus_key TEXT NOT NULL,
@@ -203,7 +281,8 @@ def _database(*, complete_inventory: bool = True) -> sqlite3.Connection:
         (SHA, "complete" if complete_inventory else "incomplete", stamp),
     )
     conn.execute(
-        "INSERT INTO expected_documents VALUES "
+        "INSERT INTO expected_documents "
+        "(expected_document_id,snapshot_id,expected_document_key,issuer_id,recorded_at) VALUES "
         "('expected','inventory','issuer:2026Q2:10-Q','issuer',?)",
         (stamp,),
     )
@@ -217,6 +296,12 @@ def _database(*, complete_inventory: bool = True) -> sqlite3.Connection:
         "('assessment','expected',1,'extracted','document','covered',?,?)",
         (stamp, stamp),
     )
+    conn.execute(
+        "INSERT INTO expected_document_lifecycle_revisions VALUES "
+        "('issuer:sec','issuer:2026Q2:10-Q',1,'expected','expected',?,?)",
+        (stamp, stamp),
+    )
+    conn.execute("INSERT INTO evidence_document_versions VALUES ('document','entity')")
     conn.commit()
     return conn
 
@@ -505,6 +590,55 @@ def test_active_obligation_without_bound_document_is_not_silently_excluded() -> 
     assert result.failed_reason_counts == {"expected_document_binding_missing": 1}
 
 
+@pytest.mark.parametrize("scope_error", ["unbound", "issuer", "entity", "family"])
+def test_positive_reporting_projection_requires_exact_obligation_scope(scope_error: str) -> None:
+    conn = _database()
+    stamp = STAMP.isoformat()
+    if scope_error == "unbound":
+        conn.execute(
+            "INSERT INTO expected_documents "
+            "(expected_document_id,snapshot_id,expected_document_key,issuer_id,recorded_at) "
+            "VALUES ('extra','inventory','extra','issuer',?)",
+            (stamp,),
+        )
+        conn.execute(
+            "INSERT INTO expected_document_lifecycle_revisions VALUES "
+            "('issuer:sec','extra',1,'expected','extra',?,?)",
+            (stamp, stamp),
+        )
+        conn.execute(
+            "INSERT INTO source_coverage_assessments VALUES "
+            "('extra','extra',1,'extracted','document','covered',?,?)",
+            (stamp, stamp),
+        )
+    elif scope_error == "issuer":
+        conn.execute("UPDATE expected_documents SET issuer_id='other'")
+    elif scope_error == "entity":
+        conn.execute("UPDATE evidence_document_versions SET reporting_entity_id='other'")
+    else:
+        conn.execute("UPDATE expected_documents SET form_type='8-K'")
+    conn.commit()
+    try:
+        canonical, _ = load_coverage_expected_document_inventory(
+            conn, ("issuer:sec",), knowledge_cutoff=STAMP, observed_through=STAMP
+        )
+        assert all(item.membership_status == "included" for item in canonical.expected_documents)
+        result = populate_retrieval_runtime(
+            conn,
+            RetrievalRuntimePopulationRequest(
+                cutoff_at=STAMP,
+                operation_recorded_at=STAMP,
+                phase="corpus",
+                apply=True,
+            ),
+        )
+        assert result.lexical_manifest_count == 0
+        assert result.failed_reason_counts == {"reporting_document_scope_widened": 1}
+        assert conn.execute("SELECT COUNT(*) FROM search_corpus_manifests").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
 def test_result_json_includes_exact_per_issuer_coordinates() -> None:
     conn = _database()
     try:
@@ -550,7 +684,7 @@ def test_semantic_canary_requires_and_receipts_exact_grounded_seed(
     _FakeSemanticRuntime.candidate_ids = ("chunk-b",)
 
     with pytest.raises(ValueError, match="grounded seed chunk"):
-        population._verify_semantic_canary(
+        _verify_semantic_canary(
             conn,
             manifest_id="manifest",
             vector_index_run_id="vector",
@@ -560,7 +694,7 @@ def test_semantic_canary_requires_and_receipts_exact_grounded_seed(
         )
 
     _FakeSemanticRuntime.candidate_ids = ("chunk-b", "chunk-a")
-    receipt = population._verify_semantic_canary(
+    receipt = _verify_semantic_canary(
         conn,
         manifest_id="manifest",
         vector_index_run_id="vector",
@@ -627,3 +761,360 @@ def test_population_stops_at_first_failed_issuer_without_advancing_cursor(
     assert calls == ["investor-reporting:issuer"]
     assert result.processed_issuer_count == 1
     assert result.last_issuer_id is None
+
+
+@pytest.mark.parametrize("include_expired_family", [False, True])
+def test_real_reporting_inventory_populates_exact_canonical_lexical_projection(
+    tmp_path: Path, migrated_db: Callable[..., Path], include_expired_family: bool
+) -> None:
+    database = migrated_db(tmp_path / "retrieval.db")
+    conn = connect_sqlite(database, role=SQLiteConnectionRole.WRITER)
+    conn.row_factory = sqlite3.Row
+    try:
+        IssuerRegistry(conn).persist(
+            IssuerEntity(
+                issuer_id="issuer",
+                idempotency_key="issuer",
+                entity_kind="operating_company",
+                created_at=STAMP,
+            )
+        )
+        registry = ReportingEntityRegistry(conn)
+        registry.persist(
+            ReportingEntity(
+                reporting_entity_id="entity",
+                idempotency_key="entity",
+                issuer_id="issuer",
+                reporting_entity_kind="legal_registrant",
+                display_name="Synthetic issuer",
+                created_at=STAMP,
+            )
+        )
+        registry.persist(
+            EvidenceSubjectBindingRevision(
+                binding_revision_id="subject",
+                idempotency_key="subject",
+                recorded_issuer_id="issuer",
+                revision=1,
+                issuer_id="issuer",
+                reporting_entity_id="entity",
+                outcome="selected",
+                material_dissent=False,
+                decision_kind="deterministic",
+                reason_code="finite_synthetic_source",
+                reason_details=(("scope", "one synthetic HTML presentation"),),
+                effective_at=STAMP,
+                knowledge_at=STAMP,
+                recorded_at=STAMP,
+            )
+        )
+        registry.persist(
+            SourceObligationRevision(
+                obligation_revision_id="obligation",
+                idempotency_key="obligation",
+                obligation_key="obligation",
+                revision=1,
+                issuer_id="issuer",
+                reporting_entity_id="entity",
+                authority_kind="issuer_publisher",
+                document_family="issuer_presentations",
+                obligation_state="required",
+                completeness_rule="publisher_surface_exhaustion",
+                active_from=STAMP,
+                active_to=None,
+                decision_kind="deterministic",
+                reason_code="finite_synthetic_source",
+                reason_details=(("scope", "one synthetic HTML presentation"),),
+                effective_at=STAMP,
+                knowledge_at=STAMP,
+                recorded_at=STAMP,
+            )
+        )
+        raw = b"<html><body><h1>Annual presentation</h1><p>Synthetic revenue growth and customer demand improved.</p></body></html>"
+        source = tmp_path / "presentation.html"
+        source.write_bytes(raw)
+        digest = hashlib.sha256(raw).hexdigest()
+        ledger = EvidenceLedger(conn)
+        ledger.persist(
+            ContentBlob(
+                sha256=digest,
+                byte_size=len(raw),
+                media_type="text/html",
+                storage_uri=source.as_uri(),
+                recorded_at=STAMP,
+            )
+        )
+        ledger.persist(
+            SourceObservation(
+                observation_id="source",
+                idempotency_key="source",
+                source_kind="issuer",
+                source_url="https://synthetic.invalid/presentation",
+                blob_sha256=digest,
+                source_published_at=STAMP,
+                filing_at=None,
+                accepted_at=None,
+                observed_at=STAMP,
+                retrieved_at=STAMP,
+                retrieval_config_sha256=SHA,
+                collector_code_version="synthetic@1",
+            )
+        )
+        ledger.persist(
+            DocumentVersion(
+                document_version_id="document",
+                document_key="SYNTH:presentation",
+                version_sequence=1,
+                observation_id="source",
+                blob_sha256=digest,
+                issuer_id="issuer",
+                ticker="SYNTH",
+                document_type="investor_presentation",
+                form_type="presentation",
+                language="en",
+                recorded_at=STAMP,
+            )
+        )
+        conn.commit()
+        extraction = backfill_fulltext_evidence(
+            conn,
+            FullTextBackfillRequest(
+                repo_root=tmp_path,
+                content_roots=(tmp_path,),
+                apply=True,
+                document_version_id="document",
+                source_lane="evidence_native",
+            ),
+        )
+        assert extraction.documents_extracted == 1
+        extra_components: tuple[InventoryComponentImport, ...] = ()
+        extra_expected: tuple[ExpectedDocumentImport, ...] = ()
+        cutoff = extraction.run_at + timedelta(seconds=1)
+        if include_expired_family:
+            release_raw = b"<html><body><h1>Earnings release</h1><p>Revenue and customer demand improved in the reported year.</p></body></html>"
+            release_path = tmp_path / "earnings.html"
+            release_path.write_bytes(release_raw)
+            release_digest = hashlib.sha256(release_raw).hexdigest()
+            ledger.persist(
+                ContentBlob(
+                    sha256=release_digest,
+                    byte_size=len(release_raw),
+                    media_type="text/html",
+                    storage_uri=release_path.as_uri(),
+                    recorded_at=STAMP,
+                )
+            )
+            ledger.persist(
+                SourceObservation(
+                    observation_id="release-source",
+                    idempotency_key="release-source",
+                    source_kind="issuer",
+                    source_url="https://synthetic.invalid/earnings",
+                    blob_sha256=release_digest,
+                    source_published_at=STAMP,
+                    filing_at=None,
+                    accepted_at=None,
+                    observed_at=STAMP,
+                    retrieved_at=STAMP,
+                    retrieval_config_sha256=SHA,
+                    collector_code_version="synthetic@1",
+                )
+            )
+            ledger.persist(
+                DocumentVersion(
+                    document_version_id="release-document",
+                    document_key="SYNTH:earnings",
+                    version_sequence=1,
+                    observation_id="release-source",
+                    blob_sha256=release_digest,
+                    issuer_id="issuer",
+                    ticker="SYNTH",
+                    document_type="earnings_release",
+                    form_type="release",
+                    language="en",
+                    recorded_at=STAMP,
+                )
+            )
+            conn.commit()
+            release_extraction = backfill_fulltext_evidence(
+                conn,
+                FullTextBackfillRequest(
+                    repo_root=tmp_path,
+                    content_roots=(tmp_path,),
+                    apply=True,
+                    document_version_id="release-document",
+                    source_lane="evidence_native",
+                ),
+            )
+            assert release_extraction.documents_extracted == 1
+            cutoff = max(cutoff, release_extraction.run_at + timedelta(seconds=1))
+            registry.persist(
+                SourceObligationRevision(
+                    obligation_revision_id="expired-obligation",
+                    idempotency_key="expired-obligation",
+                    obligation_key="expired-obligation",
+                    revision=1,
+                    issuer_id="issuer",
+                    reporting_entity_id="entity",
+                    authority_kind="issuer_publisher",
+                    document_family="issuer_earnings_materials",
+                    obligation_state="optional",
+                    completeness_rule="publisher_surface_exhaustion",
+                    active_from=STAMP,
+                    active_to=cutoff + timedelta(seconds=1),
+                    decision_kind="deterministic",
+                    reason_code="finite_synthetic_source",
+                    reason_details=(("scope", "captured family expires after inventory sealing"),),
+                    effective_at=STAMP,
+                    knowledge_at=STAMP,
+                    recorded_at=STAMP,
+                )
+            )
+            extra_components = (
+                InventoryComponentImport(
+                    component_key="earnings",
+                    component_kind="primary",
+                    source_url="https://synthetic.invalid/earnings",
+                    source_observation_id="release-source",
+                    outcome="succeeded",
+                    ordinal=1,
+                ),
+            )
+            extra_expected = (
+                ExpectedDocumentImport(
+                    expected_document_key="earnings",
+                    source_kind="ir_document",
+                    document_type="earnings_release",
+                    form_type="release",
+                    source_url="https://synthetic.invalid/earnings",
+                    expectation_basis="authoritative",
+                ),
+            )
+        conn.commit()
+        inventory_result = reconcile_source_coverage(
+            conn,
+            SourceCoverageImport(
+                inventory_key="inventory",
+                revision=1,
+                issuer_id="issuer",
+                ticker="SYNTH",
+                source_kind="ir_crawl",
+                source_url="https://synthetic.invalid/presentation",
+                source_observation_id="source",
+                outcome="succeeded",
+                authoritative=True,
+                retrieval_config_sha256=SHA,
+                collector_code_version="synthetic@1",
+                started_at=STAMP,
+                completed_at=STAMP,
+                recorded_at=cutoff,
+                reconciled_at=cutoff,
+                components=(
+                    InventoryComponentImport(
+                        component_key="primary",
+                        component_kind="primary",
+                        source_url="https://synthetic.invalid/presentation",
+                        source_observation_id="source",
+                        outcome="succeeded",
+                        ordinal=0,
+                    ),
+                    *extra_components,
+                ),
+                expected_documents=(
+                    ExpectedDocumentImport(
+                        expected_document_key="presentation",
+                        source_kind="ir_document",
+                        document_type="investor_presentation",
+                        form_type="presentation",
+                        source_url="https://synthetic.invalid/presentation",
+                        expectation_basis="authoritative",
+                    ),
+                    *extra_expected,
+                ),
+                apply=True,
+            ),
+        )
+        conn.commit()
+        if include_expired_family:
+            cutoff += timedelta(seconds=2)
+        canonical, snapshots = load_coverage_expected_document_inventory(
+            conn,
+            ("inventory",),
+            knowledge_cutoff=cutoff,
+            observed_through=cutoff,
+        )
+        assert snapshots == (inventory_result.snapshot_id,)
+        assert len(canonical.expected_documents) == (2 if include_expired_family else 1)
+        assert canonical.expected_documents[0].reason == (
+            "reporting:governed_ir_reporting_document:coverage:extracted"
+        )
+        result = populate_retrieval_runtime(
+            conn,
+            RetrievalRuntimePopulationRequest(
+                cutoff_at=cutoff,
+                operation_recorded_at=cutoff,
+                apply=True,
+                phase="corpus",
+                required_extractor_names=("fulltext-evidence-backfill",),
+            ),
+        )
+        assert result.lexical_manifest_count == 1, result.failed_reason_counts
+        # Corpus-only success does not claim qualified semantic readiness.
+        assert result.failed_issuer_count == 1
+        assert result.ready_issuer_count == 0
+        assert result.issuer_results[0].reason_codes == ("retrieval_qualification_not_run",)
+        assert conn.execute("SELECT COUNT(*) FROM search_chunks").fetchone()[0] > 0
+        memberships = conn.execute(
+            "SELECT expected_document_key,document_version_id,membership_status,reason "
+            "FROM search_corpus_document_memberships ORDER BY expected_document_key"
+        ).fetchall()
+        assert [tuple(row) for row in memberships] == [
+            (
+                item.expected_document_key,
+                item.document_version_id,
+                item.membership_status,
+                item.reason,
+            )
+            for item in canonical.expected_documents
+        ]
+        if include_expired_family:
+            # Canonical archive membership is broader than the active acquisition
+            # obligations; its retained reporting source is actually searchable.
+            manifest_id = result.issuer_results[0].manifest_id
+            assert manifest_id is not None
+            release_hits = HybridRetriever(conn).search(
+                "revenue",
+                manifest_id,
+                filters=SearchFilter(
+                    issuer_id="issuer", form_types=("release",), knowledge_cutoff=cutoff
+                ),
+                limit=10,
+            )
+            assert release_hits
+            assert all(hit.document_version_id == "release-document" for hit in release_hits)
+            assert all(
+                hit.source_url == "https://synthetic.invalid/earnings" for hit in release_hits
+            )
+        forged = tuple(
+            item.model_copy(update={"reason": "coverage:captured:invented"})
+            if item.expected_document_key == "presentation"
+            else item
+            for item in canonical.expected_documents
+        )
+        with pytest.raises(ValueError, match="exact governed reporting projection"):
+            build_grounded_search_corpus(
+                conn,
+                population.CorpusBuildRequest(
+                    corpus_key="forged",
+                    revision=1,
+                    selector_code_version="test@1",
+                    recorded_at=cutoff,
+                    knowledge_cutoff=cutoff,
+                    expected_documents=forged,
+                    source_inventory_snapshot_ids=snapshots,
+                    required_extractor_names=("fulltext-evidence-backfill",),
+                    apply=False,
+                ),
+            )
+    finally:
+        conn.close()

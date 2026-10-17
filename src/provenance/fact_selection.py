@@ -15,6 +15,8 @@ from typing import Literal, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from provenance.observation_resolution import matches_stored_values
+
 _SHA256_LENGTH = 64
 _TARGET_TABLES = frozenset({"kpi_facts"})
 SelectionState: TypeAlias = Literal["included", "excluded"]
@@ -102,25 +104,6 @@ class PersistResult:
     created: bool
 
 
-def _matches_stored_values(existing: tuple[object, ...], expected: tuple[object, ...]) -> bool:
-    if len(existing) != len(expected):
-        return False
-    for stored, supplied in zip(existing, expected, strict=True):
-        if isinstance(supplied, datetime):
-            try:
-                parsed = datetime.fromisoformat(str(stored)).replace(tzinfo=None)
-            except ValueError:
-                return False
-            if parsed != supplied.replace(tzinfo=None):
-                return False
-        elif isinstance(supplied, bool):
-            if bool(stored) is not supplied:
-                return False
-        elif stored != supplied:
-            return False
-    return True
-
-
 class FactSelectionLedger:
     """Single typed persistence boundary for immutable legacy-fact decisions."""
 
@@ -202,7 +185,7 @@ class FactSelectionLedger:
             f"SELECT {', '.join(columns)} FROM fact_selection_decisions WHERE idempotency_key = ?",  # nosec B608 -- trusted internal SQL shape; values remain bound
             (decision.idempotency_key,),
         ).fetchone()
-        if existing is None or not _matches_stored_values(tuple(existing), values):
+        if existing is None or not matches_stored_values(tuple(existing), values):
             raise ValueError(
                 f"immutable fact selection identity {decision.idempotency_key!r} conflicts with existing data"
             )

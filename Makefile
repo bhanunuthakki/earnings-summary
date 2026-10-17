@@ -72,8 +72,9 @@ test-serial:  ## Run the full suite in one process (lowest local RAM/CPU pressur
 test-changed:  ## Run pytest only on changed test files vs BASE
 	$(CHANGED_CHECK) --check tests
 
-architecture-check:  ## Guard the monotonic baseline for execution sys.path mutations and loose root src modules
+architecture-check:  ## Guard execution boundary seams and the frozen architecture/duplication ratchets
 	$(PY) scripts/check_architecture_boundaries.py
+	$(PY) scripts/check_architecture_ratchet.py
 
 instruction-check:  ## Validate layered instructions without app fixtures or DB setup
 	$(PY) execution/validate_directive_manifest.py

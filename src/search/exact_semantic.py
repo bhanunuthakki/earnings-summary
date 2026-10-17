@@ -25,6 +25,7 @@ from provenance.search_index_lineage import (
     load_projection_seal,
     verify_ledger_projection_seal,
 )
+from runtime.deterministic import canonical_json_ascii as _canonical_json
 from search.canonical_fact_projection import canonical_decimal
 from search.embedding_promotion import (
     EmbeddingPromotion,
@@ -541,15 +542,6 @@ def _chunk_id(row: dict[str, object]) -> str:
 
 def _model_digest(model: BaseModel) -> str:
     return _digest_text(_canonical_json(model.model_dump(mode="json")))
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
 
 
 def _digest_text(value: str) -> str:

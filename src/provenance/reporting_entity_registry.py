@@ -13,9 +13,13 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from typing import Literal, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from runtime.deterministic import parse_instant as _parse_datetime
+from runtime.deterministic import require_sha256
 
 ReportingEntityKind: TypeAlias = Literal[
     "legal_registrant",
@@ -91,13 +95,7 @@ def _validate_clocks(
         raise ValueError("recorded_at must not precede knowledge_at")
 
 
-def _sha256(value: str) -> str:
-    normalized = value.lower()
-    if len(normalized) != 64 or any(
-        character not in "0123456789abcdef" for character in normalized
-    ):
-        raise ValueError("must be a lowercase SHA-256 hex digest")
-    return normalized
+_sha256 = partial(require_sha256, message="must be a lowercase SHA-256 hex digest")
 
 
 def _reason_json(value: tuple[tuple[str, str], ...]) -> str:
@@ -956,11 +954,6 @@ def _insert_spec(record: RegistryRecord) -> _InsertSpec:
             record.supersedes_binding_revision_id,
         ),
     )
-
-
-def _parse_datetime(value: object) -> datetime:
-    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
-    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
 
 def _matches_stored(stored: tuple[object, ...], supplied: tuple[object, ...]) -> bool:

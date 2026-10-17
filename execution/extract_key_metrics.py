@@ -10,7 +10,7 @@ Caches to `data/key_metrics/{TICKER}.json` keyed by an input sha256 (name +
 business description + the picker catalog vocabulary). Re-runs are no-ops unless
 the inputs changed or --refresh is passed.
 
-The renderer (`src/pipeline/key_metrics.py`, read by the Explore panel) merges
+The renderer (`src/pipeline/explore_panel.py`, read by the Explore panel) merges
 the cached picks onto the deterministic tier-graded baseline. Absent cache →
 the tier-graded baseline alone. See directives/key_metrics_picker.md. Normally
 runs automatically on the `--enable-llm` build
@@ -25,12 +25,12 @@ import sqlite3
 import sys
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+# Direct invocation: importing _lib (execution/_lib.py) puts src/ on sys.path.
+from _lib import PROJECT_ROOT
 
-import db  # noqa: E402
-from compute.key_metrics import extract_for_ticker  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+import db
+from compute.key_metrics import extract_for_ticker
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def main() -> int:

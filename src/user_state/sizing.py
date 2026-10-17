@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 
 from identity import DEFAULT_USER_ID
+from runtime.deterministic import table_exists as _table_exists
 from user_state._db import now_iso, open_conn, parse_dt
 
 
@@ -302,16 +303,6 @@ def _filter_inactive_rows(
         ).fetchall()
         inactive_ids.update(int(row["superseded_intent_id"]) for row in superseded)
     return [row for row in rows if int(row["id"]) not in inactive_ids]
-
-
-def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-            (name,),
-        ).fetchone()
-        is not None
-    )
 
 
 def _insert_intent(

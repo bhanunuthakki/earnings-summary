@@ -13,9 +13,12 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import partial
 from typing import Literal, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from runtime.deterministic import require_sha256
 
 EntityKind: TypeAlias = Literal["operating_company", "fund", "partnership", "other"]
 ProfileStatus: TypeAlias = Literal["active", "inactive", "merged", "dissolved"]
@@ -71,13 +74,7 @@ def _timeline(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
-def _sha256(value: str) -> str:
-    normalized = value.lower()
-    if len(normalized) != _SHA256_LENGTH or any(
-        character not in "0123456789abcdef" for character in normalized
-    ):
-        raise ValueError("must be a lowercase SHA-256 hex digest")
-    return normalized
+_sha256 = partial(require_sha256, message="must be a lowercase SHA-256 hex digest")
 
 
 def _reason_json(value: tuple[tuple[str, str], ...]) -> str:

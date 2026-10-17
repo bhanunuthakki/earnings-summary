@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime
 import pytest
 
 from calendar_clock import calendar_today
-from pipeline.earnings_doorway import (
+from pipeline.work_os_company import (
     POST_EARNINGS_WINDOW_DAYS,
     PRE_EARNINGS_WINDOW_DAYS,
     resolve_earnings_doorway,

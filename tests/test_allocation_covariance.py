@@ -1,4 +1,4 @@
-"""Tests for src/allocation/covariance.py — Ledoit-Wolf + marginal risk."""
+"""Tests for the Ledoit-Wolf estimator + marginal risk (now in book_risk)."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import math
 import numpy as np
 import pytest
 
-from allocation.covariance import ledoit_wolf, marginal_risk
+from allocation.book_risk import ledoit_wolf, marginal_risk
 
 
 def _sample(true_cov: np.ndarray, t_obs: int, seed: int = 7) -> np.ndarray:

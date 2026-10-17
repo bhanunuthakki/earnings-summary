@@ -28,6 +28,7 @@ from provenance.source_coverage import (
     PersistResult,
     SourceCoverageLedger,
 )
+from runtime import deterministic
 from timeseries.loaders import reader_source_order_sql
 
 if TYPE_CHECKING:
@@ -402,12 +403,7 @@ class PortfolioCoverageReport(_CoverageModel):
 
     @property
     def canonical_json(self) -> str:
-        return json.dumps(
-            self.model_dump(mode="json"),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
+        return deterministic.canonical_json(self.model_dump(mode="json"))
 
 
 class PortfolioCoverageInputError(ValueError):

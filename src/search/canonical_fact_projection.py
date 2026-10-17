@@ -29,6 +29,9 @@ from provenance.metric_ontology import MetricOntology
 from provenance.source_fact_publication import verify_source_fact_publication
 from provenance.source_fact_stream import verify_resolution_snapshot_watermark
 from provenance.verifier_identity import verifier_source_artifact_sha256
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import canonical_json_model as canonical_json
+from runtime.deterministic import parse_iso8601_utc as _datetime
 from search.lexical_query import fact_alias_terms, kpi_alias_expansions
 from search.request_verification import (
     NOT_VERIFIED,
@@ -51,12 +54,6 @@ _AUDIT_VERIFIER_NAME = "strict-canonical-fact-projection-auditor"
 _AUDIT_VERIFIER_VERSION = "1"
 _STRICT_AUDIT_FETCH_ROWS = 1_000
 _monotonic = time.monotonic
-
-
-def canonical_json(value: object) -> str:
-    if isinstance(value, BaseModel):
-        value = value.model_dump(mode="json")
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
 def digest_text(value: str) -> str:
@@ -1965,15 +1962,6 @@ def _row(
     names = tuple(item[0] for item in cursor.description or ())
     value = cursor.fetchone()
     return None if value is None else dict(zip(names, tuple(value), strict=True))
-
-
-def _datetime(value: object) -> datetime:
-    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    return _utc(parsed)
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _optional_text(value: object | None) -> str | None:

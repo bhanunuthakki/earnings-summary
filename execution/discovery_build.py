@@ -36,14 +36,16 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_ROOT = SCRIPT_DIR.parent
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-from discovery.store import list_candidates, set_status  # noqa: E402
-from identity import DEFAULT_USER_ID  # noqa: E402
-from runtime.python_process import managed_python_prefix  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from db_paths import require_db_path
+from discovery.store import list_candidates, set_status
+from identity import DEFAULT_USER_ID
+from runtime.python_process import managed_python_prefix
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # A bulk approval is deliberately capped: each build is ~25 minutes + LLM
 # spend, so ten names is already a ~4-hour, multi-dollar commitment — a
@@ -109,10 +111,11 @@ def build_one(
     repo_root: Path,
     user_id: str = DEFAULT_USER_ID,
     runner: Runner = _default_runner,
+    db_path: Path | None = None,
 ) -> bool:
     """One candidate through the full ladder. Returns True on a built brief."""
     symbol = ticker.strip().upper()
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = require_db_path(db_path)
     cand_id = _candidate_id(db_path, user_id, symbol)
     if cand_id is not None:
         set_status(cand_id, "building", db_path=db_path)
@@ -127,6 +130,10 @@ def build_one(
             symbol,
             "--industry-template",
             "auto",
+            "--project-root",
+            str(repo_root),
+            "--db",
+            str(db_path),
         ],
         [
             *managed_python_prefix(PROJECT_ROOT),
@@ -135,6 +142,8 @@ def build_one(
             symbol,
             "--flavor",
             "evaluation",
+            "--db-path",
+            str(db_path),
             "--enable-llm",
             "--repo-root",
             str(repo_root),
@@ -146,6 +155,8 @@ def build_one(
         [
             *managed_python_prefix(PROJECT_ROOT),
             str(repo_root / "execution" / "build_investment_decision_card.py"),
+            "--db-path",
+            str(db_path),
             "--ticker",
             symbol,
             "--repo-root",
@@ -170,6 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build approved discovery candidates")
     parser.add_argument("--tickers", required=True, help=f"comma-separated, max {MAX_BUILD_BATCH}")
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument("--db", type=Path, help="Explicit existing portfolio database")
     parser.add_argument("--user-id", default=DEFAULT_USER_ID)
     args = parser.parse_args(argv)
 
@@ -182,9 +194,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     repo_root = args.repo_root.resolve()
+    try:
+        database_path = require_db_path(args.db)
+    except (RuntimeError, OSError):
+        _emit("discovery_build_unavailable", reason="configured portfolio database unavailable")
+        return 2
     failures = 0
     for ticker in tickers:
-        if not build_one(ticker, repo_root=repo_root, user_id=args.user_id):
+        if not build_one(ticker, repo_root=repo_root, user_id=args.user_id, db_path=database_path):
             failures += 1
     _emit("discovery_build_batch_done", total=len(tickers), failures=failures)
     return 1 if failures else 0

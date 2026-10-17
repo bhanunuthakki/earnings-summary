@@ -8,7 +8,7 @@ import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal, Protocol, Self, cast
 
 from pydantic import (
@@ -22,6 +22,10 @@ from pydantic import (
 )
 
 from filings.sec_submissions_inventory import SEC_REGISTRATION_FINANCIAL_FORMS
+from provenance.analysis_scope import AnalysisEvidenceScope, require_analysis_documents
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import canonical_json_model as canonical_json
+from runtime.deterministic import content_sha256_model as _digest
 
 ProcessingLane = Literal[
     "html_native_hierarchy",
@@ -64,22 +68,8 @@ _LANES: tuple[ProcessingLane, ...] = (
 )
 
 
-def canonical_json(value: object) -> str:
-    if isinstance(value, BaseModel):
-        value = value.model_dump(mode="json")
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
 def _digest_text(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
-
-
-def _digest(value: object) -> str:
-    return _digest_text(canonical_json(value))
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _db_time(value: datetime) -> str:
@@ -103,6 +93,9 @@ class _Frozen(BaseModel):
 class DocumentProcessingScope(_Frozen):
     issuer_ids: tuple[str, ...] = ()
     document_version_ids: tuple[str, ...] = ()
+    analysis_scope: AnalysisEvidenceScope | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator("issuer_ids", "document_version_ids")
     @classmethod
@@ -115,6 +108,10 @@ class DocumentProcessingScope(_Frozen):
     def _bounded(self) -> Self:
         if not self.issuer_ids and not self.document_version_ids:
             raise ValueError("scope requires issuer_ids or document_version_ids")
+        if self.analysis_scope is not None and (self.issuer_ids or not self.document_version_ids):
+            raise ValueError(
+                "analysis processing requires exact document versions, not issuer scope"
+            )
         return self
 
 
@@ -211,6 +208,9 @@ class ResearchUniverse(_Frozen):
     reporting_entity_ids: tuple[str, ...] = Field(min_length=1)
     document_version_ids: tuple[str, ...] = Field(min_length=1)
     source_obligation_revision_ids: tuple[str, ...] = Field(min_length=1)
+    analysis_scope: AnalysisEvidenceScope | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator(
         "reporting_entity_ids",
@@ -446,7 +446,19 @@ def _document_states(
     scope: DocumentProcessingScope,
     cutoff_at: datetime,
     observed_through: datetime,
+    *,
+    require_current_inventory: bool = True,
 ) -> tuple[_DocumentState, ...]:
+    if scope.analysis_scope is not None:
+        required = require_analysis_documents(
+            conn,
+            scope.analysis_scope,
+            cutoff_at,
+            observed_through,
+            require_current_inventory=require_current_inventory,
+        )
+        if scope.document_version_ids != required:
+            raise ValueError("analysis processing document set differs from its evidence scope")
     for table, columns in (
         (
             "evidence_document_versions",
@@ -600,6 +612,7 @@ def _derive_obligations(
     observed_through: datetime,
     operation_recorded_at: datetime,
     persist: bool,
+    require_current_inventory: bool = True,
 ) -> tuple[DocumentProcessingObligation, ...]:
     conn.row_factory = sqlite3.Row
     knowledge = _utc(cutoff)
@@ -607,7 +620,9 @@ def _derive_obligations(
     written = _utc(operation_recorded_at)
     if not knowledge <= observed <= written:
         raise ValueError("document processing clocks must satisfy K <= O <= W")
-    states = _document_states(conn, scope, knowledge, observed)
+    states = _document_states(
+        conn, scope, knowledge, observed, require_current_inventory=require_current_inventory
+    )
     obligations: list[DocumentProcessingObligation] = []
     with _savepoint(conn, "derive_document_processing_obligations"):
         for document in states:
@@ -1439,6 +1454,7 @@ def verify_processing_snapshot(
         observed_through=observed,
         operation_recorded_at=observed,
         persist=False,
+        require_current_inventory=False,
     )
     rows, payload, digest = _member_set(
         conn,
@@ -1831,7 +1847,7 @@ class _DefaultResearchReferenceVerifier:
             reference_id=seal.projection_seal_id,
             commitment_sha256=_digest(seal),
             knowledge_at=_parse_time(manifest[0]),
-            recorded_at=max(_parse_time(manifest[1]), seal.sealed_at),
+            recorded_at=max(_parse_time(manifest[1]), _utc(seal.sealed_at)),
             attributes={
                 "dimensions": seal.dimensions,
                 "manifest_id": seal.manifest_id,
@@ -2020,6 +2036,7 @@ def _verify_research_universe(
     request: ResearchSnapshotRequest,
     *,
     verify_fact_subjects: bool,
+    require_current_inventory: bool = True,
 ) -> None:
     required = {
         "document_processing_snapshot_members",
@@ -2034,6 +2051,58 @@ def _verify_research_universe(
     if missing:
         raise RuntimeError("research universe closure schema is unavailable: " + ", ".join(missing))
     universe = request.research_universe
+    if universe.analysis_scope is None:
+        for snapshot_id in request.processing_snapshot_ids:
+            row = conn.execute(
+                "SELECT scope_json FROM document_processing_snapshot_headers "
+                "WHERE processing_snapshot_id=?",
+                (snapshot_id,),
+            ).fetchone()
+            if (
+                row is not None
+                and DocumentProcessingScope.model_validate_json(str(row[0])).analysis_scope
+                is not None
+            ):
+                raise ValueError("analysis research requires its evidence scope receipt")
+        for bundle in request.corpus_bundles:
+            row = conn.execute(
+                "SELECT corpus_key FROM search_corpus_manifests WHERE manifest_id=?",
+                (bundle.corpus_manifest_id,),
+            ).fetchone()
+            if row is not None and str(row[0]).startswith("analysis-scope:"):
+                raise ValueError("analysis research requires its evidence scope receipt")
+    if universe.analysis_scope is not None:
+        analysis = universe.analysis_scope
+        required_documents = require_analysis_documents(
+            conn,
+            analysis,
+            request.cutoff_at,
+            request.recorded_at,
+            require_current_inventory=require_current_inventory,
+        )
+        if universe.issuer_id != analysis.request.issuer_id or (
+            universe.document_version_ids != required_documents
+        ):
+            raise ValueError("analysis research universe differs from its evidence scope")
+        for snapshot_id in request.processing_snapshot_ids:
+            row = conn.execute(
+                "SELECT scope_json FROM document_processing_snapshot_headers "
+                "WHERE processing_snapshot_id=?",
+                (snapshot_id,),
+            ).fetchone()
+            if (
+                row is None
+                or DocumentProcessingScope.model_validate_json(str(row[0])).analysis_scope
+                != analysis
+            ):
+                raise ValueError("analysis processing snapshot has a different evidence scope")
+        for bundle in request.corpus_bundles:
+            row = conn.execute(
+                "SELECT corpus_key FROM search_corpus_manifests WHERE manifest_id=?",
+                (bundle.corpus_manifest_id,),
+            ).fetchone()
+            if row is None or str(row[0]) != "analysis-scope:" + analysis.scope_sha256:
+                raise ValueError("analysis corpus has a different evidence scope")
     issuer = conn.execute(
         "SELECT issuer_id FROM issuer_entities WHERE issuer_id=?",
         (universe.issuer_id,),
@@ -2125,12 +2194,15 @@ def _verify_research_universe(
 
 
 def _universe_payload(universe: ResearchUniverse) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "document_version_ids": list(universe.document_version_ids),
         "issuer_id": universe.issuer_id,
         "reporting_entity_ids": list(universe.reporting_entity_ids),
         "source_obligation_revision_ids": list(universe.source_obligation_revision_ids),
     }
+    if universe.analysis_scope is not None:
+        payload["analysis_scope"] = universe.analysis_scope.model_dump(mode="json")
+    return payload
 
 
 def _persist_research_universe(
@@ -2199,11 +2271,14 @@ def _verify_research_references(
     conn: sqlite3.Connection,
     request: ResearchSnapshotRequest,
     verifier: _ResearchReferenceVerifier,
+    *,
+    require_current_inventory: bool = True,
 ) -> tuple[VerifiedResearchReference, ...]:
     _verify_research_universe(
         conn,
         request,
         verify_fact_subjects=isinstance(verifier, _DefaultResearchReferenceVerifier),
+        require_current_inventory=require_current_inventory,
     )
     verified_resolution = None
     if isinstance(verifier, _DefaultResearchReferenceVerifier):
@@ -2433,7 +2508,9 @@ def _verify_research_snapshot_with_verifier(
         or _parse_time(seal["sealed_at"]) < _parse_time(header["recorded_at"])
     ):
         raise ValueError("Research Snapshot seal clocks are invalid")
-    references = _verify_research_references(conn, request, verifier)
+    references = _verify_research_references(
+        conn, request, verifier, require_current_inventory=False
+    )
     rows, payload, digest = _member_set(
         conn, "research_snapshot_members", "research_snapshot_id", research_snapshot_id
     )

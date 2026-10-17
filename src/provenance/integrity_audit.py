@@ -27,7 +27,6 @@ from pydantic import (
     model_validator,
 )
 
-from ask.grounded_retrieval import GroundedAskItem, ask_item_bundle_sha256
 from filings.inline_xbrl_processor import (
     FILING_XBRL_PROTOCOL_SQL,
     ProcessorBundleManifest,
@@ -63,6 +62,7 @@ from provenance.source_fact_stream import (
     verify_resolution_snapshot_watermark,
 )
 from provenance.source_inventory_seal import InventoryComponent, component_digest
+from runtime.deterministic import canonical_json
 from search.canonical_fact_projection import verify_canonical_projection_generation
 from search.embedding_promotion import EmbeddingPromotion
 from search.heterogeneous_retrieval import verify_heterogeneous_retrieval_trace
@@ -280,6 +280,44 @@ _ASK_TRACE_TABLES = (
     "ask_retrieval_trace_items",
     "ask_answer_groundings",
 )
+
+
+class GroundedAskItem(BaseModel):
+    """Historical Ask trace item shape used to verify persisted bundle digests."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rank: int = Field(gt=0)
+    manifest_id: str
+    chunk_id: str
+    score: float
+    text: str
+    node_id: str
+    node_kind: str
+    locator: dict[str, object] | None
+    document_version_id: str
+    issuer_id: str
+    ticker: str | None
+    form_type: str
+    source_url: str
+    filing_at: datetime | None
+    observed_at: datetime
+    retrieved_at: datetime
+
+
+def ask_item_bundle_sha256(item: GroundedAskItem) -> str:
+    """Recompute the legacy Ask bundle digest without retaining its dead retriever."""
+
+    payload = json.dumps(
+        item.model_dump(mode="json"),
+        default=lambda value: value.isoformat() if isinstance(value, datetime) else str(value),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 _EMBEDDING_PROMOTION_TABLES = ("search_embedding_model_promotions",)
 _EXPECTATION_LIFECYCLE_TABLES = ("expected_document_lifecycle_revisions",)
 _FACT_RESOLUTION_CUTOVER_TABLES = (
@@ -983,14 +1021,6 @@ def _audit_filing_xbrl_processor_closure(
     )
     digest_mismatches: list[str] = []
 
-    def canonical_json(value: object) -> str:
-        return json.dumps(
-            value,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
-
     for artifact in conn.execute(
         "".join(
             (
@@ -1563,12 +1593,12 @@ def audit_cutover_readiness(
             candidate_commitments=candidate_commitments,
             spec=CutoverGateQuerySpec(
                 gate="document_processing_evidence",
-                selection_policy_id="document-processing-evidence.K-cutoff.O-recorded.v1",
+                selection_policy_id="document-processing-evidence.K-cutoff.O-recorded.v2",
                 key_column="evidence_seal_id",
                 query=(
-                    "SELECT evidence_seal_id,document_version_id,processing_lane "
+                    "SELECT evidence_seal_id,document_version_id,processing_lane,cutoff_at "
                     "FROM document_processing_evidence_headers "
-                    "WHERE julianday(cutoff_at)=julianday(:knowledge_cutoff) "
+                    "WHERE julianday(cutoff_at)<=julianday(:knowledge_cutoff) "
                     "AND julianday(recorded_at)<=julianday(:observed_through) "
                     "ORDER BY evidence_seal_id"
                 ),
@@ -1579,7 +1609,9 @@ def audit_cutover_readiness(
                 str(row["evidence_seal_id"]),
                 document_version_id=str(row["document_version_id"]),
                 processing_lane=str(row["processing_lane"]),
-                cutoff_at=options.cutoff_at,
+                # Terminal processing dispositions retain their original native seal.
+                cutoff_at=datetime.fromisoformat(str(row["cutoff_at"])),
+                observed_through=options.observed_through,
             ),
         )
         _run_cutover_gate(

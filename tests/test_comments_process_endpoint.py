@@ -4,24 +4,19 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from datetime import date
 from pathlib import Path
 from typing import cast
 
+import comments_server
+import process_report_comments as prc
 import pytest
 from flask.testing import FlaskClient
 from pydantic import TypeAdapter
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-import process_report_comments as prc  # noqa: E402
-
-import comments  # noqa: E402
-from dispatch_registry import Job, Registry  # noqa: E402
+import comments
+from dispatch_registry import Job, Registry
+from tests.comments_server_seams import patch_server_seam
 
 
 class _NonSpawningRegistry(Registry):
@@ -145,7 +140,7 @@ def test_process_preview_failure_is_generic_and_correlated(
     def _boom(*_args: object, **_kwargs: object) -> dict[str, object]:
         raise RuntimeError("provider failed?api_key=secret-value")
 
-    monkeypatch.setattr(comments_server, "process_comments_for_ticker", _boom)
+    patch_server_seam(monkeypatch, "process_comments_for_ticker", _boom)
     resp = client.post(
         "/api/comments/process",
         json={"ticker": "NU", "report_date": "2026-05-18", "apply": False},

@@ -25,7 +25,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from etf_sources import ingest as etf_ingest
-from etf_sources import nport, vanguard
+from etf_sources import issuer_registry as vanguard
+from etf_sources import nport
 from etf_sources.issuer_registry import (
     IssuerCharacteristics,
     IssuerData,

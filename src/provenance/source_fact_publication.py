@@ -11,10 +11,13 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import canonical_json_model as canonical_json
 
 PublicationMemberKind = Literal[
     "fact_cell",
@@ -117,17 +120,6 @@ class PublicationRecordMissingError(ValueError):
         self.record_kind: PublicationMemberKind = record_kind
         self.record_id: str = record_id
         super().__init__(f"publication commitment record {record_id} missing")
-
-
-def canonical_json(value: object) -> str:
-    if isinstance(value, BaseModel):
-        value = value.model_dump(mode="json")
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
 
 
 def digest_text(value: str) -> str:
@@ -1033,12 +1025,6 @@ def _datetime(value: object) -> datetime:
     except (TypeError, ValueError) as exc:
         raise ValueError(f"invalid publication clock: {value!r}") from exc
     return _utc(parsed)
-
-
-def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 def _verification_error(

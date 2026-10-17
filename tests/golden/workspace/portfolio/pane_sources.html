@@ -3,7 +3,7 @@
 <div class="row-split">
 <div>
 <div class="eyebrow">Provenance &amp; sources</div>
-<h2 class="section-title">2 quarters of coverage · 2 source documents · 1 transcript inline.</h2>
+<h2 class="section-title">2 quarters of coverage · 3 source documents · 1 transcript inline.</h2>
 </div>
 <div class="row-actions">
 <a class="k-btn k-btn-quiet k-btn-sm" href="/#provenance" data-server-path="/#provenance" target="_blank" rel="noopener">Open the live data-quality console &rarr;</a>
@@ -152,14 +152,14 @@ Pat Founder: Thanks everyone for joining.</div>
 <div class="panel-head">
 <span class="panel-title">Source documents</span>
 <span class="panel-meta">
-<span class="panel-sub">2 files</span>
+<span class="panel-sub">3 files</span>
 </span>
 </div>
 <div class="lg" x-data="livingGrid()">
 <div class="lg-bar">
 <input type="search" class="lg-filter" placeholder="Filter files…" x-model="q" @input.debounce.150ms="render()" aria-label="Filter files…">
 <span class="lg-count muted">
-<span x-text="shown">2</span> of <span x-text="total">2</span> files</span>
+<span x-text="shown">3</span> of <span x-text="total">3</span> files</span>
 </div>
 <div class="table-scroll">
 <table class="tbl tbl-nowrap">
@@ -172,25 +172,41 @@ Pat Founder: Thanks everyone for joining.</div>
 </span>
 </th>
 <th>Path</th>
+<th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('obsver','text')" @keydown.enter.prevent="sortBy('obsver','text')" :aria-sort="ariaSort('obsver')">Obs. version<span class="lg-ind" x-text="arrow('obsver')">
+</span>
+</th>
 <th class="lg-sortable" role="button" tabindex="0" aria-sort="none" @click="sortBy('fetched','text')" @keydown.enter.prevent="sortBy('fetched','text')" :aria-sort="ariaSort('fetched')">Fetched<span class="lg-ind" x-text="arrow('fetched')">
 </span>
 </th>
 </tr>
 </thead>
 <tbody>
-<tr data-text="10-q 2026-03-31 data/historical/sec/test_10q_2026q1.json 2026-05-02t08:00:00" data-type="10-q" data-period="2026-03-31" data-fetched="2026-05-02t08:00:00">
+<tr data-text="10-q 2026-03-31 data/historical/sec/test_10q_2026q1.json legacy-doc-101 2026-05-02t08:00:00" data-type="10-q" data-period="2026-03-31" data-obsver="legacy-doc-101" data-fetched="2026-05-02t08:00:00">
 <td>10-Q</td>
 <td>2026-03-31</td>
 <td>
-<a href="/source/101" data-server-path="/source/101" target="_blank" rel="noopener">data/historical/sec/TEST_10q_2026Q1.json</a>
+<a href="/source/version/legacy-doc-101" data-server-path="/source/version/legacy-doc-101" target="_blank" rel="noopener">data/historical/sec/TEST_10q_2026Q1.json</a>
+</td>
+<td>
+<span class="mono">legacy-doc-101</span>
 </td>
 <td>2026-05-02T08:00:00</td>
 </tr>
-<tr data-text="transcript 2026-03-31 data/transcripts/test_q1_2026.txt 2026-04-30t21:00:00" data-type="transcript" data-period="2026-03-31" data-fetched="2026-04-30t21:00:00">
+<tr data-text="transcript 2026-03-31 data/transcripts/test_q1_2026.txt not recorded or not uniquely identified 2026-04-30t21:00:00" data-type="transcript" data-period="2026-03-31" data-obsver="not recorded or not uniquely identified" data-fetched="2026-04-30t21:00:00">
 <td>transcript</td>
 <td>2026-03-31</td>
 <td>data/transcripts/TEST_Q1_2026.txt</td>
+<td>—</td>
 <td>2026-04-30T21:00:00</td>
+</tr>
+<tr data-text="fmp_income_statement 2026-03-31 data/historical/fmp/test_income_statement.json not recorded or not uniquely identified 2026-05-01t08:00:00" data-type="fmp_income_statement" data-period="2026-03-31" data-obsver="not recorded or not uniquely identified" data-fetched="2026-05-01t08:00:00">
+<td>fmp_income_statement</td>
+<td>2026-03-31</td>
+<td>
+<a href="/source/105" data-server-path="/source/105" target="_blank" rel="noopener" title="Observation version not recorded or not uniquely identified for this document — legacy viewer or original source only">data/historical/fmp/TEST_income_statement.json</a>
+</td>
+<td>not recorded or not uniquely identified</td>
+<td>2026-05-01T08:00:00</td>
 </tr>
 </tbody>
 </table>

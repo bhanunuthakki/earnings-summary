@@ -30,6 +30,7 @@ from typing import cast
 
 from clock import now_naive_utc
 from pipeline.queries import BRIEFED_LIST_TYPE_VALUES
+from runtime.deterministic import table_exists as _table_exists
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 # The "briefed" active universe — portfolio + evaluation (mirrors
@@ -71,13 +72,6 @@ class IrCoverageRow:
     @property
     def has_docs(self) -> bool:
         return self.doc_count > 0
-
-
-def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-    ).fetchone()
-    return row is not None
 
 
 def record_attempt(

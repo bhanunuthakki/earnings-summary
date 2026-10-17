@@ -17,6 +17,8 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from provenance.verifier_identity import verifier_source_artifact_sha256
+from runtime.deterministic import canonical_json as _canonical_json
+from runtime.deterministic import sha256_text as _sha256_text
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _TICKER = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,15}$")
@@ -987,14 +989,6 @@ def _verifier_code_sha256() -> str:
             "src/pipeline/issuer_document_inventory.py": Path(__file__),
         }
     )
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
-def _sha256_text(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 __all__ = [

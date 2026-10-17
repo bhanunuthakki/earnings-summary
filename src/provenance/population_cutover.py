@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 """Fresh-verifier authority for the full-universe population cutover seal."""
 
 from __future__ import annotations
@@ -7,6 +6,7 @@ import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Literal, Self, cast
 
@@ -30,7 +30,6 @@ from provenance.population_canonical_resolution import (
     verify_canonical_resolution,
 )
 from provenance.population_completeness import (
-    _CUTOVER_WRITE_AUTHORITY,
     REQUIRED_CUTOVER_AUDIT_GATES,
     REQUIRED_POPULATION_PLANES,
     PopulationAuditReceipt,
@@ -52,6 +51,8 @@ from provenance.population_research_snapshots import verify_research_snapshots
 from provenance.population_retrieval_runtime import verify_retrieval_runtime
 from provenance.population_source_facts import verify_source_fact_ontology
 from provenance.verifier_identity import verifier_source_artifact_sha256
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import require_sha256_exact
 from search.canonical_fact_projection import admit_canonical_projection_for_read
 
 _SOURCE_ROOT = Path(__file__).resolve().parents[1]
@@ -65,7 +66,6 @@ _CANDIDATE_SNAPSHOT_VERSION = "population-candidate-snapshot.v1"
 _VERIFIER_CLOSURE_FILES = tuple(
     sorted(
         {
-            "ask/grounded_retrieval.py",
             "provenance/canonical_fact_resolution.py",
             "provenance/document_processing_evidence.py",
             "provenance/fact_plane_v2.py",
@@ -129,14 +129,7 @@ class _FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-def _sha256(value: str) -> str:
-    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
-        raise ValueError("must be a lowercase SHA-256 hex digest")
-    return value
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+_sha256 = partial(require_sha256_exact, message="must be a lowercase SHA-256 hex digest")
 
 
 def _timestamp(value: datetime) -> str:
@@ -364,24 +357,13 @@ def evaluate_population_cutover(
         cutover: PopulationCutoverReceipt | None = None
         if request.apply:
             ledger = PopulationCompletenessLedger(conn)
-            with _savepoint(conn, "evaluate_population_cutover"):
-                cutover = ledger._record_verified_cutover(
-                    run=run,
-                    planes=plane_receipts,
-                    parity=parity,
-                    audit=audit,
-                    sealed_at=request.sealed_at,
-                    authority=_CUTOVER_WRITE_AUTHORITY,
-                )
-                replay = ledger._verify_fresh_cutover(
-                    run=run,
-                    planes=plane_receipts,
-                    parity=parity,
-                    audit=audit,
-                    authority=_CUTOVER_WRITE_AUTHORITY,
-                )
-                if replay != cutover:
-                    raise RuntimeError("fresh population replay differs from its new cutover seal")
+            cutover = ledger.record_and_verify_fresh_cutover(
+                run=run,
+                planes=plane_receipts,
+                parity=parity,
+                audit=audit,
+                sealed_at=request.sealed_at,
+            )
         material = {
             "audit_receipt_sha256": audit.receipt_sha256,
             "cutover_receipt_sha256": None if cutover is None else cutover.receipt_set_sha256,
@@ -918,19 +900,6 @@ def verify_full_universe_legacy_parity(
 
 def _optional_text(value: object) -> str | None:
     return None if value is None else str(value)
-
-
-@contextmanager
-def _savepoint(conn: sqlite3.Connection, name: str):
-    conn.execute(f"SAVEPOINT {name}")  # nosec B608 -- fixed internal name
-    try:
-        yield
-    except Exception:
-        conn.execute(f"ROLLBACK TO {name}")  # nosec B608 -- fixed internal name
-        conn.execute(f"RELEASE {name}")  # nosec B608 -- fixed internal name
-        raise
-    else:
-        conn.execute(f"RELEASE {name}")  # nosec B608 -- fixed internal name
 
 
 __all__ = [

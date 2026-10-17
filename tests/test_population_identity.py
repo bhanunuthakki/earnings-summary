@@ -739,3 +739,96 @@ def test_invalid_legacy_clock_fails_before_any_identity_write() -> None:
         )
     assert list(conn.iterdump()) == before
     conn.close()
+
+
+def test_created_subject_binding_is_preserved_and_verified_at_later_k_o() -> None:
+    conn = _connection()
+    try:
+        conn.execute("DELETE FROM recorded_subject_binding_revisions")
+        first = populate_recorded_subject_bindings(
+            conn,
+            PopulationIdentityRequest(
+                apply=True, knowledge_cutoff=K, operation_recorded_at=OBSERVED
+            ),
+        )
+        assert first.selected_count == first.created_count == 1
+        earlier = verify_identity_scope(
+            conn, PopulationTemporalScope(knowledge_cutoff=K, observed_through=OBSERVED)
+        )
+        before = conn.execute("SELECT * FROM recorded_subject_binding_revisions").fetchall()
+        later_k, later_o = K + timedelta(days=1), OBSERVED + timedelta(days=1)
+        preserved = populate_recorded_subject_bindings(
+            conn,
+            PopulationIdentityRequest(
+                apply=True, knowledge_cutoff=later_k, operation_recorded_at=later_o
+            ),
+        )
+        assert preserved.selected_count == 1
+        assert preserved.created_count == preserved.conflict_count == 0
+        assert preserved.items[0].reason_code == "current_authoritative_subject_preserved"
+        later = verify_identity_scope(
+            conn, PopulationTemporalScope(knowledge_cutoff=later_k, observed_through=later_o)
+        )
+        assert later.materialized_count == 1
+        assert later.failed_count == 0
+        assert later.artifact_sets == earlier.artifact_sets
+        assert later.input_commitment_sha256 != earlier.input_commitment_sha256
+        assert conn.execute("SELECT * FROM recorded_subject_binding_revisions").fetchall() == before
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("boundary", ["knowledge", "recorded"])
+@pytest.mark.parametrize("microseconds", [0, 1])
+@pytest.mark.parametrize("defect", ["dissent", "retired", "missing_entity"])
+def test_later_identity_scope_selects_latest_invalid_binding_only_when_visible(
+    boundary: str, microseconds: int, defect: str
+) -> None:
+    conn = _connection()
+    try:
+        later_k, later_o = K + timedelta(days=1), OBSERVED + timedelta(days=1)
+        row = list(conn.execute("SELECT * FROM recorded_subject_binding_revisions").fetchone())
+        row[0] = row[1] = "subject-2"
+        row[3] = 2
+        row[5] = "absent-entity" if defect == "missing_entity" else "registrant-1"
+        row[7] = "retired" if defect == "retired" else "selected"
+        row[11] = int(defect == "dissent")
+        row[13] = (
+            later_k + timedelta(microseconds=microseconds if boundary == "knowledge" else 0)
+        ).isoformat()
+        row[14] = (
+            later_o + timedelta(microseconds=microseconds if boundary == "recorded" else 0)
+        ).isoformat()
+        row[15] = "subject-1"
+        conn.execute(
+            "INSERT INTO recorded_subject_binding_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            row,
+        )
+        before = conn.execute(
+            "SELECT * FROM recorded_subject_binding_revisions ORDER BY revision"
+        ).fetchall()
+        result = populate_recorded_subject_bindings(
+            conn,
+            PopulationIdentityRequest(
+                apply=True, knowledge_cutoff=later_k, operation_recorded_at=later_o
+            ),
+        )
+        verified = verify_identity_scope(
+            conn, PopulationTemporalScope(knowledge_cutoff=later_k, observed_through=later_o)
+        )
+        if microseconds:
+            assert result.selected_count == verified.materialized_count == 1
+            assert result.conflict_count == verified.failed_count == 0
+            assert result.items[0].reason_code == "current_authoritative_subject_preserved"
+        else:
+            assert result.selected_count == verified.materialized_count == 0
+            assert result.conflict_count == verified.failed_count == 1
+        assert result.created_count == 0
+        assert (
+            conn.execute(
+                "SELECT * FROM recorded_subject_binding_revisions ORDER BY revision"
+            ).fetchall()
+            == before
+        )
+    finally:
+        conn.close()

@@ -12,6 +12,8 @@ from typing import NamedTuple, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from runtime.deterministic import table_exists as _table_exists
+
 
 class ReportKpiReferenceKind(StrEnum):
     CHART_PRIORITY = "chart_priority"
@@ -134,15 +136,6 @@ class ReportKpiReferenceDispositionRevision(BaseModel):
         if value.tzinfo is None:
             raise ValueError("report KPI reference knowledge_at must be timezone-aware")
         return value.astimezone(UTC)
-
-
-def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-        ).fetchone()
-        is not None
-    )
 
 
 def _table_columns(conn: sqlite3.Connection, name: str) -> frozenset[str]:

@@ -7,7 +7,7 @@ import json
 import sqlite3
 from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal, Self, cast
@@ -21,6 +21,8 @@ from provenance.population_completeness import (
 from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
 from provenance.search_index_lineage import load_projection_seal
 from provenance.verifier_identity import verifier_source_artifact_sha256
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import parse_iso8601_utc as _datetime
 from search.canonical_fact_projection import (
     admit_canonical_projection_for_read,
     canonical_decimal,
@@ -2182,14 +2184,6 @@ def _json_array(value: object) -> list[object]:
     if not isinstance(parsed, list):
         raise ValueError("expected canonical JSON array")
     return cast(list[object], parsed)
-
-
-def _datetime(value: object) -> datetime:
-    return _utc(datetime.fromisoformat(str(value).replace("Z", "+00:00")))
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _int(value: object) -> int:

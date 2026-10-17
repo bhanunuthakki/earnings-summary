@@ -33,7 +33,10 @@ import sys
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:  # ``python -m execution.build_artifacts``
+    from execution._lib import PROJECT_ROOT
 
 import db
 import ticker_settings
@@ -49,6 +52,7 @@ from compute.segment_definitions import (
 from db_paths import require_db_path
 from instrument_store import get_instrument_kind
 from models.companies import InstrumentType
+from pipeline.db_writer_gate import hold_writer_gate
 from report.artifacts import persist_report_artifact
 from report.builder import build_report
 from report.models import ReportFlavor
@@ -79,8 +83,6 @@ from report.sections import snapshot as snapshot_section_mod
 from report.sections.etf_holdings import build_etf_brief
 from runtime.python_process import managed_python_prefix
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 # Ticker-specific extractors that auto-populate data/ticker_specific/<T>/
 # Each entry maps a ticker to a list of (script_name, extra_args) pairs.
@@ -583,8 +585,11 @@ def _build_one(
     # Refresh quarterly_artifacts (audio/transcript/release/slides + step_* flags)
     # from the filesystem before the provenance section reads them. This is what
     # links the coverage matrix to the DB — without this, new .tmp summaries and
-    # SayDo files don't land in the table until something else syncs.
-    db.scan_and_sync_artifacts(ticker)
+    # SayDo files don't land in the table until something else syncs. The sync
+    # writes, so it runs inside the chain's cross-process writer window (the
+    # daily brief worker overlaps sibling build steps on a bounded pool).
+    with hold_writer_gate(require_db_path(), owner=f"build_artifacts:sync:{ticker}"):
+        db.scan_and_sync_artifacts(ticker)
     _emit("synced_quarterly_artifacts", {"ticker": ticker})
 
     # This extractor can call an LLM when the source changes. Cached definitions
@@ -670,17 +675,19 @@ def _build_one(
         "provenance": spec.provenance.status.value,
     }
     # Provenance rows always point at the workspace HTML — the only rendered
-    # report — so audit consumers can deep-link.
+    # report — so audit consumers can deep-link. The INSERT writes to the
+    # database, so it runs inside the chain's cross-process writer window.
     canonical_artifact = workspace_html_path
-    provenance_ref = log_brief_provenance(
-        repo_root=repo_root,
-        ticker=ticker,
-        generation_date=today,
-        sections_status=sections_status,
-        per_metric=per_metric_provenance,
-        trigger=trigger,
-        artifact_path=canonical_artifact,
-    )
+    with hold_writer_gate(require_db_path(), owner=f"build_artifacts:provenance:{ticker}"):
+        provenance_ref = log_brief_provenance(
+            repo_root=repo_root,
+            ticker=ticker,
+            generation_date=today,
+            sections_status=sections_status,
+            per_metric=per_metric_provenance,
+            trigger=trigger,
+            artifact_path=canonical_artifact,
+        )
     artifact_ref = persist_report_artifact(
         repo_root=repo_root,
         body=report_body,

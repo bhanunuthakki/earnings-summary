@@ -19,6 +19,7 @@ from execution import comments_server
 from report.models import ReportSpec
 from report.renderers.workspace_sections.boot import _comment_boot_data
 from server_runtime.access import is_allowed_origin
+from tests.comments_server_seams import patch_server_seam
 
 
 @pytest.fixture
@@ -160,13 +161,13 @@ def test_chat_admission_is_bounded_before_session_creation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setenv("COMMENTS_SERVER_REPORT_CAPABILITY", "test-capability")
-    monkeypatch.setattr(comments_server, "_MAX_ADMITTED_CHATS", 2, raising=False)
+    patch_server_seam(monkeypatch, "MAX_ADMITTED_CHATS", 2, raising=False)
     sessions: list[object] = []
 
     def ensure(*args: object, **kwargs: object) -> None:
         sessions.append(object())
 
-    monkeypatch.setattr(comments_server, "ensure_session", ensure)
+    patch_server_seam(monkeypatch, "ensure_session", ensure)
 
     def pack(*args: object) -> object:
         return object()
@@ -174,8 +175,8 @@ def test_chat_admission_is_bounded_before_session_creation(
     def events(*args: object, **kwargs: object) -> Iterator[dict[str, object]]:
         return iter([])
 
-    monkeypatch.setattr(comments_server, "build_portfolio_pack", pack)
-    monkeypatch.setattr(comments_server, "respond_turn", events)
+    patch_server_seam(monkeypatch, "build_portfolio_pack", pack)
+    patch_server_seam(monkeypatch, "respond_turn", events)
     executor = HeldExecutor()
     app = comments_server.create_app(tmp_path, chat_executor=executor)
     client = app.test_client()

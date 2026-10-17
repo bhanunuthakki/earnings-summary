@@ -42,6 +42,7 @@ from provenance.source_fact_repository import (
     SourceFactPublication,
     SourceFactRepository,
 )
+from runtime.deterministic import sha256_text as _sha
 
 _RECIPE = "meli-10q-current-h1-reported-tables.v2"
 _NORMALIZATION_RECIPE = "meli-reported-unit-normalization.v1"
@@ -144,10 +145,6 @@ class ReportedTableEvidence(_Closed):
 
 class ReportedTableRejectionError(ValueError):
     """A source population member that cannot be safely interpreted."""
-
-
-def _sha(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
 
 
 def _json(value: object) -> str:

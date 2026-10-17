@@ -12,11 +12,11 @@ from alembic.config import Config
 from alembic import command
 from execution.plan_embedding_cutover import main as plan_main
 from search.embedding_eval import EmbeddingRecommendationArtifact
-from search.embedding_evaluation_receipt import (
+from search.embedding_promotion import (
+    current_promotion,
     persist_evaluation_receipt,
     receipt_from_evaluation,
 )
-from search.embedding_promotion import current_promotion
 from search.embedding_runtime_artifact import (
     EmbeddingRuntimeArtifact,
     RuntimeArtifactFile,

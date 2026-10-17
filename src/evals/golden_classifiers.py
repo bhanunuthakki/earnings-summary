@@ -39,15 +39,15 @@ from evals.harness import (
     EvalAbortError,
     EvalRunSummary,
     dumps_compact,
+    load_golden_doc,
     now_naive_utc,
     resolve_git_sha,
     sha256_file,
 )
-from evals.harness import (
-    load_golden_document as _load_doc,
-)
 from llm.cli import DEFAULT_MODEL, LLM_MODELS, is_hard_stop
 from llm.prompt_versions import prompt_version_for
+
+_load_doc = load_golden_doc
 
 log = logging.getLogger(__name__)
 
@@ -117,7 +117,7 @@ def load_transcript_metadata_golden(path: Path) -> list[ClassifierCase]:
     errors: list[str] = []
     seen: set[str] = set()
     cases: list[ClassifierCase] = []
-    for i, c in enumerate(_load_doc(path, "transcript_metadata")):
+    for i, c in enumerate(load_golden_doc(path, purpose="transcript_metadata")):
         label = f"cases[{i}]"
         case_id = _require_str(c, "id", label, errors)
         if case_id in seen:
@@ -137,7 +137,7 @@ def load_intake_classifier_golden(path: Path) -> list[ClassifierCase]:
     errors: list[str] = []
     seen: set[str] = set()
     cases: list[ClassifierCase] = []
-    for i, c in enumerate(_load_doc(path, "intake_classifier")):
+    for i, c in enumerate(load_golden_doc(path, purpose="intake_classifier")):
         label = f"cases[{i}]"
         case_id = _require_str(c, "id", label, errors)
         if case_id in seen:
@@ -197,7 +197,7 @@ def load_decision_conditions_golden(path: Path) -> list[ClassifierCase]:
     errors: list[str] = []
     seen: set[str] = set()
     cases: list[ClassifierCase] = []
-    for i, c in enumerate(_load_doc(path, "decision_conditions_extract")):
+    for i, c in enumerate(load_golden_doc(path, purpose="decision_conditions_extract")):
         label = f"cases[{i}]"
         case_id = _require_str(c, "id", label, errors)
         if case_id in seen:
@@ -254,7 +254,7 @@ def load_capture_intent_golden(path: Path) -> list[ClassifierCase]:
     errors: list[str] = []
     seen: set[str] = set()
     cases: list[ClassifierCase] = []
-    for i, c in enumerate(_load_doc(path, "capture_intent")):
+    for i, c in enumerate(load_golden_doc(path, purpose="capture_intent")):
         label = f"cases[{i}]"
         case_id = _require_str(c, "id", label, errors)
         if case_id in seen:
@@ -285,7 +285,7 @@ def load_ledger_reply_intent_golden(path: Path) -> list[ClassifierCase]:
     errors: list[str] = []
     seen: set[str] = set()
     cases: list[ClassifierCase] = []
-    for i, c in enumerate(_load_doc(path, "ledger_reply_intent")):
+    for i, c in enumerate(load_golden_doc(path, purpose="ledger_reply_intent")):
         label = f"cases[{i}]"
         case_id = _require_str(c, "id", label, errors)
         if case_id in seen:
@@ -322,7 +322,7 @@ def load_triage_route_suggest_golden(path: Path) -> list[ClassifierCase]:
     errors: list[str] = []
     seen: set[str] = set()
     cases: list[ClassifierCase] = []
-    for i, c in enumerate(_load_doc(path, "triage_route_suggest")):
+    for i, c in enumerate(load_golden_doc(path, purpose="triage_route_suggest")):
         label = f"cases[{i}]"
         case_id = _require_str(c, "id", label, errors)
         if case_id in seen:
@@ -370,7 +370,7 @@ def load_capture_triage_golden(path: Path) -> list[ClassifierCase]:
     errors: list[str] = []
     seen: set[str] = set()
     cases: list[ClassifierCase] = []
-    for i, c in enumerate(_load_doc(path, "capture_triage")):
+    for i, c in enumerate(load_golden_doc(path, purpose="capture_triage")):
         label = f"cases[{i}]"
         case_id = _require_str(c, "id", label, errors)
         if case_id in seen:
@@ -420,7 +420,7 @@ def load_segment_10q_period_disambiguate_golden(path: Path) -> list[ClassifierCa
     errors: list[str] = []
     seen: set[str] = set()
     cases: list[ClassifierCase] = []
-    for i, c in enumerate(_load_doc(path, "segment_10q_period_disambiguate")):
+    for i, c in enumerate(load_golden_doc(path, purpose="segment_10q_period_disambiguate")):
         label = f"cases[{i}]"
         case_id = _require_str(c, "id", label, errors)
         if case_id in seen:
@@ -470,7 +470,7 @@ def load_news_structuring_golden(path: Path) -> list[ClassifierCase]:
     errors: list[str] = []
     seen: set[str] = set()
     cases: list[ClassifierCase] = []
-    for i, c in enumerate(_load_doc(path, "news_structuring")):
+    for i, c in enumerate(load_golden_doc(path, purpose="news_structuring")):
         label = f"cases[{i}]"
         case_id = _require_str(c, "id", label, errors)
         if case_id in seen:
@@ -1025,7 +1025,7 @@ def load_decision_draft_parse_golden(path: Path) -> list[ClassifierCase]:
     errors: list[str] = []
     seen: set[str] = set()
     cases: list[ClassifierCase] = []
-    for i, c in enumerate(_load_doc(path, "decision_draft_parse")):
+    for i, c in enumerate(load_golden_doc(path, purpose="decision_draft_parse")):
         label = f"cases[{i}]"
         case_id = _require_str(c, "id", label, errors)
         if case_id in seen:
@@ -1073,7 +1073,7 @@ def load_metric_lifecycle_triage_golden(path: Path) -> list[ClassifierCase]:
     errors: list[str] = []
     seen: set[str] = set()
     cases: list[ClassifierCase] = []
-    for i, c in enumerate(_load_doc(path, "metric_lifecycle_triage")):
+    for i, c in enumerate(load_golden_doc(path, purpose="metric_lifecycle_triage")):
         label = f"cases[{i}]"
         case_id = _require_str(c, "id", label, errors)
         if case_id in seen:
@@ -1159,7 +1159,7 @@ def load_disclosure_item_specificity_triage_golden(path: Path) -> list[Classifie
     errors: list[str] = []
     seen: set[str] = set()
     cases: list[ClassifierCase] = []
-    for i, c in enumerate(_load_doc(path, "disclosure_item_specificity_triage")):
+    for i, c in enumerate(load_golden_doc(path, purpose="disclosure_item_specificity_triage")):
         label = f"cases[{i}]"
         case_id = _require_str(c, "id", label, errors)
         if case_id in seen:

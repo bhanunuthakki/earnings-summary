@@ -61,7 +61,7 @@ from provenance.source_coverage import (
     SourceInventorySnapshot,
 )
 from provenance.source_coverage import ExpectedDocument as CoverageDocument
-from provenance.source_expectation_lifecycle import (
+from provenance.source_coverage_reconcile import (
     ExpectedDocumentLifecycle,
     persist_expected_document_lifecycle,
 )

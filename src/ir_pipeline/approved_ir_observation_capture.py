@@ -41,6 +41,7 @@ from pipeline.approved_ir_wix import (
     parse_wix_visible_quarters,
 )
 from pipeline.source_policy import AdapterKey, issuer_policy
+from runtime.deterministic import canonical_json_ascii as _canonical_json
 
 _SCHEMA_VERSION = "approved-ir-observation-bundle@1"
 _RENDERED_PROOF_SCHEMA_VERSION = "approved-ir-rendered-link-proof@1"
@@ -1606,10 +1607,6 @@ def _decode_b64(value: object) -> bytes:
         return base64.b64decode(value, validate=True)
     except (binascii.Error, ValueError):
         raise ValueError("invalid canonical base64 bytes") from None
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
 
 
 __all__ = [

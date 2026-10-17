@@ -38,6 +38,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from runtime.deterministic import table_exists as _has_table
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -93,15 +94,6 @@ class Criterion:
     kind: str
     weight: int
     statement: str
-
-
-def _has_table(conn: sqlite3.Connection, name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", (name,)
-        ).fetchone()
-        is not None
-    )
 
 
 def _validate_criteria(payload: object) -> tuple[Criterion, ...] | None:

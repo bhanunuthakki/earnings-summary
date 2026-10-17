@@ -238,9 +238,39 @@ def test_actual_head_is_supported() -> None:
             )
             for line in lines
         ]
-    # Retain all 154 lock-base test seams plus the hidden-control browser probe.
-    # No production gap is admitted.
-    assert len(graph.unknown_edges) == 155
+    # Retain main's 155 test seams, the Windows held-handle child and three
+    # writer-gate regression children. No production gap is admitted.
+    assert len(graph.unknown_edges) == 159
+    assert [
+        edge for edge in graph.unknown_edges if edge.source == "tests/test_db_writer_gate.py"
+    ] == [
+        GraphEdge(
+            source="tests/test_db_writer_gate.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=line,
+            unknown=True,
+        )
+        for line in (301, 465, 566)
+    ]
+    assert [
+        edge
+        for edge in graph.unknown_edges
+        if edge.source == "tests/test_job_runtime_process_tree.py"
+    ] == [
+        GraphEdge(
+            source="tests/test_job_runtime_process_tree.py",
+            target="<dynamic process entrypoint>",
+            kind="unknown",
+            evidence="subprocess/runpy expression",
+            confidence="low",
+            line=line,
+            unknown=True,
+        )
+        for line in (233, 330)
+    ]
     assert (
         GraphEdge(
             source="tests/test_design_computed_canary.py",

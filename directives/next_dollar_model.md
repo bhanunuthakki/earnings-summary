@@ -19,7 +19,7 @@ remain later roadmap work. Cash exceeding 5% is not, by itself, an approved 5% r
 constraint. Preserve the distinction between source failure and a recommendation
 to retain cash.
 
-Code: `src/allocation/` (`price_history.py`, `covariance.py`, `model.py`).
+Code: `src/allocation/` (`price_history.py`, `book_risk.py`, `model.py`).
 Primary consumer: the `$next-dollar-allocation` analyst workflow.
 There is no application recommendation panel or route; the library is consumed
 only as supporting evidence by the analyst workflow.

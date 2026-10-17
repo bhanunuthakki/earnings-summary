@@ -27,6 +27,7 @@ from provenance.issuer_registry import (
     IssuerRegistry,
     UnresolvedIssuerIdentityError,
 )
+from runtime.deterministic import parse_instant as _parse_datetime
 
 _COLLECTOR = "ir-home-authority@1"
 _CREDENTIAL_QUERY_KEYS = frozenset(
@@ -380,8 +381,3 @@ def _store_exact_bytes(target: Path, raw_body: bytes, digest: str) -> None:
 
 def _record_id(prefix: str, *parts: str) -> str:
     return f"{prefix}:" + hashlib.sha256("\0".join(parts).encode()).hexdigest()
-
-
-def _parse_datetime(value: object) -> datetime:
-    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
-    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)

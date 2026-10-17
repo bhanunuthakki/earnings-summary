@@ -14,6 +14,7 @@ import json
 import os
 import sqlite3
 import tempfile
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Self
@@ -39,6 +40,7 @@ from provenance.legacy_document_evidence import (
     LegacyDocumentEvidenceBindingRevision,
     LegacyDocumentScopeLocator,
 )
+from runtime.deterministic import parse_iso8601_utc as _datetime
 
 _COLLECTOR_VERSION = "sec-companyfacts-capture@1"
 _DOCUMENT_EXTRACTOR = "sec-companyfacts-document-anchor"
@@ -144,6 +146,53 @@ class SecCompanyFactsCaptureResult(_ClosedModel):
     records_replayed: int = Field(ge=0)
 
 
+class SecCompanyFactsUnchangedObservationRequest(_ClosedModel):
+    """One unchanged-payload retrieval (HTTP 304 or digest-equal replay).
+
+    No new bytes exist: the retained content-addressed snapshot stays the
+    observation source. Carries exactly the fields the retrieval-observation
+    identity and its link to the retained document version need.
+    """
+
+    ticker: str = Field(min_length=1, max_length=32)
+    normalized_cik: str = Field(pattern=r"^\d{10}$")
+    issuer_id: str = Field(min_length=1, max_length=128)
+    source_url: str = Field(min_length=1)
+    blob_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    observed_at: datetime
+    retrieved_at: datetime
+
+    @field_validator("ticker")
+    @classmethod
+    def _ticker(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @model_validator(mode="after")
+    def _validate_clocks(self) -> Self:
+        if _timeline(self.retrieved_at) < _timeline(self.observed_at):
+            raise ValueError("retrieved_at must not precede observed_at")
+        return self
+
+
+@dataclass(frozen=True)
+class VerifiedCompanyFactsPayload:
+    """Caller attestation that `payload` was parsed from `raw_body` as-is.
+
+    Minted by the caller that just ran ``parse_companyfacts_body`` on the exact
+    bytes it hands to capture. Passing the token lets the capture boundary keep
+    its bytes-versus-payload consistency guarantee WITHOUT re-parsing the full
+    response inside the caller's write transaction (the ingest path parses
+    once, before any writes). Capture still refuses a token whose payload
+    differs from the request's payload.
+    """
+
+    payload: CompanyFactsPayload
+
+
+# The request shapes that share the retrieval-observation field contract.
+_CaptureRequestLike = SecCompanyFactsCaptureRequest | SecCompanyFactsUnchangedObservationRequest
+
+
 def _timeline(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
@@ -163,15 +212,28 @@ def parse_companyfacts_body(raw_body: bytes, *, expected_cik: str) -> CompanyFac
 def capture_sec_companyfacts(
     conn: sqlite3.Connection,
     request: SecCompanyFactsCaptureRequest,
+    *,
+    payload_verified: VerifiedCompanyFactsPayload | None = None,
 ) -> SecCompanyFactsCaptureResult:
-    """Persist one complete evidence chain without committing the caller transaction."""
+    """Persist one complete evidence chain without committing the caller transaction.
 
-    reparsed = parse_companyfacts_body(
-        request.raw_body,
-        expected_cik=request.normalized_cik,
-    )
-    if reparsed != request.payload:
-        raise ValueError("raw CompanyFacts bytes conflict with validated payload")
+    The boundary verifies the raw bytes still parse to exactly ``request.payload``
+    before writing anything. A caller that just parsed those exact bytes may
+    instead hand the ``VerifiedCompanyFactsPayload`` attestation so the
+    verification runs once — before the caller's write transaction opens —
+    instead of as a second full re-parse inside it. Capture still refuses an
+    attestation whose payload differs from the request's payload.
+    """
+
+    if payload_verified is None:
+        reparsed = parse_companyfacts_body(
+            request.raw_body,
+            expected_cik=request.normalized_cik,
+        )
+        if reparsed != request.payload:
+            raise ValueError("raw CompanyFacts bytes conflict with validated payload")
+    elif payload_verified.payload != request.payload:
+        raise ValueError("attested CompanyFacts payload conflicts with the capture request")
     digest = hashlib.sha256(request.raw_body).hexdigest()
     _validate_snapshot_document(conn, request, digest)
     storage_path = request.blob_root.resolve() / digest[:2] / f"{digest}.json"
@@ -252,6 +314,81 @@ def capture_sec_companyfacts(
     )
 
 
+def record_companyfacts_unchanged_observation(
+    conn: sqlite3.Connection,
+    request: SecCompanyFactsUnchangedObservationRequest,
+) -> SecCompanyFactsCaptureResult:
+    """Persist the retrieval observation for an unchanged CompanyFacts payload.
+
+    An unchanged source (HTTP 304, or a downloaded payload whose digest equals
+    a completed ingest's) is a positive capture-boundary observation, never
+    silence: the retrieval still enters the evidence chain. Writes exactly
+    what a fresh retrieval adds — one source observation and its retrieval
+    link to the retained document version — and nothing else: no new blob,
+    document version, location, binding, or fact rows.
+
+    Fails closed when the retained document version for the digest is
+    missing: an observation that cannot anchor to captured content must not
+    be recorded; the caller re-ingests from bytes instead.
+    """
+
+    document = _existing_document_version(
+        conn,
+        digest=request.blob_sha256,
+        issuer_id=request.issuer_id,
+        ticker=request.ticker,
+    )
+    if document is None:
+        raise ValueError(
+            "CompanyFacts unchanged-payload observation requires the retained document version"
+        )
+    ledger = EvidenceLedger(conn)
+    link_ledger = EvidenceLinkLedger(conn)
+    observation = _source_observation(request, request.blob_sha256)
+    created = 0
+    replayed = 0
+    created, replayed = _account(ledger.persist(observation).created, created, replayed)
+    link = _document_observation_link(
+        request,
+        observation,
+        document,
+        link_kind=(
+            "primary" if document.observation_id == observation.observation_id else "retrieval"
+        ),
+    )
+    created, replayed = _account(link_ledger.persist_link(link).created, created, replayed)
+    return SecCompanyFactsCaptureResult(
+        blob_sha256=request.blob_sha256,
+        document_version_id=document.document_version_id,
+        document_version_created=False,
+        bindings_created=0,
+        bindings_unchanged=0,
+        records_created=created,
+        records_replayed=replayed,
+    )
+
+
+def companyfacts_document_version_present(
+    conn: sqlite3.Connection,
+    *,
+    issuer_id: str,
+    digest: str,
+) -> bool:
+    """True when the evidence chain already holds this issuer's version of the digest.
+
+    The unchanged-skip precondition: an unchanged payload may only skip full
+    reprocessing when the retained capture chain it claims to stand on is
+    actually present.
+    """
+
+    row = conn.execute(
+        "SELECT 1 FROM evidence_document_versions "
+        "WHERE document_key = ? AND blob_sha256 = ? LIMIT 1",
+        (f"{issuer_id}:sec-companyfacts", digest),
+    ).fetchone()
+    return row is not None
+
+
 def _content_blob(
     conn: sqlite3.Connection,
     request: SecCompanyFactsCaptureRequest,
@@ -282,7 +419,7 @@ def _content_blob(
 
 
 def _source_observation(
-    request: SecCompanyFactsCaptureRequest,
+    request: _CaptureRequestLike,
     digest: str,
 ) -> SourceObservation:
     identity = _stable_digest(
@@ -315,36 +452,14 @@ def _document_version(
     digest: str,
 ) -> tuple[DocumentVersion, bool]:
     document_key = f"{request.issuer_id}:sec-companyfacts"
-    exact = conn.execute(
-        "SELECT document_version_id, version_sequence, observation_id, "
-        "replaces_document_version_id, recorded_at "
-        "FROM evidence_document_versions WHERE document_key = ? AND blob_sha256 = ?",
-        (document_key, digest),
-    ).fetchone()
-    if exact is not None:
-        return (
-            DocumentVersion(
-                document_version_id=str(exact[0]),
-                document_key=document_key,
-                version_sequence=int(exact[1]),
-                observation_id=str(exact[2]),
-                blob_sha256=digest,
-                issuer_id=request.issuer_id,
-                ticker=request.ticker,
-                document_type="companyfacts_snapshot",
-                form_type="SEC-COMPANYFACTS",
-                accession_number=None,
-                exhibit_id=None,
-                period_start=None,
-                period_end=None,
-                as_of_at=_datetime(exact[4]),
-                language="en",
-                replaces_document_version_id=(None if exact[3] is None else str(exact[3])),
-                legacy_document_id=None,
-                recorded_at=_datetime(exact[4]),
-            ),
-            False,
-        )
+    existing = _existing_document_version(
+        conn,
+        digest=digest,
+        issuer_id=request.issuer_id,
+        ticker=request.ticker,
+    )
+    if existing is not None:
+        return (existing, False)
     current = conn.execute(
         "SELECT document_version_id, version_sequence "
         "FROM evidence_document_versions WHERE document_key = ? "
@@ -379,8 +494,53 @@ def _document_version(
     )
 
 
+def _existing_document_version(
+    conn: sqlite3.Connection,
+    *,
+    digest: str,
+    issuer_id: str,
+    ticker: str,
+) -> DocumentVersion | None:
+    """Rebuild the retained DocumentVersion row for an already-captured digest.
+
+    Returns None when this issuer has no document version for the digest —
+    the caller decides whether that means "create a new version" (capture) or
+    "fail closed" (unchanged-payload observation).
+    """
+
+    document_key = f"{issuer_id}:sec-companyfacts"
+    exact = conn.execute(
+        "SELECT document_version_id, version_sequence, observation_id, "
+        "replaces_document_version_id, recorded_at "
+        "FROM evidence_document_versions WHERE document_key = ? AND blob_sha256 = ?",
+        (document_key, digest),
+    ).fetchone()
+    if exact is None:
+        return None
+    return DocumentVersion(
+        document_version_id=str(exact[0]),
+        document_key=document_key,
+        version_sequence=int(exact[1]),
+        observation_id=str(exact[2]),
+        blob_sha256=digest,
+        issuer_id=issuer_id,
+        ticker=ticker,
+        document_type="companyfacts_snapshot",
+        form_type="SEC-COMPANYFACTS",
+        accession_number=None,
+        exhibit_id=None,
+        period_start=None,
+        period_end=None,
+        as_of_at=_datetime(exact[4]),
+        language="en",
+        replaces_document_version_id=(None if exact[3] is None else str(exact[3])),
+        legacy_document_id=None,
+        recorded_at=_datetime(exact[4]),
+    )
+
+
 def _document_observation_link(
-    request: SecCompanyFactsCaptureRequest,
+    request: _CaptureRequestLike,
     observation: SourceObservation,
     document: DocumentVersion,
     *,
@@ -587,11 +747,6 @@ def _write_verified_blob(path: Path, body: bytes, digest: str) -> None:
 
 def _stable_digest(*parts: str) -> str:
     return hashlib.sha256("\0".join(parts).encode()).hexdigest()
-
-
-def _datetime(value: object) -> datetime:
-    parsed = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
-    return _timeline(parsed)
 
 
 def _account(created_now: bool, created: int, replayed: int) -> tuple[int, int]:

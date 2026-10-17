@@ -318,3 +318,39 @@ def test_build_cockpit_rows_uses_cache_and_canonical_fallback(
     with_cache = build_cockpit_rows(conn, repo_root)
     row = {item.base.ticker: item for item in with_cache["evaluation"]}["SYNTH"]
     assert row.rev_yoy_pct == pytest.approx(20.0)
+
+
+def test_existing_morning_stage_runs_file_input_materializer(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import execution.refresh_cockpit_fundamentals as refresh
+    from sqlite_runtime import SQLiteConnectionRole
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    db_path = repo_root / "data" / "portfolio.db"
+    db_path.parent.mkdir()
+    db_path.touch()
+    conn = sqlite3.connect(":memory:")
+
+    def connect(_path: str, *, role: SQLiteConnectionRole) -> sqlite3.Connection:
+        assert role is SQLiteConnectionRole.READ_ONLY
+        return conn
+
+    def stub_materializer(_conn: sqlite3.Connection, _repo_root: Path) -> int:
+        return 12
+
+    monkeypatch.setattr(refresh, "connect_sqlite", connect)
+    monkeypatch.setattr(refresh, "materialize_fundamentals", stub_materializer)
+    monkeypatch.setattr(refresh, "materialize_cockpit_file_inputs", stub_materializer)
+    monkeypatch.setattr(
+        refresh.sys,
+        "argv",
+        ["refresh_cockpit_fundamentals.py", "--repo-root", str(repo_root)],
+    )
+
+    assert refresh.main() == 0
+    assert "file_inputs=12 · cache=.cache/cockpit_file_inputs.json" in capsys.readouterr().out
+    conn.close()

@@ -1,5 +1,5 @@
 @echo off
-REM Weekly (Saturday 02:00) — SEC EDGAR companyfacts refresh across the tracked
+REM Weekly (Saturday 01:40) — SEC EDGAR companyfacts refresh across the tracked
 REM universe (portfolio + evaluation + watchlist).
 REM
 REM Runs execution\fetch_sec_xbrl.py, which reads the roster from the DB at run
@@ -17,8 +17,11 @@ REM ~6-monthly bulk backpopulation (directives/edgar_pipeline.md). SEC facts
 REM outrank FMP in the tier-aware loader, so disagreements resolve to the
 REM issuer's own filed number.
 REM
-REM Runs Saturday 02:00 — clear of the Sunday maintenance block (refresh_ir_kpis
-REM 01:00, discover_ir_documents 01:30, git cleanup 03:00). Edit
+REM Runs Saturday 01:40 — clear of the Sunday maintenance block (refresh_ir_kpis
+REM 01:00, discover_ir_documents 01:30, git cleanup 03:00), after the Friday P2
+REM lens dispatch stops (01:35), and staggered ahead of the other overnight DB
+REM writers (backfill_transcripts 02:00, submit_saydo_batch 02:20) so their
+REM starts no longer stack on the single-writer database. Edit
 REM fetch_sec_xbrl.task.xml to change cadence, then re-register from the MAIN
 REM checkout (editing the XML alone does NOT update the live task):
 REM   schtasks /create /tn "\earnings-summary\fetch_sec_xbrl" /xml "%~dp0fetch_sec_xbrl.task.xml" /f

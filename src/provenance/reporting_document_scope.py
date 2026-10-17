@@ -43,6 +43,7 @@ def reporting_document_scope(
     observed_through: datetime,
     *,
     inventory_snapshot_ids: tuple[str, ...] | None = None,
+    expected_document_ids: tuple[str, ...] | None = None,
 ) -> tuple[
     tuple[ReportingDocumentDecision, ...],
     dict[str, tuple[str, ...]],
@@ -52,6 +53,9 @@ def reporting_document_scope(
         raise ValueError("reporting projection requires at least one inventory snapshot")
     snapshot_ids_json = (
         json.dumps(inventory_snapshot_ids) if inventory_snapshot_ids is not None else None
+    )
+    selected_ids_json = (
+        json.dumps(expected_document_ids) if expected_document_ids is not None else None
     )
     cursor = conn.cursor()
     cursor.row_factory = sqlite3.Row
@@ -89,6 +93,7 @@ def reporting_document_scope(
         "ON canonical.document_version_id=coverage.document_version_id "
         "WHERE datetime(expected.recorded_at)<=datetime(?) "
         "AND (? IS NULL OR expected.snapshot_id IN (SELECT value FROM json_each(?))) "
+        "AND (? IS NULL OR expected.expected_document_id IN (SELECT value FROM json_each(?))) "
         "ORDER BY expected.issuer_id,expected.expected_document_key",
         (
             _db_time(cutoff),
@@ -102,6 +107,8 @@ def reporting_document_scope(
             _db_time(observed_through),
             snapshot_ids_json,
             snapshot_ids_json,
+            selected_ids_json,
+            selected_ids_json,
         ),
     ).fetchall()
     grouped: dict[str, list[str]] = {}

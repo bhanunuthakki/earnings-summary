@@ -772,21 +772,193 @@ def resolve_kpi_definition_names(
     return resolved
 
 
+class KpiResolverReadMemo:
+    """Per-build read memo for the report KPI resolver lookups.
+
+    A report build resolves every chart-priority KPI through the same
+    per-ticker scans — the definitions roster, the ``kpi_facts`` currency map,
+    the semantic-context column guards, the per-definition identity signature
+    — and pre-hoist each per-name lookup re-issued those scans (audit
+    performance-serving F6). Callers that own one read connection for a whole
+    build (the financials section context) pass one memo so the scans run once
+    per build instead of once per KPI. Every cached value is a pure function of
+    the read-only connection (and, where keyed, the ticker or definition id),
+    so memoized results are exactly the unmemoized ones; omitting the memo
+    preserves the historical per-call behavior for every other consumer.
+    """
+
+    def __init__(self) -> None:
+        self._definitions_rows: dict[str, list[sqlite3.Row]] = {}
+        self._definition_columns: frozenset[str] | None = None
+        self._fact_columns: frozenset[str] | None = None
+        self._fact_relation: str | None = None
+        self._currencies: dict[str, dict[int, set[str | None]]] = {}
+        self._semantic_columns: frozenset[str] | None = None
+        self._signatures: dict[int, tuple[str, str, str, str, str] | None] = {}
+        self._cadence_rows: dict[str, list[sqlite3.Row]] = {}
+
+    def definitions_rows(self, conn: sqlite3.Connection, ticker: str) -> list[sqlite3.Row]:
+        key = ticker.upper()
+        if key not in self._definitions_rows:
+            self._definitions_rows[key] = conn.execute(
+                "SELECT id, name, unit FROM kpi_definitions WHERE ticker = ? ORDER BY id",
+                (key,),
+            ).fetchall()
+        return self._definitions_rows[key]
+
+    def definition_columns(self, conn: sqlite3.Connection) -> frozenset[str]:
+        if self._definition_columns is None:
+            self._definition_columns = frozenset(
+                str(column["name"])
+                for column in conn.execute("PRAGMA table_info(kpi_definitions)").fetchall()
+            )
+        return self._definition_columns
+
+    def fact_columns(self, conn: sqlite3.Connection) -> frozenset[str]:
+        if self._fact_columns is None:
+            self._fact_columns = frozenset(
+                str(column["name"])
+                for column in conn.execute("PRAGMA table_info(kpi_facts)").fetchall()
+            )
+        return self._fact_columns
+
+    def fact_relation(self, conn: sqlite3.Connection) -> str:
+        if self._fact_relation is None:
+            self._fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
+        return self._fact_relation
+
+    def currencies_by_definition(
+        self, conn: sqlite3.Connection, ticker: str
+    ) -> dict[int, set[str | None]]:
+        key = ticker.upper()
+        if key not in self._currencies:
+            rows = conn.execute(
+                f"SELECT kpi_definition_id, currency FROM {self.fact_relation(conn)} "  # nosec B608
+                "WHERE ticker = ?",
+                (key,),
+            ).fetchall()
+            by_definition: dict[int, set[str | None]] = {}
+            for fact in rows:
+                by_definition.setdefault(int(fact["kpi_definition_id"]), set()).add(
+                    str(fact["currency"]) if fact["currency"] is not None else None
+                )
+            self._currencies[key] = by_definition
+        return self._currencies[key]
+
+    def semantic_columns(self, conn: sqlite3.Connection) -> frozenset[str]:
+        if self._semantic_columns is None:
+            self._semantic_columns = frozenset(
+                str(column["name"])
+                for column in conn.execute(
+                    "PRAGMA table_info(kpi_fact_semantic_contexts)"
+                ).fetchall()
+            )
+        return self._semantic_columns
+
+    def signature(
+        self,
+        conn: sqlite3.Connection,
+        definition_id: int,
+        *,
+        semantic_columns: frozenset[str],
+        fact_relation: str,
+    ) -> tuple[str, str, str, str, str] | None:
+        """Memoized latest admitted current-actual identity signature.
+
+        ``None`` is a valid cached outcome (guards absent or no anchor row), so
+        membership in the cache — not the value — decides a hit. The column
+        guard and relation are the caller's already-resolved values (shared per
+        build through this memo) so a cached hit issues no statement at all.
+        """
+        if definition_id not in self._signatures:
+            self._signatures[definition_id] = _latest_identity_signature(
+                conn,
+                definition_id,
+                semantic_columns=semantic_columns,
+                fact_relation=fact_relation,
+            )
+        return self._signatures[definition_id]
+
+    def cadence_rows(self, conn: sqlite3.Connection, ticker: str) -> list[sqlite3.Row]:
+        key = ticker.upper()
+        if key not in self._cadence_rows:
+            self._cadence_rows[key] = conn.execute(
+                "SELECT name, reporting_cadence FROM kpi_definitions WHERE ticker = ?",
+                (key,),
+            ).fetchall()
+        return self._cadence_rows[key]
+
+
+def _latest_identity_signature(
+    conn: sqlite3.Connection,
+    definition_id: int,
+    *,
+    semantic_columns: frozenset[str],
+    fact_relation: str,
+) -> tuple[str, str, str, str, str] | None:
+    """The latest admitted current-actual semantic signature of one definition.
+
+    Column guard and canonical relation are injected by the caller (shared per
+    build through :class:`KpiResolverReadMemo`) so the probe cost is paid once
+    per build, not once per definition.
+    """
+    signature_fields = (
+        "metric_name_as_reported",
+        "accounting_basis",
+        "consolidation_scope",
+        "dimensions_json",
+        "unit_scale",
+    )
+    if not set(signature_fields).issubset(semantic_columns):
+        return None
+    row = conn.execute(
+        "SELECT "  # nosec B608
+        + ",".join(f"context.{field}" for field in signature_fields)
+        + " "
+        f"FROM {fact_relation} fact JOIN kpi_fact_semantic_contexts context "  # nosec B608
+        "ON context.kpi_fact_id=fact.id AND NOT EXISTS ("
+        "SELECT 1 FROM kpi_fact_semantic_contexts successor "
+        "WHERE successor.supersedes_context_id=context.id) "
+        "WHERE fact.kpi_definition_id=? AND context.status='admitted' "
+        "AND context.publication_lane='current_actual' "
+        "ORDER BY fact.period_end DESC,fact.id DESC LIMIT 1",
+        (definition_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return (
+        str(row[0]),
+        str(row[1]),
+        str(row[2]),
+        str(row[3]),
+        str(row[4]),
+    )
+
+
 def matching_kpi_definition_ids(
-    conn: sqlite3.Connection, ticker: str, requested: str
+    conn: sqlite3.Connection,
+    ticker: str,
+    requested: str,
+    *,
+    memo: KpiResolverReadMemo | None = None,
 ) -> tuple[int, ...]:
     """All definition IDs in the read-side normalized KPI family.
 
     Readers must reconcile aliases *before* filtering and window partitioning;
     choosing a single rich definition first leaves a same-period fact under a
     less-populated alias invisible.  This is intentionally read-only and uses
-    the existing conservative normalized-name contract.
+    the existing conservative normalized-name contract. ``memo`` lets a
+    caller that owns one read connection for a whole report build share the
+    per-ticker scans across every KPI of that build.
     """
     want = normalize_kpi_name(requested)
-    rows = conn.execute(
-        "SELECT id, name, unit FROM kpi_definitions WHERE ticker = ? ORDER BY id",
-        (ticker.upper(),),
-    ).fetchall()
+    if memo is None:
+        rows = conn.execute(
+            "SELECT id, name, unit FROM kpi_definitions WHERE ticker = ? ORDER BY id",
+            (ticker.upper(),),
+        ).fetchall()
+    else:
+        rows = memo.definitions_rows(conn, ticker)
     family = [row for row in rows if normalize_kpi_name(str(row["name"])) == want]
     if not family:
         return ()
@@ -798,59 +970,57 @@ def matching_kpi_definition_ids(
     # may a USD alias pull a BRL observation into the same report cell. Currency
     # is a fact (not definition) attribute, so compare each definition's observed
     # currency set; a definition with no observations is harmless to retain.
-    fact_columns = {
-        str(column["name"]) for column in conn.execute("PRAGMA table_info(kpi_facts)").fetchall()
-    }
+    fact_columns: frozenset[str] = (
+        memo.fact_columns(conn)
+        if memo is not None
+        else frozenset(
+            str(column["name"])
+            for column in conn.execute("PRAGMA table_info(kpi_facts)").fetchall()
+        )
+    )
     if "currency" not in fact_columns:
         return tuple(int(row["id"]) for row in family if str(row["unit"]) == anchor_unit)
-    fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
-    fact_currency_rows = conn.execute(
-        f"SELECT kpi_definition_id, currency FROM {fact_relation} WHERE ticker = ?",
-        (ticker.upper(),),
-    ).fetchall()
-    currencies_by_definition: dict[int, set[str | None]] = {}
-    for fact in fact_currency_rows:
-        definition_id = int(fact["kpi_definition_id"])
-        currencies_by_definition.setdefault(definition_id, set()).add(
-            str(fact["currency"]) if fact["currency"] is not None else None
-        )
+    fact_relation: str = (
+        memo.fact_relation(conn)
+        if memo is not None
+        else canonical_fact_relation(conn, "kpi_facts").sql
+    )
+    if memo is not None:
+        currencies_by_definition = memo.currencies_by_definition(conn, ticker)
+    else:
+        fact_currency_rows = conn.execute(
+            f"SELECT kpi_definition_id, currency FROM {fact_relation} WHERE ticker = ?",  # nosec B608
+            (ticker.upper(),),
+        ).fetchall()
+        currencies_by_definition = {}
+        for fact in fact_currency_rows:
+            definition_id = int(fact["kpi_definition_id"])
+            currencies_by_definition.setdefault(definition_id, set()).add(
+                str(fact["currency"]) if fact["currency"] is not None else None
+            )
     anchor_currencies = currencies_by_definition.get(int(anchor["id"]), set())
-    semantic_columns = {
-        str(column["name"])
-        for column in conn.execute("PRAGMA table_info(kpi_fact_semantic_contexts)").fetchall()
-    }
+    semantic_columns: frozenset[str] = (
+        memo.semantic_columns(conn)
+        if memo is not None
+        else frozenset(
+            str(column["name"])
+            for column in conn.execute("PRAGMA table_info(kpi_fact_semantic_contexts)").fetchall()
+        )
+    )
 
     def latest_signature(definition_id: int) -> tuple[str, str, str, str, str] | None:
-        signature_fields = (
-            "metric_name_as_reported",
-            "accounting_basis",
-            "consolidation_scope",
-            "dimensions_json",
-            "unit_scale",
-        )
-        if not set(signature_fields).issubset(semantic_columns):
-            return None
-        row = conn.execute(
-            "SELECT "  # nosec B608
-            + ",".join(f"context.{field}" for field in signature_fields)
-            + " "
-            f"FROM {fact_relation} fact JOIN kpi_fact_semantic_contexts context "  # nosec B608
-            "ON context.kpi_fact_id=fact.id AND NOT EXISTS ("
-            "SELECT 1 FROM kpi_fact_semantic_contexts successor "
-            "WHERE successor.supersedes_context_id=context.id) "
-            "WHERE fact.kpi_definition_id=? AND context.status='admitted' "
-            "AND context.publication_lane='current_actual' "
-            "ORDER BY fact.period_end DESC,fact.id DESC LIMIT 1",
-            (definition_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        return (
-            str(row[0]),
-            str(row[1]),
-            str(row[2]),
-            str(row[3]),
-            str(row[4]),
+        if memo is not None:
+            return memo.signature(
+                conn,
+                definition_id,
+                semantic_columns=semantic_columns,
+                fact_relation=fact_relation,
+            )
+        return _latest_identity_signature(
+            conn,
+            definition_id,
+            semantic_columns=semantic_columns,
+            fact_relation=fact_relation,
         )
 
     signatures = {int(row["id"]): latest_signature(int(row["id"])) for row in family}
@@ -879,6 +1049,7 @@ def semantic_series_identity_sql(
     fact_alias: str = "kf",
     context_alias: str = "ksc",
     fact_relation: str | None = None,
+    memo: KpiResolverReadMemo | None = None,
 ) -> str:
     """Restrict an admitted series to its latest basis/scope/dimension identity.
 
@@ -888,6 +1059,8 @@ def semantic_series_identity_sql(
     resolved-current view. Any active legacy scalar ``replace`` or ``drop``
     rejects the whole compatible definition-alias family: consumers may resume
     only after a source-reviewed superseding fact has its own admitted head.
+    ``memo`` (a per-build :class:`KpiResolverReadMemo`) shares the override
+    scan's resolver lookups with the rest of one report build.
     """
     resolved_fact_relation = fact_relation or canonical_fact_relation(conn, "kpi_facts").sql
     columns = {
@@ -941,7 +1114,7 @@ def semantic_series_identity_sql(
         f"((({context_alias}.id IS NULL OR {context_alias}.status='legacy_unknown') "
         f"AND NOT {admitted_anchor_exists}) OR ({qualified}))"
     )
-    blocked_definition_ids = _active_kpi_override_blocked_definition_ids(conn)
+    blocked_definition_ids = _active_kpi_override_blocked_definition_ids(conn, memo=memo)
     if not blocked_definition_ids:
         return admitted_identity
     blocked_ids_sql = ",".join(
@@ -952,6 +1125,8 @@ def semantic_series_identity_sql(
 
 def _active_kpi_override_blocked_definition_ids(
     conn: sqlite3.Connection,
+    *,
+    memo: KpiResolverReadMemo | None = None,
 ) -> tuple[int, ...]:
     """Definition ids whose family an active legacy KPI override rejects.
 
@@ -984,6 +1159,7 @@ def _active_kpi_override_blocked_definition_ids(
                 conn,
                 str(override["ticker"]),
                 str(override["fact_key"]),
+                memo=memo,
             )
         )
     return tuple(sorted(blocked_definition_ids))
@@ -1123,7 +1299,13 @@ def engine_formula_definition(name: str) -> str | None:
     return f"{formula.display_formula} — {formula.method_notes}"
 
 
-def reporting_cadence_for(conn: sqlite3.Connection, ticker: str, requested: str) -> str:
+def reporting_cadence_for(
+    conn: sqlite3.Connection,
+    ticker: str,
+    requested: str,
+    *,
+    memo: KpiResolverReadMemo | None = None,
+) -> str:
     """Return the reporting_cadence ('quarterly' | 'annual' | 'ttm') for the
     definition best matching ``requested``, defaulting to ``'quarterly'``.
 
@@ -1136,17 +1318,29 @@ def reporting_cadence_for(conn: sqlite3.Connection, ticker: str, requested: str)
     treat the result as authoritative without re-checking the schema.
 
     Requires ``conn.row_factory = sqlite3.Row`` (every consumer sets it).
+    ``memo`` lets a caller that owns one read connection for a whole report
+    build share the per-ticker definitions scan across every KPI of that build.
     """
-    cols = {c["name"] for c in conn.execute("PRAGMA table_info(kpi_definitions)").fetchall()}
+    cols: frozenset[str] = (
+        memo.definition_columns(conn)
+        if memo is not None
+        else frozenset(
+            str(c["name"]) for c in conn.execute("PRAGMA table_info(kpi_definitions)").fetchall()
+        )
+    )
     if "reporting_cadence" not in cols:
         return "quarterly"
     want = normalize_kpi_name(requested)
     best = "quarterly"
     found = False
-    for row in conn.execute(
-        "SELECT name, reporting_cadence FROM kpi_definitions WHERE ticker = ?",
-        (ticker.upper(),),
-    ):
+    if memo is not None:
+        cadence_rows = memo.cadence_rows(conn, ticker)
+    else:
+        cadence_rows = conn.execute(
+            "SELECT name, reporting_cadence FROM kpi_definitions WHERE ticker = ?",
+            (ticker.upper(),),
+        ).fetchall()
+    for row in cadence_rows:
         stored = str(row["name"])
         if stored == requested or normalize_kpi_name(stored) == want:
             found = True

@@ -6,7 +6,8 @@ import hashlib
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Literal, Self, cast
 from urllib.parse import quote
@@ -14,6 +15,7 @@ from urllib.parse import quote
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ask.audit_store import canonical_json, digest_text, retrieval_query_sha256
+from provenance.fact_read_model import FactAdmissionError, FactReadModel, ProvenanceBundle
 from provenance.population_completeness import (
     PopulationCompletenessLedger,
     PopulationCutoverReceipt,
@@ -25,6 +27,11 @@ from provenance.scope_identity import (
     validate_retrieval_scope_identity,
     validate_source_scope_revision_id,
 )
+from provenance.source_fact_publication import record_commitment
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import parse_iso8601_utc as _datetime
+from runtime.deterministic import require_sha256
+from search.canonical_fact_projection import canonical_decimal
 from search.embedding_promotion import LocalVectorRuntimeConfig
 from search.heterogeneous_retrieval import (
     HeterogeneousRetrievalError,
@@ -92,6 +99,8 @@ _VERIFIER_ARTIFACTS = (
     ("src/ask/sealed_retrieval.py", "ask-sealed-retrieval.v3"),
     ("src/provenance/population_completeness.py", "population-cutover-verifier.v1"),
     ("src/provenance/research_snapshot.py", "research-snapshot-verifier.v1"),
+    ("src/provenance/fact_read_model.py", "sealed-fact-read-model.v1"),
+    ("src/provenance/source_fact_publication.py", "source-fact-publication-verifier.v1"),
     ("src/search/exact_semantic.py", "exact-semantic-verifier.v1"),
     ("src/search/heterogeneous_retrieval.py", "heterogeneous-trace-verifier.v1"),
 )
@@ -137,24 +146,11 @@ def current_verifier_identity() -> tuple[str, str, str, str, str]:
     )
 
 
-def _sha(value: str) -> str:
-    normalized = value.lower()
-    if len(normalized) != 64 or any(char not in "0123456789abcdef" for char in normalized):
-        raise ValueError("must be a lowercase SHA-256 digest")
-    return normalized
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+_sha = partial(require_sha256, message="must be a lowercase SHA-256 digest")
 
 
 def _db_time(value: datetime) -> str:
     return _utc(value).replace(tzinfo=None).isoformat(sep=" ")
-
-
-def _datetime(value: object) -> datetime:
-    parsed = datetime.fromisoformat(str(value))
-    return _utc(parsed)
 
 
 def _integer(value: object) -> int:
@@ -1452,7 +1448,9 @@ def load_verified_trace_evidence(
         raise PromotionVerificationError(
             "trace_verification_failed", "retrieval trace header disappeared"
         )
-    items: list[SealedEvidenceItem] = []
+    cutoff = _datetime(header["cutoff_at"])
+    selected: list[tuple[int, dict[str, object], sqlite3.Row]] = []
+    fact_entries: dict[int, sqlite3.Row] = {}
     for index, result in enumerate(receipt.ordered_results, start=start_number):
         result_ordinal = _integer(result["result_ordinal"])
         candidate = conn.execute(
@@ -1467,6 +1465,33 @@ def load_verified_trace_evidence(
             raise PromotionVerificationError(
                 "trace_verification_failed", "verified result candidate is missing"
             )
+        selected.append((index, result, candidate))
+        if str(candidate["candidate_kind"]) == "fact":
+            fact_entries[index] = _fact_entry(conn, receipt, candidate)
+    # The source owner verifies shared publications once for this bounded batch.
+    # No context or partial answer is returned when any selected fact is inadmissible.
+    try:
+        observed_through = (
+            _fact_context_observed_through(conn, receipt, cutoff=cutoff) if fact_entries else cutoff
+        )
+        observation_ids = tuple(
+            dict.fromkeys(str(row["selected_observation_id"]) for row in fact_entries.values())
+        )
+        reads = FactReadModel(conn).provenance_bundles(
+            observation_ids,
+            cutoff=observed_through,
+        )
+        bundles = {read.observation_id: read.bundle for read in reads if read.bundle is not None}
+        if tuple(read.observation_id for read in reads) != observation_ids or any(
+            read.failure is not None or read.bundle is None for read in reads
+        ):
+            raise ValueError("selected fact context lacks sealed source admission")
+    except (FactAdmissionError, ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise PromotionVerificationError(
+            "trace_verification_failed", "selected fact context is unavailable"
+        ) from exc
+    items: list[SealedEvidenceItem] = []
+    for index, result, candidate in selected:
         kind = str(candidate["candidate_kind"])
         if kind == "narrative":
             item = _narrative_item(
@@ -1475,7 +1500,7 @@ def load_verified_trace_evidence(
                 candidate,
                 result,
                 n=index,
-                cutoff=_datetime(header["cutoff_at"]),
+                cutoff=cutoff,
             )
         elif kind == "fact":
             item = _fact_item(
@@ -1484,7 +1509,10 @@ def load_verified_trace_evidence(
                 candidate,
                 result,
                 n=index,
-                cutoff=_datetime(header["cutoff_at"]),
+                cutoff=cutoff,
+                entry=fact_entries[index],
+                source_bundle=bundles[str(fact_entries[index]["selected_observation_id"])],
+                observed_through=observed_through,
             )
         else:
             raise PromotionVerificationError(
@@ -1502,7 +1530,7 @@ def _document_metadata(
     row = conn.execute(
         "SELECT document.document_version_id,document.issuer_id,document.ticker,"
         "document.document_type,document.form_type,document.period_start,"
-        "document.period_end,observation.source_url "
+        "document.period_end,observation.source_url,observation.observation_id AS source_observation_id "
         "FROM evidence_document_versions document "
         "JOIN evidence_source_observations observation "
         "ON observation.observation_id=document.observation_id "
@@ -1577,15 +1605,32 @@ def _narrative_item(
     )
 
 
-def _fact_item(
+def _fact_context_observed_through(
+    conn: sqlite3.Connection,
+    receipt: HeterogeneousRetrievalReceipt,
+    *,
+    cutoff: datetime,
+) -> datetime:
+    """Use the verified projection head's observation bound, including inherited entries."""
+
+    head = conn.execute(
+        "SELECT cutoff_at,recorded_at FROM canonical_fact_projection_generations "
+        "WHERE generation_id=?",
+        (receipt.fact_generation_id,),
+    ).fetchone()
+    if head is None:
+        raise ValueError("selected fact context projection head is missing")
+    observed = _datetime(head["recorded_at"])
+    if _datetime(head["cutoff_at"]) != _utc(cutoff) or observed < _utc(cutoff):
+        raise ValueError("selected fact context projection clocks differ")
+    return observed
+
+
+def _fact_entry(
     conn: sqlite3.Connection,
     receipt: HeterogeneousRetrievalReceipt,
     candidate: sqlite3.Row,
-    result: dict[str, object],
-    *,
-    n: int,
-    cutoff: datetime,
-) -> SealedEvidenceItem:
+) -> sqlite3.Row:
     row = conn.execute(
         """
         WITH RECURSIVE lineage(generation_id,parent_generation_id,depth) AS (
@@ -1620,9 +1665,40 @@ def _fact_item(
         raise PromotionVerificationError(
             "trace_verification_failed", "fact source commitment is missing"
         )
+    return row
+
+
+def _fact_item(
+    conn: sqlite3.Connection,
+    receipt: HeterogeneousRetrievalReceipt,
+    candidate: sqlite3.Row,
+    result: dict[str, object],
+    *,
+    n: int,
+    cutoff: datetime,
+    entry: sqlite3.Row,
+    source_bundle: ProvenanceBundle,
+    observed_through: datetime,
+) -> SealedEvidenceItem:
+    row = entry
+    document = _document_metadata(
+        conn, document_version_id=str(row["evidence_document_version_id"])
+    )
+    try:
+        context = _verified_fact_context(
+            conn,
+            row,
+            source_bundle,
+            source_observation_id=str(document["source_observation_id"]),
+            knowledge_cutoff=cutoff,
+            observed_through=observed_through,
+        )
+    except (FactAdmissionError, ValueError, RuntimeError, sqlite3.Error) as exc:
+        raise PromotionVerificationError(
+            "trace_verification_failed", "selected fact context is unavailable or mismatched"
+        ) from exc
     version_id = str(row["evidence_document_version_id"])
     node_id = str(row["evidence_node_id"])
-    document = _document_metadata(conn, document_version_id=version_id)
     locator = cast(dict[str, object], json.loads(str(row["evidence_locator_json"])))
     ticker = None if document["ticker"] is None else str(document["ticker"])
     doc_type = str(document["form_type"] or document["document_type"])
@@ -1631,12 +1707,14 @@ def _fact_item(
     metric = str(row["canonical_metric_name"])
     unit = str(row["unit_key"])
     currency = None if row["currency"] is None else str(row["currency"])
-    value_text = " ".join(part for part in (value, currency or unit) if part)
+    value_text = " ".join(
+        part for part in (value, currency, unit if unit != currency else None) if part
+    )
     return SealedEvidenceItem(
         n=n,
         kind="fact",
         label=" · ".join(part for part in (ticker, metric, period) if part),
-        text=f"{metric}: {value_text} ({period})",
+        text=f"{metric}: {value_text} ({period})\nVerified financial context: {context}",
         href=f"/source/version/{quote(version_id, safe='')}?node={quote(node_id, safe='')}",
         source_url=str(document["source_url"]),
         ticker=ticker,
@@ -1655,6 +1733,111 @@ def _fact_item(
         locator=locator,
         score=str(result["final_score"]),
     )
+
+
+def _verified_fact_context(
+    conn: sqlite3.Connection,
+    entry: sqlite3.Row,
+    bundle: ProvenanceBundle,
+    *,
+    source_observation_id: str,
+    knowledge_cutoff: datetime,
+    observed_through: datetime,
+) -> str:
+    """Preserve admitted context for the exact selected projection, never a newer fact."""
+
+    raw_payload = json.loads(str(entry["entry_json"]))
+    if not isinstance(raw_payload, dict):
+        raise ValueError("selected projection context must be an object")
+    payload = cast(dict[str, object], raw_payload)
+    columns = frozenset(entry.keys())
+    if digest_text(str(entry["entry_json"])) != str(entry["entry_sha256"]) or any(
+        entry[key] != value for key, value in payload.items() if key in columns
+    ):
+        raise ValueError("selected projection context commitment differs")
+    cell, observation, evidence = bundle.cell, bundle.observation, bundle.evidence
+    expected_start = None if entry["period_start"] is None else _datetime(entry["period_start"])
+    value = (
+        canonical_decimal(observation.decimal_value)
+        if observation.value_kind == "numeric"
+        else observation.text_value
+    )
+    if (
+        evidence is None
+        or _utc(cell.knowledge_at) > _utc(knowledge_cutoff)
+        or _utc(observation.knowledge_at) > _utc(knowledge_cutoff)
+        or _utc(cell.recorded_at) > _utc(observed_through)
+        or _utc(observation.recorded_at) > _utc(observed_through)
+        or cell.fact_cell_id != entry["source_fact_cell_id"]
+        or observation.observation_id != entry["selected_observation_id"]
+        or cell.reporting_entity_id != entry["reporting_entity_id"]
+        or cell.scope_security_id != entry["scope_security_id"]
+        or cell.period_kind != entry["period_kind"]
+        or (None if cell.period_start is None else _utc(cell.period_start)) != expected_start
+        or _utc(cell.period_end) != _datetime(entry["period_end"])
+        or cell.unit_key != entry["unit_key"]
+        or cell.currency != entry["currency"]
+        or observation.value_kind != entry["value_kind"]
+        or value != entry["canonical_value"]
+        or evidence.document_version_id != entry["evidence_document_version_id"]
+        or evidence.evidence_node_id != entry["evidence_node_id"]
+        or evidence.source_locator_sha256 != entry["evidence_locator_sha256"]
+        or canonical_json(evidence.source_locator.root) != entry["evidence_locator_json"]
+        or record_commitment(conn, "fact_observation", observation.observation_id)
+        != entry["source_record_commitment_sha256"]
+    ):
+        raise ValueError("selected projection differs from admitted source context")
+    source_payload = bundle.canonical_payload.root
+    # Native v2 records preserve reported/derived and revision kind. They do not
+    # encode actual/guidance/consensus or a separate scale. Never invent them.
+    context = {
+        "knowledge_cutoff": knowledge_cutoff.isoformat(),
+        "observed_through": observed_through.isoformat(),
+        "observation_knowledge_at": observation.knowledge_at.isoformat(),
+        "observation_recorded_at": observation.recorded_at.isoformat(),
+        "metric_definition_revision_id": entry["metric_definition_revision_id"],
+        "metric_definition_commitment_sha256": entry["metric_definition_commitment_sha256"],
+        "metric_definition_context": entry["canonical_search_text"],
+        "canonical_metric_cell_id": entry["canonical_metric_cell_id"],
+        "canonical_resolution_revision_id": entry["canonical_resolution_revision_id"],
+        "binding_revision_id": entry["binding_revision_id"],
+        "binding_commitment_sha256": entry["binding_commitment_sha256"],
+        "source_fact_cell_id": cell.fact_cell_id,
+        "selected_observation_id": observation.observation_id,
+        "source_observation_id": source_observation_id,
+        "document_version_id": evidence.document_version_id,
+        "evidence_node_id": evidence.evidence_node_id,
+        "source_locator": evidence.source_locator.root,
+        "subject_binding_revision_id": evidence.subject_binding_revision_id,
+        "reporting_entity_id": cell.reporting_entity_id,
+        "scope_security_id": cell.scope_security_id,
+        "unit_key": cell.unit_key,
+        "currency": cell.currency,
+        "accounting_basis": cell.accounting_basis,
+        "consolidation_scope": cell.consolidation_scope,
+        "dimensions": [dimension.canonical_member for dimension in cell.dimensions],
+        "period_kind": cell.period_kind,
+        "period_start": cell.model_dump(mode="json")["period_start"],
+        "period_end": cell.model_dump(mode="json")["period_end"],
+        "fiscal_year": cell.fiscal_year,
+        "fiscal_period": cell.fiscal_period,
+        "observation_kind": observation.observation_kind,
+        "revision_kind": observation.revision_kind,
+        "raw_lexical_value": observation.raw_lexical_value,
+        "decimals": source_payload.get("decimals"),
+        "precision": source_payload.get("precision"),
+        "actual_guidance_consensus_status": "unavailable",
+        "scale": "unavailable",
+        "context_limitations": (
+            "Preserve this fact's explicit unit_key and its literal meaning. "
+            "A separate scale field is unavailable; this does not erase scale expressed in the unit. "
+            "Do not infer an additional scale or actual/guidance/consensus status from currency, "
+            "decimals, or reported observation status. Preserve unknown accounting context as unknown. "
+            "Unsupported qualifier claims remain unavailable; this context does not establish "
+            "complete decision-grade financial context."
+        ),
+    }
+    return canonical_json(context)
 
 
 __all__ = [

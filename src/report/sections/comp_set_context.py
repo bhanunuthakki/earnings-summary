@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import cast
 
 from report.render_clock import render_today
+from runtime.deterministic import table_exists as _table_exists
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -146,13 +147,6 @@ def _open(db_path: Path | str) -> sqlite3.Connection | None:
     except sqlite3.Error as exc:
         log.warning({"event": "comp_set_context_open_failed", "error": str(exc)})
         return None
-
-
-def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    row = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (name,)
-    ).fetchone()
-    return row is not None
 
 
 def _first_record(path: Path) -> dict[str, object] | None:

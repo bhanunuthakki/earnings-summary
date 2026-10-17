@@ -466,15 +466,23 @@ def latest_verdicts(conn: sqlite3.Connection) -> dict[str, str]:
         # thesis history relation entirely. A real migrated runtime is guarded
         # by schema preflight before this read.
         return {}
+    # Same pick the ordered-full-scan-then-first-in-Python loop had — the
+    # latest row per ticker with a non-empty overall_status — but windowed
+    # inside SQLite so only the kept rows cross the boundary (F4b); ties
+    # within one timestamp keep the same unspecified order.
     rows = _safe_rows(
         conn,
-        f"SELECT ticker, overall_status FROM {source.relation} "
-        f"ORDER BY ticker, {source.latest_checked_column} DESC",  # nosec B608 -- trusted closed relation
+        "SELECT ticker, overall_status FROM ("
+        "  SELECT ticker, overall_status,"
+        f"  ROW_NUMBER() OVER (PARTITION BY ticker ORDER BY {source.latest_checked_column} DESC) AS rn"  # nosec B608 -- trusted closed relation; values stay bound
+        f"  FROM {source.relation}"
+        "  WHERE overall_status IS NOT NULL AND overall_status != ''"
+        ") WHERE rn = 1 ORDER BY ticker",
     )
     out: dict[str, str] = {}
     for r in rows:
         t = str(r["ticker"]).upper()
-        if t not in out and r["overall_status"]:
+        if t not in out:
             out[t] = str(r["overall_status"])
     return out
 
@@ -1022,9 +1030,9 @@ def render_coach_mutes_section(db_path: Path, *, conn: sqlite3.Connection | None
     return panel_section(
         sub,
         f'<div class="cpnl-list">{lines}</div>',
-        _UNMUTE_JS,
         title="Active mutes",
         cls="cpnl-mutes",
+        tail=_UNMUTE_JS,
     )
 
 

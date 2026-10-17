@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import allocation.eligibility as eligibility_mod
-from allocation.digest import allocation_payload_sha
+from allocation.eligibility import allocation_payload_sha
 
 NESTED_PAYLOAD: dict[str, object] = {"b": 1, "a": {"d": 4, "c": 3}}
 NESTED_SHA = (

@@ -222,26 +222,6 @@
       "expires_at": "2027-01-01T00:00:00Z"
     },
     {
-      "path": "tests/test_fact_search_projection.py",
-      "source_sha256": "9a60aba40128774d1db4bc9080520c48648668622a3a22e97292494e9bf400e4",
-      "parity_receipt": {
-        "schema_version": "test-db-parity/v1",
-        "status": "PASS",
-        "invocation_id": "e5256ee6acc6dfc52c2ca6999deb0331ae33c5c6f1bb51b3507fbd45f565d263",
-        "path": "tests/test_fact_search_projection.py",
-        "locator": {
-          "start_line": 61,
-          "start_col": 4,
-          "end_line": 61,
-          "end_col": 21
-        },
-        "source_sha256": "9a60aba40128774d1db4bc9080520c48648668622a3a22e97292494e9bf400e4"
-      },
-      "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
-      "expires_at": "2027-01-01T00:00:00Z"
-    },
-    {
       "path": "tests/test_fact_selection.py",
       "source_sha256": "01690a67d815d4c16b764ddfde55c9a19221873f8f7217bbe23b762e94785b6e",
       "parity_receipt": {
@@ -336,26 +316,6 @@
           "end_col": 90
         },
         "source_sha256": "b3d3af2d6ace7ab1e2ae73a6b8399a612baa04f6b80e1b99bf80c35852ae6a02"
-      },
-      "owner_issue": "linear:BHA-104",
-      "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",
-      "expires_at": "2027-01-01T00:00:00Z"
-    },
-    {
-      "path": "tests/test_grounded_ask_retrieval.py",
-      "source_sha256": "6380d41ebcb06ba64bab067ab743665a109bad8689c4c0252f32a34761eee15c",
-      "parity_receipt": {
-        "schema_version": "test-db-parity/v1",
-        "status": "PASS",
-        "invocation_id": "4d494706a116fd5ee5b93818d1cc315890c791c91e03ccee22be12528b8eb7b1",
-        "path": "tests/test_grounded_ask_retrieval.py",
-        "locator": {
-          "start_line": 44,
-          "start_col": 4,
-          "end_line": 49,
-          "end_col": 5
-        },
-        "source_sha256": "6380d41ebcb06ba64bab067ab743665a109bad8689c4c0252f32a34761eee15c"
       },
       "owner_issue": "linear:BHA-104",
       "reason": "Chain replay replaced by the cached migrated_db template; fidelity and isolation are proven by tests/test_migrated_db_parity.py.",

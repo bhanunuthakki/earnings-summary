@@ -8,7 +8,6 @@ per session, payload-hash replay protection, and revision compare-and-swap.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import math
@@ -32,6 +31,8 @@ from pydantic import (
 
 from clock import now_iso
 from research.proposal_approval import AskProposalRefV1
+from runtime.deterministic import canonical_json_ascii_no_nan as _canonical_json
+from runtime.deterministic import sha256_text as _sha256
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -1189,20 +1190,6 @@ def _validated_json(value: object) -> CanonicalJson:
 
 def _model_json(model: BaseModel) -> str:
     return _canonical_json(model.model_dump(mode="json"))
-
-
-def _canonical_json(value: object) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=True,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
-def _sha256(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _validate_identifier(name: str, value: str) -> None:

@@ -37,19 +37,19 @@ import sys
 from datetime import date
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = SCRIPT_DIR.parent
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import db  # noqa: E402
-from db_paths import resolve_db_path  # noqa: E402
-from identity import DEFAULT_USER_ID  # noqa: E402
-from llm.cli import is_hard_stop  # noqa: E402
-from report.builder import build_report  # noqa: E402
-from report.models import ReportFlavor  # noqa: E402
-from report.renderers.workspace_html import render as render_workspace_html  # noqa: E402
-from research.investment_decision_card import generate_card  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from db_paths import db_path_context, require_db_path
+from identity import DEFAULT_USER_ID
+from llm.cli import is_hard_stop
+from report.builder import build_report
+from report.models import ReportFlavor
+from report.renderers.workspace_html import render as render_workspace_html
+from research.investment_decision_card import generate_card
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def _log(event: str, **kwargs: object) -> None:
@@ -70,12 +70,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "input-sha cache-keyed); kept for CLI-shape parity with sibling scripts",
     )
     return parser.parse_args(argv)
-
-
-def _sync_db_to_repo(repo_root: Path) -> None:
-    db.PROJECT_ROOT = str(repo_root)
-    db.DATA_DIR = str(repo_root / "data")
-    db.DB_PATH = str(repo_root / "data" / "portfolio.db")
 
 
 def _flavor_for_ticker(db_path: Path, ticker: str) -> ReportFlavor:
@@ -101,39 +95,48 @@ def _flavor_for_ticker(db_path: Path, ticker: str) -> ReportFlavor:
     return ReportFlavor.PORTFOLIO
 
 
-def rerender_workspace(ticker: str, repo_root: Path) -> Path:
+def rerender_workspace(ticker: str, repo_root: Path, *, db_path: Path | None = None) -> Path:
     """Rebuild + rewrite today's static workspace HTML — the same call path
     execution/build_artifacts.py uses. ``enable_llm=False`` keeps this a pure
     cache read for every section besides the card itself (already generated
     by the time this runs)."""
-    _sync_db_to_repo(repo_root)
-    db_path = repo_root / "data" / "portfolio.db"
+    db_path = require_db_path(db_path)
     flavor = _flavor_for_ticker(db_path, ticker)
-    spec = build_report(
-        ticker=ticker,
-        repo_root=repo_root,
-        model_link=f"dcf/{ticker}.xlsx",
-        enable_llm=False,
-        flavor=flavor,
-    )
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
+    try:
+        with db_path_context(db_path):
+            spec = build_report(
+                ticker=ticker,
+                repo_root=repo_root,
+                model_link=f"dcf/{ticker}.xlsx",
+                enable_llm=False,
+                flavor=flavor,
+                conn=conn,
+                db_path=db_path,
+            )
+            html = render_workspace_html(spec)
+    finally:
+        conn.close()
     out_dir = repo_root / "output" / "research" / ticker
     out_dir.mkdir(parents=True, exist_ok=True)
     workspace_html_path = out_dir / f"{date.today().isoformat()}_workspace.html"
-    workspace_html_path.write_text(render_workspace_html(spec), encoding="utf-8")
+    workspace_html_path.write_text(html, encoding="utf-8")
     return workspace_html_path
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     ticker = args.ticker.strip().upper()
-    db_path = resolve_db_path(args.db_path)
-    if db_path is None:
-        _log("halt", reason="DB path not configured")
+    try:
+        db_path = require_db_path(args.db_path)
+    except (RuntimeError, OSError):
+        _log("halt", reason="Configured portfolio database is unavailable")
         return 1
-    repo_root = args.repo_root or db_path.parent.parent
+    repo_root = args.repo_root or PROJECT_ROOT
 
     try:
-        result = generate_card(db_path, repo_root, ticker)
+        with db_path_context(db_path):
+            result = generate_card(db_path, repo_root, ticker)
     except Exception as exc:
         if is_hard_stop(exc):
             _log("hard_stop", ticker=ticker, error=str(exc))
@@ -160,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
-        workspace_path = rerender_workspace(ticker, repo_root)
+        workspace_path = rerender_workspace(ticker, repo_root, db_path=db_path)
     except Exception as exc:
         # The card itself is already persisted — a workspace re-render
         # failure is a degraded (stale HTML) outcome, not a generation

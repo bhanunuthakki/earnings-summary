@@ -40,6 +40,7 @@ import logging
 import sqlite3
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
@@ -118,6 +119,35 @@ def _table_has_column(conn: sqlite3.Connection, table: str, column: str) -> bool
         if str(name) == column:
             return True
     return False
+
+
+@dataclass(frozen=True)
+class FinancialFactSchemaProfile:
+    """The financial_facts column-presence probes, hoisted to once per caller.
+
+    `insert_with_restatement_detection` re-derives its INSERT shape from these
+    booleans; computing them once per ingest batch (the schema cannot change
+    mid-transaction) removes the per-fact ``PRAGMA table_info`` probes from
+    the admission hot loop.
+    """
+
+    has_supersedes_id: bool
+    has_extracted_by: bool
+    has_locator: bool
+
+    @property
+    def has_audit_cols(self) -> bool:
+        return self.has_supersedes_id and self.has_extracted_by
+
+
+def probe_financial_fact_schema(conn: sqlite3.Connection) -> FinancialFactSchemaProfile:
+    """Probe financial_facts column presence once for a whole batch of inserts."""
+
+    return FinancialFactSchemaProfile(
+        has_supersedes_id=_table_has_column(conn, "financial_facts", "supersedes_id"),
+        has_extracted_by=_table_has_column(conn, "financial_facts", "extracted_by"),
+        has_locator=_table_has_column(conn, "financial_facts", "locator"),
+    )
 
 
 # Schema-tolerant public read seam for legacy writers during staged migrations.
@@ -227,6 +257,7 @@ def _correct_same_document_fact(
     unit: str,
     source_doc_id: int,
     extracted_by: str | None,
+    schema_profile: FinancialFactSchemaProfile | None = None,
 ) -> int | None:
     """Heal an incumbent `financial_facts` row that shares this write's exact
     provenance key but carries a stale value/currency/unit.
@@ -249,7 +280,11 @@ def _correct_same_document_fact(
     incumbent for the key, the incumbent already matches (identical replay — a
     true no-op), the safety rail blocked the write, or the schema predates the
     `extracted_by` audit column (synthetic pre-0054 fixtures)."""
-    if not _table_has_column(conn, "financial_facts", "extracted_by"):
+    if schema_profile is not None:
+        has_extracted_by = schema_profile.has_extracted_by
+    else:
+        has_extracted_by = _table_has_column(conn, "financial_facts", "extracted_by")
+    if not has_extracted_by:
         # Pre-0054 fixture schema: no audit column to gate the safety rail on,
         # and same-document correction is a prod-healing concern only. Skip.
         return None
@@ -373,6 +408,7 @@ def insert_with_restatement_detection(
     before_resolve: Callable[[int], None] | None = None,
     evidence_resolution_timing_sink: Callable[[int], None] | None = None,
     monotonic_ns: Callable[[], int] = time.perf_counter_ns,
+    schema_profile: FinancialFactSchemaProfile | None = None,
 ) -> tuple[int | None, int | None]:
     """Insert one financial_facts row, setting `supersedes_id` when this is
     a restatement of an existing row from an earlier filing.
@@ -403,6 +439,11 @@ def insert_with_restatement_detection(
     `evidence_resolution_timing_sink`, when provided, receives the elapsed
     nanoseconds for the source-specific provenance callback plus mandatory
     resolution. It is observational only and does not own transaction state.
+
+    `schema_profile`, when provided, carries the once-per-batch column-
+    presence probes (see `probe_financial_fact_schema`) so batch callers
+    avoid re-running ``PRAGMA table_info`` for every fact row; when None the
+    probes run per call exactly as before.
 
     Callers should use this in place of a raw INSERT OR IGNORE when the
     extractor wants the restatement chain populated. Existing call sites
@@ -440,10 +481,15 @@ def insert_with_restatement_detection(
             ):
                 supersedes_id = incumbent_id
 
-    has_audit_cols = _table_has_column(
-        conn, "financial_facts", "supersedes_id"
-    ) and _table_has_column(conn, "financial_facts", "extracted_by")
-    write_locator = locator is not None and _table_has_column(conn, "financial_facts", "locator")
+    if schema_profile is not None:
+        has_audit_cols = schema_profile.has_audit_cols
+        has_locator = schema_profile.has_locator
+    else:
+        has_audit_cols = _table_has_column(
+            conn, "financial_facts", "supersedes_id"
+        ) and _table_has_column(conn, "financial_facts", "extracted_by")
+        has_locator = _table_has_column(conn, "financial_facts", "locator")
+    write_locator = locator is not None and has_locator
     try:
         if has_audit_cols and write_locator:
             cur = conn.execute(
@@ -541,6 +587,7 @@ def insert_with_restatement_detection(
             unit=unit,
             source_doc_id=source_doc_id,
             extracted_by=extracted_by,
+            schema_profile=schema_profile,
         )
         return (None, None)
     new_row_id = int(cur.lastrowid) if cur.lastrowid is not None else None

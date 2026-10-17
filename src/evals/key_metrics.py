@@ -30,25 +30,19 @@ and scores 0 at stage ``call``. The first case erroring twice aborts the run.
 from __future__ import annotations
 
 import logging
-import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
-from uuid import uuid4
 
 from evals.harness import (
     CaseResult,
-    EvalAbortError,
     EvalRunSummary,
-    dumps_compact,
-    now_naive_utc,
-    resolve_git_sha,
-    sha256_file,
+    grade_recall_set_case,
+    run_golden_eval,
 )
-from llm.cli import DEFAULT_MODEL, LLM_MODELS, is_hard_stop
+from llm.cli import DEFAULT_MODEL, LLM_MODELS
 from llm.prompt_versions import prompt_version_for
-from llm.structured import StructuredParseError
 
 log = logging.getLogger(__name__)
 
@@ -180,53 +174,16 @@ def load_key_metrics_golden(path: Path) -> list[KeyMetricCase]:
 
 
 def grade_key_metrics_case(case: KeyMetricCase, *, suggest_fn: SuggestFn) -> CaseResult:
-    t0 = time.monotonic()
-    try:
-        returned_raw = suggest_fn(case)
-    except StructuredParseError as exc:
-        latency_ms = int((time.monotonic() - t0) * 1000)
-        return CaseResult(
-            case_id=case.case_id,
-            question=f"{PURPOSE}/{case.case_id} ({case.ticker})",
-            passed=False,
-            score=0.0,
-            expected_json=dumps_compact(sorted(case.expected_metrics)),
-            actual_json=None,
-            failure_stage="call",
-            judge_rationale=f"suggest_key_metrics returned unusable JSON twice: {exc}",
-            latency_ms=latency_ms,
-        )
-    except Exception as exc:
-        if is_hard_stop(exc):
-            raise EvalAbortError(
-                f"{PURPOSE} hard stop on case {case.case_id}: {type(exc).__name__}: {exc} — "
-                "aborting instead of scoring 0s."
-            ) from exc
-        raise
-    latency_ms = int((time.monotonic() - t0) * 1000)
-
-    returned = frozenset(t.strip() for t in returned_raw if t.strip())
-    hits = returned & case.expected_metrics
-    recall = len(hits) / len(case.expected_metrics) if case.expected_metrics else 0.0
-    acceptable = case.expected_metrics | case.also_valid
-    precision = len(returned & acceptable) / len(returned) if returned else 0.0
-    passed = recall >= _CASE_PASS_RECALL
-    missed = sorted(case.expected_metrics - returned)
-    off = sorted(returned - acceptable)
-    return CaseResult(
+    return grade_recall_set_case(
+        purpose=PURPOSE,
         case_id=case.case_id,
-        question=f"{PURPOSE}/{case.case_id} ({case.ticker})",
-        passed=passed,
-        score=recall,
-        expected_json=dumps_compact(sorted(case.expected_metrics)),
-        actual_json=dumps_compact(sorted(returned)),
-        failure_stage=None if passed else "mismatch",
-        judge_rationale=(
-            f"recall={recall:.2f} precision={precision:.2f}"
-            + (f"; missed {missed}" if missed else "")
-            + (f"; off-thesis {off}" if off else "")
-        ),
-        latency_ms=latency_ms,
+        ticker=case.ticker,
+        expected=case.expected_metrics,
+        also_valid=case.also_valid,
+        produce=lambda: suggest_fn(case),
+        produce_label="suggest_key_metrics",
+        normalize=lambda token: token.strip(),
+        pass_recall=_CASE_PASS_RECALL,
     )
 
 
@@ -259,42 +216,14 @@ def run_key_metrics_eval(
     """The full mode-A run. Does NOT persist — the caller decides
     (execution/run_llm_evals.py). ``suggest_fn`` injects a fake generator for
     tests; None = the production ``compute.key_metrics.suggest_key_metrics``."""
-    cases = load_key_metrics_golden(golden_path)
-    if limit is not None:
-        cases = cases[: max(0, limit)]
     target: SuggestFn = suggest_fn if suggest_fn is not None else _production_suggest
-
-    summary = EvalRunSummary(
-        run_id=uuid4().hex,
+    return run_golden_eval(
         purpose=PURPOSE,
-        mode="live",
+        golden_path=golden_path,
+        code_root=code_root,
+        cases=load_key_metrics_golden(golden_path),
+        grade_case=lambda case: grade_key_metrics_case(case, suggest_fn=target),
         prompt_version=prompt_version_for(PURPOSE),
         model=LLM_MODELS.get(PURPOSE, DEFAULT_MODEL),
-        judge_model=None,  # hand-picked ground truth — deterministic recall, no judge
-        golden_set_sha=sha256_file(golden_path),
-        started_at=now_naive_utc(),
-        git_sha=resolve_git_sha(code_root),
+        limit=limit,
     )
-    for i, case in enumerate(cases):
-        result = grade_key_metrics_case(case, suggest_fn=target)
-        if i == 0 and result.failure_stage == "call":
-            retry = grade_key_metrics_case(case, suggest_fn=target)
-            if retry.failure_stage == "call":
-                raise EvalAbortError(
-                    f"{PURPOSE}: the first case errored twice ({result.judge_rationale}) — "
-                    "transport looks down; aborting instead of scoring 0s."
-                )
-            result = retry
-        summary.cases.append(result)
-        log.info(
-            {
-                "event": "eval_case_graded",
-                "purpose": PURPOSE,
-                "case_id": result.case_id,
-                "passed": result.passed,
-                "score": result.score,
-                "failure_stage": result.failure_stage,
-            }
-        )
-    summary.finished_at = now_naive_utc()
-    return summary

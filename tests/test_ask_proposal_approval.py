@@ -4,21 +4,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-from ask.exchange_store import (  # noqa: E402
+from ask.exchange_store import (
     ExchangeArtifactsV1,
     SessionContextV1,
     begin_exchange,
@@ -27,9 +21,9 @@ from ask.exchange_store import (  # noqa: E402
     hash_request_payload,
     put_session_context,
 )
-from ask.store import delete_session, ensure_session  # noqa: E402
-from research.apply import apply_governed_proposal  # noqa: E402
-from research.proposal_approval import (  # noqa: E402
+from ask.store import delete_session, ensure_session
+from research.apply import apply_governed_proposal
+from research.proposal_approval import (
     AskProposalDecisionV1,
     AskProposalRefV1,
     ProposalConflictError,
@@ -40,7 +34,8 @@ from research.proposal_approval import (  # noqa: E402
     decide_ask_proposal,
     get_ask_proposal_detail,
 )
-from research.proposals import get_proposal  # noqa: E402
+from research.proposals import get_proposal
+from tests.comments_server_seams import patch_server_seam
 
 
 def _holdings_payload(*, thesis: str = "Old thesis") -> dict[str, object]:
@@ -532,7 +527,7 @@ def test_legacy_chat_cutover_never_mutates_files_or_database(
     def _retired_respond(*_args: object, **_kwargs: object) -> None:
         pytest.fail("retired chat invoked the Ask engine")
 
-    monkeypatch.setattr(comments_server, "respond_turn", _retired_respond)
+    patch_server_seam(monkeypatch, "respond_turn", _retired_respond)
     client = comments_server.create_app(repo_root, db_path=db_path).test_client()
 
     responses = [
@@ -594,9 +589,9 @@ def test_routes_emit_durable_ref_live_and_replay_and_expose_exact_detail(
         yield {"type": "final", "text": "I prepared the governed change."}
         yield {"type": "diff_proposal", "diff": _thesis_diff()}
 
-    monkeypatch.setattr(comments_server, "build_portfolio_pack", _empty_pack)
-    monkeypatch.setattr(comments_server, "respond_turn", _respond)
-    monkeypatch.setattr(comments_server, "ask_retrieval_mode", lambda: "legacy")
+    patch_server_seam(monkeypatch, "build_portfolio_pack", _empty_pack)
+    patch_server_seam(monkeypatch, "respond_turn", _respond)
+    patch_server_seam(monkeypatch, "ask_retrieval_mode", lambda: "legacy")
 
     live = client.post("/api/ask/stream", json=_durable_payload(request_id="ask-1"))
     live_events = _sse_events(live.get_data(as_text=True))
@@ -662,9 +657,9 @@ def test_proposal_error_is_identical_live_replay_and_session_reload(
             "diff": {**_thesis_diff(), "target_file": "directives/forbidden.md"},
         }
 
-    monkeypatch.setattr(comments_server, "build_portfolio_pack", _empty_pack)
-    monkeypatch.setattr(comments_server, "respond_turn", _respond)
-    monkeypatch.setattr(comments_server, "ask_retrieval_mode", lambda: "legacy")
+    patch_server_seam(monkeypatch, "build_portfolio_pack", _empty_pack)
+    patch_server_seam(monkeypatch, "respond_turn", _respond)
+    patch_server_seam(monkeypatch, "ask_retrieval_mode", lambda: "legacy")
     live = client.post("/api/ask/stream", json=_durable_payload(request_id="proposal-error"))
     live_events = _sse_events(live.get_data(as_text=True))
     live_error = next(event for event in live_events if event["type"] == "proposal_error")

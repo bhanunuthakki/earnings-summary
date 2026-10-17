@@ -8,7 +8,6 @@ fetches the network, or invents missing research values.
 
 from __future__ import annotations
 
-import json
 import math
 import re
 import sqlite3
@@ -24,6 +23,13 @@ from candidate_fit_cache import read_materialized_candidate_fit
 from dcf.availability import resolve_dcf_route_artifact
 from etf_score_cache import read_materialized_etf_loadings, read_materialized_etf_whatif
 from instrument_store import get_etf_profile
+from pipeline.cockpit_file_inputs import (
+    HoldingsReadError,
+    cockpit_input_is_current,
+    project_micro_thesis_excerpt,
+    read_holdings_payload,
+    read_materialized_cockpit_file_inputs,
+)
 from pipeline.research_cockpit import CockpitRow
 from pipeline.work_os_briefs import build_brief_library
 from research.investment_profile import (
@@ -354,20 +360,18 @@ def _bounded_excerpt(value: str) -> str:
     return _bounded_human_text(value, limit=_EXCERPT_LIMIT)
 
 
-def _micro_thesis(repo_root: Path, ticker: str) -> tuple[str | None, bool]:
-    path = repo_root / "micro_thesis" / "holdings" / f"{ticker}.json"
-    if not path.is_file():
+def _micro_thesis(raw: object | None, read_error: HoldingsReadError) -> tuple[str | None, bool]:
+    if read_error == "missing":
         return None, False
-    try:
-        raw: object = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    if read_error != "none":
         return None, True
     if not isinstance(raw, dict):
         return None, True
-    thesis = cast("dict[str, object]", raw).get("thesis")
-    if isinstance(thesis, str) and thesis.strip():
-        return _bounded_excerpt(thesis), False
-    return None, False
+    data = cast("dict[str, object]", raw)
+    cached_excerpt = data.get("thesis_excerpt")
+    if isinstance(cached_excerpt, str) and cached_excerpt.strip():
+        return cached_excerpt, False
+    return project_micro_thesis_excerpt(data), False
 
 
 def _position_entry_excerpt(
@@ -403,12 +407,13 @@ def _position_entry_excerpt(
 
 
 def _thesis_excerpt(
-    repo_root: Path,
     conn: sqlite3.Connection,
     ticker: str,
     warnings: set[str],
+    holdings_payload: object | None,
+    holdings_error: HoldingsReadError,
 ) -> tuple[str | None, ThesisSource]:
-    excerpt, malformed = _micro_thesis(repo_root, ticker)
+    excerpt, malformed = _micro_thesis(holdings_payload, holdings_error)
     if malformed:
         warnings.add("micro_thesis_unavailable")
     if excerpt is not None:
@@ -483,6 +488,7 @@ def build_work_os_evaluation(
     except (OSError, UnicodeDecodeError, ValueError, TypeError):
         etf_whatif_cache = {}
         warnings.add("etf_whatif_unavailable")
+    file_inputs = read_materialized_cockpit_file_inputs(repo_root)
     items: list[WorkOsEvaluationItem] = []
     for row in rows:
         try:
@@ -490,7 +496,23 @@ def build_work_os_evaluation(
         except ValueError:
             warnings.add("invalid_ticker_omitted")
             continue
-        thesis_excerpt, source = _thesis_excerpt(repo_root, conn, ticker, warnings)
+        ticker_inputs = file_inputs.get(ticker)
+        if (
+            ticker_inputs is not None
+            and ticker_inputs.holdings_readable
+            and cockpit_input_is_current(repo_root, ticker, ticker_inputs, "holdings")
+        ):
+            holdings_payload = ticker_inputs.holdings_payload
+            holdings_error = ticker_inputs.holdings_error
+        else:
+            holdings_payload, holdings_error = read_holdings_payload(repo_root, ticker)
+        thesis_excerpt, source = _thesis_excerpt(
+            conn,
+            ticker,
+            warnings,
+            holdings_payload,
+            holdings_error,
+        )
         instrument_type: EvaluationInstrument = "etf" if row.is_etf else "company"
         dcf_upside_pct = _dcf_upside_pct(row)
         structured_fit = fit_cache.get(ticker)
@@ -533,7 +555,19 @@ def build_work_os_evaluation(
         dcf_url = None
         if instrument_type == "company":
             try:
-                if resolve_dcf_route_artifact(repo_root, ticker) is not None:
+                if holdings_error == "unicode":
+                    # The original path re-read the holdings file here and the
+                    # UnicodeDecodeError aborted resolution before the workbook
+                    # fallback; keep that exact outcome with the preloaded payload.
+                    warnings.add("dcf_route_unavailable")
+                elif (
+                    resolve_dcf_route_artifact(
+                        repo_root,
+                        ticker,
+                        holdings_payload=holdings_payload,
+                    )
+                    is not None
+                ):
                     dcf_url = f"/dcf/{ticker}"
             except (OSError, UnicodeDecodeError, ValueError, TypeError):
                 warnings.add("dcf_route_unavailable")

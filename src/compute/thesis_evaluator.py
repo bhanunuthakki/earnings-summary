@@ -73,6 +73,7 @@ from pipeline.kpi_semantics import semantic_admission_sql
 from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import KPI as OVERRIDE_KPI
 from provenance.overrides import active_scalar_override_map
+from runtime.deterministic import canonical_json_no_nan as _canonical_json
 from thesis_reunderwrite_gate import ReUnderwriteBlockedError, evaluate_gate
 
 log = logging.getLogger(__name__)
@@ -317,16 +318,6 @@ _METRIC_EVALUATOR_SEMANTIC_VERSION = "thesis-evaluator/v2"
 _METRIC_RULESET_VERSION = "holdings-break-rules/v2"
 _HOLDINGS_PAYLOAD_ADAPTER = TypeAdapter(dict[str, JsonValue])
 _RULE_PROJECTION_ADAPTER = TypeAdapter(list[dict[str, JsonValue]])
-
-
-def _canonical_json(value: JsonValue) -> str:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
 
 
 def _sha256_json(value: JsonValue) -> str:

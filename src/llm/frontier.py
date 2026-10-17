@@ -63,6 +63,7 @@ from llm.model_ladder import (
     family_of,
     model_rank,
 )
+from runtime.deterministic import table_exists as _has_table
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -100,15 +101,6 @@ class CandidateModel:
     def blended_usd_per_mtok(self) -> float:
         # Same 6:1 output-weighting as ModelCost — the shared rank key.
         return (6.0 * self.input_usd_per_mtok + self.output_usd_per_mtok) / 7.0
-
-
-def _has_table(conn: sqlite3.Connection, name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name = ?", (name,)
-        ).fetchone()
-        is not None
-    )
 
 
 def load_candidate_models(db_path: Path) -> dict[str, CandidateModel]:

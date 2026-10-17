@@ -55,6 +55,7 @@ from ask.sealed_retrieval import (
     current_verifier_identity,
     derive_retrieval_scope_id,
 )
+from provenance.fact_read_model import FactReadModel, ProvenanceBundle, ProvenanceBundleRead
 from provenance.population_completeness import PopulationTemporalScope
 from provenance.research_snapshot import (
     CorpusProjectionBundle,
@@ -3131,6 +3132,31 @@ def test_turn_with_real_fact_candidates_verifies_projection_admission_once_throu
     probe = _Probe()
     _install_doubles(monkeypatch, probe, records=records, runtime=runtime, enabled=True)
     _install_turn_seams(monkeypatch, probe, runtime=runtime, audit_cites=(1, 3))
+
+    # This cache fixture has synthetic projection metadata, not native source
+    # publications. Source-context admission is outside this test's boundary.
+    # Real published-source adapter regressions and the genuine pipeline fixture
+    # cover that owner; retain real search, projection and cache assertions here.
+    def _source_reads(
+        _reader: FactReadModel,
+        observation_ids: tuple[str, ...],
+        *,
+        cutoff: datetime,
+    ) -> tuple[ProvenanceBundleRead, ...]:
+        assert cutoff == NOW
+        return tuple(
+            ProvenanceBundleRead(
+                observation_id=observation_id,
+                bundle=ProvenanceBundle.model_construct(),
+            )
+            for observation_id in observation_ids
+        )
+
+    def _source_context(*_args: object, **_kwargs: object) -> str:
+        return "Source context is outside this synthetic cache fixture."
+
+    monkeypatch.setattr(FactReadModel, "provenance_bundles", _source_reads)
+    monkeypatch.setattr(sealed, "_verified_fact_context", _source_context)
 
     # Restore REAL search_canonical_facts on retrieval module
     monkeypatch.setattr(retrieval_module, "search_canonical_facts", search_canonical_facts)

@@ -30,6 +30,7 @@ from provenance.fulltext_extractor_identity import (
     pdf_table_extractor_code_version,
 )
 from provenance.pdf_table_extraction import PdfTableExtractionArtifact, extract_pdf_tables
+from runtime.deterministic import content_sha256 as _digest
 from runtime.job_runtime import JobLock
 from schema_compat import require_current_for_write
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -488,16 +489,6 @@ def _write_checkpoint(path: Path, checkpoint: PdfTableBackfillCheckpoint) -> Non
         encoding="utf-8",
     )
     temporary.replace(path)
-
-
-def _digest(value: object) -> str:
-    canonical = json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _sql_sha256(value: object) -> str:

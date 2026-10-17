@@ -6,10 +6,12 @@ import hashlib
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal, Self, cast
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+
+from runtime.deterministic import as_utc as _utc
 
 REQUIRED_POPULATION_PLANES = (
     "identity_scope",
@@ -109,10 +111,6 @@ def _validate_sha256(value: str) -> str:
     if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
         raise ValueError("must be a lowercase SHA-256 hex digest")
     return value
-
-
-def _utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 def _timestamp(value: datetime) -> str:
@@ -801,6 +799,37 @@ class PopulationCompletenessLedger:
         self._record_parity(parity)
         self._record_audit(audit)
         return self._seal_verified(run.population_run_id, sealed_at=sealed_at)
+
+    def record_and_verify_fresh_cutover(
+        self,
+        *,
+        run: PopulationRun,
+        planes: tuple[PopulationPlaneReceipt, ...],
+        parity: PopulationParityReceipt,
+        audit: PopulationAuditReceipt,
+        sealed_at: datetime,
+    ) -> PopulationCutoverReceipt:
+        """Persist and replay a verified cutover within one rollback-safe savepoint."""
+
+        with self._savepoint("evaluate_population_cutover"):
+            cutover = self._record_verified_cutover(
+                run=run,
+                planes=planes,
+                parity=parity,
+                audit=audit,
+                sealed_at=sealed_at,
+                authority=_CUTOVER_WRITE_AUTHORITY,
+            )
+            replay = self._verify_fresh_cutover(
+                run=run,
+                planes=planes,
+                parity=parity,
+                audit=audit,
+                authority=_CUTOVER_WRITE_AUTHORITY,
+            )
+            if replay != cutover:
+                raise RuntimeError("fresh population replay differs from its new cutover seal")
+        return cutover
 
     def _record_plane(self, receipt: PopulationPlaneReceipt) -> bool:
         self._require_run_scope(

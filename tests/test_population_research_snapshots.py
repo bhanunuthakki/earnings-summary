@@ -364,7 +364,8 @@ def test_corpus_coordinate_requires_exact_document_set() -> None:
             manifest_id TEXT PRIMARY KEY,
             revision INTEGER NOT NULL,
             knowledge_cutoff TEXT,
-            recorded_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL,
+            corpus_key TEXT NOT NULL DEFAULT 'whole-archive'
         );
         CREATE TABLE search_corpus_manifest_seals (
             manifest_id TEXT PRIMARY KEY,
@@ -380,7 +381,7 @@ def test_corpus_coordinate_requires_exact_document_set() -> None:
     )
     for manifest_id, revision in (("superset", 2), ("exact", 1)):
         conn.execute(
-            "INSERT INTO search_corpus_manifests VALUES (?,?,?,?)",
+            "INSERT INTO search_corpus_manifests (manifest_id,revision,knowledge_cutoff,recorded_at) VALUES (?,?,?,?)",
             (
                 manifest_id,
                 revision,
@@ -511,7 +512,8 @@ def test_current_corpus_and_retrieval_coordinates_ignore_retained_and_future_his
             manifest_id TEXT PRIMARY KEY,
             revision INTEGER NOT NULL,
             knowledge_cutoff TEXT,
-            recorded_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL,
+            corpus_key TEXT NOT NULL DEFAULT 'whole-archive'
         );
         CREATE TABLE search_corpus_manifest_seals (
             manifest_id TEXT PRIMARY KEY,
@@ -554,7 +556,7 @@ def test_current_corpus_and_retrieval_coordinates_ignore_retained_and_future_his
     )
     for manifest_id, revision, knowledge_at, recorded_at in corpus_rows:
         conn.execute(
-            "INSERT INTO search_corpus_manifests VALUES (?,?,?,?)",
+            "INSERT INTO search_corpus_manifests (manifest_id,revision,knowledge_cutoff,recorded_at) VALUES (?,?,?,?)",
             (manifest_id, revision, knowledge_at.isoformat(), recorded_at.isoformat()),
         )
         conn.execute(
@@ -700,7 +702,8 @@ def test_current_processing_and_fact_coordinates_select_latest_complete_as_of_o(
         CREATE TABLE document_processing_snapshot_headers (
             processing_snapshot_id TEXT PRIMARY KEY,
             cutoff_at TEXT NOT NULL,
-            recorded_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL,
+            scope_json TEXT NOT NULL DEFAULT '{}'
         );
         CREATE TABLE document_processing_snapshot_seals (
             processing_snapshot_id TEXT PRIMARY KEY,
@@ -776,7 +779,7 @@ def test_current_processing_and_fact_coordinates_select_latest_complete_as_of_o(
         ontology_id = f"ontology-{suffix}"
         resolution_id = f"resolution-{suffix}"
         conn.execute(
-            "INSERT INTO document_processing_snapshot_headers VALUES (?,?,?)",
+            "INSERT INTO document_processing_snapshot_headers (processing_snapshot_id,cutoff_at,recorded_at) VALUES (?,?,?)",
             (processing_id, _CUTOFF.isoformat(), clock.isoformat()),
         )
         conn.execute(
@@ -961,7 +964,8 @@ def test_stale_generation_coordinates_are_not_admitted() -> None:
             manifest_id TEXT PRIMARY KEY,
             revision INTEGER NOT NULL,
             knowledge_cutoff TEXT,
-            recorded_at TEXT NOT NULL
+            recorded_at TEXT NOT NULL,
+            corpus_key TEXT NOT NULL DEFAULT 'whole-archive'
         );
         CREATE TABLE search_corpus_manifest_seals (
             manifest_id TEXT PRIMARY KEY,
@@ -973,7 +977,7 @@ def test_stale_generation_coordinates_are_not_admitted() -> None:
             document_version_id TEXT,
             membership_status TEXT NOT NULL
         );
-        INSERT INTO search_corpus_manifests VALUES (
+        INSERT INTO search_corpus_manifests (manifest_id,revision,knowledge_cutoff,recorded_at) VALUES (
             'stale-manifest',1,'2026-07-28T00:00:00+00:00',
             '2026-07-28T00:00:00+00:00'
         );

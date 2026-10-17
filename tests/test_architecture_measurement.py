@@ -90,6 +90,17 @@ def test_architecture_ratchet_rejects_metric_growth() -> None:
     assert any(item.startswith("modules_over_1000_loc increased") for item in regressions)
 
 
+def test_architecture_ratchet_rejects_new_executable_modules() -> None:
+    baseline = analyze_sources(_sources())
+    grown_sources = _sources()
+    grown_sources["src/pipeline/probe.py"] = "PROBE = 1\n"
+    grown = analyze_sources(grown_sources)
+
+    regressions = architecture_regressions(grown, baseline)
+
+    assert "executable_modules increased from 4 to 5" in regressions
+
+
 def test_architecture_ratchet_detects_scc_member_replacement_without_order_noise() -> None:
     baseline = analyze_sources(_sources())
     reordered = baseline.model_copy(

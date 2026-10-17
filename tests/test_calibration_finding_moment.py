@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-import research.calibration_moments as cm
+import research.governor as cm
 from decision_calibration import CalibrationStats, ConvictionBucket
 from research.governor import Moment
 
@@ -52,7 +52,10 @@ def _stats(buckets: list[ConvictionBucket]) -> CalibrationStats:
 
 
 def _patch(monkeypatch: pytest.MonkeyPatch, buckets: list[ConvictionBucket]) -> None:
-    monkeypatch.setattr(cm, "build_calibration", lambda **_k: _stats(buckets))
+    def fake_calibration(**_k: object) -> object:
+        return _stats(buckets)
+
+    monkeypatch.setattr(cm, "build_calibration", fake_calibration)
 
 
 def test_fires_on_a_miscalibrated_high_conviction_cohort(
@@ -103,11 +106,16 @@ def test_at_most_one_moment_the_worst_cohort(monkeypatch: pytest.MonkeyPatch) ->
     )
     out = cm.collect_calibration_finding_moments(Path("x.db"), now=_NOW)
     assert len(out) == 1
-    assert out[0].key.endswith(":high")
+    moment = out[0]
+    assert isinstance(moment, Moment)
+    assert moment.key.endswith(":high")
 
 
 def test_degrades_to_empty_when_substrate_absent(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(cm, "build_calibration", lambda **_k: None)
+    def absent_calibration(**_k: object) -> object:
+        return None
+
+    monkeypatch.setattr(cm, "build_calibration", absent_calibration)
     assert cm.collect_calibration_finding_moments(Path("x.db"), now=_NOW) == []
 
     def _boom(**_k: object) -> None:

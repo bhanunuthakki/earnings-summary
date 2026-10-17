@@ -11,9 +11,12 @@ from pathlib import Path
 import pytest
 
 import sqlite_runtime
+from pipeline import db_writer_gate
+from pipeline.db_writer_gate import chain_writer_scope, writer_gate_path_for
 from schema_compat import SchemaRevisionMismatch
 from scope_identity import derive_retrieval_scope_id
 from sqlite_runtime import (
+    ManagedConnection,
     SQLiteConnectionRole,
     connect_sqlite,
     sqlite_version_is_wal_reset_safe,
@@ -596,3 +599,92 @@ def test_read_only_connection_can_preflight_schema(tmp_path: Path) -> None:
             role=SQLiteConnectionRole.READ_ONLY,
             schema_preflight=True,
         )
+
+
+def test_chain_writer_keeps_managed_observers_and_releases_gate(tmp_path: Path) -> None:
+    path = tmp_path / "chain.db"
+    statements: list[str] = []
+    with chain_writer_scope(path):
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=False)
+        assert isinstance(conn, ManagedConnection)
+        try:
+            assert writer_gate_path_for(path).exists()
+            unregister = conn.register_trace_observer(statements.append)
+            conn.execute("CREATE TABLE sample (value INTEGER)")
+            conn.commit()
+            conn.execute("INSERT INTO sample VALUES (1)")
+            before_rollback = conn.rollback_generation
+            conn.rollback()
+            assert conn.rollback_generation > before_rollback
+            assert conn.execute("SELECT COUNT(*) FROM sample").fetchone()[0] == 0
+            assert any("INSERT INTO sample" in statement for statement in statements)
+            unregister()
+            assert conn.trace_observer_count == 0
+        finally:
+            conn.close()
+        assert not writer_gate_path_for(path).exists()
+
+
+@pytest.mark.parametrize("failure_stage", ["policy", "open_trace"])
+def test_chain_writer_setup_failure_releases_gate_even_when_close_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_stage: str
+) -> None:
+    path = tmp_path / "setup-failure.db"
+    primary = RuntimeError("controlled writer initialization failure")
+    real_close = ManagedConnection.close
+
+    def noisy_close(conn: ManagedConnection) -> None:
+        real_close(conn)
+        raise OSError("controlled cleanup failure")
+
+    def fail_policy(_conn: sqlite3.Connection) -> None:
+        raise primary
+
+    def fail_open_trace(event: str, **_kwargs: object) -> None:
+        if event == "writer_open":
+            raise primary
+
+    with chain_writer_scope(path):
+        with monkeypatch.context() as patch:
+            patch.setattr(ManagedConnection, "close", noisy_close)
+            if failure_stage == "policy":
+                patch.setattr(sqlite_runtime, "_apply_connection_policy", fail_policy)
+            else:
+                patch.setattr(sqlite_runtime, "trace_writer_connection", fail_open_trace)
+            with pytest.raises(RuntimeError) as caught:
+                connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=False)
+        assert caught.value is primary
+        assert any("OSError" in note for note in getattr(primary, "__notes__", []))
+        assert not writer_gate_path_for(path).exists()
+        recovered = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=False)
+        recovered.close()
+    assert not writer_gate_path_for(path).exists()
+
+
+@pytest.mark.parametrize("failure_stage", ["connection_trace", "gate_trace"])
+def test_chain_writer_close_observer_failure_releases_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_stage: str
+) -> None:
+    path = tmp_path / "close-failure.db"
+    primary = RuntimeError("controlled close observer failure")
+
+    def fail_close_trace(event: str, **_kwargs: object) -> None:
+        if event in {"writer_close", "exit"}:
+            raise primary
+
+    with chain_writer_scope(path):
+        conn = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=False)
+        with monkeypatch.context() as patch:
+            if failure_stage == "connection_trace":
+                patch.setenv("EARNINGS_SUMMARY_WRITER_GATE_TRACE", str(tmp_path / "trace.jsonl"))
+                patch.setattr(sqlite_runtime, "trace_writer_connection", fail_close_trace)
+            else:
+                patch.setattr(db_writer_gate, "_trace_event", fail_close_trace)
+            with pytest.raises(RuntimeError) as caught:
+                conn.close()
+        assert caught.value is primary
+        assert not writer_gate_path_for(path).exists()
+        conn.close()
+        recovered = connect_sqlite(path, role=SQLiteConnectionRole.WRITER, schema_preflight=False)
+        recovered.close()
+    assert not writer_gate_path_for(path).exists()

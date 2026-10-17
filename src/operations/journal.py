@@ -7,7 +7,6 @@ environments, outputs, prompts, responses, URLs, or arbitrary payloads.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import sqlite3
@@ -16,6 +15,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TypeAlias, cast
+
+from runtime.deterministic import sha256_text as _digest
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _LABEL = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
@@ -129,10 +130,6 @@ class OperationCursor:
     def __post_init__(self) -> None:
         _require_aware(self.requested_at, "requested_at")
         _require_operation_id(self.operation_id)
-
-
-def _digest(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def make_operation_id(idempotency_key: str) -> str:

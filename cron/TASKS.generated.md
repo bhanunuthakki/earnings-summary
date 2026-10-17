@@ -19,7 +19,7 @@ Generated from `cron/task_manifest.json`; do not edit by hand.
 | `\earnings-summary\discover_ir_failing` | weekly Wednesday,Saturday at 02:30:00 | `discover_ir_failing.task.xml` | `run_discover_ir_failing.bat` | Task Scheduler |
 | `\earnings-summary\fetch_fmp_earnings_calendar` | daily at 05:45:00 | `fetch_fmp_earnings_calendar.task.xml` | `run_fetch_fmp_earnings_calendar.bat` | Task Scheduler |
 | `\earnings-summary\fetch_macro_series` | daily at 05:35:00 | `fetch_macro_series.task.xml` | `run_fetch_macro_series.bat` | Task Scheduler |
-| `\earnings-summary\fetch_sec_xbrl` | weekly Saturday at 02:00:00 | `fetch_sec_xbrl.task.xml` | `run_fetch_sec_xbrl.bat` | Task Scheduler |
+| `\earnings-summary\fetch_sec_xbrl` | weekly Saturday at 01:40:00 | `fetch_sec_xbrl.task.xml` | `run_fetch_sec_xbrl.bat` | Task Scheduler |
 | `\earnings-summary\grade_calibration` | weekly Sunday at 10:30:00 | `grade_calibration.task.xml` | `run_grade_calibration.bat` | Task Scheduler |
 | `\earnings-summary\ledger_synthesis` | daily at 06:45:00 | `ledger_synthesis.task.xml` | `run_ledger_synthesis.bat` | Task Scheduler |
 | `\earnings-summary\model_eval_sweep` | weekly Saturday at 20:00:00 | `model_eval_sweep.task.xml` | `run_weekly_model_eval.bat` | Task Scheduler |
@@ -38,7 +38,7 @@ Generated from `cron/task_manifest.json`; do not edit by hand.
 | `\earnings-summary\restore_drill` | monthly day 15 at 09:00:00 | `restore_drill.task.xml` | `run_restore_drill.bat` | Task Scheduler |
 | `\earnings-summary\run_morning_pipeline` | daily at 04:00:00 | `run_morning_pipeline.task.xml` | `run_morning_pipeline.bat` | Task Scheduler |
 | `\earnings-summary\scan_ir_transcripts` | daily at 02:15:00 | `scan_ir_transcripts.task.xml` | `run_scan_ir_transcripts.bat` | Task Scheduler |
-| `\earnings-summary\submit_saydo_batch` | weekly Saturday at 02:00:00 | `submit_saydo_batch.task.xml` | `run_submit_saydo_batch.bat` | Task Scheduler |
+| `\earnings-summary\submit_saydo_batch` | weekly Saturday at 02:20:00 | `submit_saydo_batch.task.xml` | `run_submit_saydo_batch.bat` | Task Scheduler |
 | `\earnings-summary\tenet_accountability` | weekly Saturday at 09:00:00 | `tenet_accountability.task.xml` | `run_tenet_accountability.bat` | Task Scheduler |
 | `\earnings-summary\thesis_collision` | weekly Saturday at 11:00:00 | `thesis_collision.task.xml` | `run_thesis_collision.bat` | Task Scheduler |
 | `\earnings-summary\track_comp_metrics` | daily at 07:10:00 | `track_comp_metrics.task.xml` | `run_track_comp_metrics.bat` | Task Scheduler |

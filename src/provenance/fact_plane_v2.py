@@ -8,13 +8,12 @@ remain safe when called inside an existing transaction.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal, Self
 
@@ -28,6 +27,10 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from runtime.deterministic import as_utc as _utc
+from runtime.deterministic import canonical_json_model as _canonical_json
+from runtime.deterministic import sha256_text as _digest
 
 PeriodKind = Literal["instant", "duration"]
 RelationKind = Literal[
@@ -84,21 +87,6 @@ class _FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-def _canonical_json(value: object) -> str:
-    if isinstance(value, BaseModel):
-        value = value.model_dump(mode="json")
-    return json.dumps(
-        value,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=False,
-    )
-
-
-def _digest(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
-
-
 def _sql_sha256(value: object) -> str:
     return _digest(str(value))
 
@@ -124,12 +112,6 @@ def _canonical_decimal(value: str | None) -> str | None:
     if "." in normalized:
         normalized = normalized.rstrip("0").rstrip(".")
     return "0" if normalized in {"", "-0"} else normalized
-
-
-def _utc(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
 
 
 def _same_time(left: object, right: datetime) -> bool:

@@ -16,6 +16,9 @@ Modules:
                Dashboard inputs for edit-preservation (the live reader/engine)
   valuation  — the Damodaran engine: FCFF → operating value → equity bridge →
                value/share, with an EV exit multiple + implied price multiples
-  live_price — current market price from the multi-source stack (`sources.price`)
   persist    — upsert the `dcf_runs` row briefs read from
+
+The current market price is read directly from the multi-source stack
+(`sources.price`) — the former `dcf.live_price` re-export shim was removed
+once its last importer (`execution/refresh_dcf.py`) read the real module.
 """

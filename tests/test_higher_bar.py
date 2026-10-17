@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from research.higher_bar import (
+from research.apply import (
     MUTATING_KINDS,
     HigherBarResult,
     evaluate_higher_bar,

@@ -16,7 +16,6 @@ boundary for a future additive dual-write rollout.
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -24,6 +23,8 @@ from hashlib import sha256
 from typing import Literal, Self, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from runtime import deterministic
 
 _SHA256_LENGTH = 64
 EvidenceNodeKind: TypeAlias = Literal[
@@ -298,9 +299,7 @@ class EvidenceLocator(_LedgerRecord):
 
     @property
     def canonical_json(self) -> str:
-        return json.dumps(
-            self.model_dump(mode="json", exclude_none=True), sort_keys=True, separators=(",", ":")
-        )
+        return deterministic.canonical_json_ascii(self.model_dump(mode="json", exclude_none=True))
 
     @property
     def canonical_sha256(self) -> str:

@@ -1618,6 +1618,7 @@ ${r?'Expression: "'+r+`"
     }
     var meta = [];
     if (c.kind && !c.ticker) meta.push(esc(c.kind));
+    if (c.no_observation_version) meta.push('observation version not recorded or not uniquely identified');
     if (typeof c.confidence === 'number') {
       meta.push('confidence ' + Math.round(c.confidence * 100) + '%');
     }

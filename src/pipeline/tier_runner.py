@@ -51,6 +51,7 @@ from pathlib import Path
 from typing import Literal
 
 from models.companies import schedule_class_for_list_type
+from runtime.deterministic import table_exists as _has_table
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 Cadence = Literal["daily", "weekly", "monthly"]
@@ -201,14 +202,6 @@ def _parse_dt(s: str) -> datetime | None:
     if dt.tzinfo is not None:
         dt = dt.replace(tzinfo=None)
     return dt
-
-
-def _has_table(conn: sqlite3.Connection, name: str) -> bool:
-    row = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-        (name,),
-    ).fetchone()
-    return row is not None
 
 
 def _has_columns(conn: sqlite3.Connection, table: str, required: set[str]) -> bool:

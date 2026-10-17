@@ -10,6 +10,7 @@ import pytest
 
 from provenance.legacy_canonical_parity import (
     LegacyFactCursor,
+    ParityContractError,
     ParityDisposition,
     ParityRequest,
     ProjectionCoordinate,
@@ -176,6 +177,7 @@ def _seed(
     canonical_status: str = "resolved",
     knowledge_at: str = PAST,
     recorded_at: str | None = None,
+    legacy_period_end: str = "2025-12-31",
 ) -> str:
     recorded_at = recorded_at or knowledge_at
     coordinate = coordinate or f"coordinate-{row_id}"
@@ -217,7 +219,7 @@ def _seed(
     match_id = f"match-{table}-{row_id}"
     payload = {
         "value": "100.00",
-        "period_end": "2025-12-31",
+        "period_end": legacy_period_end,
         "unit": "USD",
         "currency": "USD" if table == "financial_facts" else None,
         "source_doc_id": row_id,
@@ -632,3 +634,50 @@ def test_legacy_pages_are_bounded_and_cursor_is_scope_bound(tmp_path: Path) -> N
     assert five_row_page.complete
     assert one_row_pages.legacy_fact_universe_sha256 == five_row_page.legacy_fact_universe_sha256
     assert one_row_pages.parity_rows_sha256 == five_row_page.parity_rows_sha256
+
+
+@pytest.mark.parametrize("legacy_period_end", ["2025-12-31 00:00:00", "2025-12-31 00:00:00.000000"])
+def test_legacy_sqlite_midnight_fiscal_date_matches_canonical_period(
+    tmp_path: Path, legacy_period_end: str
+) -> None:
+    path = _database(tmp_path)
+    coordinate = _seed(path, legacy_period_end=legacy_period_end)
+    report = _run(path, [_projection(coordinate)])
+    assert report.cutover_ready
+    assert report.rows[0].disposition == ParityDisposition.EQUAL
+    with sqlite3.connect(path) as conn:
+        stored = conn.execute(
+            "SELECT fact_payload_json FROM legacy_fact_evidence_match_revisions"
+        ).fetchone()[0]
+    assert json.loads(stored)["period_end"] == legacy_period_end
+
+
+@pytest.mark.parametrize(
+    "legacy_period_end",
+    ["2025-12-31 12:00:00", "2025-12-31 00:00:00.000001", "2025-12-31T00:00:00"],
+)
+def test_legacy_naive_nondate_timestamp_is_not_given_an_inferred_timezone(
+    tmp_path: Path, legacy_period_end: str
+) -> None:
+    path = _database(tmp_path)
+    coordinate = _seed(path, legacy_period_end=legacy_period_end)
+    with pytest.raises(ParityContractError, match="timezone-aware"):
+        _run(path, [_projection(coordinate)])
+
+
+@pytest.mark.parametrize("canonical_period_end", ["2025-12-31 00:00:00", "2025-12-31T00:00:00"])
+def test_canonical_timestamp_still_requires_explicit_timezone(
+    tmp_path: Path, canonical_period_end: str
+) -> None:
+    path = _database(tmp_path)
+    coordinate = _seed(path)
+    with pytest.raises(ParityContractError, match="timezone-aware"):
+        _run(path, [_projection(coordinate, period_end=canonical_period_end)])
+
+
+def test_legacy_midnight_date_does_not_hide_a_different_fiscal_day(tmp_path: Path) -> None:
+    path = _database(tmp_path)
+    coordinate = _seed(path, legacy_period_end="2025-12-30 00:00:00")
+    report = _run(path, [_projection(coordinate)])
+    assert not report.cutover_ready
+    assert report.rows[0].disposition == ParityDisposition.PERIOD_MISMATCH

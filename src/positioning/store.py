@@ -16,10 +16,10 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from pydantic import ValidationError
 
+from clock import now_iso as _now_iso
 from identity import DEFAULT_USER_ID
 from model_provenance.versioning import mark_superseded_by, supersede_current
 from positioning.profile import PositioningProfile
@@ -43,10 +43,6 @@ class PositioningIntentRow:
     is_latest: bool
     superseded_at: str | None
     superseded_by_id: int | None
-
-
-def _now_iso() -> str:
-    return datetime.now(UTC).replace(tzinfo=None).isoformat()
 
 
 def append_intent(

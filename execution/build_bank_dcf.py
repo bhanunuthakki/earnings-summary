@@ -28,7 +28,6 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import sys
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from pathlib import Path
@@ -39,8 +38,10 @@ from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:  # ``python -m execution.build_bank_dcf``
+    from execution._lib import PROJECT_ROOT
 
 from db_paths import require_db_path, resolve_db_path
 from dcf.artifact_promotion import (
@@ -55,27 +56,29 @@ from dcf.specialized_price import (
     price_seed_source_files,
     resolve_specialized_price,
 )
+from pipeline.db_writer_gate import hold_writer_gate
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
+try:  # persistence is best-effort — the workbook builds without a DB
+    from dcf import persist as _persist_module
+except ImportError:  # pragma: no cover
+    persist_mod = None
+else:
+    persist_mod = _persist_module
+try:  # global macro assumptions — best-effort; degrades to in-code seed defaults
+    from dcf import global_assumptions as _global_assumptions_module
+except ImportError:  # pragma: no cover
+    global_dcf = None
+else:
+    global_dcf = _global_assumptions_module
+
+# Data repo (may differ from the executing checkout): REPO is the DATA root;
+# code always imports from the executing checkout via ``_lib``.
+REPO = Path(os.environ.get("DCF_REPO_ROOT") or PROJECT_ROOT)
 T = os.environ.get("DCF_TICKER", "NU")
 DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 
 FMP = REPO / "data" / "historical" / "fmp"
-
-
-try:  # persistence is best-effort — the workbook builds without a DB
-    from dcf import persist as _persist_mod_module
-except ImportError:  # pragma: no cover
-    persist_mod = None
-else:
-    persist_mod = _persist_mod_module
-try:  # global macro assumptions — best-effort; degrades to in-code seed defaults
-    from dcf import global_assumptions as _global_dcf_module
-except ImportError:  # pragma: no cover
-    global_dcf = None
-else:
-    global_dcf = _global_dcf_module
 
 # ---- styling (mirrors the redesign Color Code: yellow=input, blue=actual) ----
 YELLOW = PatternFill("solid", fgColor="FFF2CC")
@@ -105,7 +108,7 @@ def _rows(x: Any) -> list[dict[str, Any]]:
             if isinstance(x.get(k), list):
                 return cast("list[dict[str, Any]]", x[k])
         return [cast("dict[str, Any]", x)]
-    return x
+    return cast("list[dict[str, Any]]", x)
 
 
 @dataclass
@@ -142,12 +145,13 @@ def load_actuals(ticker: str, s: Assum, override: dict[str, Any] | None = None) 
     ov = override or {}
     inc = _rows(_load(f"{ticker}_income_statement_annual.json"))
     bal = _rows(_load(f"{ticker}_balance_sheet_annual.json"))
-    prof = _load(f"{ticker}_profile.json")
-    if isinstance(prof, list):
-        prof = cast("list[Any]", prof)[0] if prof else dict[str, Any]()
-    if not isinstance(prof, dict):
+    raw_profile: object = _load(f"{ticker}_profile.json")
+    if isinstance(raw_profile, list):
+        profiles = cast("list[object]", raw_profile)
+        raw_profile = profiles[0] if profiles else {}
+    if not isinstance(raw_profile, dict):
         raise ValueError("FMP profile must be an object")
-    prof = cast("dict[str, Any]", prof)
+    prof = cast("dict[str, Any]", raw_profile)
     i0, b0, b1 = inc[0], bal[0], bal[1]
     m = 1e6
 
@@ -354,6 +358,7 @@ def mirror(a: Actuals, s: Assum) -> Mirror:
     ke, n = s.ke, s.years
     book_prev, ea_prev, eq_prev = a.book, a.ea, a.equity
     reqcap_prev = s.cap_ratio * a.book
+    _avg_eq0 = (a.equity + a.equity_prior) / 2  # Y0 ref only
     m = Mirror()
     for t in range(1, n + 1):
         g = _interp(s.g_near, s.g_term, t, n)
@@ -488,9 +493,8 @@ def render_generic_guardrails(
     for key in ("break_rules", "business_model_rules"):
         rr = holdings.get(key)
         if isinstance(rr, list):
-            for rule in cast("list[object]", rr):
-                if isinstance(rule, dict):
-                    rules.append(cast("dict[str, Any]", rule))
+            entries = cast("list[object]", rr)
+            rules.extend(cast("dict[str, Any]", r) for r in entries if isinstance(r, dict))
     if not rules:
         return
     _hdr(dash, "D2", "GUARDRAILS — thesis break rules vs latest KPI")
@@ -626,7 +630,8 @@ def build(
 ) -> None:
     wb = openpyxl.Workbook()
     dash = wb.active
-    assert isinstance(dash, Worksheet)
+    if not isinstance(dash, Worksheet):
+        raise RuntimeError(f"{T} workbook requires an active worksheet")
     dash.title = "Dashboard"
     fin = wb.create_sheet("Financials")
     mod = wb.create_sheet("Model")
@@ -1060,7 +1065,13 @@ def persist_dcf_run(
         notes=f"workbook={live_workbook.name} (bank credit model)",
         provenance=provenance,
     )
-    with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
+    with (
+        hold_writer_gate(db, owner=f"build_bank_dcf:{T}"),
+        connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn,
+    ):
+        # The cross-process writer gate serializes this upsert against the
+        # daily brief driver and its sibling chain steps; it is NOT the
+        # whole-job run lock.
         if not schema_supports_provenance(conn):
             row = replace(row, provenance=None)
         if artifact_promotion is None:

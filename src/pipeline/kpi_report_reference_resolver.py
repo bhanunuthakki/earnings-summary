@@ -27,6 +27,7 @@ from pipeline.kpi_report_reference_dispositions import (
 )
 from pipeline.kpi_semantics import KpiUnitScale, validate_admitted_unit_scale
 from provenance.financial_fact_resolution import canonical_fact_relation
+from runtime.deterministic import table_exists as _table_exists
 
 POLICY_NAME = "report_kpi_reference_resolution"
 POLICY_VERSION = "v2"
@@ -86,15 +87,6 @@ class VerifiedReportKpiReferenceDefinition(BaseModel):
     kpi_definition_id: int = Field(gt=0)
     definition_name: str = Field(min_length=1, max_length=256)
     resolution_id: int | None = Field(default=None, gt=0)
-
-
-def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
-    return (
-        conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-        ).fetchone()
-        is not None
-    )
 
 
 def _row_dict(cursor: sqlite3.Cursor, row: object) -> dict[str, object]:

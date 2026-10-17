@@ -8,7 +8,6 @@ module does not activate transcript acquisition or authorize any side effect.
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import date
 from enum import StrEnum
 from typing import Annotated, Literal, Self
@@ -34,6 +33,7 @@ from provenance.source_regime import (
     contract_for,
     receipt_identity,
 )
+from runtime.deterministic import canonical_json_ascii as _canonical_json
 
 _STRICT_FROZEN = ConfigDict(
     extra="forbid",
@@ -292,15 +292,6 @@ class _TranscriptIdempotencyInput(BaseModel):
     document_type: DocType
     source_policy_version: TranscriptSourcePolicyVersion
     source_regime_identity: SourceRegimeReceiptIdentity
-
-
-def _canonical_json(payload: object) -> str:
-    return json.dumps(
-        payload,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
 
 
 def _role_is_authorized(

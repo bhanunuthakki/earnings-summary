@@ -4,29 +4,25 @@ from __future__ import annotations
 
 import hashlib
 import sqlite3
-import sys
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
+import comments_server
 import pytest
 from flask.testing import FlaskClient
 from pydantic import TypeAdapter
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import comments_server  # noqa: E402
-
-from ask.exchange_store import (  # noqa: E402
+from ask.engine import AskTurn
+from ask.exchange_store import (
     SessionContextV1,
     begin_exchange,
     hash_request_payload,
     put_session_context,
 )
-from ask.store import ensure_session  # noqa: E402
-from tests.ask_stream_support import fold_sse_response, parse_sse_events  # noqa: E402
+from ask.store import ensure_session
+from tests.ask_stream_support import fold_sse_response, parse_sse_events
+from tests.comments_server_seams import patch_server_seam
 
 _JSON_OBJECT = TypeAdapter(dict[str, object])
 _JSON_ARRAY = TypeAdapter(list[object])
@@ -98,9 +94,9 @@ def test_durable_stream_orders_terminal_final_and_replays_without_engine(
         yield {"type": "citations", "items": [{"href": "/source/7"}]}
         yield {"type": "proposal_ref", "proposal_ref": "proposal:7"}
 
-    monkeypatch.setattr(comments_server, "build_portfolio_pack", _empty_pack)
-    monkeypatch.setattr(comments_server, "respond_turn", _respond)
-    monkeypatch.setattr(comments_server, "ask_retrieval_mode", _legacy_mode)
+    patch_server_seam(monkeypatch, "build_portfolio_pack", _empty_pack)
+    patch_server_seam(monkeypatch, "respond_turn", _respond)
+    patch_server_seam(monkeypatch, "ask_retrieval_mode", _legacy_mode)
 
     first = client.post("/api/ask/stream", json=_payload())
     first_events = parse_sse_events(first.get_data(as_text=True))
@@ -160,9 +156,9 @@ def test_durable_request_conflicts_are_409(
     expected_status: int,
 ) -> None:
     client, _db_path = _client(tmp_path, migrated_db)
-    monkeypatch.setattr(comments_server, "build_portfolio_pack", _empty_pack)
-    monkeypatch.setattr(comments_server, "respond_turn", _answer_events)
-    monkeypatch.setattr(comments_server, "ask_retrieval_mode", _legacy_mode)
+    patch_server_seam(monkeypatch, "build_portfolio_pack", _empty_pack)
+    patch_server_seam(monkeypatch, "respond_turn", _answer_events)
+    patch_server_seam(monkeypatch, "ask_retrieval_mode", _legacy_mode)
     first = client.post("/api/ask/stream", json=_payload())
     assert first.status_code == 200
     first_payload = fold_sse_response(first.get_data(as_text=True))
@@ -184,16 +180,14 @@ def test_legacy_request_without_request_id_keeps_engine_owned_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, _db_path = _client(tmp_path, migrated_db)
-    captured: list[comments_server.AskTurn] = []
-    monkeypatch.setattr(comments_server, "build_portfolio_pack", _empty_pack)
+    captured: list[AskTurn] = []
+    patch_server_seam(monkeypatch, "build_portfolio_pack", _empty_pack)
 
-    def _respond(
-        turn: comments_server.AskTurn, *_a: object, **_k: object
-    ) -> Iterator[dict[str, object]]:
+    def _respond(turn: AskTurn, *_a: object, **_k: object) -> Iterator[dict[str, object]]:
         captured.append(turn)
         yield {"type": "final", "text": "legacy"}
 
-    monkeypatch.setattr(comments_server, "respond_turn", _respond)
+    patch_server_seam(monkeypatch, "respond_turn", _respond)
     response = client.post("/api/ask/stream", json={"query": "legacy"})
 
     assert response.status_code == 200
@@ -222,8 +216,8 @@ def test_pending_durable_request_is_409_with_current_revision(
         expected_revision=0,
         db_path=db_path,
     )
-    monkeypatch.setattr(
-        comments_server,
+    patch_server_seam(
+        monkeypatch,
         "respond_turn",
         _unexpected_engine,
     )
@@ -247,9 +241,9 @@ def test_session_context_uses_historical_thesis_hash_not_live_recomputation(
     thesis.parent.mkdir(parents=True)
     thesis.write_bytes(b'{"version":"A"}')
     hash_a = hashlib.sha256(thesis.read_bytes()).hexdigest()
-    monkeypatch.setattr(comments_server, "build_portfolio_pack", _empty_pack)
-    monkeypatch.setattr(comments_server, "respond_turn", _answer_events)
-    monkeypatch.setattr(comments_server, "ask_retrieval_mode", _legacy_mode)
+    patch_server_seam(monkeypatch, "build_portfolio_pack", _empty_pack)
+    patch_server_seam(monkeypatch, "respond_turn", _answer_events)
+    patch_server_seam(monkeypatch, "ask_retrieval_mode", _legacy_mode)
 
     first_response = client.post("/api/ask/stream", json=_payload())
     first = fold_sse_response(first_response.get_data(as_text=True))

@@ -16,6 +16,7 @@ from typing import Literal, cast
 from pydantic import BaseModel, ConfigDict, Field
 
 from quality.git_env import clean_local_git_env
+from runtime.deterministic import sha256_bytes as _sha256
 
 
 class CompatibilityEvidenceError(RuntimeError):
@@ -161,10 +162,6 @@ def _artifact_path(root: Path, relative: str) -> Path:
     return candidate
 
 
-def _sha256(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
 def _aggregate(items: list[tuple[str, bytes]]) -> str:
     digest = hashlib.sha256()
     for path, content in sorted(items):
@@ -265,8 +262,9 @@ def _entrypoints(
 def _extract_records(root: Path, name: str, artifacts: list[str]) -> list[EvidenceRecord]:
     records: list[EvidenceRecord] = []
     if name == "flask_url_method_endpoint_map":
-        relative = "execution/comments_server.py"
-        if (root / relative).exists():
+        for relative in artifacts:
+            if not relative.startswith("execution/comments_server"):
+                continue
             try:
                 tree = ast.parse(_read_text(root, relative))
                 for node in ast.walk(tree):
@@ -444,7 +442,7 @@ def capture_compatibility_evidence(
         _category(
             repo_root,
             "flask_url_method_endpoint_map",
-            ("execution/comments_server.py", "tests/test_comments_server*.py"),
+            ("execution/comments_server*.py", "tests/test_comments_server*.py"),
         ),
         _category(
             repo_root,

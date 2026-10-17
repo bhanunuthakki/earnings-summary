@@ -394,3 +394,72 @@ def test_detect_secrets_scans_investing_baseline_without_masking_other_fields(
     other.parent.mkdir(parents=True)
     other.write_text(original, encoding="utf-8")
     assert _run_detect_secrets(tmp_path, unrelated, filtered=True).returncode == 1
+
+
+CANONICAL_HELPERS_BASELINE = "docs/quality/canonical-helpers.json"
+GROUNDED_SEARCH_ORACLE = "tests/test_grounded_search_foundation.py"
+
+
+@pytest.mark.parametrize("key", ("generated_commit", "source_commit", "capture_commit"))
+@pytest.mark.parametrize("delimiter", (":", "="))
+def test_reconciliation_hashes_are_path_and_schema_specific(key: str, delimiter: str) -> None:
+    digest = hashlib.sha1(b"public reconciliation commit", usedforsecurity=False).hexdigest()
+    line = f'  "{key}" {delimiter} "{digest}",\n'
+    assert FILTER.is_quality_evidence_hash(CANONICAL_HELPERS_BASELINE, line)
+    for filename in (
+        "docs/quality/architecture-ratchet.json",
+        "other/" + CANONICAL_HELPERS_BASELINE,
+        "./" + CANONICAL_HELPERS_BASELINE,
+    ):
+        assert not FILTER.is_quality_evidence_hash(filename, line)
+    assert not FILTER.is_quality_evidence_hash(
+        CANONICAL_HELPERS_BASELINE, f'"sha256": "{"a" * 64}"'
+    )
+
+
+def test_reconciliation_oracle_accepts_only_its_complete_named_assignment() -> None:
+    digest = hashlib.sha256(b"public historical Ask bundle oracle").hexdigest()
+    assignment = f'    expected_bundle_sha256 = "{digest}"\n'
+    assert FILTER.is_quality_evidence_hash(GROUNDED_SEARCH_ORACLE, assignment)
+    for filename in (
+        "tests/test_other.py",
+        "other/" + GROUNDED_SEARCH_ORACLE,
+        "./" + GROUNDED_SEARCH_ORACLE,
+    ):
+        assert not FILTER.is_quality_evidence_hash(filename, assignment)
+    for line in (
+        assignment.replace("expected_bundle_sha256", "other_bundle_sha256"),
+        assignment.replace(digest, digest.upper()),
+        assignment.replace(digest, digest[:-1]),
+        assignment.rstrip() + "; token = 'secret'",
+        assignment.rstrip() + " # fixture",
+        '"source_commit": "' + "a" * 40 + '"',
+    ):
+        assert not FILTER.is_quality_evidence_hash(GROUNDED_SEARCH_ORACLE, line)
+
+
+@pytest.mark.parametrize("filename", (CANONICAL_HELPERS_BASELINE, GROUNDED_SEARCH_ORACLE))
+def test_actual_detector_preserves_adjacent_secrets_at_reconciliation_paths(
+    tmp_path: Path, filename: str
+) -> None:
+    digest = hashlib.sha256(b"public deterministic reconciliation scanner fixture").hexdigest()
+    if filename == CANONICAL_HELPERS_BASELINE:
+        original = _json_document(
+            f'  "generated_commit": "{digest[:40]}",\n  "source_commit": "{digest[-40:]}"'
+        )
+        hostile = original.replace("\n}", f',\n  "{SCANNER_FIELD_NAME}": "ghp_{digest[:36]}"\n}}')
+    else:
+        original = f'expected_bundle_sha256 = "{digest}"\n'
+        hostile = original + f'{SCANNER_FIELD_NAME} = "ghp_{digest[:36]}"\n'
+    fixture = tmp_path / filename
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(original, encoding="utf-8")
+    assert _run_detect_secrets(tmp_path, filename, filtered=False).returncode == 1
+    assert _run_detect_secrets(tmp_path, filename, filtered=True).returncode == 0
+    fixture.write_text(hostile, encoding="utf-8")
+    assert _run_detect_secrets(tmp_path, filename, filtered=True).returncode == 1
+    unrelated = "other/" + filename
+    other = tmp_path / unrelated
+    other.parent.mkdir(parents=True)
+    other.write_text(original, encoding="utf-8")
+    assert _run_detect_secrets(tmp_path, unrelated, filtered=True).returncode == 1

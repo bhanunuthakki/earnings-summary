@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date
 from pathlib import Path
@@ -47,8 +46,10 @@ from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:  # ``python -m execution.build_fintech_sotp``
+    from execution._lib import PROJECT_ROOT
 
 from db_paths import require_db_path, resolve_db_path
 from dcf.artifact_promotion import (
@@ -63,25 +64,27 @@ from dcf.specialized_price import (
     price_seed_source_files,
     resolve_specialized_price,
 )
+from pipeline.db_writer_gate import hold_writer_gate
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-REPO = Path(os.environ.get("DCF_REPO_ROOT") or Path(__file__).resolve().parents[1])
-T = os.environ.get("DCF_TICKER", "SOFI")
-DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
-
-
 try:  # persistence is best-effort -- the workbook builds without a DB
-    from dcf import persist as _persist_mod_module
+    from dcf import persist as _persist_module
 except ImportError:  # pragma: no cover
     persist_mod = None
 else:
-    persist_mod = _persist_mod_module
+    persist_mod = _persist_module
 try:  # global macro assumptions -- best-effort; degrades to in-code seed defaults
-    from dcf import global_assumptions as _global_dcf_module
+    from dcf import global_assumptions as _global_assumptions_module
 except ImportError:  # pragma: no cover
     global_dcf = None
 else:
-    global_dcf = _global_dcf_module
+    global_dcf = _global_assumptions_module
+
+# Data repo (may differ from the executing checkout): REPO is the DATA root;
+# code always imports from the executing checkout via ``_lib``.
+REPO = Path(os.environ.get("DCF_REPO_ROOT") or PROJECT_ROOT)
+T = os.environ.get("DCF_TICKER", "SOFI")
+DEST = Path(os.environ.get("DCF_DEST") or (REPO / "dcf" / f"{T}.xlsx"))
 
 YELLOW = PatternFill("solid", fgColor="FFF2CC")
 BLUE_FONT = Font(color="1F4E79")
@@ -176,16 +179,16 @@ def _load(ticker: str) -> Sotp:
     prof = REPO / "data" / "historical" / "fmp" / f"{ticker}_profile.json"
     if prof.exists():
         try:
-            d: Any = json.loads(prof.read_text(encoding="utf-8"))
-            if isinstance(d, list):
-                d = cast("list[Any]", d)[0] if d else dict[str, Any]()
-            if isinstance(d, dict):
-                record = cast("dict[str, Any]", d)
-                if not record.get("price"):
-                    raise ValueError("profile price missing")
-                s.price = float(record["price"])
-                s.price_seed_source = "fmp_profile"
-                s.price_seed_path = f"data/historical/fmp/{ticker}_profile.json"
+            raw_profile: object = json.loads(prof.read_text(encoding="utf-8"))
+            if isinstance(raw_profile, list):
+                profiles = cast("list[object]", raw_profile)
+                raw_profile = profiles[0] if profiles else {}
+            if isinstance(raw_profile, dict):
+                d = cast("dict[str, Any]", raw_profile)
+                if d.get("price"):
+                    s.price = float(d["price"])
+                    s.price_seed_source = "fmp_profile"
+                    s.price_seed_path = f"data/historical/fmp/{ticker}_profile.json"
         except (OSError, json.JSONDecodeError, ValueError, KeyError):
             pass
     ov_path = REPO / "data" / "bank_assumptions" / f"{ticker}_sotp.json"
@@ -273,7 +276,8 @@ R = {
 def build(s: Sotp, dest: Path) -> None:
     wb = openpyxl.Workbook()
     dash = wb.active
-    assert isinstance(dash, Worksheet)
+    if not isinstance(dash, Worksheet):
+        raise RuntimeError(f"{T} workbook requires an active worksheet")
     dash.title = "Dashboard"
     seg = wb.create_sheet("Segments")
     corp = wb.create_sheet("Corporate")
@@ -587,7 +591,13 @@ def persist_dcf_run(
         notes=f"workbook={live_workbook.name} (fintech SOTP)",
         provenance=provenance,
     )
-    with connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn:
+    with (
+        hold_writer_gate(db, owner=f"build_fintech_sotp:{T}"),
+        connect_sqlite(str(db), role=SQLiteConnectionRole.WRITER, schema_preflight=True) as conn,
+    ):
+        # The cross-process writer gate serializes this upsert against the
+        # daily brief driver and its sibling chain steps; it is NOT the
+        # whole-job run lock.
         if not schema_supports_provenance(conn):
             row = replace(row, provenance=None)
         if artifact_promotion is None:

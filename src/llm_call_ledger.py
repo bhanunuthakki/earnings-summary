@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import cast
 
 from db_paths import resolve_db_path
+from pipeline.db_writer_gate import WriterGateHeldError
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 log = logging.getLogger(__name__)
@@ -348,10 +349,14 @@ def record_call(record: LlmCallRecord, *, db_path: Path | str | None = None) -> 
             return cur.lastrowid
         finally:
             conn.close()
-    except (sqlite3.Error, OSError, ValueError) as exc:
+    except (WriterGateHeldError, sqlite3.Error, OSError, ValueError) as exc:
         # Best-effort: log + return None. The LLM call that produced this
         # record has already succeeded (or failed loudly elsewhere); a logging
-        # miss must never escalate into a pipeline failure.
+        # miss must never escalate into a pipeline failure. That includes the
+        # daily-chain writer gate timing out (WriterGateHeldError): inside a
+        # chain participant this writer's connection is serialized per
+        # resolved database path, and a gate timeout drops the row LOUDLY —
+        # warning + counter below — never silently.
         detail = f"{type(exc).__name__}: {exc}"
         log.warning(
             {

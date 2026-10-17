@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
-import json
 import re
 import sqlite3
 from datetime import date
@@ -16,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from models.companies import InstrumentType, ListType
 from models.documents import DocType
+from runtime import deterministic
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 POLICY_VERSION = "2026-09-19.1"
@@ -367,12 +367,7 @@ class IssuerAcquisitionPolicy(BaseModel):
     transcript: TranscriptIssuerRules = Field(default_factory=TranscriptIssuerRules)
 
     def canonical_json(self) -> str:
-        return json.dumps(
-            self.model_dump(mode="json", exclude_none=False),
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-        )
+        return deterministic.canonical_json_ascii(self.model_dump(mode="json", exclude_none=False))
 
     @property
     def policy_sha256(self) -> str:

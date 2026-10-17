@@ -4,7 +4,7 @@ import hashlib
 import json
 import shutil
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -37,6 +37,7 @@ from provenance.fulltext_extractor_identity import (
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
     pdf_table_extractor_code_version,
 )
+from provenance.integrity_audit import CutoverAuditOptions, audit_cutover_readiness
 from provenance.pdf_table_extraction import PdfTableExtractionArtifact, extract_pdf_tables
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -2242,3 +2243,80 @@ def test_native_clock_invalid_value_fails_closed(conn: sqlite3.Connection) -> No
     assert (
         conn.execute("SELECT COUNT(*) FROM document_processing_evidence_headers").fetchone()[0] == 0
     )
+
+
+@pytest.mark.parametrize(
+    (
+        "seal_cutoff",
+        "recorded_at",
+        "audit_cutoff",
+        "observed_through",
+        "expected_count",
+        "late_seal",
+    ),
+    [
+        (T1, T1, T2, T2, 1, False),
+        (T2, T2, T1, T2, 0, False),
+        (T1, T2, T1, T1, 0, False),
+        (T1, T1, T1, T1, 1, True),
+    ],
+    ids=["historical-evidence", "future-knowledge", "future-recording", "future-seal"],
+)
+def test_cutover_processing_evidence_dual_clocks(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    seal_cutoff: datetime,
+    recorded_at: datetime,
+    audit_cutoff: datetime,
+    observed_through: datetime,
+    expected_count: int,
+    late_seal: bool,
+) -> None:
+    path = migrated_db(tmp_path / "evidence.db")
+    with sqlite3.connect(path) as conn:
+        conn.create_function("fact_sha256", 1, _sha)
+        blob = _seed_document(conn, document_version_id="native-html", media_type="text/html")
+        identity = STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR
+        _seed_run(
+            conn,
+            document_version_id="native-html",
+            blob_sha=blob,
+            run_id="native-html-run",
+            extractor_name=identity.name,
+            extractor_code_version=identity.code_version,
+            extractor_config_sha256=identity.config_sha256,
+            children=(
+                ("passage", "Revenue increased.", EvidenceLocator(source_ref="report.html")),
+            ),
+            node_recorded_at=T0,
+        )
+        receipt = publish_document_processing_evidence(
+            conn,
+            document_version_id="native-html",
+            processing_lane="html_native_hierarchy",
+            cutoff_at=seal_cutoff,
+            recorded_at=recorded_at,
+        )
+        if late_seal:
+            # Simulate corruption: an eligible header cannot hide a post-O seal.
+            conn.execute("DROP TRIGGER trg_document_processing_evidence_seals_update_append_only")
+            conn.execute(
+                "UPDATE document_processing_evidence_seals SET sealed_at=?",
+                (T2.isoformat(),),
+            )
+        before = conn.total_changes
+        summary = audit_cutover_readiness(
+            conn,
+            CutoverAuditOptions(knowledge_cutoff=audit_cutoff, observed_through=observed_through),
+        )
+        assert conn.total_changes == before
+        coverage = next(
+            row for row in summary.coverage if row.gate == "document_processing_evidence"
+        )
+        assert coverage.eligible_count == expected_count
+        assert coverage.verified_count == (0 if late_seal else expected_count)
+        assert coverage.failed_count == int(late_seal)
+        assert receipt.member_count == 1
+        # Other absent populations remain blockers; native evidence cannot waive them.
+        assert summary.has_blockers
+        assert len(summary.coverage) == 13

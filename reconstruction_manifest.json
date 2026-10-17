@@ -137,7 +137,8 @@
         "All scripts use typed CLI arguments and Pydantic models",
         "Outputs >100KB or >2000 lines write to .tmp/",
         "Scripts log JSON-lines to stderr and return data on stdout",
-        "Orchestration is resumable via .tmp/ checkpoint state"
+        "Orchestration is resumable via .tmp/ checkpoint state",
+        "Analysis Evidence Scope selects immutable purpose-specific evidence without weakening capture, processing, financial admission, or full-population readiness"
       ],
       "exit_ready_boundary": "Pure Python CLI entrypoints with standard library argparse/typer; independent of proprietary orchestration engines"
     },

@@ -753,6 +753,223 @@ def test_build_next_earnings_prefers_canonical_table(
     assert _by_ticker(built["evaluation"])["V"].next_earnings is None
 
 
+def test_morning_file_materialization_preserves_rows_and_removes_render_source_reads(
+    conn: sqlite3.Connection,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pipeline.cockpit_file_inputs import materialize_cockpit_file_inputs
+
+    expected = build_cockpit_rows(conn, repo_root, now=NOW)
+    holdings = repo_root / "micro_thesis" / "holdings"
+    holdings.mkdir(parents=True, exist_ok=True)
+    v_holdings = holdings / "V.json"
+    v_holdings.write_text(
+        json.dumps(
+            {
+                "thesis": "Visa remains a high-quality network.",
+                "dcf_defaults": {"gsheet_id": "v-sheet"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    fmp = repo_root / "data" / "historical" / "fmp"
+    sources = {
+        fmp / "NU_profile.json",
+        fmp / "NU_earnings_calendar.json",
+        repo_root / "data" / "valuation_basis" / "NU.json",
+        v_holdings,
+    }
+    original_read_text = Path.read_text
+    original_glob = Path.glob
+    reads: dict[Path, int] = {}
+    globs: list[tuple[Path, str]] = []
+
+    def counted_read_text(
+        path: Path,
+        encoding: str | None = None,
+        errors: str | None = None,
+    ) -> str:
+        if path in sources:
+            reads[path] = reads.get(path, 0) + 1
+        return original_read_text(path, encoding=encoding, errors=errors)
+
+    def counted_glob(path: Path, pattern: str) -> object:
+        if path == repo_root / "output" / "research":
+            globs.append((path, pattern))
+        return original_glob(path, pattern)
+
+    monkeypatch.setattr(Path, "read_text", counted_read_text)
+    monkeypatch.setattr(Path, "glob", counted_glob)
+    assert materialize_cockpit_file_inputs(conn, repo_root) == 3
+    assert reads == {path: 1 for path in sources}
+
+    reads.clear()
+    first = build_cockpit_rows(conn, repo_root, now=NOW)
+    second = build_cockpit_rows(conn, repo_root, now=NOW)
+
+    assert first == expected
+    assert second == expected
+    assert reads == {}
+    assert globs == [
+        (repo_root / "output" / "research", "*/*_workspace.html"),
+        (repo_root / "output" / "research", "*/*_workspace.html"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "missing_kind",
+    ("comments", "workspace"),
+)
+def test_missing_workspace_or_comments_file_keeps_dashboard_row(
+    conn: sqlite3.Connection,
+    repo_root: Path,
+    missing_kind: str,
+) -> None:
+    from comments import Anchor, append_comment
+
+    report_date = datetime(2026, 6, 8).date()
+    append_comment(
+        repo_root,
+        "NU",
+        report_date,
+        Anchor(type="free_text", key="Revenue"),
+        "Confirm segment mix before the next report.",
+    )
+    comment_path = repo_root / "data" / "report_comments" / "NU" / f"{report_date.isoformat()}.json"
+    workspace = repo_root / "output" / "research" / "NU" / "2026-06-08_workspace.html"
+    with_inputs = build_cockpit_rows(conn, repo_root, now=NOW)
+    assert _by_ticker(with_inputs["portfolio"])["NU"].base.open_comments_count == 1
+
+    if missing_kind == "comments":
+        comment_path.unlink()
+    else:
+        workspace.unlink()
+    missing_input = build_cockpit_rows(conn, repo_root, now=NOW)
+
+    row = _by_ticker(missing_input["portfolio"])["NU"]
+    assert row.base.ticker == "NU"
+    if missing_kind == "comments":
+        assert row.base.open_comments_count == 0
+        assert row.base.last_build_at is not None
+    else:
+        assert row.base.open_comments_count == 1
+        assert row.base.last_build_at is None
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "expected_price", "expected_peg", "expected_earnings"),
+    (
+        (
+            "data/historical/fmp/NU_profile.json",
+            None,
+            0.52,
+            (NOW + timedelta(days=30)).date().isoformat(),
+        ),
+        (
+            "data/valuation_basis/NU.json",
+            12.29,
+            None,
+            (NOW + timedelta(days=30)).date().isoformat(),
+        ),
+        (
+            "data/historical/fmp/NU_earnings_calendar.json",
+            12.29,
+            0.52,
+            None,
+        ),
+    ),
+)
+def test_missing_fmp_or_valuation_input_uses_direct_fallback_without_dropping_row(
+    conn: sqlite3.Connection,
+    repo_root: Path,
+    relative_path: str,
+    expected_price: float | None,
+    expected_peg: float | None,
+    expected_earnings: str | None,
+) -> None:
+    (repo_root / relative_path).unlink()
+
+    built = build_cockpit_rows(conn, repo_root, now=NOW)
+    row = _by_ticker(built["portfolio"])["NU"]
+
+    assert row.price == expected_price
+    assert row.peg_ratio == expected_peg
+    assert row.next_earnings == expected_earnings
+    assert any(item.base.ticker == "NU" for item in built["portfolio"])
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    (
+        "data/historical/fmp/NU_profile.json",
+        "data/valuation_basis/NU.json",
+        "data/historical/fmp/NU_earnings_calendar.json",
+    ),
+)
+def test_materialized_source_removal_matches_direct_read_fallback(
+    conn: sqlite3.Connection,
+    repo_root: Path,
+    relative_path: str,
+) -> None:
+    from pipeline.cockpit_file_inputs import materialize_cockpit_file_inputs
+
+    assert materialize_cockpit_file_inputs(conn, repo_root) == 3
+    cache_path = repo_root / ".cache" / "cockpit_file_inputs.json"
+    cached_bytes = cache_path.read_bytes()
+    (repo_root / relative_path).unlink()
+    with_cached = build_cockpit_rows(conn, repo_root, now=NOW)
+    cache_path.unlink()
+    direct = build_cockpit_rows(conn, repo_root, now=NOW)
+    assert with_cached == direct
+    assert any(item.base.ticker == "NU" for item in with_cached["portfolio"])
+    cache_path.write_bytes(cached_bytes)
+
+
+@pytest.mark.parametrize("cache_state", ("missing", "invalid", "ticker_missing"))
+def test_missing_or_unreadable_materialized_cache_uses_direct_reads(
+    conn: sqlite3.Connection,
+    repo_root: Path,
+    cache_state: str,
+) -> None:
+    from materialized_cache import cache_metadata
+    from pipeline.cockpit_file_inputs import materialize_cockpit_file_inputs
+
+    expected = build_cockpit_rows(conn, repo_root, now=NOW)
+    assert materialize_cockpit_file_inputs(conn, repo_root) == 3
+    cache_path = repo_root / ".cache" / "cockpit_file_inputs.json"
+    if cache_state == "missing":
+        cache_path.unlink()
+    elif cache_state == "invalid":
+        cache_path.write_text("{not-json", encoding="utf-8")
+    else:
+        cache_path.write_text(
+            json.dumps({**cache_metadata("cockpit-file-inputs/v1"), "tickers": {}}),
+            encoding="utf-8",
+        )
+
+    fallback = build_cockpit_rows(conn, repo_root, now=NOW)
+    assert fallback == expected
+    assert any(item.base.ticker == "NU" for item in fallback["portfolio"])
+
+
+def test_changed_materialized_source_is_read_directly(
+    conn: sqlite3.Connection,
+    repo_root: Path,
+) -> None:
+    from pipeline.cockpit_file_inputs import materialize_cockpit_file_inputs
+
+    assert materialize_cockpit_file_inputs(conn, repo_root) == 3
+    profile = repo_root / "data" / "historical" / "fmp" / "NU_profile.json"
+    profile.write_text(
+        json.dumps([{"price": 12.39, "changePercentage": 0.82}]),
+        encoding="utf-8",
+    )
+
+    built = build_cockpit_rows(conn, repo_root, now=NOW)
+    assert _by_ticker(built["portfolio"])["NU"].price == 12.39
+
+
 def test_build_degrades_on_minimal_schema(tmp_path: Path) -> None:
     """The hand-rolled comments-server test schema (no alerts / dcf_runs /
     documents / kpi tables, no last_built_at column) renders a sparser cockpit
