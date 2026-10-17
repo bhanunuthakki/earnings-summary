@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "c6982c36d98b2b154b676ac5df3180bde17dd304",
+  "scoped_commit": "5aef8be95ec79102c5f8f7a811d09a4ecd5f77b8",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "7e9787faecff62e6fb2c4a703352e7cd2a7f41fe35c3a649864851413ba9b2b1",
+  "source_sha256": "1e3ef16cc81ceb92098533fc92e994fe3c2b51e72e2984c8313dd236b5864067",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1451,
-    "total_noncomment_loc": 552105,
+    "total_noncomment_loc": 552106,
     "modules_over_1000_loc": 104,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -16273,9 +16273,9 @@
         "path": "src/provenance/integrity_audit.py",
         "module": "provenance.integrity_audit",
         "lines": {
-          "physical": 6775,
-          "nonblank": 6515,
-          "noncomment": 6507
+          "physical": 6777,
+          "nonblank": 6517,
+          "noncomment": 6508
         },
         "internal_fan_out": 17,
         "responsibilities": [

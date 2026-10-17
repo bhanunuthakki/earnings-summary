@@ -474,3 +474,31 @@ It predates the fiscal-date correction, which is outside this browser path.
 The retained source hashes define that scope; the measurements do not establish
 whole-tree equivalence with a later commit. The initial fixture row-count
 assertion errors are retained. They occurred before the timing loops.
+
+## Approved fixture continuation
+
+The exact approved synthetic CompanyFacts/8-K evaluation reaches real embedding
+promotion, indexing, processing, ontology, canonical projection, research and
+retrieval qualification. Nonempty legacy/canonical parity matches one fact.
+A genuine pre-cutover retrieval trace verifies 51 candidates and 20 results,
+including that fact. No application LLM call or Ask answer was generated.
+
+The continuation exposed a processing audit mismatch. Terminal dispositions
+reuse immutable native evidence at its original knowledge cutoff. The audit
+now selects eligible historical evidence and verifies it at that exact original
+cutoff, with the audit's observation cutoff. Four real migrated-database cases
+cover historical reuse, future knowledge, future recording and a corrupt
+post-observation seal. The old implementation fails two cases. All 133 owning
+processing, research and audit tests pass after correction. The unchanged
+architecture scanner records one additional noncomment source line; no other
+aggregate ceiling or duplicate baseline changes. This read-only correction
+adds no operator action, database write, model route or scheduling capability.
+
+Full Ask remains unverified. The strict 13-gate audit requires nonempty native
+filing-XBRL evidence, which the approved Windows runtime must produce. The Mac
+fixture cannot supply it. The audit also rejects retained successful vectors
+and projections from the unapproved losing evaluation model. These rows remain
+immutable; the losing model is not promoted and no gate is waived. The initial
+audit also lacked the later retrieval trace. Its complete failure receipt is
+retained. Unsupported-answer and runtime-tamper delivery drivers remain unrun.
+These limits concern full population/Ask readiness, not a successful cutover.

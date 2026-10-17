@@ -1593,12 +1593,12 @@ def audit_cutover_readiness(
             candidate_commitments=candidate_commitments,
             spec=CutoverGateQuerySpec(
                 gate="document_processing_evidence",
-                selection_policy_id="document-processing-evidence.K-cutoff.O-recorded.v1",
+                selection_policy_id="document-processing-evidence.K-cutoff.O-recorded.v2",
                 key_column="evidence_seal_id",
                 query=(
-                    "SELECT evidence_seal_id,document_version_id,processing_lane "
+                    "SELECT evidence_seal_id,document_version_id,processing_lane,cutoff_at "
                     "FROM document_processing_evidence_headers "
-                    "WHERE julianday(cutoff_at)=julianday(:knowledge_cutoff) "
+                    "WHERE julianday(cutoff_at)<=julianday(:knowledge_cutoff) "
                     "AND julianday(recorded_at)<=julianday(:observed_through) "
                     "ORDER BY evidence_seal_id"
                 ),
@@ -1609,7 +1609,9 @@ def audit_cutover_readiness(
                 str(row["evidence_seal_id"]),
                 document_version_id=str(row["document_version_id"]),
                 processing_lane=str(row["processing_lane"]),
-                cutoff_at=options.cutoff_at,
+                # Terminal processing dispositions retain their original native seal.
+                cutoff_at=datetime.fromisoformat(str(row["cutoff_at"])),
+                observed_through=options.observed_through,
             ),
         )
         _run_cutover_gate(
