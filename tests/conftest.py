@@ -81,7 +81,8 @@ def _collection_temp_policy() -> tuple[Path | None, int]:
                 return None, ordinary
     except OSError:
         return None, ordinary
-    return root, 4 * 1024**3
+    # RUNNER_TEMP can be outside the admitted system-temp ownership boundary.
+    return None, 4 * 1024**3
 
 
 _worker_id = os.environ.get("PYTEST_XDIST_WORKER", "controller")

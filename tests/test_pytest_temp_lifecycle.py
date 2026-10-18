@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -97,3 +100,22 @@ def test_session_hook_registers_success_and_preserves_failure(
     # Remove only the exact child test directory that this test created. Failed
     # session protection is already proved; this test does not leave test debris.
     shutil.rmtree(run_root)
+
+
+def test_actions_floor_keeps_fixture_parent_inside_admitted_system_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tree = ast.parse((PROJECT_ROOT / "tests/conftest.py").read_text())
+    function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_collection_temp_policy"
+    )
+    namespace: dict[str, object] = {"Path": Path, "os": os, "stat": stat}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), "fixture_policy", "exec"), namespace)
+    policy = cast(Callable[[], tuple[Path | None, int]], namespace["_collection_temp_policy"])
+    runner = tmp_path / "runner-separate-from-system-temp"
+    runner.mkdir()
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("RUNNER_TEMP", str(runner))
+    assert policy() == (None, 4 * 1024**3)
