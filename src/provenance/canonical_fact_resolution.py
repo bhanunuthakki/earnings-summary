@@ -10,13 +10,14 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from contextlib import suppress
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from provenance.fact_read_model import FactAdmissionError, FactReadModel
+from provenance.fact_read_model import FactAdmissionError, FactReadModel, ProvenanceBundle
 from provenance.source_fact_publication import verify_source_fact_publication
 
 Status = Literal["resolved", "unresolved", "retired"]
@@ -72,6 +73,15 @@ class ResolutionReceipt(BaseModel):
     selected_observation_id: str | None
     reason_code: str
     exact_replay: bool
+
+
+@dataclass(frozen=True)
+class CanonicalFactRead:
+    """One exact canonical selection and its admitted source context."""
+
+    canonical_metric_cell_id: str
+    resolution: ResolutionReceipt | None
+    bundle: ProvenanceBundle | None
 
 
 class ResolutionPlan(BaseModel):
@@ -480,25 +490,73 @@ class CanonicalFactResolutionEngine:
         *,
         observed_through: datetime | None = None,
     ) -> ResolutionReceipt | None:
-        receipt = self._stored_as_known(
-            canonical_metric_cell_id, cutoff_at, observed_through=observed_through
-        )
-        if (
-            receipt is not None
-            and receipt.status == "resolved"
-            and receipt.selected_observation_id is not None
-        ):
-            # Broken selected-source evidence is a provenance failure, not an
-            # absent resolution. Retain the typed failure for every consumer.
-            observed = cutoff_at if observed_through is None else observed_through
-            bundle = FactReadModel(self._conn).provenance_bundle(
-                receipt.selected_observation_id, cutoff=_utc(observed)
+        return self.read_as_known(
+            (canonical_metric_cell_id,), cutoff_at, observed_through=observed_through
+        )[0].resolution
+
+    def read_as_known(
+        self,
+        canonical_metric_cell_ids: tuple[str, ...],
+        cutoff_at: datetime,
+        *,
+        observed_through: datetime | None = None,
+    ) -> tuple[CanonicalFactRead, ...]:
+        """Read exact selections and sources together under one read snapshot.
+
+        Every resolution retains its existing graph checks. Full publication
+        verification is reused only within this bounded call at the same cutoff.
+        Broken selected evidence raises; it never becomes an absent resolution.
+        """
+        self._conn.execute("SAVEPOINT canonical_resolution_read_batch")
+        try:
+            receipts = tuple(
+                self._stored_as_known(cell_id, cutoff_at, observed_through=observed_through)
+                for cell_id in canonical_metric_cell_ids
             )
-            if bundle.derivation is not None and not self.observation_lineage_current(
-                receipt.selected_observation_id, cutoff_at, observed_through=observed_through
-            ):
-                return None
-        return receipt
+            observation_ids = tuple(
+                dict.fromkeys(
+                    receipt.selected_observation_id
+                    for receipt in receipts
+                    if receipt is not None
+                    and receipt.status == "resolved"
+                    and receipt.selected_observation_id is not None
+                )
+            )
+            observed = cutoff_at if observed_through is None else observed_through
+            bundles = {
+                bundle.observation.observation_id: bundle
+                for bundle in FactReadModel(self._conn).required_provenance_bundles(
+                    observation_ids, cutoff=_utc(observed)
+                )
+            }
+            result: list[CanonicalFactRead] = []
+            for cell_id, receipt in zip(canonical_metric_cell_ids, receipts, strict=True):
+                bundle = (
+                    bundles[receipt.selected_observation_id]
+                    if receipt is not None
+                    and receipt.status == "resolved"
+                    and receipt.selected_observation_id is not None
+                    else None
+                )
+                if (
+                    bundle is not None
+                    and bundle.derivation is not None
+                    and receipt is not None
+                    and not self.observation_lineage_current(
+                        bundle.observation.observation_id,
+                        cutoff_at,
+                        observed_through=observed_through,
+                    )
+                ):
+                    receipt, bundle = None, None
+                result.append(CanonicalFactRead(cell_id, receipt, bundle))
+            self._conn.execute("RELEASE SAVEPOINT canonical_resolution_read_batch")
+            return tuple(result)
+        except BaseException:
+            with suppress(sqlite3.Error):
+                self._conn.execute("ROLLBACK TO SAVEPOINT canonical_resolution_read_batch")
+                self._conn.execute("RELEASE SAVEPOINT canonical_resolution_read_batch")
+            raise
 
     def _stored_as_known(
         self,
@@ -536,6 +594,31 @@ class CanonicalFactResolutionEngine:
         )
 
     def seal_snapshot(
+        self,
+        resolution_snapshot_id: str,
+        cutoff_at: datetime,
+        recorded_at: datetime,
+        scope: ResolutionSnapshotScope,
+    ) -> VerifiedResolutionSnapshot:
+        """Select and seal under the same database write boundary as admission."""
+        self._conn.execute("SAVEPOINT canonical_snapshot_admission")
+        try:
+            # A zero-row write acquires SQLite's writer lock without changing a
+            # retained row. This also works inside an existing transaction.
+            self._conn.execute(
+                "UPDATE canonical_fact_resolution_snapshot_seals "
+                "SET recorded_at=recorded_at WHERE 0"
+            )
+            receipt = self._seal_snapshot(resolution_snapshot_id, cutoff_at, recorded_at, scope)
+        except BaseException:
+            with suppress(sqlite3.Error):
+                self._conn.execute("ROLLBACK TO SAVEPOINT canonical_snapshot_admission")
+                self._conn.execute("RELEASE SAVEPOINT canonical_snapshot_admission")
+            raise
+        self._conn.execute("RELEASE SAVEPOINT canonical_snapshot_admission")
+        return receipt
+
+    def _seal_snapshot(
         self,
         resolution_snapshot_id: str,
         cutoff_at: datetime,

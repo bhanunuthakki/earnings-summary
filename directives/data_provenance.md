@@ -112,6 +112,27 @@ currency, units, fiscal coordinates and comparison continuity. Unsupported
 semantics and unadmitted overrides remain unavailable. A newer override or
 restatement cannot change the evidence selected at an earlier cutoff.
 
+Sealed ontology and canonical-resolution selections reject new admissions that
+would become visible behind their retained cutoffs. Migration0058 enforces this
+at the database boundary, including direct SQL. Ontology membership is global;
+resolution membership follows its retained reporting-entity scope and knowledge/
+observation clocks. Existing whole-row exact replay remains valid. Conflicting
+replay and new retroactive rows fail closed with `sealed_ontology_admission_conflict`
+or `sealed_resolution_admission_conflict`. The guards also cover the current
+readers' second-precision visibility, so a same-second fractional append may be
+blocked. Do not retry the same input unchanged, manufacture later clocks, or
+rewrite retained rows. A legitimate late admission needs an explicit new-coordinate
+producer; this guard does not implement that workflow or repair an already-invalid
+seal. Other upstream closures retain their own verification requirements.
+
+`CanonicalFactResolutionEngine.read_as_known` returns each exact canonical
+selection with its admitted source bundle under one read snapshot. It retains
+the same resolution, publication and derived-lineage checks as `as_known`.
+Required source batches fail as a whole; they expose no partial usable inputs.
+MELI preview and model-input verification reuse this owner. Full publication
+verification is shared only within one bounded batch at one cutoff. Separate
+verification passes and later calls verify again; no persistent cache is added.
+
 Growth evidence retains every input and comparison witness, plus the versioned
 calculation rule. The evidence reader re-admits that complete selection at its
 original cutoff. TTM growth uses four-quarter totals; heatmap level growth uses

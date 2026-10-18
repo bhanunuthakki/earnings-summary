@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "639b8f784352d5c84d5413478b3ee99301dd2455",
+  "scoped_commit": "4334160a46eb1eaa95a7226522dcc1bd8f1ac44e",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "7dd2d6201f54311fd12cd493f00d115f19b167bd4038f87f85b776170bf88d1c",
+  "source_sha256": "e846c1639241effcf81c6ec6fdc5daf97ed013c45dc013c6aaaf17c428bfc699",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1452,
-    "total_noncomment_loc": 553579,
+    "total_noncomment_loc": 553829,
     "modules_over_1000_loc": 106,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -4570,11 +4570,11 @@
         "path": "execution/preview_meli_inputs.py",
         "module": "execution.preview_meli_inputs",
         "lines": {
-          "physical": 90,
-          "nonblank": 82,
-          "noncomment": 82
+          "physical": 187,
+          "nonblank": 174,
+          "noncomment": 170
         },
-        "internal_fan_out": 7,
+        "internal_fan_out": 9,
         "responsibilities": [
           "database"
         ],
@@ -9452,9 +9452,9 @@
         "path": "src/dcf/input_evidence.py",
         "module": "dcf.input_evidence",
         "lines": {
-          "physical": 832,
-          "nonblank": 772,
-          "noncomment": 762
+          "physical": 878,
+          "nonblank": 818,
+          "noncomment": 803
         },
         "internal_fan_out": 9,
         "responsibilities": [
@@ -9498,11 +9498,11 @@
         "path": "src/dcf/meli_input_preview.py",
         "module": "dcf.meli_input_preview",
         "lines": {
-          "physical": 203,
-          "nonblank": 189,
-          "noncomment": 184
+          "physical": 220,
+          "nonblank": 206,
+          "noncomment": 201
         },
-        "internal_fan_out": 6,
+        "internal_fan_out": 5,
         "responsibilities": [
           "database"
         ],
@@ -15857,9 +15857,9 @@
         "path": "src/provenance/canonical_fact_resolution.py",
         "module": "provenance.canonical_fact_resolution",
         "lines": {
-          "physical": 1590,
-          "nonblank": 1519,
-          "noncomment": 1513
+          "physical": 1673,
+          "nonblank": 1596,
+          "noncomment": 1590
         },
         "internal_fan_out": 2,
         "responsibilities": [
@@ -16080,9 +16080,9 @@
         "path": "src/provenance/fact_read_model.py",
         "module": "provenance.fact_read_model",
         "lines": {
-          "physical": 1159,
-          "nonblank": 1082,
-          "noncomment": 1082
+          "physical": 1188,
+          "nonblank": 1109,
+          "noncomment": 1109
         },
         "internal_fan_out": 3,
         "responsibilities": [

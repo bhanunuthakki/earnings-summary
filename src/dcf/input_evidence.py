@@ -536,7 +536,24 @@ def verify_source_coverage(
     about quarterly fact age. A newer inventory invalidates the old proof even
     when the old inventory is within that window. No FMP cache participates.
     """
-    admission = verify_research_snapshot(conn, request.research_snapshot_id)
+    try:
+        admission = verify_research_snapshot(conn, request.research_snapshot_id)
+    except ValueError as exc:
+        # The snapshot owner uses ValueError for both absence and corruption.
+        # Normalize only missing state; a present but invalid seal still fails
+        # through its original verifier. No exception text becomes a reason code.
+        state = conn.execute(
+            "SELECT seal.research_snapshot_id FROM research_snapshot_headers header "
+            "LEFT JOIN research_snapshot_seals seal "
+            "ON seal.research_snapshot_id=header.research_snapshot_id "
+            "WHERE header.research_snapshot_id=?",
+            (request.research_snapshot_id,),
+        ).fetchone()
+        if state is None:
+            raise InputEvidenceError("research_snapshot_missing") from exc
+        if state[0] is None:
+            raise InputEvidenceError("research_snapshot_unsealed") from exc
+        raise
     row = conn.execute(
         "SELECT request_json FROM research_snapshot_headers WHERE research_snapshot_id=?",
         (request.research_snapshot_id,),
@@ -677,13 +694,42 @@ def verify_model_inputs(
         CanonicalFactResolutionEngine(conn),
         MetricOntology(conn),
     )
+    selections = {
+        read.canonical_metric_cell_id: read
+        for read in resolver.read_as_known(
+            tuple(
+                dict.fromkeys(
+                    request.facts[item.key].canonical_metric_cell_id for item in requirements
+                )
+            ),
+            cutoff,
+        )
+    }
+    bundles = {
+        read.bundle.observation.observation_id: read.bundle
+        for read in selections.values()
+        if read.bundle is not None
+    }
+    # Valid references reuse the resolver's exact admitted context. A wrong
+    # reference still crosses the normal admission boundary before rejection.
+    unmatched = tuple(
+        dict.fromkeys(
+            request.facts[item.key].observation_id
+            for item in requirements
+            if request.facts[item.key].observation_id not in bundles
+        )
+    )
+    bundles.update(
+        (bundle.observation.observation_id, bundle)
+        for bundle in reader.required_provenance_bundles(unmatched, cutoff=cutoff)
+    )
     inputs: list[VerifiedInput] = []
     for requirement in requirements:
         ref = request.facts[requirement.key]
-        resolution = resolver.as_known(ref.canonical_metric_cell_id, cutoff)
+        resolution = selections[ref.canonical_metric_cell_id].resolution
         definition = ontology.metric_definition_as_known(ref.metric_id, cutoff)
         binding = ontology.binding_as_known(ref.observation_id, cutoff)
-        bundle = reader.provenance_bundle(ref.observation_id, cutoff=cutoff)
+        bundle = bundles[ref.observation_id]
         fact = bundle.observation
         identity = conn.execute(
             "SELECT cell.metric_id,cell.dimension_count,seal.dimension_set_json,"
