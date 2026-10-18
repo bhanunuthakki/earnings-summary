@@ -1,4 +1,4 @@
-"""Publish the closed 18-member MELI H1 displayed-statement source population.
+"""Publish the closed 18-member MELI H1 or seven-flow FY statement source population.
 
 Dry-run is default. This does not bind canonical metrics, promote valuation
 inputs, or declare complete filing extraction. Missing members remain rejected.
