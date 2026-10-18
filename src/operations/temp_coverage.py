@@ -56,6 +56,11 @@ def inventory_temp_coverage(
     result = TempCoverage()
     groups: dict[tuple[str, str, str, str], CoverageGroup] = {}
     by_path = {os.path.normcase(item.path): item.reason for item in decisions}
+    # Preserve the first matching registration, including overlapping roots.
+    # Directory inheritance avoids searching every run for every file.
+    indexed_runs = {
+        root: (rank, status) for rank, (root, status) in enumerate(run_statuses.items())
+    }
     seen_roots: list[Path] = []
     for root, purpose in roots:
         if root in seen_roots or any(parent in root.parents for parent in seen_roots):
@@ -72,9 +77,20 @@ def inventory_temp_coverage(
             continue
         # No excluded directory is invisible here: environments and registered
         # scopes contribute bytes even when the deletion pass preserves them.
-        stack: list[tuple[Path, str | None]] = [(root, None)]
+        initial_owner = min(
+            (
+                indexed_runs[ancestor]
+                for ancestor in (root, *root.parents)
+                if ancestor in indexed_runs
+            ),
+            default=None,
+        )
+        stack: list[tuple[Path, str | None, tuple[int, str] | None]] = [(root, None, initial_owner)]
         while stack:
-            current, checkpoint = stack.pop()
+            current, checkpoint, owner = stack.pop()
+            registered = indexed_runs.get(current)
+            if registered is not None and (owner is None or registered[0] < owner[0]):
+                owner = registered
             state = current / "state.json"
             try:
                 if state.is_file() and not _linked(state):
@@ -117,7 +133,7 @@ def inventory_temp_coverage(
                                 result.unsafe_paths += 1
                                 continue
                             if stat.S_ISDIR(metadata.st_mode):
-                                stack.append((path, checkpoint))
+                                stack.append((path, checkpoint, owner))
                                 continue
                             if not stat.S_ISREG(metadata.st_mode):
                                 continue
@@ -125,18 +141,17 @@ def inventory_temp_coverage(
                             scope = relative.parts[0] if len(relative.parts) > 1 else "(root files)"
                             reason = by_path.get(os.path.normcase(str(path)))
                             disposition = reason or checkpoint or purpose
-                            for run_root, run_status in run_statuses.items():
-                                if run_root in path.parents:
-                                    # Undeclared files added after sealing remain
-                                    # visible as unknown, not implicitly disposable.
-                                    disposition = reason or (
-                                        run_status
-                                        if run_status in {"active", "failed"}
-                                        else "unclassified"
-                                    )
-                                    if path.name == ".earnings-temp-run.json":
-                                        disposition = "lifecycle_receipt"
-                                    break
+                            if owner is not None:
+                                # Undeclared files added after sealing remain
+                                # visible as unknown, not implicitly disposable.
+                                run_status = owner[1]
+                                disposition = reason or (
+                                    run_status
+                                    if run_status in {"active", "failed"}
+                                    else "unclassified"
+                                )
+                                if path.name == ".earnings-temp-run.json":
+                                    disposition = "lifecycle_receipt"
                             days = (now.timestamp() - metadata.st_mtime) / 86400
                             bucket: Literal["0-14d", "15-30d", "31-60d", "61d+"] = (
                                 "0-14d"

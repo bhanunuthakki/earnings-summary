@@ -8,17 +8,62 @@ from __future__ import annotations
 
 import hashlib
 import json
+import ntpath
 import os
 import stat
 import tempfile
+from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import RLock
 from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 CATALOG_RELATIVE_PATH = Path("data/operations/artifact-retention.json")
 RECEIPT_RELATIVE_ROOT = Path("data/operations/artifact-retention-receipts")
+_MANIFEST_CACHE_INPUT_LIMIT = 16 * 1024 * 1024
+_MANIFEST_CACHE: OrderedDict[str, tuple[dict[str, object], dict[str, object] | None]] = (
+    OrderedDict()
+)
+_MANIFEST_CACHE_LOCK = RLock()
+
+
+def _decode_manifest(data: bytes) -> tuple[dict[str, object], dict[str, object] | None]:
+    payload: object = json.loads(data)
+    if not isinstance(payload, dict):
+        raise ValueError("manifest must be an object")
+    record = cast("dict[str, object]", payload)
+    declarations = record.get("files")
+    index: dict[str, object] | None = None
+    if isinstance(declarations, list):
+        index = {}
+        for entry in cast("list[object]", declarations):
+            if not isinstance(entry, dict):
+                raise ValueError("invalid file declaration")
+            relative = cast("dict[str, object]", entry).get("relative_path")
+            if not isinstance(relative, str) or os.path.normcase(relative) in index:
+                raise ValueError("invalid or duplicate file declaration")
+            index[os.path.normcase(relative)] = entry
+    return record, index
+
+
+def _manifest_view(data: bytes) -> tuple[dict[str, object], dict[str, object] | None]:
+    """Reuse parsing only after hashing freshly read bytes, never filesystem metadata."""
+    digest = hashlib.sha256(data).hexdigest()
+    if len(data) > _MANIFEST_CACHE_INPUT_LIMIT:
+        return _decode_manifest(data)
+    with _MANIFEST_CACHE_LOCK:
+        cached = _MANIFEST_CACHE.get(digest)
+        if cached is not None:
+            _MANIFEST_CACHE.move_to_end(digest)
+            return cached
+        value = _decode_manifest(data)
+        _MANIFEST_CACHE[digest] = value
+        _MANIFEST_CACHE.move_to_end(digest)
+        while len(_MANIFEST_CACHE) > 2:
+            _MANIFEST_CACHE.popitem(last=False)
+        return value
 
 
 class RetirementProof(BaseModel):
@@ -65,6 +110,11 @@ class Artifact(BaseModel):
     kind: Literal["disposable_test", "backup"]
     status: Literal["completed", "failed", "active"]
     verified: bool
+    disposable_class: Literal["declared_files", "isolated_test_fixture"] = "declared_files"
+    purpose: str | None = None
+    byte_budget: int | None = Field(default=None, ge=0)
+    review_after: datetime | None = None
+    file_identity: tuple[int, int, int] | None = None
     pins: list[str] = Field(default_factory=list)
     lifecycle_manifest: Path | None = None
     lifecycle_manifest_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
@@ -79,6 +129,10 @@ class Artifact(BaseModel):
             self.allowed_root / ".earnings-temp-run.json"
         ):
             raise ValueError("lifecycle manifest must belong to the exact allowed run root")
+        if self.disposable_class == "isolated_test_fixture" and (
+            self.lifecycle_manifest is None or self.kind != "disposable_test"
+        ):
+            raise ValueError("isolated fixtures require their exact producer manifest")
         return self
 
     @field_validator("created_at")
@@ -226,6 +280,112 @@ def _hash(path: Path) -> str:
     return digest.hexdigest()
 
 
+def fixture_git_hold(directory: Path, root: Path) -> str | None:
+    """Check local Git storage without executing Git or following its pointers."""
+    controls = [
+        (directory / ".git", directory, True),
+        (directory / ".git/commondir", directory / ".git", False),
+        (directory / ".git/objects/info/alternates", directory / ".git/objects", False),
+    ]
+    for path, base, gitfile in controls:
+        if not path.exists() and not path.is_symlink():
+            continue
+        if not _safe_ancestors(path):
+            return "linked_git_storage"
+        if path.is_dir() and gitfile:
+            continue
+        metadata = path.lstat()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_size > 8192:
+            return "invalid_git_storage"
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except UnicodeError:
+            return "invalid_git_storage"
+        if gitfile:
+            # Dummy .git files are test data. Real worktree pointers must stay local.
+            lines = [line[7:].strip() for line in lines if line.startswith("gitdir:")]
+        for line in lines:
+            if not line.strip():
+                continue
+            raw = Path(line.strip())
+            if ntpath.isabs(line) and not raw.is_absolute():
+                return "external_git_storage"
+            target = Path(os.path.abspath(raw if raw.is_absolute() else base / raw))
+            if target != root and root not in target.parents:
+                return "external_git_storage"
+            for component in (target, *target.parents):
+                if (component.exists() or component.is_symlink()) and _link_like(component):
+                    return "linked_git_storage"
+    return None
+
+
+def _fixture_binding(item: Artifact) -> str | None:
+    """A fixture classification cannot be supplied by a catalog flag alone."""
+    if item.lifecycle_manifest is None:
+        return "unverified_fixture_ownership"
+    try:
+        raw = item.lifecycle_manifest.read_bytes()
+        if len(raw) > 64 * 1024 * 1024:
+            return "unverified_fixture_ownership"
+        record, declarations = _manifest_view(raw)
+        if record.get("disposable_class") != "isolated_test_fixture":
+            return "unverified_fixture_ownership"
+        reason, _digest = _ancestor_lifecycle(item.lifecycle_manifest, item.allowed_root)
+        if reason is not None:
+            # A failed receipt stays immutable; the separately bound resolution owns closure.
+            resolution = item.allowed_root / ".earnings-temp-run-resolution.json"
+            proof = next(
+                (proof for proof in item.retirement_proofs if proof.path == resolution), None
+            )
+            if reason != "unfinished_lifecycle_manifest" or proof is None:
+                return reason
+            original = record
+            record, declarations = _manifest_view(resolution.read_bytes())
+            if (
+                original.get("status") != "failed"
+                or record.get("schema_version") != "earnings-temp-run-resolution/v1"
+                or record.get("run_root") != str(item.allowed_root)
+                or record.get("failed_run_id") != original.get("run_id")
+                or record.get("failed_manifest_sha256") != item.lifecycle_manifest_sha256
+            ):
+                return "unverified_fixture_resolution"
+            success = record.get("successful_manifest")
+            if not isinstance(success, dict):
+                return "unverified_fixture_resolution"
+            successful_proof = RetirementProof.model_validate(success)
+            if not any(proof == successful_proof for proof in item.retirement_proofs):
+                return "unverified_fixture_resolution"
+            reason, _digest = _ancestor_lifecycle(
+                successful_proof.path, successful_proof.path.parent
+            )
+            if reason is not None:
+                return "unverified_fixture_resolution"
+        if declarations is None:
+            return "unverified_fixture_ownership"
+        relative = str(item.path.relative_to(item.allowed_root))
+        if not _fixture_file_matches(declarations.get(os.path.normcase(relative)), relative, item):
+            return "undeclared_fixture_file"
+        for directory in (item.path.parent, *item.path.parent.parents):
+            if reason := fixture_git_hold(directory, item.allowed_root):
+                return reason
+            if directory == item.allowed_root:
+                break
+    except (OSError, UnicodeError, ValueError):
+        return "unverified_fixture_ownership"
+    return None
+
+
+def _fixture_file_matches(entry: object, relative: str, item: Artifact) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    declaration = cast("dict[str, object]", entry)
+    return (
+        declaration.get("relative_path") == relative
+        and declaration.get("sha256") == item.sha256
+        and declaration.get("size") == item.size
+    )
+
+
 def evidence_set_digest(directory: Path) -> str | None:
     """Hash bounded direct JSON members without following links or opening a DB."""
     for component in reversed((directory, *directory.parents)):
@@ -282,10 +442,7 @@ def _ancestor_lifecycle(path: Path, parent: Path) -> tuple[str | None, str | Non
             data = handle.read(64 * 1024 * 1024 + 1)
         if len(data) > 64 * 1024 * 1024:
             return "unverified_lifecycle_manifest", None
-        payload: object = json.loads(data)
-        if not isinstance(payload, dict):
-            return "unverified_lifecycle_manifest", None
-        record = cast("dict[str, object]", payload)
+        record, _declarations = _manifest_view(data)
         root = record.get("run_root")
         pins = record.get("pins", [])
         status = record.get("status")
@@ -355,7 +512,8 @@ def _validate_file(item: Artifact, repo_root: Path, live_db: Path | None) -> str
     }:
         return "live_database"
     relative_parts = item.path.relative_to(item.allowed_root).parts
-    if any(
+    fixture = item.disposable_class == "isolated_test_fixture"
+    if not fixture and any(
         component.casefold()
         in {
             ".git",
@@ -381,6 +539,8 @@ def _validate_file(item: Artifact, repo_root: Path, live_db: Path | None) -> str
                 return "linked_lifecycle_manifest"
             if _hash(item.lifecycle_manifest) != item.lifecycle_manifest_sha256:
                 return "lifecycle_manifest_changed"
+        if fixture and (reason := _fixture_binding(item)):
+            return reason
         if live_db is not None and item.path.resolve() == live_db.resolve():
             return "live_database"
         parent = item.path.parent
@@ -404,6 +564,13 @@ def _validate_file(item: Artifact, repo_root: Path, live_db: Path | None) -> str
         lifecycle_guards: list[tuple[Path, str]] = []
         checkpoint_guards: list[tuple[Path, str | None]] = []
         while parent == boundary or boundary in parent.parents:
+            # A newly claimed test run owns its nested synthetic lifecycle and
+            # checkpoint fixtures. Outside ancestors retain their normal guards.
+            if fixture and (parent == item.allowed_root or item.allowed_root in parent.parents):
+                if parent == boundary:
+                    break
+                parent = parent.parent
+                continue
             lifecycle = parent / ".earnings-temp-run.json"
             if lifecycle != item.lifecycle_manifest and (
                 lifecycle.exists() or lifecycle.is_symlink()
@@ -437,6 +604,12 @@ def _validate_file(item: Artifact, repo_root: Path, live_db: Path | None) -> str
                 break
             parent = parent.parent
         metadata = item.path.lstat()
+        if item.file_identity is not None and item.file_identity != (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_mtime_ns,
+        ):
+            return "producer_file_changed"
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
             return "not_unique_regular_file"
         if metadata.st_size != item.size:
@@ -515,10 +688,29 @@ def run_retention(
     catalog: ArtifactCatalog | None = None,
     catalog_roots: tuple[Path, ...] = (),
     test_retention_days: int = 7,
+    exact_run_root: Path | None = None,
 ) -> RetirementResult:
     """Plan explicit retirement and save a durable receipt before apply effects."""
     if test_retention_days < 0:
         raise ValueError("test_retention_days must be nonnegative")
+    if exact_run_root is not None:
+        if (
+            not exact_run_root.is_absolute()
+            or ".." in exact_run_root.parts
+            or not _approved_root(exact_run_root, repo_root)
+            or not _safe_ancestors(exact_run_root)
+            or not exact_run_root.is_dir()
+            or catalog is None
+        ):
+            raise ValueError("exact run retirement requires an owned producer catalog")
+        if any(
+            item.allowed_root != exact_run_root
+            or item.lifecycle_manifest != exact_run_root / ".earnings-temp-run.json"
+            or item.disposable_class != "isolated_test_fixture"
+            or item.kind != "disposable_test"
+            for item in catalog.artifacts
+        ):
+            raise ValueError("producer catalog differs from exact isolated fixture run")
     # Load current operator declarations atop producer registrations. Later roots
     # have priority, so the caller supplies runtime first and canonical state last.
     sources = {root: _catalog_source(root) for root in dict.fromkeys(catalog_roots or (repo_root,))}
@@ -529,7 +721,22 @@ def run_retention(
         if current is not None:
             for item in current.artifacts:
                 name = os.path.normcase(str(item.path))
-                artifacts[name] = merge_operator_artifact(item, artifacts.get(name))
+                if exact_run_root is not None:
+                    # An immediate producer close cannot expand into operator
+                    # cleanup or replace sealed identities with operator bytes.
+                    producer = artifacts.get(name)
+                    if producer is None:
+                        continue
+                    merged = merge_operator_artifact(item, producer)
+                    artifacts[name] = producer.model_copy(
+                        update={
+                            "pins": [*merged.pins, "operator_registration_requires_review"],
+                            "status": merged.status,
+                            "verified": merged.verified,
+                        }
+                    )
+                else:
+                    artifacts[name] = merge_operator_artifact(item, artifacts.get(name))
     if catalog is None and all(current is None for current, _digest in sources.values()):
         return RetirementResult()
     catalog = ArtifactCatalog(schema_version=1, artifacts=list(artifacts.values()))
@@ -568,7 +775,13 @@ def run_retention(
             if latest.get(item.family) == item
             else "within_test_retention"
             if item.kind == "disposable_test"
-            and item.created_at >= now - timedelta(days=test_retention_days)
+            and (
+                item.created_at > now
+                or (
+                    test_retention_days > 0
+                    and item.created_at >= now - timedelta(days=test_retention_days)
+                )
+            )
             else "completed_test"
             if item.kind == "disposable_test"
             else "superseded_verified_backup"
@@ -598,7 +811,12 @@ def run_retention(
     # Unique receipts preserve prior partial-failure evidence and bind the exact
     # catalog and plan. Never replace the only receipt for an earlier attempt.
     stamp = now.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    receipt = repo_root / RECEIPT_RELATIVE_ROOT / f"{stamp}-{os.getpid()}-{catalog_sha[:16]}.json"
+    receipt_root = (
+        exact_run_root / ".earnings-temp-retirement"
+        if exact_run_root is not None
+        else repo_root / RECEIPT_RELATIVE_ROOT
+    )
+    receipt = receipt_root / f"{stamp}-{os.getpid()}-{catalog_sha[:16]}.json"
     if receipt.exists():
         raise ValueError("retirement receipt already exists; use a new invocation time")
     result.receipt_path = str(receipt)

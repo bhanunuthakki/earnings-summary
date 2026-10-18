@@ -75,6 +75,12 @@ def test_session_hook_registers_success_and_preserves_failure(
     manifest: object = json.loads((run_root / ".earnings-temp-run.json").read_bytes())
     assert isinstance(manifest, dict)
     assert manifest["status"] == ("completed" if passed else "failed")
+    fixture = fixture_dir / "fixture.db"
+    if passed:
+        assert not fixture.exists(), "successful payload retires at child process exit"
+        assert list((run_root / ".earnings-temp-retirement").glob("*.jsonl"))
+    else:
+        assert fixture.read_bytes() == b"synthetic fixture"
     now = datetime.now(UTC) + timedelta(days=8)
     discovery = discover_temp_runs(source, code_root=source, now=now)
     catalog = discovery.catalog.model_copy(
@@ -85,13 +91,8 @@ def test_session_hook_registers_success_and_preserves_failure(
         }
     )
     retirement = run_retention(source, now=now, apply=True, catalog=catalog)
-    fixture = fixture_dir / "fixture.db"
-    if passed:
-        assert retirement.deleted == 1
-        assert not fixture.exists()
-    else:
-        assert retirement.deleted == 0
-        assert fixture.exists()
+    assert retirement.deleted == 0
+    assert fixture.exists() is not passed
     assert (run_root / ".earnings-temp-run.json").is_file()
     # Remove only the exact child test directory that this test created. Failed
     # session protection is already proved; this test does not leave test debris.

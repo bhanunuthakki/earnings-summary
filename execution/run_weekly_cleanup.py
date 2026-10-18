@@ -13,6 +13,7 @@ import os
 import re
 import stat
 import sys
+import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -930,11 +931,24 @@ def catalog_authority_roots(repo_root: Path, code_root: Path) -> tuple[Path, ...
     return (repo_root,)
 
 
+def system_temp_coverage_roots() -> list[tuple[Path, str]]:
+    """Count OS test pools; names select observation scope, never deletion rights."""
+    temporary = Path(os.path.abspath(tempfile.gettempdir())).resolve()
+    roots = [
+        (path, "unclassified")
+        for path in temporary.iterdir()
+        if path.name.startswith(("pytest-of-", "earnings-summary-pytest-controller-"))
+        and (_is_reparse_or_symlink(path) or path.is_dir())
+    ]
+    return sorted(roots, key=lambda item: str(item[0]))
+
+
 def external_temp_coverage_roots() -> list[tuple[Path, str]]:
     """Count legacy tests and deployment backups without deletion authority."""
+    roots = system_temp_coverage_roots()
     if os.name != "nt":
-        return []
-    roots = [(Path("C:/tmp"), "unclassified")]
+        return roots
+    roots.append((Path("C:/tmp"), "unclassified"))
     deployments = Path("C:/ProgramData/BhanuOperations/deployments")
     try:
         if any(_is_reparse_or_symlink(part) for part in (deployments, *deployments.parents)):

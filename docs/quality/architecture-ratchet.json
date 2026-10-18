@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "5aef8be95ec79102c5f8f7a811d09a4ecd5f77b8",
+  "scoped_commit": "68181820bb40ee25d2642f9cb95619ba8c10bb7f",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "1e3ef16cc81ceb92098533fc92e994fe3c2b51e72e2984c8313dd236b5864067",
+  "source_sha256": "e259a7d189af7c339a70ff5e12d1fba6366004b9960bf4def51615dc7a94e041",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,9 +22,9 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1451,
-    "total_noncomment_loc": 552106,
-    "modules_over_1000_loc": 104,
+    "executable_modules": 1452,
+    "total_noncomment_loc": 553352,
+    "modules_over_1000_loc": 105,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
     "max_internal_fan_out": 40,
@@ -1252,9 +1252,9 @@
         "path": "execution/build_kpi_semantic_refresh_manifest.py",
         "module": "execution.build_kpi_semantic_refresh_manifest",
         "lines": {
-          "physical": 608,
-          "nonblank": 566,
-          "noncomment": 562
+          "physical": 609,
+          "nonblank": 567,
+          "noncomment": 563
         },
         "internal_fan_out": 10,
         "responsibilities": [
@@ -5984,9 +5984,9 @@
         "path": "execution/run_weekly_cleanup.py",
         "module": "execution.run_weekly_cleanup",
         "lines": {
-          "physical": 1199,
-          "nonblank": 1094,
-          "noncomment": 1082
+          "physical": 1213,
+          "nonblank": 1106,
+          "noncomment": 1094
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -5994,8 +5994,8 @@
           "network",
           "process"
         ],
-        "public_functions": 5,
-        "fully_annotated_public_functions": 5
+        "public_functions": 6,
+        "fully_annotated_public_functions": 6
       },
       {
         "path": "execution/run_weekly_model_eval.py",
@@ -12887,17 +12887,17 @@
         "path": "src/operations/artifact_retention.py",
         "module": "operations.artifact_retention",
         "lines": {
-          "physical": 661,
-          "nonblank": 602,
-          "noncomment": 590
+          "physical": 879,
+          "nonblank": 810,
+          "noncomment": 792
         },
         "internal_fan_out": 0,
         "responsibilities": [
           "filesystem",
           "network"
         ],
-        "public_functions": 5,
-        "fully_annotated_public_functions": 5
+        "public_functions": 6,
+        "fully_annotated_public_functions": 6
       },
       {
         "path": "src/operations/attention.py",
@@ -13026,17 +13026,17 @@
         "path": "src/operations/kpi_semantic_review_export.py",
         "module": "operations.kpi_semantic_review_export",
         "lines": {
-          "physical": 551,
-          "nonblank": 490,
-          "noncomment": 490
+          "physical": 1138,
+          "nonblank": 1009,
+          "noncomment": 1005
         },
         "internal_fan_out": 1,
         "responsibilities": [
           "filesystem",
           "network"
         ],
-        "public_functions": 8,
-        "fully_annotated_public_functions": 8
+        "public_functions": 12,
+        "fully_annotated_public_functions": 12
       },
       {
         "path": "src/operations/models.py",
@@ -13147,12 +13147,27 @@
         "fully_annotated_public_functions": 1
       },
       {
+        "path": "src/operations/storage_reservation.py",
+        "module": "operations.storage_reservation",
+        "lines": {
+          "physical": 158,
+          "nonblank": 137,
+          "noncomment": 137
+        },
+        "internal_fan_out": 0,
+        "responsibilities": [
+          "filesystem"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
+      },
+      {
         "path": "src/operations/temp_coverage.py",
         "module": "operations.temp_coverage",
         "lines": {
-          "physical": 175,
-          "nonblank": 162,
-          "noncomment": 158
+          "physical": 190,
+          "nonblank": 177,
+          "noncomment": 171
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -13166,17 +13181,17 @@
         "path": "src/operations/temp_run_retention.py",
         "module": "operations.temp_run_retention",
         "lines": {
-          "physical": 493,
-          "nonblank": 443,
-          "noncomment": 441
+          "physical": 877,
+          "nonblank": 809,
+          "noncomment": 807
         },
         "internal_fan_out": 0,
         "responsibilities": [
           "filesystem",
           "network"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 6,
+        "fully_annotated_public_functions": 6
       },
       {
         "path": "src/owner_profile/__init__.py",
