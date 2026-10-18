@@ -288,18 +288,21 @@ def test_live_process_holder_timeout_recovers_after_connection_close(
 ) -> None:
     db, ready = tmp_path / "process.db", tmp_path / "ready"
     code = (
-        "import sys; from pathlib import Path; "
+        "import os, sys; from pathlib import Path; "
         "from sqlite_runtime import SQLiteConnectionRole, connect_sqlite; "
         "conn=connect_sqlite(sys.argv[1], role=SQLiteConnectionRole.WRITER, schema_preflight=False); "
         "conn.execute('CREATE TABLE sample (value INTEGER)'); conn.commit(); "
-        "Path(sys.argv[2]).write_text('ready'); sys.stdin.buffer.read(1); conn.close()"
+        "Path(sys.argv[2]).write_text(str(os.getpid())); sys.stdin.buffer.read(1); conn.close()"
     )
     env = dict(os.environ)
     env[db_writer_gate.CHAIN_WRITER_DB_ENV] = str(db)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
     monkeypatch.setattr(db_writer_gate, "WRITER_GATE_TIMEOUT_S", 0.06)
+    script = tmp_path / "writer-holder.py"
+    script.write_text(code)
+    bootstrap = Path(__file__).resolve().parents[1] / "execution/sqlite_bootstrap.py"
     process = subprocess.Popen(
-        [sys.executable, "-c", code, str(db), str(ready)],
+        [sys.executable, str(bootstrap), str(script), str(db), str(ready)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -315,7 +318,10 @@ def test_live_process_holder_timeout_recovers_after_connection_close(
             with pytest.raises(WriterGateHeldError) as caught:
                 connect_sqlite(db, role=SQLiteConnectionRole.WRITER, schema_preflight=False)
             assert 0.04 <= time.monotonic() - started < 1.0
-            assert caught.value.holder["pid"] == process.pid
+            holder_pid = int(ready.read_text())
+            assert caught.value.holder["pid"] == holder_pid
+            if os.name != "nt":
+                assert holder_pid == process.pid
             assert process.poll() is None
             assert process.stdin is not None
             process.stdin.write(b"x")
@@ -459,11 +465,14 @@ def test_stale_takeover_serializes_two_real_contenders(tmp_path: Path) -> None:
     env = dict(os.environ)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
     processes: list[subprocess.Popen[bytes]] = []
+    script = tmp_path / "stale-contender.py"
+    script.write_text(_STALE_CONTENDER)
+    bootstrap = Path(__file__).resolve().parents[1] / "execution/sqlite_bootstrap.py"
 
     def start(tag: str) -> None:
         processes.append(
             subprocess.Popen(
-                [sys.executable, "-c", _STALE_CONTENDER, str(tmp_path), tag],
+                [sys.executable, str(bootstrap), str(script), str(tmp_path), tag],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
@@ -563,8 +572,11 @@ with gate._ownership_transition_guard(lock, deadline=time.monotonic()+5):
 """
     env = dict(os.environ)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    script = tmp_path / "writer-holder.py"
+    script.write_text(code)
+    bootstrap = Path(__file__).resolve().parents[1] / "execution/sqlite_bootstrap.py"
     process = subprocess.Popen(
-        [sys.executable, "-c", code, str(db), str(ready)],
+        [sys.executable, str(bootstrap), str(script), str(db), str(ready)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

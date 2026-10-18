@@ -1089,7 +1089,8 @@ def test_semantic_review_export_is_content_addressed_and_current_portfolio_scope
 
     assert loaded == export
     assert index.ticker_manifests[0].partitions[0].content_sha256 == export.content_sha256
-    assert payload == (root / "artifacts" / f"{export.content_sha256}.json").read_bytes()
+    assert payload == export_module.encoded_kpi_semantic_review_export(export)
+    assert (root / "artifacts" / f"{export.content_sha256}.json").is_file()
     with pytest.raises(KpiSemanticReviewExportError, match="outside the current portfolio"):
         load_current_kpi_semantic_review_export(
             root=root,

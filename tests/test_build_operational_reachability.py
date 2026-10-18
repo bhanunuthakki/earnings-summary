@@ -202,7 +202,7 @@ def test_actual_head_is_supported() -> None:
             line=line,
             unknown=True,
         )
-        for line in (201, 289, 330)
+        for line in (219, 307, 348)
     ]
     # The native fence tests read a fixed GenericMapping field tuple and select
     # GetCurrentProcess or GetCurrentThread for read-only token observation.
@@ -220,11 +220,12 @@ def test_actual_head_is_supported() -> None:
         )
         for line in (123, 913)
     ]
-    # Two managed-startup regressions add fresh subprocess seams. Keep the
-    # existing native bootstrap seam and reject any other additions in these files.
+    # Keep the exact managed-startup and shared-ledger admission test children.
+    # Reject any other additions in these files.
     for source, lines in (
         ("tests/test_sqlite_bootstrap.py", (32, 108)),
         ("tests/test_weekly_cleanup.py", (190,)),
+        ("tests/test_storage_reservation.py", (54,)),
     ):
         assert [edge for edge in graph.unknown_edges if edge.source == source] == [
             GraphEdge(
@@ -238,9 +239,9 @@ def test_actual_head_is_supported() -> None:
             )
             for line in lines
         ]
-    # Retain main's 155 test seams, the Windows held-handle child and three
-    # writer-gate regression children. No production gap is admitted.
-    assert len(graph.unknown_edges) == 159
+    # Retain the 159 existing test seams and one shared-ledger admission child.
+    # No production gap is admitted.
+    assert len(graph.unknown_edges) == 160
     assert [
         edge for edge in graph.unknown_edges if edge.source == "tests/test_db_writer_gate.py"
     ] == [
@@ -253,7 +254,7 @@ def test_actual_head_is_supported() -> None:
             line=line,
             unknown=True,
         )
-        for line in (301, 465, 566)
+        for line in (304, 474, 578)
     ]
     assert [
         edge
@@ -307,7 +308,7 @@ def test_actual_head_is_supported() -> None:
             kind="unknown",
             evidence="subprocess/runpy expression",
             confidence="low",
-            line=62,
+            line=56,
             unknown=True,
         )
     ]

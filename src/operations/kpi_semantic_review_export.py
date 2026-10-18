@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import os
 import re
+import stat
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, Self
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 from pydantic_core import to_jsonable_python
 
 from pipeline.kpi_semantic_review import KpiSemanticReviewBatch
@@ -22,6 +25,8 @@ KPI_SEMANTIC_EXPORT_RELATIVE_ROOT = Path("data/operations/kpi_semantic_reviews")
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _TICKER_PATTERN = re.compile(r"^[A-Z][A-Z0-9.-]{0,14}$")
 _LATEST_MAX_BYTES = 1_000_000
+_LOG = logging.getLogger(__name__)
+OPERATIONS_GOVERNANCE_DISPOSITION = "no-surface-change: exact v2 reader and publisher contracts"
 
 
 class KpiSemanticReviewExportError(RuntimeError):
@@ -292,11 +297,536 @@ def encoded_kpi_semantic_review_ticker_manifest(
     return encoded
 
 
+class _SealedModel(_FrozenModel):
+    content_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+    @model_validator(mode="after")
+    def _check_seal(self) -> Self:
+        if self.content_sha256 != _payload_sha256(
+            self.model_dump(mode="json", exclude={"content_sha256"})
+        ):
+            raise ValueError("stored semantic review hash is invalid")
+        return self
+
+
+class _SemanticBlob(_SealedModel):
+    schema_version: Literal["kpi_semantic_blob.v1"] = "kpi_semantic_blob.v1"
+    payload: dict[str, JsonValue]
+
+
+class _StoredPointer(_FrozenModel):
+    wire_sha256: str = Field(pattern=_SHA256_PATTERN)
+    semantic_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+
+
+class _ArtifactDescriptor(_SealedModel):
+    schema_version: Literal["kpi_semantic_descriptor.v1"] = "kpi_semantic_descriptor.v1"
+    observed_at: datetime
+    wire_sha256: str = Field(pattern=_SHA256_PATTERN)
+    semantic_sha256: str = Field(pattern=_SHA256_PATTERN)
+
+
+class _Allocation(_FrozenModel):
+    new_blob_count: int = Field(default=0, ge=0)
+    new_blob_bytes: int = Field(default=0, ge=0)
+    reused_blob_count: int = Field(default=0, ge=0)
+    reused_blob_bytes: int = Field(default=0, ge=0)
+    new_descriptor_count: int = Field(default=0, ge=0)
+    new_descriptor_bytes: int = Field(default=0, ge=0)
+    predecessor_capture_bytes: int = Field(default=0, ge=0, le=_LATEST_MAX_BYTES)
+    served_wire_bytes: int = Field(default=0, ge=0)
+
+
+class _Capture(_SealedModel):
+    schema_version: Literal["kpi_semantic_capture.v1"] = "kpi_semantic_capture.v1"
+    index: KpiSemanticReviewExportIndex
+    pointers: tuple[_StoredPointer, ...]
+    previous_capture_index_sha256: str | None = Field(default=None, pattern=_SHA256_PATTERN)
+    allocation: _Allocation
+
+    @model_validator(mode="after")
+    def _check_pointers(self) -> Self:
+        expected = tuple(
+            pointer.content_sha256
+            for manifest in self.index.ticker_manifests
+            for pointer in manifest.partitions
+        )
+        if tuple(pointer.wire_sha256 for pointer in self.pointers) != expected:
+            raise ValueError("capture pointers do not match the complete public index")
+        allocation = self.allocation
+        if allocation.served_wire_bytes != sum(
+            pointer.byte_size
+            for manifest in self.index.ticker_manifests
+            for pointer in manifest.partitions
+        ):
+            raise ValueError("capture wire accounting does not match its complete public index")
+        if (
+            allocation.new_blob_count + allocation.reused_blob_count > len(expected)
+            or allocation.new_descriptor_count > len(expected)
+            or allocation.new_blob_bytes > allocation.new_blob_count * MAX_KPI_SEMANTIC_EXPORT_BYTES
+            or allocation.reused_blob_bytes
+            > allocation.reused_blob_count * MAX_KPI_SEMANTIC_EXPORT_BYTES
+            or allocation.new_descriptor_bytes > allocation.new_descriptor_count * _LATEST_MAX_BYTES
+        ):
+            raise ValueError("capture allocation exceeds its bounded object counts")
+        if self.previous_capture_index_sha256 == self.index.content_sha256:
+            raise ValueError("capture predecessor cannot refer to itself")
+        return self
+
+
+class KpiSemanticReviewStorageObservation(_FrozenModel):
+    """New immutable bytes attributed to one publication, not retained directory size."""
+
+    schema_version: Literal["storage-producer-observation/v1"] = "storage-producer-observation/v1"
+    id: Literal["kpi-semantic-review"] = "kpi-semantic-review"
+    kind: Literal["exports"] = "exports"
+    observed_at: datetime
+    logical_bytes: int = Field(ge=0)
+    files: int = Field(ge=0)
+    publisher_mode: Literal["managed"] = "managed"
+    pending_since: None = None
+    metric: Literal["publication_created_logical_bytes"] = "publication_created_logical_bytes"
+    new_blob_count: int
+    new_blob_bytes: int
+    reused_blob_count: int
+    reused_blob_bytes: int
+    new_descriptor_count: int
+    new_descriptor_bytes: int
+    capture_bytes: int
+    served_wire_bytes: int
+    capture_index_sha256: str = Field(pattern=_SHA256_PATTERN)
+    preservation_digest: str = Field(pattern=_SHA256_PATTERN)
+    previous_capture_index_sha256: str | None
+
+
+class KpiSemanticReviewStoragePreservation(_FrozenModel):
+    """Validated current and one tested predecessor; this grants no deletion authority."""
+
+    current_capture_index_sha256: str
+    previous_capture_index_sha256: str | None
+    capture_paths: tuple[Path, ...]
+    semantic_blob_paths: tuple[Path, ...]
+    descriptor_paths: tuple[Path, ...]
+    legacy_artifact_paths: tuple[Path, ...]
+    preservation_digest: str
+
+
+def _encoded_private(model: _FrozenModel, *, bound: int) -> bytes:
+    encoded = model.model_dump_json().encode("utf-8") + b"\n"
+    if len(encoded) > bound:
+        raise KpiSemanticReviewExportError("stored semantic review exceeds its byte bound")
+    return encoded
+
+
+def _semantic_blob(export: KpiSemanticReviewExport) -> _SemanticBlob:
+    # Only these two envelope clocks and their derived hashes are removed.
+    payload = export.model_dump(mode="json", exclude={"observed_at", "content_sha256"})
+    review = export.review.model_dump(mode="json", exclude={"observed_at", "content_sha256"})
+    payload["review"] = review
+    sealed = {"schema_version": "kpi_semantic_blob.v1", "payload": payload}
+    return _SemanticBlob.model_validate({**sealed, "content_sha256": _payload_sha256(sealed)})
+
+
+def _restore_export(blob: _SemanticBlob, observed_at: datetime) -> KpiSemanticReviewExport:
+    payload = dict(blob.payload)
+    nested = payload.get("review")
+    if not isinstance(nested, dict):
+        raise KpiSemanticReviewExportError("semantic blob review is invalid")
+    review = dict(nested)
+    review["observed_at"] = observed_at.isoformat().replace("+00:00", "Z")
+    review["content_sha256"] = _payload_sha256(review)
+    payload["review"] = review
+    payload["observed_at"] = review["observed_at"]
+    payload["content_sha256"] = _payload_sha256(payload)
+    try:
+        export = KpiSemanticReviewExport.model_validate(payload)
+    except ValueError as exc:
+        raise KpiSemanticReviewExportError("semantic blob reconstruction is invalid") from exc
+    if _semantic_blob(export) != blob:
+        raise KpiSemanticReviewExportError("semantic blob contains noncanonical fields")
+    return export
+
+
+def _check_path(path: Path, *, leaf_optional: bool = False) -> None:
+    absolute = path.absolute()
+    if ".." in absolute.parts:
+        raise KpiSemanticReviewExportError("semantic storage path is invalid")
+    for component in (*reversed(absolute.parents), absolute):
+        try:
+            info = component.lstat()
+        except FileNotFoundError:
+            if leaf_optional:
+                continue
+            raise KpiSemanticReviewExportError("semantic storage is unavailable") from None
+        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+            raise KpiSemanticReviewExportError("semantic storage link is refused")
+        if component != absolute and not stat.S_ISDIR(info.st_mode):
+            raise KpiSemanticReviewExportError("semantic storage ancestor is invalid")
+        if component == absolute and stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
+            raise KpiSemanticReviewExportError("semantic storage hard link is refused")
+
+
+def _file_identity(info: os.stat_result) -> tuple[int, int, int, int, int]:
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_nlink
+
+
+def _read_bounded(path: Path, bound: int) -> bytes:
+    _check_path(path)
+    try:
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode):
+            raise KpiSemanticReviewExportError("semantic storage file is invalid")
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(descriptor, "rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+                opened.st_dev,
+                opened.st_ino,
+                opened.st_size,
+                opened.st_mtime_ns,
+            ) or opened.st_nlink != 1:
+                raise KpiSemanticReviewExportError("semantic storage identity changed")
+            payload = handle.read(bound + 1)
+            after = os.fstat(handle.fileno())
+        if _file_identity(opened) != _file_identity(after) or _file_identity(
+            path.lstat()
+        ) != _file_identity(before):
+            raise KpiSemanticReviewExportError("semantic storage identity changed")
+    except OSError as exc:
+        raise KpiSemanticReviewExportError("semantic storage is unavailable") from exc
+    if len(payload) > bound:
+        raise KpiSemanticReviewExportError("semantic storage exceeds its byte bound")
+    return payload
+
+
+def _sync_directory(path: Path) -> None:
+    if os.name != "nt":
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+
 def _atomic_write(path: Path, payload: bytes) -> None:
+    _check_path(path, leaf_optional=True)
     path.parent.mkdir(parents=True, exist_ok=True)
+    _check_path(path.parent)
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    temporary.write_bytes(payload)
-    temporary.replace(path)
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _check_path(path, leaf_optional=True)
+        temporary.replace(path)
+        try:
+            _sync_directory(path.parent)
+        except OSError:
+            # Replacement already committed; report durability evidence without a false rollback.
+            _LOG.warning("publication_committed_directory_sync_pending")
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_immutable(path: Path, payload: bytes, *, bound: int) -> bool:
+    _check_path(path, leaf_optional=True)
+    if path.exists():
+        if _read_bounded(path, bound) != payload:
+            raise KpiSemanticReviewExportError(
+                "content-addressed artifact conflicts with existing bytes"
+            )
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _check_path(path.parent)
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _check_path(path, leaf_optional=True)
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if _read_bounded(path, bound) != payload:
+                raise KpiSemanticReviewExportError(
+                    "content-addressed artifact conflicts with existing bytes"
+                ) from None
+            return False
+        _sync_directory(path.parent)
+        return True
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _capture_path(root: Path, digest: str) -> Path:
+    return root / "artifacts" / "captures" / f"{digest}.json"
+
+
+def _read_capture(root: Path, index: KpiSemanticReviewExportIndex) -> _Capture | None:
+    path = _capture_path(root, index.content_sha256)
+    _check_path(path, leaf_optional=True)
+    if not path.exists():
+        return None
+    try:
+        capture = _Capture.model_validate_json(_read_bounded(path, _LATEST_MAX_BYTES))
+    except ValueError as exc:
+        raise KpiSemanticReviewExportError("semantic capture is invalid") from exc
+    if capture.index != index:
+        raise KpiSemanticReviewExportError("semantic capture does not match the public index")
+    return capture
+
+
+def _index_manifest(
+    index: KpiSemanticReviewExportIndex, ticker: str
+) -> KpiSemanticReviewTickerManifest:
+    normalized = normalize_export_ticker(ticker)
+    manifest = next((item for item in index.ticker_manifests if item.ticker == normalized), None)
+    if manifest is None:
+        raise KpiSemanticReviewExportError("ticker is outside the current portfolio export")
+    return manifest
+
+
+class KpiSemanticReviewStorageComponents(_FrozenModel):
+    """Pure preparation. No replacement, retention or roster authority is granted."""
+
+    semantic_sha256: str
+    blob_bytes: bytes
+    descriptor_bytes: bytes
+    wire_bytes: bytes
+    wire_sha256: str
+
+
+def prepare_kpi_semantic_review_storage(
+    export: KpiSemanticReviewExport,
+) -> KpiSemanticReviewStorageComponents:
+    export = KpiSemanticReviewExport.model_validate(export.model_dump(mode="json"))
+    blob = _semantic_blob(export)
+    descriptor_payload = {
+        "schema_version": "kpi_semantic_descriptor.v1",
+        "observed_at": export.observed_at,
+        "wire_sha256": export.content_sha256,
+        "semantic_sha256": blob.content_sha256,
+    }
+    descriptor = _ArtifactDescriptor.model_validate(
+        {**descriptor_payload, "content_sha256": _payload_sha256(descriptor_payload)}
+    )
+    if _restore_export(blob, export.observed_at) != export:
+        raise KpiSemanticReviewExportError("semantic export reconstruction conflicts")
+    return KpiSemanticReviewStorageComponents(
+        semantic_sha256=blob.content_sha256,
+        blob_bytes=_encoded_private(blob, bound=MAX_KPI_SEMANTIC_EXPORT_BYTES),
+        descriptor_bytes=_encoded_private(descriptor, bound=_LATEST_MAX_BYTES),
+        wire_bytes=encoded_kpi_semantic_review_export(export),
+        wire_sha256=export.content_sha256,
+    )
+
+
+def _decode_artifact(path: Path) -> tuple[KpiSemanticReviewExport, bytes, str | None]:
+    physical = _read_bounded(path, MAX_KPI_SEMANTIC_EXPORT_BYTES)
+    try:
+        descriptor = _ArtifactDescriptor.model_validate_json(physical)
+    except ValueError:
+        try:
+            export = KpiSemanticReviewExport.model_validate_json(physical)
+        except ValueError as exc:
+            raise KpiSemanticReviewExportError(
+                "semantic review export artifact is invalid"
+            ) from exc
+        return export, physical, None
+    if path.parent.name != "artifacts" or path.name != f"{descriptor.wire_sha256}.json":
+        raise KpiSemanticReviewExportError("semantic descriptor path identity is invalid")
+    try:
+        blob = _SemanticBlob.model_validate_json(
+            _read_bounded(
+                path.parent / "semantic" / f"{descriptor.semantic_sha256}.json",
+                MAX_KPI_SEMANTIC_EXPORT_BYTES,
+            )
+        )
+    except ValueError as exc:
+        raise KpiSemanticReviewExportError("semantic blob is invalid") from exc
+    if blob.content_sha256 != descriptor.semantic_sha256:
+        raise KpiSemanticReviewExportError("semantic blob identity is invalid")
+    export = _restore_export(blob, descriptor.observed_at)
+    if export.content_sha256 != descriptor.wire_sha256:
+        raise KpiSemanticReviewExportError("semantic descriptor wire identity is invalid")
+    return export, encoded_kpi_semantic_review_export(export), blob.content_sha256
+
+
+def decode_kpi_semantic_review_artifact(*, path: Path) -> tuple[KpiSemanticReviewExport, bytes]:
+    """Strict explicit-path legacy/descriptor read; does not claim current roster membership."""
+    export, payload, _ = _decode_artifact(path)
+    return export, payload
+
+
+def _read_partition(
+    root: Path,
+    index: KpiSemanticReviewExportIndex,
+    manifest: KpiSemanticReviewTickerManifest,
+    pointer: KpiSemanticReviewArtifactPointer,
+    capture: _Capture | None,
+) -> tuple[KpiSemanticReviewExport, bytes]:
+    artifact = root / "artifacts" / f"{pointer.content_sha256}.json"
+    export, payload, semantic_sha = _decode_artifact(artifact)
+    if semantic_sha is not None and capture is None:
+        raise KpiSemanticReviewExportError("semantic capture is unavailable")
+    if capture is not None:
+        stored = next(
+            item for item in capture.pointers if item.wire_sha256 == pointer.content_sha256
+        )
+        if stored.semantic_sha256 != semantic_sha:
+            raise KpiSemanticReviewExportError("semantic artifact conflicts with its capture")
+    if len(payload) != pointer.byte_size:
+        raise KpiSemanticReviewExportError(
+            "semantic review export artifact violates its byte bound"
+        )
+    if (
+        export.content_sha256 != pointer.content_sha256
+        or export.ticker != manifest.ticker
+        or export.partition_ordinal != pointer.ordinal
+        or export.review.total_items != pointer.item_count
+        or export.after_fact_id != pointer.after_fact_id
+        or export.next_after_fact_id != pointer.next_after_fact_id
+        or export.observed_at != manifest.observed_at
+        or export.user_id != manifest.user_id
+        or export.code_instance_sha256 != manifest.code_instance_sha256
+        or export.database_instance_sha256 != manifest.database_instance_sha256
+        or export.schema_revision != manifest.schema_revision
+    ):
+        raise KpiSemanticReviewExportError(
+            "semantic review export artifact does not match its current ticker manifest"
+        )
+    return export, payload
+
+
+def _validate_capture_artifacts(root: Path, capture: _Capture) -> None:
+    for manifest in capture.index.ticker_manifests:
+        for pointer in manifest.partitions:
+            _read_partition(root, capture.index, manifest, pointer, capture)
+
+
+def _seal_capture(
+    index: KpiSemanticReviewExportIndex,
+    pointers: tuple[_StoredPointer, ...],
+    previous: str | None,
+    allocation: _Allocation,
+) -> _Capture:
+    payload = {
+        "schema_version": "kpi_semantic_capture.v1",
+        "index": index,
+        "pointers": pointers,
+        "previous_capture_index_sha256": previous,
+        "allocation": allocation,
+    }
+    return _Capture.model_validate({**payload, "content_sha256": _payload_sha256(payload)})
+
+
+def _preservation_digest(capture: _Capture) -> str:
+    return _payload_sha256(
+        {
+            "current": capture.index.content_sha256,
+            "previous": capture.previous_capture_index_sha256,
+            "pointers": capture.pointers,
+        }
+    )
+
+
+def _observation(capture: _Capture) -> KpiSemanticReviewStorageObservation:
+    allocation = capture.allocation
+    capture_bytes = (
+        len(_encoded_private(capture, bound=_LATEST_MAX_BYTES))
+        + allocation.predecessor_capture_bytes
+    )
+    return KpiSemanticReviewStorageObservation(
+        observed_at=capture.index.observed_at,
+        logical_bytes=allocation.new_blob_bytes + allocation.new_descriptor_bytes + capture_bytes,
+        files=allocation.new_blob_count
+        + allocation.new_descriptor_count
+        + 1
+        + int(allocation.predecessor_capture_bytes > 0),
+        new_blob_count=allocation.new_blob_count,
+        new_blob_bytes=allocation.new_blob_bytes,
+        reused_blob_count=allocation.reused_blob_count,
+        reused_blob_bytes=allocation.reused_blob_bytes,
+        new_descriptor_count=allocation.new_descriptor_count,
+        new_descriptor_bytes=allocation.new_descriptor_bytes,
+        capture_bytes=capture_bytes,
+        served_wire_bytes=allocation.served_wire_bytes,
+        capture_index_sha256=capture.index.content_sha256,
+        preservation_digest=_preservation_digest(capture),
+        previous_capture_index_sha256=capture.previous_capture_index_sha256,
+    )
+
+
+def kpi_semantic_review_storage_observation(*, root: Path) -> KpiSemanticReviewStorageObservation:
+    """Read bounded sealed capture accounting without scanning semantic payloads."""
+    index = KpiSemanticReviewExportIndex.model_validate_json(
+        _read_bounded(root / "latest.json", _LATEST_MAX_BYTES)
+    )
+    capture = _read_capture(root, index)
+    if capture is None:
+        raise KpiSemanticReviewExportError("semantic capture accounting is unavailable")
+    return _observation(capture)
+
+
+def kpi_semantic_review_storage_preservation(*, root: Path) -> KpiSemanticReviewStoragePreservation:
+    index = KpiSemanticReviewExportIndex.model_validate_json(
+        _read_bounded(root / "latest.json", _LATEST_MAX_BYTES)
+    )
+    current = _read_capture(root, index)
+    if current is None:
+        raise KpiSemanticReviewExportError("semantic capture preservation is unavailable")
+    captures = [current]
+    if current.previous_capture_index_sha256 is not None:
+        try:
+            previous = _Capture.model_validate_json(
+                _read_bounded(
+                    _capture_path(root, current.previous_capture_index_sha256), _LATEST_MAX_BYTES
+                )
+            )
+        except ValueError as exc:
+            raise KpiSemanticReviewExportError("previous semantic capture is invalid") from exc
+        if previous.index.content_sha256 != current.previous_capture_index_sha256:
+            raise KpiSemanticReviewExportError("previous semantic capture identity is invalid")
+        captures.append(previous)
+    for capture in captures:
+        _validate_capture_artifacts(root, capture)
+    semantic = sorted(
+        {
+            root / "artifacts" / "semantic" / f"{pointer.semantic_sha256}.json"
+            for capture in captures
+            for pointer in capture.pointers
+            if pointer.semantic_sha256 is not None
+        }
+    )
+    descriptors = sorted(
+        {
+            root / "artifacts" / f"{pointer.wire_sha256}.json"
+            for capture in captures
+            for pointer in capture.pointers
+            if pointer.semantic_sha256 is not None
+        }
+    )
+    legacy = sorted(
+        {
+            root / "artifacts" / f"{pointer.wire_sha256}.json"
+            for capture in captures
+            for pointer in capture.pointers
+            if pointer.semantic_sha256 is None
+        }
+    )
+    return KpiSemanticReviewStoragePreservation(
+        current_capture_index_sha256=index.content_sha256,
+        previous_capture_index_sha256=current.previous_capture_index_sha256,
+        capture_paths=tuple(
+            _capture_path(root, capture.index.content_sha256) for capture in captures
+        ),
+        semantic_blob_paths=tuple(semantic),
+        descriptor_paths=tuple(descriptors),
+        legacy_artifact_paths=tuple(legacy),
+        preservation_digest=_preservation_digest(current),
+    )
 
 
 def _state_counts(exports: tuple[KpiSemanticReviewExport, ...]) -> dict[str, int]:
@@ -415,31 +945,133 @@ def publish_kpi_semantic_review_exports(
     if len(encoded_index) > _LATEST_MAX_BYTES:
         raise KpiSemanticReviewExportError("semantic review export index exceeds its byte bound")
 
-    artifact_root = root / "artifacts"
-    for export, encoded in encoded_by_export:
-        destination = artifact_root / f"{export.content_sha256}.json"
-        if destination.exists():
-            try:
-                with destination.open("rb") as handle:
-                    existing = handle.read(MAX_KPI_SEMANTIC_EXPORT_BYTES + 1)
-            except OSError as exc:
-                raise KpiSemanticReviewExportError(
-                    "content-addressed semantic review artifact is unavailable"
-                ) from exc
-            if len(existing) > MAX_KPI_SEMANTIC_EXPORT_BYTES:
-                raise KpiSemanticReviewExportError(
-                    "content-addressed semantic review artifact exceeds its byte bound"
-                )
-            if existing != encoded:
-                raise KpiSemanticReviewExportError(
-                    "content-addressed semantic review artifact conflicts with existing bytes"
-                )
-    for export, encoded in encoded_by_export:
-        destination = artifact_root / f"{export.content_sha256}.json"
-        if not destination.exists():
-            _atomic_write(destination, encoded)
+    try:
+        return _publish_storage(root, index, encoded_index, tuple(encoded_by_export))
+    except (OSError, ValueError) as exc:
+        raise KpiSemanticReviewExportError(
+            "semantic review publication failed before pointer commit"
+        ) from exc
+
+
+def _publish_storage(
+    root: Path,
+    index: KpiSemanticReviewExportIndex,
+    encoded_index: bytes,
+    encoded_exports: tuple[tuple[KpiSemanticReviewExport, bytes], ...],
+) -> KpiSemanticReviewExportIndex:
+    previous: _Capture | None = None
+    predecessor_bytes = 0
+    _check_path(root / "latest.json", leaf_optional=True)
+    if (root / "latest.json").exists():
+        prior_index = KpiSemanticReviewExportIndex.model_validate_json(
+            _read_bounded(root / "latest.json", _LATEST_MAX_BYTES)
+        )
+        previous = _read_capture(root, prior_index)
+        if previous is None:
+            for manifest in prior_index.ticker_manifests:
+                for pointer in manifest.partitions:
+                    _read_partition(root, prior_index, manifest, pointer, None)
+            previous = _seal_capture(
+                prior_index,
+                tuple(
+                    _StoredPointer(wire_sha256=pointer.content_sha256)
+                    for manifest in prior_index.ticker_manifests
+                    for pointer in manifest.partitions
+                ),
+                None,
+                _Allocation(
+                    served_wire_bytes=sum(
+                        pointer.byte_size
+                        for manifest in prior_index.ticker_manifests
+                        for pointer in manifest.partitions
+                    )
+                ),
+            )
+            previous_payload = _encoded_private(previous, bound=_LATEST_MAX_BYTES)
+            if _write_immutable(
+                _capture_path(root, prior_index.content_sha256),
+                previous_payload,
+                bound=_LATEST_MAX_BYTES,
+            ):
+                predecessor_bytes = len(previous_payload)
+        _validate_capture_artifacts(root, previous)
+        if prior_index == index:
+            observation = _observation(previous)
+            _write_observation(root, observation)
+            return index
+        # Test only the named predecessor; do not chase unbounded history chains.
+        kpi_semantic_review_storage_preservation(root=root)
+    pointers: list[_StoredPointer] = []
+    new_blobs: dict[str, int] = {}
+    reused_blobs: dict[str, int] = {}
+    descriptor_count = descriptor_bytes = 0
+    for export, wire in encoded_exports:
+        components = prepare_kpi_semantic_review_storage(export)
+        blob_sha = components.semantic_sha256
+        blob_bytes = components.blob_bytes
+        artifact = root / "artifacts" / f"{export.content_sha256}.json"
+        physical = components.descriptor_bytes
+        _check_path(artifact, leaf_optional=True)
+        if artifact.exists() and _read_bounded(artifact, MAX_KPI_SEMANTIC_EXPORT_BYTES) == wire:
+            pointers.append(_StoredPointer(wire_sha256=export.content_sha256))
+            continue
+        if _write_immutable(
+            root / "artifacts" / "semantic" / f"{blob_sha}.json",
+            blob_bytes,
+            bound=MAX_KPI_SEMANTIC_EXPORT_BYTES,
+        ):
+            new_blobs[blob_sha] = len(blob_bytes)
+        elif blob_sha not in new_blobs:
+            reused_blobs[blob_sha] = len(blob_bytes)
+        if _write_immutable(artifact, physical, bound=MAX_KPI_SEMANTIC_EXPORT_BYTES):
+            descriptor_count += 1
+            descriptor_bytes += len(physical)
+        pointers.append(_StoredPointer(wire_sha256=export.content_sha256, semantic_sha256=blob_sha))
+    candidate = _seal_capture(
+        index,
+        tuple(pointers),
+        previous.index.content_sha256 if previous else None,
+        _Allocation(
+            new_blob_count=len(new_blobs),
+            new_blob_bytes=sum(new_blobs.values()),
+            reused_blob_count=len(reused_blobs),
+            reused_blob_bytes=sum(reused_blobs.values()),
+            new_descriptor_count=descriptor_count,
+            new_descriptor_bytes=descriptor_bytes,
+            predecessor_capture_bytes=predecessor_bytes,
+            served_wire_bytes=sum(len(wire) for _, wire in encoded_exports),
+        ),
+    )
+    existing = _read_capture(root, index)
+    if existing is not None:
+        if (
+            existing.pointers != candidate.pointers
+            or existing.previous_capture_index_sha256 != candidate.previous_capture_index_sha256
+        ):
+            raise KpiSemanticReviewExportError(
+                "semantic capture conflicts with pending publication"
+            )
+        candidate = existing  # Preserve original admission accounting across an interrupted retry.
+    _write_immutable(
+        _capture_path(root, index.content_sha256),
+        _encoded_private(candidate, bound=_LATEST_MAX_BYTES),
+        bound=_LATEST_MAX_BYTES,
+    )
+    _validate_capture_artifacts(root, candidate)
     _atomic_write(root / "latest.json", encoded_index)
+    _write_observation(root, _observation(candidate))
     return index
+
+
+def _write_observation(root: Path, observation: KpiSemanticReviewStorageObservation) -> None:
+    try:
+        _atomic_write(
+            root / "storage-observation.json",
+            _encoded_private(observation, bound=_LATEST_MAX_BYTES),
+        )
+    except (OSError, KpiSemanticReviewExportError):
+        # The public pointer already committed. Optional telemetry must not undo it.
+        _LOG.warning("publication_committed_metadata_pending")
 
 
 def _load_current_index(
@@ -447,14 +1079,7 @@ def _load_current_index(
 ) -> tuple[KpiSemanticReviewExportIndex, bytes]:
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
-    latest = root / "latest.json"
-    try:
-        with latest.open("rb") as handle:
-            payload = handle.read(_LATEST_MAX_BYTES + 1)
-    except OSError as exc:
-        raise KpiSemanticReviewExportError("semantic review export index is unavailable") from exc
-    if len(payload) > _LATEST_MAX_BYTES:
-        raise KpiSemanticReviewExportError("semantic review export index exceeds its byte bound")
+    payload = _read_bounded(root / "latest.json", _LATEST_MAX_BYTES)
     try:
         index = KpiSemanticReviewExportIndex.model_validate_json(payload)
     except Exception as exc:
@@ -467,11 +1092,8 @@ def _load_current_index(
 def load_current_kpi_semantic_review_ticker_manifest(
     *, root: Path, ticker: str, now: datetime, max_age: timedelta
 ) -> tuple[KpiSemanticReviewTickerManifest, bytes]:
-    normalized = normalize_export_ticker(ticker)
     index, _ = _load_current_index(root=root, now=now, max_age=max_age)
-    manifest = next((item for item in index.ticker_manifests if item.ticker == normalized), None)
-    if manifest is None:
-        raise KpiSemanticReviewExportError("ticker is outside the current portfolio export")
+    manifest = _index_manifest(index, ticker)
     return manifest, encoded_kpi_semantic_review_ticker_manifest(manifest)
 
 
@@ -485,9 +1107,8 @@ def load_current_kpi_semantic_review_partition(
 ) -> tuple[KpiSemanticReviewExport, bytes]:
     if re.fullmatch(_SHA256_PATTERN, content_sha256) is None:
         raise KpiSemanticReviewExportError("semantic review partition hash is invalid")
-    manifest, _ = load_current_kpi_semantic_review_ticker_manifest(
-        root=root, ticker=ticker, now=now, max_age=max_age
-    )
+    index, _ = _load_current_index(root=root, now=now, max_age=max_age)
+    manifest = _index_manifest(index, ticker)
     pointer = next(
         (item for item in manifest.partitions if item.content_sha256 == content_sha256), None
     )
@@ -495,57 +1116,23 @@ def load_current_kpi_semantic_review_partition(
         raise KpiSemanticReviewExportError(
             "semantic review partition is not referenced by the current ticker manifest"
         )
-    artifact = root / "artifacts" / f"{pointer.content_sha256}.json"
-    try:
-        with artifact.open("rb") as handle:
-            payload = handle.read(MAX_KPI_SEMANTIC_EXPORT_BYTES + 1)
-    except OSError as exc:
-        raise KpiSemanticReviewExportError(
-            "semantic review export artifact is unavailable"
-        ) from exc
-    if len(payload) > MAX_KPI_SEMANTIC_EXPORT_BYTES or len(payload) != pointer.byte_size:
-        raise KpiSemanticReviewExportError(
-            "semantic review export artifact violates its byte bound"
-        )
-    try:
-        export = KpiSemanticReviewExport.model_validate_json(payload)
-    except Exception as exc:
-        raise KpiSemanticReviewExportError("semantic review export artifact is invalid") from exc
-    if (
-        export.content_sha256 != pointer.content_sha256
-        or export.ticker != manifest.ticker
-        or export.partition_ordinal != pointer.ordinal
-        or export.review.total_items != pointer.item_count
-        or export.after_fact_id != pointer.after_fact_id
-        or export.next_after_fact_id != pointer.next_after_fact_id
-        or export.observed_at != manifest.observed_at
-        or export.user_id != manifest.user_id
-        or export.code_instance_sha256 != manifest.code_instance_sha256
-        or export.database_instance_sha256 != manifest.database_instance_sha256
-        or export.schema_revision != manifest.schema_revision
-    ):
-        raise KpiSemanticReviewExportError(
-            "semantic review export artifact does not match its current ticker manifest"
-        )
-    return export, payload
+    return _read_partition(root, index, manifest, pointer, _read_capture(root, index))
 
 
 def load_current_kpi_semantic_review_export(
-    *, root: Path, ticker: str, now: datetime, max_age: timedelta
+    *,
+    root: Path,
+    ticker: str,
+    now: datetime,
+    max_age: timedelta,
 ) -> tuple[KpiSemanticReviewExport, bytes]:
     """Compatibility loader for a current ticker with exactly one partition."""
-
-    manifest, _ = load_current_kpi_semantic_review_ticker_manifest(
-        root=root, ticker=ticker, now=now, max_age=max_age
-    )
+    index, _ = _load_current_index(root=root, now=now, max_age=max_age)
+    manifest = _index_manifest(index, ticker)
     if len(manifest.partitions) != 1:
         raise KpiSemanticReviewExportError(
             "ticker has multiple semantic review partitions; load an exact partition"
         )
-    return load_current_kpi_semantic_review_partition(
-        root=root,
-        ticker=manifest.ticker,
-        content_sha256=manifest.partitions[0].content_sha256,
-        now=now,
-        max_age=max_age,
+    return _read_partition(
+        root, index, manifest, manifest.partitions[0], _read_capture(root, index)
     )

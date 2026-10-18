@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from decimal import Decimal
 from pathlib import Path
 from typing import Literal
@@ -985,3 +985,66 @@ def test_rejects_unsupported_decision_action_and_review_state(tmp_path: Path) ->
             decisions=unsupported_decisions,
             now=NOW,
         )
+
+
+@pytest.mark.parametrize("descriptor", [False, True])
+def test_cli_reads_exact_raw_and_deduplicated_review_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, descriptor: bool
+) -> None:
+    import execution.build_kpi_semantic_refresh_manifest as owner
+    import operations.kpi_semantic_review_export as storage
+
+    conn = _database()
+    export = _export(_review(conn, tmp_path))
+    decisions = _decisions(export)
+    expected = build_kpi_semantic_refresh_manifest(
+        conn, repo_root=tmp_path, review_export=export, decisions=decisions, now=NOW
+    )
+    database = tmp_path / "synthetic.db"
+    target = sqlite3.connect(database)
+    conn.commit()
+    conn.backup(target)
+    target.close()
+    conn.close()
+    components = storage.prepare_kpi_semantic_review_storage(export)
+    artifact = tmp_path / "artifacts" / f"{export.content_sha256}.json"
+    artifact.parent.mkdir()
+    artifact.write_bytes(components.wire_bytes)
+    if descriptor:
+        blob_root = artifact.parent / "semantic"
+        blob_root.mkdir()
+        (blob_root / f"{components.semantic_sha256}.json").write_bytes(components.blob_bytes)
+        artifact.write_bytes(components.descriptor_bytes)
+    decision_path = tmp_path / "decisions.json"
+    decision_path.write_text(decisions.model_dump_json(), encoding="utf-8")
+    output = tmp_path / "refresh-manifest.json"
+
+    class FixtureClock(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            return NOW
+
+    monkeypatch.setattr(owner, "datetime", FixtureClock)
+    assert (
+        owner.main(
+            [
+                "--db",
+                str(database),
+                "--repo-root",
+                str(tmp_path),
+                "--review-export",
+                str(artifact),
+                "--decisions",
+                str(decision_path),
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+    actual = RefreshManifest.model_validate_json(output.read_bytes())
+    assert actual == expected
+    assert storage.decode_kpi_semantic_review_artifact(path=artifact) == (
+        export,
+        components.wire_bytes,
+    )
