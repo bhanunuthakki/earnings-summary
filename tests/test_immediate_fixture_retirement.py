@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import IO, Any, cast
 from unittest.mock import patch
 
 STAGED = Path(__file__).resolve().parent
@@ -213,8 +213,36 @@ class ImmediateFixtureTest(unittest.TestCase):
         for number in range(200):
             self.payload(f"fixtures/payload-{number}.bin")
         self.seal()
+        manifest = self.root / runs.MANIFEST_NAME
+        manifest_bytes = manifest.read_bytes()
+        original_open = Path.open
+        original_sha256 = hashlib.sha256
+        manifest_reads = initial_hashes = 0
+
+        def counted_open(
+            path: Path,
+            mode: str = "r",
+            buffering: int = -1,
+            encoding: str | None = None,
+            errors: str | None = None,
+            newline: str | None = None,
+        ) -> IO[Any]:
+            nonlocal manifest_reads
+            if path == manifest and mode == "rb":
+                manifest_reads += 1
+            return original_open(path, mode, buffering, encoding, errors, newline)
+
+        def counted_sha256(data: bytes = b"", *, usedforsecurity: bool = True) -> object:
+            nonlocal initial_hashes
+            if data == manifest_bytes:
+                initial_hashes += 1
+            return original_sha256(data, usedforsecurity=usedforsecurity)
+
         vars(artifacts)["_MANIFEST_CACHE"].clear()
         with (
+            patch.object(Path, "open", counted_open),
+            patch.object(hashlib, "sha256", side_effect=counted_sha256),
+            patch.object(artifacts, "_hash", wraps=vars(artifacts)["_hash"]) as file_hash,
             patch.object(
                 artifacts, "_decode_manifest", wraps=vars(artifacts)["_decode_manifest"]
             ) as decode,
@@ -229,6 +257,48 @@ class ImmediateFixtureTest(unittest.TestCase):
         self.assertEqual(decode.call_count, 1)
         self.assertLessEqual(matches.call_count, 600)
         self.assertLessEqual(len(vars(artifacts)["_MANIFEST_CACHE"]), 2)
+        # Two fresh reads/hashes per validation, planning plus apply, and three
+        # caller reads/hashes bind the exact manifest before retirement starts.
+        full_hashes = initial_hashes + sum(
+            call.args[0] == manifest for call in file_hash.call_args_list
+        )
+        self.assertLessEqual(manifest_reads, 803, f"reads={manifest_reads}, hashes={full_hashes}")
+        self.assertLessEqual(full_hashes, 803)
+
+    def test_manifest_pin_added_during_apply_hash_with_preserved_metadata_is_held(self):
+        payload = self.payload()
+        self.seal()
+        path = self.root / runs.MANIFEST_NAME
+        original = path.read_bytes() + b" " * 128
+        path.write_bytes(original)
+        metadata = path.stat()
+        mutated = json.loads(original)
+        mutated["pins"] = ["new owner hold"]
+        changed = json.dumps(mutated, separators=(",", ":")).encode()
+        self.assertLessEqual(len(changed), len(original))
+        changed += b" " * (len(original) - len(changed))
+        original_hash = vars(artifacts)["_hash"]
+        payload_hashes = 0
+
+        def mutate_during_apply_hash(current: Path) -> str:
+            nonlocal payload_hashes
+            digest = original_hash(current)
+            if current == payload:
+                payload_hashes += 1
+                if payload_hashes == 2:
+                    path.write_bytes(changed)
+                    os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+            return digest
+
+        with patch.object(artifacts, "_hash", side_effect=mutate_during_apply_hash):
+            result = self.retire()
+        self.assertEqual(payload_hashes, 2)
+        self.assertEqual(path.stat().st_size, metadata.st_size)
+        self.assertEqual(path.stat().st_mtime_ns, metadata.st_mtime_ns)
+        self.assertTrue(payload.exists())
+        self.assertEqual(result.deleted, 0)
+        self.assertEqual(result.errors, 1)
+        self.assertEqual(result.decisions[0].reason, "lifecycle_manifest_changed")
 
     def test_changed_manifest_hash_is_held_after_cache_population(self):
         payload = self.payload()

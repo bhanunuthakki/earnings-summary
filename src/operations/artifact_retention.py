@@ -16,7 +16,7 @@ from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import RLock
-from typing import Literal, cast
+from typing import Literal, NamedTuple, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -27,6 +27,12 @@ _MANIFEST_CACHE: OrderedDict[str, tuple[dict[str, object], dict[str, object] | N
     OrderedDict()
 )
 _MANIFEST_CACHE_LOCK = RLock()
+
+
+class _ManifestSnapshot(NamedTuple):
+    sha256: str
+    record: dict[str, object]
+    declarations: dict[str, object] | None
 
 
 def _decode_manifest(data: bytes) -> tuple[dict[str, object], dict[str, object] | None]:
@@ -48,22 +54,31 @@ def _decode_manifest(data: bytes) -> tuple[dict[str, object], dict[str, object] 
     return record, index
 
 
-def _manifest_view(data: bytes) -> tuple[dict[str, object], dict[str, object] | None]:
+def _manifest_view(data: bytes) -> _ManifestSnapshot:
     """Reuse parsing only after hashing freshly read bytes, never filesystem metadata."""
     digest = hashlib.sha256(data).hexdigest()
     if len(data) > _MANIFEST_CACHE_INPUT_LIMIT:
-        return _decode_manifest(data)
+        return _ManifestSnapshot(digest, *_decode_manifest(data))
     with _MANIFEST_CACHE_LOCK:
         cached = _MANIFEST_CACHE.get(digest)
         if cached is not None:
             _MANIFEST_CACHE.move_to_end(digest)
-            return cached
+            return _ManifestSnapshot(digest, *cached)
         value = _decode_manifest(data)
         _MANIFEST_CACHE[digest] = value
         _MANIFEST_CACHE.move_to_end(digest)
         while len(_MANIFEST_CACHE) > 2:
             _MANIFEST_CACHE.popitem(last=False)
-        return value
+        return _ManifestSnapshot(digest, *value)
+
+
+def _read_manifest_snapshot(path: Path) -> _ManifestSnapshot:
+    """Bind one validation to fresh bounded bytes, never cached file metadata."""
+    with path.open("rb") as handle:
+        data = handle.read(64 * 1024 * 1024 + 1)
+    if len(data) > 64 * 1024 * 1024:
+        raise ValueError("lifecycle manifest exceeds its byte bound")
+    return _manifest_view(data)
 
 
 class RetirementProof(BaseModel):
@@ -319,18 +334,15 @@ def fixture_git_hold(directory: Path, root: Path) -> str | None:
     return None
 
 
-def _fixture_binding(item: Artifact) -> str | None:
+def _fixture_binding(item: Artifact, snapshot: _ManifestSnapshot) -> str | None:
     """A fixture classification cannot be supplied by a catalog flag alone."""
     if item.lifecycle_manifest is None:
         return "unverified_fixture_ownership"
     try:
-        raw = item.lifecycle_manifest.read_bytes()
-        if len(raw) > 64 * 1024 * 1024:
-            return "unverified_fixture_ownership"
-        record, declarations = _manifest_view(raw)
+        record, declarations = snapshot.record, snapshot.declarations
         if record.get("disposable_class") != "isolated_test_fixture":
             return "unverified_fixture_ownership"
-        reason, _digest = _ancestor_lifecycle(item.lifecycle_manifest, item.allowed_root)
+        reason = _lifecycle_record_disposition(record, item.allowed_root)
         if reason is not None:
             # A failed receipt stays immutable; the separately bound resolution owns closure.
             resolution = item.allowed_root / ".earnings-temp-run-resolution.json"
@@ -340,7 +352,8 @@ def _fixture_binding(item: Artifact) -> str | None:
             if reason != "unfinished_lifecycle_manifest" or proof is None:
                 return reason
             original = record
-            record, declarations = _manifest_view(resolution.read_bytes())
+            resolution_snapshot = _read_manifest_snapshot(resolution)
+            record, declarations = resolution_snapshot.record, resolution_snapshot.declarations
             if (
                 original.get("status") != "failed"
                 or record.get("schema_version") != "earnings-temp-run-resolution/v1"
@@ -438,43 +451,45 @@ def _ancestor_lifecycle(path: Path, parent: Path) -> tuple[str | None, str | Non
     if not _safe_ancestors(path):
         return "linked_lifecycle_manifest", None
     try:
-        with path.open("rb") as handle:
-            data = handle.read(64 * 1024 * 1024 + 1)
-        if len(data) > 64 * 1024 * 1024:
-            return "unverified_lifecycle_manifest", None
-        record, _declarations = _manifest_view(data)
-        root = record.get("run_root")
-        pins = record.get("pins", [])
-        status = record.get("status")
-        if (
-            record.get("schema_version") != "earnings-temp-run/v1"
-            or record.get("owner") != "earnings-summary"
-            or not isinstance(root, str)
-            or not Path(root).is_absolute()
-            or ".." in Path(root).parts
-            or os.path.normcase(os.path.abspath(root)) != os.path.normcase(str(parent))
-            or not isinstance(pins, list)
-            or not isinstance(status, str)
-            or not isinstance(record.get("run_id"), str)
-            or not record.get("run_id")
-            or not isinstance(record.get("files"), list)
-        ):
-            return "unverified_lifecycle_manifest", None
-        if status in {"active", "failed"}:
-            return "unfinished_lifecycle_manifest", None
-        if status != "completed":
-            return "unverified_lifecycle_manifest", None
-        started, completed = record.get("started_at"), record.get("completed_at")
-        if not isinstance(started, str) or not isinstance(completed, str):
-            return "unverified_lifecycle_manifest", None
-        start, finish = datetime.fromisoformat(started), datetime.fromisoformat(completed)
-        if start.tzinfo is None or finish.tzinfo is None or finish < start:
-            return "unverified_lifecycle_manifest", None
-        if pins:
-            return "pinned_lifecycle_manifest", None
-        return None, hashlib.sha256(data).hexdigest()
+        snapshot = _read_manifest_snapshot(path)
+        reason = _lifecycle_record_disposition(snapshot.record, parent)
+        return reason, None if reason is not None else snapshot.sha256
     except (OSError, UnicodeError, ValueError):
         return "unverified_lifecycle_manifest", None
+
+
+def _lifecycle_record_disposition(record: dict[str, object], parent: Path) -> str | None:
+    """Validate a byte-bound record without rereading it within one check."""
+    root = record.get("run_root")
+    pins = record.get("pins", [])
+    status = record.get("status")
+    if (
+        record.get("schema_version") != "earnings-temp-run/v1"
+        or record.get("owner") != "earnings-summary"
+        or not isinstance(root, str)
+        or not Path(root).is_absolute()
+        or ".." in Path(root).parts
+        or os.path.normcase(os.path.abspath(root)) != os.path.normcase(str(parent))
+        or not isinstance(pins, list)
+        or not isinstance(status, str)
+        or not isinstance(record.get("run_id"), str)
+        or not record.get("run_id")
+        or not isinstance(record.get("files"), list)
+    ):
+        return "unverified_lifecycle_manifest"
+    if status in {"active", "failed"}:
+        return "unfinished_lifecycle_manifest"
+    if status != "completed":
+        return "unverified_lifecycle_manifest"
+    started, completed = record.get("started_at"), record.get("completed_at")
+    if not isinstance(started, str) or not isinstance(completed, str):
+        return "unverified_lifecycle_manifest"
+    start, finish = datetime.fromisoformat(started), datetime.fromisoformat(completed)
+    if start.tzinfo is None or finish.tzinfo is None or finish < start:
+        return "unverified_lifecycle_manifest"
+    if pins:
+        return "pinned_lifecycle_manifest"
+    return None
 
 
 def _validate_proofs(item: Artifact) -> str | None:
@@ -534,13 +549,25 @@ def _validate_file(item: Artifact, repo_root: Path, live_db: Path | None) -> str
             return "linked_path"
         if reason := _validate_proofs(item):
             return reason
+        snapshot = None
         if item.lifecycle_manifest is not None:
             if not _safe_ancestors(item.lifecycle_manifest):
                 return "linked_lifecycle_manifest"
-            if _hash(item.lifecycle_manifest) != item.lifecycle_manifest_sha256:
+            if fixture:
+                try:
+                    snapshot = _read_manifest_snapshot(item.lifecycle_manifest)
+                except (UnicodeError, ValueError):
+                    return "unverified_fixture_ownership"
+                manifest_digest = snapshot.sha256
+            else:
+                manifest_digest = _hash(item.lifecycle_manifest)
+            if manifest_digest != item.lifecycle_manifest_sha256:
                 return "lifecycle_manifest_changed"
-        if fixture and (reason := _fixture_binding(item)):
-            return reason
+        if fixture:
+            if snapshot is None:
+                return "unverified_fixture_ownership"
+            if reason := _fixture_binding(item, snapshot):
+                return reason
         if live_db is not None and item.path.resolve() == live_db.resolve():
             return "live_database"
         parent = item.path.parent

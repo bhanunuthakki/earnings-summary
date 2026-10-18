@@ -17,13 +17,27 @@ fails closed when it is unavailable. Successful pytest sessions could restore an
 empty database environment before fixture retirement. The cleanup now passes its
 explicit database guard; the new regression demonstrates the original failure.
 
+## Fixture shutdown cost
+
+The complete CI suite exposed duplicate full-manifest reads during immediate
+fixture retirement. All 2,698 tests in the last group passed, but its shutdown
+exceeded the job deadline. Each validation now shares one fresh bounded manifest
+snapshot internally and retains the final fresh path check and full hash. No
+snapshot is reused across files or between planning and deletion. A 200-file
+regression bounds manifest reads and hashes at 803 each, down from 1,603 reads
+and 2,002 hashes. A pin inserted during target hashing still prevents deletion
+with file size and timestamps unchanged. Whole-manifest verification per file
+still has quadratic total cost; the change removes duplicate work within each
+validation without weakening current pin and source checks.
+
 ## Architecture measurement
 
 The architecture baseline is deliberately remeasured for the retained storage
 behavior and its shared reservation module. The increase is functional code for
 verified descriptor reconstruction, producer ownership, recovery, and bounded
 storage admission. It does not relax the scanner, metric definitions, or admission
-policy. The reviewed baseline delta is recorded in the pull request. Subsequent
+policy. The final retained change adds 1,267 non-comment source lines, including
+21 lines for bounded snapshot reuse and shared record validation. The reviewed baseline delta is recorded in the pull request. Subsequent
 growth remains subject to the same ratchet.
 
 ## Operational reachability

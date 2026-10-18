@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "68181820bb40ee25d2642f9cb95619ba8c10bb7f",
+  "scoped_commit": "22b963eec51c3fc434acb43f3281e3919622d875",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "e259a7d189af7c339a70ff5e12d1fba6366004b9960bf4def51615dc7a94e041",
+  "source_sha256": "a3824a9432ee99a5e75c924417861e31a0ecca2562f550ae485d604b684d65aa",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1452,
-    "total_noncomment_loc": 553352,
+    "total_noncomment_loc": 553373,
     "modules_over_1000_loc": 105,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -12887,9 +12887,9 @@
         "path": "src/operations/artifact_retention.py",
         "module": "operations.artifact_retention",
         "lines": {
-          "physical": 879,
-          "nonblank": 810,
-          "noncomment": 792
+          "physical": 906,
+          "nonblank": 831,
+          "noncomment": 813
         },
         "internal_fan_out": 0,
         "responsibilities": [
