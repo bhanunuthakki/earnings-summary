@@ -10,6 +10,8 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from pydantic import ValidationError
 
 from provenance.analysis_scope import (
@@ -999,10 +1001,13 @@ def test_reconciled_migrations_preserve_both_historical_upgrade_paths(
     database = migrated_db(
         tmp_path / "reconciled.db", upgrade_from=historical_head, before_upgrade=retain_row
     )
+    root = Path(__file__).resolve().parents[1]
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "alembic"))
+    head = ScriptDirectory.from_config(config).get_current_head()
+    assert head is not None
     with sqlite3.connect(database) as conn:
-        assert conn.execute("SELECT version_num FROM alembic_version").fetchall() == [
-            ("0057_companyfacts_extractor_identity",)
-        ]
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchall() == [(head,)]
         assert conn.execute("SELECT identity FROM retained_migration_fixture").fetchall() == [
             ("preserved",)
         ]

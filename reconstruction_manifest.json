@@ -253,7 +253,8 @@
         "pytest tests/test_reviewed_input_roles.py tests/test_review_onon_input_roles.py -q",
         "pytest tests/test_model_source_bytes.py tests/test_source_context_entrypoints.py tests/test_meli_input_evidence.py tests/test_onon_explicit_routing.py -q",
         "pytest tests/test_meli_scenario_preview.py -q",
-        "pytest tests/test_meli_preview_batch_reuse.py tests/test_preview_meli_inputs_cli.py -q"
+        "pytest tests/test_meli_preview_batch_reuse.py tests/test_preview_meli_inputs_cli.py -q",
+        "pytest tests/test_canonical_fact_exact_read.py tests/test_memo_model_roundtrip.py -q"
       ],
       "documentation": [
         "directives/data_provenance.md"

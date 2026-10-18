@@ -52,6 +52,7 @@ _SAFE_INPUT_REASONS = _PRE_CANDIDATE_REASONS | {
     "input_recipe_mismatch",
     "assumption_population_mismatch",
     "input_outside_canonical_snapshot",
+    "input_snapshot_context_mismatch",
     "input_semantic_admission_failed",
     "input_coordinate_mismatch",
     "input_outside_source_universe",

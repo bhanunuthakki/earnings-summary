@@ -533,7 +533,6 @@ def test_partial_admission_migration_can_resume_without_replacing_guards(
     path = migrated_db(
         tmp_path / "interrupted-upgrade.db", target="0057_companyfacts_extractor_identity"
     )
-    config = _migration_config(path)
     execute = op.execute
 
     def interrupted(sql: str) -> None:
@@ -544,13 +543,13 @@ def test_partial_admission_migration_can_resume_without_replacing_guards(
     with monkeypatch.context() as fault:
         fault.setattr(op, "execute", interrupted)
         with pytest.raises(RuntimeError, match="synthetic migration interruption"):
-            command.upgrade(config, "head")
+            migrated_db(path, target="0058_sealed_snapshot_admission_fences", upgrade_existing=True)
     with sqlite3.connect(path) as conn:
         partial = conn.execute(
             "SELECT name FROM sqlite_master WHERE name LIKE 'ix_%_snapshot_admission_%'"
         ).fetchall()
         assert partial, "fixture must reproduce retained partial SQLite DDL"
-    command.upgrade(config, "head")
+    migrated_db(path, target="0058_sealed_snapshot_admission_fences", upgrade_existing=True)
     with sqlite3.connect(path) as conn:
         guards = conn.execute(
             "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND name LIKE '%_sealed_admission' ORDER BY name"
@@ -561,7 +560,7 @@ def test_partial_admission_migration_can_resume_without_replacing_guards(
         conn.execute(
             "UPDATE alembic_version SET version_num='0057_companyfacts_extractor_identity'"
         )
-    command.upgrade(config, "head")
+    migrated_db(path, target="0058_sealed_snapshot_admission_fences", upgrade_existing=True)
     with sqlite3.connect(path) as conn:
         assert (
             conn.execute(
@@ -573,6 +572,7 @@ def test_partial_admission_migration_can_resume_without_replacing_guards(
 
 def test_admission_migration_downgrade_upgrade_preserves_retained_seal(
     ontology_db: tuple[sqlite3.Connection, MetricOntology],
+    migrated_db: Callable[..., Path],
 ) -> None:
     conn, _repository = ontology_db
     path = Path(str(conn.execute("PRAGMA database_list").fetchone()[2]))
@@ -588,7 +588,7 @@ def test_admission_migration_downgrade_upgrade_preserves_retained_seal(
             ).fetchone()[0]
             == 0
         )
-    command.upgrade(config, "head")
+    migrated_db(path, target="0058_sealed_snapshot_admission_fences", upgrade_existing=True)
     with sqlite3.connect(path) as restored:
         repository = MetricOntology(restored)
         repository.verify_snapshot("retained-ontology")
@@ -610,4 +610,4 @@ def test_admission_migration_rejects_conflicting_partial_schema(
             "ON ontology_snapshot_headers(ontology_snapshot_id)"
         )
     with pytest.raises(RuntimeError, match="sealed admission migration object conflicts"):
-        command.upgrade(_migration_config(path), "head")
+        migrated_db(path, target="0058_sealed_snapshot_admission_fences", upgrade_existing=True)

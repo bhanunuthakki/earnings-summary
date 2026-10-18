@@ -153,6 +153,10 @@ def test_present_invalid_snapshot_keeps_its_original_verification_failure(
             "model_input_source_digest_or_size_mismatch",
         ),
         (
+            InputEvidenceError("input_snapshot_context_mismatch:/private/metric"),
+            "input_snapshot_context_mismatch",
+        ),
+        (
             InputEvidenceError("unrecognized_private_/private/document.pdf"),
             "input_verification_failed",
         ),

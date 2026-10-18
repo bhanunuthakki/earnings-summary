@@ -129,9 +129,20 @@ seal. Other upstream closures retain their own verification requirements.
 selection with its admitted source bundle under one read snapshot. It retains
 the same resolution, publication and derived-lineage checks as `as_known`.
 Required source batches fail as a whole; they expose no partial usable inputs.
-MELI preview and model-input verification reuse this owner. Full publication
+MELI preview, model-input verification and generic DCF statements reuse this owner. Full publication
 verification is shared only within one bounded batch at one cutoff. Separate
 verification passes and later calls verify again; no persistent cache is added.
+
+Model-input verification also reads exact selected cells from the snapshot's
+sealed canonical projection. The projected observation, resolution, definition,
+binding and mapping identities must match the requested/current admitted context.
+Definition, binding and mapping payload hashes must match too. A later compatible
+revision does not change the saved context. It requires a new snapshot before it
+can supply model inputs. Current lifecycle, role, basis, unit, source-byte and
+inventory checks still apply independently. Exact lookup shares projection
+admission and entry verification with lexical reads; it does not use query terms
+or the lexical candidate limit. Absence must agree with the sealed effective
+bucket, including checkpoint/delta tombstones.
 
 Growth evidence retains every input and comparison witness, plus the versioned
 calculation rule. The evidence reader re-admits that complete selection at its

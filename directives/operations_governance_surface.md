@@ -1647,8 +1647,16 @@ candidate inspection was performed/completed. They emit no usable bindings or
 invented slot counts. Unexpected faults and output conflicts remain command
 failures. Candidate selection and the final model-input verifier share the same
 canonical/source reader, but each independently verifies its own bounded pass.
+The final verifier requires definition, binding and mapping identity/payload parity
+with the snapshot's sealed projection. A later valid revision fails with
+`input_snapshot_context_mismatch`; it needs a new snapshot. An absent or different
+projected selection fails with `input_outside_canonical_snapshot`. These checks
+also apply to other model recipes using the shared verifier.
 
 Disposition: no interactive Operations control, scheduler, service, provider,
 publication or model-readiness change. Existing manual CLI and migration owners
 remain authoritative. Regression evidence: `tests/test_sealed_snapshot_admission.py`,
 `tests/test_meli_preview_batch_reuse.py` and `tests/test_preview_meli_inputs_cli.py`.
+Exact-read and model-context regressions are in
+`tests/test_canonical_fact_exact_read.py`, `tests/test_meli_input_evidence.py`,
+`tests/test_cashflow_input_evidence.py` and `tests/test_memo_model_roundtrip.py`.
