@@ -54,11 +54,21 @@ else:
         result = subprocess.run(
             [sys.executable, "-c", script, str(tmp_path / name), str(ledger)],
             cwd=Path(__file__).resolve().parents[1],
+            env={
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join(
+                    (
+                        str(Path(__file__).resolve().parents[1]),
+                        str(Path(__file__).resolve().parents[1] / "src"),
+                    )
+                ),
+            },
             capture_output=True,
             text=True,
-            check=True,
+            check=False,
             timeout=20,
         )
+        assert result.returncode == 0, result.stderr
         return json.loads(result.stdout)
 
     with ThreadPoolExecutor(max_workers=2) as workers:

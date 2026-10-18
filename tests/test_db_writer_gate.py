@@ -298,8 +298,11 @@ def test_live_process_holder_timeout_recovers_after_connection_close(
     env[db_writer_gate.CHAIN_WRITER_DB_ENV] = str(db)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
     monkeypatch.setattr(db_writer_gate, "WRITER_GATE_TIMEOUT_S", 0.06)
+    script = tmp_path / "writer-holder.py"
+    script.write_text(code)
+    bootstrap = Path(__file__).resolve().parents[1] / "execution/sqlite_bootstrap.py"
     process = subprocess.Popen(
-        [sys.executable, "-c", code, str(db), str(ready)],
+        [sys.executable, str(bootstrap), str(script), str(db), str(ready)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -459,11 +462,14 @@ def test_stale_takeover_serializes_two_real_contenders(tmp_path: Path) -> None:
     env = dict(os.environ)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
     processes: list[subprocess.Popen[bytes]] = []
+    script = tmp_path / "stale-contender.py"
+    script.write_text(_STALE_CONTENDER)
+    bootstrap = Path(__file__).resolve().parents[1] / "execution/sqlite_bootstrap.py"
 
     def start(tag: str) -> None:
         processes.append(
             subprocess.Popen(
-                [sys.executable, "-c", _STALE_CONTENDER, str(tmp_path), tag],
+                [sys.executable, str(bootstrap), str(script), str(tmp_path), tag],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=env,
@@ -563,8 +569,11 @@ with gate._ownership_transition_guard(lock, deadline=time.monotonic()+5):
 """
     env = dict(os.environ)
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    script = tmp_path / "writer-holder.py"
+    script.write_text(code)
+    bootstrap = Path(__file__).resolve().parents[1] / "execution/sqlite_bootstrap.py"
     process = subprocess.Popen(
-        [sys.executable, "-c", code, str(db), str(ready)],
+        [sys.executable, str(bootstrap), str(script), str(db), str(ready)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

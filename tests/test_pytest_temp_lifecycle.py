@@ -28,18 +28,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 def test_session_hook_registers_success_and_preserves_failure(
     tmp_path: Path, passed: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    search_roots: Callable[[Path, Path | None], list[tuple[Path, bool]]] = getattr(
-        temp_run_retention, "_search_roots"
-    )
-
-    def isolated_roots(repo_root: Path, code_root: Path | None) -> list[tuple[Path, bool]]:
-        return [item for item in search_roots(repo_root, code_root) if item[0] != Path("C:/tmp")]
-
-    monkeypatch.setattr(
-        temp_run_retention,
-        "_search_roots",
-        isolated_roots,
-    )
     source = tmp_path / "synthetic-project"
     tests = source / "tests"
     tests.mkdir(parents=True)
@@ -56,7 +44,9 @@ def test_session_hook_registers_success_and_preserves_failure(
     )
     environment = os.environ.copy()
     environment.update(
-        PYTHONPATH=os.pathsep.join((str(PROJECT_ROOT), str(PROJECT_ROOT / "src"))),
+        PYTHONPATH=os.pathsep.join(
+            (str(PROJECT_ROOT), str(PROJECT_ROOT / "src"), str(Path(pytest.__file__).parent.parent))
+        ),
         PYTEST_DISABLE_PLUGIN_AUTOLOAD="1",
         FIXTURE_LOCATION=str(locator),
         EARNINGS_SUMMARY_ENV_FILE=str(source / "no-external-env"),
@@ -64,7 +54,16 @@ def test_session_hook_registers_success_and_preserves_failure(
         EARNINGS_SUMMARY_MANAGED_TEST_TEMPS="1",
     )
     result = subprocess.run(
-        [sys.executable, "-m", "pytest", str(tests), "-q", "-o", "addopts="],
+        [
+            sys.executable,
+            str(PROJECT_ROOT / "execution/sqlite_bootstrap.py"),
+            "-m",
+            "pytest",
+            str(tests),
+            "-q",
+            "-o",
+            "addopts=",
+        ],
         cwd=source,
         env=environment,
         capture_output=True,
@@ -85,6 +84,11 @@ def test_session_hook_registers_success_and_preserves_failure(
         assert list((run_root / ".earnings-temp-retirement").glob("*.jsonl"))
     else:
         assert fixture.read_bytes() == b"synthetic fixture"
+
+    def isolated_roots(repo_root: Path, code_root: Path | None) -> list[tuple[Path, bool]]:
+        return [(run_root, False)]
+
+    monkeypatch.setattr(temp_run_retention, "_search_roots", isolated_roots)
     now = datetime.now(UTC) + timedelta(days=8)
     discovery = discover_temp_runs(source, code_root=source, now=now)
     catalog = discovery.catalog.model_copy(
