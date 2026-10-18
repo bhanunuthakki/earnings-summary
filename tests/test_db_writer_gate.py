@@ -288,11 +288,11 @@ def test_live_process_holder_timeout_recovers_after_connection_close(
 ) -> None:
     db, ready = tmp_path / "process.db", tmp_path / "ready"
     code = (
-        "import sys; from pathlib import Path; "
+        "import os, sys; from pathlib import Path; "
         "from sqlite_runtime import SQLiteConnectionRole, connect_sqlite; "
         "conn=connect_sqlite(sys.argv[1], role=SQLiteConnectionRole.WRITER, schema_preflight=False); "
         "conn.execute('CREATE TABLE sample (value INTEGER)'); conn.commit(); "
-        "Path(sys.argv[2]).write_text('ready'); sys.stdin.buffer.read(1); conn.close()"
+        "Path(sys.argv[2]).write_text(str(os.getpid())); sys.stdin.buffer.read(1); conn.close()"
     )
     env = dict(os.environ)
     env[db_writer_gate.CHAIN_WRITER_DB_ENV] = str(db)
@@ -318,7 +318,10 @@ def test_live_process_holder_timeout_recovers_after_connection_close(
             with pytest.raises(WriterGateHeldError) as caught:
                 connect_sqlite(db, role=SQLiteConnectionRole.WRITER, schema_preflight=False)
             assert 0.04 <= time.monotonic() - started < 1.0
-            assert caught.value.holder["pid"] == process.pid
+            holder_pid = int(ready.read_text())
+            assert caught.value.holder["pid"] == holder_pid
+            if os.name != "nt":
+                assert holder_pid == process.pid
             assert process.poll() is None
             assert process.stdin is not None
             process.stdin.write(b"x")

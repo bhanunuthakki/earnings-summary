@@ -26,6 +26,22 @@ storage admission. It does not relax the scanner, metric definitions, or admissi
 policy. The reviewed baseline delta is recorded in the pull request. Subsequent
 growth remains subject to the same ratchet.
 
+## Operational reachability
+
+The source inventory follows the existing runtime entrypoints. Weekly cleanup
+imports the temporary-run lifecycle, artifact retention, and coverage modules.
+The temporary-run lifecycle imports the shared storage reservation module.
+Semantic export storage remains reachable from review preparation, Operations
+routes, Windows review fetching, refresh-manifest construction, and quarantined
+KPI correction preparation.
+
+The three disposition manifests are rebound to the final scanner input digest.
+All 189 existing reviewed entries retain their exact source-line fingerprints:
+28 dynamic imports, 69 attribute lookups, and 92 process calls. No disposition,
+target, scanner rule, or unknown-edge allowance changes. The added storage module
+and changed storage modules introduce no unknown production edges. Regenerate
+the graph after the final source and test bytes are fixed to verify closure.
+
 ## Operations surface disposition
 
 No Operations action or public capability is added. Existing cleanup and semantic

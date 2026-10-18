@@ -100,7 +100,7 @@ def test_growth_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     if os.name == "nt":
         _, payload = read_stable_artifact(source, max_bytes=5, allowed_root=tmp_path)
         assert payload == b"exact"
-        assert sizes == [5, 1]
+        assert sizes == [5]
     else:
         with pytest.raises(ImmutableArtifactConflictError, match="byte limit"):
             read_stable_artifact(source, max_bytes=5, allowed_root=tmp_path)
