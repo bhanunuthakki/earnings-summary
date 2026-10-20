@@ -65,9 +65,11 @@ the public availability cutoff separate from physical knowledge and observation
 cutoffs. It pins original document versions for reviewed quarterly 6-K subjects.
 Exact retained SEC submissions bytes must replay each selected accession's
 acceptance time. Authority references retain observation IDs and blob hashes;
-they do not copy raw metadata into each report. SEC acceptance proves
-available-by for that archived SEC copy. It does not establish the first issuer
-release time or prove a contemporaneous system record. Missing or ambiguous
+they do not copy raw metadata into each report. SEC acceptance records the
+filing event; SEC dissemination can follow later. It does not establish exact
+public availability, the first issuer release time or a contemporaneous system
+record. Legacy v2 reason names retain their bytes but are not public-availability
+witnesses. Missing or ambiguous
 acceptance times fail closed. This mode does not waive package dependencies,
 processing lanes, financial admission or narrative verification. V1 serialized
 requests and scope identities remain unchanged.

@@ -1,5 +1,5 @@
 {
-  "manifest_version": "2026-10-07.1",
+  "manifest_version": "2026-10-19.1",
   "workspace_name": "earnings-summary",
   "description": "11-subsystem reconstruction manifest and deterministic inventory definition for the earnings-summary research platform.",
   "canonical_runtime": {
@@ -31,6 +31,7 @@
         "src/provenance/population_research_snapshots.py",
         "execution/populate_research_snapshots.py",
         "alembic/versions/0058_sealed_snapshot_admission_fences.py",
+        "src/search/corpus_builder.py",
         "src/provenance/canonical_fact_resolution.py",
         "src/provenance/fact_read_model.py"
       ],
@@ -42,7 +43,9 @@
         "pytest tests/test_sqlite_runtime.py -q",
         "pytest tests/test_research_snapshot.py tests/test_research_snapshot_publication_clock.py tests/test_population_research_snapshots.py tests/test_population_research_projection_mode.py -q",
         "pytest tests/test_kpi_legacy_dispositions.py tests/test_kpi_source_precision.py tests/test_financial_source_repairs.py tests/test_reviewed_kpi_native_population.py -q",
-        "pytest tests/test_sealed_snapshot_admission.py tests/test_fact_read_model_batch.py -q"
+        "pytest tests/test_sealed_snapshot_admission.py tests/test_fact_read_model_batch.py -q",
+        "pytest tests/test_document_processing_evidence.py -q",
+        "pytest tests/test_search_corpus_builder.py tests/test_search_projection_seals.py -q"
       ],
       "documentation": [
         "AGENTS.md",
@@ -100,7 +103,9 @@
         "execution/publish_meli_reported_statements.py",
         "execution/plan_analysis_evidence_scope.py",
         "src/provenance/analysis_scope.py",
-        "execution/preview_meli_inputs.py"
+        "src/provenance/report_evidence_contract.py",
+        "execution/preview_meli_inputs.py",
+        "src/provenance/historical_public_witness.py"
       ],
       "dependencies": [
         "core_data_layer"
@@ -111,7 +116,8 @@
         "pytest tests/test_source_context_entrypoints.py tests/test_refresh_dispatch.py -q",
         "pytest tests/test_meli_reported_statements.py -q",
         "pytest tests/test_analysis_scope.py tests/test_historical_analysis_scope.py tests/test_historical_research_boundary.py tests/test_analysis_scope_cli.py -q",
-        "pytest tests/test_meli_input_evidence.py -q"
+        "pytest tests/test_meli_input_evidence.py -q",
+        "pytest tests/test_sec_subject_date_witness.py -q"
       ],
       "documentation": [
         "AGENTS.md",
@@ -232,6 +238,7 @@
         "src/dcf/onon_inputs.py",
         "src/dcf/scenario_acceptance.py",
         "execution/build_onon_dcf.py",
+        "execution/build_meli_platform_dcf.py",
         "src/compute/thesis_metric_series.py",
         "src/evals/kpi_repair_judge.py",
         "src/dcf/reviewed_input_roles.py",

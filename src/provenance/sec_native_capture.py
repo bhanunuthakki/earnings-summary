@@ -25,6 +25,7 @@ import requests
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from log_redact import redact
+from provenance.analysis_scope import AnalysisEvidenceScope, require_analysis_document_coverage
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -236,7 +237,7 @@ class CaptureItemResult(_ClosedModel):
 
 
 class CapturedSecPackageMember(_ClosedModel):
-    """One current hash-addressed member of a completely captured accession."""
+    """One hash-addressed member; its selection receipt owns completeness."""
 
     expected_document_id: str
     expected_document_key: str
@@ -275,12 +276,45 @@ def load_captured_sec_filing_package(
     *,
     inventory_key: str,
     accession_number: str,
+    analysis_scope: AnalysisEvidenceScope | None = None,
 ) -> tuple[CapturedSecPackageMember, ...]:
-    """Load a complete primary/financial package from the current sealed inventory."""
+    """Load the full financial package or exact natively verified report members."""
+
+    selected: dict[str, str] | None = None
+    if analysis_scope is not None:
+        if analysis_scope.request.inventory_key != inventory_key:
+            raise SecNativeCaptureError("filing scope has a different inventory")
+        if accession_number not in analysis_scope.accession_numbers:
+            raise SecNativeCaptureError("accession is outside the filing scope")
+        coverage = require_analysis_document_coverage(
+            conn,
+            analysis_scope,
+            analysis_scope.request.cutoff_at,
+            analysis_scope.request.observed_through,
+        )
+        selected_ids = {
+            entry.expected_document.expected_document_id
+            for entry in analysis_scope.entries
+            if entry.expected_document.accession_number == accession_number
+            and (
+                entry.role == "research_document"
+                or (
+                    entry.role == "package_dependency"
+                    and analysis_scope.request.readiness_profile is None
+                )
+            )
+        }
+        selected = {
+            item.expected_document_id: item.document_version_id
+            for item in coverage
+            if item.expected_document_id in selected_ids and item.document_version_id is not None
+        }
+        if not selected_ids or set(selected) != selected_ids:
+            raise SecNativeCaptureError("filing scope lacks exact captured members")
 
     rows = conn.execute(
         "SELECT expected.expected_document_id,expected.expected_document_key,"
-        "coverage.document_version_id,coverage.coverage_status,"
+        "document.document_version_id,coverage.coverage_status,"
         "expected.issuer_id,expected.document_type,"
         "expected.accession_number,expected.primary_document,expected.source_url,"
         "document.blob_sha256,blob.byte_size,blob.media_type,blob.storage_uri "
@@ -289,25 +323,35 @@ def load_captured_sec_filing_package(
         "ON inventory.snapshot_id=expected.snapshot_id "
         "LEFT JOIN v_source_coverage_current AS coverage "
         "ON coverage.expected_document_id=expected.expected_document_id "
+        "LEFT JOIN json_each(?) AS selection ON selection.key=expected.expected_document_id "
         "LEFT JOIN evidence_document_versions AS document "
-        "ON document.document_version_id=coverage.document_version_id "
+        "ON document.document_version_id=COALESCE(selection.value,coverage.document_version_id) "
         "LEFT JOIN evidence_content_blobs AS blob ON blob.sha256=document.blob_sha256 "
         "WHERE inventory.inventory_key=? AND expected.accession_number=? "
-        "AND expected.document_type IN ('filing','sec_financial_report') "
+        "AND ((? IS NULL AND expected.document_type IN ('filing','sec_financial_report')) "
+        "OR expected.expected_document_id IN (SELECT value FROM json_each(?))) "
         "AND expected.source_url IS NOT NULL "
         "AND expected.primary_document IS NOT NULL "
         "ORDER BY CASE expected.document_type WHEN 'filing' THEN 0 ELSE 1 END,"
         "expected.expected_document_key",
-        (inventory_key, accession_number),
+        (
+            json.dumps({} if selected is None else selected),
+            inventory_key,
+            accession_number,
+            None if selected is None else "scoped",
+            json.dumps([] if selected is None else sorted(selected)),
+        ),
     ).fetchall()
     if not rows:
         raise SecNativeCaptureError("sealed inventory has no filing package for accession")
+    if selected is not None and {str(row[0]): str(row[2]) for row in rows} != selected:
+        raise SecNativeCaptureError("captured filing members differ from verified scope")
     admitted_statuses = {"captured", "extracted", "indexed"}
     missing = tuple(
         str(row[0])
         for row in rows
         if row[2] is None
-        or str(row[3]) not in admitted_statuses
+        or (selected is None and str(row[3]) not in admitted_statuses)
         or any(row[index] is None for index in (9, 10, 11, 12))
     )
     if missing:
@@ -331,7 +375,7 @@ def load_captured_sec_filing_package(
         )
         for row in rows
     )
-    if sum(item.document_type == "filing" for item in members) != 1:
+    if selected is None and sum(item.document_type == "filing" for item in members) != 1:
         raise SecNativeCaptureError("captured filing package requires exactly one primary")
     if len({item.issuer_id for item in members}) != 1:
         raise SecNativeCaptureError("captured filing package crosses issuer identities")
