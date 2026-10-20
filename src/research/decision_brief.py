@@ -38,8 +38,13 @@ from report.artifacts import ReportArtifactRef, validate_report_artifact_path
 from report.legacy_body import extract_legacy_reader_body
 from research.memo_claim_support import (
     MemoClaimSupportError,
+    MemoDerivedFigure,
     MemoReportedValue,
+    MemoSourceExcerpt,
     financial_reader_value,
+    read_evidence_node_texts,
+    verified_value_display,
+    verify_memo_analysis_text,
     verify_memo_numeric_population,
     verify_reported_memo_claim,
 )
@@ -101,6 +106,29 @@ class MemoScopedSupport(_Closed):
 class ReviewedMemoClaimV2(ReviewedMemoClaim):
     supporting_evidence: tuple[MemoScopedSupport, ...] = ()
     model_values: tuple[MemoModelValue, ...] = ()
+    # Analyst prose cites short verbatim excerpts; the whole node stays in the
+    # report's evidence section. Omitted when empty to keep earlier hashes.
+    excerpts: tuple[MemoSourceExcerpt, ...] = Field(default=(), exclude_if=lambda value: not value)
+    derived_values: tuple[MemoDerivedFigure, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
+    # Verbatim spans of the review's pinned owner thesis, such as a break rule.
+    owner_thesis_excerpts: tuple[str, ...] = Field(default=(), exclude_if=lambda value: not value)
+
+
+class MemoOwnerThesis(_Closed):
+    """The owner's thesis as of the report's public cutoff: an input, not company evidence."""
+
+    ticker: str = Field(min_length=1)
+    revision: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    text: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def pinned(self) -> MemoOwnerThesis:
+        if hashlib.sha256(self.text.encode()).hexdigest() != self.sha256:
+            raise ValueError("owner_thesis_hash_mismatch")
+        return self
 
 
 class MemoReaderBlock(_Closed):
@@ -119,7 +147,11 @@ def memo_reader_blocks(body_html: str) -> tuple[MemoReaderBlock, ...]:
     reconstruction gate. Inert headings and controls are presentation only.
     """
     soup = BeautifulSoup(body_html, "html.parser")
-    for item in soup.select("script,style,.src-chip,.src-pop,button,select,option"):
+    # Citation markers and their popovers point at evidence claimed elsewhere
+    # in the body; the cited value itself (.cite-val) stays in the passage.
+    for item in soup.select(
+        "script,style,.src-chip,.src-pop,.cite,.cite-mark,.cite-pop,button,select,option"
+    ):
         item.decompose()
     groups: dict[str, tuple[Tag, list[str]]] = {}
     boundaries = {
@@ -162,7 +194,7 @@ def memo_reader_blocks(body_html: str) -> tuple[MemoReaderBlock, ...]:
         selector = " > ".join(reversed(parts))
         groups.setdefault(selector, (parent, []))[1].append(text)
     result: list[MemoReaderBlock] = []
-    for selector, (_element, fragments) in groups.items():
+    for selector, (element, fragments) in groups.items():
         text = " ".join(fragments)
         # A heading can carry a substantive claim. Formatting alone cannot
         # authorize an evidence-free disposition.
@@ -189,6 +221,20 @@ def memo_reader_blocks(body_html: str) -> tuple[MemoReaderBlock, ...]:
             "QoQ",
             "YoY",
             "3y CAGR",
+            "Bottom line",
+            "Expectation bar",
+            "Business drivers",
+            "What to track",
+            "PRE scorecard",
+            "Next quarter",
+            "Baseline financials",
+            "Bear case",
+            "Valuation and model",
+            "Model and baseline",
+            "Model values",
+            "Questions for the print",
+            "Calculations",
+            "Evidence",
         }
         result.append(
             MemoReaderBlock(
@@ -196,7 +242,9 @@ def memo_reader_blocks(body_html: str) -> tuple[MemoReaderBlock, ...]:
                 selector=selector,
                 text=text,
                 presentation_only=presentation,
-                visibly_inferred=text.startswith("Analyst inference:"),
+                visibly_inferred=text.startswith("Analyst inference:")
+                or element.find_parent(attrs={"data-voice": "analyst"}) is not None
+                or element.get("data-voice") == "analyst",
             )
         )
     return tuple(result)
@@ -220,8 +268,12 @@ def verify_memo_claim_population(
             raise MemoEvidenceError("memo_inference_not_distinguished_in_reader")
         if claim.kind == "calculation":
             model_values = claim.model_values if isinstance(claim, ReviewedMemoClaimV2) else ()
-            if claim.calculation is None and not model_values:
+            derived = claim.derived_values if isinstance(claim, ReviewedMemoClaimV2) else ()
+            if claim.calculation is None and not model_values and not derived:
                 raise MemoEvidenceError("memo_calculation_reconstruction_missing")
+            if derived:
+                # Operand binding and replay run against retained evidence later.
+                continue
             try:
                 verify_memo_numeric_population(
                     claim.passage,
@@ -243,7 +295,10 @@ def verify_memo_claim_population(
             except MemoClaimSupportError as exc:
                 raise MemoEvidenceError(exc.reason_code) from exc
         elif claim.calculation is not None or (
-            isinstance(claim, ReviewedMemoClaimV2) and claim.model_values
+            # Analyst prose may state verified model outputs; claim replay binds them.
+            isinstance(claim, ReviewedMemoClaimV2)
+            and claim.model_values
+            and claim.kind != "analyst_inference"
         ):
             raise MemoEvidenceError("memo_calculation_kind_mismatch")
     if claimed != set(blocks):
@@ -465,9 +520,14 @@ class MemoContextReviewV2(_Closed):
     rationale: str = Field(min_length=20)
     supporting_contexts: tuple[MemoSupportingContext, ...] = Field(default=(), max_length=8)
     model: MemoModelCommitment | None = None
+    owner_thesis: MemoOwnerThesis | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def distinct_contexts(self) -> MemoContextReviewV2:
+        if self.owner_thesis is None and any(claim.owner_thesis_excerpts for claim in self.claims):
+            raise ValueError("owner_thesis_excerpt_without_pinned_thesis")
         ids = tuple(context.context_id for context in self.supporting_contexts)
         snapshots = tuple(context.research_snapshot_id for context in self.supporting_contexts)
         if (
@@ -825,8 +885,11 @@ def _assess_decision_brief(
                     claim.supporting_evidence if isinstance(claim, ReviewedMemoClaimV2) else ()
                 )
                 model_values = claim.model_values if isinstance(claim, ReviewedMemoClaimV2) else ()
+                excerpts = claim.excerpts if isinstance(claim, ReviewedMemoClaimV2) else ()
+                derived = claim.derived_values if isinstance(claim, ReviewedMemoClaimV2) else ()
                 if claim.kind not in {"analyst_inference", "presentation"} and not (
-                    claim.evidence_node_ids
+                    excerpts
+                    or claim.evidence_node_ids
                     or claim.financial_references
                     or claim.calculation
                     or claim.values
@@ -836,6 +899,9 @@ def _assess_decision_brief(
                     raise MemoEvidenceError("memo_reported_claim_support_missing")
                 for node_id in claim.evidence_node_ids:
                     verify_memo_snapshot_node(conn, node_id, snapshot, cutoff)
+                for excerpt in excerpts:
+                    for node_id in excerpt.evidence_node_ids:
+                        verify_memo_snapshot_node(conn, node_id, snapshot, cutoff)
                 claim_references = (
                     claim.financial_references
                     + (claim.calculation.operands if claim.calculation else ())
@@ -877,7 +943,45 @@ def _assess_decision_brief(
                     calculated_values += tuple(
                         verified_model.display(value) for value in model_values
                     )
-                if claim.kind in {"reported_fact", "management_claim", "calculation"}:
+                owner = (
+                    claim.owner_thesis_excerpts if isinstance(claim, ReviewedMemoClaimV2) else ()
+                )
+                if owner and claim.kind not in {"calculation", "analyst_inference"}:
+                    # The owner's thesis frames analysis; it never supports a reported fact.
+                    raise MemoEvidenceError("memo_owner_thesis_claim_kind_mismatch")
+                if claim.kind == "analyst_inference" or derived:
+                    # Analyst prose: quoted spans and figures must bind to cited support.
+                    if derived and claim.kind not in {"calculation", "analyst_inference"}:
+                        raise MemoEvidenceError("memo_derived_claim_kind_mismatch")
+                    thesis = (
+                        context_review.owner_thesis
+                        if isinstance(context_review, MemoContextReviewV2)
+                        else None
+                    )
+                    try:
+                        verify_memo_analysis_text(
+                            claim.passage,
+                            (
+                                *(
+                                    (
+                                        item.text,
+                                        tuple(
+                                            read_evidence_node_texts(conn, item.evidence_node_ids)
+                                        ),
+                                    )
+                                    for item in excerpts
+                                ),
+                                *((text, (thesis.text,)) for text in owner if thesis is not None),
+                            ),
+                            (
+                                *calculated_values,
+                                *(verified_value_display(conn, value) for value in all_values),
+                            ),
+                            derived,
+                        )
+                    except MemoClaimSupportError as exc:
+                        raise MemoEvidenceError(exc.reason_code) from exc
+                elif claim.kind in {"reported_fact", "management_claim", "calculation"}:
                     try:
                         verify_reported_memo_claim(
                             conn,
