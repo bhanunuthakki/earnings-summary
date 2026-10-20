@@ -1686,6 +1686,22 @@ remain authoritative. Regression evidence: `tests/test_sealed_snapshot_admission
 Exact-read and model-context regressions are in
 `tests/test_canonical_fact_exact_read.py`, `tests/test_meli_input_evidence.py`,
 `tests/test_cashflow_input_evidence.py` and `tests/test_memo_model_roundtrip.py`.
+
+### Native untimed PDF transcript evidence — 2026-10-19
+
+Disposition: **tested no UI or operator CLI surface change**. The new typed
+`provenance.native_pdf_transcript` library profile supplies the existing required
+transcript-turn and transcript-speaker processing lanes. A task-only qualification
+runner can call it under the existing isolated database writer boundary. It adds
+no registered operator command, dashboard control, scheduler, provider call,
+production activation or live write authority. The profile requires a verified
+promoted native PDF text seal and replays a complete exact page-span partition.
+It preserves reviewed raw speaker labels, explicit unknown attribution and
+unavailable timecodes. The existing legacy speaker/timecode guard stays in force.
+Evidence: `tests/test_native_pdf_transcript.py` and
+`tests/test_document_processing_evidence.py::test_transcript_speaker_lane_requires_immutable_speaker_and_timecodes`.
+
+
 ### Scoped issuer-document obligation bindings — 2026-10-19
 
 Disposition: **no UI or operator CLI surface change**. The native research
@@ -1713,4 +1729,19 @@ publication authority. Native regression evidence:
 `tests/test_report_financial_resolution_clock.py`,
 `tests/test_report_canonical_financials.py` and `tests/test_nu_earnings_evidence.py`.
 
+
+### Reviewed report PDF table scope — 2026-10-19
+
+Disposition: **tested no UI or operator CLI surface change**. Existing typed
+analysis-scope and processing-library entrypoints can retain a reviewed all-page
+PDF table scope and issue a distinct report-scoped certificate. No dashboard,
+registered command, scheduler, parser, provider or production authority is added.
+The source review must be actual and precede generation. Full text and the full
+native quarantined artifact remain retained. Required quarantined pages and all
+deferred-page report/model anchor paths fail closed. The processing receipt names
+scoped identities and deferred pages. Full/default certificates remain strict.
+Evidence: `tests/test_report_pdf_table_scope.py`,
+`tests/test_document_processing_evidence.py`,
+`tests/test_population_document_processing.py` and
+`tests/test_decision_brief_report_scope.py`.
 

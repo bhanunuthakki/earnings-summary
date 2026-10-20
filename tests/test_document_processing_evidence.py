@@ -1523,6 +1523,77 @@ def test_transcript_speaker_lane_requires_immutable_speaker_and_timecodes(
             )
 
 
+@pytest.mark.parametrize("lane", ["transcript_turns", "transcript_speakers"])
+@pytest.mark.parametrize("tampered", [False, True])
+def test_transcript_unicode_locator_uses_native_commitment(
+    conn: sqlite3.Connection, lane: str, tampered: bool
+) -> None:
+    blob = _seed_document(conn, document_version_id="unicode-call", media_type="text/plain")
+    locator = EvidenceLocator(
+        transcript_turn_sequence=0,
+        transcript_speaker="Pedro  Leduc  -  Itaú  BBA",
+        transcript_time_code_start="00:00:01",
+        transcript_time_code_end="00:00:10",
+    )
+    nodes = _seed_run(
+        conn,
+        document_version_id="unicode-call",
+        blob_sha=blob,
+        run_id="unicode-call-run",
+        extractor_name="legacy-evidence-backfill",
+        extractor_code_version="evidence-backfill@1",
+        extractor_config_sha256="b" * 64,
+        children=(("transcript_turn", "Question.", locator),),
+        legacy_ascii_output=True,
+    )
+    assert locator.canonical_sha256 != _sha(locator.model_dump(mode="json", exclude_none=True))
+    if tampered:
+        conn.execute("DROP TRIGGER trg_evidence_nodes_append_only")
+        conn.execute(
+            "UPDATE evidence_nodes SET locator_json=? WHERE node_id=?",
+            (
+                EvidenceLocator.model_validate(
+                    locator.model_dump(exclude_none=True) | {"transcript_speaker": "Other"}
+                ).canonical_json,
+                nodes[1].node_id,
+            ),
+        )
+        with pytest.raises(
+            DocumentProcessingEvidenceIntegrityError, match="native_locator_commitment_mismatch"
+        ):
+            publish_document_processing_evidence(
+                conn,
+                document_version_id="unicode-call",
+                processing_lane=lane,
+                cutoff_at=T1,
+                recorded_at=T2,
+            )
+        return
+
+    receipt = publish_document_processing_evidence(
+        conn,
+        document_version_id="unicode-call",
+        processing_lane=lane,
+        cutoff_at=T1,
+        recorded_at=T2,
+    )
+    proof = verify_document_processing_evidence(
+        conn,
+        receipt.evidence_seal_id,
+        document_version_id="unicode-call",
+        processing_lane=lane,
+        cutoff_at=T1,
+    )
+    assert proof.member_count == 1
+    member = conn.execute(
+        "SELECT locator_json,locator_sha256 FROM document_processing_evidence_members "
+        "WHERE evidence_seal_id=?",
+        (receipt.evidence_seal_id,),
+    ).fetchone()
+    closure_locator_json = _canonical(locator.model_dump(mode="json", exclude_none=True))
+    assert tuple(member) == (closure_locator_json, _sha(closure_locator_json))
+
+
 def test_pdf_ocr_rejects_partial_required_page_set_then_closes_exactly(
     conn: sqlite3.Connection,
 ) -> None:

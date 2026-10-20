@@ -163,6 +163,12 @@ Only genuinely matching retained bytes can receive a byte-verification stamp.
 
 ### Selected financial evidence and calculations
 
+The finite `native-pdf-transcript-review/v1` profile binds untimed transcript turns
+and speakers to the complete promoted native PDF text seal and exact page/character
+spans. Reviewed raw source labels supply attribution; page openings and reviewed
+speakerless headings retain unknown attribution. Timecodes remain explicitly
+unavailable, and the existing time-coded transcript profile keeps its requirements.
+
 Financials, Explore, Ask and financial decision conditions retain the exact
 selected observation and one aware knowledge cutoff. Table and series references
 name their reader policy. Supported annual and quarterly series preserve native
