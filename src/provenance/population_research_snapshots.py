@@ -32,6 +32,7 @@ from provenance.research_snapshot import (
     ResearchSnapshotRequest,
     ResearchUniverse,
     build_research_snapshot,
+    resolve_corpus_obligation_bindings,
     verify_research_snapshot,
 )
 from runtime.deterministic import as_utc as _utc
@@ -432,7 +433,9 @@ def assemble_research_snapshot_request(
         cutoff,
         observed,
     )
-    obligation_ids = _obligation_coordinates(conn, manifest_id, issuer_id)
+    obligation_ids = _obligation_coordinates(
+        conn, manifest_id, issuer_id, analysis_scope=analysis_scope
+    )
     publication_ids = _publication_coordinates(conn, resolution_id, cutoff, observed)
     identity_payload = {
         "canonical_fact_projection_run_id": projection_id,
@@ -997,29 +1000,18 @@ def _obligation_coordinates(
     conn: sqlite3.Connection,
     manifest_id: str,
     issuer_id: str,
+    *,
+    analysis_scope: AnalysisEvidenceScope | None = None,
 ) -> tuple[str, ...]:
-    rows = conn.execute(
-        "SELECT membership.membership_id,"
-        "binding.source_obligation_revision_id,binding.issuer_id "
-        "FROM search_corpus_document_memberships membership "
-        "JOIN search_manifest_source_inventories inventory "
-        "ON inventory.manifest_id=membership.manifest_id "
-        "JOIN expected_documents expected "
-        "ON expected.snapshot_id=inventory.snapshot_id "
-        "AND expected.expected_document_key=membership.expected_document_key "
-        "JOIN expected_document_obligation_bindings binding "
-        "ON binding.expected_document_id=expected.expected_document_id "
-        "WHERE membership.manifest_id=? "
-        "ORDER BY membership.membership_id",
-        (manifest_id,),
-    ).fetchall()
-    membership_count = int(
-        conn.execute(
-            "SELECT COUNT(*) FROM search_corpus_document_memberships WHERE manifest_id=?",
+    try:
+        rows = resolve_corpus_obligation_bindings(
+            conn,
             (manifest_id,),
-        ).fetchone()[0]
-    )
-    if not rows or len(rows) != membership_count or any(str(row[2]) != issuer_id for row in rows):
+            analysis_scope=analysis_scope,
+        )
+    except ValueError as exc:
+        raise ResearchSnapshotPlanError("corpus_obligation_binding_incomplete") from exc
+    if not rows or any(str(row[2]) != issuer_id for row in rows):
         raise ResearchSnapshotPlanError("corpus_obligation_binding_incomplete")
     return tuple(sorted({str(row[1]) for row in rows}))
 
