@@ -21,6 +21,7 @@ import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import IO, Literal, cast
 
@@ -58,6 +59,7 @@ _TICKER = re.compile(r"^[A-Z][A-Z0-9.-]{0,31}$")
 # Citation marks such as [3] or [3, 4] are references, not financial figures.
 _CITE_MARK = re.compile(r"\[\d+(?:\s*,\s*\d+)*\]")
 _ANY_QUOTE = re.compile(r"[“\"]([^”\"]+)[”\"]")
+_NUMBER_TOKEN = re.compile(r"\d[\d,]*(?:\.\d+)?")
 
 ItemStatus = Literal["admitted", "unadmitted_fact", "source_passage", "owner_record"]
 
@@ -214,12 +216,16 @@ class ResearchToolSession:
             excerpts = tuple((by_number[n].text, (by_number[n].text,)) for n in cites)
             try:
                 _check_claim_shape(text, cites, [by_number[n].text for n in cites])
-                # Derivations are replayed here and only their displayed results join
-                # the supported figures; formula constants never support a figure.
+                # Derivations are replayed here: operands bind numerically to cited
+                # figures or earlier results, with no calendar exemption, and only the
+                # displayed results join the supported figures. Constants never do.
+                bound = _magnitudes(" ".join(by_number[n].text for n in cites))
                 for figure in derived:
-                    verify_memo_analysis_text(" ".join(figure.operands.values()), excerpts)
+                    if any(_magnitude(token) not in bound for token in figure.operands.values()):
+                        raise MemoClaimSupportError("memo_derived_operand_unbound")
                     if derived_figure_display(figure) != figure.displayed_value:
                         raise MemoClaimSupportError("memo_derived_value_mismatch")
+                    bound.add(_magnitude(figure.displayed_value))
                 verify_memo_analysis_text(
                     _CITE_MARK.sub(" ", text),
                     excerpts,
@@ -247,6 +253,17 @@ class ResearchToolSession:
             "items": [item.chip_payload() | {"status": item_status(item)} for item in self.ledger],
             "status_counts": counts,
         }
+
+
+def _magnitude(token: str) -> Decimal:
+    try:
+        return abs(Decimal(re.sub(r"[,%$\s]", "", token).strip("()"))).normalize()
+    except InvalidOperation as exc:
+        raise MemoClaimSupportError("memo_derived_expression_invalid") from exc
+
+
+def _magnitudes(text: str) -> set[Decimal]:
+    return {_magnitude(token) for token in _NUMBER_TOKEN.findall(text)}
 
 
 def _check_claim_shape(text: str, cites: tuple[int, ...], cited_texts: list[str]) -> None:
@@ -441,6 +458,8 @@ def handle_message(session: ResearchToolSession, message: object) -> dict[str, o
     method, request_id = request.get("method"), request.get("id")
     params = request.get("params")
     params_map = cast("dict[str, object]", params) if isinstance(params, dict) else {}
+    if not isinstance(method, str):
+        return _rpc_error(request_id, -32600, "invalid request")
     if request_id is None:
         return None
     if method == "initialize":

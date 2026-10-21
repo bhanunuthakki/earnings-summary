@@ -243,8 +243,34 @@ def test_verify_draft_rejects_figures_supported_only_by_formula_constants(
     )
     assert [r["reason"] for r in results] == [
         "memo_analysis_number_unbound",
-        "memo_analysis_number_unbound",
+        "memo_derived_operand_unbound",
     ]
+
+
+def test_verify_draft_binds_operands_numerically_and_chains_results(db: Path, repo: Path) -> None:
+    session = ResearchToolSession(db_path=db, repo_root=repo)
+    session.ledger.append(_item(1, "fact", "NU · Revenue", "Revenue 5"))
+    year_operand = [
+        {
+            "expression": "a * 2",
+            "operands": {"a": "2025"},
+            "displayed_value": "4,050",
+            "decimals": 0,
+        }
+    ]
+    chained = [
+        {"expression": "a * 2", "operands": {"a": "5"}, "displayed_value": "10", "decimals": 0},
+        {"expression": "b * 2", "operands": {"b": "10"}, "displayed_value": "20", "decimals": 0},
+    ]
+    results = _verified(
+        session,
+        [
+            {"text": "Revenue was 4,050 [1].", "cites": [1], "derived": year_operand},
+            {"text": "Doubled 10, then 20 [1].", "cites": [1], "derived": chained},
+        ],
+    )
+    assert results[0]["reason"] == "memo_derived_operand_unbound"
+    assert results[1]["status"] == "pass"
 
 
 def test_verify_draft_checks_inline_marks_and_short_quotes(db: Path, repo: Path) -> None:
@@ -315,6 +341,12 @@ def test_json_rpc_handshake_listing_and_errors(db: Path, repo: Path) -> None:
     serve(session, io.StringIO(json.dumps(batch) + "\n" + "[]\n"), out)
     replies = [json.loads(line) for line in out.getvalue().splitlines()]
     assert [r["id"] for r in replies[0]] == [4, 5]
+    assert replies[1]["error"]["code"] == -32600
+
+    out = io.StringIO()
+    serve(session, io.StringIO("[{}]\n{}\n"), out)
+    replies = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert replies[0][0]["error"]["code"] == -32600
     assert replies[1]["error"]["code"] == -32600
 
 
