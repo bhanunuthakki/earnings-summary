@@ -10,14 +10,26 @@ import hashlib
 import re
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Literal, Self
+from typing import TYPE_CHECKING, Literal, Self
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 from soupsieve import SelectorSyntaxError
 
-from provenance.source_coverage_reconcile import ExpectedDocumentImport
+if TYPE_CHECKING:
+    from provenance.source_coverage_reconcile import ExpectedDocumentImport
+
+
+def parse_sec_subject_period_text(value: str) -> date:
+    """Read an exact full-month source date without changing its retained wording."""
+    normalized = value.replace(",", "").strip()
+    for pattern in ("%B %d %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(normalized, pattern).date()
+        except ValueError:
+            continue
+    raise ValueError("financial_subject_period_text_invalid")
 
 
 class PackageSubjectReview(BaseModel):
@@ -45,11 +57,7 @@ class PackageSubjectReview(BaseModel):
         if self.document_type not in {"investor_presentation", "investor_update"}:
             if self.period_end is None or self.period_end_text is None:
                 raise ValueError("financial_subject_requires_reported_period_witness")
-            normalized = self.period_end_text.replace(",", "").strip()
-            try:
-                parsed = datetime.strptime(normalized, "%B %d %Y").date()
-            except ValueError as exc:
-                raise ValueError("financial_subject_period_text_invalid") from exc
+            parsed = parse_sec_subject_period_text(self.period_end_text)
             if parsed != self.period_end or self.period_end_text not in self.heading_text:
                 raise ValueError("financial_subject_period_witness_mismatch")
         elif self.period_end is not None or self.period_end_text is not None:

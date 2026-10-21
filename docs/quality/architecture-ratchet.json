@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "c9dbfbb4cb57054067178dfdf98b9476a2080668",
+  "scoped_commit": "071464db29d3016c6d5afca2d7a9776bd73dc7f1",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "c0136716399900fe07a920e65c4733cc779e366a560207e840d61642ed5a036b",
+  "source_sha256": "ad40f00a235d3295b0f7c1b010df26805517933e2e8070c3069a88159699cdb1",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,14 +22,14 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1454,
-    "total_noncomment_loc": 554829,
-    "modules_over_1000_loc": 106,
+    "executable_modules": 1456,
+    "total_noncomment_loc": 555938,
+    "modules_over_1000_loc": 107,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
     "max_internal_fan_out": 40,
     "scc_count": 19,
-    "scc_module_count": 65,
+    "scc_module_count": 70,
     "largest_scc": 16,
     "composition_root_loc": {
       "execution/comments_server.py": 178,
@@ -10991,17 +10991,17 @@
         "path": "src/filings/sec_financial_classification.py",
         "module": "filings.sec_financial_classification",
         "lines": {
-          "physical": 169,
-          "nonblank": 152,
-          "noncomment": 152
+          "physical": 177,
+          "nonblank": 158,
+          "noncomment": 158
         },
         "internal_fan_out": 1,
         "responsibilities": [
           "filesystem",
           "network"
         ],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
       },
       {
         "path": "src/filings/sec_submissions_inventory.py",
@@ -15824,17 +15824,17 @@
         "path": "src/provenance/analysis_scope.py",
         "module": "provenance.analysis_scope",
         "lines": {
-          "physical": 825,
-          "nonblank": 772,
-          "noncomment": 770
+          "physical": 1471,
+          "nonblank": 1390,
+          "noncomment": 1385
         },
-        "internal_fan_out": 7,
+        "internal_fan_out": 9,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 4,
-        "fully_annotated_public_functions": 4
+        "public_functions": 5,
+        "fully_annotated_public_functions": 5
       },
       {
         "path": "src/provenance/archive_catalog.py",
@@ -16280,6 +16280,22 @@
         ],
         "public_functions": 5,
         "fully_annotated_public_functions": 5
+      },
+      {
+        "path": "src/provenance/historical_public_witness.py",
+        "module": "provenance.historical_public_witness",
+        "lines": {
+          "physical": 426,
+          "nonblank": 377,
+          "noncomment": 377
+        },
+        "internal_fan_out": 2,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 6,
+        "fully_annotated_public_functions": 6
       },
       {
         "path": "src/provenance/image_ocr_extraction.py",
@@ -16741,6 +16757,19 @@
         "fully_annotated_public_functions": 3
       },
       {
+        "path": "src/provenance/report_evidence_contract.py",
+        "module": "provenance.report_evidence_contract",
+        "lines": {
+          "physical": 84,
+          "nonblank": 67,
+          "noncomment": 67
+        },
+        "internal_fan_out": 1,
+        "responsibilities": [],
+        "public_functions": 0,
+        "fully_annotated_public_functions": 0
+      },
+      {
         "path": "src/provenance/reporting_document_scope.py",
         "module": "provenance.reporting_document_scope",
         "lines": {
@@ -16931,11 +16960,11 @@
         "path": "src/provenance/sec_native_capture.py",
         "module": "provenance.sec_native_capture",
         "lines": {
-          "physical": 1306,
-          "nonblank": 1187,
-          "noncomment": 1187
+          "physical": 1350,
+          "nonblank": 1230,
+          "noncomment": 1230
         },
-        "internal_fan_out": 5,
+        "internal_fan_out": 6,
         "responsibilities": [
           "database",
           "filesystem",
@@ -16948,11 +16977,11 @@
         "path": "src/provenance/sec_package_subject_witness.py",
         "module": "provenance.sec_package_subject_witness",
         "lines": {
-          "physical": 158,
-          "nonblank": 145,
-          "noncomment": 145
+          "physical": 159,
+          "nonblank": 146,
+          "noncomment": 146
         },
-        "internal_fan_out": 1,
+        "internal_fan_out": 2,
         "responsibilities": [
           "database",
           "network"
@@ -22224,6 +22253,16 @@
         "user_state.triage_suggest"
       ],
       [
+        "filings.sec_financial_classification",
+        "provenance.analysis_scope",
+        "provenance.reporting_document_scope",
+        "provenance.search_index_lineage",
+        "provenance.sec_package_subject_witness",
+        "provenance.source_coverage_reconcile",
+        "search.corpus_builder",
+        "search.grounded"
+      ],
+      [
         "ir_pipeline.transcript",
         "pipeline.source_policy",
         "pipeline.transcript_acquisition",
@@ -22257,11 +22296,6 @@
         "pipeline.issuer_document_coverage",
         "pipeline.issuer_fact_manifest",
         "provenance.source_coverage"
-      ],
-      [
-        "provenance.search_index_lineage",
-        "search.corpus_builder",
-        "search.grounded"
       ],
       [
         "signals.ir_event_discovery",

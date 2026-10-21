@@ -74,6 +74,49 @@ capture dependencies; they do not duplicate the primary research text. Applicabl
 processing lanes, including XBRL extraction, remain mandatory. Processing, corpus,
 and research must agree on the exact primary document set.
 
+### Complete report evidence profile (owner-approved 2026-10-18)
+
+An explicit `AnalysisScopeRequest.readiness_profile=complete_report_evidence/v1`
+selects the versioned v3 report boundary. This is an additive acceptance profile.
+The default full-processing policy above remains unchanged. The report profile
+requires every selected primary, including known amendments, and its complete
+qualified text. Original SEC exhibits keep their capture requirement. This
+profile has no implicit nonmaterial-exhibit exemption. Other package-child
+capture coverage remains visible in the same scope; it is deferred, not complete.
+Applicable native filing-XBRL processing is a
+separate deferred duty. The processing receipt names that duty and its bounded
+profile. No XBRL obligation becomes succeeded or not applicable through deferral.
+
+This profile changes processing prerequisites, not financial truth. Source bytes,
+identity, public and physical clocks, extraction, definitions, admission, conflicts,
+comparability, canonical resolution and reader reconstruction remain mandatory.
+Processing, corpus and financial research bind the same exact scope. A report
+cannot obtain acceptance merely from all model slots or all rendered claims.
+Its versioned required evidence population must also cover the complete report.
+Missing critical evidence blocks acceptance. Full-output claim verification,
+integrated model/scenario proof and recalculated workbook parity remain required.
+A qualified result identifies its bounded report scope and cannot inherit a
+whole-filing or whole-issuer decision-grade label.
+
+Analysis Evidence Scope v7 can bind an explicit `report-pdf-table-scope/v1`
+under the same report profile. This implements the approved report-first boundary;
+it does not add a package-wide table requirement. The review commits every page,
+the exact retained native artifact and raw PDF, and a source population for the
+existing ten MELI report requirements before generation. Each deferred page has a
+content-backed rationale and either exact replacement sources or an explicit
+outside-report disposition. Required quarantined pages still block acceptance.
+
+The distinct `report-pdf-table-certificate/v1` verifies required native child pages
+and the complete parent artifact/member seal. It retains all page dispositions,
+complete qualified text, the quarantined parent and deferred-page receipt. Its
+obligation and certificate identities bind the reviewed page scope. It cannot
+satisfy an unscoped/full-PDF obligation. A report cannot use a deferred page through
+fulltext, financial references, calculation operands, derived financial leaves,
+supporting contexts or model inputs. Replacement sources require native snapshot
+membership and actual report use. Report review binds the independently declared
+source population to the existing analytical requirements. Review rationales are
+analyst judgments; a schema-valid page plan does not supply materiality approval.
+
 Unrelated archive gaps remain visible. A complete selected analysis does not make
 the archive complete or establish financial-fact admission or model readiness.
 The scoped artifact has its own identity. Full-population verification does not

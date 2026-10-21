@@ -1589,6 +1589,15 @@ selection. This integration adds no collection action, scheduler, dashboard
 control, or production operation. Consumer adoption requires a separate current
 source-clock and financial acceptance integration.
 
+The owner-approved report profile is selected through the typed request field
+`readiness_profile: complete_report_evidence/v1`. Its v3 scope has a distinct
+identity; existing requests keep their original identity. Package dependency
+coverage remains inspectable and native filing-XBRL processing remains deferred.
+Processing receipts expose the profile and `deferred_processing_lanes`. Complete
+primary text and exact reported/derived fact-source closure stay mandatory. This
+does not change source collection limits, start a provider or authorize production
+writes. The report evidence population and reader/model gates determine acceptance.
+
 ### MELI reported-input and explicit-vector previews — 2026-10-10
 
 Disposition: **no Operations surface change**. The bounded CLI
