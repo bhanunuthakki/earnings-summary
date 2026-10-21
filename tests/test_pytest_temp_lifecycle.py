@@ -102,14 +102,13 @@ def test_session_hook_registers_success_and_preserves_failure(
     assert retirement.deleted == 0
     assert fixture.exists() is not passed
     assert (run_root / ".earnings-temp-run.json").is_file()
+    # Both outcomes end the child's peak lease at seal; failure keeps its payload.
+    sealed = temp_run_retention.TempRunManifest.model_validate(manifest)
+    assert sealed.reservation_token is not None
+    with pytest.raises(FileNotFoundError):
+        release_peak(run_root, sealed.reservation_token)
     # Remove only the exact child test directory that this test created. Failed
     # session protection is already proved; this test does not leave test debris.
-    if not passed:
-        sealed = temp_run_retention.TempRunManifest.model_validate(manifest)
-        if sealed.reservation_token is not None:
-            # This failure was intentional and verified. Release its exact lease
-            # before the test removes the owned reproduction it no longer needs.
-            release_peak(run_root, sealed.reservation_token)
     shutil.rmtree(run_root)
 
 

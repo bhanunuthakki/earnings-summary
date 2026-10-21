@@ -1714,3 +1714,21 @@ publication authority. Native regression evidence:
 `tests/test_report_canonical_financials.py` and `tests/test_nu_earnings_evidence.py`.
 
 
+### Test-storage peak lease lifetime — 2026-10-21
+
+Disposition: **no UI or operator CLI surface change**. A disposable run's peak
+lease in `src/operations/storage_reservation.py` now covers only its live
+producer. `finish_temp_run` releases it after a passed or failed seal. The next
+admission on the same host reclaims a lease when the operating system reports
+that its holder process does not exist. Any doubt, including denied access or a
+reused process number, keeps the lease. A failed run keeps its manifest and
+payload protected until a reviewed resolution, as before. Its retained bytes
+still count through the 50 GiB free-space headroom, but no longer through the
+20 GiB concurrent-producer limit. A reviewed resolution can now bind to a passed
+rerun whose only holds are pytest links or multiply linked files. Those paths
+stay in place and are never followed or retired. Other holds still block. This
+removes the outage where ten failed local test sessions blocked all later pytest
+runs. No operator action, scheduler, service, Operations surface or retention
+window changed. Regression evidence: `tests/test_storage_reservation.py`,
+`tests/test_temp_run_review_resolution.py` and
+`tests/test_pytest_temp_lifecycle.py`.
