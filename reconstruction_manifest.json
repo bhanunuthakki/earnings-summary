@@ -110,7 +110,7 @@
         "pytest tests/test_onboard_sec_fallback.py tests/test_sec_onboarding_identity.py tests/test_onboarding_state_authority.py tests/test_runtime_state_authority.py tests/test_decision_brief_workflow.py -q",
         "pytest tests/test_source_context_entrypoints.py tests/test_refresh_dispatch.py -q",
         "pytest tests/test_meli_reported_statements.py -q",
-        "pytest tests/test_analysis_scope.py tests/test_analysis_scope_cli.py -q",
+        "pytest tests/test_analysis_scope.py tests/test_historical_analysis_scope.py tests/test_historical_research_boundary.py tests/test_analysis_scope_cli.py -q",
         "pytest tests/test_meli_input_evidence.py -q"
       ],
       "documentation": [

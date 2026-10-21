@@ -2038,6 +2038,11 @@ def _verify_research_universe(
     verify_fact_subjects: bool,
     require_current_inventory: bool = True,
 ) -> None:
+    analysis = request.research_universe.analysis_scope
+    if analysis is not None and analysis.request.historical_reconstruction is not None:
+        # Issuer-scoped fact resolution does not yet bind reported and derived
+        # source evidence to the exact original historical document selection.
+        raise ValueError("historical_research_fact_source_closure_unavailable")
     required = {
         "document_processing_snapshot_members",
         "expected_document_obligation_bindings",
