@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol, Self, cast
+from urllib.parse import urlsplit
 
 from pydantic import (
     BaseModel,
@@ -22,7 +23,22 @@ from pydantic import (
 )
 
 from filings.sec_submissions_inventory import SEC_REGISTRATION_FINANCIAL_FORMS
-from provenance.analysis_scope import AnalysisEvidenceScope, require_analysis_documents
+from provenance.analysis_scope import (
+    AnalysisEvidenceScope,
+    ReportPdfTableScope,
+    require_analysis_documents,
+)
+from provenance.canonical_fact_resolution import (
+    MAX_DERIVATION_DEPTH,
+    MAX_DERIVATION_NODES,
+    CanonicalFactResolutionEngine,
+    VerifiedResolutionSnapshot,
+)
+from provenance.fact_read_model import FactReadModel
+from provenance.source_fact_publication import (
+    VerifiedSourceFactPublication,
+    verify_source_fact_publication,
+)
 from runtime.deterministic import as_utc as _utc
 from runtime.deterministic import canonical_json_model as canonical_json
 from runtime.deterministic import content_sha256_model as _digest
@@ -114,6 +130,16 @@ class DocumentProcessingScope(_Frozen):
             )
         return self
 
+    @property
+    def readiness_profile(self) -> Literal["complete_report_evidence/v1"] | None:
+        return (
+            None if self.analysis_scope is None else self.analysis_scope.request.readiness_profile
+        )
+
+    @property
+    def excluded_processing_lanes(self) -> tuple[Literal["filing_xbrl"], ...]:
+        return ("filing_xbrl",) if self.readiness_profile is not None else ()
+
 
 class DocumentProcessingPolicy(_Frozen):
     policy_name: str = Field(min_length=1, max_length=128)
@@ -183,6 +209,19 @@ class DocumentProcessingSnapshotReceipt(_Frozen):
     member_count: int = Field(ge=0)
     member_set_sha256: str
     cutoff_at: datetime
+    readiness_profile: Literal["complete_report_evidence/v1"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    deferred_processing_lanes: tuple[Literal["filing_xbrl"], ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
+
+    scoped_pdf_table_scope_sha256s: tuple[str, ...] = Field(
+        default=(), exclude_if=lambda value: not value
+    )
+    deferred_pdf_table_pages: dict[str, tuple[int, ...]] = Field(
+        default_factory=dict, exclude_if=lambda value: not value
+    )
 
     _sha = field_validator("member_set_sha256")(_validate_sha)
 
@@ -331,6 +370,8 @@ class _DocumentState:
     document_recorded_at: datetime
     evidence_knowledge_at: datetime
     evidence_recorded_at: datetime
+    source_kind: str | None = None
+    source_url: str | None = None
 
 
 @contextmanager
@@ -338,9 +379,12 @@ def _savepoint(conn: sqlite3.Connection, name: str) -> Generator[None, None, Non
     conn.execute(f"SAVEPOINT {name}")
     try:
         yield
-    except Exception:
-        conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
-        conn.execute(f"RELEASE SAVEPOINT {name}")
+    except BaseException:
+        try:
+            conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
+            conn.execute(f"RELEASE SAVEPOINT {name}")
+        except sqlite3.Error:
+            pass
         raise
     conn.execute(f"RELEASE SAVEPOINT {name}")
 
@@ -427,6 +471,37 @@ def _applicable_lanes(state: _DocumentState) -> set[ProcessingLane]:
     return lanes
 
 
+def _financial_source_authority(
+    document: _DocumentState,
+) -> Literal["sec_edgar", "issuer_publisher"] | None:
+    if document.form_type.strip().upper() in SEC_REGISTRATION_FINANCIAL_FORMS:
+        return "sec_edgar"
+    if document.source_kind != "sec_filing" or document.source_url is None:
+        return None
+    try:
+        source = urlsplit(document.source_url)
+    except ValueError:
+        return None
+    parts = source.path.split("/")
+    if (
+        source.scheme == "https"
+        and source.netloc == "www.sec.gov"
+        and not source.query
+        and not source.fragment
+        and len(parts) == 7
+        and parts[:4] == ["", "Archives", "edgar", "data"]
+        and parts[4].isascii()
+        and parts[4].isdigit()
+        and len(parts[5]) == 18
+        and parts[5].isascii()
+        and parts[5].isdigit()
+        and parts[6] not in {"", ".", ".."}
+        and not any(character in parts[6] for character in "\\%")
+    ):
+        return "sec_edgar"
+    return None
+
+
 def _scope_filter(scope: DocumentProcessingScope) -> tuple[str, list[object]]:
     clauses: list[str] = []
     parameters: list[object] = []
@@ -476,7 +551,7 @@ def _document_states(
         ),
         (
             "evidence_source_observations",
-            {"observation_id", "retrieved_at", "blob_sha256"},
+            {"observation_id", "retrieved_at", "blob_sha256", "source_kind", "source_url"},
         ),
         ("evidence_content_blobs", {"sha256", "media_type", "recorded_at"}),
     ):
@@ -489,7 +564,8 @@ def _document_states(
         SELECT document.document_version_id,document.issuer_id,
                document.document_type,document.form_type,blob.media_type,
                document.blob_sha256,document.recorded_at,
-               observation.retrieved_at,blob.recorded_at
+               observation.retrieved_at,blob.recorded_at,
+               observation.source_kind,observation.source_url
         FROM evidence_document_versions document
         JOIN evidence_source_observations observation
           ON observation.observation_id=document.observation_id
@@ -516,6 +592,8 @@ def _document_states(
             document_recorded_at=_parse_time(row[6]),
             evidence_knowledge_at=_parse_time(row[7]),
             evidence_recorded_at=_parse_time(row[8]),
+            source_kind=None if row[9] is None else str(row[9]),
+            source_url=None if row[10] is None else str(row[10]),
         )
         for row in rows
     )
@@ -613,6 +691,7 @@ def _derive_obligations(
     operation_recorded_at: datetime,
     persist: bool,
     require_current_inventory: bool = True,
+    deferred_processing_lanes: set[Literal["filing_xbrl"]] | None = None,
 ) -> tuple[DocumentProcessingObligation, ...]:
     conn.row_factory = sqlite3.Row
     knowledge = _utc(cutoff)
@@ -633,11 +712,7 @@ def _derive_obligations(
                 cutoff_at=knowledge,
                 observed_through=observed,
                 include_optional=policy.include_optional_source_obligations,
-                financial_authority=(
-                    "sec_edgar"
-                    if document.form_type.strip().upper() in SEC_REGISTRATION_FINANCIAL_FORMS
-                    else None
-                ),
+                financial_authority=_financial_source_authority(document),
             )
             applicable = _applicable_lanes(document)
             for source in sources:
@@ -656,9 +731,30 @@ def _derive_obligations(
                     raise ValueError("document processing input exceeds observed_through")
                 recorded_at = written
                 for lane in _LANES:
+                    # This versioned profile proves report evidence processing.
+                    # Applicable native XBRL remains a visible deferred duty, never a
+                    # succeeded or not-applicable processing disposition.
+                    if lane in scope.excluded_processing_lanes:
+                        if lane in applicable and deferred_processing_lanes is not None:
+                            deferred_processing_lanes.add("filing_xbrl")
+                        continue
+                    table_scope = (
+                        next(
+                            (
+                                item
+                                for item in scope.analysis_scope.request.report_pdf_tables
+                                if item.document_version_id == document.document_version_id
+                            ),
+                            None,
+                        )
+                        if scope.analysis_scope is not None and lane == "pdf_table"
+                        else None
+                    )
                     key = f"{source['obligation_key']}:{document.document_version_id}:{lane}"
+                    if table_scope is not None:
+                        key += ":report-pages:" + table_scope.scope_sha256
                     applicability = "applicable" if lane in applicable else "not_applicable"
-                    source_state = {
+                    source_state: dict[str, object] = {
                         "blob_sha256": document.blob_sha256,
                         "document_recorded_at": _utc(document.document_recorded_at).isoformat(),
                         "document_type": document.document_type,
@@ -672,6 +768,8 @@ def _derive_obligations(
                         "source_obligation_revision_id": str(source["obligation_revision_id"]),
                         "source_obligation_revision": int(source["revision"]),
                     }
+                    if table_scope is not None:
+                        source_state["report_pdf_table_scope"] = table_scope.model_dump(mode="json")
                     source_json = canonical_json(source_state)
                     commitment = {
                         "applicability": applicability,
@@ -845,6 +943,20 @@ def derive_obligations(
     )
 
 
+def report_pdf_table_scope_for_obligation(
+    conn: sqlite3.Connection, processing_obligation_revision_id: str
+) -> ReportPdfTableScope | None:
+    row = conn.execute(
+        "SELECT source_state_json,source_state_sha256 FROM document_processing_obligation_revisions "
+        "WHERE processing_obligation_revision_id=?",
+        (processing_obligation_revision_id,),
+    ).fetchone()
+    if row is None or _digest_text(str(row[0])) != str(row[1]):
+        raise ValueError("processing obligation source state commitment mismatch")
+    value = json.loads(str(row[0])).get("report_pdf_table_scope")
+    return None if value is None else ReportPdfTableScope.model_validate(value)
+
+
 def _verify_processing_evidence(
     conn: sqlite3.Connection,
     obligation: sqlite3.Row,
@@ -860,6 +972,9 @@ def _verify_processing_evidence(
             verify_document_processing_evidence,
         )
 
+        table_scope = report_pdf_table_scope_for_obligation(
+            conn, str(obligation["processing_obligation_revision_id"])
+        )
         verified = verify_document_processing_evidence(
             conn,
             reference.evidence_id,
@@ -867,6 +982,7 @@ def _verify_processing_evidence(
             processing_lane=str(obligation["processing_lane"]),
             cutoff_at=knowledge_cutoff,
             observed_through=observed,
+            **({"report_pdf_table_scope": table_scope} if table_scope is not None else {}),
         )
         if verified.member_set_sha256 != reference.evidence_commitment_sha256:
             raise ValueError("processing evidence commitment is missing or mismatched")
@@ -1280,6 +1396,7 @@ def seal_processing_snapshot(
     policy: DocumentProcessingPolicy,
     recorded_at: datetime,
 ) -> DocumentProcessingSnapshotReceipt:
+    deferred: set[Literal["filing_xbrl"]] = set()
     obligations = _derive_obligations(
         conn,
         scope,
@@ -1288,6 +1405,7 @@ def seal_processing_snapshot(
         observed_through=recorded_at,
         operation_recorded_at=recorded_at,
         persist=False,
+        deferred_processing_lanes=deferred,
     )
     scope_json = canonical_json(scope)
     policy_json = canonical_json(policy)
@@ -1400,6 +1518,21 @@ def seal_processing_snapshot(
         member_count=len(rows),
         member_set_sha256=digest,
         cutoff_at=cutoff_at,
+        readiness_profile=scope.readiness_profile,
+        deferred_processing_lanes=tuple(sorted(deferred)),
+        scoped_pdf_table_scope_sha256s=tuple(
+            item.scope_sha256 for item in scope.analysis_scope.request.report_pdf_tables
+        )
+        if scope.analysis_scope is not None
+        else (),
+        deferred_pdf_table_pages={
+            item.document_version_id: tuple(
+                page.page_number for page in item.pages if page.table_requirement == "deferred"
+            )
+            for item in scope.analysis_scope.request.report_pdf_tables
+        }
+        if scope.analysis_scope is not None
+        else {},
     )
 
 
@@ -1446,6 +1579,7 @@ def verify_processing_snapshot(
         raise ValueError("Document Processing Snapshot was not visible by observed_through")
     if recorded < cutoff or sealed < recorded:
         raise ValueError("Document Processing Snapshot seal clocks are invalid")
+    deferred: set[Literal["filing_xbrl"]] = set()
     obligations = _derive_obligations(
         conn,
         scope,
@@ -1455,6 +1589,7 @@ def verify_processing_snapshot(
         operation_recorded_at=observed,
         persist=False,
         require_current_inventory=False,
+        deferred_processing_lanes=deferred,
     )
     rows, payload, digest = _member_set(
         conn,
@@ -1507,6 +1642,21 @@ def verify_processing_snapshot(
         member_count=len(rows),
         member_set_sha256=digest,
         cutoff_at=cutoff,
+        readiness_profile=scope.readiness_profile,
+        deferred_processing_lanes=tuple(sorted(deferred)),
+        scoped_pdf_table_scope_sha256s=tuple(
+            item.scope_sha256 for item in scope.analysis_scope.request.report_pdf_tables
+        )
+        if scope.analysis_scope is not None
+        else (),
+        deferred_pdf_table_pages={
+            item.document_version_id: tuple(
+                page.page_number for page in item.pages if page.table_requirement == "deferred"
+            )
+            for item in scope.analysis_scope.request.report_pdf_tables
+        }
+        if scope.analysis_scope is not None
+        else {},
     )
 
 
@@ -1573,6 +1723,47 @@ def _required_source_fact_publications(
 
 
 class _DefaultResearchReferenceVerifier:
+    @staticmethod
+    def publication_reference(
+        verified: VerifiedSourceFactPublication,
+        requested_lane: str,
+        request: ResearchSnapshotRequest,
+    ) -> VerifiedResearchReference:
+        if request.source_publication_reference_clock == "cutoff_v1":
+            publication_knowledge = request.cutoff_at
+        elif request.source_publication_reference_clock == "publication_created_v2":
+            publication_knowledge = verified.created_at
+        else:
+            raise ValueError("unsupported source publication reference clock")
+        return VerifiedResearchReference(
+            requested_lane=requested_lane,
+            reference_table="source_fact_publication_seals",
+            reference_id=verified.publication_seal_id,
+            commitment_sha256=verified.member_set_sha256,
+            knowledge_at=publication_knowledge,
+            recorded_at=max(verified.recorded_at, verified.sealed_at),
+        )
+
+    @staticmethod
+    def resolution_reference(
+        verified: VerifiedResolutionSnapshot,
+        requested_lane: str,
+        reference_id: str,
+    ) -> VerifiedResearchReference:
+        return VerifiedResearchReference(
+            requested_lane=requested_lane,
+            reference_table="canonical_fact_resolution_snapshot_scope_seals",
+            reference_id=reference_id,
+            commitment_sha256=verified.snapshot_commitment_sha256,
+            knowledge_at=verified.cutoff_at,
+            recorded_at=verified.recorded_at,
+            attributes={
+                "issuer_id": verified.scope.issuer_id,
+                "reporting_entity_ids": list(verified.scope.reporting_entity_ids),
+                "scope_sha256": verified.scope_sha256,
+            },
+        )
+
     def verify(
         self,
         conn: sqlite3.Connection,
@@ -1616,6 +1807,14 @@ class _DefaultResearchReferenceVerifier:
                 commitment_sha256=receipt.member_set_sha256,
                 knowledge_at=receipt.cutoff_at,
                 recorded_at=_parse_time(row[0]),
+                attributes=(
+                    {
+                        "readiness_profile": receipt.readiness_profile,
+                        "deferred_processing_lanes": list(receipt.deferred_processing_lanes),
+                    }
+                    if receipt.readiness_profile is not None
+                    else {}
+                ),
             )
         if requested_lane.startswith("corpus:"):
             return self._corpus(
@@ -1634,30 +1833,13 @@ class _DefaultResearchReferenceVerifier:
                 request.recorded_at,
             )
         if requested_lane.startswith("source_fact_publication:"):
-            from provenance.source_fact_publication import (
-                verify_source_fact_publication,
-            )
-
             verified = verify_source_fact_publication(
                 conn,
                 publication_id=reference_id,
                 cutoff=request.cutoff_at,
                 observed_through=request.recorded_at,
             )
-            if request.source_publication_reference_clock == "cutoff_v1":
-                publication_knowledge = request.cutoff_at
-            elif request.source_publication_reference_clock == "publication_created_v2":
-                publication_knowledge = verified.created_at
-            else:
-                raise ValueError("unsupported source publication reference clock")
-            return VerifiedResearchReference(
-                requested_lane=requested_lane,
-                reference_table="source_fact_publication_seals",
-                reference_id=verified.publication_seal_id,
-                commitment_sha256=verified.member_set_sha256,
-                knowledge_at=publication_knowledge,
-                recorded_at=max(verified.recorded_at, verified.sealed_at),
-            )
+            return self.publication_reference(verified, requested_lane, request)
         if requested_lane == "ontology_snapshot":
             from provenance.metric_ontology import MetricOntology
 
@@ -1690,10 +1872,6 @@ class _DefaultResearchReferenceVerifier:
                 recorded_at=max(_parse_time(row[1]), _parse_time(row[3])),
             )
         if requested_lane == "canonical_fact_resolution_snapshot":
-            from provenance.canonical_fact_resolution import (
-                CanonicalFactResolutionEngine,
-            )
-
             verified = CanonicalFactResolutionEngine(conn).verify_snapshot(
                 reference_id,
                 cutoff_at,
@@ -1703,19 +1881,7 @@ class _DefaultResearchReferenceVerifier:
                 request.recorded_at
             ):
                 raise ValueError("Canonical Fact Resolution Snapshot is absent at cutoff")
-            return VerifiedResearchReference(
-                requested_lane=requested_lane,
-                reference_table="canonical_fact_resolution_snapshot_scope_seals",
-                reference_id=reference_id,
-                commitment_sha256=verified.snapshot_commitment_sha256,
-                knowledge_at=verified.cutoff_at,
-                recorded_at=verified.recorded_at,
-                attributes={
-                    "issuer_id": verified.scope.issuer_id,
-                    "reporting_entity_ids": list(verified.scope.reporting_entity_ids),
-                    "scope_sha256": verified.scope_sha256,
-                },
-            )
+            return self.resolution_reference(verified, requested_lane, reference_id)
         if requested_lane.startswith("canonical_fact_projection:"):
             from search.canonical_fact_projection import (
                 verify_canonical_projection_generation,
@@ -1967,14 +2133,18 @@ def _corpus_document_sets(
     )
 
 
-def _corpus_obligation_bindings(
+def resolve_corpus_obligation_bindings(
     conn: sqlite3.Connection,
-    bundles: tuple[CorpusProjectionBundle, ...],
+    manifest_ids: tuple[str, ...],
+    *,
+    analysis_scope: AnalysisEvidenceScope | None = None,
 ) -> tuple[sqlite3.Row, ...]:
+    # Both callers first verify the native scope, including publisher authority,
+    # exact captured coverage and (for historical calls) the public-day witness.
+    issuer_selections = () if analysis_scope is None else analysis_scope.request.issuer_documents
     all_rows: list[sqlite3.Row] = []
     expected_documents: set[str] = set()
-    for bundle in bundles:
-        manifest_id = bundle.corpus_manifest_id
+    for manifest_id in manifest_ids:
         memberships = conn.execute(
             "SELECT membership_id FROM search_corpus_document_memberships "
             "WHERE manifest_id=? ORDER BY membership_id",
@@ -1998,6 +2168,39 @@ def _corpus_obligation_bindings(
                 "ORDER BY expected.expected_document_id",
                 (str(membership[0]),),
             ).fetchall()
+            for selection in issuer_selections:
+                issuer_rows = conn.execute(
+                    "SELECT expected.expected_document_id,"
+                    "binding.source_obligation_revision_id,binding.issuer_id,"
+                    "binding.reporting_entity_id,binding.document_family,"
+                    "membership.document_version_id,membership.membership_status "
+                    "FROM search_corpus_document_memberships AS membership "
+                    "JOIN expected_documents AS expected "
+                    "ON expected.expected_document_key=membership.expected_document_key "
+                    "JOIN expected_document_obligation_bindings AS binding "
+                    "ON binding.expected_document_id=expected.expected_document_id "
+                    "JOIN source_obligation_revisions duty "
+                    "ON duty.obligation_revision_id=binding.source_obligation_revision_id "
+                    "AND duty.issuer_id=binding.issuer_id "
+                    "AND duty.reporting_entity_id IS binding.reporting_entity_id "
+                    "AND duty.document_family=binding.document_family "
+                    "AND duty.authority_kind='issuer_publisher' "
+                    "WHERE membership.membership_id=? AND expected.expected_document_id=? "
+                    "AND membership.document_version_id=? "
+                    "AND membership.membership_status='included' "
+                    "AND expected.issuer_id=? AND binding.issuer_id=expected.issuer_id ",
+                    (
+                        str(membership[0]),
+                        selection.expected_document_id,
+                        selection.document_version_id,
+                        analysis_scope.request.issuer_id if analysis_scope is not None else "",
+                    ),
+                ).fetchall()
+                # A selected publisher inventory may also be explicitly listed in
+                # the manifest. Count that identical binding once, not twice.
+                for row in issuer_rows:
+                    if tuple(row) not in {tuple(existing) for existing in rows}:
+                        rows.append(row)
             if len(rows) != 1:
                 raise ValueError(
                     "every corpus membership must resolve to exactly one "
@@ -2031,18 +2234,152 @@ def _validate_document_obligation_subject_pairs(
             )
 
 
+@dataclass(frozen=True)
+class _VerifiedNativeReferences:
+    resolution: VerifiedResolutionSnapshot
+    publications: tuple[VerifiedSourceFactPublication, ...]
+
+
+def _verify_analysis_fact_source_closure(
+    conn: sqlite3.Connection,
+    request: ResearchSnapshotRequest,
+) -> _VerifiedNativeReferences | None:
+    """Prove selected-source closure without changing resolution policy.
+
+    Read at K conservatively: every source/operand admission must be sealed by K,
+    even when the research seal's physical observation clock O is later. No
+    recorded-after-K evidence is silently read using O as its knowledge cutoff.
+    """
+    analysis = request.research_universe.analysis_scope
+    if analysis is None or (
+        analysis.request.historical_reconstruction is None
+        and analysis.request.readiness_profile is None
+    ):
+        return None
+    with _savepoint(conn, "analysis_fact_source_closure"):
+        universe = request.research_universe
+        verified = CanonicalFactResolutionEngine(conn).verify_snapshot(
+            request.canonical_fact_resolution_snapshot_id,
+            request.cutoff_at,
+            observed_through=request.recorded_at,
+        )
+        if (
+            verified.scope.issuer_id != universe.issuer_id
+            or verified.scope.reporting_entity_ids != universe.reporting_entity_ids
+        ):
+            raise ValueError("analysis_research_fact_resolution_scope_differs")
+        required = _required_source_fact_publications(
+            conn, request.canonical_fact_resolution_snapshot_id
+        )
+        if request.source_fact_publication_ids != required:
+            raise ValueError(
+                "Source Fact Publications must exactly match the requested 0244 candidate universes"
+            )
+        if not required:
+            raise ValueError("analysis_research_fact_source_closure_empty")
+        originals = set(universe.document_version_ids)
+        historical = analysis.request.historical_reconstruction
+        if historical is not None and originals != {
+            item.document_version_id
+            for item in (*historical.documents, *analysis.request.issuer_documents)
+        }:
+            raise ValueError("analysis_research_fact_original_selection_differs")
+        observation_ids: set[str] = set()
+        publications: list[VerifiedSourceFactPublication] = []
+        for publication_id in required:
+            publication = verify_source_fact_publication(
+                conn,
+                publication_id=publication_id,
+                cutoff=request.cutoff_at,
+                observed_through=request.recorded_at,
+            )
+            publications.append(publication)
+            observation_ids.update(
+                member.record_id
+                for member in publication.members
+                if member.record_kind == "fact_observation"
+            )
+        if not observation_ids:
+            raise ValueError("analysis_research_fact_source_closure_empty")
+        if len(observation_ids) > MAX_DERIVATION_NODES:
+            raise ValueError("analysis_research_fact_derivation_bounds")
+        discovered = set(observation_ids)
+        closed: dict[str, int] = {}
+        reader = FactReadModel(conn)
+        ordered = tuple(sorted(observation_ids))
+        bundles = {
+            bundle.observation.observation_id: bundle
+            for offset in range(0, len(ordered), MAX_DERIVATION_NODES)
+            for bundle in reader.required_provenance_bundles(
+                ordered[offset : offset + MAX_DERIVATION_NODES], cutoff=request.cutoff_at
+            )
+        }
+
+        def visit(observation_id: str, depth: int, visiting: set[str]) -> int:
+            if observation_id in visiting or depth > MAX_DERIVATION_DEPTH:
+                raise ValueError("analysis_research_fact_derivation_bounds")
+            if observation_id in closed:
+                height = closed[observation_id]
+                if depth + height > MAX_DERIVATION_DEPTH:
+                    raise ValueError("analysis_research_fact_derivation_bounds")
+                return height
+            if observation_id not in discovered:
+                if len(discovered) >= MAX_DERIVATION_NODES:
+                    raise ValueError("analysis_research_fact_derivation_bounds")
+                discovered.add(observation_id)
+            visiting.add(observation_id)
+            if observation_id not in bundles:
+                (bundles[observation_id],) = reader.required_provenance_bundles(
+                    (observation_id,), cutoff=request.cutoff_at
+                )
+            bundle = bundles[observation_id]
+            if bundle.cell.reporting_entity_id not in universe.reporting_entity_ids:
+                raise ValueError("analysis_research_fact_source_subject_differs")
+            height = 0
+            if bundle.observation.observation_kind == "reported":
+                evidence = bundle.evidence
+                if evidence is None or bundle.derivation is not None:
+                    raise ValueError("analysis_research_fact_source_evidence_missing")
+                if evidence.document_version_id not in originals:
+                    raise ValueError("analysis_research_fact_source_outside_originals")
+                if (
+                    evidence.canonical_issuer_id != universe.issuer_id
+                    or evidence.reporting_entity_id != bundle.cell.reporting_entity_id
+                ):
+                    raise ValueError("analysis_research_fact_source_subject_differs")
+            else:
+                derivation = bundle.derivation
+                if derivation is None or not derivation.input_observation_ids:
+                    raise ValueError("analysis_research_fact_derivation_evidence_missing")
+                # Source closure follows the retained basis. Canonical operand
+                # currentness and as_known eligibility remain the resolver's job.
+                height = 1 + max(
+                    visit(operand, depth + 1, visiting)
+                    for operand in derivation.input_observation_ids
+                )
+            visiting.remove(observation_id)
+            closed[observation_id] = height
+            return height
+
+        for observation_id in ordered:
+            visit(observation_id, 0, set())
+    return _VerifiedNativeReferences(verified, tuple(publications))
+
+
 def _verify_research_universe(
     conn: sqlite3.Connection,
     request: ResearchSnapshotRequest,
     *,
     verify_fact_subjects: bool,
     require_current_inventory: bool = True,
-) -> None:
+) -> _VerifiedNativeReferences | None:
+    native = None
     analysis = request.research_universe.analysis_scope
-    if analysis is not None and analysis.request.historical_reconstruction is not None:
-        # Issuer-scoped fact resolution does not yet bind reported and derived
-        # source evidence to the exact original historical document selection.
-        raise ValueError("historical_research_fact_source_closure_unavailable")
+    if analysis is not None and (
+        analysis.request.historical_reconstruction is not None
+        or analysis.request.readiness_profile is not None
+    ):
+        native = _verify_analysis_fact_source_closure(conn, request)
     required = {
         "document_processing_snapshot_members",
         "expected_document_obligation_bindings",
@@ -2161,7 +2498,11 @@ def _verify_research_universe(
     if document_entities != set(universe.reporting_entity_ids):
         raise ValueError("document reporting-entity set must equal the research universe")
 
-    binding_rows = _corpus_obligation_bindings(conn, request.corpus_bundles)
+    binding_rows = resolve_corpus_obligation_bindings(
+        conn,
+        tuple(bundle.corpus_manifest_id for bundle in request.corpus_bundles),
+        analysis_scope=analysis,
+    )
     obligation_ids = tuple(sorted({str(row[1]) for row in binding_rows}))
     if obligation_ids != universe.source_obligation_revision_ids:
         raise ValueError("corpus source obligations must exactly match the research universe")
@@ -2177,7 +2518,7 @@ def _verify_research_universe(
         raise ValueError("source-obligation reporting-entity set must equal the research universe")
 
     if not verify_fact_subjects or not request.source_fact_publication_ids:
-        return
+        return native
     fact_rows = conn.execute(
         "SELECT DISTINCT cell.reporting_entity_id,entity.issuer_id "
         "FROM canonical_fact_resolution_snapshot_members AS member "
@@ -2196,6 +2537,7 @@ def _verify_research_universe(
         or any(str(row[1]) != universe.issuer_id for row in fact_rows)
     ):
         raise ValueError("canonical fact reporting-entity set must equal the research universe")
+    return native
 
 
 def _universe_payload(universe: ResearchUniverse) -> dict[str, object]:
@@ -2279,16 +2621,27 @@ def _verify_research_references(
     *,
     require_current_inventory: bool = True,
 ) -> tuple[VerifiedResearchReference, ...]:
-    _verify_research_universe(
+    with _savepoint(conn, "research_reference_verification"):
+        return _verify_research_references_in_snapshot(
+            conn, request, verifier, require_current_inventory=require_current_inventory
+        )
+
+
+def _verify_research_references_in_snapshot(
+    conn: sqlite3.Connection,
+    request: ResearchSnapshotRequest,
+    verifier: _ResearchReferenceVerifier,
+    *,
+    require_current_inventory: bool = True,
+) -> tuple[VerifiedResearchReference, ...]:
+    native = _verify_research_universe(
         conn,
         request,
         verify_fact_subjects=isinstance(verifier, _DefaultResearchReferenceVerifier),
         require_current_inventory=require_current_inventory,
     )
-    verified_resolution = None
-    if isinstance(verifier, _DefaultResearchReferenceVerifier):
-        from provenance.canonical_fact_resolution import CanonicalFactResolutionEngine
-
+    verified_resolution = None if native is None else native.resolution
+    if isinstance(verifier, _DefaultResearchReferenceVerifier) and verified_resolution is None:
         verified_resolution = CanonicalFactResolutionEngine(conn).verify_snapshot(
             request.canonical_fact_resolution_snapshot_id,
             request.cutoff_at,
@@ -2302,23 +2655,35 @@ def _verify_research_references(
             raise ValueError(
                 "canonical resolution snapshot scope must exactly match the research universe"
             )
-    required_publications = _required_source_fact_publications(
-        conn, request.canonical_fact_resolution_snapshot_id
+    required_publications = (
+        tuple(item.publication_id for item in native.publications)
+        if native is not None
+        else _required_source_fact_publications(conn, request.canonical_fact_resolution_snapshot_id)
     )
     if request.source_fact_publication_ids != required_publications:
         raise ValueError(
             "Source Fact Publications must exactly match the requested 0244 candidate universes"
         )
-    references = tuple(
-        (_DefaultResearchReferenceVerifier() if lane == "research_universe" else verifier).verify(
+    publications = (
+        {} if native is None else {item.publication_id: item for item in native.publications}
+    )
+
+    def verify_lane(lane: str, reference_id: str) -> VerifiedResearchReference:
+        if isinstance(verifier, _DefaultResearchReferenceVerifier):
+            if lane == "canonical_fact_resolution_snapshot" and verified_resolution is not None:
+                return verifier.resolution_reference(verified_resolution, lane, reference_id)
+            if lane.startswith("source_fact_publication:") and reference_id in publications:
+                return verifier.publication_reference(publications[reference_id], lane, request)
+        selected = _DefaultResearchReferenceVerifier() if lane == "research_universe" else verifier
+        return selected.verify(
             conn,
             requested_lane=lane,
             reference_id=reference_id,
             cutoff_at=request.cutoff_at,
             request=request,
         )
-        for lane, reference_id in _research_lanes(request)
-    )
+
+    references = tuple(verify_lane(lane, identity) for lane, identity in _research_lanes(request))
     expected_lanes = [lane for lane, _ in _research_lanes(request)]
     actual_lanes = [item.requested_lane for item in references]
     if actual_lanes != expected_lanes:

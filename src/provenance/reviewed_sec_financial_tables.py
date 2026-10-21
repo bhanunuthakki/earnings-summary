@@ -30,6 +30,7 @@ from provenance.evidence_native_candidates import (
 from provenance.fact_plane_v2 import (
     AccountingBasis,
     CanonicalJSONObject,
+    ConsolidationScope,
     ExtractionRunCompletenessSealV2,
     FactCellV2,
     FiscalPeriod,
@@ -47,7 +48,8 @@ from provenance.source_fact_repository import (
 
 _RECIPE = "reviewed-sec-financial-tables.v2"
 _NAME = "reviewed-sec-financial-tables"
-SecSourceKind = Literal["sec_20f", "sec_6k"]
+SecSourceKind = Literal["sec_20f", "sec_6k", "sec_8k", "sec_10q"]
+_SOURCE_FORMS = {"sec_20f": "20-F", "sec_6k": "6-K", "sec_8k": "8-K", "sec_10q": "10-Q"}
 
 
 def _sha(value: str) -> str:
@@ -61,6 +63,19 @@ def _json(value: object) -> str:
 def _time(value: object) -> datetime:
     parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+
+def _has_currency_witness(*, currency: str, text: str) -> bool:
+    if currency.upper() == "USD":
+        return (
+            re.search(
+                r"\b(?:USD|U\.S\.\s+dollars?|US\s+dollars?|United\s+States\s+dollars?)\b",
+                text,
+                re.IGNORECASE,
+            )
+            is not None
+        )
+    return currency.lower() in text.lower()
 
 
 class _Closed(BaseModel):
@@ -108,7 +123,7 @@ def assert_sec_source_identity(
     source_url: str,
 ) -> None:
     """Verify the native SEC form, CIK and accession without changing its kind."""
-    if form_type != {"sec_20f": "20-F", "sec_6k": "6-K"}[source_kind]:
+    if form_type != _SOURCE_FORMS[source_kind]:
         raise ValueError("reviewed SEC source kind does not match its native form")
     if len(sec_cik) != 10 or not sec_cik.isdecimal():
         raise ValueError("reviewed SEC source requires an exact normalized CIK")
@@ -322,6 +337,9 @@ class ReviewedSecFinancialFact(_Closed):
     period_end: datetime
     fiscal_period: FiscalPeriod
     accounting_basis: AccountingBasis
+    consolidation_scope: ConsolidationScope = Field(
+        default="consolidated", exclude_if=lambda value: value == "consolidated"
+    )
     definition_text: str = Field(min_length=1)
     definition_node_ids: tuple[str, ...] = Field(min_length=1, max_length=100)
     context_node_ids: tuple[str, ...] = Field(min_length=1, max_length=100)
@@ -510,7 +528,7 @@ def _publish(
             raise ValueError("reviewed SEC document has conflicting source commitments")
         assert_sec_source_identity(
             source_kind=fact.source_kind,
-            form_type={"sec_20f": "20-F", "sec_6k": "6-K"}[evidence.source_kind],
+            form_type=_SOURCE_FORMS[evidence.source_kind],
             accession_number=fact.accession_number,
             sec_cik=fact.sec_cik,
             source_url=evidence.source_url,
@@ -644,7 +662,10 @@ def _publish(
         unit_text = context_text.lower()
         scale = fact.unit_key.rsplit("_", 1)[-1] if "_" in fact.unit_key else None
         if (
-            (fact.currency is not None and fact.currency.lower() not in unit_text)
+            (
+                fact.currency is not None
+                and not _has_currency_witness(currency=fact.currency, text=context_text)
+            )
             or (scale is not None and scale.rstrip("s") not in unit_text)
             or (
                 fact.currency is None
@@ -668,7 +689,7 @@ def _publish(
             "unit_key": fact.unit_key,
             "currency": fact.currency,
             "accounting_basis": fact.accounting_basis,
-            "consolidation_scope": "consolidated",
+            "consolidation_scope": fact.consolidation_scope,
             "period_kind": "duration" if fact.period_start else "instant",
             "normalization": {"unit_key": unit, "multiplier": str(multiplier)},
         }
@@ -726,7 +747,7 @@ def _publish(
             taxonomy_name="issuer-reported-table",
             taxonomy_version="source-definition:" + definition_sha,
             accounting_basis=fact.accounting_basis,
-            consolidation_scope="consolidated",
+            consolidation_scope=fact.consolidation_scope,
             period_kind="duration" if fact.period_start else "instant",
             period_start=fact.period_start,
             period_end=fact.period_end,

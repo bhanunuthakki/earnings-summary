@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "6722d1ef5670d6743020bac0a6d2b41e1328d24a",
+  "scoped_commit": "b41bc90c84c38775eca0b160446eda4b464d61be",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "065e8192bbc8f0385fb868a3e5d2faf83e20002eb330c33d2ec19ddd96fd0bd6",
+  "source_sha256": "a41dca49990b115bb7eb3e5f972c6706c6df2d28f8738fe6e415c93357427f3c",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1454,
-    "total_noncomment_loc": 555476,
+    "total_noncomment_loc": 555866,
     "modules_over_1000_loc": 107,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -16683,9 +16683,9 @@
         "path": "src/provenance/population_research_snapshots.py",
         "module": "provenance.population_research_snapshots",
         "lines": {
-          "physical": 1413,
-          "nonblank": 1334,
-          "noncomment": 1329
+          "physical": 1405,
+          "nonblank": 1326,
+          "noncomment": 1321
         },
         "internal_fan_out": 5,
         "responsibilities": [
@@ -16776,25 +16776,25 @@
         "path": "src/provenance/research_snapshot.py",
         "module": "provenance.research_snapshot",
         "lines": {
-          "physical": 2595,
-          "nonblank": 2447,
-          "noncomment": 2443
+          "physical": 2960,
+          "nonblank": 2795,
+          "noncomment": 2784
         },
-        "internal_fan_out": 10,
+        "internal_fan_out": 11,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 8,
-        "fully_annotated_public_functions": 8
+        "public_functions": 10,
+        "fully_annotated_public_functions": 10
       },
       {
         "path": "src/provenance/reviewed_sec_financial_tables.py",
         "module": "provenance.reviewed_sec_financial_tables",
         "lines": {
-          "physical": 955,
-          "nonblank": 900,
-          "noncomment": 895
+          "physical": 976,
+          "nonblank": 919,
+          "noncomment": 914
         },
         "internal_fan_out": 9,
         "responsibilities": [
@@ -20416,9 +20416,9 @@
         "path": "src/sources/report_financials.py",
         "module": "sources.report_financials",
         "lines": {
-          "physical": 511,
-          "nonblank": 478,
-          "noncomment": 475
+          "physical": 551,
+          "nonblank": 517,
+          "noncomment": 513
         },
         "internal_fan_out": 5,
         "responsibilities": [

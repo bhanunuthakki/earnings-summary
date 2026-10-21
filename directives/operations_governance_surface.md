@@ -1686,3 +1686,31 @@ remain authoritative. Regression evidence: `tests/test_sealed_snapshot_admission
 Exact-read and model-context regressions are in
 `tests/test_canonical_fact_exact_read.py`, `tests/test_meli_input_evidence.py`,
 `tests/test_cashflow_input_evidence.py` and `tests/test_memo_model_roundtrip.py`.
+### Scoped issuer-document obligation bindings — 2026-10-19
+
+Disposition: **no UI or operator CLI surface change**. The native research
+snapshot assembler and verifier share one membership-to-duty resolver. An exact
+issuer document selected by a verified analysis scope can bind to its persisted
+publisher duty without claiming that its partial publisher inventory is a SEC
+inventory. The existing authority, coverage, public-witness, issuer and reporting
+entity checks remain required. No source collection, processing waiver, scheduler,
+service or publication authority changes. Regression evidence:
+`tests/test_research_issuer_obligation_bindings.py`,
+`tests/test_population_research_snapshots.py` and `tests/test_research_snapshot.py`.
+
+
+### Financial report resolution materialization clock — 2026-10-19
+
+Disposition: **no UI or operator CLI surface change**. The shared report-table
+reader can retain a later physical canonical-resolution recording clock O while
+keeping reported source evidence, financial-role review, definitions and bindings
+at knowledge cutoff K. A memo requires O to equal its exact Research Snapshot
+recording clock. NU PRE/POST baseline checks retain the exact original cell and Observation
+Version while verifying each context's separate sealed resolution revision.
+Legacy wire identities omit the optional field. This adapter
+adds no source collection, financial admission, review approval, service or
+publication authority. Native regression evidence:
+`tests/test_report_financial_resolution_clock.py`,
+`tests/test_report_canonical_financials.py` and `tests/test_nu_earnings_evidence.py`.
+
+
