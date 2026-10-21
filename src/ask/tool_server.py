@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import re
-import sqlite3
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
@@ -42,6 +41,8 @@ from pipeline.queries import tracked_companies_for_user
 from research.memo_claim_support import (
     MemoClaimSupportError,
     MemoDerivedFigure,
+    derived_figure_display,
+    readable_source_text,
     verify_memo_analysis_text,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
@@ -56,6 +57,7 @@ MAX_TEXT = 4000
 _TICKER = re.compile(r"^[A-Z][A-Z0-9.-]{0,31}$")
 # Citation marks such as [3] or [3, 4] are references, not financial figures.
 _CITE_MARK = re.compile(r"\[\d+(?:\s*,\s*\d+)*\]")
+_ANY_QUOTE = re.compile(r"[“\"]([^”\"]+)[”\"]")
 
 ItemStatus = Literal["admitted", "unadmitted_fact", "source_passage", "owner_record"]
 
@@ -211,7 +213,18 @@ class ResearchToolSession:
                 continue
             excerpts = tuple((by_number[n].text, (by_number[n].text,)) for n in cites)
             try:
-                verify_memo_analysis_text(_CITE_MARK.sub(" ", text), excerpts, derived=derived)
+                _check_claim_shape(text, cites, [by_number[n].text for n in cites])
+                # Derivations are replayed here and only their displayed results join
+                # the supported figures; formula constants never support a figure.
+                for figure in derived:
+                    verify_memo_analysis_text(" ".join(figure.operands.values()), excerpts)
+                    if derived_figure_display(figure) != figure.displayed_value:
+                        raise MemoClaimSupportError("memo_derived_value_mismatch")
+                verify_memo_analysis_text(
+                    _CITE_MARK.sub(" ", text),
+                    excerpts,
+                    declared_values=tuple(figure.displayed_value for figure in derived),
+                )
             except MemoClaimSupportError as exc:
                 results.append({"claim": index, "status": "fail", "reason": str(exc)})
                 continue
@@ -236,17 +249,28 @@ class ResearchToolSession:
         }
 
 
+def _check_claim_shape(text: str, cites: tuple[int, ...], cited_texts: list[str]) -> None:
+    """Inline marks must name cited items; every quote, however short, must be cited text."""
+    marks = {int(n) for mark in _CITE_MARK.findall(text) for n in re.findall(r"\d+", mark)}
+    if not marks <= set(cites):
+        raise MemoClaimSupportError("inline_citation_not_in_cites")
+    sources = [readable_source_text(t) for t in cited_texts]
+    for quoted in _ANY_QUOTE.findall(readable_source_text(text)):
+        if not any(quoted.strip() in source for source in sources):
+            raise MemoClaimSupportError("memo_quoted_span_not_in_excerpt")
+
+
 def _needs(arguments: Mapping[str, object]) -> list[EvidenceNeed]:
     needs: list[EvidenceNeed] = []
     for raw in _list(arguments.get("needs"), "needs", MAX_NEEDS):
         entry = _mapping(raw, "needs")
         kind = entry.get("kind")
-        if kind not in NEED_KINDS:
+        if not isinstance(kind, str) or kind not in NEED_KINDS:
             raise ToolInputError(f"need kind must be one of {sorted(NEED_KINDS)}")
         ticker = entry.get("ticker")
         needs.append(
             EvidenceNeed(
-                kind=cast("str", kind),
+                kind=kind,
                 ticker=None if ticker is None else _ticker(ticker),
                 period=_text(entry.get("period"), "period", required=False) or None,
                 query=_text(entry.get("query"), "query", required=False),
@@ -395,7 +419,7 @@ def call_tool(
         return _content(tool.handler(session, arguments))
     except ToolInputError as exc:
         return _content({"error": str(exc)}, is_error=True)
-    except (sqlite3.Error, OSError, RuntimeError, ValueError) as exc:
+    except Exception as exc:  # one bad call must not end the session or lose its ledger
         _log("tool_failed", tool=name, error=type(exc).__name__, detail=redact(str(exc)))
         return _content({"error": f"{type(exc).__name__} while running {name}"}, is_error=True)
 
@@ -459,9 +483,16 @@ def serve(session: ResearchToolSession, stdin: IO[str], stdout: IO[str]) -> None
         try:
             message: object = json.loads(line)
         except json.JSONDecodeError:
-            reply: dict[str, object] | None = _rpc_error(None, -32700, "parse error")
+            reply: object = _rpc_error(None, -32700, "parse error")
         else:
-            reply = handle_message(session, message)
+            if not isinstance(message, list):
+                reply = handle_message(session, message)
+            elif not message:
+                reply = _rpc_error(None, -32600, "empty batch")
+            else:  # JSON-RPC batches, used by the 2025-03-26 protocol revision
+                batch = cast("list[object]", message)
+                replies = [r for m in batch if (r := handle_message(session, m)) is not None]
+                reply = replies or None
         if reply is not None:
             stdout.write(json.dumps(reply, ensure_ascii=False, default=str) + "\n")
             stdout.flush()

@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "071464db29d3016c6d5afca2d7a9776bd73dc7f1",
+  "scoped_commit": "e50d5fe1478f97246dfcc5714d24b64a2f2d2642",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "ad40f00a235d3295b0f7c1b010df26805517933e2e8070c3069a88159699cdb1",
+  "source_sha256": "ca54f68b16d844eb6a129bf42010ccae43d55ef87f6b673c72d6ee6de56c07f1",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1456,
-    "total_noncomment_loc": 555938,
+    "total_noncomment_loc": 555965,
     "modules_over_1000_loc": 107,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -7557,13 +7557,12 @@
         "path": "src/ask/tool_server.py",
         "module": "ask.tool_server",
         "lines": {
-          "physical": 467,
-          "nonblank": 416,
-          "noncomment": 414
+          "physical": 498,
+          "nonblank": 445,
+          "noncomment": 441
         },
         "internal_fan_out": 8,
         "responsibilities": [
-          "database",
           "network"
         ],
         "public_functions": 4,

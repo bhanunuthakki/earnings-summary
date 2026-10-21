@@ -223,6 +223,62 @@ def test_verify_draft_reports_bad_arithmetic_as_failure(db: Path, repo: Path) ->
     assert results[0] == {"claim": 0, "status": "fail", "reason": "memo_derived_expression_invalid"}
 
 
+def test_verify_draft_rejects_figures_supported_only_by_formula_constants(
+    db: Path, repo: Path
+) -> None:
+    session = ResearchToolSession(db_path=db, repo_root=repo)
+    session.ledger.append(_item(1, "fact", "NU · Revenue", "Revenue 5"))
+    inert = [
+        {"expression": "a + 0 * 999", "operands": {"a": "5"}, "displayed_value": "5", "decimals": 0}
+    ]
+    unbound = [
+        {"expression": "a * 2", "operands": {"a": "7"}, "displayed_value": "14", "decimals": 0}
+    ]
+    results = _verified(
+        session,
+        [
+            {"text": "Revenue was 999 [1].", "cites": [1], "derived": inert},
+            {"text": "Twice revenue is 14 [1].", "cites": [1], "derived": unbound},
+        ],
+    )
+    assert [r["reason"] for r in results] == [
+        "memo_analysis_number_unbound",
+        "memo_analysis_number_unbound",
+    ]
+
+
+def test_verify_draft_checks_inline_marks_and_short_quotes(db: Path, repo: Path) -> None:
+    session = ResearchToolSession(db_path=db, repo_root=repo)
+    session.ledger.extend(
+        [
+            _item(1, "fact", "NU · Customers", "Customers 127.0M"),
+            _item(2, "fact", "NU · Revenue", "Revenue 4.2B, a record"),
+        ]
+    )
+    results = _verified(
+        session,
+        [
+            {"text": "Revenue was 4.2B [1].", "cites": [2]},
+            {"text": 'Management said "record".', "cites": []},
+            {"text": 'Management called it "a record" [2].', "cites": [2]},
+        ],
+    )
+    assert [r.get("reason", r["status"]) for r in results] == [
+        "inline_citation_not_in_cites",
+        "memo_quoted_span_not_in_excerpt",
+        "pass",
+    ]
+
+
+def test_malformed_tool_input_fails_the_call_but_keeps_the_session(db: Path, repo: Path) -> None:
+    session = ResearchToolSession(db_path=db, repo_root=repo)
+    session.ledger.append(_item(1, "fact", "x", "5"))
+    malformed: dict[str, object] = {"question": "q", "needs": [{"kind": []}]}
+    bad = call_tool(session, "evidence", malformed)
+    assert bad["isError"] is True
+    assert _payload(call_tool(session, "manifest", {}))["status_counts"] == {"unadmitted_fact": 1}
+
+
 def _rpc(
     request_id: int, method: str, params: dict[str, object] | None = None
 ) -> dict[str, object]:
@@ -249,6 +305,17 @@ def test_json_rpc_handshake_listing_and_errors(db: Path, repo: Path) -> None:
     out = io.StringIO()
     serve(session, io.StringIO("not json\n\n"), out)
     assert json.loads(out.getvalue())["error"]["code"] == -32700
+
+    out = io.StringIO()
+    batch = [
+        _rpc(4, "ping"),
+        {"jsonrpc": "2.0", "method": "notifications/initialized"},
+        _rpc(5, "ping"),
+    ]
+    serve(session, io.StringIO(json.dumps(batch) + "\n" + "[]\n"), out)
+    replies = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert [r["id"] for r in replies[0]] == [4, 5]
+    assert replies[1]["error"]["code"] == -32600
 
 
 def test_stdio_entrypoint_serves_coverage(db: Path) -> None:
