@@ -58,8 +58,14 @@ MAX_TEXT = 4000
 _TICKER = re.compile(r"^[A-Z][A-Z0-9.-]{0,31}$")
 # Citation marks such as [3] or [3, 4] are references, not financial figures.
 _CITE_MARK = re.compile(r"\[\d+(?:\s*,\s*\d+)*\]")
-_ANY_QUOTE = re.compile(r"[“\"]([^”\"]+)[”\"]")
-_NUMBER_TOKEN = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_ANY_QUOTE = re.compile(
+    '[\u201c"]([^\u201d"]+)[\u201d"]|\u2018([^\u2019]+)\u2019' r"|(?<!\w)'([^']+)'(?!\w)"
+)
+# Whole numeric tokens, including exponents and leading-decimal fractions, so that
+# 1e3 or .5 is compared as one exact value rather than as its digits.
+_NUMBER_TOKEN = re.compile(r"(?<![\w.])(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?")
+_BARE_YEAR = re.compile(r"(?:19|20)\d{2}")
+_CURRENCY = "$€£¥"
 
 ItemStatus = Literal["admitted", "unadmitted_fact", "source_passage", "owner_record"]
 
@@ -226,6 +232,7 @@ class ResearchToolSession:
                     if derived_figure_display(figure) != figure.displayed_value:
                         raise MemoClaimSupportError("memo_derived_value_mismatch")
                     bound.add(_magnitude(figure.displayed_value))
+                _check_numbers(text, bound)
                 verify_memo_analysis_text(
                     _CITE_MARK.sub(" ", text),
                     excerpts,
@@ -263,9 +270,26 @@ def _magnitude(token: str) -> Decimal:
         raise MemoClaimSupportError("memo_derived_expression_invalid") from exc
 
 
+def _tokens(text: str) -> list[tuple[str, str]]:
+    """Numeric tokens of the readable form, each with the character before it."""
+    readable = readable_source_text(text)
+    return [
+        (m.group(), readable[m.start() - 1 : m.start()]) for m in _NUMBER_TOKEN.finditer(readable)
+    ]
+
+
 def _magnitudes(text: str) -> set[Decimal]:
     """Figures in the readable form the verifier checks, so entities add no digits."""
-    return {_magnitude(token) for token in _NUMBER_TOKEN.findall(readable_source_text(text))}
+    return {_magnitude(token) for token, _ in _tokens(text)}
+
+
+def _check_numbers(text: str, bound: set[Decimal]) -> None:
+    """Every figure except a bare year must equal a bound value exactly."""
+    for token, before in _tokens(_CITE_MARK.sub(" ", text)):
+        if _BARE_YEAR.fullmatch(token) and before not in _CURRENCY:
+            continue
+        if _magnitude(token) not in bound:
+            raise MemoClaimSupportError("memo_analysis_number_unbound")
 
 
 def _check_claim_shape(text: str, cites: tuple[int, ...], cited_texts: list[str]) -> None:
@@ -274,7 +298,8 @@ def _check_claim_shape(text: str, cites: tuple[int, ...], cited_texts: list[str]
     if not marks <= set(cites):
         raise MemoClaimSupportError("inline_citation_not_in_cites")
     sources = [readable_source_text(t) for t in cited_texts]
-    for quoted in _ANY_QUOTE.findall(readable_source_text(text)):
+    for match in _ANY_QUOTE.finditer(readable_source_text(text)):
+        quoted = next(group for group in match.groups() if group is not None)
         if not any(quoted.strip() in source for source in sources):
             raise MemoClaimSupportError("memo_quoted_span_not_in_excerpt")
 
@@ -503,7 +528,7 @@ def serve(session: ResearchToolSession, stdin: IO[str], stdout: IO[str]) -> None
             continue
         try:
             message: object = json.loads(line)
-        except json.JSONDecodeError:
+        except (ValueError, RecursionError):  # includes JSONDecodeError and deep nesting
             reply: object = _rpc_error(None, -32700, "parse error")
         else:
             if not isinstance(message, list):

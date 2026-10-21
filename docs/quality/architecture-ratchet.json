@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "7bef9c15bc38bac65e2222a637bd198a461036c5",
+  "scoped_commit": "de5014b4dec5a62006d17fbd5e80eff52ce98a3e",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "ccb22d81d89ac3cb741ba712e1d24b5b42b0b8c61801a447d37465fbf53e41da",
+  "source_sha256": "01a0d9a917d5644fcfe353db2e91a0fc40ff8b8914fb7f9e6c4f5bd465954ba0",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1456,
-    "total_noncomment_loc": 555980,
+    "total_noncomment_loc": 556389,
     "modules_over_1000_loc": 107,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -7557,9 +7557,9 @@
         "path": "src/ask/tool_server.py",
         "module": "ask.tool_server",
         "lines": {
-          "physical": 519,
-          "nonblank": 462,
-          "noncomment": 456
+          "physical": 544,
+          "nonblank": 483,
+          "noncomment": 475
         },
         "internal_fan_out": 8,
         "responsibilities": [
@@ -16711,9 +16711,9 @@
         "path": "src/provenance/population_research_snapshots.py",
         "module": "provenance.population_research_snapshots",
         "lines": {
-          "physical": 1413,
-          "nonblank": 1334,
-          "noncomment": 1329
+          "physical": 1405,
+          "nonblank": 1326,
+          "noncomment": 1321
         },
         "internal_fan_out": 5,
         "responsibilities": [
@@ -16804,25 +16804,25 @@
         "path": "src/provenance/research_snapshot.py",
         "module": "provenance.research_snapshot",
         "lines": {
-          "physical": 2595,
-          "nonblank": 2447,
-          "noncomment": 2443
+          "physical": 2960,
+          "nonblank": 2795,
+          "noncomment": 2784
         },
-        "internal_fan_out": 10,
+        "internal_fan_out": 11,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 8,
-        "fully_annotated_public_functions": 8
+        "public_functions": 10,
+        "fully_annotated_public_functions": 10
       },
       {
         "path": "src/provenance/reviewed_sec_financial_tables.py",
         "module": "provenance.reviewed_sec_financial_tables",
         "lines": {
-          "physical": 955,
-          "nonblank": 900,
-          "noncomment": 895
+          "physical": 976,
+          "nonblank": 919,
+          "noncomment": 914
         },
         "internal_fan_out": 9,
         "responsibilities": [
@@ -20444,9 +20444,9 @@
         "path": "src/sources/report_financials.py",
         "module": "sources.report_financials",
         "lines": {
-          "physical": 511,
-          "nonblank": 478,
-          "noncomment": 475
+          "physical": 551,
+          "nonblank": 517,
+          "noncomment": 513
         },
         "internal_fan_out": 5,
         "responsibilities": [

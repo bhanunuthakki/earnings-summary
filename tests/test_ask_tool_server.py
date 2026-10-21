@@ -331,6 +331,60 @@ def test_verify_draft_checks_inline_marks_and_short_quotes(db: Path, repo: Path)
     ]
 
 
+def test_verify_draft_compares_whole_numeric_tokens_and_single_quotes(db: Path, repo: Path) -> None:
+    session = ResearchToolSession(db_path=db, repo_root=repo)
+    session.ledger.extend(
+        [
+            _item(1, "fact", "a", "Revenue 13"),
+            _item(2, "fact", "b", "Revenue 1e3"),
+            _item(3, "fact", "c", "Revenue 5 in 2026, growth 0.5"),
+        ]
+    )
+    exp_operand = [
+        {"expression": "a * 2", "operands": {"a": "3"}, "displayed_value": "6", "decimals": 0}
+    ]
+    results = _verified(
+        session,
+        [
+            {"text": "Revenue was 1e3 [1].", "cites": [1]},
+            {"text": "Revenue was 6 [2].", "cites": [2], "derived": exp_operand},
+            {"text": "Revenue was $.5 [1].", "cites": [1]},
+            {"text": "Growth was .5 in 2026 [3].", "cites": [3]},
+            {"text": "Revenue was $2026.", "cites": []},
+            {"text": "Management said \u2018record demand\u2019.", "cites": []},
+            {"text": "Management said 'record demand'.", "cites": []},
+        ],
+    )
+    assert [r.get("reason", r["status"]) for r in results] == [
+        "memo_analysis_number_unbound",
+        "memo_derived_operand_unbound",
+        "memo_analysis_number_unbound",
+        "pass",
+        "memo_analysis_number_unbound",
+        "memo_quoted_span_not_in_excerpt",
+        "memo_quoted_span_not_in_excerpt",
+    ]
+
+
+def test_decoder_recursion_limit_fails_the_line_but_keeps_the_session(
+    db: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session = ResearchToolSession(db_path=db, repo_root=repo)
+    real_loads = json.loads
+
+    def loads(line: str) -> object:
+        if line.startswith("[[["):
+            raise RecursionError("maximum recursion depth exceeded")  # deeply nested input
+        return real_loads(line)
+
+    monkeypatch.setattr(tool_server.json, "loads", loads)
+    out = io.StringIO()
+    serve(session, io.StringIO("[[[0]]]\n" + json.dumps(_rpc(6, "ping")) + "\n"), out)
+    replies = [real_loads(line) for line in out.getvalue().splitlines()]
+    assert replies[0]["error"]["code"] == -32700
+    assert replies[1]["id"] == 6
+
+
 def test_malformed_tool_input_fails_the_call_but_keeps_the_session(db: Path, repo: Path) -> None:
     session = ResearchToolSession(db_path=db, repo_root=repo)
     session.ledger.append(_item(1, "fact", "x", "5"))

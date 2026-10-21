@@ -31,6 +31,7 @@
         "src/provenance/population_research_snapshots.py",
         "execution/populate_research_snapshots.py",
         "alembic/versions/0058_sealed_snapshot_admission_fences.py",
+        "alembic/versions/0059_scoped_research_universe_commitments.py",
         "src/search/corpus_builder.py",
         "src/provenance/canonical_fact_resolution.py",
         "src/provenance/fact_read_model.py"
@@ -45,7 +46,8 @@
         "pytest tests/test_kpi_legacy_dispositions.py tests/test_kpi_source_precision.py tests/test_financial_source_repairs.py tests/test_reviewed_kpi_native_population.py -q",
         "pytest tests/test_sealed_snapshot_admission.py tests/test_fact_read_model_batch.py -q",
         "pytest tests/test_document_processing_evidence.py -q",
-        "pytest tests/test_search_corpus_builder.py tests/test_search_projection_seals.py -q"
+        "pytest tests/test_research_sec_financial_authority.py -q",
+        "pytest tests/test_search_corpus_builder.py tests/test_search_projection_seals.py tests/test_scoped_research_universe_migration.py -q"
       ],
       "documentation": [
         "AGENTS.md",
