@@ -32,8 +32,12 @@ from provenance.evidence_ledger import (
 from provenance.evidence_links import BlobLocationObservation, EvidenceLinkLedger
 from provenance.fulltext_backfill import FullTextBackfillRequest, backfill_fulltext_evidence
 from provenance.fulltext_extractor_identity import (
+    BASE_FULLTEXT_EXTRACTOR,
+    PDF_FULLTEXT_EXTRACTOR,
     PDF_FULLTEXT_PYPDF_VERSION,
     PDF_TABLE_EXTRACTOR_NAME,
+    RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0,
+    FulltextExtractorIdentity,
     pdf_table_extractor_code_version,
 )
 from provenance.source_coverage import (
@@ -1540,16 +1544,24 @@ def test_evidence_native_lane_extracts_extensionless_content_without_legacy_row(
         conn.close()
 
 
-def _install_versioned_pdf_reader(monkeypatch: pytest.MonkeyPatch, version: str) -> None:
+def _install_versioned_pdf_reader(
+    monkeypatch: pytest.MonkeyPatch,
+    version: str,
+    *,
+    page_texts: tuple[str, ...] = ("Reported revenue.",),
+) -> None:
     import pypdf
 
     class Page:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
         def extract_text(self) -> str:
-            return "Reported revenue."
+            return self.text
 
     class Reader:
         is_encrypted = False
-        pages = (Page(),)
+        pages = tuple(Page(text) for text in page_texts)
 
         def __init__(self, _stream: object) -> None:
             pass
@@ -1661,7 +1673,7 @@ def test_pdf_invalid_permissions_are_quarantined_before_page_access(
         conn.close()
 
 
-@pytest.mark.parametrize("version", ["6.15.0", "6.16.1", "6.17.0", "unknown", None])
+@pytest.mark.parametrize("version", ["6.15.0", "6.16.1", "6.17.0", "6.19.0", "unknown", None])
 def test_pdf_unapproved_runtime_is_quarantined_before_parse(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, version: str | None
 ) -> None:
@@ -1691,14 +1703,15 @@ def test_pdf_unapproved_runtime_is_quarantined_before_parse(
         conn.close()
 
 
+@pytest.mark.parametrize(
+    "legacy", [BASE_FULLTEXT_EXTRACTOR, RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0]
+)
 def test_promoted_pdf_run_preserves_legacy_and_has_distinct_replay_identity(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy: FulltextExtractorIdentity
 ) -> None:
     import pypdf
 
     from provenance.fulltext_extractor_identity import (
-        BASE_FULLTEXT_EXTRACTOR,
-        FulltextExtractorIdentity,
         resolve_fulltext_extractor_identity,
     )
 
@@ -1707,7 +1720,7 @@ def test_promoted_pdf_run_preserves_legacy_and_has_distinct_replay_identity(
     try:
         # Reproduce the historical writer identity; its immutable rows must survive.
         def historical_identity(_source: str, _media: str | None) -> FulltextExtractorIdentity:
-            return BASE_FULLTEXT_EXTRACTOR
+            return legacy
 
         monkeypatch.setattr(
             fulltext_backfill_module, "resolve_fulltext_extractor_identity", historical_identity
@@ -1724,15 +1737,26 @@ def test_promoted_pdf_run_preserves_legacy_and_has_distinct_replay_identity(
         promoted = backfill_fulltext_evidence(
             conn, _request(repo_root, apply=True, task_id="promoted")
         )
+        if legacy is RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0:
+            assert promoted.documents_skipped_covered == 1
+            assert promoted.documents_extracted == promoted.records_created == 0
+            assert tuple(conn.execute("SELECT * FROM evidence_extraction_runs")) == old_runs
+            assert tuple(conn.execute("SELECT * FROM evidence_nodes")) == old_nodes
+            return
         assert promoted.documents_extracted == 1
         runs = tuple(conn.execute("SELECT * FROM evidence_extraction_runs").fetchall())
         nodes = tuple(conn.execute("SELECT * FROM evidence_nodes").fetchall())
         assert all(row in runs for row in old_runs)
         assert all(row in nodes for row in old_nodes)
         assert len(runs) == len(old_runs) + 1
+        promoted_run = next(row for row in runs if row not in old_runs)
+        assert promoted_run["extractor_code_version"] == (
+            "fulltext-evidence-backfill@6-pdf-public-access;pypdf=6.20.1"
+        )
+        assert promoted_run["extractor_config_sha256"] == PDF_FULLTEXT_EXTRACTOR.config_sha256
         current = resolve_fulltext_extractor_identity("report.pdf", "application/pdf")
         assert f"pypdf={PDF_FULLTEXT_PYPDF_VERSION}" in current.code_version
-        assert current.idempotency_namespace != BASE_FULLTEXT_EXTRACTOR.idempotency_namespace
+        assert current.idempotency_namespace != legacy.idempotency_namespace
         # A reader's ambient package cannot revoke or reinterpret existing proof.
         monkeypatch.setattr(pypdf, "__version__", "6.15.0")
         assert resolve_fulltext_extractor_identity("report.pdf", "application/pdf") == current
@@ -1743,14 +1767,19 @@ def test_promoted_pdf_run_preserves_legacy_and_has_distinct_replay_identity(
         conn.close()
 
 
-def test_pdf_coverage_requires_exact_promoted_identity(
+@pytest.mark.parametrize(
+    "legacy", [BASE_FULLTEXT_EXTRACTOR, RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0]
+)
+@pytest.mark.parametrize("promoted_page_count", [1, 2])
+def test_pdf_coverage_selects_one_complete_approved_run(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     migrated_db: Callable[..., Path],
+    legacy: FulltextExtractorIdentity,
+    promoted_page_count: int,
 ) -> None:
     from provenance.fulltext_extractor_identity import (
         BASE_FULLTEXT_EXTRACTOR,
-        FulltextExtractorIdentity,
         resolve_fulltext_extractor_identity,
     )
     from provenance.source_coverage_refresh import CoverageRefreshRequest, refresh_source_coverage
@@ -1766,7 +1795,9 @@ def test_pdf_coverage_requires_exact_promoted_identity(
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     register_sqlite_integrity_functions(conn)
-    _install_versioned_pdf_reader(monkeypatch, PDF_FULLTEXT_PYPDF_VERSION)
+    _install_versioned_pdf_reader(
+        monkeypatch, PDF_FULLTEXT_PYPDF_VERSION, page_texts=("Reported revenue.",) * 2
+    )
     recorded_at = datetime(2026, 7, 20, 12)
     try:
         conn.execute(
@@ -1838,18 +1869,110 @@ def test_pdf_coverage_requires_exact_promoted_identity(
         request = CoverageRefreshRequest(inventory_keys=("pdf-inventory",), recorded_at=recorded_at)
 
         def historical_identity(_source: str, _media: str | None) -> FulltextExtractorIdentity:
-            return BASE_FULLTEXT_EXTRACTOR
+            return legacy
 
         with monkeypatch.context() as historical_policy:
             historical_policy.setattr(
                 fulltext_backfill_module, "resolve_fulltext_extractor_identity", historical_identity
             )
             backfill_fulltext_evidence(conn, _request(repo_root, apply=True, task_id="legacy"))
-        assert refresh_source_coverage(conn, request).assessments_planned == 0
+        assert refresh_source_coverage(conn, request).assessments_planned == (
+            1 if legacy is RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0 else 0
+        )
         backfill_fulltext_evidence(conn, _request(repo_root, apply=True, task_id="promoted"))
         current = refresh_source_coverage(conn, request.model_copy(update={"apply": True}))
         assert current.target_status_counts == {"extracted": 1}
         assert current.assessments_created == 1
+        if legacy is RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0:
+            retained_run_id = conn.execute(
+                "SELECT extraction_run_id FROM evidence_extraction_runs WHERE extractor_code_version=?",
+                (legacy.code_version,),
+            ).fetchone()[0]
+            retained_nodes = tuple(
+                conn.execute(
+                    "SELECT * FROM evidence_nodes WHERE extraction_run_id=?", (retained_run_id,)
+                )
+            )
+            conn.execute(
+                "INSERT INTO ocr_document_assessments VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    "native-assessment",
+                    "native-assessment",
+                    str(document[0]),
+                    hashlib.sha256(raw).hexdigest(),
+                    "pdf-preflight",
+                    "d" * 64,
+                    "pdf-preflight@1",
+                    "e" * 64,
+                    2,
+                    "native_sufficient",
+                    None,
+                    recorded_at,
+                ),
+            )
+            conn.executemany(
+                "INSERT INTO ocr_preflight_pages VALUES (?,?,?,?,?)",
+                [
+                    (
+                        "native-assessment",
+                        page,
+                        17,
+                        hashlib.sha256(b"Reported revenue.").hexdigest(),
+                        0,
+                    )
+                    for page in (1, 2)
+                ],
+            )
+            ledger = EvidenceLedger(conn)
+            ledger.persist(
+                ExtractionRun(
+                    extraction_run_id="promoted-run",
+                    idempotency_key="promoted-run",
+                    document_version_id=str(document[0]),
+                    input_sha256=hashlib.sha256(raw).hexdigest(),
+                    extractor_name=PDF_FULLTEXT_EXTRACTOR.name,
+                    extractor_code_version=PDF_FULLTEXT_EXTRACTOR.code_version,
+                    extractor_config_sha256=PDF_FULLTEXT_EXTRACTOR.config_sha256,
+                    output_sha256="c" * 64,
+                    started_at=recorded_at,
+                    completed_at=recorded_at,
+                    outcome="succeeded",
+                )
+            )
+            for page in range(1, promoted_page_count + 1):
+                prior = conn.execute(
+                    "SELECT node_id,evidence_key FROM evidence_nodes WHERE extraction_run_id=? AND node_kind='pdf_page' AND json_extract(locator_json,'$.page_number')=?",
+                    (retained_run_id, page),
+                ).fetchone()
+                ledger.persist(
+                    EvidenceNode(
+                        node_id=f"promoted-page-{page}",
+                        evidence_key=str(prior[1]),
+                        revision=2,
+                        supersedes_node_id=str(prior[0]),
+                        extraction_run_id="promoted-run",
+                        node_kind="pdf_page",
+                        text="Reported revenue.",
+                        locator=EvidenceLocator(source_ref="data/ACME.pdf", page_number=page),
+                        recorded_at=recorded_at,
+                    )
+                )
+            conn.commit()
+            refresh_source_coverage(conn, request.model_copy(update={"apply": True}))
+            selected_run_id = conn.execute(
+                "SELECT extraction_run_id FROM v_source_coverage_current WHERE expected_document_id='pdf-expected'"
+            ).fetchone()[0]
+            assert selected_run_id == (
+                "promoted-run" if promoted_page_count == 2 else retained_run_id
+            )
+            assert (
+                tuple(
+                    conn.execute(
+                        "SELECT * FROM evidence_nodes WHERE extraction_run_id=?", (retained_run_id,)
+                    )
+                )
+                == retained_nodes
+            )
         assert (
             f"pypdf={PDF_FULLTEXT_PYPDF_VERSION}"
             in resolve_fulltext_extractor_identity("report.html", "application/pdf").code_version
@@ -1870,4 +1993,18 @@ def test_promoted_pdf_runtime_matches_reviewed_lock() -> None:
         for line in (PROJECT_ROOT / "requirements.lock").read_text().splitlines()
         if line.startswith("pypdf==")
     ]
+    assert PDF_FULLTEXT_PYPDF_VERSION == "6.20.1"
     assert locked_versions == [PDF_FULLTEXT_PYPDF_VERSION]
+
+
+def test_retained_pdf_identity_matches_original_bytes() -> None:
+    retained = RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0
+    assert retained.code_version == "fulltext-evidence-backfill@6-pdf-public-access;pypdf=6.19.0"
+    assert (
+        retained.config_sha256
+        == hashlib.sha256(
+            b"fulltext-evidence-backfill-config-v6-pdf:pdf-pages,empty-opening-password,"
+            b"verify-permissions,pypdf=6.19.0"
+        ).hexdigest()
+        == "ea890987a338e86830c366dac7c9587344de831e487695cb6753f51cbb042f15"
+    )
