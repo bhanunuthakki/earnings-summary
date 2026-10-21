@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "55220321facd04afd751c1ee0091f312eb058073",
+  "scoped_commit": "c9dbfbb4cb57054067178dfdf98b9476a2080668",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "641dc9d183808e1cbeb7871bb733244f88c96e3506a5101f35ff725e74278f87",
+  "source_sha256": "c0136716399900fe07a920e65c4733cc779e366a560207e840d61642ed5a036b",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1454,
-    "total_noncomment_loc": 554435,
+    "total_noncomment_loc": 554829,
     "modules_over_1000_loc": 106,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -7557,9 +7557,9 @@
         "path": "src/ask/tool_server.py",
         "module": "ask.tool_server",
         "lines": {
-          "physical": 466,
-          "nonblank": 415,
-          "noncomment": 413
+          "physical": 467,
+          "nonblank": 416,
+          "noncomment": 414
         },
         "internal_fan_out": 8,
         "responsibilities": [
@@ -15824,13 +15824,14 @@
         "path": "src/provenance/analysis_scope.py",
         "module": "provenance.analysis_scope",
         "lines": {
-          "physical": 499,
-          "nonblank": 460,
-          "noncomment": 460
+          "physical": 825,
+          "nonblank": 772,
+          "noncomment": 770
         },
-        "internal_fan_out": 3,
+        "internal_fan_out": 7,
         "responsibilities": [
-          "database"
+          "database",
+          "network"
         ],
         "public_functions": 4,
         "fully_annotated_public_functions": 4
@@ -16443,9 +16444,9 @@
         "path": "src/provenance/meli_reported_statements.py",
         "module": "provenance.meli_reported_statements",
         "lines": {
-          "physical": 762,
-          "nonblank": 720,
-          "noncomment": 714
+          "physical": 832,
+          "nonblank": 790,
+          "noncomment": 784
         },
         "internal_fan_out": 5,
         "responsibilities": [
@@ -16458,9 +16459,9 @@
         "path": "src/provenance/meli_reported_tables.py",
         "module": "provenance.meli_reported_tables",
         "lines": {
-          "physical": 707,
-          "nonblank": 664,
-          "noncomment": 654
+          "physical": 717,
+          "nonblank": 674,
+          "noncomment": 664
         },
         "internal_fan_out": 10,
         "responsibilities": [
@@ -16775,9 +16776,9 @@
         "path": "src/provenance/research_snapshot.py",
         "module": "provenance.research_snapshot",
         "lines": {
-          "physical": 2590,
-          "nonblank": 2442,
-          "noncomment": 2440
+          "physical": 2595,
+          "nonblank": 2447,
+          "noncomment": 2443
         },
         "internal_fan_out": 10,
         "responsibilities": [

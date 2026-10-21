@@ -6,12 +6,21 @@ distinct; selecting a period does not admit facts or waive processing lanes.
 
 from __future__ import annotations
 
+import hashlib
+import re
 import sqlite3
 from datetime import date, datetime
+from pathlib import Path
 from typing import Literal, Self
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from filings.sec_submissions_inventory import HistoricalComponent, parse_sec_submissions_inventory
+from provenance.immutable_artifact import ImmutableArtifactConflictError, read_stable_artifact
+from provenance.issuer_registry import IssuerRegistry
+from provenance.sec_package_subject_witness import verify_sec_package_subject_witness
 from provenance.source_coverage import ExpectedDocument
 from provenance.source_inventory_seal import InventoryComponent, component_digest
 from runtime.deterministic import as_utc as _utc
@@ -39,6 +48,46 @@ class AnalysisAccessionSelection(_Frozen):
         return value
 
 
+class HistoricalSecAuthority(_Frozen):
+    """Reference retained SEC metadata without copying it into each scope."""
+
+    source_observation_id: str = Field(min_length=1, max_length=128)
+    expected_blob_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class HistoricalDocumentSelection(_Frozen):
+    expected_document_id: str = Field(min_length=1, max_length=128)
+    document_version_id: str = Field(min_length=1, max_length=128)
+
+
+class HistoricalReconstruction(_Frozen):
+    """A bounded public information set reconstructed at physical knowledge time.
+
+    SEC acceptance proves available-by for the selected SEC package. It does
+    not establish the first issuer release time or a contemporaneous record.
+    """
+
+    label: Literal["historical_reconstruction"]
+    public_cutoff_at: datetime
+    authorities: tuple[HistoricalSecAuthority, ...] = Field(min_length=1, max_length=12)
+    documents: tuple[HistoricalDocumentSelection, ...] = Field(min_length=1, max_length=12)
+
+    @model_validator(mode="after")
+    def _selection(self) -> Self:
+        if self.public_cutoff_at.tzinfo is None or self.public_cutoff_at.utcoffset() is None:
+            raise ValueError("historical public cutoff requires an explicit time zone")
+        authorities = tuple(item.source_observation_id for item in self.authorities)
+        documents = tuple(item.expected_document_id for item in self.documents)
+        versions = tuple(item.document_version_id for item in self.documents)
+        if authorities != tuple(sorted(set(authorities))) or documents != tuple(
+            sorted(set(documents))
+        ):
+            raise ValueError("historical authorities and documents must be ordered and unique")
+        if len(set(versions)) != len(versions):
+            raise ValueError("historical original document versions must be unique")
+        return self
+
+
 class AnalysisScopeRequest(_Frozen):
     purpose: str = Field(min_length=1, max_length=256)
     issuer_id: str = Field(min_length=1, max_length=128)
@@ -48,6 +97,9 @@ class AnalysisScopeRequest(_Frozen):
     require_latest_period: bool = True
     cutoff_at: datetime
     observed_through: datetime
+    historical_reconstruction: HistoricalReconstruction | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator("cutoff_at", "observed_through")
     @classmethod
@@ -67,6 +119,15 @@ class AnalysisScopeRequest(_Frozen):
             raise ValueError("extra accessions must be sorted and unique")
         if _utc(self.observed_through) < _utc(self.cutoff_at):
             raise ValueError("observed_through must not precede cutoff_at")
+        historical = self.historical_reconstruction
+        if historical is not None and (
+            self.require_latest_period
+            or self.extra_accessions
+            or _utc(historical.public_cutoff_at) > _utc(self.cutoff_at)
+        ):
+            raise ValueError(
+                "historical reconstruction requires bounded original selection and physical clocks"
+            )
         return self
 
 
@@ -92,7 +153,9 @@ class AnalysisScopeEntry(_Frozen):
 
 
 class AnalysisEvidenceScope(_Frozen):
-    schema_version: Literal["analysis-evidence-scope/v1"] = "analysis-evidence-scope/v1"
+    schema_version: Literal["analysis-evidence-scope/v1", "analysis-evidence-scope/v2"] = (
+        "analysis-evidence-scope/v1"
+    )
     request: AnalysisScopeRequest
     inventory: AnalysisInventoryIdentity
     accession_numbers: tuple[str, ...] = Field(min_length=1)
@@ -102,6 +165,13 @@ class AnalysisEvidenceScope(_Frozen):
 
     @model_validator(mode="after")
     def _commitment(self) -> Self:
+        expected_version = (
+            "analysis-evidence-scope/v2"
+            if self.request.historical_reconstruction is not None
+            else "analysis-evidence-scope/v1"
+        )
+        if self.schema_version != expected_version:
+            raise ValueError("analysis scope mode and schema version differ")
         keys = tuple(entry.expected_document_id for entry in self.entries)
         if keys != tuple(sorted(set(keys))):
             raise ValueError("analysis entries must be sorted and unique")
@@ -149,6 +219,8 @@ def build_analysis_scope(
     Retained verification selects the latest inventory visible at the original
     observation clock. It does not skip a newer incomplete visible inventory.
     """
+    if request.historical_reconstruction is not None:
+        request = AnalysisScopeRequest.model_validate(request.model_dump())
     inventory_relation = (
         "v_source_inventory_current" if require_current_inventory else "source_inventory_snapshots"
     )
@@ -215,6 +287,8 @@ def build_analysis_scope(
         raise ValueError(
             "analysis expected documents have invalid issuer, authority or observation time"
         )
+    if request.historical_reconstruction is not None:
+        return _historical_scope(conn, request, inventory, components, documents)
     primaries = tuple(item for item in documents if item.document_type == "filing")
     if any(item.filing_at is None for item in primaries):
         raise ValueError("analysis primary filing has unknown publication time")
@@ -363,6 +437,251 @@ def build_analysis_scope(
     )
 
 
+def _historical_acceptances(
+    conn: sqlite3.Connection,
+    request: AnalysisScopeRequest,
+    inventory: dict[str, object],
+    components: tuple[InventoryComponent, ...],
+) -> tuple[dict[str, datetime], str]:
+    historical = request.historical_reconstruction
+    assert historical is not None
+    authorities: dict[str, tuple[str, bytes]] = {}
+    required_metadata: set[str] = set()
+    for component in components:
+        if not component.required or component.source_observation_id is None:
+            continue
+        rows = _rows(
+            conn,
+            "SELECT source_kind FROM evidence_source_observations WHERE observation_id=?",
+            (component.source_observation_id,),
+        )
+        if not rows:
+            raise ValueError("historical required inventory source observation is unavailable")
+        if rows[0]["source_kind"] == "sec_submissions":
+            required_metadata.add(component.source_observation_id)
+    if required_metadata != {item.source_observation_id for item in historical.authorities}:
+        raise ValueError("historical availability requires the complete retained SEC metadata set")
+    for authority in historical.authorities:
+        rows = _rows(
+            conn,
+            "SELECT observation.source_url,observation.blob_sha256,observation.retrieved_at,"
+            "observation.observed_at,blob.byte_size,blob.recorded_at,blob.storage_uri "
+            "FROM evidence_source_observations observation JOIN evidence_content_blobs blob "
+            "ON blob.sha256=observation.blob_sha256 WHERE observation.observation_id=?",
+            (authority.source_observation_id,),
+        )
+        if len(rows) != 1:
+            raise ValueError("historical SEC authority observation is unavailable")
+        row = rows[0]
+        uri = urlsplit(str(row["storage_uri"]))
+        if uri.scheme != "file" or uri.netloc or uri.query or uri.fragment:
+            raise ValueError("historical SEC authority requires an exact local file URI")
+        path = Path(url2pathname(uri.path))
+        if not path.is_absolute() or path.as_uri() != str(row["storage_uri"]):
+            raise ValueError("historical SEC authority path is not exact and absolute")
+        try:
+            if path.stat().st_nlink != 1:
+                raise ValueError("historical SEC authority cannot use a hard-link alias")
+            _artifact, raw = read_stable_artifact(
+                path, max_bytes=2_000_000, allowed_root=path.parent
+            )
+        except (ImmutableArtifactConflictError, OSError) as exc:
+            raise ValueError("historical SEC authority bytes are unavailable or unstable") from exc
+        if (
+            authority.expected_blob_sha256 != row["blob_sha256"]
+            or hashlib.sha256(raw).hexdigest() != row["blob_sha256"]
+            or len(raw) != int(str(row["byte_size"]))
+            or _clock(row["observed_at"]) > _utc(request.cutoff_at)
+            or _clock(row["retrieved_at"]) > _utc(request.cutoff_at)
+            or _clock(row["recorded_at"]) > _utc(request.observed_through)
+            or any(
+                component.source_url != row["source_url"]
+                for component in components
+                if component.source_observation_id == authority.source_observation_id
+            )
+        ):
+            raise ValueError("historical SEC authority bytes, identity or physical clocks differ")
+        authorities[authority.source_observation_id] = (str(row["source_url"]), raw)
+    root = authorities.get(str(inventory["source_observation_id"]))
+    if root is None:
+        raise ValueError("historical SEC root authority is unavailable")
+    match = re.fullmatch(r"https://data\.sec\.gov/submissions/CIK(\d{10})\.json", root[0])
+    if match is None:
+        raise ValueError("historical SEC authority does not match the exact issuer")
+    issuer = IssuerRegistry(conn).resolve_identifier(
+        "sec_cik", match[1], knowledge_at=request.cutoff_at
+    )
+    if issuer.issuer_id != request.issuer_id or issuer.material_dissent:
+        raise ValueError("historical SEC CIK does not resolve to the exact issuer")
+    # The registry selects at K. Do not substitute an older resolution when
+    # that selected identity was recorded after this scope's observation O.
+    identity = _rows(
+        conn,
+        "SELECT assertion.issuer_id,resolution.recorded_at AS resolution_recorded_at,"
+        "assertion.recorded_at AS assertion_recorded_at,entity.created_at "
+        "FROM issuer_identifier_resolution_outcomes resolution "
+        "JOIN issuer_identifier_assertions assertion "
+        "ON assertion.assertion_id=resolution.selected_assertion_id "
+        "JOIN issuer_entities entity ON entity.issuer_id=assertion.issuer_id "
+        "WHERE resolution.resolution_key=? AND resolution.outcome='selected' "
+        "AND resolution.knowledge_at<=? AND assertion.knowledge_at<=? "
+        "AND NOT EXISTS (SELECT 1 FROM issuer_identifier_resolution_outcomes newer "
+        "WHERE newer.resolution_key=resolution.resolution_key "
+        "AND newer.knowledge_at<=? AND newer.revision>resolution.revision)",
+        (f"sec_cik:{match[1]}", request.cutoff_at, request.cutoff_at, request.cutoff_at),
+    )
+    if (
+        len(identity) != 1
+        or identity[0]["issuer_id"] != issuer.issuer_id
+        or any(
+            _clock(identity[0][field]) > _utc(request.observed_through)
+            for field in ("resolution_recorded_at", "assertion_recorded_at", "created_at")
+        )
+    ):
+        raise ValueError("historical SEC identity was not recorded by observed-through")
+    history: list[HistoricalComponent] = []
+    for identity, (url, raw) in authorities.items():
+        if identity == str(inventory["source_observation_id"]):
+            continue
+        if not re.fullmatch(
+            rf"https://data\.sec\.gov/submissions/CIK{match[1]}-submissions-\d+\.json", url
+        ):
+            raise ValueError("historical SEC component URL differs from its issuer")
+        history.append(HistoricalComponent(name=url.rsplit("/", 1)[1], body=raw))
+    parsed = parse_sec_submissions_inventory(
+        cik=match[1],
+        ticker=str(inventory["ticker"] or ""),
+        primary_body=root[1],
+        historical=tuple(history),
+    )
+    if not parsed.complete:
+        raise ValueError("historical SEC availability metadata is incomplete or conflicted")
+    selected_accessions = {
+        str(row[0])
+        for selection in historical.documents
+        for row in conn.execute(
+            "SELECT accession_number FROM expected_documents WHERE expected_document_id=? AND snapshot_id=?",
+            (selection.expected_document_id, str(inventory["snapshot_id"])),
+        )
+    }
+    result: dict[str, datetime] = {}
+    for filing in parsed.filings:
+        if filing.accession_number not in selected_accessions:
+            continue
+        if filing.form_type != "6-K" or filing.accepted_at is None:
+            raise ValueError(
+                "historical SEC availability requires an original 6-K acceptance witness"
+            )
+        accepted = datetime.fromisoformat(filing.accepted_at.replace("Z", "+00:00"))
+        if accepted.tzinfo is None or accepted.utcoffset() is None:
+            raise ValueError("historical SEC acceptance requires an explicit time zone")
+        if _utc(accepted) > _utc(historical.public_cutoff_at):
+            raise ValueError("historical selected SEC package was not available by public cutoff")
+        result[filing.accession_number] = _utc(accepted)
+    if set(result) != selected_accessions:
+        raise ValueError("historical selected SEC acceptance witness is absent")
+    return result, match[1]
+
+
+def _historical_scope(
+    conn: sqlite3.Connection,
+    request: AnalysisScopeRequest,
+    inventory: dict[str, object],
+    components: tuple[InventoryComponent, ...],
+    documents: tuple[ExpectedDocument, ...],
+) -> AnalysisEvidenceScope:
+    historical = request.historical_reconstruction
+    assert historical is not None
+    acceptances, cik = _historical_acceptances(conn, request, inventory, components)
+    by_id = {item.expected_document_id: item for item in documents}
+    periods: set[date] = set()
+    selected: dict[str, str] = {}
+    for selection in historical.documents:
+        document = by_id.get(selection.expected_document_id)
+        if (
+            document is None
+            or document.form_type != "6-K"
+            or document.document_type
+            not in {"financial_statement", "supplement", "earnings_release"}
+            or document.period_end is None
+            or document.period_end.date() not in request.required_period_ends
+            or document.accession_number not in acceptances
+            or not document.source_url
+            or not document.primary_document
+        ):
+            raise ValueError(
+                "historical selection requires an exact reviewed quarterly SEC subject"
+            )
+        source = urlsplit(document.source_url)
+        prefix = f"/Archives/edgar/data/{int(cik)}/{document.accession_number.replace('-', '')}/"
+        if (
+            source.scheme != "https"
+            or source.netloc != "www.sec.gov"
+            or source.query
+            or source.fragment
+            or source.path != prefix + document.primary_document
+        ):
+            raise ValueError("historical selected SEC source identity differs")
+        verify_sec_package_subject_witness(
+            conn,
+            identity=document.expected_document_id,
+            issuer_id=request.issuer_id,
+            document_version_ids=(selection.document_version_id,),
+            kind=document.document_type,
+            period=conn.execute(
+                "SELECT period_end FROM expected_documents WHERE expected_document_id=?",
+                (document.expected_document_id,),
+            ).fetchone()[0],
+            accession=document.accession_number,
+            source_url=document.source_url,
+            cutoff=request.cutoff_at,
+            observed_through=request.observed_through,
+        )
+        periods.add(document.period_end.date())
+        selected[document.expected_document_id] = selection.document_version_id
+    if periods != set(request.required_period_ends):
+        raise ValueError("historical selected original documents do not cover the declared periods")
+    entries: list[AnalysisScopeEntry] = []
+    for document in documents:
+        role: AnalysisDocumentRole = "outside_scope"
+        reason = "outside_declared_historical_original_selection"
+        if document.accession_number in acceptances:
+            if (
+                document.form_type != "6-K"
+                or not document.source_url
+                or not document.primary_document
+            ):
+                raise ValueError(
+                    "historical selected package dependency lacks exact source identity"
+                )
+            role = (
+                "research_document"
+                if document.expected_document_id in selected
+                else "package_dependency"
+            )
+            reason = (
+                "historical_reconstruction:sec_acceptance_available_by:"
+                + acceptances[document.accession_number].isoformat()
+            )
+        entries.append(AnalysisScopeEntry(expected_document=document, role=role, reason=reason))
+    material = {
+        "schema_version": "analysis-evidence-scope/v2",
+        "request": request.model_dump(mode="json"),
+        "inventory": AnalysisInventoryIdentity(
+            inventory_key=request.inventory_key,
+            snapshot_id=str(inventory["snapshot_id"]),
+            revision=int(str(inventory["revision"])),
+            component_digest_sha256=str(inventory["component_digest_sha256"]),
+        ).model_dump(mode="json"),
+        "accession_numbers": sorted(acceptances),
+        "entries": [entry.model_dump(mode="json") for entry in entries],
+    }
+    digest = _sha(material)
+    return AnalysisEvidenceScope.model_validate(
+        material | {"scope_sha256": digest, "scope_id": "analysis-scope:" + digest}
+    )
+
+
 def verify_analysis_scope(
     conn: sqlite3.Connection,
     scope: AnalysisEvidenceScope,
@@ -414,6 +733,13 @@ def resolve_analysis_coverage(
             if not rows or rows[0]["document_version_id"] is None
             else str(rows[0]["document_version_id"])
         )
+        historical = scope.request.historical_reconstruction
+        if historical is not None and entry.role == "research_document":
+            originals = {
+                item.expected_document_id: item.document_version_id for item in historical.documents
+            }
+            if document_id != originals.get(expected.expected_document_id):
+                raise ValueError("historical original document version changed")
         if entry.role != "outside_scope" and status in _POSITIVE:
             if document_id is None:
                 raise ValueError("positive analysis coverage lacks document version")

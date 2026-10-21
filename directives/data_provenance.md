@@ -60,6 +60,25 @@ artifact verification; no CLI exposes it as a stale-write option. Processing and
 research identities include the scope identity when present. Unscoped identities
 and their retained serialized contents remain unchanged.
 
+The explicit `analysis-evidence-scope/v2` historical reconstruction mode keeps
+the public availability cutoff separate from physical knowledge and observation
+cutoffs. It pins original document versions for reviewed quarterly 6-K subjects.
+Exact retained SEC submissions bytes must replay each selected accession's
+acceptance time. Authority references retain observation IDs and blob hashes;
+they do not copy raw metadata into each report. SEC acceptance proves
+available-by for that archived SEC copy. It does not establish the first issuer
+release time or prove a contemporaneous system record. Missing or ambiguous
+acceptance times fail closed. This mode does not waive package dependencies,
+processing lanes, financial admission or narrative verification. V1 serialized
+requests and scope identities remain unchanged.
+
+Historical v2 financial Research Snapshots currently fail with
+`historical_research_fact_source_closure_unavailable`. Document selection alone
+does not constrain an issuer-wide canonical fact projection to public evidence
+available at the historical cutoff. Remove this hold only when selected reported
+facts and every derived operand prove lineage to the exact original selected
+source versions. Both the default and custom verifier paths retain this hold.
+
 ### Progressive proof and legacy repair (2026-09-19)
 
 Capture, extraction, source coverage, semantic admission, and reader parity are

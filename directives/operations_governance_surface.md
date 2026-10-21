@@ -975,6 +975,18 @@ coverage gaps. Selected periodic packages include known amendments. Missing or
 ambiguous required periods and unavailable current-report amendment linkage fail;
 selection never invents reporting dates or relationships.
 
+The optional `historical_reconstruction` request selects reviewed original 6-K
+financial subjects under a separate public cutoff. It requires sorted exact
+authority observation/hash references and original document-version selections.
+Latest-period selection and extra accessions are disabled in this mode. Physical
+knowledge and observation clocks retain their actual values. Stored SEC metadata
+must replay acceptance times; issuer identity must also be visible at the
+observation cutoff. Missing clocks, changed originals and unstable metadata fail.
+This remains a source selection operation. Financial Research Snapshots return
+`historical_research_fact_source_closure_unavailable` until selected reported and
+derived facts prove the same historical source boundary. No scheduler, service or
+interactive Operations control changes.
+
 Use the receipt through the existing manual interfaces:
 
 - `execution/populate_document_processing.py --analysis-scope <receipt.json>` accepts
@@ -1478,7 +1490,7 @@ schedule, provider, model pin, budget, schema or live-state write.
 binding is a deterministic release check; it does not certify the meaning of a
 paraphrase, so semantic review remains required.
 
-### MELI H1 displayed-statement source population
+### MELI displayed-statement source populations
 
 `execution/publish_meli_reported_statements.py` is a manual, source-only operation:
 
@@ -1493,7 +1505,12 @@ Dry-run is the default. Its separate `meli-h1-displayed-statements.v1` recipe cl
 exactly 18 members: current/prior H1 Commerce, consolidated, Fintech and Credit
 revenues, operating income, D&A and productive-asset expenditures; June 30 gross
 loans and current/noncurrent operating leases; and current H1 diluted weighted
-average shares. FY annual values, TTM, net cash, economic allocations, model-role
+average shares. The separate `meli-fy-displayed-statements.v1` recipe closes seven
+annual duration members from an explicitly dated 10-K: Commerce, consolidated,
+Fintech and Credit revenues, operating income, D&A and productive-asset
+expenditures. Exact annual headings, units, business populations and footnotes
+are required. Interim and annual recipes have separate extraction identities and
+completeness memberships. TTM, net cash, economic allocations, model-role
 bindings and assumptions are outside this operation. The existing three-member
 NIMAL/liquidity/debt publisher keeps its recipe and immutable identities.
 
@@ -1505,7 +1522,7 @@ separate `issuer-reported-statement` namespace with complete displayed
 business/product/geography scope in hash-bound definitions and locators.
 XBRL dimensions remain empty; no invented axis/member or canonical equivalence is
 admitted. A later reviewed mapping must establish any relationship to an XBRL
-series. Current/prior H1 are durations; gross loans and leases are instants.
+series. Current/prior H1 and FY flows are durations; gross loans and leases are instants.
 Diluted shares remain a count under the explicit share-data exception, never a
 million-scaled amount. Source cash-flow parentheses are retained; the explicitly
 named expenditure measure uses their positive payment magnitude, with the signed

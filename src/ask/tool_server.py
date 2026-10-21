@@ -360,9 +360,10 @@ TOOLS: tuple[ToolSpec, ...] = (
                             "derived": {
                                 "type": "array",
                                 "items": {"type": "object"},
-                                "description": "Arithmetic shown in the claim: {expression: '(b - a) / a "
-                                "* 100', operands: {a: '3.5', b: '4.2'}, displayed_value: '20', "
-                                "decimals: 0, percent?: false}. Operands must occur in cited items.",
+                                "description": "Arithmetic shown in the claim. Each entry has an "
+                                "expression such as (b - a) / a * 100, operands that map each name "
+                                "to a figure from a cited item, the displayed_value, decimals and an "
+                                "optional percent flag.",
                             },
                         },
                         "required": ["text", "cites"],

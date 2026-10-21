@@ -161,7 +161,10 @@ def _time(value: object) -> datetime:
 
 
 def load_reported_table_evidence(
-    conn: sqlite3.Connection, request: ReportedTableRequest
+    conn: sqlite3.Connection,
+    request: ReportedTableRequest,
+    *,
+    allow_annual_statements: bool = False,
 ) -> ReportedTableEvidence:
     try:
         package = load_captured_sec_filing_package(
@@ -187,7 +190,11 @@ def load_reported_table_evidence(
         "WHERE d.document_version_id=?",
         (request.document_version_id,),
     ).fetchone()
-    if row is None or row[0] != "10-Q" or row[2] is None:
+    if (
+        row is None
+        or row[2] is None
+        or (row[0] != "10-Q" and not (allow_annual_statements and row[0] == "10-K"))
+    ):
         raise ValueError("MELI H1 recipe requires an explicitly dated 10-Q")
     if tuple(row[4:7]) != (primary.issuer_id, request.accession_number, primary.source_url):
         raise ValueError("native document issuer/accession/source conflicts with inventory")
@@ -195,9 +202,12 @@ def load_reported_table_evidence(
     # The admitted NIMAL row must separately prove the exact six-month header.
     # SEC submissions commonly omit a start date; do not invent capture metadata.
     start = datetime(end.year, 1, 1, tzinfo=UTC) if row[1] is None else _time(row[1])
-    if (start.month, start.day, end.month, end.day) != (1, 1, 6, 30) or start.year != end.year:
+    expected_span = (1, 1, 12, 31) if row[0] == "10-K" else (1, 1, 6, 30)
+    if (start.month, start.day, end.month, end.day) != expected_span or start.year != end.year:
         raise ValueError(
-            "unsupported fiscal period: only an explicitly dated H1 filing is qualified"
+            "unsupported fiscal period: only an explicitly dated calendar FY or H1 filing is qualified"
+            if allow_annual_statements
+            else "unsupported fiscal period: only an explicitly dated H1 filing is qualified"
         )
     run = conn.execute(
         "SELECT document_version_id,input_sha256,extractor_name,extractor_code_version,extractor_config_sha256,outcome,completed_at FROM evidence_extraction_runs WHERE extraction_run_id=?",

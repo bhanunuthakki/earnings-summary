@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import sqlite3
 from collections.abc import Callable, Iterator
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from execution import publish_meli_reported_statements as cli
+from provenance import meli_reported_statements as statements
+from provenance.evidence_ledger import DocumentVersion
 from provenance.meli_reported_statements import publish_meli_reported_statements
+from provenance.meli_reported_tables import ReportedTableRequest, publish_meli_reported_tables
+from provenance.source_coverage import ExpectedDocument
 from sqlite_runtime import register_sqlite_integrity_functions
+from tests import test_meli_reported_tables as table_fixtures
 from tests.test_meli_reported_tables import END, STAMP, START, URL, seed_reported_html
 
 FIXTURES = Path(__file__).parent / "fixtures" / "meli_reported_statements"
@@ -347,3 +353,264 @@ def test_real_cli_dry_apply_replay(
     replay = json.loads(capsys.readouterr().out)
     assert replay["exact_replay"] and replay["publication_id"] == applied["publication_id"]
     assert database.execute("SELECT count(*) FROM fact_observations_v2").fetchone()[0] == 18
+
+
+ANNUAL_URL = "https://www.sec.gov/Archives/edgar/data/1099590/000109959026000006/meli-20251231.htm"
+ANNUAL_ACCESSION = "0001099590-26-000006"
+ANNUAL_END = datetime(2025, 12, 31, tzinfo=UTC)
+
+
+def _seed_annual(
+    conn: sqlite3.Connection, tmp_path: Path, raw: bytes, monkeypatch: pytest.MonkeyPatch
+) -> ReportedTableRequest:
+    # Reuse the native synthetic inventory fixture; change metadata before its
+    # append-only authorities persist it. This fixture is not a real SEC capture.
+    def annual_document(**data: object) -> DocumentVersion:
+        return DocumentVersion.model_validate({**data, "form_type": "10-K"})
+
+    def annual_expected(**data: object) -> ExpectedDocument:
+        return ExpectedDocument.model_validate(
+            {**data, "form_type": "10-K", "primary_document": "meli-20251231.htm"}
+        )
+
+    with monkeypatch.context() as patch:
+        patch.setattr(table_fixtures, "END", ANNUAL_END)
+        patch.setattr(table_fixtures, "START", ANNUAL_END.replace(month=1, day=1))
+        patch.setattr(table_fixtures, "URL", ANNUAL_URL)
+        patch.setattr(table_fixtures, "ACCESSION", ANNUAL_ACCESSION)
+        patch.setattr(table_fixtures, "DocumentVersion", annual_document)
+        patch.setattr(table_fixtures, "ExpectedDocument", annual_expected)
+        return table_fixtures.seed_reported_html(
+            conn, tmp_path, raw, document_accession=ANNUAL_ACCESSION
+        )
+
+
+def test_annual_statement_gate_keeps_management_tables_h1_only(
+    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _seed_annual(database, tmp_path, _raw(), monkeypatch)
+    # The annual source metadata is allowed only by the statement publisher.
+    # An H1 body inside this synthetic annual document must not become FY facts.
+    preview = publish_meli_reported_statements(database, request)
+    assert preview.recipe == "meli-fy-displayed-statements.v1"
+    assert preview.expected_count == 7
+    assert preview.captured_count == 0 and preview.rejected_count == 7
+    assert {p.population_key for p in preview.population} == {
+        concept + "_current_fy"
+        for concept in (
+            "commerce_revenues",
+            "total_revenues",
+            "fintech_revenues",
+            "credit_revenues",
+            "operating_income",
+            "depreciation_and_amortization",
+            "productive_asset_expenditures",
+        )
+    }
+    assert preview.canonical_admission == "not_performed"
+    assert preview.document_completeness == "not_claimed"
+    with pytest.raises(ValueError, match="H1 recipe"):
+        publish_meli_reported_tables(database, request)
+    assert database.execute("SELECT count(*) FROM fact_observations_v2").fetchone()[0] == 0
+
+
+def _annual_raw() -> bytes:
+    """Synthetic HTML with the exact qualified 2025 headings and selected rows.
+
+    Values/labels come from the retained annual layout diagnostic (source SHA
+    3f2ddbb4d2f4d770cc90b1081dfca2d899824c8df84162ad7e28759c0bc2efb2).
+    Generated wrappers and omitted rows make this a parser fixture, not a capture.
+    """
+
+    def table(rows: list[list[str]]) -> str:
+        return (
+            "<table>"
+            + "".join(
+                "<tr>" + "".join("<td>" + html.escape(cell) + "</td>" for cell in row) + "</tr>"
+                for row in rows
+            )
+            + "</table>"
+        )
+
+    income = table(
+        [
+            ["Year Ended December 31,"],
+            ["2025", "2024", "2023 (1)"],
+            ["Net revenues and financial income", "28,893", "20,777", "15,107"],
+            ["Operating expenses:"],
+            ["Income from operations", "3,201", "2,631", "2,207"],
+        ]
+    )
+    cashflow = table(
+        [
+            ["Year Ended December 31,"],
+            ["2025", "2024", "2023"],
+            ["Cash flows from operations:"],
+            ["Adjustments to reconcile net income to net cash provided by operating activities:"],
+            ["Depreciation and amortization", "818", "617", "524"],
+            ["Cash flows from investing activities:"],
+            [
+                "Investments in property and equipment, intangible assets and intangible assets at fair value",
+                "(1,343)",
+                "(860)",
+                "(509)",
+            ],
+        ]
+    )
+    revenue = table(
+        [
+            ["Year Ended December 31, 2025"],
+            ["Brazil", "Mexico", "Argentina", "Other Countries (7)", "Total"],
+            ["(In millions)"],
+            ["Commerce services (1)", "6,859", "3,432", "1,722", "737", "12,750"],
+            ["Commerce products sales (2)", "2,325", "753", "312", "154", "3,544"],
+            ["Total commerce revenues", "9,184", "4,185", "2,034", "891", "16,294"],
+            ["Financial services and income (3)", "2,829", "897", "2,609", "343", "6,678"],
+            ["Credit revenues (4)", "3,158", "1,370", "1,315", "15", "5,858"],
+            ["Fintech products sales (5)", "30", "23", "4", "6", "63"],
+            ["Total fintech revenues", "6,017", "2,290", "3,928", "364", "12,599"],
+            [
+                "Total net revenues and financial income",
+                "15,201",
+                "6,475",
+                "5,962",
+                "1,255",
+                "28,893",
+            ],
+        ]
+    )
+    # The annual KPI capex population differs from the full productive-asset
+    # cash-flow row. It must never substitute for that model input.
+    kpi = table(
+        [
+            ["Year Ended December 31, (1)"],
+            ["2025", "2024", "2023"],
+            ["(In millions, except percentages)"],
+            ["Capital expenditures", "1,327", "860", "509"],
+            ["Depreciation and amortization", "818", "617", "524"],
+        ]
+    )
+    passages = [
+        "The accompanying audited consolidated financial statements are prepared in conformity with accounting principles generally accepted in the U.S. (",
+        "These audited consolidated financial statements are stated in U.S. dollars, except for where otherwise indicated.",
+        "Includes final value fees and flat fees paid by sellers derived from intermediation services and related shipping and storage fees, classified fees derived from classified advertising services, ad sales and membership subscription fees.",
+        "Includes revenues from inventory sales and related shipping fees.",
+        "Includes revenues from commissions the Company charges for transactions off-platform derived from use of the Company",
+        "Includes interest earned on loans and advances granted to merchants and consumers, and interest and commissions earned on Mercado Pago credit card transactions.",
+        "Includes sales of mobile point of sales devices.",
+    ]
+    raw = (
+        "<html><body><p><span>Consolidated Statements of Income</span></p>"
+        "<p><span>(In millions of U.S. dollars, except for share data)</span></p>"
+        + income
+        + "<p><span>Consolidated Statements of Cash Flows</span></p><p><span>(In millions of U.S. dollars)</span></p>"
+        + cashflow
+        + revenue
+        + kpi
+        + "".join("<p><span>" + html.escape(text) + "</span></p>" for text in passages)
+        + "</body></html>"
+    )
+    return raw.encode()
+
+
+def test_annual_seven_flows_dry_apply_replay(
+    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = _seed_annual(database, tmp_path, _annual_raw(), monkeypatch)
+    before = database.total_changes
+    preview = publish_meli_reported_statements(database, request)
+    assert database.total_changes == before
+    assert preview.source_population_complete, [
+        (p.population_key, p.reason_code) for p in preview.population
+    ]
+    assert preview.recipe == statements.FY_RECIPE and preview.expected_count == 7
+    assert preview.captured_count == 7 and preview.rejected_count == 0
+    assert {p.population_key: p.normalized_numeric_value for p in preview.population} == {
+        "commerce_revenues_current_fy": "16294000000",
+        "total_revenues_current_fy": "28893000000",
+        "fintech_revenues_current_fy": "12599000000",
+        "credit_revenues_current_fy": "5858000000",
+        "operating_income_current_fy": "3201000000",
+        "depreciation_and_amortization_current_fy": "818000000",
+        "productive_asset_expenditures_current_fy": "1343000000",
+    }
+    assert all(
+        p.period_start == ANNUAL_END.replace(month=1, day=1) and p.period_end == ANNUAL_END
+        for p in preview.population
+    )
+    applied = publish_meli_reported_statements(database, request.model_copy(update={"apply": True}))
+    assert applied.publication_id and not applied.exact_replay
+    assert applied.canonical_admission == "not_performed"
+    assert applied.document_completeness == "not_claimed"
+    assert tuple(
+        database.execute(
+            "SELECT expected_node_count,observed_node_count,reported_fact_count FROM fact_extraction_run_completeness_seals_v2"
+        ).fetchone()
+    ) == (7, 7, 7)
+    assert {r[0] for r in database.execute("SELECT fiscal_period FROM fact_cells_v2")} == {"FY"}
+    assert database.execute("SELECT count(*) FROM canonical_metrics").fetchone()[0] == 0
+    assert {r[0] for r in database.execute("SELECT method_version FROM fact_observations_v2")} == {
+        statements.FY_RECIPE
+    }
+    before = database.total_changes
+    replay = publish_meli_reported_statements(
+        database,
+        request.model_copy(update={"apply": True, "recorded_at": STAMP + timedelta(days=1)}),
+    )
+    assert replay.exact_replay and replay.publication_id == applied.publication_id
+    assert database.total_changes == before
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "concept"),
+    [
+        (b"Year Ended December 31, 2025", b"Year Ended December 31, 2024", "commerce_revenues"),
+        (b"Other Countries (7)", b"Other Geographies (7)", "fintech_revenues"),
+        (b"(In millions)", b"(In thousands)", "credit_revenues"),
+        (b"Commerce products sales (2)", b"Other product sales (2)", "commerce_revenues"),
+        (
+            b"accounting principles generally accepted in the U.S.",
+            b"International Financial Reporting Standards",
+            "operating_income",
+        ),
+        (
+            b"are stated in U.S. dollars",
+            b"are stated in Brazilian reais",
+            "depreciation_and_amortization",
+        ),
+        (
+            b"(In millions of U.S. dollars)",
+            b"(In thousands of U.S. dollars)",
+            "productive_asset_expenditures",
+        ),
+        (b"merchants and consumers", b"selected borrowers", "credit_revenues"),
+        (b">(1,343)<", b">1,343<", "productive_asset_expenditures"),
+        (b"<td>2023 (1)</td>", b"<td>2023</td>", "operating_income"),
+    ],
+)
+def test_annual_context_changes_reject(
+    database: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    old: bytes,
+    new: bytes,
+    concept: str,
+) -> None:
+    raw = _annual_raw()
+    assert old in raw
+    request = _seed_annual(database, tmp_path, raw.replace(old, new), monkeypatch)
+    result = publish_meli_reported_statements(database, request)
+    assert not result.source_population_complete
+    member = next(p for p in result.population if p.concept == concept)
+    assert member.status == "rejected"
+    assert database.execute("SELECT count(*) FROM fact_observations_v2").fetchone()[0] == 0
+
+
+def test_annual_conflicting_total_rejects(
+    database: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    raw = _annual_raw().replace(b">28,893<", b">28,894<", 1)
+    request = _seed_annual(database, tmp_path, raw, monkeypatch)
+    result = publish_meli_reported_statements(database, request)
+    member = next(p for p in result.population if p.concept == "total_revenues")
+    assert member.status == "rejected" and member.reason_code == "conflicting_displayed_duplicates"

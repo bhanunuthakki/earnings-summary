@@ -520,8 +520,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Analysis coverage compares only this fixed tuple of ExpectedDocument identity fields; no callable or dispatch target is selected.",
-      "fingerprint": "85598e05597634eee69d12de4deedf1f4b6200bdca3a9b7c49fe6efbee1ec867",
-      "line": 440,
+      "fingerprint": "0bff1dc0259e9c2641ce797f12dc064da378791d35317586d081db01cab3097f",
+      "line": 766,
       "path": "src/provenance/analysis_scope.py",
       "targets": [
         "issuer_id",
@@ -534,8 +534,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Analysis coverage compares only this fixed tuple of ExpectedDocument identity fields; no callable or dispatch target is selected.",
-      "fingerprint": "5843980f3e3cb969cf401745be45ba6cce73193d8aae34bddb286ee5f0a6b96b",
-      "line": 443,
+      "fingerprint": "2326c8e3826ba91c4ce70733d50c68417c3c14cde5fb40961f897cda7116a7f1",
+      "line": 769,
       "path": "src/provenance/analysis_scope.py",
       "targets": [
         "period_start",
@@ -775,7 +775,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "9d058ce6abcb797790be5757d788d40ebac96b74a2f7738f7120e434d57a2ab0",
+      "source_sha256": "78282f9044d0abec6b0f3d2096ba4e0c872f12d426ee440637633770239fca3c",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
