@@ -533,13 +533,33 @@ captured. Unscoped snapshots retain their full-population contract.
 **Definition.** An immutable header/member/final-seal publication derived from one exact successful extraction run and the complete ordered native rows required for a supported Document Processing lane. Its public verifier re-derives membership from the pinned native run and compares every locator, content commitment, clock, and final member-set digest.
 **Lives in.** `document_processing_evidence_headers`, `document_processing_evidence_members`, `document_processing_evidence_seals`, `src/provenance/document_processing_evidence.py`, and `alembic/versions/0248_native_processing_closure_adapters.py`.
 **Not to be confused with.** A successful extraction attempt or caller-supplied evidence list; neither proves that the native output set is complete.
-**Current admission boundary.** HTML hierarchy, PDF native text/OCR/tables, standalone image OCR, PPTX slides/charts/tables, XLSX workbook/sheets/named tables, transcript turns, and fully time-coded transcript speakers can seal. Each applicable lane still fails closed when its exact native inventory is missing, quarantined, old, or tampered.
+**Current admission boundary.** HTML hierarchy, PDF native text/OCR/tables, standalone image OCR, PPTX slides/charts/tables, XLSX workbook/sheets/named tables, transcript turns, and fully time-coded transcript speakers can seal. The finite `native-pdf-transcript-review/v1` profile also admits untimed PDF turns and speakers from a pinned promoted native PDF text seal. It partitions every source page into exact character spans, preserves reviewed raw speaker labels, and retains unknown attribution for page openings and reviewed speakerless headings. It does not carry a speaker across pages or infer names or timecodes. Timecodes remain explicitly unavailable. The existing time-coded profile keeps its speaker and timecode requirements. Each applicable lane still fails closed when its exact native inventory is missing, quarantined, old, or tampered.
+
+## Report PDF Table Scope
+
+**Definition.** An immutable, reviewed all-page inventory for one PDF in an
+Analysis Evidence Scope v7 under `complete_report_evidence/v1`. It binds the raw
+PDF, retained native artifact, exact page commitments, required/deferred table
+population and independently declared source dependencies for the existing ten
+MELI report requirements. Deferral requires a content-backed review basis. A
+schema-valid source plan is not materiality approval.
+**Lives in.** `ReportPdfTableScope`, `ReportPdfPageSelection`,
+`MemoReportSourcePopulation`, `src/provenance/report_evidence_contract.py` and
+the existing analysis-scope artifact.
+**Proof.** `report-pdf-table-certificate/v1` verifies the full retained native
+parent seal and the complete required child-page inventories. The distinct
+adapter and scoped obligation cannot stand in for full-PDF table completion.
+The processing receipt retains scoped identities and deferred pages. All selected
+text remains required. Deferred-page anchors fail through direct source, financial,
+calculation, derived-leaf, supporting-context and model-input paths.
 
 ## PDF Table Extraction Artifact
 
 **Definition.** An append-only header/member/final-seal publication over one exact PDF byte stream and one pinned PyMuPDF/MuPDF dual-detector configuration. Its ordered members preserve every page disposition and detected table, row, cell, coordinate, nested commitment, and explicit no-table proof.
 **Lives in.** `pdf_table_extraction_artifact_headers`, `pdf_table_extraction_artifact_members`, `pdf_table_extraction_artifact_seals`, `src/provenance/pdf_table_extraction.py`, and `src/provenance/document_processing_evidence.py`.
-**Not to be confused with.** A claim of semantic table exhaustiveness. The artifact proves exact detector-relative coverage; encrypted, scanned, image-only, malformed, ambiguous, or resource-capped inputs remain quarantined and cannot satisfy the `pdf_table` lane.
+**Not to be confused with.** A claim of semantic table exhaustiveness. The artifact proves exact detector-relative coverage; encrypted, scanned, image-only, malformed, ambiguous, or resource-capped inputs remain quarantined and cannot satisfy a full-PDF `pdf_table` obligation.
+A Report PDF Table Scope can verify valid child pages for a distinct bounded
+report obligation while retaining that full parent quarantine.
 
 ## Research Snapshot
 
