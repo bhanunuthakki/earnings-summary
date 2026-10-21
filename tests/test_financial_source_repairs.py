@@ -25,14 +25,27 @@ from sources.canonical_financial_series import CanonicalFinancialSeriesReader
 from tests.test_report_canonical_financials import STAMP, seed_table
 from tests.test_report_canonical_financials import database as database
 
+# A reviewed admission follows the source population and its retained ontology seal.
+REVIEW_AT = STAMP + timedelta(seconds=1)
+
+
+def _verify_ontology_seals(conn: sqlite3.Connection) -> None:
+    snapshot_ids = tuple(
+        str(row[0])
+        for row in conn.execute("SELECT ontology_snapshot_id FROM ontology_snapshot_seals")
+    )
+    assert snapshot_ids
+    for snapshot_id in snapshot_ids:
+        MetricOntology(conn).verify_snapshot(snapshot_id)
+
 
 def reviewed_binding(conn: sqlite3.Connection, fact: ReportedSourceFact, metric: str) -> None:
     ontology = MetricOntology(conn)
     prior = ontology.binding_as_known(fact.observation.observation_id, STAMP)
     assert prior is not None and prior.source_component_id is not None
-    prior_mapping = ontology.mapping_as_known(prior.source_component_id, STAMP)
+    prior_mapping = ontology.mapping_as_known(prior.source_component_id, REVIEW_AT)
     assert prior_mapping is not None and prior_mapping.metric_id is not None
-    definition = ontology.metric_definition_as_known(prior_mapping.metric_id, STAMP)
+    definition = ontology.metric_definition_as_known(prior_mapping.metric_id, REVIEW_AT)
     assert definition is not None
     ontology.persist_metric(
         CanonicalMetric(
@@ -40,8 +53,8 @@ def reviewed_binding(conn: sqlite3.Connection, fact: ReportedSourceFact, metric:
             idempotency_key=metric,
             canonical_name=metric,
             effective_at=STAMP,
-            knowledge_at=STAMP,
-            recorded_at=STAMP,
+            knowledge_at=REVIEW_AT,
+            recorded_at=REVIEW_AT,
         )
     )
     ontology.persist_metric_definition(
@@ -50,6 +63,8 @@ def reviewed_binding(conn: sqlite3.Connection, fact: ReportedSourceFact, metric:
                 "metric_id": metric,
                 "metric_definition_revision_id": f"definition:{metric}",
                 "idempotency_key": f"definition:{metric}",
+                "knowledge_at": REVIEW_AT,
+                "recorded_at": REVIEW_AT,
                 "scope_constraints": {
                     **definition.scope_constraints,
                     "currency": fact.cell.currency,
@@ -59,6 +74,8 @@ def reviewed_binding(conn: sqlite3.Connection, fact: ReportedSourceFact, metric:
     )
     mapping = prior_mapping.model_copy(
         update={
+            "knowledge_at": REVIEW_AT,
+            "recorded_at": REVIEW_AT,
             "mapping_revision_id": f"review:{fact.cell.fact_cell_id}",
             "idempotency_key": f"review:{fact.cell.fact_cell_id}",
             "revision": prior_mapping.revision + 1,
@@ -85,8 +102,8 @@ def reviewed_binding(conn: sqlite3.Connection, fact: ReportedSourceFact, metric:
             accounting_basis=fact.cell.accounting_basis,
             consolidation_scope=fact.cell.consolidation_scope,
             effective_at=STAMP,
-            knowledge_at=STAMP,
-            recorded_at=STAMP,
+            knowledge_at=REVIEW_AT,
+            recorded_at=REVIEW_AT,
         )
     )
     ontology.persist_binding(
@@ -101,16 +118,17 @@ def reviewed_binding(conn: sqlite3.Connection, fact: ReportedSourceFact, metric:
             mapping_revision_id=mapping.mapping_revision_id,
             source_component_id=prior.source_component_id,
             effective_at=STAMP,
-            knowledge_at=STAMP,
-            recorded_at=STAMP,
+            knowledge_at=REVIEW_AT,
+            recorded_at=REVIEW_AT,
         )
     )
     CanonicalFactResolutionEngine(conn).resolve(
         cell_id,
-        STAMP,
+        REVIEW_AT,
         ResolutionPolicy(name="fixture", version="1", config={}),
-        recorded_at=STAMP,
+        recorded_at=REVIEW_AT,
     )
+    _verify_ontology_seals(conn)
     conn.commit()
 
 
@@ -121,7 +139,7 @@ def test_financial_reader_uses_native_reviewed_binding(database: sqlite3.Connect
         concept_namespace="http://fasb.org/us-gaap/2025",
     )
     reviewed_binding(database, facts[0], "revenue")
-    result = CanonicalFinancialSeriesReader(database, "SYNTH", cutoff=STAMP).read("revenue")
+    result = CanonicalFinancialSeriesReader(database, "SYNTH", cutoff=REVIEW_AT).read("revenue")
     assert result.status == "available", result.reason_code
     assert result.observations[0].observation_id == facts[0].observation.observation_id
     assert facts[0].cell.concept_namespace == "http://fasb.org/us-gaap/2025"
@@ -174,7 +192,9 @@ def _bind_derived(conn: sqlite3.Connection, fact: object, metric_id: str) -> str
     assert isinstance(fact, DerivedSourceFact)
     ontology = MetricOntology(conn)
     assert fact.cell.taxonomy_version is not None
-    bundle = FactReadModel(conn).provenance_bundle(fact.observation.observation_id, cutoff=STAMP)
+    bundle = FactReadModel(conn).provenance_bundle(
+        fact.observation.observation_id, cutoff=REVIEW_AT
+    )
     assert bundle.derivation is not None
     component_id = f"derived-component:{fact.cell.fact_cell_id[-64:]}"
     ontology.persist_source_component(
@@ -192,8 +212,8 @@ def _bind_derived(conn: sqlite3.Connection, fact: object, metric_id: str) -> str
             definition_text="Reviewed synthetic subtraction",
             evidence_locator={"derivation_seal_id": bundle.derivation.derivation_seal_id},
             effective_at=STAMP,
-            knowledge_at=STAMP,
-            recorded_at=STAMP,
+            knowledge_at=REVIEW_AT,
+            recorded_at=REVIEW_AT,
         )
     )
     mapping_id = f"derived-map:{fact.cell.fact_cell_id[-64:]}"
@@ -220,8 +240,8 @@ def _bind_derived(conn: sqlite3.Connection, fact: object, metric_id: str) -> str
             },
             evidence={"fixture": True},
             effective_at=STAMP,
-            knowledge_at=STAMP,
-            recorded_at=STAMP,
+            knowledge_at=REVIEW_AT,
+            recorded_at=REVIEW_AT,
         )
     )
     cell_id = f"derived-target:{fact.cell.fact_cell_id[-64:]}"
@@ -238,8 +258,8 @@ def _bind_derived(conn: sqlite3.Connection, fact: object, metric_id: str) -> str
             accounting_basis=fact.cell.accounting_basis,
             consolidation_scope=fact.cell.consolidation_scope,
             effective_at=STAMP,
-            knowledge_at=STAMP,
-            recorded_at=STAMP,
+            knowledge_at=REVIEW_AT,
+            recorded_at=REVIEW_AT,
         )
     )
     ontology.persist_binding(
@@ -253,16 +273,17 @@ def _bind_derived(conn: sqlite3.Connection, fact: object, metric_id: str) -> str
             mapping_revision_id=mapping_id,
             canonical_metric_cell_id=cell_id,
             effective_at=STAMP,
-            knowledge_at=STAMP,
-            recorded_at=STAMP,
+            knowledge_at=REVIEW_AT,
+            recorded_at=REVIEW_AT,
         )
     )
     CanonicalFactResolutionEngine(conn).resolve(
         cell_id,
-        STAMP,
+        REVIEW_AT,
         ResolutionPolicy(name="fixture", version="1", config={}),
-        recorded_at=STAMP,
+        recorded_at=REVIEW_AT,
     )
+    _verify_ontology_seals(conn)
     conn.commit()
     return cell_id
 
@@ -300,8 +321,8 @@ def test_ytd_subtraction_publishes_sealed_quarter_and_keeps_original(
     request = QuarterDerivationRequest(
         cumulative_observation_id=facts[1].observation.observation_id,
         prior_cumulative_observation_id=facts[0].observation.observation_id,
-        knowledge_cutoff=STAMP,
-        recorded_at=STAMP,
+        knowledge_cutoff=REVIEW_AT,
+        recorded_at=REVIEW_AT,
     )
     derived, receipt = publish_discrete_quarter(database, request)
     assert derived.observation.numeric_value == "3201"
@@ -314,12 +335,12 @@ def test_ytd_subtraction_publishes_sealed_quarter_and_keeps_original(
     assert publish_discrete_quarter(database, request)[1].created_record_ids == ()
     assert (
         FactReadModel(database)
-        .provenance_bundle(facts[1].observation.observation_id, cutoff=STAMP)
+        .provenance_bundle(facts[1].observation.observation_id, cutoff=REVIEW_AT)
         .cell.period_start
         == facts[1].cell.period_start
     )
     _bind_derived(database, derived, "operating_cash_flow")
-    reader = CanonicalFinancialSeriesReader(database, "SYNTH", cutoff=STAMP)
+    reader = CanonicalFinancialSeriesReader(database, "SYNTH", cutoff=REVIEW_AT)
     result = reader.read("operating_cash_flow")
     assert result.status == "available", result.reason_code
     assert [item.value for item in result.observations] == [Decimal(3283), Decimal(3201)]
@@ -386,8 +407,8 @@ def test_signed_capex_is_preserved_and_positive_outflow_is_rejected(
     request = QuarterDerivationRequest(
         cumulative_observation_id=facts[1].observation.observation_id,
         prior_cumulative_observation_id=facts[0].observation.observation_id,
-        knowledge_cutoff=STAMP,
-        recorded_at=STAMP,
+        knowledge_cutoff=REVIEW_AT,
+        recorded_at=REVIEW_AT,
     )
     derived, _ = publish_discrete_quarter(database, request)
     assert derived.observation.numeric_value == "-64"
@@ -443,8 +464,8 @@ def test_positive_capex_needs_explicit_sign_transform(database: sqlite3.Connecti
             QuarterDerivationRequest(
                 cumulative_observation_id=facts[1].observation.observation_id,
                 prior_cumulative_observation_id=facts[0].observation.observation_id,
-                knowledge_cutoff=STAMP,
-                recorded_at=STAMP,
+                knowledge_cutoff=REVIEW_AT,
+                recorded_at=REVIEW_AT,
             ),
         )
 
@@ -515,8 +536,8 @@ def test_reviewed_kpi_money_binding_and_scale_use_one_reported_observation(
         definition_text="Reviewed synthetic EBITDA metric retaining the admitted source basis and scope.",
         reviewer_identity="synthetic-reviewer",
         review_evidence={"manifest": "fixture"},
-        knowledge_cutoff=STAMP,
-        recorded_at=STAMP,
+        knowledge_cutoff=REVIEW_AT,
+        recorded_at=REVIEW_AT,
     )
     target = bind_reviewed_financial_observation(database, review)
     assert bind_reviewed_financial_observation(database, review) == target
@@ -535,7 +556,7 @@ def test_reviewed_kpi_money_binding_and_scale_use_one_reported_observation(
         for clock in ontology_clocks
     )
     retained = FactReadModel(database).provenance_bundle(
-        scaled.observation.observation_id, cutoff=STAMP
+        scaled.observation.observation_id, cutoff=REVIEW_AT
     )
     assert retained.cell.effective_at == retained.observation.effective_at == source_time
     assert retained.cell.period_start == facts[0].cell.period_start
@@ -545,9 +566,15 @@ def test_reviewed_kpi_money_binding_and_scale_use_one_reported_observation(
     assert retained.observation == before_binding.observation
     assert retained.derivation == before_binding.derivation
     CanonicalFactResolutionEngine(database).resolve(
-        target, STAMP, ResolutionPolicy(name="fixture", version="2", config={}), recorded_at=STAMP
+        target,
+        REVIEW_AT,
+        ResolutionPolicy(name="fixture", version="2", config={}),
+        recorded_at=REVIEW_AT,
     )
-    result = CanonicalFinancialSeriesReader(database, "SYNTH", cutoff=STAMP).read("adjusted_ebitda")
+    _verify_ontology_seals(database)
+    result = CanonicalFinancialSeriesReader(database, "SYNTH", cutoff=REVIEW_AT).read(
+        "adjusted_ebitda"
+    )
     assert result.status == "available", result.reason_code
     assert result.observations[0].value == Decimal(1088000000)
     assert result.observations[0].derivation is not None
@@ -831,8 +858,8 @@ def test_derived_revision_preserves_predecessor_and_retired_operand_fails_closed
     request = QuarterDerivationRequest(
         cumulative_observation_id=facts[1].observation.observation_id,
         prior_cumulative_observation_id=facts[0].observation.observation_id,
-        knowledge_cutoff=STAMP,
-        recorded_at=STAMP,
+        knowledge_cutoff=REVIEW_AT,
+        recorded_at=REVIEW_AT,
     )
     original, _ = publish_discrete_quarter(database, request)
     target = _bind_derived(database, original, "operating_cash_flow")
@@ -852,7 +879,7 @@ def test_derived_revision_preserves_predecessor_and_retired_operand_fails_closed
         original.observation.observation_id, cutoff=later
     ).observation.decimal_value == Decimal(3201)
     ontology = MetricOntology(database)
-    operand = ontology.binding_as_known(facts[0].observation.observation_id, STAMP)
+    operand = ontology.binding_as_known(facts[0].observation.observation_id, REVIEW_AT)
     assert operand is not None
     ontology.persist_binding(
         operand.model_copy(

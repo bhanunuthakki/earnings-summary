@@ -1,7 +1,8 @@
 """MELI recipe integration against real published/ontologized/resolved facts.
 
-Only research-snapshot/source-inventory coverage is isolated in the model tests;
-its separate tests exercise inventory logic. This is not live package qualification.
+Model fixtures use real sealed ontology, resolution watermarks and canonical
+projections. Research-snapshot/source-inventory coverage remains isolated; its
+separate tests exercise inventory logic. This is not live package qualification.
 """
 
 from __future__ import annotations
@@ -51,6 +52,7 @@ from provenance.metric_ontology import (
     CanonicalMetricDefinitionRevision,
     MappingRevision,
     MetricOntology,
+    OntologySnapshot,
     SourceDimensionMappingRevision,
     SourceObservationTaxonomyAssertion,
     SourceTaxonomyComponent,
@@ -65,6 +67,11 @@ from provenance.source_fact_repository import (
     ReportedSourceFact,
     SourceFactPublication,
     SourceFactRepository,
+)
+from provenance.source_fact_stream import bind_resolution_snapshot_watermark
+from search.canonical_fact_projection import (
+    ProjectionGenerationRequest,
+    build_canonical_projection_generation,
 )
 from tests.test_source_fact_repository import STAMP, make_cell, make_report, seed_foundation, sha256
 
@@ -109,6 +116,39 @@ def _snapshot() -> ResearchSnapshotRequest:
             "recorded_at": NOW,
         }
     )
+
+
+def seal_model_projection_context(
+    conn: sqlite3.Connection, snapshot: ResearchSnapshotRequest
+) -> None:
+    """Seal real model selection context; do not claim corpus/inventory coverage."""
+    MetricOntology(conn).seal_snapshot(
+        OntologySnapshot(
+            ontology_snapshot_id=snapshot.ontology_snapshot_id,
+            idempotency_key=snapshot.ontology_snapshot_id,
+            cutoff_at=snapshot.cutoff_at,
+            recorded_at=snapshot.recorded_at,
+        )
+    )
+    bind_resolution_snapshot_watermark(
+        conn,
+        resolution_snapshot_id=snapshot.canonical_fact_resolution_snapshot_id,
+        cutoff_at=snapshot.cutoff_at,
+        recorded_at=snapshot.recorded_at,
+    )
+    build_canonical_projection_generation(
+        conn,
+        ProjectionGenerationRequest(
+            generation_id=snapshot.canonical_fact_projection_run_id,
+            idempotency_key=snapshot.canonical_fact_projection_run_id,
+            generation_kind="checkpoint",
+            resolution_snapshot_id=snapshot.canonical_fact_resolution_snapshot_id,
+            ontology_snapshot_id=snapshot.ontology_snapshot_id,
+            cutoff_at=snapshot.cutoff_at,
+            recorded_at=snapshot.recorded_at,
+        ),
+    )
+    conn.commit()
 
 
 def _inputs() -> dict[str, float]:
@@ -775,11 +815,13 @@ def real_inputs(
 ) -> Generator[tuple[sqlite3.Connection, evidence.ModelInputRequest], None, None]:
     conn = sqlite3.connect(migrated_db(tmp_path / "meli.db"))
     refs = _seed_real_inputs(conn, source_path=source_context.content_roots[0] / "fixture.json")
+    snapshot = _snapshot()
+    seal_model_projection_context(conn, snapshot)
 
     def coverage(
         _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime
     ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
-        return _snapshot(), "b" * 64, ("inventory",)
+        return snapshot, "b" * 64, ("inventory",)
 
     monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
     try:
@@ -799,11 +841,13 @@ def shared_revenue_inputs(
     refs = _seed_real_inputs(
         conn, shared_revenues=True, source_path=source_context.content_roots[0] / "fixture.json"
     )
+    snapshot = _snapshot()
+    seal_model_projection_context(conn, snapshot)
 
     def coverage(
         _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime
     ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
-        return _snapshot(), "b" * 64, ("inventory",)
+        return snapshot, "b" * 64, ("inventory",)
 
     monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
     try:
@@ -892,13 +936,15 @@ def test_real_published_distractor_cell_cannot_feed_meli_role(
             extra_country=distraction == "extra_country",
             security_scope=distraction == "security_scope",
         )
+        snapshot = _snapshot()
+        seal_model_projection_context(conn, snapshot)
 
         def coverage(
             _conn: sqlite3.Connection,
             _request: evidence.ModelInputRequest,
             _cutoff: datetime,
         ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
-            return _snapshot(), "b" * 64, ("inventory",)
+            return snapshot, "b" * 64, ("inventory",)
 
         monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
         ref = refs[DISTRACTOR_KEY]
@@ -1056,9 +1102,9 @@ def test_shared_revenue_revised_definition_fails_closed(
             "revision": 2,
             "supersedes_metric_definition_revision_id": old.metric_definition_revision_id,
             "scope_constraints": scopes[change],
-            "effective_at": NOW,
-            "knowledge_at": NOW,
-            "recorded_at": NOW,
+            "effective_at": NOW + timedelta(seconds=1),
+            "knowledge_at": NOW + timedelta(seconds=1),
+            "recorded_at": NOW + timedelta(seconds=1),
         }
     )
     ontology.persist_metric_definition(revised)
@@ -1081,7 +1127,11 @@ def test_shared_revenue_revised_definition_fails_closed(
         )
     with pytest.raises(evidence.InputEvidenceError, match="input_semantic_admission_failed"):
         meli_inputs.prepare_meli_inputs(
-            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+            conn,
+            request,
+            effective_inputs=_inputs(),
+            as_of=NOW + timedelta(seconds=1),
+            source_context=source_context,
         )
 
 
@@ -1102,6 +1152,172 @@ def test_shared_revenue_append_only_dimension_and_recipe_cannot_be_bypassed(
             "WHERE canonical_metric_cell_id=?",
             (cell_id,),
         )
+
+
+@pytest.mark.parametrize("drift", ["definition", "binding", "mapping"])
+def test_model_inputs_cannot_mix_later_semantics_with_an_older_projected_context(
+    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    source_context: evidence.SourceReadContext,
+    monkeypatch: pytest.MonkeyPatch,
+    drift: str,
+) -> None:
+    conn, request = real_inputs
+    ontology = MetricOntology(conn)
+    ref = request.facts["comm_rev0_ytd"]
+    binding = ontology.binding_as_known(ref.observation_id, NOW)
+    assert binding is not None
+    later = NOW + timedelta(seconds=1)
+    replacement_mapping: MappingRevision | None = None
+    if drift == "definition":
+        definition = ontology.metric_definition_as_known(ref.metric_id, NOW)
+        assert definition is not None
+        replacement = definition.model_copy(
+            update={
+                "metric_definition_revision_id": definition.metric_definition_revision_id
+                + ":later",
+                "idempotency_key": definition.idempotency_key + ":later",
+                "revision": 2,
+                "supersedes_metric_definition_revision_id": definition.metric_definition_revision_id,
+                "definition_text": definition.definition_text
+                + " Reviewed later, same economic role.",
+                "effective_at": later,
+                "knowledge_at": later,
+                "recorded_at": later,
+            }
+        )
+        ontology.persist_metric_definition(replacement)
+        # Updating the caller's refs must not retroactively update the snapshot.
+        request = request.model_copy(
+            update={
+                "facts": {
+                    key: point.model_copy(
+                        update={
+                            "metric_definition_revision_id": replacement.metric_definition_revision_id
+                        }
+                    )
+                    if point.metric_id == ref.metric_id
+                    else point
+                    for key, point in request.facts.items()
+                }
+            }
+        )
+    elif drift == "binding":
+        ontology.persist_binding(
+            binding.model_copy(
+                update={
+                    "binding_revision_id": binding.binding_revision_id + ":later",
+                    "idempotency_key": binding.idempotency_key + ":later",
+                    "revision": 2,
+                    "supersedes_binding_revision_id": binding.binding_revision_id,
+                    "effective_at": later,
+                    "knowledge_at": later,
+                    "recorded_at": later,
+                }
+            )
+        )
+    else:
+        assert binding.source_component_id is not None
+        mapping = ontology.mapping_as_known(binding.source_component_id, NOW)
+        assert mapping is not None
+        replacement_mapping = mapping.model_copy(
+            update={
+                "mapping_revision_id": mapping.mapping_revision_id + ":later",
+                "idempotency_key": mapping.idempotency_key + ":later",
+                "revision": 2,
+                "supersedes_mapping_revision_id": mapping.mapping_revision_id,
+                "method_version": "later-review-same-metric",
+                "effective_at": later,
+                "knowledge_at": later,
+                "recorded_at": later,
+            }
+        )
+        ontology.persist_mapping(replacement_mapping)
+    conn.commit()
+    inputs = _inputs()
+    with pytest.raises(evidence.InputEvidenceError, match="input_snapshot_context_mismatch"):
+        evidence.verify_model_inputs(
+            conn,
+            request,
+            recipe=meli_inputs.RECIPE,
+            requirements=meli_inputs.requirements_for(END),
+            effective_inputs={key: inputs[key] for key in meli_inputs.ASSUMPTION_KEYS},
+            assumption_keys=meli_inputs.ASSUMPTION_KEYS,
+            as_of=later,
+            source_context=source_context,
+        )
+
+    # Accept the changed mapping through an explicit new binding before sealing
+    # a new context. A new seal is not permission to reuse the obsolete binding.
+    if replacement_mapping is not None:
+        for point in request.facts.values():
+            affected = ontology.binding_as_known(point.observation_id, NOW)
+            assert affected is not None
+            if affected.source_component_id != replacement_mapping.source_component_id:
+                continue
+            ontology.persist_binding(
+                affected.model_copy(
+                    update={
+                        "binding_revision_id": affected.binding_revision_id + ":later",
+                        "idempotency_key": affected.idempotency_key + ":later",
+                        "revision": 2,
+                        "supersedes_binding_revision_id": affected.binding_revision_id,
+                        "mapping_revision_id": replacement_mapping.mapping_revision_id,
+                        "effective_at": later,
+                        "knowledge_at": later,
+                        "recorded_at": later,
+                    }
+                )
+            )
+    resolver = CanonicalFactResolutionEngine(conn)
+    facts: dict[str, evidence.FactBinding] = {}
+    for key, point in request.facts.items():
+        selected = resolver.resolve(
+            point.canonical_metric_cell_id,
+            later,
+            ResolutionPolicy(name="synthetic", version="1", config={}),
+            recorded_at=later,
+        )
+        facts[key] = point.model_copy(
+            update={"canonical_resolution_revision_id": selected.canonical_resolution_revision_id}
+        )
+    resolver.seal_snapshot(
+        "resolution-later",
+        later,
+        later,
+        ResolutionSnapshotScope(issuer_id="issuer-1", reporting_entity_ids=("reporting-1",)),
+    )
+    snapshot = _snapshot().model_copy(
+        update={
+            "research_snapshot_id": "snapshot-later",
+            "idempotency_key": "snapshot-later",
+            "ontology_snapshot_id": "ontology-later",
+            "canonical_fact_resolution_snapshot_id": "resolution-later",
+            "canonical_fact_projection_run_id": "projection-later",
+            "cutoff_at": later,
+            "recorded_at": later,
+        }
+    )
+    seal_model_projection_context(conn, snapshot)
+
+    def coverage(
+        _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime
+    ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
+        return snapshot, "c" * 64, ("inventory-later",)
+
+    monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
+    verified = evidence.verify_model_inputs(
+        conn,
+        request.model_copy(update={"research_snapshot_id": "snapshot-later", "facts": facts}),
+        recipe=meli_inputs.RECIPE,
+        requirements=meli_inputs.requirements_for(END),
+        effective_inputs={key: inputs[key] for key in meli_inputs.ASSUMPTION_KEYS},
+        assumption_keys=meli_inputs.ASSUMPTION_KEYS,
+        as_of=later,
+        source_context=source_context,
+    )
+    assert len(verified.inputs) == 28
+    assert verified.request.research_snapshot_id == "snapshot-later"
+    assert verified.source_integrity == "present_bytes_verified"
 
 
 def test_real_reported_bindings_compute_ttm_and_bridge(
@@ -1367,9 +1583,9 @@ def test_current_definition_supersession_invalidates_old_binding_recipe(
                 "revision": 2,
                 "supersedes_metric_definition_revision_id": old.metric_definition_revision_id,
                 "scope_constraints": {**old.scope_constraints, "funding_costs": "not_deducted"},
-                "effective_at": NOW,
-                "knowledge_at": NOW,
-                "recorded_at": NOW,
+                "effective_at": NOW + timedelta(seconds=1),
+                "knowledge_at": NOW + timedelta(seconds=1),
+                "recorded_at": NOW + timedelta(seconds=1),
             }
         )
     )
@@ -1389,7 +1605,11 @@ def test_current_definition_supersession_invalidates_old_binding_recipe(
         )
     with pytest.raises(evidence.InputEvidenceError, match="input_semantic_admission_failed"):
         meli_inputs.prepare_meli_inputs(
-            conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+            conn,
+            request,
+            effective_inputs=_inputs(),
+            as_of=NOW + timedelta(seconds=1),
+            source_context=source_context,
         )
 
 
@@ -1634,9 +1854,9 @@ def test_input_preview_refuses_missing_or_ambiguous_roles_without_partial_bindin
                 "revision": 2,
                 "supersedes_metric_definition_revision_id": old.metric_definition_revision_id,
                 "scope_constraints": scope,
-                "effective_at": NOW,
-                "knowledge_at": NOW,
-                "recorded_at": NOW,
+                "effective_at": NOW + timedelta(seconds=1),
+                "knowledge_at": NOW + timedelta(seconds=1),
+                "recorded_at": NOW + timedelta(seconds=1),
             }
         )
     )
@@ -1646,7 +1866,7 @@ def test_input_preview_refuses_missing_or_ambiguous_roles_without_partial_bindin
         conn,
         research_snapshot_id=request.research_snapshot_id,
         financial_period_end=END,
-        as_of=NOW,
+        as_of=NOW + timedelta(seconds=1),
         source_context=source_context,
     )
     slots = {slot.key: slot for slot in result.slots}
@@ -1752,9 +1972,9 @@ def test_input_preview_excludes_old_basis_cell_after_definition_reclassification
                 "supersedes_metric_definition_revision_id": credit.metric_definition_revision_id,
                 "accounting_basis": cash.accounting_basis,
                 "scope_constraints": cash.scope_constraints,
-                "effective_at": NOW,
-                "knowledge_at": NOW,
-                "recorded_at": NOW,
+                "effective_at": NOW + timedelta(seconds=1),
+                "knowledge_at": NOW + timedelta(seconds=1),
+                "recorded_at": NOW + timedelta(seconds=1),
             }
         )
     )
@@ -1764,7 +1984,7 @@ def test_input_preview_excludes_old_basis_cell_after_definition_reclassification
         conn,
         research_snapshot_id=request.research_snapshot_id,
         financial_period_end=END,
-        as_of=NOW,
+        as_of=NOW + timedelta(seconds=1),
         source_context=source_context,
     )
     slots = {slot.key: slot for slot in result.slots}
@@ -1794,9 +2014,9 @@ def test_input_preview_excludes_retired_binding_from_apparent_competing_role(
                 "revision": 2,
                 "supersedes_metric_definition_revision_id": total.metric_definition_revision_id,
                 "scope_constraints": commerce.scope_constraints,
-                "effective_at": NOW,
-                "knowledge_at": NOW,
-                "recorded_at": NOW,
+                "effective_at": NOW + timedelta(seconds=1),
+                "knowledge_at": NOW + timedelta(seconds=1),
+                "recorded_at": NOW + timedelta(seconds=1),
             }
         )
     )
@@ -1810,9 +2030,9 @@ def test_input_preview_excludes_retired_binding_from_apparent_competing_role(
                 "revision": 2,
                 "supersedes_binding_revision_id": binding.binding_revision_id,
                 "binding_status": "retired",
-                "effective_at": NOW,
-                "knowledge_at": NOW,
-                "recorded_at": NOW,
+                "effective_at": NOW + timedelta(seconds=1),
+                "knowledge_at": NOW + timedelta(seconds=1),
+                "recorded_at": NOW + timedelta(seconds=1),
             }
         )
     )
@@ -1822,7 +2042,7 @@ def test_input_preview_excludes_retired_binding_from_apparent_competing_role(
         conn,
         research_snapshot_id=request.research_snapshot_id,
         financial_period_end=END,
-        as_of=NOW,
+        as_of=NOW + timedelta(seconds=1),
         source_context=source_context,
     )
     slots = {slot.key: slot for slot in result.slots}

@@ -1218,7 +1218,13 @@ CREATE TABLE canonical_fact_projection_generations (
         + """
 CREATE TABLE canonical_fact_projection_buckets (
     generation_id TEXT NOT NULL, digest_bucket INTEGER NOT NULL,
+    entry_count INTEGER NOT NULL,
     canonical_entry_set_json TEXT NOT NULL, entry_set_sha256 TEXT NOT NULL
+);
+CREATE TABLE canonical_fact_projection_seals (
+    generation_id TEXT PRIMARY KEY, ordered_bucket_set_json TEXT NOT NULL,
+    bucket_set_sha256 TEXT NOT NULL, projection_seal_json TEXT NOT NULL,
+    projection_seal_sha256 TEXT NOT NULL
 );
 CREATE TABLE source_fact_publication_seals (
     publication_seal_id TEXT PRIMARY KEY, publication_id TEXT NOT NULL
@@ -1239,12 +1245,47 @@ CREATE TABLE source_fact_publication_members (
     for entry in entries:
         digest = cast(int, entry["digest_bucket"])
         buckets.setdefault(digest, []).append(str(entry["entry_sha256"]))
-    for bucket, shas in buckets.items():
-        payload = canonical_json(sorted(shas))
+    bucket_vector: list[dict[str, object]] = []
+    for bucket in range(4096):
+        shas = buckets.get(bucket, [])
+        payload = canonical_json(shas)
         conn.execute(
-            "INSERT INTO canonical_fact_projection_buckets VALUES (?,?,?,?)",
-            ("generation-facts", bucket, payload, digest_text(payload)),
+            "INSERT INTO canonical_fact_projection_buckets VALUES (?,?,?,?,?)",
+            ("generation-facts", bucket, len(shas), payload, digest_text(payload)),
         )
+        bucket_vector.append(
+            {
+                "digest_bucket": bucket,
+                "entry_count": len(shas),
+                "entry_set_sha256": digest_text(payload),
+            }
+        )
+    bucket_json = canonical_json(bucket_vector)
+    seal_json = canonical_json(
+        {
+            "batch_set_sha256": digest_text("[]"),
+            "bucket_set_sha256": digest_text(bucket_json),
+            "change_count": len(entries),
+            "effective_entry_count": len(entries),
+            "generation_id": "generation-facts",
+            "ordered_entry_set_sha256": digest_text(
+                canonical_json([str(entry["entry_sha256"]) for entry in entries])
+            ),
+            "projection_seal_version": "canonical_fact_projection_seal.v1",
+            "tombstone_count": 0,
+            "upsert_count": len(entries),
+        }
+    )
+    conn.execute(
+        "INSERT INTO canonical_fact_projection_seals VALUES (?,?,?,?,?)",
+        (
+            "generation-facts",
+            bucket_json,
+            digest_text(bucket_json),
+            seal_json,
+            digest_text(seal_json),
+        ),
+    )
     conn.execute(
         "INSERT INTO source_fact_publication_seals VALUES (?,?)",
         ("publication-seal-1", "publication-1"),

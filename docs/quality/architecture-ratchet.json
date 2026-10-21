@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "962d008c3ab3d9815975704a420c0fbb970584db",
+  "scoped_commit": "55220321facd04afd751c1ee0091f312eb058073",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "77eac08278270d024285c60320ef4316297403b3f5c9d8a87b828c9aa7bfd973",
+  "source_sha256": "641dc9d183808e1cbeb7871bb733244f88c96e3506a5101f35ff725e74278f87",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1454,
-    "total_noncomment_loc": 554040,
+    "total_noncomment_loc": 554435,
     "modules_over_1000_loc": 106,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -4570,11 +4570,11 @@
         "path": "execution/preview_meli_inputs.py",
         "module": "execution.preview_meli_inputs",
         "lines": {
-          "physical": 90,
-          "nonblank": 82,
-          "noncomment": 82
+          "physical": 188,
+          "nonblank": 175,
+          "noncomment": 171
         },
-        "internal_fan_out": 7,
+        "internal_fan_out": 9,
         "responsibilities": [
           "database"
         ],
@@ -9481,11 +9481,11 @@
         "path": "src/dcf/input_evidence.py",
         "module": "dcf.input_evidence",
         "lines": {
-          "physical": 832,
-          "nonblank": 772,
-          "noncomment": 762
+          "physical": 921,
+          "nonblank": 861,
+          "noncomment": 843
         },
-        "internal_fan_out": 9,
+        "internal_fan_out": 10,
         "responsibilities": [
           "database",
           "network"
@@ -9527,11 +9527,11 @@
         "path": "src/dcf/meli_input_preview.py",
         "module": "dcf.meli_input_preview",
         "lines": {
-          "physical": 203,
-          "nonblank": 189,
-          "noncomment": 184
+          "physical": 220,
+          "nonblank": 206,
+          "noncomment": 201
         },
-        "internal_fan_out": 6,
+        "internal_fan_out": 5,
         "responsibilities": [
           "database"
         ],
@@ -15886,9 +15886,9 @@
         "path": "src/provenance/canonical_fact_resolution.py",
         "module": "provenance.canonical_fact_resolution",
         "lines": {
-          "physical": 1590,
-          "nonblank": 1519,
-          "noncomment": 1513
+          "physical": 1673,
+          "nonblank": 1596,
+          "noncomment": 1590
         },
         "internal_fan_out": 2,
         "responsibilities": [
@@ -16109,9 +16109,9 @@
         "path": "src/provenance/fact_read_model.py",
         "module": "provenance.fact_read_model",
         "lines": {
-          "physical": 1159,
-          "nonblank": 1082,
-          "noncomment": 1082
+          "physical": 1188,
+          "nonblank": 1109,
+          "noncomment": 1109
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -19753,17 +19753,17 @@
         "path": "src/search/canonical_fact_projection.py",
         "module": "search.canonical_fact_projection",
         "lines": {
-          "physical": 2158,
-          "nonblank": 2011,
-          "noncomment": 2008
+          "physical": 2309,
+          "nonblank": 2151,
+          "noncomment": 2147
         },
         "internal_fan_out": 8,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 10,
-        "fully_annotated_public_functions": 10
+        "public_functions": 11,
+        "fully_annotated_public_functions": 11
       },
       {
         "path": "src/search/corpus_builder.py",
@@ -20158,9 +20158,9 @@
         "path": "src/sources/dcf_statements.py",
         "module": "sources.dcf_statements",
         "lines": {
-          "physical": 471,
-          "nonblank": 454,
-          "noncomment": 450
+          "physical": 438,
+          "nonblank": 421,
+          "noncomment": 415
         },
         "internal_fan_out": 5,
         "responsibilities": [
