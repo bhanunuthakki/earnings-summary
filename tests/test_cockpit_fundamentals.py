@@ -242,7 +242,7 @@ def test_materialized_cache_requires_complete_canonical_manifest(
     assert materialize_fundamentals(conn, repo_root) == 1
     cache = repo_root / "data" / "cockpit_fundamentals.json"
     payload = json.loads(cache.read_text(encoding="utf-8"))
-    assert payload["cache_schema"] == "cockpit-fundamentals-canonical/v2"
+    assert payload["cache_schema"] == "cockpit-fundamentals-canonical/v3"
     snapshot = payload["snapshot"]
     assert snapshot["source_authority"] == "canonical_fact_resolution"
     assert snapshot["status"] == "complete"
@@ -255,13 +255,15 @@ def test_materialized_cache_requires_complete_canonical_manifest(
     assert selected["observation_id"]
     assert selected["canonical_resolution_revision_id"]
     assert selected["document_version_id"]
-    assert read_materialized_fundamentals(repo_root)["SYNTH"][0] == pytest.approx(20.0)
+    assert read_materialized_fundamentals(repo_root, conn)["SYNTH"][0] == pytest.approx(20.0)
 
 
-def test_legacy_or_incomplete_cache_cannot_claim_canonical(repo_root: Path) -> None:
+def test_legacy_or_incomplete_cache_cannot_claim_canonical(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
     cache = repo_root / "data" / "cockpit_fundamentals.json"
     cache.write_text(json.dumps({"fundamentals": {"OLD": [99.0, 99.0]}}), encoding="utf-8")
-    assert read_materialized_fundamentals(repo_root) == {}
+    assert read_materialized_fundamentals(repo_root, conn) == {}
 
 
 def test_cache_rejects_manifest_or_envelope_cutoff_tampering(
@@ -274,15 +276,15 @@ def test_cache_rejects_manifest_or_envelope_cutoff_tampering(
     manifests = payload["snapshot"]["fundamentals"]["SYNTH"]["fcf_margin"]["source_manifests"]
     next(iter(manifests.values()))["cutoff"] = "2001-01-01T00:00:00Z"
     cache.write_text(json.dumps(payload), encoding="utf-8")
-    assert read_materialized_fundamentals(repo_root) == {}
+    assert read_materialized_fundamentals(repo_root, conn) == {}
 
     materialize_fundamentals(conn, repo_root)
     payload = json.loads(cache.read_text(encoding="utf-8"))
     payload["computed_at"] = "2001-01-01T00:00:00"
     cache.write_text(json.dumps(payload), encoding="utf-8")
-    assert read_materialized_fundamentals(repo_root) == {}
+    assert read_materialized_fundamentals(repo_root, conn) == {}
     cache.write_text("not-json", encoding="utf-8")
-    assert read_materialized_fundamentals(repo_root) == {}
+    assert read_materialized_fundamentals(repo_root, conn) == {}
 
 
 def test_global_failure_preserves_previous_cache_bytes(
@@ -354,3 +356,30 @@ def test_existing_morning_stage_runs_file_input_materializer(
     assert refresh.main() == 0
     assert "file_inputs=12 · cache=.cache/cockpit_file_inputs.json" in capsys.readouterr().out
     conn.close()
+
+
+def test_cockpit_never_serves_cache_built_before_canonical_facts_changed(
+    conn: sqlite3.Connection, head_template: Path, repo_root: Path, tmp_path: Path
+) -> None:
+    """A fresh-by-clock cache built before new canonical facts landed must not
+    be shown as current: the cockpit row agrees with the live canonical read."""
+    from pipeline.research_cockpit import build_cockpit_rows
+
+    rows = _quarter_rows()
+    earlier_path = tmp_path / "earlier.db"
+    shutil.copy(head_template, earlier_path)
+    earlier = sqlite3.connect(earlier_path)
+    earlier.row_factory = sqlite3.Row
+    try:
+        _publish(earlier, [row for row in rows if row[1] != "2026-01-01"])
+        materialize_fundamentals(earlier, repo_root)
+    finally:
+        earlier.close()
+    _publish(conn, rows)
+    _track_synth(conn)
+
+    live_yoy, live_margin = compute_from_db(conn)["SYNTH"]
+    assert live_yoy == pytest.approx(20.0)
+    cockpit = build_cockpit_rows(conn, repo_root)
+    row = {item.base.ticker: item for item in cockpit["evaluation"]}["SYNTH"]
+    assert (row.rev_yoy_pct, row.fcf_margin_pct) == (live_yoy, live_margin)

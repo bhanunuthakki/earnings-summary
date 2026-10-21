@@ -71,9 +71,12 @@ Governor rules, all deterministic, ZERO LLM:
 - **auto-mute**: ``MUTE_AFTER`` consecutive dismissals of a class mutes it
   until explicitly cleared — dismissals train the coach; it never argues.
 - one row per moment forever (UNIQUE class+key) — a moment is never re-pushed.
-  Single exception: ``send_failed`` (an attempted push that died in flight)
-  stays eligible, and the next run re-attempts delivery on the same row —
-  an undelivered ping was never a nag.
+  Exceptions: ``send_failed`` (an attempted push that failed) and a
+  ``sending`` row whose ``SEND_LEASE`` expired (the process died mid-push)
+  stay eligible, and the next run re-attempts delivery on the same row —
+  an undelivered ping was never a nag. ``sent`` is written only after the
+  push is confirmed, and every status write is conditional on the status the
+  run last observed, so an owner acknowledgement in between always wins.
 
 The Telegram send is injected (``send_fn``) so the core is pure; the dismiss
 button routes back through ``research_notify`` (``cp:dismiss:<id>``).
@@ -121,6 +124,8 @@ CLASSES: tuple[str, ...] = (
 DAILY_CAP = 2
 WEEKLY_CAP = 8
 MUTE_AFTER = 3
+# Telegram sends time out after 60s; a younger ``sending`` row belongs to a live run.
+SEND_LEASE = timedelta(minutes=15)
 ANNOTATION_AGE_HOURS = 24
 INTENT_FOLLOWUP_DAYS = 14
 
@@ -727,17 +732,17 @@ def run_governor(
         for moment in moments:
             if has_episode_link:
                 prior = conn.execute(
-                    "SELECT id,status,thesis_evaluation_episode_id FROM coach_pings "
+                    "SELECT id,status,updated_at,thesis_evaluation_episode_id FROM coach_pings "
                     "WHERE class_ = ? AND key = ?",
                     (moment.class_, moment.key),
                 ).fetchone()
             else:
                 prior = conn.execute(
-                    "SELECT id,status FROM coach_pings WHERE class_ = ? AND key = ?",
+                    "SELECT id,status,updated_at FROM coach_pings WHERE class_ = ? AND key = ?",
                     (moment.class_, moment.key),
                 ).fetchone()
             prior_id = None if prior is None else int(prior[0])
-            linked_episode_id = None if prior is None or not has_episode_link else prior[2]
+            linked_episode_id = None if prior is None or not has_episode_link else prior[3]
             if linked_episode_id is not None and prior_id is not None:
                 if not has_attention_schema:
                     missing = sorted(required_attention_columns - attention_columns)
@@ -760,7 +765,13 @@ def run_governor(
                     )
                     conn.commit()
                     continue
-            if prior is not None and str(prior[1]) != "send_failed":
+            if prior is not None and not (
+                str(prior[1]) == "send_failed"
+                or (
+                    str(prior[1]) == "sending"
+                    and datetime.fromisoformat(str(prior[2])) <= stamp - SEND_LEASE
+                )
+            ):
                 continue  # anti-nag: a moment is considered exactly once, forever
             tally["seen"] += 1
             iso = stamp.isoformat()
@@ -770,7 +781,7 @@ def run_governor(
                 status = "skipped_stale"
             else:
                 day, week = _sent_counts(conn, stamp)
-                status = "digest" if (day >= DAILY_CAP or week >= WEEKLY_CAP) else "sent"
+                status = "digest" if (day >= DAILY_CAP or week >= WEEKLY_CAP) else "sending"
             if prior is None:
                 cur = conn.execute(
                     """
@@ -791,50 +802,54 @@ def run_governor(
                 )
                 ping_id = int(cur.lastrowid or 0)
             else:
-                # A prior run's push died mid-flight — re-run the gates on the
-                # SAME row (UNIQUE class+key), then retry the delivery below.
+                # A prior push failed or died mid-flight — re-run the gates on
+                # the SAME row (UNIQUE class+key), then retry the delivery below.
+                # Conditional on the observed status: an acknowledgement or a
+                # live sibling run that changed the row since then wins.
                 ping_id = int(prior[0])
-                conn.execute(
-                    "UPDATE coach_pings SET status = ?, updated_at = ? WHERE id = ?",
-                    (status, iso, ping_id),
+                claimed = conn.execute(
+                    "UPDATE coach_pings SET status = ?, updated_at = ? "
+                    "WHERE id = ? AND status = ? AND updated_at = ?",
+                    (status, iso, ping_id, str(prior[1]), str(prior[2])),
                 )
+                if claimed.rowcount != 1:
+                    conn.commit()
+                    continue
             conn.commit()
-            if status == "sent":
+            if status == "sending":
                 if send_fn is None:
                     # No push channel — not a send failure; park in the digest.
                     delivered, fallback = False, "digest"
                 else:
                     delivered, fallback = bool(send_fn(ping_id, moment)), "send_failed"
-                if not delivered:
-                    completed = conn.execute(
-                        "UPDATE coach_pings SET status = ?, updated_at = ? "
-                        "WHERE id = ? AND status = 'sent'",
-                        (fallback, iso, ping_id),
-                    )
-                    conn.commit()
-                    if completed.rowcount == 1:
-                        status = fallback
-                    else:
-                        current = conn.execute(
-                            "SELECT status FROM coach_pings WHERE id=?", (ping_id,)
-                        ).fetchone()
-                        if current is None:
-                            raise RuntimeError(
-                                f"coach ping {ping_id} disappeared during delivery completion"
-                            )
-                        current_status = str(current[0])
-                        if current_status == "sent":
-                            raise RuntimeError(
-                                f"coach ping {ping_id} delivery completion lost its CAS"
-                            )
-                        if current_status not in tally and current_status not in {
-                            "acted",
-                            "dismissed",
-                        }:
-                            raise RuntimeError(
-                                f"coach ping {ping_id} has unexpected status {current_status!r}"
-                            )
-                        status = current_status
+                final = "sent" if delivered else fallback
+                completed = conn.execute(
+                    "UPDATE coach_pings SET status = ?, updated_at = ? "
+                    "WHERE id = ? AND status = 'sending'",
+                    (final, iso, ping_id),
+                )
+                conn.commit()
+                if completed.rowcount == 1:
+                    status = final
+                else:
+                    current = conn.execute(
+                        "SELECT status FROM coach_pings WHERE id=?", (ping_id,)
+                    ).fetchone()
+                    if current is None:
+                        raise RuntimeError(
+                            f"coach ping {ping_id} disappeared during delivery completion"
+                        )
+                    current_status = str(current[0])
+                    if current_status == "sending":
+                        raise RuntimeError(f"coach ping {ping_id} delivery completion lost its CAS")
+                    if current_status not in tally and current_status not in {
+                        "acted",
+                        "dismissed",
+                    }:
+                        raise RuntimeError(
+                            f"coach ping {ping_id} has unexpected status {current_status!r}"
+                        )
+                    status = current_status
             if status in tally:
                 tally[status] += 1
     finally:
