@@ -101,6 +101,75 @@ WINDOWS_APP_TEST_FILES = (
     "tests/test_run_coach_pings.py",
     "tests/test_governor.py",
     "tests/test_cockpit_fundamentals.py",
+    "tests/test_sqlite_bootstrap.py",
+)
+# Cases whose absence would void the native evidence, including every Windows
+# parametrization. A deselected case leaves no testcase element, so module
+# presence alone cannot prove it ran; each of these must pass exactly once.
+WINDOWS_APP_REQUIRED_CASES = frozenset(
+    f"{module}::{name}"
+    for module, names in {
+        "tests.test_governor": (
+            "test_push_interrupted_mid_flight_is_retried_not_recorded_as_sent",
+            "test_in_flight_push_from_a_live_run_is_not_duplicated",
+            "test_stale_worker_completing_late_cannot_overwrite_a_newer_attempt",
+            "test_push_accepted_before_a_crash_is_pushed_once_more",
+            "test_expired_claim_is_swept_even_when_its_moment_is_no_longer_collected",
+            "test_acknowledgement_during_freshness_gate_cancels_the_retry_push",
+        ),
+        "tests.test_run_coach_pings": (
+            "test_manual_run_cannot_overlap_a_run_holding_the_lane",
+            "test_scheduled_run_proceeds_under_the_lane_its_wrapper_holds",
+        ),
+        "tests.test_cockpit_fundamentals": (
+            "test_cockpit_never_serves_cache_built_before_canonical_facts_changed",
+            "test_same_database_capture_invalidates_the_cache",
+            "test_every_revision_token_table_rejects_update_and_delete",
+            "test_materialize_refuses_an_open_caller_transaction",
+        ),
+        "tests.test_storage_reservation": (
+            "test_windows_accounts_with_different_temp_roots_share_volume_admission",
+            "test_concurrent_processes_cannot_both_admit_over_host_limit",
+            "test_ledger_parent_link_is_refused_without_writing_target",
+        ),
+        "tests.test_sqlite_bootstrap": (
+            "test_vendored_sqlite_dll_matches_pinned_binary_hash",
+            "test_bootstrap_preloads_sqlite_3534_before_application_import",
+            "test_windows_session_is_bound_to_the_vendored_hash_verified_dll",
+        ),
+        "tests.test_job_runtime": (
+            *(
+                f"test_windows_process_probe_checks_termination_and_closes_handle[{p}]"
+                for p in ("0-False", "258-True", "4294967295-True", "128-True")
+            ),
+            *(
+                f"test_windows_process_open_failure_requires_positive_absence_evidence[{p}]"
+                for p in ("87-False", "5-True", "6-True")
+            ),
+            *(
+                f"test_windows_creation_identity_uses_full_handle_and_closes_on_query_failure[{p}]"
+                for p in ("True", "False")
+            ),
+            "test_windows_process_loader_declares_handle_and_filetime_pointer_abi",
+            *(
+                f"test_windows_owner_wait_state_controls_stale_lock_recovery[{p}]"
+                for p in ("0", "258", "4294967295", "128")
+            ),
+            *(
+                f"test_windows_scheduler_owner_wait_state_controls_child_termination[{p}]"
+                for p in (
+                    "0-win:same--15",
+                    "258-win:same-17",
+                    "4294967295-win:same-17",
+                    "128-win:same-17",
+                    "258-None-17",
+                    "258-win:other--15",
+                )
+            ),
+            "test_windows_mutex_is_cross_session",
+        ),
+    }.items()
+    for name in names
 )
 DiagnosticFingerprint = tuple[str, str, str]
 WINDOWS_NATIVE_CASES = frozenset(
@@ -582,9 +651,16 @@ def _verify_windows_app(junit: Path) -> int:
         for case in cases
         if any(child.tag in {"skipped", "failure", "error"} for child in case)
     ]
-    if missing or not_passed:
+    ran = Counter(
+        f"{'.'.join(case.get('classname', '').split('.')[:2])}::{case.get('name', '')}"
+        for case in cases
+    )
+    absent = sorted(case for case in WINDOWS_APP_REQUIRED_CASES if ran[case] != 1)
+    if missing or not_passed or absent:
         for path in missing:
             print(f"::error::No native Windows cases ran from {path}.")
+        for case in absent:
+            print(f"::error::Required native Windows case did not run exactly once: {case}")
         for name in not_passed:
             print(f"::error::Native Windows case did not pass: {name}")
         return 1

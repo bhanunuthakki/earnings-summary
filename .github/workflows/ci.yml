@@ -659,7 +659,9 @@ jobs:
     # vendored hash-verified SQLite DLL) on a disposable hosted Windows VM, for
     # code whose behavior differs on Windows: storage reservation, job-runtime
     # locks and process liveness, the coach-ping entrypoint and governor, and
-    # the cockpit cache. The production host is never used as a test runner.
+    # the cockpit cache, plus proof that the session bound the vendored DLL.
+    # The production host is never used as a test runner. verify-windows-app
+    # requires every file and every named case in WINDOWS_APP_REQUIRED_CASES.
     timeout-minutes: 30
     env:
       PYTHONNOUSERSITE: "1"
@@ -690,7 +692,8 @@ jobs:
             tests/test_job_runtime.py `
             tests/test_run_coach_pings.py `
             tests/test_governor.py `
-            tests/test_cockpit_fundamentals.py
+            tests/test_cockpit_fundamentals.py `
+            tests/test_sqlite_bootstrap.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python .github/scripts/ci_gate.py verify-windows-app --junit "$env:RUNNER_TEMP/native-app.xml"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

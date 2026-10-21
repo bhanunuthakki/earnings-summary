@@ -339,19 +339,41 @@ def test_gate_requires_native_windows_application_evidence(helper: ModuleType, r
 
 @pytest.mark.parametrize(
     "disposition",
-    ["passed", "skipped", "failure", "error", "missing_file", "malformed", "unavailable"],
+    [
+        "passed",
+        "skipped",
+        "failure",
+        "error",
+        "missing_file",
+        "missing_required",
+        "duplicate_required",
+        "malformed",
+        "unavailable",
+    ],
 )
-def test_native_app_receipt_requires_every_file_and_no_non_passing_case(
+def test_native_app_receipt_requires_every_file_and_named_case(
     helper: ModuleType, tmp_path: Path, disposition: str
 ) -> None:
+    required = sorted(helper.WINDOWS_APP_REQUIRED_CASES)
     files = list(helper.WINDOWS_APP_TEST_FILES)
+    entries = [tuple(case.split("::", 1)) for case in required] + [
+        (path.removesuffix(".py").replace("/", "."), "test_extra_case") for path in files
+    ]
     if disposition == "missing_file":
-        files.pop()
-    child = "" if disposition in {"passed", "missing_file"} else f"<{disposition}/>"
+        dropped = files[-1].removesuffix(".py").replace("/", ".")
+        entries = [entry for entry in entries if entry[0] != dropped]
+    elif disposition == "missing_required":
+        entries.remove(tuple(required[0].split("::", 1)))
+    elif disposition == "duplicate_required":
+        entries.append(tuple(required[0].split("::", 1)))
+    child = (
+        ""
+        if disposition in {"passed", "missing_file", "missing_required", "duplicate_required"}
+        else f"<{disposition}/>"
+    )
     cases = "".join(
-        f'<testcase classname="{path.removesuffix(".py").replace("/", ".")}" name="test_{i}">'
-        f"{child if i == 0 else ''}</testcase>"
-        for i, path in enumerate(files)
+        f'<testcase classname="{module}" name="{name}">{child if i == 0 else ""}</testcase>'
+        for i, (module, name) in enumerate(entries)
     )
     receipt = tmp_path / "native-app.xml"
     receipt.write_text(f"<testsuites><testsuite>{cases}</testsuite></testsuites>", encoding="utf-8")
@@ -362,6 +384,12 @@ def test_native_app_receipt_requires_every_file_and_no_non_passing_case(
     assert helper.main(["verify-windows-app", "--junit", str(receipt)]) == (
         0 if disposition == "passed" else 1
     )
+
+
+def test_every_required_windows_case_belongs_to_a_selected_file() -> None:
+    helper = _load_helper()
+    modules = {path.removesuffix(".py").replace("/", ".") for path in helper.WINDOWS_APP_TEST_FILES}
+    assert {case.split("::", 1)[0] for case in helper.WINDOWS_APP_REQUIRED_CASES} == modules
 
 
 def test_windows_app_job_runs_the_harness_on_hosted_windows_and_is_required() -> None:
