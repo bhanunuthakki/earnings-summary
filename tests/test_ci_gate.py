@@ -144,6 +144,7 @@ def test_every_visual_census_root_requires_design_sync(helper: ModuleType) -> No
                 "fast-signal": "success",
                 "tests": "success",
                 "windows-native": "success",
+                "windows-app": "success",
                 "design": "skipped",
                 "quality": "success",
                 "typecheck": "success",
@@ -187,6 +188,7 @@ def test_gate_requires_every_applicable_job_to_succeed(helper: ModuleType) -> No
             "fast-signal": "success",
             "tests": "success",
             "windows-native": "success",
+            "windows-app": "success",
             "design": "success",
             "quality": "success",
             "typecheck": "skipped",
@@ -207,6 +209,7 @@ def test_gate_accepts_skipped_expensive_jobs_for_docs_only(helper: ModuleType) -
                 "fast-signal": "skipped",
                 "tests": "skipped",
                 "windows-native": "skipped",
+                "windows-app": "skipped",
                 "design": "skipped",
                 "quality": "skipped",
                 "typecheck": "skipped",
@@ -228,6 +231,7 @@ def test_gate_requires_fast_signal_for_code_changes(helper: ModuleType) -> None:
             "fast-signal": "skipped",
             "tests": "success",
             "windows-native": "success",
+            "windows-app": "success",
             "design": "skipped",
             "quality": "skipped",
             "typecheck": "skipped",
@@ -243,6 +247,7 @@ def test_gate_requires_native_windows_evidence(helper: ModuleType, result: str) 
             "changes",
             "public-boundary",
             "fast-signal",
+            "windows-app",
             "tests",
             "design",
             "quality",
@@ -310,6 +315,71 @@ def test_windows_native_job_is_isolated_and_required() -> None:
     assert '--windows-native-result "$WINDOWS_NATIVE_RESULT"' in workflow
 
 
+@pytest.mark.parametrize("result", ["skipped", "failure", "cancelled", ""])
+def test_gate_requires_native_windows_application_evidence(helper: ModuleType, result: str) -> None:
+    results: dict[str, str] = dict.fromkeys(
+        (
+            "changes",
+            "public-boundary",
+            "fast-signal",
+            "windows-native",
+            "tests",
+            "design",
+            "quality",
+            "typecheck",
+            "security",
+        ),
+        "success",
+    )
+    results["windows-app"] = result
+    failures = helper.gate_failures(code=True, python=True, design=True, results=results)
+    assert len(failures) == 1
+    assert failures[0].startswith("windows-app ")
+
+
+@pytest.mark.parametrize(
+    "disposition",
+    ["passed", "skipped", "failure", "error", "missing_file", "malformed", "unavailable"],
+)
+def test_native_app_receipt_requires_every_file_and_no_non_passing_case(
+    helper: ModuleType, tmp_path: Path, disposition: str
+) -> None:
+    files = list(helper.WINDOWS_APP_TEST_FILES)
+    if disposition == "missing_file":
+        files.pop()
+    child = "" if disposition in {"passed", "missing_file"} else f"<{disposition}/>"
+    cases = "".join(
+        f'<testcase classname="{path.removesuffix(".py").replace("/", ".")}" name="test_{i}">'
+        f"{child if i == 0 else ''}</testcase>"
+        for i, path in enumerate(files)
+    )
+    receipt = tmp_path / "native-app.xml"
+    receipt.write_text(f"<testsuites><testsuite>{cases}</testsuite></testsuites>", encoding="utf-8")
+    if disposition == "malformed":
+        receipt.write_text("not XML", encoding="utf-8")
+    elif disposition == "unavailable":
+        receipt.unlink()
+    assert helper.main(["verify-windows-app", "--junit", str(receipt)]) == (
+        0 if disposition == "passed" else 1
+    )
+
+
+def test_windows_app_job_runs_the_harness_on_hosted_windows_and_is_required() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    app_job = workflow.split("\n  windows-app:\n", maxsplit=1)[1].split(
+        "\n  windows-native:\n", maxsplit=1
+    )[0]
+    assert "runs-on: windows-latest" in app_job
+    assert "--noconftest" not in app_job
+    assert "--require-hashes -r requirements.lock" in app_job
+    assert "verify-windows-app --junit" in app_job
+    assert "retention-days: 7" in app_job
+    for path in _load_helper().WINDOWS_APP_TEST_FILES:
+        assert path in app_job
+    assert "WINDOWS_APP_RESULT: ${{ needs.windows-app.result }}" in workflow
+    assert '--windows-app-result "$WINDOWS_APP_RESULT"' in workflow
+
+
 def test_gate_never_hides_failed_or_cancelled_jobs(helper: ModuleType) -> None:
     assert helper.gate_failures(
         code=False,
@@ -321,6 +391,7 @@ def test_gate_never_hides_failed_or_cancelled_jobs(helper: ModuleType) -> None:
             "fast-signal": "skipped",
             "tests": "skipped",
             "windows-native": "skipped",
+            "windows-app": "skipped",
             "design": "skipped",
             "quality": "skipped",
             "typecheck": "skipped",
@@ -343,6 +414,7 @@ def test_gate_rejects_skipped_change_classification(helper: ModuleType) -> None:
             "fast-signal": "skipped",
             "tests": "skipped",
             "windows-native": "skipped",
+            "windows-app": "skipped",
             "design": "skipped",
             "quality": "skipped",
             "typecheck": "skipped",
@@ -362,6 +434,7 @@ def test_gate_always_requires_public_boundary(helper: ModuleType) -> None:
             "fast-signal": "skipped",
             "tests": "skipped",
             "windows-native": "skipped",
+            "windows-app": "skipped",
             "design": "skipped",
             "quality": "skipped",
             "typecheck": "skipped",
@@ -386,6 +459,7 @@ def test_gate_fails_when_design_paths_changed_but_design_job_skipped(
             "fast-signal": "success",
             "tests": "success",
             "windows-native": "success",
+            "windows-app": "success",
             "design": "skipped",
             "quality": "success",
             "typecheck": "success",
@@ -408,6 +482,7 @@ def test_gate_accepts_skipped_design_job_for_backend_only_change(helper: ModuleT
                 "fast-signal": "success",
                 "tests": "success",
                 "windows-native": "success",
+                "windows-app": "success",
                 "design": "skipped",
                 "quality": "success",
                 "typecheck": "success",
@@ -439,6 +514,8 @@ def test_verify_command_consumes_design_classification(helper: ModuleType) -> No
             "--tests-result",
             "success",
             "--windows-native-result",
+            "success",
+            "--windows-app-result",
             "success",
             "--design-result",
             design_result,
@@ -758,7 +835,7 @@ def test_workflow_uses_native_classifier_and_fail_closed_aggregate() -> None:
     assert "name: Public Boundary" in workflow
     assert "python execution/verify_public_tree.py" in workflow
     assert (
-        "needs: [changes, public-boundary, fast-signal, windows-native, tests, design, quality, typecheck, security]"
+        "needs: [changes, public-boundary, fast-signal, windows-native, windows-app, tests, design, quality, typecheck, security]"
         in workflow
     )
     assert "PUBLIC_BOUNDARY_RESULT" in workflow
@@ -883,7 +960,7 @@ def test_test_job_labels_count_and_picker_are_stable() -> None:
     assert "--source-shard" not in workflow
     assert "--split-count" not in workflow
     assert (
-        "needs: [changes, public-boundary, fast-signal, windows-native, tests, design, quality, typecheck, security]"
+        "needs: [changes, public-boundary, fast-signal, windows-native, windows-app, tests, design, quality, typecheck, security]"
         in workflow
     )
 
