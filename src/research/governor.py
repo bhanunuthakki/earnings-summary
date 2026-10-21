@@ -684,6 +684,11 @@ def run_governor(
 ) -> dict[str, int]:
     """One governed pass: collect → freshness-gate → cap → send/digest.
 
+    Callers must hold the ``notification-delivery`` job lane (``JobLock``) for
+    the whole pass, as ``execution/run_coach_pings.py`` and the scheduler do:
+    the cap check and the creation of a moment's row are not atomic across
+    concurrent passes.
+
     ``send_fn(ping_id, moment) -> bool`` performs the push (Telegram). No
     ``send_fn`` at all (dry-run / no bot configured) downgrades the ping to
     the quiet digest — that IS the delivery surface then. A ``send_fn`` that

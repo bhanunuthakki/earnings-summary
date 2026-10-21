@@ -398,22 +398,50 @@ def test_materialize_refuses_an_open_caller_transaction(
     assert not (repo_root / "data" / "cockpit_fundamentals.json").exists()
 
 
-def test_every_revision_token_table_is_append_only(conn: sqlite3.Connection) -> None:
+def test_every_revision_token_table_rejects_update_and_delete(conn: sqlite3.Connection) -> None:
     """The cache token relies on MAX(rowid) moving on every change; that holds
-    only while each table rejects UPDATE and DELETE."""
+    only while each table it reads rejects in-place UPDATE and DELETE."""
     import inspect
     import re
 
     from provenance.evidence_revision import canonical_financial_revision
 
+    _publish(conn, _quarter_rows())
     tables = re.findall(r"FROM (\w+)\)", inspect.getsource(canonical_financial_revision))
     assert len(tables) == 9
-    triggers = conn.execute("SELECT sql FROM sqlite_master WHERE type='trigger'").fetchall()
-    bodies = [str(row[0]) for row in triggers]
     for table in tables:
-        for event in ("UPDATE", "DELETE"):
-            guarded = any(
-                re.search(rf"BEFORE {event} ON {table}\b.*RAISE\(ABORT", body, re.S)
-                for body in bodies
-            )
-            assert guarded, f"{table} lacks an append-only {event} guard"
+        newest = conn.execute(f"SELECT MAX(rowid) FROM {table}").fetchone()[0]
+        assert newest is not None, f"{table} has no row to test"
+        for statement in (
+            f"UPDATE {table} SET rowid = rowid WHERE rowid = ?",
+            f"DELETE FROM {table} WHERE rowid = ?",
+        ):
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(statement, (newest,))
+        conn.rollback()
+
+
+def test_same_database_capture_invalidates_the_cache(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
+    """New governed facts committed to the same database after materialization
+    make the cache unusable; the cockpit then shows the live canonical read."""
+    from pipeline.research_cockpit import build_cockpit_rows
+
+    _publish(conn, _quarter_rows())
+    _track_synth(conn)
+    materialize_fundamentals(conn, repo_root)
+    assert read_materialized_fundamentals(repo_root, conn)["SYNTH"][0] == pytest.approx(20.0)
+
+    seed_table(
+        conn,
+        [("revenue", "2026-04-01", "2026-06-30", "Q2", "130", "USD")],
+        publication_prefix="later",
+        populate=False,
+    )
+    conn.commit()
+
+    assert read_materialized_fundamentals(repo_root, conn) == {}
+    cockpit = build_cockpit_rows(conn, repo_root)
+    row = {item.base.ticker: item for item in cockpit["evaluation"]}["SYNTH"]
+    assert (row.rev_yoy_pct, row.fcf_margin_pct) == compute_from_db(conn)["SYNTH"]
