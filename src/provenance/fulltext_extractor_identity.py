@@ -45,7 +45,7 @@ BASE_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(
 RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0 = FulltextExtractorIdentity(
     name=FULLTEXT_EXTRACTOR_NAME,
     code_version="fulltext-evidence-backfill@6-pdf-public-access;pypdf=6.19.0",
-    config_sha256="ea890987a338e86830c366dac7c9587344de831e487695cb6753f51cbb042f15",
+    config_sha256="ea890987a338e86830c366dac7c9587344de831e487695cb6753f51cbb042f15",  # pragma: allowlist secret -- retained extractor config digest, not a credential
     idempotency_namespace="fulltext-pdf-v6",
     evidence_namespace="fulltext-pdf-v6",
     hierarchy="flat",

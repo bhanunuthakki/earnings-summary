@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "fce17dcf89fc943d0f863ea543e02611e8ced93b",
+  "scoped_commit": "0d85e78705f87556a9281193347d1be53542ed0e",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "d39169ea10da408eb771f65ef8234f3d5d17cdf0be74c098b8e6e22cbbb3624e",
+  "source_sha256": "69602af360c1160a12817d53c2fd2c3257f1b6c80f63037cb766ad9c17912f93",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [

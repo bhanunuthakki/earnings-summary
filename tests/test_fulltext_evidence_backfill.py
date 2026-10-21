@@ -2006,5 +2006,5 @@ def test_retained_pdf_identity_matches_original_bytes() -> None:
             b"fulltext-evidence-backfill-config-v6-pdf:pdf-pages,empty-opening-password,"
             b"verify-permissions,pypdf=6.19.0"
         ).hexdigest()
-        == "ea890987a338e86830c366dac7c9587344de831e487695cb6753f51cbb042f15"
+        == "ea890987a338e86830c366dac7c9587344de831e487695cb6753f51cbb042f15"  # pragma: allowlist secret -- retained extractor config digest, not a credential
     )
