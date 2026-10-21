@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "22b963eec51c3fc434acb43f3281e3919622d875",
+  "scoped_commit": "639b8f784352d5c84d5413478b3ee99301dd2455",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "a3824a9432ee99a5e75c924417861e31a0ecca2562f550ae485d604b684d65aa",
+  "source_sha256": "7dd2d6201f54311fd12cd493f00d115f19b167bd4038f87f85b776170bf88d1c",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,8 +23,8 @@
   },
   "metrics": {
     "executable_modules": 1452,
-    "total_noncomment_loc": 553373,
-    "modules_over_1000_loc": 105,
+    "total_noncomment_loc": 553579,
+    "modules_over_1000_loc": 106,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
     "max_internal_fan_out": 40,
@@ -19119,9 +19119,9 @@
         "path": "src/research/decision_brief.py",
         "module": "research.decision_brief",
         "lines": {
-          "physical": 1011,
-          "nonblank": 945,
-          "noncomment": 930
+          "physical": 1115,
+          "nonblank": 1045,
+          "noncomment": 1021
         },
         "internal_fan_out": 13,
         "responsibilities": [
@@ -19247,16 +19247,16 @@
         "path": "src/research/memo_claim_support.py",
         "module": "research.memo_claim_support",
         "lines": {
-          "physical": 133,
-          "nonblank": 110,
-          "noncomment": 107
+          "physical": 280,
+          "nonblank": 228,
+          "noncomment": 222
         },
         "internal_fan_out": 1,
         "responsibilities": [
           "database"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 8,
+        "fully_annotated_public_functions": 8
       },
       {
         "path": "src/research/memo_model_evidence.py",

@@ -1455,6 +1455,20 @@ check the changed behavior. The dated [audit](history/financial_narrative_ground
 records the remaining runtime gates; these instruction changes do not establish
 that all financial narratives are verified before release.
 
+### Report claim binding contract — no operational surface change
+
+The memo verifier now binds analyst prose to its support. A figure in an analyst
+claim must match a cited verbatim excerpt of a retained node, an admitted value, a
+verified model value or arithmetic that the verifier replays; quoted wording must
+occur in a cited excerpt. Claims may also quote the owner's thesis when the review
+pins its exact text and hash. Reader blocks exclude citation markers, and an
+analyst section can be marked with `data-voice="analyst"`. Earlier claim
+serializations are unchanged. This adds no operator action, route, service,
+schedule, provider, model pin, budget, schema or live-state write.
+`tests/test_memo_analysis_binding.py` and the existing memo suites check it. The
+binding is a deterministic release check; it does not certify the meaning of a
+paraphrase, so semantic review remains required.
+
 ### MELI H1 displayed-statement source population
 
 `execution/publish_meli_reported_statements.py` is a manual, source-only operation:
