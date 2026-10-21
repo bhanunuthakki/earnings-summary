@@ -1628,3 +1628,35 @@ reads still use the established resolved views, so stale preparation rows cannot
 change selected facts. The existing manual bounded backfill still serves observation
 capture and resolution convergence. No scheduler task is added or activated,
 no database is migrated, and no application is deployed by this source merge.
+
+
+### Sealed native admission and MELI input-preview diagnostics
+
+Migration0058 rejects new rows that would retroactively change a sealed ontology
+or issuer-scoped canonical-resolution snapshot. Existing exact replay is retained.
+The stable SQLite failure reasons are `sealed_ontology_admission_conflict` and
+`sealed_resolution_admission_conflict`. These are terminal validation failures for
+that input, not transient retry signals. Preserve the failed input and old seals;
+plan a supported new-coordinate admission instead of changing timestamps or seals.
+No backfill operation or live migration is activated by the source change.
+
+`preview_meli_inputs.py` keeps its read-only database, explicit roots, no-clobber
+artifact and exit-code contracts. Known verification failures return exit3 and
+bounded unavailable JSON with the requested snapshot, period, cutoff and whether
+candidate inspection was performed/completed. They emit no usable bindings or
+invented slot counts. Unexpected faults and output conflicts remain command
+failures. Candidate selection and the final model-input verifier share the same
+canonical/source reader, but each independently verifies its own bounded pass.
+The final verifier requires definition, binding and mapping identity/payload parity
+with the snapshot's sealed projection. A later valid revision fails with
+`input_snapshot_context_mismatch`; it needs a new snapshot. An absent or different
+projected selection fails with `input_outside_canonical_snapshot`. These checks
+also apply to other model recipes using the shared verifier.
+
+Disposition: no interactive Operations control, scheduler, service, provider,
+publication or model-readiness change. Existing manual CLI and migration owners
+remain authoritative. Regression evidence: `tests/test_sealed_snapshot_admission.py`,
+`tests/test_meli_preview_batch_reuse.py` and `tests/test_preview_meli_inputs_cli.py`.
+Exact-read and model-context regressions are in
+`tests/test_canonical_fact_exact_read.py`, `tests/test_meli_input_evidence.py`,
+`tests/test_cashflow_input_evidence.py` and `tests/test_memo_model_roundtrip.py`.

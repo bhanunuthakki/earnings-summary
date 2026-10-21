@@ -58,6 +58,7 @@ from research.memo_model_evidence import (
     VerifiedMemoModel,
     load_verified_memo_model,
 )
+from tests.test_meli_input_evidence import seal_model_projection_context
 from tests.test_onon_inputs import END, NOW, proof
 from tests.test_onon_model import memo_inputs
 from tests.test_source_fact_repository import STAMP, make_cell, make_report, seed_foundation, sha256
@@ -358,6 +359,7 @@ def admitted_model(
             "recorded_at": NOW,
         }
     )
+    seal_model_projection_context(conn, snapshot)
 
     # Only the inventory/research-coverage boundary is isolated. Every fact is
     # checked against this explicit primary universe by the real shared reader.

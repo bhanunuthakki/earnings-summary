@@ -4,7 +4,8 @@ The projection is downstream of the exhaustive 0244 resolution snapshot.  It
 never enumerates ``fact_cells_v2`` directly and never admits an unsealed source
 publication.  Checkpoints contain the full selected state; deltas contain only
 changed upserts and deletions relative to a sealed parent.  Retrieval resolves
-the short delta chain in SQL and applies a hard candidate limit.
+the short delta chain in SQL. Lexical search limits candidates; exact reads
+retain every requested identity and prove missing selections against the seal.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import json
 import sqlite3
 import time
 from collections.abc import Generator, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -286,6 +287,13 @@ class CanonicalFactHit(_Frozen):
     entry_sha256: str
     lineage: dict[str, object]
     evidence_locator: dict[str, object]
+
+
+@dataclass(frozen=True)
+class _ReadBucket:
+    entry_count: int
+    entry_set_sha256: str
+    entry_hashes: frozenset[str]
 
 
 def build_canonical_projection_generation(
@@ -650,42 +658,117 @@ def search_canonical_facts(
         tuple([generation_id, *tokens, *tokens, *params[1 + len(tokens) :]]),
     )
     hits: list[CanonicalFactHit] = []
-    verified_buckets: set[int] = set()
+    verified_buckets: dict[int, _ReadBucket] = {}
     for row in rows:
         _verify_projected_hit_for_read(conn, generation_id, row, verified_buckets=verified_buckets)
-        lineage_dict: dict[str, object] = {
+        hits.append(
+            _canonical_fact_hit(
+                generation_id,
+                row,
+                ontology_snapshot_id=str(header["ontology_snapshot_id"]),
+                resolution_snapshot_id=str(header["resolution_snapshot_id"]),
+                aliases=committed_aliases,
+            )
+        )
+    return tuple(hits)
+
+
+def _canonical_fact_hit(
+    generation_id: str,
+    row: dict[str, object],
+    *,
+    ontology_snapshot_id: str,
+    resolution_snapshot_id: str,
+    aliases: dict[str, list[str]],
+) -> CanonicalFactHit:
+    return CanonicalFactHit(
+        generation_id=generation_id,
+        canonical_metric_cell_id=str(row["canonical_metric_cell_id"]),
+        canonical_metric_name=str(row["canonical_metric_name"]),
+        canonical_search_text=str(row["canonical_search_text"]),
+        canonical_value=_optional_text(row["canonical_value"]),
+        value_kind=cast(Literal["numeric", "text", "nil"], str(row["value_kind"])),
+        period_start=_optional_text(row["period_start"]),
+        period_end=str(row["period_end"]),
+        currency=_optional_text(row["currency"]),
+        unit_key=str(row["unit_key"]),
+        entry_sha256=str(row["entry_sha256"]),
+        lineage={
             "binding_commitment_sha256": row["binding_commitment_sha256"],
             "binding_revision_id": row["binding_revision_id"],
+            "mapping_revision_id": row["mapping_revision_id"],
+            "mapping_commitment_sha256": row["mapping_commitment_sha256"],
             "canonical_resolution_revision_id": row["canonical_resolution_revision_id"],
             "metric_definition_commitment_sha256": row["metric_definition_commitment_sha256"],
             "metric_definition_revision_id": row["metric_definition_revision_id"],
-            "ontology_snapshot_id": header["ontology_snapshot_id"],
-            "resolution_snapshot_id": header["resolution_snapshot_id"],
+            "ontology_snapshot_id": ontology_snapshot_id,
+            "resolution_snapshot_id": resolution_snapshot_id,
             "selected_observation_id": row["selected_observation_id"],
             "source_fact_cell_id": row["source_fact_cell_id"],
             "source_publication_id": row["source_publication_id"],
             "source_publication_member_id": row["source_publication_member_id"],
             "source_publication_seal_id": row["source_publication_seal_id"],
-            "aliases": committed_aliases,
-        }
-        hits.append(
-            CanonicalFactHit(
-                generation_id=generation_id,
-                canonical_metric_cell_id=str(row["canonical_metric_cell_id"]),
-                canonical_metric_name=str(row["canonical_metric_name"]),
-                canonical_search_text=str(row["canonical_search_text"]),
-                canonical_value=_optional_text(row["canonical_value"]),
-                value_kind=cast(Literal["numeric", "text", "nil"], str(row["value_kind"])),
-                period_start=_optional_text(row["period_start"]),
-                period_end=str(row["period_end"]),
-                currency=_optional_text(row["currency"]),
-                unit_key=str(row["unit_key"]),
-                entry_sha256=str(row["entry_sha256"]),
-                lineage=lineage_dict,
-                evidence_locator=json.loads(str(row["evidence_locator_json"])),
-            )
+            "aliases": aliases,
+        },
+        evidence_locator=json.loads(str(row["evidence_locator_json"])),
+    )
+
+
+def read_canonical_facts_by_id(
+    conn: sqlite3.Connection,
+    *,
+    generation_id: str,
+    canonical_metric_cell_ids: tuple[str, ...],
+    verification: RequestVerificationCache | None = None,
+) -> tuple[CanonicalFactHit | None, ...]:
+    """Read every exact identity in order, preserving duplicate requests.
+
+    None means absent or effectively deleted, with its bucket rechecked against
+    the sealed state. Even an empty request requires generation admission. All
+    selection and verification stays in one read snapshot; aliases are unused.
+    """
+    with _savepoint(conn, "canonical_fact_exact_read"):
+        generation = admit_canonical_projection_for_read(conn, generation_id, verification)
+        if not canonical_metric_cell_ids:
+            return ()
+        rows = _rows(
+            conn,
+            _CURRENT_STATE_CTE + " SELECT * FROM current_state "  # nosec B608 -- fixed projection query; IDs stay bound
+            "WHERE canonical_metric_cell_id IN (SELECT value FROM json_each(?))",
+            (generation_id, canonical_json(list(dict.fromkeys(canonical_metric_cell_ids)))),
         )
-    return tuple(hits)
+        hits: dict[str, CanonicalFactHit] = {}
+        verified_buckets: dict[int, _ReadBucket] = {}
+        for row in rows:
+            if row["change_kind"] == "delete":
+                _verify_projected_entry_commitment(generation_id, row)
+                continue
+            _verify_projected_hit_for_read(
+                conn, generation_id, row, verified_buckets=verified_buckets
+            )
+            cell_id = str(row["canonical_metric_cell_id"])
+            hits[cell_id] = _canonical_fact_hit(
+                generation_id,
+                row,
+                ontology_snapshot_id=generation.ontology_snapshot_id,
+                resolution_snapshot_id=generation.resolution_snapshot_id,
+                aliases={},
+            )
+        absent_buckets = {
+            digest_bucket(cell_id) for cell_id in canonical_metric_cell_ids if cell_id not in hits
+        }
+        for bucket in absent_buckets:
+            retained = _read_projection_bucket(
+                conn, generation_id, bucket, verified_buckets=verified_buckets
+            )
+            count, _payload, digest = _effective_bucket_commitment(
+                conn, generation_id, bucket, verify_entries=True
+            )
+            if count != retained.entry_count or digest != retained.entry_set_sha256:
+                raise CanonicalFactProjectionError(
+                    "projection_read_absence_bucket_mismatch", generation_id=generation_id
+                )
+        return tuple(hits.get(cell_id) for cell_id in canonical_metric_cell_ids)
 
 
 class CanonicalFactQueryPlan(_Frozen):
@@ -784,6 +867,16 @@ def admit_canonical_projection_for_read(
         raise CanonicalFactProjectionError(
             "projection_strict_audit_receipt_tampered", generation_id=generation_id
         )
+    seal_payload = json.loads(str(seal["projection_seal_json"]))
+    if (
+        digest_text(str(seal["projection_seal_json"])) != str(seal["projection_seal_sha256"])
+        or digest_text(str(seal["ordered_bucket_set_json"])) != str(seal["bucket_set_sha256"])
+        or not isinstance(seal_payload, dict)
+        or seal_payload.get("bucket_set_sha256") != str(seal["bucket_set_sha256"])
+    ):
+        raise CanonicalFactProjectionError(
+            "projection_strict_audit_receipt_tampered", generation_id=generation_id
+        )
     verified = VerifiedCanonicalProjectionGeneration(
         generation_id=generation_id,
         projection_seal_id=str(seal["projection_seal_id"]),
@@ -818,52 +911,17 @@ def _verify_projected_hit_for_read(
     generation_id: str,
     entry: dict[str, object],
     *,
-    verified_buckets: set[int],
+    verified_buckets: dict[int, _ReadBucket],
 ) -> None:
-    expected_entry_json = _entry_json_from_row(entry)
-    if str(entry["entry_json"]) != expected_entry_json or str(entry["entry_sha256"]) != digest_text(
-        expected_entry_json
-    ):
+    _verify_projected_entry_commitment(generation_id, entry)
+    bucket = _read_projection_bucket(
+        conn, generation_id, _int(entry["digest_bucket"]), verified_buckets=verified_buckets
+    )
+    # Every entry must belong, including later hits in an already verified bucket.
+    if str(entry["entry_sha256"]) not in bucket.entry_hashes:
         raise CanonicalFactProjectionError(
-            "projection_read_entry_commitment_tampered",
-            generation_id=generation_id,
+            "projection_read_bucket_commitment_tampered", generation_id=generation_id
         )
-    bucket = _int(entry["digest_bucket"])
-    if bucket not in verified_buckets:
-        bucket_row = _row(
-            conn,
-            """
-            WITH RECURSIVE lineage(generation_id,parent_generation_id,depth) AS (
-              SELECT generation_id,parent_generation_id,0
-              FROM canonical_fact_projection_generations WHERE generation_id=?
-              UNION ALL
-              SELECT parent.generation_id,parent.parent_generation_id,
-                     lineage.depth+1
-              FROM canonical_fact_projection_generations parent
-              JOIN lineage ON parent.generation_id=lineage.parent_generation_id
-              WHERE lineage.depth<32
-            )
-            SELECT bucket.canonical_entry_set_json,bucket.entry_set_sha256
-            FROM lineage
-            JOIN canonical_fact_projection_buckets bucket
-              ON bucket.generation_id=lineage.generation_id
-            WHERE bucket.digest_bucket=?
-            ORDER BY lineage.depth LIMIT 1
-            """,
-            (generation_id, bucket),
-        )
-        if (
-            bucket_row is None
-            or str(bucket_row["entry_set_sha256"])
-            != digest_text(str(bucket_row["canonical_entry_set_json"]))
-            or str(entry["entry_sha256"])
-            not in json.loads(str(bucket_row["canonical_entry_set_json"]))
-        ):
-            raise CanonicalFactProjectionError(
-                "projection_read_bucket_commitment_tampered",
-                generation_id=generation_id,
-            )
-        verified_buckets.add(bucket)
     publication_member = _row(
         conn,
         "SELECT member.publication_id,member.canonical_member_sha256,"
@@ -888,6 +946,91 @@ def _verify_projected_hit_for_read(
             "projection_read_publication_lineage_mismatch",
             generation_id=generation_id,
         )
+
+
+def _verify_projected_entry_commitment(generation_id: str, entry: dict[str, object]) -> None:
+    expected_entry_json = _entry_json_from_row(entry)
+    if (
+        entry["change_kind"] not in {"upsert", "delete"}
+        or str(entry["entry_json"]) != expected_entry_json
+        or str(entry["entry_sha256"]) != digest_text(expected_entry_json)
+    ):
+        raise CanonicalFactProjectionError(
+            "projection_read_entry_commitment_tampered",
+            generation_id=generation_id,
+        )
+
+
+def _read_projection_bucket(
+    conn: sqlite3.Connection,
+    generation_id: str,
+    bucket: int,
+    *,
+    verified_buckets: dict[int, _ReadBucket],
+) -> _ReadBucket:
+    if bucket in verified_buckets:
+        return verified_buckets[bucket]
+    bucket_row = _row(
+        conn,
+        """
+            WITH RECURSIVE lineage(generation_id,parent_generation_id,depth) AS (
+              SELECT generation_id,parent_generation_id,0
+              FROM canonical_fact_projection_generations WHERE generation_id=?
+              UNION ALL
+              SELECT parent.generation_id,parent.parent_generation_id,
+                     lineage.depth+1
+              FROM canonical_fact_projection_generations parent
+              JOIN lineage ON parent.generation_id=lineage.parent_generation_id
+              WHERE lineage.depth<32
+            )
+            SELECT bucket.entry_count,bucket.canonical_entry_set_json,bucket.entry_set_sha256
+            FROM lineage
+            JOIN canonical_fact_projection_buckets bucket
+              ON bucket.generation_id=lineage.generation_id
+            WHERE bucket.digest_bucket=?
+            ORDER BY lineage.depth LIMIT 1
+        """,
+        (generation_id, bucket),
+    )
+    commitment = _row(
+        conn,
+        "SELECT json_extract(item.value,'$.entry_count') AS entry_count,"
+        "json_extract(item.value,'$.entry_set_sha256') AS entry_set_sha256 "
+        "FROM canonical_fact_projection_seals seal,json_each(seal.ordered_bucket_set_json) item "
+        "WHERE seal.generation_id=? AND json_extract(item.value,'$.digest_bucket')=?",
+        (generation_id, bucket),
+    )
+    if (
+        bucket_row is None
+        or commitment is None
+        or str(bucket_row["entry_set_sha256"])
+        != digest_text(str(bucket_row["canonical_entry_set_json"]))
+        or str(bucket_row["entry_set_sha256"]) != str(commitment["entry_set_sha256"])
+        or _int(bucket_row["entry_count"]) != _int(commitment["entry_count"])
+    ):
+        raise CanonicalFactProjectionError(
+            "projection_read_bucket_commitment_tampered",
+            generation_id=generation_id,
+        )
+    hashes: object = json.loads(str(bucket_row["canonical_entry_set_json"]))
+    if not isinstance(hashes, list) or any(
+        not isinstance(value, str) for value in cast(list[object], hashes)
+    ):
+        raise CanonicalFactProjectionError(
+            "projection_read_bucket_commitment_tampered", generation_id=generation_id
+        )
+    exact_hashes = cast(list[str], hashes)
+    result = _ReadBucket(
+        entry_count=_int(bucket_row["entry_count"]),
+        entry_set_sha256=str(bucket_row["entry_set_sha256"]),
+        entry_hashes=frozenset(exact_hashes),
+    )
+    if len(exact_hashes) != result.entry_count or len(result.entry_hashes) != result.entry_count:
+        raise CanonicalFactProjectionError(
+            "projection_read_bucket_commitment_tampered", generation_id=generation_id
+        )
+    verified_buckets[bucket] = result
+    return result
 
 
 def _record_projection_audit_receipt(
@@ -1893,16 +2036,23 @@ def _logical_bucket_vector(conn: sqlite3.Connection, generation_id: str) -> list
 
 
 def _effective_bucket_commitment(
-    conn: sqlite3.Connection, generation_id: str, bucket: int
+    conn: sqlite3.Connection,
+    generation_id: str,
+    bucket: int,
+    *,
+    verify_entries: bool = False,
 ) -> tuple[int, str, str]:
     payload_builder = _bucket_payload_builder(generation_id)
+    selected_columns = "*" if verify_entries else "entry_sha256"
     for row in _iter_rows_batched(
         conn,
-        _CURRENT_STATE_CTE + " SELECT entry_sha256 FROM current_state "  # nosec B608 -- trusted internal SQL shape; values remain bound
+        _CURRENT_STATE_CTE + f" SELECT {selected_columns} FROM current_state "  # nosec B608 -- two fixed internal projections; values remain bound
         "WHERE change_kind='upsert' AND digest_bucket=? "
         "ORDER BY canonical_metric_cell_id",
         (generation_id, bucket),
     ):
+        if verify_entries:
+            _verify_projected_entry_commitment(generation_id, row)
         payload_builder.add(str(row["entry_sha256"]))
     payload = payload_builder.finish()
     return payload_builder.item_count, payload, digest_text(payload)
@@ -1923,9 +2073,10 @@ def _savepoint(conn: sqlite3.Connection, name: str) -> Generator[None, None, Non
     conn.execute(f"SAVEPOINT {name}")
     try:
         yield
-    except Exception:
-        conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
-        conn.execute(f"RELEASE SAVEPOINT {name}")
+    except BaseException:
+        with suppress(sqlite3.Error):
+            conn.execute(f"ROLLBACK TO SAVEPOINT {name}")
+            conn.execute(f"RELEASE SAVEPOINT {name}")
         raise
     conn.execute(f"RELEASE SAVEPOINT {name}")
 
