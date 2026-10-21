@@ -383,3 +383,37 @@ def test_cockpit_never_serves_cache_built_before_canonical_facts_changed(
     cockpit = build_cockpit_rows(conn, repo_root)
     row = {item.base.ticker: item for item in cockpit["evaluation"]}["SYNTH"]
     assert (row.rev_yoy_pct, row.fcf_margin_pct) == (live_yoy, live_margin)
+
+
+def test_materialize_refuses_an_open_caller_transaction(
+    conn: sqlite3.Connection, repo_root: Path
+) -> None:
+    _publish(conn, _quarter_rows())
+    conn.execute("BEGIN")
+    try:
+        with pytest.raises(ValueError, match="committed state"):
+            materialize_fundamentals(conn, repo_root)
+    finally:
+        conn.rollback()
+    assert not (repo_root / "data" / "cockpit_fundamentals.json").exists()
+
+
+def test_every_revision_token_table_is_append_only(conn: sqlite3.Connection) -> None:
+    """The cache token relies on MAX(rowid) moving on every change; that holds
+    only while each table rejects UPDATE and DELETE."""
+    import inspect
+    import re
+
+    from provenance.evidence_revision import canonical_financial_revision
+
+    tables = re.findall(r"FROM (\w+)\)", inspect.getsource(canonical_financial_revision))
+    assert len(tables) == 9
+    triggers = conn.execute("SELECT sql FROM sqlite_master WHERE type='trigger'").fetchall()
+    bodies = [str(row[0]) for row in triggers]
+    for table in tables:
+        for event in ("UPDATE", "DELETE"):
+            guarded = any(
+                re.search(rf"BEFORE {event} ON {table}\b.*RAISE\(ABORT", body, re.S)
+                for body in bodies
+            )
+            assert guarded, f"{table} lacks an append-only {event} guard"

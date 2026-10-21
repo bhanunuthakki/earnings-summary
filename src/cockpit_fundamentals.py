@@ -583,16 +583,18 @@ def materialize_fundamentals(
     """Atomically replace the cache only after a complete canonical read.
 
     The cache records the canonical revision it was read at, in the same read
-    transaction, so readers can reject it once canonical facts change.
+    transaction, so readers can reject it once canonical facts change. It reads
+    only committed state: inside a caller's open transaction it could publish
+    facts that are later rolled back.
     """
-    owns_snapshot = not conn.in_transaction
+    if conn.in_transaction:
+        raise ValueError("cockpit fundamentals must be materialized from committed state")
     try:
-        if owns_snapshot:
-            conn.execute("BEGIN")
+        conn.execute("BEGIN")
         source_revision = list(canonical_financial_revision(conn))
         snapshot = compute_snapshot(conn, cutoff=cutoff)
     finally:
-        if owns_snapshot and conn.in_transaction:
+        if conn.in_transaction:
             conn.rollback()
     payload: dict[str, object] = {
         **cache_metadata(_CACHE_SCHEMA, now=snapshot.cutoff),

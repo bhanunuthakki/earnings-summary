@@ -68,7 +68,13 @@ def current_evidence_revision(conn: sqlite3.Connection) -> tuple[object, ...]:
 
 def canonical_financial_revision(conn: sqlite3.Connection) -> tuple[object, ...]:
     """Return coordinates that change whenever governed fact capture or
-    canonical resolution can change a canonical financial read."""
+    canonical resolution can change a canonical financial read.
+
+    Every table here is append-only by database trigger, so an in-place edit
+    or delete cannot leave the coordinates unchanged. Replacing the database
+    file (for example a snapshot restore) is outside this guarantee; refresh
+    derived caches after such an operator action.
+    """
 
     row = conn.execute(
         "SELECT "
