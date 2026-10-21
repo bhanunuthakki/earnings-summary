@@ -1596,7 +1596,7 @@ def _seal_complete_snapshots(
 def _pdf_table_scope_predicate(alias: str = "") -> str:
     prefix = alias + "." if alias else ""
     return (
-        f" AND ({prefix}processing_lane!='pdf_table' OR "
+        f" AND ({prefix}processing_lane!='pdf_table' OR "  # nosec B608 -- prefix is a fixed internal alias
         f"json_extract({prefix}source_state_json,'$.report_pdf_table_scope.scope_sha256') IS "
         "(SELECT json_extract(value,'$.scope_sha256') FROM json_each(?) "
         f"WHERE json_extract(value,'$.document_version_id')={prefix}document_version_id)) "
@@ -1632,13 +1632,13 @@ def _obligation_rows(
         limit_sql = " LIMIT ?"
         parameters.append(limit)
     return conn.execute(
-        "SELECT * FROM document_processing_obligation_revisions "
+        "SELECT * FROM document_processing_obligation_revisions "  # nosec B608 -- fixed fragments; values are bound
         "WHERE datetime(knowledge_at)<=datetime(?) "
         "AND datetime(recorded_at)<=datetime(?) "
         "AND document_version_id IN (SELECT value FROM json_each(?)) "
         "AND (?=0 OR processing_lane!='filing_xbrl') "
         + _pdf_table_scope_predicate()
-        + f"{after_sql} ORDER BY processing_obligation_revision_id{limit_sql}",  # nosec B608 -- fixed fragments; values are bound
+        + f"{after_sql} ORDER BY processing_obligation_revision_id{limit_sql}",
         tuple(parameters),
     ).fetchall()
 
@@ -1681,7 +1681,7 @@ def _obligation_totals(
     if not document_version_ids:
         return counts
     for row in conn.execute(
-        "SELECT applicability,COUNT(*) "
+        "SELECT applicability,COUNT(*) "  # nosec B608 -- fixed predicate fragment; values are bound
         "FROM document_processing_obligation_revisions "
         "WHERE datetime(knowledge_at)<=datetime(?) "
         "AND datetime(recorded_at)<=datetime(?) "
@@ -1714,7 +1714,7 @@ def _sealed_disposition_count(
         return 0
     return int(
         conn.execute(
-            "SELECT COUNT(DISTINCT header.processing_obligation_revision_id) "
+            "SELECT COUNT(DISTINCT header.processing_obligation_revision_id) "  # nosec B608 -- fixed predicate fragment; values are bound
             "FROM document_processing_disposition_headers header "
             "JOIN document_processing_obligation_revisions obligation "
             "ON obligation.processing_obligation_revision_id="
