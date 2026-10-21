@@ -273,6 +273,41 @@ def test_verify_draft_binds_operands_numerically_and_chains_results(db: Path, re
     assert results[1]["status"] == "pass"
 
 
+def test_operand_binding_uses_readable_text_and_exact_values(db: Path, repo: Path) -> None:
+    session = ResearchToolSession(db_path=db, repo_root=repo)
+    session.ledger.extend(
+        [_item(1, "fact", "x", "Revenue &#53;"), _item(2, "fact", "y", "Revenue 5.0")]
+    )
+    entity = [
+        {"expression": "a * 2", "operands": {"a": "53"}, "displayed_value": "106", "decimals": 0}
+    ]
+    near = "5.0000000000000000000000000001"
+    rounding = [
+        {
+            "expression": "(a - 5) * 10000000000000000000000000000",
+            "operands": {"a": near},
+            "displayed_value": "1",
+            "decimals": 0,
+        }
+    ]
+    equal = [
+        {"expression": "a * 2", "operands": {"a": "5"}, "displayed_value": "10", "decimals": 0}
+    ]
+    results = _verified(
+        session,
+        [
+            {"text": "Revenue was 106 [1].", "cites": [1], "derived": entity},
+            {"text": "Gap 1 [2].", "cites": [2], "derived": rounding},
+            {"text": "Twice revenue is 10 [2].", "cites": [2], "derived": equal},
+        ],
+    )
+    assert [r.get("reason", r["status"]) for r in results] == [
+        "memo_derived_operand_unbound",
+        "memo_derived_operand_unbound",
+        "pass",
+    ]
+
+
 def test_verify_draft_checks_inline_marks_and_short_quotes(db: Path, repo: Path) -> None:
     session = ResearchToolSession(db_path=db, repo_root=repo)
     session.ledger.extend(

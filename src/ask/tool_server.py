@@ -256,14 +256,16 @@ class ResearchToolSession:
 
 
 def _magnitude(token: str) -> Decimal:
+    # copy_abs is exact; abs() and normalize() would round to the context precision.
     try:
-        return abs(Decimal(re.sub(r"[,%$\s]", "", token).strip("()"))).normalize()
+        return Decimal(re.sub(r"[,%$\s]", "", token).strip("()")).copy_abs()
     except InvalidOperation as exc:
         raise MemoClaimSupportError("memo_derived_expression_invalid") from exc
 
 
 def _magnitudes(text: str) -> set[Decimal]:
-    return {_magnitude(token) for token in _NUMBER_TOKEN.findall(text)}
+    """Figures in the readable form the verifier checks, so entities add no digits."""
+    return {_magnitude(token) for token in _NUMBER_TOKEN.findall(readable_source_text(text))}
 
 
 def _check_claim_shape(text: str, cites: tuple[int, ...], cited_texts: list[str]) -> None:
