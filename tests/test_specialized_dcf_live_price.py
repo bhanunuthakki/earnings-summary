@@ -592,11 +592,21 @@ def test_meli_entrypoint_threads_one_observation_through_model_and_persistence(
     monkeypatch.setenv("DCF_MELI_ASSUMPTIONS_PATH", str(artifact_path))
 
     def load_assumptions(
-        _ticker: str, *, db_path: Path, assumptions_path: Path, expected_sha256: str | None = None
+        _ticker: str,
+        *,
+        db_path: Path,
+        assumptions_path: Path,
+        expected_sha256: str | None = None,
+        retained_receipt: ModelInputReceipt | None = None,
+        verification_output: Path | None = None,
     ) -> tuple[meli.Assum, ModelInputReceipt]:
         assert db_path == db
         assert assumptions_path == artifact_path
         assert expected_sha256 is None
+        assert retained_receipt == proof
+        assert verification_output == (tmp_path / "staged.xlsx").with_suffix(
+            ".xlsx.input-verification.json"
+        )
         return assumptions, proof
 
     def resolve_price(
@@ -618,8 +628,10 @@ def test_meli_entrypoint_threads_one_observation_through_model_and_persistence(
         _mirror: meli.Mirror,
         _destination: Path,
         _holdings: dict[str, object] | None = None,
+        **kwargs: object,
     ) -> None:
-        return None
+        assert kwargs["input_receipt"] is proof
+        assert kwargs["cases"] is cases
 
     def capture_persist(
         model_inputs: meli.Assum,
@@ -634,6 +646,20 @@ def test_meli_entrypoint_threads_one_observation_through_model_and_persistence(
         captured.append((model_inputs.price, price_observation))
         return True
 
+    retained = tmp_path / "retained-input.json"
+    retained.write_text(proof.model_dump_json(), encoding="utf-8")
+    monkeypatch.setenv("DCF_MELI_INPUT_RECEIPT_PATH", str(retained))
+    acceptance_path = tmp_path / "scenario-acceptance.json"
+    acceptance_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("DCF_MELI_SCENARIO_ACCEPTANCE_PATH", str(acceptance_path))
+    cases = {"bear": assumptions, "base": assumptions, "bull": assumptions}
+
+    def reviewed_cases(*args: object, **kwargs: object) -> tuple[dict[str, meli.Assum], None]:
+        assert args[2] is proof
+        assert kwargs["scenario_acceptance_path"] == acceptance_path
+        return cases, None
+
+    monkeypatch.setattr(meli, "load_reviewed_cases", reviewed_cases)
     monkeypatch.setattr(meli, "load_verified_assumptions", load_assumptions)
     monkeypatch.setattr(meli, "resolve_specialized_price", resolve_price)
     monkeypatch.setattr(meli, "_load_holdings", no_holdings)

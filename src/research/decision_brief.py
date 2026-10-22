@@ -22,17 +22,22 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 from dcf.grade_evidence import load_dcf_verification_evidence
 from dcf.input_evidence import ModelInputReceipt, SourceReadContext, verify_source_coverage
 from dcf.readiness import load_valuation_readiness
+from provenance.canonical_fact_resolution import MAX_DERIVATION_DEPTH, MAX_DERIVATION_NODES
 from provenance.evidence_native_candidates import (
     resolve_local_storage_uri,
     select_evidence_native_candidates_by_id,
 )
+from provenance.fact_read_model import FactReadModel
 from provenance.immutable_artifact import (
     canonical_text_artifact_sha256,
     publish_text_no_clobber,
     read_stable_artifact,
 )
 from provenance.issuer_registry import IssuerRegistry
-from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
+from provenance.research_snapshot import (
+    ResearchSnapshotRequest,
+    verify_research_snapshot,
+)
 from provenance.sec_filing_xbrl_ingest import file_uri_path
 from report.artifacts import ReportArtifactRef, validate_report_artifact_path
 from report.legacy_body import extract_legacy_reader_body
@@ -49,11 +54,33 @@ from research.memo_claim_support import (
     verify_reported_memo_claim,
 )
 from research.memo_model_evidence import (
-    MemoModelCommitment,
+    MemoModelCommitmentReference,
     MemoModelEvidenceError,
-    MemoModelValue,
+    MemoModelValueReference,
+    VerifiedMeliMemoModel,
+    VerifiedMemoModel,
     load_verified_memo_model,
 )
+from research.memo_report_evidence import (
+    DecisionBriefReadiness,
+    MemoReportEvidencePopulation,
+    verify_memo_report_evidence,
+)
+from research.nu_earnings_evidence import (
+    NuEarningsEvidenceError,
+    NuFinancialComparison,
+    NuHistoricalEarningsContext,
+    load_nu_pre_brief,
+    verify_nu_comparison_operands,
+    verify_nu_historical_context,
+    verify_nu_inference_anchors,
+    verify_nu_post_baselines,
+)
+from search.canonical_fact_projection import (
+    admit_canonical_projection_for_read,
+    read_canonical_facts_by_id,
+)
+from search.request_verification import RequestVerificationCache
 from sources.report_financials import (
     FinancialEvidenceReference,
     FinancialTableCell,
@@ -103,9 +130,31 @@ class MemoScopedSupport(_Closed):
     values: tuple[MemoReportedValue, ...] = ()
 
 
+class MemoObservationReference(_Closed):
+    """Exact generic fact identity within the report's sealed financial projection."""
+
+    observation_id: str = Field(min_length=1, max_length=128)
+    canonical_metric_cell_id: str = Field(min_length=1, max_length=128)
+    canonical_resolution_revision_id: str = Field(min_length=1, max_length=128)
+    metric_definition_revision_id: str = Field(min_length=1, max_length=128)
+
+
+class MemoObservationSum(_Closed):
+    """Signed monetary sum; the shared reader supplies values in currency millions."""
+
+    operands: tuple[MemoObservationReference, ...] = Field(min_length=2, max_length=8)
+    displayed_value: str
+    display_format: Literal["number1", "number2"]
+    currency: Literal["USD"] = "USD"
+    display_unit: Literal["millions"] = "millions"
+
+
 class ReviewedMemoClaimV2(ReviewedMemoClaim):
     supporting_evidence: tuple[MemoScopedSupport, ...] = ()
-    model_values: tuple[MemoModelValue, ...] = ()
+    model_values: tuple[MemoModelValueReference, ...] = ()
+    observation_sum: MemoObservationSum | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     # Analyst prose cites short verbatim excerpts; the whole node stays in the
     # report's evidence section. Omitted when empty to keep earlier hashes.
     excerpts: tuple[MemoSourceExcerpt, ...] = Field(default=(), exclude_if=lambda value: not value)
@@ -226,12 +275,12 @@ def memo_reader_blocks(body_html: str) -> tuple[MemoReaderBlock, ...]:
             "Business drivers",
             "What to track",
             "PRE scorecard",
-            "Next quarter",
-            "Baseline financials",
-            "Bear case",
             "Valuation and model",
             "Model and baseline",
             "Model values",
+            "Next quarter",
+            "Baseline financials",
+            "Bear case",
             "Questions for the print",
             "Calculations",
             "Evidence",
@@ -268,8 +317,16 @@ def verify_memo_claim_population(
             raise MemoEvidenceError("memo_inference_not_distinguished_in_reader")
         if claim.kind == "calculation":
             model_values = claim.model_values if isinstance(claim, ReviewedMemoClaimV2) else ()
+            observation_sum = (
+                claim.observation_sum if isinstance(claim, ReviewedMemoClaimV2) else None
+            )
             derived = claim.derived_values if isinstance(claim, ReviewedMemoClaimV2) else ()
-            if claim.calculation is None and not model_values and not derived:
+            if (
+                claim.calculation is None
+                and not model_values
+                and observation_sum is None
+                and not derived
+            ):
                 raise MemoEvidenceError("memo_calculation_reconstruction_missing")
             if derived:
                 # Operand binding and replay run against retained evidence later.
@@ -279,6 +336,7 @@ def verify_memo_claim_population(
                     claim.passage,
                     (
                         *((claim.calculation.displayed_value,) if claim.calculation else ()),
+                        *((observation_sum.displayed_value,) if observation_sum else ()),
                         *(value.displayed_value for value in model_values),
                         *(value.displayed_value for value in claim.values),
                         *(
@@ -335,10 +393,62 @@ def _read_memo_financial_cell(
     return cell
 
 
-def _require_supported_memo_pdf_scope(snapshot: ResearchSnapshotRequest) -> None:
+def _verify_report_pdf_node(
+    conn: sqlite3.Connection, node_id: str, snapshot: ResearchSnapshotRequest
+) -> None:
     analysis = snapshot.research_universe.analysis_scope
-    if analysis is not None and analysis.request.report_pdf_tables:
-        raise MemoEvidenceError("memo_report_pdf_scope_unsupported")
+    scopes = () if analysis is None else analysis.request.report_pdf_tables
+    if not scopes:
+        return
+    row = conn.execute(
+        "SELECT run.document_version_id,node.locator_json FROM evidence_nodes node "
+        "JOIN evidence_extraction_runs run USING(extraction_run_id) WHERE node.node_id=?",
+        (node_id,),
+    ).fetchone()
+    if row is None:
+        raise MemoEvidenceError("memo_report_pdf_anchor_missing")
+    for scope in scopes:
+        if scope.document_version_id != str(row[0]):
+            continue
+        page_number = json.loads(str(row[1])).get("page_number")
+        if type(page_number) is not int or not 1 <= page_number <= len(scope.pages):
+            raise MemoEvidenceError("memo_report_pdf_anchor_page_unknown")
+        if scope.pages[page_number - 1].table_requirement != "required":
+            raise MemoEvidenceError("memo_report_deferred_pdf_page_used")
+
+
+def _verify_report_pdf_observation(
+    conn: sqlite3.Connection,
+    observation_id: str,
+    snapshot: ResearchSnapshotRequest,
+    *,
+    cutoff: datetime,
+) -> None:
+    analysis = snapshot.research_universe.analysis_scope
+    if analysis is None or not analysis.request.report_pdf_tables:
+        return
+    pending = [(observation_id, frozenset[str]())]
+    verified: set[str] = set()
+    reader = FactReadModel(conn)
+    while pending:
+        identity, ancestors = pending.pop()
+        if identity in ancestors or len(ancestors) >= MAX_DERIVATION_DEPTH:
+            raise MemoEvidenceError("memo_report_source_derivation_cycle_or_depth")
+        if identity in verified:
+            continue
+        verified.add(identity)
+        if len(verified) > MAX_DERIVATION_NODES:
+            raise MemoEvidenceError("memo_report_source_derivation_node_limit")
+        bundle = reader.provenance_bundle(identity, cutoff=cutoff)
+        if bundle.evidence is not None:
+            _verify_report_pdf_node(conn, bundle.evidence.evidence_node_id, snapshot)
+        elif bundle.derivation is None:
+            raise MemoEvidenceError("memo_report_source_leaf_unavailable")
+        if bundle.derivation is not None:
+            pending.extend(
+                (source, ancestors | {identity})
+                for source in bundle.derivation.input_observation_ids
+            )
 
 
 def verify_memo_snapshot_reference(
@@ -348,7 +458,14 @@ def verify_memo_snapshot_reference(
     ticker: str,
     cutoff: datetime,
 ) -> None:
-    _require_supported_memo_pdf_scope(snapshot)
+    _verify_report_pdf_observation(conn, reference.observation_id, snapshot, cutoff=reference.as_of)
+    observed = reference.resolution_observed_through
+    if observed is not None and (
+        reference.as_of != snapshot.cutoff_at
+        or observed != snapshot.recorded_at
+        or observed > cutoff
+    ):
+        raise MemoEvidenceError("memo_financial_resolution_observation_clock_mismatch")
     cell = _read_memo_financial_cell(
         conn, reference.model_copy(update={"as_of": snapshot.cutoff_at})
     )
@@ -377,7 +494,107 @@ def verify_memo_snapshot_reference(
         raise MemoEvidenceError("memo_financial_evidence_outside_exact_snapshot")
 
 
-def verify_memo_calculation(conn: sqlite3.Connection, calculation: MemoCalculation) -> None:
+def read_memo_observation_sum(
+    conn: sqlite3.Connection,
+    operands: tuple[MemoObservationReference, ...],
+    snapshot: ResearchSnapshotRequest,
+) -> Decimal:
+    """Sum exact admitted reported monetary facts in signed USD millions.
+
+    The caller admits the complete research snapshot. This boundary replays its
+    financial projection and source lineage; it creates no metric or alias.
+    """
+    if not 2 <= len(operands) <= 8 or len({ref.observation_id for ref in operands}) != len(
+        operands
+    ):
+        raise MemoEvidenceError("memo_observation_sum_duplicate_or_invalid_operands")
+    verification = RequestVerificationCache(conn)
+    generation = admit_canonical_projection_for_read(
+        conn, snapshot.canonical_fact_projection_run_id, verification
+    )
+    if (
+        generation.cutoff_at != snapshot.cutoff_at
+        or generation.recorded_at != snapshot.recorded_at
+        or generation.ontology_snapshot_id != snapshot.ontology_snapshot_id
+        or generation.resolution_snapshot_id != snapshot.canonical_fact_resolution_snapshot_id
+    ):
+        raise MemoEvidenceError("memo_observation_sum_snapshot_identity_mismatch")
+    hits = read_canonical_facts_by_id(
+        conn,
+        generation_id=generation.generation_id,
+        canonical_metric_cell_ids=tuple(ref.canonical_metric_cell_id for ref in operands),
+        verification=verification,
+    )
+    values: list[Decimal] = []
+    identities: list[tuple[object, ...]] = []
+    for ref, hit in zip(operands, hits, strict=True):
+        if hit is None or any(
+            hit.lineage[key] != expected
+            for key, expected in (
+                ("selected_observation_id", ref.observation_id),
+                ("canonical_resolution_revision_id", ref.canonical_resolution_revision_id),
+                ("metric_definition_revision_id", ref.metric_definition_revision_id),
+            )
+        ):
+            raise MemoEvidenceError("memo_observation_sum_operand_identity_mismatch")
+        bundle = FactReadModel(conn).provenance_bundle(
+            ref.observation_id, cutoff=snapshot.cutoff_at
+        )
+        cell, value = bundle.cell, bundle.observation
+        if (
+            cell.reporting_entity_id not in snapshot.research_universe.reporting_entity_ids
+            or bundle.evidence is None
+            or bundle.evidence.document_version_id
+            not in snapshot.research_universe.document_version_ids
+            or value.observation_kind != "reported"
+            or value.decimal_value is None
+            or not value.decimal_value.is_finite()
+            or hit.value_kind != "numeric"
+            or hit.canonical_value is None
+            or Decimal(hit.canonical_value) != value.decimal_value
+            or cell.accounting_basis not in {"ifrs", "us_gaap"}
+            or cell.consolidation_scope == "other"
+            or cell.currency != "USD"
+            or cell.unit_key != "USD"
+        ):
+            raise MemoEvidenceError("memo_observation_sum_source_scope_mismatch")
+        _verify_report_pdf_observation(
+            conn, ref.observation_id, snapshot, cutoff=snapshot.cutoff_at
+        )
+        identities.append(
+            (
+                cell.reporting_entity_id,
+                cell.scope_security_id,
+                cell.accounting_basis,
+                cell.consolidation_scope,
+                cell.period_kind,
+                cell.period_start,
+                cell.period_end,
+                cell.dimensions,
+            )
+        )
+        values.append(value.decimal_value / Decimal(1000000))
+    if any(identity != identities[0] for identity in identities[1:]):
+        raise MemoEvidenceError("memo_observation_sum_semantic_scope_mismatch")
+    return sum(values, Decimal(0))
+
+
+def verify_memo_observation_sum(
+    conn: sqlite3.Connection, calculation: MemoObservationSum, snapshot: ResearchSnapshotRequest
+) -> None:
+    calculation = MemoObservationSum.model_validate(calculation.model_dump())
+    value = read_memo_observation_sum(conn, calculation.operands, snapshot)
+    expected = format(value, ".1f" if calculation.display_format == "number1" else ".2f")
+    if expected != calculation.displayed_value:
+        raise MemoEvidenceError("memo_observation_sum_value_mismatch")
+
+
+def verify_memo_calculation(
+    conn: sqlite3.Connection,
+    calculation: MemoCalculation,
+    *,
+    nu_comparison: NuFinancialComparison | None = None,
+) -> None:
     cells = [_read_memo_financial_cell(conn, reference) for reference in calculation.operands]
     if any(cell is None or cell.display_value is None for cell in cells):
         raise MemoEvidenceError("memo_calculation_operand_unavailable")
@@ -397,7 +614,11 @@ def verify_memo_calculation(conn: sqlite3.Connection, calculation: MemoCalculati
     }
     if len(identities) != 1:
         raise MemoEvidenceError("memo_calculation_semantic_scope_mismatch")
-    if (
+    if nu_comparison is not None:
+        verify_nu_comparison_operands(
+            conn, nu_comparison, calculation, tuple(cell for cell in cells if cell is not None)
+        )
+    if nu_comparison is None and (
         calculation.operation == "growth"
         and len(
             {
@@ -451,7 +672,7 @@ def verify_memo_snapshot_node(
     snapshot: ResearchSnapshotRequest,
     cutoff: datetime,
 ) -> None:
-    _require_supported_memo_pdf_scope(snapshot)
+    _verify_report_pdf_node(conn, node_id, snapshot)
     processing_snapshot_ids = json.dumps(snapshot.processing_snapshot_ids)
     row = conn.execute(
         "SELECT node.recorded_at,run.outcome,run.document_version_id FROM evidence_nodes node "
@@ -506,6 +727,9 @@ class MemoContextReview(_Closed):
     reviewer: str = Field(min_length=1)
     reviewed_at: AwareDatetime
     rationale: str = Field(min_length=20)
+    report_evidence: MemoReportEvidencePopulation | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class MemoSupportingContext(_Closed):
@@ -526,8 +750,14 @@ class MemoContextReviewV2(_Closed):
     reviewer: str = Field(min_length=1)
     reviewed_at: AwareDatetime
     rationale: str = Field(min_length=20)
+    report_evidence: MemoReportEvidencePopulation | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     supporting_contexts: tuple[MemoSupportingContext, ...] = Field(default=(), max_length=8)
-    model: MemoModelCommitment | None = None
+    model: MemoModelCommitmentReference | None = None
+    earnings: NuHistoricalEarningsContext | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     owner_thesis: MemoOwnerThesis | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -536,6 +766,13 @@ class MemoContextReviewV2(_Closed):
     def distinct_contexts(self) -> MemoContextReviewV2:
         if self.owner_thesis is None and any(claim.owner_thesis_excerpts for claim in self.claims):
             raise ValueError("owner_thesis_excerpt_without_pinned_thesis")
+        if self.earnings is not None and (
+            self.model is not None
+            or self.supporting_contexts
+            or self.report_evidence is not None
+            or any(claim.model_values or claim.supporting_evidence for claim in self.claims)
+        ):
+            raise ValueError("nu_qualitative_earnings_cannot_claim_model_or_other_contexts")
         ids = tuple(context.context_id for context in self.supporting_contexts)
         snapshots = tuple(context.research_snapshot_id for context in self.supporting_contexts)
         if (
@@ -556,8 +793,8 @@ def parse_memo_context_review(raw: str | bytes) -> MemoContextReview | MemoConte
     if not isinstance(payload, dict):
         raise ValueError("memo_context_review_object_required")
     if "schema_version" not in payload:
-        return MemoContextReview.model_validate(payload)
-    return MemoContextReviewV2.model_validate(payload)
+        return MemoContextReview.model_validate_json(raw)
+    return MemoContextReviewV2.model_validate_json(raw)
 
 
 def verify_memo_supporting_context(
@@ -666,25 +903,6 @@ def verify_memo_composed_source_bytes(
     return len(all_ids)
 
 
-class DecisionBriefReadiness(_Closed):
-    schema_version: Literal["decision_brief_readiness.v1"] = "decision_brief_readiness.v1"
-    artifact_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,191}$")
-    ticker: str = Field(pattern=r"^[A-Z][A-Z0-9.-]{0,31}$")
-    body_sha256: str | None
-    evaluated_at: AwareDatetime
-    status: Literal["verified", "degraded"] = "degraded"
-    decision_grade: bool = False
-    reason_codes: tuple[str, ...]
-    research_snapshot_id: str | None = None
-    snapshot_member_sha256: str | None = None
-    financial_reference_count: int = 0
-    reconstructed_document_count: int = 0
-    valuation_run_id: int | None = None
-    context_review_sha256: str | None = None
-    # Approval-bound portfolio fit and allocation are separate authorities.
-    owner_thesis_required: Literal[False] = False
-
-
 def _sha(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
@@ -727,6 +945,275 @@ def _raw_documents(conn: sqlite3.Connection, document_ids: tuple[str, ...]) -> i
     return len(document_ids)
 
 
+def _verify_nu_earnings(
+    conn: sqlite3.Connection,
+    *,
+    repo_root: Path,
+    artifact: ReportArtifactRef,
+    review: MemoContextReviewV2,
+    snapshot: ResearchSnapshotRequest,
+    verified_claim_ids: frozenset[str],
+    source_context: SourceReadContext | None,
+) -> None:
+    context = review.earnings
+    if context is None:
+        raise NuEarningsEvidenceError("nu_earnings_context_required")
+    verify_nu_inference_anchors(context, review.claims, verified_claim_ids)
+    if context.phase == "pre":
+        return
+    commitment = context.pre_brief
+    if commitment is None:
+        raise NuEarningsEvidenceError("nu_post_pre_commitment_required")
+    pre_artifact, raw_review, pre_readiness = load_nu_pre_brief(repo_root, commitment)
+    pre_review = parse_memo_context_review(raw_review)
+    if (
+        not isinstance(pre_review, MemoContextReviewV2)
+        or pre_review.earnings is None
+        or pre_review.earnings.phase != "pre"
+        or pre_review.earnings.public_cutoff_at != commitment.public_cutoff_at
+        or commitment.public_cutoff_at >= context.public_cutoff_at
+        or pre_artifact.generated_at >= artifact.generated_at
+        or pre_review.reviewed_at > artifact.generated_at
+        or pre_readiness.evaluated_at >= snapshot.cutoff_at
+        or pre_readiness.context_review_sha256 != _sha(pre_review.model_dump_json().encode())
+    ):
+        raise NuEarningsEvidenceError("nu_post_pre_knowledge_order_or_commitment_mismatch")
+    # The loaded review must be PRE, whose closed schema forbids another baseline.
+    # This replays every shared gate rather than trusting a caller's "sealed" label.
+    replayed = _assess_decision_brief(
+        conn,
+        repo_root=repo_root,
+        artifact=pre_artifact,
+        as_of=pre_readiness.evaluated_at,
+        context_review=pre_review,
+        source_context=source_context,
+    )
+    if replayed.model_dump() != pre_readiness.model_dump():
+        raise NuEarningsEvidenceError("nu_post_pre_verification_replay_mismatch")
+    verify_nu_post_baselines(conn, context, review.claims, verified_claim_ids, pre_review.claims)
+
+
+def verify_memo_claims(
+    conn: sqlite3.Connection,
+    *,
+    review: MemoContextReview | MemoContextReviewV2,
+    snapshot: ResearchSnapshotRequest,
+    ticker: str,
+    snapshots: dict[str, tuple[ResearchSnapshotRequest, str]],
+    supporting_contexts: dict[str, MemoSupportingContext],
+    used_contexts: set[str],
+    cutoff: datetime,
+    verified_model: VerifiedMemoModel | VerifiedMeliMemoModel | None,
+    earnings: NuHistoricalEarningsContext | None,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Replay the shared claim gates for ordinary and historical reports."""
+    verified_claim_ids: set[str] = set()
+    verified_model_claim_ids: set[str] = set()
+    for claim in review.claims:
+        scoped_support = claim.supporting_evidence if isinstance(claim, ReviewedMemoClaimV2) else ()
+        model_values = claim.model_values if isinstance(claim, ReviewedMemoClaimV2) else ()
+        observation_sum = claim.observation_sum if isinstance(claim, ReviewedMemoClaimV2) else None
+        excerpts = claim.excerpts if isinstance(claim, ReviewedMemoClaimV2) else ()
+        if claim.kind not in {"analyst_inference", "presentation"} and not (
+            excerpts
+            or claim.evidence_node_ids
+            or claim.financial_references
+            or claim.calculation
+            or claim.values
+            or scoped_support
+            or model_values
+            or observation_sum
+        ):
+            raise MemoEvidenceError("memo_reported_claim_support_missing")
+        for node_id in claim.evidence_node_ids:
+            verify_memo_snapshot_node(conn, node_id, snapshot, cutoff)
+        claim_references = (
+            claim.financial_references
+            + (claim.calculation.operands if claim.calculation else ())
+            + tuple(value.reference for value in claim.values)
+        )
+        for reference in claim_references:
+            verify_memo_snapshot_reference(conn, reference, snapshot, ticker, cutoff)
+        all_nodes = list(claim.evidence_node_ids)
+        all_values = list(claim.values)
+        for support in scoped_support:
+            if support.context_id not in supporting_contexts:
+                raise MemoEvidenceError("memo_claim_context_unknown")
+            if not (support.evidence_node_ids or support.financial_references or support.values):
+                raise MemoEvidenceError("memo_claim_context_support_empty")
+            used_contexts.add(support.context_id)
+            context_snapshot, context_ticker = snapshots[support.context_id]
+            for node_id in support.evidence_node_ids:
+                _verify_report_pdf_node(conn, node_id, snapshot)
+                verify_memo_snapshot_node(conn, node_id, context_snapshot, cutoff)
+            for reference in support.financial_references + tuple(
+                value.reference for value in support.values
+            ):
+                _verify_report_pdf_observation(
+                    conn, reference.observation_id, snapshot, cutoff=reference.as_of
+                )
+                verify_memo_snapshot_reference(
+                    conn, reference, context_snapshot, context_ticker, cutoff
+                )
+            all_nodes.extend(support.evidence_node_ids)
+            all_values.extend(support.values)
+        if claim.calculation is not None:
+            comparison = (
+                next(
+                    (
+                        item
+                        for item in earnings.comparisons
+                        if item.claim_block_id == claim.block_id
+                    ),
+                    None,
+                )
+                if earnings is not None
+                else None
+            )
+            if comparison is None:
+                verify_memo_calculation(conn, claim.calculation)
+            else:
+                verify_memo_calculation(conn, claim.calculation, nu_comparison=comparison)
+        calculated_values = (claim.calculation.displayed_value,) if claim.calculation else ()
+        if observation_sum is not None:
+            if claim.kind != "calculation":
+                raise MemoEvidenceError("memo_observation_sum_claim_kind_mismatch")
+            verify_memo_observation_sum(conn, observation_sum, snapshot)
+            calculated_values += (observation_sum.displayed_value,)
+        if model_values:
+            if verified_model is None:
+                raise MemoEvidenceError("memo_model_reference_population_mismatch")
+            calculated_values += tuple(verified_model.display(value) for value in model_values)
+            verified_model_claim_ids.add(claim.block_id)
+        derived = claim.derived_values if isinstance(claim, ReviewedMemoClaimV2) else ()
+        for excerpt in excerpts:
+            for node_id in excerpt.evidence_node_ids:
+                verify_memo_snapshot_node(conn, node_id, snapshot, cutoff)
+        if (
+            isinstance(claim, ReviewedMemoClaimV2)
+            and claim.owner_thesis_excerpts
+            and claim.kind not in {"calculation", "analyst_inference"}
+        ):
+            # The owner's thesis frames analysis; it never supports a reported fact.
+            raise MemoEvidenceError("memo_owner_thesis_claim_kind_mismatch")
+        if claim.kind == "analyst_inference" or derived:
+            # Analyst prose: quoted spans and figures must bind to cited support.
+            if derived and claim.kind not in {"calculation", "analyst_inference"}:
+                raise MemoEvidenceError("memo_derived_claim_kind_mismatch")
+            try:
+                thesis = review.owner_thesis if isinstance(review, MemoContextReviewV2) else None
+                owner = (
+                    claim.owner_thesis_excerpts if isinstance(claim, ReviewedMemoClaimV2) else ()
+                )
+                verify_memo_analysis_text(
+                    claim.passage,
+                    (
+                        *(
+                            (
+                                item.text,
+                                tuple(read_evidence_node_texts(conn, item.evidence_node_ids)),
+                            )
+                            for item in excerpts
+                        ),
+                        *((text, (thesis.text,)) for text in owner if thesis is not None),
+                    ),
+                    (
+                        *calculated_values,
+                        *(verified_value_display(conn, value) for value in all_values),
+                    ),
+                    derived,
+                )
+            except MemoClaimSupportError as exc:
+                raise MemoEvidenceError(exc.reason_code) from exc
+        elif claim.kind in {"reported_fact", "management_claim", "calculation"}:
+            try:
+                verify_reported_memo_claim(
+                    conn,
+                    claim.passage,
+                    evidence_node_ids=tuple(all_nodes),
+                    values=tuple(all_values),
+                    calculated_values=calculated_values,
+                )
+            except MemoClaimSupportError as exc:
+                raise MemoEvidenceError(exc.reason_code) from exc
+        verified_claim_ids.add(claim.block_id)
+    return frozenset(verified_claim_ids), frozenset(verified_model_claim_ids)
+
+
+def _verify_report_source_population(
+    conn: sqlite3.Connection,
+    snapshot: ResearchSnapshotRequest,
+    review: MemoContextReview | MemoContextReviewV2,
+    cutoff: datetime,
+) -> None:
+    analysis = snapshot.research_universe.analysis_scope
+    scopes = () if analysis is None else analysis.request.report_pdf_tables
+    if not scopes:
+        return
+    populations = {item.source_population.population_sha256 for item in scopes}
+    if (
+        len(populations) != 1
+        or review.report_evidence is None
+        or (review.report_evidence.source_population_sha256 not in populations)
+    ):
+        raise MemoEvidenceError("memo_report_source_population_mismatch")
+    population = scopes[0].source_population
+    claims = {claim.block_id: claim for claim in review.claims}
+    declared = {item.requirement: item for item in population.requirements}
+    for requirement in population.requirements:
+        for node in requirement.evidence_node_ids:
+            verify_memo_snapshot_node(conn, node, snapshot, cutoff)
+        for observation in requirement.observation_ids:
+            _verify_report_pdf_observation(conn, observation, snapshot, cutoff=snapshot.cutoff_at)
+            if (
+                conn.execute(
+                    "SELECT 1 FROM canonical_fact_resolution_snapshot_members member "
+                    "JOIN canonical_fact_resolution_revisions resolution "
+                    "USING(canonical_resolution_revision_id) WHERE member.resolution_snapshot_id=? "
+                    "AND resolution.selected_observation_id=?",
+                    (snapshot.canonical_fact_resolution_snapshot_id, observation),
+                ).fetchone()
+                is None
+            ):
+                raise MemoEvidenceError("memo_report_source_observation_not_in_snapshot")
+    for table_scope in scopes:
+        all_nodes = {node for item in population.requirements for node in item.evidence_node_ids}
+        all_observations = {
+            value for item in population.requirements for value in item.observation_ids
+        }
+        for page in table_scope.pages:
+            if (
+                not set(page.replacement_evidence_node_ids) <= all_nodes
+                or not set(page.replacement_observation_ids) <= all_observations
+            ):
+                raise MemoEvidenceError("memo_report_pdf_replacement_outside_source_population")
+    for item in review.report_evidence.requirements:
+        sources = declared[item.requirement]
+        source_found = False
+        for identity in item.claim_block_ids:
+            claim = claims[identity]
+            supports = claim.supporting_evidence if isinstance(claim, ReviewedMemoClaimV2) else ()
+            nodes = set(claim.evidence_node_ids)
+            observations = {reference.observation_id for reference in claim.financial_references}
+            observations.update(value.reference.observation_id for value in claim.values)
+            if claim.calculation is not None:
+                observations.update(value.observation_id for value in claim.calculation.operands)
+            if isinstance(claim, ReviewedMemoClaimV2) and claim.observation_sum is not None:
+                observations.update(
+                    value.observation_id for value in claim.observation_sum.operands
+                )
+            for support in supports:
+                nodes.update(support.evidence_node_ids)
+                observations.update(value.observation_id for value in support.financial_references)
+                observations.update(value.reference.observation_id for value in support.values)
+            if nodes.intersection(sources.evidence_node_ids) or observations.intersection(
+                sources.observation_ids
+            ):
+                source_found = True
+        if not source_found:
+            raise MemoEvidenceError("memo_report_requirement_declared_source_unused")
+
+
 def _assess_decision_brief(
     conn: sqlite3.Connection,
     *,
@@ -741,6 +1228,8 @@ def _assess_decision_brief(
         raise ValueError("memo cutoff must have a timezone")
     cutoff = as_of.astimezone(UTC)
     reasons: set[str] = set()
+    if artifact.publication_status == "draft_preview":
+        raise MemoEvidenceError("memo_draft_preview_not_accepted")
     body_path = repo_root / (artifact.body_path or "")
     try:
         validate_report_artifact_path(repo_root, body_path)
@@ -812,12 +1301,20 @@ def _assess_decision_brief(
     if not any(context_id == "primary" for context_id, _ref in references):
         reasons.add("memo_canonical_financial_references_missing")
 
+    readiness_profile: Literal["complete_report_evidence/v1"] | None = None
+    report_evidence: MemoReportEvidencePopulation | None = None
+    historical_bounded = False
+    earnings = context_review.earnings if isinstance(context_review, MemoContextReviewV2) else None
+    earnings_verified = False
     snapshot_id = context_review.research_snapshot_id if context_review is not None else None
     member_sha: str | None = None
     reconstructed = 0
     if context_review is None:
         reasons.add("memo_claim_context_review_missing")
     else:
+        if earnings is not None:
+            # Revalidate the external review, including callers that used model_copy.
+            context_review = MemoContextReviewV2.model_validate(context_review.model_dump())
         if (
             context_review.artifact_id != artifact.artifact_id
             or context_review.body_sha256 != artifact.body_sha256
@@ -835,6 +1332,33 @@ def _assess_decision_brief(
             if row is None:
                 raise MemoEvidenceError("memo_research_snapshot_missing")
             snapshot = ResearchSnapshotRequest.model_validate_json(str(row[0]))
+            analysis = snapshot.research_universe.analysis_scope
+            readiness_profile = None if analysis is None else analysis.request.readiness_profile
+            if (
+                analysis is not None
+                and analysis.request.report_pdf_tables
+                and (snapshot.recorded_at > artifact.generated_at)
+            ):
+                raise MemoEvidenceError("memo_report_source_population_not_fixed_before_generation")
+            historical_bounded = (
+                analysis is not None and analysis.request.historical_reconstruction is not None
+            )
+            if earnings is not None:
+                verify_nu_historical_context(earnings, artifact, snapshot)
+            if (
+                historical_bounded
+                and earnings is None
+                and (readiness_profile is None or artifact.ticker != "MELI")
+            ):
+                reasons.add("historical_report_evidence_recipe_absent")
+            if readiness_profile is None and context_review.report_evidence is not None:
+                raise MemoEvidenceError("memo_report_evidence_profile_required")
+            if (
+                earnings is None
+                and readiness_profile is not None
+                and context_review.report_evidence is None
+            ):
+                raise MemoEvidenceError("memo_report_evidence_population_missing")
             if snapshot.recorded_at > cutoff or snapshot.cutoff_at > cutoff:
                 raise MemoEvidenceError("memo_research_snapshot_after_cutoff")
             member_sha = admission.member_set_sha256
@@ -867,6 +1391,9 @@ def _assess_decision_brief(
             verify_memo_section_population(soup, artifact.section_ids)
             for (context_id, _reference_key), reference in references.items():
                 context_snapshot, context_ticker = snapshots[context_id]
+                _verify_report_pdf_observation(
+                    conn, reference.observation_id, snapshot, cutoff=reference.as_of
+                )
                 verify_memo_snapshot_reference(
                     conn, reference, context_snapshot, context_ticker, cutoff
                 )
@@ -888,168 +1415,128 @@ def _assess_decision_brief(
                         as_of=cutoff,
                         source_context=source_context,
                     )
-            for claim in context_review.claims:
-                scoped_support = (
-                    claim.supporting_evidence if isinstance(claim, ReviewedMemoClaimV2) else ()
+            verified_claim_ids, verified_model_claim_ids = verify_memo_claims(
+                conn,
+                review=context_review,
+                ticker=artifact.ticker,
+                snapshot=snapshot,
+                snapshots=snapshots,
+                supporting_contexts=supporting_contexts,
+                used_contexts=used_contexts,
+                cutoff=cutoff,
+                verified_model=verified_model,
+                earnings=earnings,
+            )
+            if isinstance(context_review, MemoContextReviewV2) and earnings is not None:
+                _verify_nu_earnings(
+                    conn,
+                    repo_root=repo_root,
+                    artifact=artifact,
+                    review=context_review,
+                    snapshot=snapshot,
+                    verified_claim_ids=frozenset(verified_claim_ids),
+                    source_context=source_context,
                 )
-                model_values = claim.model_values if isinstance(claim, ReviewedMemoClaimV2) else ()
-                excerpts = claim.excerpts if isinstance(claim, ReviewedMemoClaimV2) else ()
-                derived = claim.derived_values if isinstance(claim, ReviewedMemoClaimV2) else ()
-                if claim.kind not in {"analyst_inference", "presentation"} and not (
-                    excerpts
-                    or claim.evidence_node_ids
-                    or claim.financial_references
-                    or claim.calculation
-                    or claim.values
-                    or scoped_support
-                    or model_values
-                ):
-                    raise MemoEvidenceError("memo_reported_claim_support_missing")
-                for node_id in claim.evidence_node_ids:
-                    verify_memo_snapshot_node(conn, node_id, snapshot, cutoff)
-                for excerpt in excerpts:
-                    for node_id in excerpt.evidence_node_ids:
-                        verify_memo_snapshot_node(conn, node_id, snapshot, cutoff)
-                claim_references = (
-                    claim.financial_references
-                    + (claim.calculation.operands if claim.calculation else ())
-                    + tuple(value.reference for value in claim.values)
+                earnings_verified = True
+            if not earnings_verified:
+                report_evidence = verify_memo_report_evidence(
+                    context_review,
+                    scope_request=None if analysis is None else analysis.request,
+                    ticker=artifact.ticker,
+                    verified_claim_ids=frozenset(verified_claim_ids),
+                    verified_model_claim_ids=frozenset(verified_model_claim_ids),
                 )
-                for reference in claim_references:
-                    verify_memo_snapshot_reference(
-                        conn, reference, snapshot, artifact.ticker, cutoff
-                    )
-                all_nodes = list(claim.evidence_node_ids)
-                all_values = list(claim.values)
-                for support in scoped_support:
-                    if support.context_id not in supporting_contexts:
-                        raise MemoEvidenceError("memo_claim_context_unknown")
-                    if not (
-                        support.evidence_node_ids or support.financial_references or support.values
-                    ):
-                        raise MemoEvidenceError("memo_claim_context_support_empty")
-                    used_contexts.add(support.context_id)
-                    context_snapshot, context_ticker = snapshots[support.context_id]
-                    for node_id in support.evidence_node_ids:
-                        verify_memo_snapshot_node(conn, node_id, context_snapshot, cutoff)
-                    for reference in support.financial_references + tuple(
-                        value.reference for value in support.values
-                    ):
-                        verify_memo_snapshot_reference(
-                            conn, reference, context_snapshot, context_ticker, cutoff
-                        )
-                    all_nodes.extend(support.evidence_node_ids)
-                    all_values.extend(support.values)
-                if claim.calculation is not None:
-                    verify_memo_calculation(conn, claim.calculation)
-                calculated_values = (
-                    (claim.calculation.displayed_value,) if claim.calculation else ()
-                )
-                if model_values:
-                    if verified_model is None:
-                        raise MemoEvidenceError("memo_model_reference_population_mismatch")
-                    calculated_values += tuple(
-                        verified_model.display(value) for value in model_values
-                    )
-                owner = (
-                    claim.owner_thesis_excerpts if isinstance(claim, ReviewedMemoClaimV2) else ()
-                )
-                if owner and claim.kind not in {"calculation", "analyst_inference"}:
-                    # The owner's thesis frames analysis; it never supports a reported fact.
-                    raise MemoEvidenceError("memo_owner_thesis_claim_kind_mismatch")
-                if claim.kind == "analyst_inference" or derived:
-                    # Analyst prose: quoted spans and figures must bind to cited support.
-                    if derived and claim.kind not in {"calculation", "analyst_inference"}:
-                        raise MemoEvidenceError("memo_derived_claim_kind_mismatch")
-                    thesis = (
-                        context_review.owner_thesis
-                        if isinstance(context_review, MemoContextReviewV2)
-                        else None
-                    )
-                    try:
-                        verify_memo_analysis_text(
-                            claim.passage,
-                            (
-                                *(
-                                    (
-                                        item.text,
-                                        tuple(
-                                            read_evidence_node_texts(conn, item.evidence_node_ids)
-                                        ),
-                                    )
-                                    for item in excerpts
-                                ),
-                                *((text, (thesis.text,)) for text in owner if thesis is not None),
-                            ),
-                            (
-                                *calculated_values,
-                                *(verified_value_display(conn, value) for value in all_values),
-                            ),
-                            derived,
-                        )
-                    except MemoClaimSupportError as exc:
-                        raise MemoEvidenceError(exc.reason_code) from exc
-                elif claim.kind in {"reported_fact", "management_claim", "calculation"}:
-                    try:
-                        verify_reported_memo_claim(
-                            conn,
-                            claim.passage,
-                            evidence_node_ids=tuple(all_nodes),
-                            values=tuple(all_values),
-                            calculated_values=calculated_values,
-                        )
-                    except MemoClaimSupportError as exc:
-                        raise MemoEvidenceError(exc.reason_code) from exc
+                _verify_report_source_population(conn, snapshot, context_review, cutoff)
             if used_contexts != set(supporting_contexts):
                 raise MemoEvidenceError("memo_supporting_context_population_mismatch")
         except MemoEvidenceError as exc:
             reasons.add(exc.reason_code)
+        except NuEarningsEvidenceError as exc:
+            reasons.add(exc.reason_code)
         except MemoModelEvidenceError as exc:
+            reasons.add(exc.reason_code)
+        except MemoClaimSupportError as exc:
             reasons.add(exc.reason_code)
         except (ValueError, RuntimeError, sqlite3.Error, OSError):
             reasons.add("memo_source_context_reconstruction_failed")
 
-    valuation = load_valuation_readiness(
-        conn, artifact.ticker, as_of=cutoff, purpose="analyst_memo", source_context=source_context
-    )
-    if not valuation.ready:
-        reasons.update(f"valuation_{reason}" for reason in valuation.reason_codes)
-        if not valuation.reason_codes:
-            reasons.add("memo_valuation_not_verified")
-    # The memo and valuation must use one source universe. A sealed but
-    # unrelated current model cannot certify this report's evidence.
-    try:
-        grade = load_dcf_verification_evidence(conn, artifact.ticker)
-        receipt_raw = (grade.provenance or {}).get("model_input_receipt")
-        if receipt_raw is None:
-            raise MemoEvidenceError("memo_model_input_receipt_missing")
-        receipt = ModelInputReceipt.model_validate(receipt_raw)
-        if snapshot_id != receipt.request.research_snapshot_id:
-            raise MemoEvidenceError("memo_model_source_universe_mismatch")
-        verified, verified_member_sha, _inventories = verify_source_coverage(
-            conn, receipt.request, cutoff
+    valuation_run_id: int | None = None
+    if not earnings_verified:
+        valuation = load_valuation_readiness(
+            conn,
+            artifact.ticker,
+            as_of=cutoff,
+            purpose="analyst_memo",
+            source_context=source_context,
         )
-        if verified_member_sha != member_sha:
-            raise MemoEvidenceError("memo_model_source_commitment_mismatch")
-        if not verified.research_universe.document_version_ids:
-            raise MemoEvidenceError("memo_model_source_universe_empty")
-    except MemoEvidenceError as exc:
-        reasons.add(exc.reason_code)
-    except (ValueError, RuntimeError, sqlite3.Error):
-        reasons.add("memo_current_source_and_model_closure_unverified")
+        valuation_run_id = valuation.run_id
+        if not valuation.ready:
+            reasons.update(f"valuation_{reason}" for reason in valuation.reason_codes)
+            if not valuation.reason_codes:
+                reasons.add("memo_valuation_not_verified")
+        # Ordinary investment memos retain the exact model/source closure.
+        try:
+            grade = load_dcf_verification_evidence(conn, artifact.ticker)
+            receipt_raw = (grade.provenance or {}).get("model_input_receipt")
+            if receipt_raw is None:
+                raise MemoEvidenceError("memo_model_input_receipt_missing")
+            receipt = ModelInputReceipt.model_validate(receipt_raw)
+            if snapshot_id != receipt.request.research_snapshot_id:
+                raise MemoEvidenceError("memo_model_source_universe_mismatch")
+            verified, verified_member_sha, _inventories = verify_source_coverage(
+                conn, receipt.request, cutoff
+            )
+            if verified_member_sha != member_sha:
+                raise MemoEvidenceError("memo_model_source_commitment_mismatch")
+            for fact in receipt.request.facts.values():
+                _verify_report_pdf_observation(
+                    conn, fact.observation_id, verified, cutoff=verified.cutoff_at
+                )
+            if not verified.research_universe.document_version_ids:
+                raise MemoEvidenceError("memo_model_source_universe_empty")
+        except MemoEvidenceError as exc:
+            reasons.add(exc.reason_code)
+        except (ValueError, RuntimeError, sqlite3.Error):
+            reasons.add("memo_current_source_and_model_closure_unverified")
     return DecisionBriefReadiness(
         artifact_id=artifact.artifact_id,
         ticker=artifact.ticker,
         body_sha256=artifact.body_sha256,
         evaluated_at=cutoff,
         status="degraded" if reasons else "verified",
-        decision_grade=not reasons,
+        decision_grade=not reasons and readiness_profile is None and not historical_bounded,
         reason_codes=tuple(sorted(reasons)),
         research_snapshot_id=snapshot_id,
         snapshot_member_sha256=member_sha,
+        readiness_profile=readiness_profile,
+        readiness_scope="historical_bounded"
+        if historical_bounded
+        else "bounded_report"
+        if readiness_profile is not None
+        else None,
+        joint_mvp_status="not_verified"
+        if readiness_profile is not None or historical_bounded
+        else None,
+        report_evidence_population=report_evidence,
+        report_evidence_recipe=None if report_evidence is None else report_evidence.recipe,
+        report_evidence_sha256=None
+        if report_evidence is None
+        else report_evidence.population_sha256,
+        report_evidence_requirement_count=None
+        if report_evidence is None
+        else len(report_evidence.requirements),
+        scope_limitation=(
+            "Historical NU earnings verification covers the selected public-information set and qualitative valuation only. Whole-issuer decision grade and a joint DCF/workbook qualification are not claimed."
+            if earnings_verified
+            else "Historical reconstruction verifies only the selected public-information set when status is verified. Whole-filing/issuer decision grade and the joint brief, DCF, and recalculated-workbook deliverable remain unverified."
+            if historical_bounded
+            else "Complete selected report evidence is verified only when status is verified; whole filing/issuer coverage and native XBRL processing remain deferred. Analytical coverage mapping is reviewed, not an automated proof of semantic completeness. The joint brief and DCF deliverable is not verified; native recalculated-workbook parity remains required."
+            if readiness_profile is not None
+            else None
+        ),
         financial_reference_count=len(references),
         reconstructed_document_count=reconstructed,
-        valuation_run_id=valuation.run_id,
+        valuation_run_id=valuation_run_id,
         context_review_sha256=_sha(context_review.model_dump_json().encode())
         if context_review
         else None,

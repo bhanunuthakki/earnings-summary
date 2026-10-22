@@ -58,6 +58,8 @@ class Assum:
     credit_cash_allocation: float = 0.0
     operating_cash_reserve: float = 0.0
     credit_funding_debt_allocation: float = 0.0
+    # Serialization only: v5 qualification requires an explicit attributed value.
+    financing_other_expenses_reserve: float = 0.0
     g_term: float = 0.045  # operating perpetuity-cross-check growth (~risk-free)
     years: int = 10
     shares: float = 50.697  # diluted shares (M)
@@ -78,6 +80,16 @@ class Assum:
     )
     price_seed_source: str = field(default="model_seed", repr=False)
     price_seed_path: str | None = field(default=None, repr=False)
+
+
+def implied_credit_terminal_roe(inputs: Mapping[str, float]) -> float:
+    """Next-year credit income over opening equity, using one capital convention."""
+    return (
+        (1 + inputs["cbg_term"] / 2)
+        * (inputs["nimal_term"] - inputs["credit_opex_ratio"])
+        * (1 - inputs["tax"])
+        / inputs["cap_ratio"]
+    )
 
 
 def validate_credit_terminal(inputs: Mapping[str, float]) -> None:
@@ -109,12 +121,7 @@ def validate_credit_terminal(inputs: Mapping[str, float]) -> None:
     if not math.isclose(inputs["cbg_term"], inputs["credit_g_term"], rel_tol=0.0, abs_tol=1e-9):
         raise ValueError("terminal_credit_growth_inconsistent")
     # NI_(N+1)/E_N must make Gordon retention equal c * B_N * g.
-    implied = (
-        (1 + inputs["cbg_term"] / 2)
-        * (inputs["nimal_term"] - inputs["credit_opex_ratio"])
-        * (1 - inputs["tax"])
-        / inputs["cap_ratio"]
-    )
+    implied = implied_credit_terminal_roe(inputs)
     if not math.isclose(implied, inputs["credit_terminal_roe"], rel_tol=1e-6, abs_tol=1e-6):
         raise ValueError("terminal_credit_roe_capital_inconsistent")
 

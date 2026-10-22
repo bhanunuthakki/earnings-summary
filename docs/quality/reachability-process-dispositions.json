@@ -588,6 +588,18 @@
       ]
     },
     {
+      "disposition": "external_process",
+      "evidence": "Runs the explicitly configured WorkbookRuntime.node executable with fixed argv pointing to a copy of execution/meli_workbook_adapter.mjs, spec.json and workbook.xlsx. shell is not enabled and timeout is 120 seconds. The adapter imports @oai/artifact-tool from configured node_modules. This records the external process boundary and fixed script selection; it does not establish executable or dependency identity or immutable runtime code.",
+      "fingerprint": "aadb458b77eb4209e2c8cff2fdf9fff6f5a96abdc55e5379977a3b57ed8a8486",
+      "line": 711,
+      "path": "src/dcf/meli_workbook.py",
+      "targets": [
+        "configured WorkbookRuntime.node",
+        "execution/meli_workbook_adapter.mjs",
+        "@oai/artifact-tool"
+      ]
+    },
+    {
       "disposition": "runtime_registry",
       "evidence": "Job.start_subprocess executes the registry-owned argv which may mix targets.",
       "fingerprint": "e67f3ee629f1d9693d1c983f95ee5715cfe15c7388becf5d06a69016e6f413a0",
@@ -973,6 +985,18 @@
       ]
     },
     {
+      "disposition": "external_process",
+      "evidence": "Test-only process runs configured WorkbookRuntime.node with the literal generated edits.mjs in tmp_path, no shell and timeout120s. The script imports @oai/artifact-tool plus a copied checked-in meli_workbook_adapter.mjs, edits synthetic workbooks and verifies recalculated/exported values and fixed Actuals. Runtime executable and dependency identity are configurable, not identity-verified by this test. No production data or application source is executed as a Python target.",
+      "fingerprint": "036481c70183f92c7f8c2e8a6bfd1cc1b2925064f2a3f0e01b9f303e9c1ac39d",
+      "line": 384,
+      "path": "tests/test_meli_workbook_recalculation.py",
+      "targets": [
+        "configured WorkbookRuntime.node",
+        "test-written edits.mjs",
+        "@oai/artifact-tool"
+      ]
+    },
+    {
       "disposition": "internal_python_target",
       "evidence": "The private test helper launches the fixed third-party detect_secrets.pre_commit_hook.main entrypoint. Its optional --filter argument loads this fixed repository callback, so retain that local-code edge. Other arguments are test-controlled scanner flags/fixture paths; --no-verify disables provider verification.",
       "fingerprint": "802d6b00df58132768f6f572311d8949ffc0c8e00c7fd4b9e26d1949abeae089",
@@ -995,7 +1019,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "cd00b357cf795769a461aab68319910901b72a1d4d83fe402f74b7deb92b911f",
+      "source_sha256": "db7b8c3eb15624183d784587c6ae85f2db365b791b99a5261a1a7107abaee810",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

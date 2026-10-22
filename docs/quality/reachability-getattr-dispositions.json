@@ -43,8 +43,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-growth scenario attribute tuple.",
-      "fingerprint": "0dfdbad7cdd5de3c1cdafcc28e7c344d8b410b0cac5def2f7e7b1b1a9c753674",
-      "line": 302,
+      "fingerprint": "54d2b4e7321f233189f3c83c5aacfd57eb99e34c61104986a01ef3b25c3b90f0",
+      "line": 304,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_near",
@@ -55,8 +55,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-growth scenario attribute tuple.",
-      "fingerprint": "5e103b1c59aa91b7b457acc49a8d99c8606496470086015f11373c401d33112a",
-      "line": 304,
+      "fingerprint": "d70adba3ed237213ca3fd18b60248cb2a0f27c57a535b4debd0b127531dfe441",
+      "line": 306,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_g_term",
@@ -67,8 +67,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal near-margin scenario attribute tuple.",
-      "fingerprint": "cee7a66bbaf8255cc422aaf8be816f1e49dbf5aa1d55493e655888d8da8d98dd",
-      "line": 306,
+      "fingerprint": "f7af3358ca33401448c5593530f6ac9ecd570ec07fb956c0c189a6eb06e98361",
+      "line": 308,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_near",
@@ -79,8 +79,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Loop iterates the literal terminal-margin scenario attribute tuple.",
-      "fingerprint": "3363decfc2aec231c1665fc7a8fc5f13205225ba454358af15bc3c528026e2f1",
-      "line": 308,
+      "fingerprint": "c59470bbe6ee9fb2699eb3b5207c33077604a974a3d3f057c4982ea6cf0cec0e",
+      "line": 310,
       "path": "execution/build_meli_platform_dcf.py",
       "targets": [
         "comm_margin_term",
@@ -264,6 +264,184 @@
       "path": "src/dcf/assumptions_doc.py",
       "targets": [
         "_SCEN_LEVER_LABELS"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Attribute reads iterate only the checked-in WORKBOOK_DRIVERS tuple. Each selected name is a declared Assum numeric field used for base-case parity or worksheet cell values; no callable, module or command is selected.",
+      "fingerprint": "c9ec0a6ce1ceec2014cfb01b1fde929d24dc579b55c67741379781989b78a674",
+      "line": 182,
+      "path": "src/dcf/meli_workbook.py",
+      "targets": [
+        "comm_rev0",
+        "comm_g_near",
+        "comm_g_term",
+        "comm_margin_near",
+        "comm_margin_term",
+        "fpay_rev0",
+        "fpay_g_near",
+        "fpay_g_term",
+        "fpay_margin_near",
+        "fpay_margin_term",
+        "da_pct",
+        "capex_pct_near",
+        "capex_pct_term",
+        "nwc_pct",
+        "tax",
+        "op_exit_ebitda_mult",
+        "wacc",
+        "cb0",
+        "cbg_near",
+        "cbg_term",
+        "nimal_near",
+        "nimal_term",
+        "credit_opex_ratio",
+        "cap_ratio",
+        "credit_ke",
+        "credit_g_term",
+        "credit_terminal_roe",
+        "net_cash",
+        "years",
+        "shares",
+        "price"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Reported-anchor comparisons use the fixed five-field tuple, adding only financing_other_expenses_reserve for the explicit financing recipe. Both operands are Assum records; no callable or dispatch target is selected.",
+      "fingerprint": "b1b58c8a76e17b916d4e208d7693fd80183830e684d36a2c58779886987709bb",
+      "line": 192,
+      "path": "src/dcf/meli_workbook.py",
+      "targets": [
+        "comm_rev0",
+        "fpay_rev0",
+        "cb0",
+        "shares",
+        "net_cash",
+        "financing_other_expenses_reserve"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Attribute reads iterate only the checked-in WORKBOOK_DRIVERS tuple. Each selected name is a declared Assum numeric field used for base-case parity or worksheet cell values; no callable, module or command is selected.",
+      "fingerprint": "0c3c39eae53c86eb2da9c752eda45150ff9430f055850909988883ec834a4dda",
+      "line": 238,
+      "path": "src/dcf/meli_workbook.py",
+      "targets": [
+        "comm_rev0",
+        "comm_g_near",
+        "comm_g_term",
+        "comm_margin_near",
+        "comm_margin_term",
+        "fpay_rev0",
+        "fpay_g_near",
+        "fpay_g_term",
+        "fpay_margin_near",
+        "fpay_margin_term",
+        "da_pct",
+        "capex_pct_near",
+        "capex_pct_term",
+        "nwc_pct",
+        "tax",
+        "op_exit_ebitda_mult",
+        "wacc",
+        "cb0",
+        "cbg_near",
+        "cbg_term",
+        "nimal_near",
+        "nimal_term",
+        "credit_opex_ratio",
+        "cap_ratio",
+        "credit_ke",
+        "credit_g_term",
+        "credit_terminal_roe",
+        "net_cash",
+        "years",
+        "shares",
+        "price"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Attribute reads iterate only the checked-in WORKBOOK_DRIVERS tuple. Each selected name is a declared Assum numeric field used for base-case parity or worksheet cell values; no callable, module or command is selected.",
+      "fingerprint": "6ae1dac0c5c1e0638fd6f9b3c9751d66052f4a81cccf7f984748ad554c5a703a",
+      "line": 247,
+      "path": "src/dcf/meli_workbook.py",
+      "targets": [
+        "comm_rev0",
+        "comm_g_near",
+        "comm_g_term",
+        "comm_margin_near",
+        "comm_margin_term",
+        "fpay_rev0",
+        "fpay_g_near",
+        "fpay_g_term",
+        "fpay_margin_near",
+        "fpay_margin_term",
+        "da_pct",
+        "capex_pct_near",
+        "capex_pct_term",
+        "nwc_pct",
+        "tax",
+        "op_exit_ebitda_mult",
+        "wacc",
+        "cb0",
+        "cbg_near",
+        "cbg_term",
+        "nimal_near",
+        "nimal_term",
+        "credit_opex_ratio",
+        "cap_ratio",
+        "credit_ke",
+        "credit_g_term",
+        "credit_terminal_roe",
+        "net_cash",
+        "years",
+        "shares",
+        "price"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Expected workbook Valuation values read only the literal row/attribute tuple on the typed dcf.meli_model.Mirror result. The attributes are numeric model outputs, not callable or module targets.",
+      "fingerprint": "7cff7d23c760e96d41dd8b730ef58a3af0b232591a08b550d6ac6cf620f3b88e",
+      "line": 444,
+      "path": "src/dcf/meli_workbook.py",
+      "targets": [
+        "pv_op_fcff",
+        "op_terminal_ev",
+        "pv_op_terminal",
+        "operating_ev",
+        "pv_credit_fcfe",
+        "credit_terminal",
+        "pv_credit_terminal",
+        "credit_equity_value",
+        "equity_value",
+        "vps",
+        "op_terminal_revenue",
+        "credit_terminal_roe"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Expected workbook Model values read only the literal row/attribute tuple on dcf.meli_model.Row members of Mirror.rows. These are numeric annual model outputs, not callable or module targets.",
+      "fingerprint": "be98d7b65f94e1268c9b593706914a32f805de3af462dde77e873b552ee9169d",
+      "line": 488,
+      "path": "src/dcf/meli_workbook.py",
+      "targets": [
+        "comm_rev",
+        "fpay_rev",
+        "op_rev",
+        "op_ebit",
+        "op_da",
+        "op_capex",
+        "op_fcff",
+        "df_op",
+        "cb",
+        "credit_ni",
+        "reqcap",
+        "credit_fcfe",
+        "df_cr"
       ]
     },
     {
@@ -682,6 +860,33 @@
       ]
     },
     {
+      "disposition": "closed_literal_set",
+      "evidence": "Retained SEC member replay compares DocumentVersion and ExpectedSecDocument using only the literal native identity/period-field tuple. The attributes are schema data; no callable, module or command is selected.",
+      "fingerprint": "9f3acc0c118fb8033ac66730da64ecd3b9047cdd0097abedbd42f565c68cdcc5",
+      "line": 263,
+      "path": "src/provenance/sec_submission_import.py",
+      "targets": [
+        "issuer_id",
+        "ticker",
+        "document_type",
+        "form_type",
+        "accession_number",
+        "period_start",
+        "period_end"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
+      "evidence": "Native parent replay iterates only the closed table/identity/schema tuples: evidence_source_observations with observation_id on SourceObservation, and evidence_content_blobs with sha256 on ContentBlob. The attribute supplies a bound SQL identity value; no callable or code target is selected.",
+      "fingerprint": "0f33141df7d8a6dfd95d5feed8b3af48362398577f53b21c8ff07957a09c6806",
+      "line": 615,
+      "path": "src/provenance/sec_submission_import.py",
+      "targets": [
+        "observation_id",
+        "sha256"
+      ]
+    },
+    {
       "disposition": "schema_field",
       "evidence": "getattr projects only the typed publication-member columns.",
       "fingerprint": "1508d851c889f45ab469be852653f20928ff2903e1862d347c158e4b531d22fe",
@@ -771,6 +976,20 @@
     },
     {
       "disposition": "closed_literal_set",
+      "evidence": "Test-only baseline mutation reads an Assum value from synthetic_cases using exactly the five literal pytest parameter keys declared immediately above the test. No callable or dispatch target is selected; this exact test seam is classified without changing the protected residual unknown-edge total.",
+      "fingerprint": "38050665002dd8aa3d0704ac863a1d18ad49b5fe56d0948a714a02dcb9a41443",
+      "line": 45,
+      "path": "tests/test_meli_workbook_recalculation.py",
+      "targets": [
+        "comm_rev0",
+        "fpay_rev0",
+        "cb0",
+        "shares",
+        "net_cash"
+      ]
+    },
+    {
+      "disposition": "closed_literal_set",
       "evidence": "The parameterized reporting-date regression selects only the two literal quarter and annual cell readers declared in its pytest parameter table.",
       "fingerprint": "e252ddb5e4049a27d98f84a5b6aacac9e228665b46b2bb0bde8ec8c405f1e759",
       "line": 220,
@@ -799,7 +1018,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "cd00b357cf795769a461aab68319910901b72a1d4d83fe402f74b7deb92b911f",
+      "source_sha256": "db7b8c3eb15624183d784587c6ae85f2db365b791b99a5261a1a7107abaee810",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

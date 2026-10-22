@@ -481,7 +481,7 @@ def admitted_model(
 def _load(
     conn: sqlite3.Connection, commitment: MemoModelCommitment, context: evidence.SourceReadContext
 ) -> VerifiedMemoModel:
-    return load_verified_memo_model(
+    model = load_verified_memo_model(
         conn,
         commitment,
         primary_snapshot_id="snapshot",
@@ -490,6 +490,8 @@ def _load(
         as_of=NOW,
         source_context=context,
     )
+    assert isinstance(model, VerifiedMemoModel)
+    return model
 
 
 def test_real_model_commitment_roundtrip(admitted_model: ModelFixture) -> None:

@@ -8,6 +8,7 @@ import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
@@ -71,6 +72,52 @@ def test_future_market_timestamp_is_not_current() -> None:
     receipt = load_valuation_readiness(conn, "META", as_of=NOW)
     assert receipt.market_status == "invalid"
     assert "market_timestamp_after_cutoff" in receipt.reason_codes
+
+
+@pytest.mark.parametrize("purpose", ["allocation", "analyst_memo"])
+@pytest.mark.parametrize(
+    ("price", "observed_at", "market_status", "reason"),
+    [
+        (None, None, "missing", "market_price_or_timestamp_missing"),
+        (700, None, "missing", "market_price_or_timestamp_missing"),
+        (None, NOW.isoformat(), "missing", "market_price_or_timestamp_missing"),
+        (700, "2026-09-01T20:00:00+00:00", "stale", "market_price_stale"),
+        (700, "2026-10-02T20:00:00+00:00", "invalid", "market_timestamp_after_cutoff"),
+    ],
+)
+def test_only_completely_absent_quote_is_optional_for_analyst_memo(
+    purpose: Literal["allocation", "analyst_memo"],
+    price: float | None,
+    observed_at: str | None,
+    market_status: str,
+    reason: str,
+) -> None:
+    conn = _db()
+    conn.execute("UPDATE dcf_runs SET live_price=?, live_price_at=?", (price, observed_at))
+    result = load_valuation_readiness(conn, "META", as_of=NOW, purpose=purpose)
+    optional = purpose == "analyst_memo" and price is None and observed_at is None
+    assert result.market_status == market_status
+    assert (reason in result.reason_codes) is not optional
+    # A missing comparison quote never waives financial admission/completeness.
+    assert not result.ready
+    assert "financial_input_completeness_unverified" in result.reason_codes
+    conn.close()
+
+
+@pytest.mark.parametrize("purpose", ["allocation", "analyst_memo"])
+@pytest.mark.parametrize(
+    ("price", "observed_at"),
+    [(0, NOW.isoformat()), (700, "invalid-timestamp")],
+)
+def test_invalid_quote_still_blocks_both_readiness_purposes(
+    purpose: Literal["allocation", "analyst_memo"], price: float, observed_at: str
+) -> None:
+    conn = _db()
+    conn.execute("UPDATE dcf_runs SET live_price=?, live_price_at=?", (price, observed_at))
+    result = load_valuation_readiness(conn, "META", as_of=NOW, purpose=purpose)
+    assert not result.ready
+    assert "dcf_evidence_invalid" in result.reason_codes
+    conn.close()
 
 
 def test_file_clock_is_explicitly_not_financial_period_or_admission(tmp_path: Path) -> None:

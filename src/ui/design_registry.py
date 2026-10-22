@@ -646,6 +646,7 @@ _BHA_89_TO_92_ADDITIONAL_EMITTERS = (
     "pipeline/work_os_research.py",
     "pipeline/you_said.py",
     "report/renderers/offline_document.py",
+    "report/renderers/bound_draft.py",
     "report/renderers/markdown.py",
     "report/renderers/workspace_decision_card.py",
     "report/renderers/workspace_html.py",
@@ -981,6 +982,15 @@ VISUAL_EMITTER_MANIFEST = (
             frozenset({EvidenceMode.STATIC}),
             "design-system",
             "Vendored Alpine runtime mutates consumer-owned markup; application surfaces own design.",
+        ),
+        VisualEmitterEntry(
+            "execution/meli_workbook_adapter.mjs",
+            EmitterDisposition.NONVISUAL,
+            frozenset({EvidenceAdapter.PYTHON_CSS}),
+            frozenset({EvidenceMode.STATIC}),
+            "dcf-workbook",
+            "Formats XLSX worksheet cells and verifies recalculation; JavaScript object literals "
+            "resemble CSS but emit no HTML, CSS or browser DOM.",
         ),
     )
     + tuple(

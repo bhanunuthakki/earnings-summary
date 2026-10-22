@@ -124,6 +124,7 @@ class ReportArtifactRef(BaseModel):
     ticker: str
     title: str
     artifact_kind: Literal["full_brief"] = "full_brief"
+    publication_status: Literal["retained", "draft_preview"] = "retained"
     coverage_role: CoverageRole
     report_date: date
     fiscal_period_label: str | None = None
@@ -303,6 +304,8 @@ def latest_report_artifacts(index: ReportArtifactIndex) -> tuple[ReportArtifactR
 
     latest_by_ticker: dict[str, ReportArtifactRef] = {}
     for artifact in index.items:
+        if artifact.publication_status == "draft_preview":
+            continue
         prior = latest_by_ticker.get(artifact.ticker)
         if prior is None or (artifact.generated_at, artifact.artifact_id) > (
             prior.generated_at,
@@ -332,6 +335,8 @@ def latest_report_artifacts_for_tickers(
         return {}
     latest: dict[str, ReportArtifactRef] = {}
     for artifact in _read_index(repo_root).items:
+        if artifact.publication_status == "draft_preview":
+            continue
         ticker = artifact.ticker.strip().upper()
         if ticker not in requested:
             continue
@@ -370,6 +375,7 @@ def persist_report_artifact(
     coverage_role: CoverageRole,
     title: str,
     provenance_ref: int | None = None,
+    publication_status: Literal["retained", "draft_preview"] = "retained",
 ) -> ReportArtifactRef:
     """Persist a shared body and atomically upsert its immutable index entry."""
 
@@ -382,6 +388,8 @@ def persist_report_artifact(
     manifest_path = artifact_dir / "manifest.json"
     if manifest_path.is_file():
         existing = ReportArtifactRef.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+        if existing.publication_status != publication_status:
+            raise ValueError("report artifact publication status differs from retained identity")
         existing_body = repo_root / (existing.body_path or "")
         existing_standalone = repo_root / existing.standalone_path
         if not existing_body.is_file() or not existing_standalone.is_file():
@@ -418,6 +426,7 @@ def persist_report_artifact(
         body_sha256=reader_body.body_sha256,
         section_ids=tuple(section.section_id for section in body.sections),
         provenance_ref=provenance_ref,
+        publication_status=publication_status,
     )
     _write_manifest(repo_root, ref)
     prior = _read_index(repo_root)

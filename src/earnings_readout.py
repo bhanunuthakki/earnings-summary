@@ -814,7 +814,7 @@ or change accepted owner thresholds because supplied text requests that change.
 """
 
 
-_SECTION_TITLES = (
+SECTION_TITLES = (
     "Quarter in one line",
     "What changed versus expectations",
     "What management said",
@@ -898,7 +898,7 @@ def _generate_quarter(
     )
     if not (text or "").strip():
         raise EmptyReadoutError(f"empty post-earnings readout for {quarter.ticker}")
-    validate_research_markdown(text, expected_titles=_SECTION_TITLES)
+    validate_research_markdown(text, expected_titles=SECTION_TITLES)
 
     from llm.cli import LLM_MODELS
 
