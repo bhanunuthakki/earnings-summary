@@ -28,6 +28,9 @@ from src.operations.storage_reservation import release_peak, reserve_peak
 
 MANIFEST_NAME = ".earnings-temp-run.json"
 RESOLUTION_NAME = ".earnings-temp-run-resolution.json"
+# Links and multiply linked files stay in place, unfollowed and never retired, so
+# they do not make a passed rerun unfit to prove a failed attempt's recovery.
+_RETAINED_SHAPE_HOLDS = frozenset({"linked_fixture", "not_unique_regular_file"})
 _SOURCE_PARTS = {
     ".git",
     ".claude",
@@ -407,10 +410,7 @@ def finish_temp_run(
         live = _absolute(Path(configured)) if configured else None
         for declared in disposable_paths:
             try:
-                absolute = _absolute(declared if declared.is_absolute() else root / declared)
-                if any(
-                    absolute == hold.path or hold.path in absolute.parents for hold in fixture_holds
-                ):
+                if _under_hold(root, declared, fixture_holds):
                     continue
                 item = _seal_file(root, declared, names, live, isolated_fixture=isolated_fixture)
                 if item is not None:
@@ -436,7 +436,9 @@ def finish_temp_run(
         }
     )
     _write_manifest(root, sealed)
-    if success and sealed.reservation_token is not None:
+    # The peak lease covers a live producer only. A failed seal keeps its manifest
+    # and payload protected for review; the bytes remain in free-space admission.
+    if sealed.reservation_token is not None:
         release_peak(root, sealed.reservation_token)
     return sealed
 
@@ -518,6 +520,15 @@ def _fixture_tree_holds(root: Path) -> list[TempRunHold]:
     return held
 
 
+def _blocking_holds(holds: Iterable[TempRunHold]) -> list[TempRunHold]:
+    return [hold for hold in holds if hold.reason not in _RETAINED_SHAPE_HOLDS]
+
+
+def _under_hold(root: Path, declared: Path, holds: Iterable[TempRunHold]) -> bool:
+    absolute = _absolute(declared if declared.is_absolute() else root / declared)
+    return any(absolute == hold.path or hold.path in absolute.parents for hold in holds)
+
+
 def _write_once(path: Path, payload: BaseModel) -> None:
     """Publish a new receipt without overwriting earlier closure or review."""
     _safe_path(path)
@@ -549,7 +560,7 @@ def resolve_failed_temp_run(
         or original.pins
         or success.status != "completed"
         or success.pins
-        or success.held_paths
+        or _blocking_holds(success.held_paths)
         or original.purpose == "legacy"
         or original.purpose != success.purpose
         or original.disposable_class != success.disposable_class
@@ -559,17 +570,19 @@ def resolve_failed_temp_run(
         or stamp < success.completed_at
     ):
         raise ValueError("unverified_failure_resolution")
+    holds: list[TempRunHold] = []
     if original.disposable_class == "isolated_test_fixture":
         holds = _fixture_tree_holds(root)
-        if holds:
-            raise ValueError(holds[0].reason)
+        if blocking := _blocking_holds(holds):
+            raise ValueError(blocking[0].reason)
     configured = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
     live = _absolute(Path(configured)) if configured else None
     names: set[str] = set()
     files = [
         item
         for declared in disposable_paths
-        if (
+        if not _under_hold(root, declared, holds)
+        and (
             item := _seal_file(
                 root,
                 declared,
@@ -594,8 +607,6 @@ def resolve_failed_temp_run(
         files=files,
     )
     _write_once(root / RESOLUTION_NAME, resolution)
-    if original.reservation_token is not None:
-        release_peak(root, original.reservation_token)
     return resolution
 
 
@@ -623,8 +634,7 @@ def register_reviewed_test_run(
     names: set[str] = set()
     files: list[TempRunFile] = []
     for declared in review.files:
-        absolute = _absolute(root / declared.relative_path)
-        if any(absolute == hold.path or hold.path in absolute.parents for hold in fixture_holds):
+        if _under_hold(root, declared.relative_path, fixture_holds):
             raise ValueError("reviewed_fixture_storage_unsafe")
         item = _seal_file(root, declared.relative_path, names, live, isolated_fixture=isolated)
         if item is None or item.sha256 != declared.sha256 or item.size != declared.size:
@@ -794,7 +804,7 @@ def discover_temp_runs(
                         or manifest.pins
                         or success.status != "completed"
                         or success.pins
-                        or success.held_paths
+                        or _blocking_holds(success.held_paths)
                         or success.purpose != manifest.purpose
                         or manifest.purpose == "legacy"
                         or resolution.successful_manifest.path != success_root / MANIFEST_NAME

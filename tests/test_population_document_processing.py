@@ -368,7 +368,10 @@ def test_snapshot_batch_preflights_every_issuer_before_first_write(
         _cutoff: datetime,
         document_ids: tuple[str, ...],
         _recorded: datetime,
+        *,
+        defer_filing_xbrl: bool,
     ) -> dict[str, int]:
+        assert defer_filing_xbrl is False
         return {"total": 1 if document_ids == ("document-a",) else 2}
 
     def sealed_stub(
@@ -376,7 +379,10 @@ def test_snapshot_batch_preflights_every_issuer_before_first_write(
         _cutoff: datetime,
         _document_ids: tuple[str, ...],
         _recorded: datetime,
+        *,
+        defer_filing_xbrl: bool,
     ) -> int:
+        assert defer_filing_xbrl is False
         return 1
 
     monkeypatch.setattr(population, "_obligation_totals", totals_stub)
@@ -416,7 +422,10 @@ def test_snapshot_batch_rolls_back_every_issuer_when_later_seal_fails(
         _cutoff: datetime,
         _document_ids: tuple[str, ...],
         _recorded: datetime,
+        *,
+        defer_filing_xbrl: bool,
     ) -> dict[str, int]:
+        assert defer_filing_xbrl is False
         return {"total": 1}
 
     def sealed_stub(
@@ -424,7 +433,10 @@ def test_snapshot_batch_rolls_back_every_issuer_when_later_seal_fails(
         _cutoff: datetime,
         _document_ids: tuple[str, ...],
         _recorded: datetime,
+        *,
+        defer_filing_xbrl: bool,
     ) -> int:
+        assert defer_filing_xbrl is False
         return 1
 
     calls = 0

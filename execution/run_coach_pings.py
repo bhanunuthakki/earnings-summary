@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -68,6 +69,19 @@ def main() -> int:
     repo_root = args.repo_root.resolve()
     db_path = repo_root / "data" / "portfolio.db"
 
+    from runtime.job_runtime import JobLock, inherited_lock_is_valid
+
+    # One coach-ping run at a time: the scheduler already holds this lane for
+    # scheduled runs; a manual run takes the same lane, so the governor's cap
+    # check and row creation never interleave with another run.
+    inherited = inherited_lock_is_valid(repo_root, "notification-delivery")
+    with (
+        nullcontext() if inherited else JobLock(repo_root, "coach-pings", ["notification-delivery"])
+    ):
+        return _run(repo_root, db_path, dry_run=args.dry_run)
+
+
+def _run(repo_root: Path, db_path: Path, *, dry_run: bool) -> int:
     from collections.abc import Callable
 
     from research.governor import run_governor
@@ -79,7 +93,7 @@ def main() -> int:
     print(f"auto_reconcile: {auto_tally}", file=sys.stderr)
 
     send_fn: Callable[[int, Moment], bool] | None = None
-    if not args.dry_run:
+    if not dry_run:
         from capture import telegram
         from capture.token_store import load_chat_id, load_token
 

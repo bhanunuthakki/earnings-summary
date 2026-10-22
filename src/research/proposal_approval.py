@@ -929,7 +929,7 @@ def decide_ask_proposal(
                 )
             if prop.kind in {"owner_thesis_edit", "owner_kpi_edit"}:
                 authorization_row = connection.execute(
-                    "SELECT 1 FROM owner_proposal_authorizations WHERE authorization_id=? "
+                    "SELECT * FROM owner_proposal_authorizations WHERE authorization_id=? "
                     "AND ticker=? AND canonical_content_sha256=?",
                     (prop.owner_authorization_id, prop.ticker, prop.canonical_content_sha256),
                 ).fetchone()
@@ -941,6 +941,17 @@ def decide_ask_proposal(
                         current_proposal_revision=detail.proposal_revision,
                         current_status=detail.status,
                     )
+                try:
+                    retained_authorization = dict(authorization_row)
+                    retained_authorization["evidence"] = json.loads(
+                        str(retained_authorization.pop("evidence_json"))
+                    )
+                    retained_authorization.pop("created_at")
+                    OwnerProposalAuthorizationV1.model_validate(retained_authorization)
+                except (ValueError, KeyError) as exc:
+                    raise StoredProposalError(
+                        "stored owner proposal authorization is invalid"
+                    ) from exc
             else:
                 exchange_row = connection.execute(
                     "SELECT status FROM ask_exchanges WHERE request_id=?",

@@ -206,7 +206,12 @@ at completion, not creation. Pytest stores its default fixtures in that owned ru
 root on Windows and seals it through its session-finish hook. Other hosts retain
 pytest's existing fixture cleanup; tests can opt in through
 `EARNINGS_SUMMARY_MANAGED_TEST_TEMPS=1`. Failed or interrupted sessions
-remain protected. Explicit user `--basetemp` paths are not claimed by this hook.
+remain protected. A run's peak storage lease covers only its live producer: the
+seal releases it after a pass or a failure, and the next admission on the same
+host reclaims a lease whose holder process no longer exists. Retained failed
+bytes still count against the free-space headroom. A reviewed resolution can
+bind to a passed rerun whose only holds are retained links or multiply linked
+files. Explicit user `--basetemp` paths are not claimed by this hook.
 The existing weekly cleaner discovers these receipts in both configured state
 and runtime `.tmp` roots, plus narrowly named `earnings-summary-*` runs under
 the Windows/user temporary roots. Unknown paths are inventoried, not registered

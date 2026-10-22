@@ -180,3 +180,26 @@ def test_noncentral_sqlite_writer_entrypoints_require_runtime_gate() -> None:
         source = (PROJECT_ROOT / relative_path).read_text(encoding="utf-8")
         for fragment in required_fragments:
             assert fragment in source, (relative_path, fragment)
+
+
+def test_windows_session_is_bound_to_the_vendored_hash_verified_dll() -> None:
+    """In this very test process, the module Windows has loaded as sqlite3.dll is
+    the vendored, hash-pinned binary, and Python's sqlite3 reports its version."""
+    if sys.platform != "win32":
+        pytest.skip("Windows DLL binding is only observable on Windows")
+    import ctypes
+    import sqlite3
+    from ctypes import wintypes
+
+    assert sqlite_bootstrap.preload_sqlite() == sqlite3.sqlite_version == "3.53.4"
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+    kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+    kernel32.GetModuleFileNameW.argtypes = [wintypes.HMODULE, wintypes.LPWSTR, wintypes.DWORD]
+    kernel32.GetModuleFileNameW.restype = wintypes.DWORD
+    module = kernel32.GetModuleHandleW("sqlite3.dll")
+    assert module, ctypes.get_last_error()
+    path = ctypes.create_unicode_buffer(32768)
+    assert kernel32.GetModuleFileNameW(module, path, len(path)) > 0
+    assert Path(path.value).resolve() == DLL_PATH.resolve()
+    assert hashlib.sha256(Path(path.value).read_bytes()).hexdigest() == EXPECTED_DLL_SHA256

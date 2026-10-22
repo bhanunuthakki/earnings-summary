@@ -17,6 +17,7 @@ from research.proposal_approval import (
     AskProposalDecisionV1,
     ProposalConflictError,
     ProposalValidationError,
+    StoredProposalError,
     TargetDriftError,
     create_owner_proposal,
     decide_ask_proposal,
@@ -192,6 +193,7 @@ def test_authorization_and_link_are_immutable(authority: tuple[Path, Path, Path]
         for sql in [
             "UPDATE owner_proposal_authorizations SET statement='changed'",
             "DELETE FROM owner_proposal_authorizations",
+            "DELETE FROM research_proposals",
             "UPDATE research_proposals SET owner_authorization_id=NULL",
         ]:
             with pytest.raises(sqlite3.IntegrityError, match="immutable"):
@@ -332,3 +334,133 @@ def test_authorization_sql_boundary(
                 f"INSERT INTO owner_proposal_authorizations ({columns}) VALUES ({placeholders})",
                 tuple(values.values()),
             )
+
+
+@pytest.mark.parametrize("table", ["owner_proposal_authorizations", "research_proposals"])
+def test_sql_replace_cannot_erase_owner_authority(
+    authority: tuple[Path, Path, Path], table: str
+) -> None:
+    root, db, _ = authority
+    _register(root, db)
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        assert conn.execute("PRAGMA recursive_triggers").fetchone()[0] == 0
+        original = dict(conn.execute(f"SELECT * FROM {table}").fetchone())
+        replacement = {
+            **original,
+            "source_ref" if table == "owner_proposal_authorizations" else "title": "replaced",
+        }
+        columns = ",".join(replacement)
+        placeholders = ",".join("?" for _ in replacement)
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            conn.execute(
+                f"INSERT OR REPLACE INTO {table} ({columns}) VALUES ({placeholders})",
+                tuple(replacement.values()),
+            )
+        assert dict(conn.execute(f"SELECT * FROM {table}").fetchone()) == original
+
+
+def test_decision_revalidates_retained_authorization_evidence_digest(
+    authority: tuple[Path, Path, Path],
+) -> None:
+    root, db, holdings = authority
+    ref = _register(root, db)
+    before = holdings.read_bytes()
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        values = dict(conn.execute("SELECT * FROM owner_proposal_authorizations").fetchone())
+        values.update(authorization_id="owner-review:bad-digest", evidence_sha256="b" * 64)
+        columns, placeholders = ",".join(values), ",".join("?" for _ in values)
+        conn.execute(
+            f"INSERT INTO owner_proposal_authorizations ({columns}) VALUES ({placeholders})",
+            tuple(values.values()),
+        )
+        proposal = dict(
+            conn.execute(
+                "SELECT * FROM research_proposals WHERE id=?", (ref.proposal_id,)
+            ).fetchone()
+        )
+        proposal.pop("id")
+        proposal["owner_authorization_id"] = values["authorization_id"]
+        columns, placeholders = ",".join(proposal), ",".join("?" for _ in proposal)
+        inserted = conn.execute(
+            f"INSERT INTO research_proposals ({columns}) VALUES ({placeholders})",
+            tuple(proposal.values()),
+        )
+        assert inserted.lastrowid is not None
+        proposal_id = inserted.lastrowid
+    with pytest.raises(StoredProposalError, match="authorization"):
+        decide_ask_proposal(_decision(proposal_id), repo_root=root, db_path=db)
+    assert holdings.read_bytes() == before
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT status,proposal_revision FROM research_proposals WHERE id=?", (proposal_id,)
+        ).fetchone() == ("pending", 0)
+        assert (
+            conn.execute("SELECT COUNT(*) FROM research_proposal_decision_receipts").fetchone()[0]
+            == 0
+        )
+
+
+@pytest.mark.parametrize("identity_column", ["id", "rowid", "_rowid_", "oid"])
+@pytest.mark.parametrize("operation", ["move_owner", "replace_owner", "replace_legacy"])
+def test_id_updates_cannot_move_or_replace_retained_owner_proposals(
+    authority: tuple[Path, Path, Path], operation: str, identity_column: str
+) -> None:
+    root, db, _ = authority
+    ref = _register(root, db)
+    legacy_id = create_proposal(
+        task_id=None,
+        kind="thesis_edit",
+        ticker="NU",
+        title="Legacy fixture",
+        body_md="Unchanged legacy fixture",
+        db_path=db,
+    )
+    source = legacy_id if operation == "replace_owner" else ref.proposal_id
+    target = (
+        ref.proposal_id
+        if operation == "replace_owner"
+        else legacy_id
+        if operation == "replace_legacy"
+        else 10000
+    )
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        assert conn.execute("PRAGMA recursive_triggers").fetchone()[0] == 0
+        before = [dict(row) for row in conn.execute("SELECT * FROM research_proposals ORDER BY id")]
+        with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+            conn.execute(
+                f"UPDATE OR REPLACE research_proposals SET {identity_column}=? WHERE id=?",
+                (target, source),
+            )
+        assert [
+            dict(row) for row in conn.execute("SELECT * FROM research_proposals ORDER BY id")
+        ] == before
+
+
+@pytest.mark.parametrize("identity_column", ["rowid", "_rowid_", "oid"])
+def test_authorization_replacement_cannot_target_hidden_row_identity(
+    authority: tuple[Path, Path, Path], identity_column: str
+) -> None:
+    root, db, _ = authority
+    _register(root, db)
+    with sqlite3.connect(db) as conn:
+        conn.row_factory = sqlite3.Row
+        assert conn.execute("PRAGMA recursive_triggers").fetchone()[0] == 0
+        original = dict(conn.execute("SELECT * FROM owner_proposal_authorizations").fetchone())
+        replacement = {
+            identity_column: 1,
+            **original,
+            "authorization_id": "owner-review:replacement",
+        }
+        columns, placeholders = ",".join(replacement), ",".join("?" for _ in replacement)
+        with pytest.raises(sqlite3.OperationalError, match="no column named"):
+            conn.execute(
+                f"INSERT OR REPLACE INTO owner_proposal_authorizations ({columns}) "
+                f"VALUES ({placeholders})",
+                tuple(replacement.values()),
+            )
+        assert (
+            dict(conn.execute("SELECT * FROM owner_proposal_authorizations").fetchone()) == original
+        )

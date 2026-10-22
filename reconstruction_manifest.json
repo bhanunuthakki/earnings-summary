@@ -34,7 +34,8 @@
         "alembic/versions/0059_scoped_research_universe_commitments.py",
         "src/search/corpus_builder.py",
         "src/provenance/canonical_fact_resolution.py",
-        "src/provenance/fact_read_model.py"
+        "src/provenance/fact_read_model.py",
+        "src/provenance/native_pdf_transcript.py"
       ],
       "dependencies": [
         "requirements.lock",
@@ -45,8 +46,10 @@
         "pytest tests/test_research_snapshot.py tests/test_research_snapshot_publication_clock.py tests/test_population_research_snapshots.py tests/test_population_research_projection_mode.py -q",
         "pytest tests/test_kpi_legacy_dispositions.py tests/test_kpi_source_precision.py tests/test_financial_source_repairs.py tests/test_reviewed_kpi_native_population.py -q",
         "pytest tests/test_sealed_snapshot_admission.py tests/test_fact_read_model_batch.py -q",
-        "pytest tests/test_document_processing_evidence.py -q",
+        "pytest tests/test_native_pdf_transcript.py tests/test_document_processing_evidence.py -q",
         "pytest tests/test_research_sec_financial_authority.py -q",
+        "pytest tests/test_research_issuer_obligation_bindings.py -q",
+        "pytest tests/test_pdf_no_ocr_processing_evidence.py -q",
         "pytest tests/test_search_corpus_builder.py tests/test_search_projection_seals.py tests/test_scoped_research_universe_migration.py -q"
       ],
       "documentation": [
@@ -117,7 +120,7 @@
         "pytest tests/test_onboard_sec_fallback.py tests/test_sec_onboarding_identity.py tests/test_onboarding_state_authority.py tests/test_runtime_state_authority.py tests/test_decision_brief_workflow.py -q",
         "pytest tests/test_source_context_entrypoints.py tests/test_refresh_dispatch.py -q",
         "pytest tests/test_meli_reported_statements.py -q",
-        "pytest tests/test_analysis_scope.py tests/test_historical_analysis_scope.py tests/test_historical_research_boundary.py tests/test_analysis_scope_cli.py -q",
+        "pytest tests/test_analysis_scope.py tests/test_historical_analysis_scope.py tests/test_historical_research_boundary.py tests/test_report_evidence_scope.py tests/test_analysis_scope_cli.py -q",
         "pytest tests/test_meli_input_evidence.py -q",
         "pytest tests/test_sec_subject_date_witness.py -q"
       ],

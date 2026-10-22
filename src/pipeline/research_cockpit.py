@@ -478,7 +478,7 @@ def compute_attractiveness(
     if row is None:
         return None
     _gap, fair_value, dcf_price, _date = latest_dcf_runs(conn).get(t, (None, None, None, None))
-    fundamentals = read_materialized_fundamentals(repo_root)
+    fundamentals = read_materialized_fundamentals(repo_root, conn)
     if not fundamentals:
         fundamentals = _eval_fundamentals(conn)
     rev_yoy, fcf_margin = fundamentals.get(t, (None, None))
@@ -535,7 +535,7 @@ def build_cockpit_rows(
     # Fast path: precomputed cache written by the morning pipeline (stage 0d).
     # Falls back to the live DB scan when the cache is absent (fresh install,
     # test env, dev run without the morning pipeline).
-    fundamentals = read_materialized_fundamentals(repo_root)
+    fundamentals = read_materialized_fundamentals(repo_root, conn)
     if not fundamentals:
         fundamentals = _eval_fundamentals(conn)
     # Portfolio fit per evaluation name (PR3): a pure disk read of the cache the
@@ -721,7 +721,8 @@ def _safe_rows(
 # _eval_fundamentals is kept as a thin wrapper around cockpit_fundamentals so
 # the existing test imports and direct callers continue to work unchanged.
 # The build_cockpit_rows render path calls read_materialized_fundamentals (a
-# disk read) and only falls back here when no cache file exists.
+# disk read) and only falls back here when no cache current with the canonical
+# facts exists.
 def _eval_fundamentals(conn: sqlite3.Connection) -> dict[str, tuple[float | None, float | None]]:
     """(rev_yoy_pct, fcf_margin_pct) per ticker — delegates to cockpit_fundamentals.compute_from_db."""
     return _compute_fundamentals(conn)

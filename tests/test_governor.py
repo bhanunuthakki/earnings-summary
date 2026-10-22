@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,7 @@ from research.governor import (
     collect_moments,
     digest_pings,
     get_ping,
+    mark_ping_acted,
     record_dismissal,
     run_governor,
     unmute,
@@ -295,6 +297,71 @@ def test_late_failed_send_callback_cannot_overwrite_linked_acknowledgement(
         ).fetchone() == ("acted",)
 
 
+def test_acknowledgement_during_freshness_gate_cancels_the_retry_push(
+    db_head: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The owner acknowledges between the attention check and the push. The
+    governor must not overwrite ``acted`` and must not buzz the phone."""
+    import research.governor as governor_mod
+    from compute.thesis_episode_attention import acknowledge_episode
+
+    episode_id = "episode-governor-gate-race"
+    moment = Moment("falsifier_breach", "alert:904", "WIX", "review", "decision:4")
+    with sqlite3.connect(db_head) as connection:
+        stamp = datetime(2026, 7, 10, 12, 0, tzinfo=UTC).isoformat()
+        connection.execute(
+            "INSERT INTO thesis_evaluation_episodes "
+            "(episode_id,ticker,fingerprint_policy_version,semantic_input_json,"
+            "semantic_input_sha256,evaluator_semantic_version,result_sha256,"
+            "overall_status,provenance_completeness,first_evaluated_at,last_seen_at,"
+            "last_checked_at,duplicate_run_count,rule_evaluations_json,created_at) "
+            "VALUES (?, 'WIX','legacy_v0','{}',?,'legacy/v0',?,'warn','partial',"
+            "?,?,?,0,'[]',?)",
+            (episode_id, "e" * 64, "f" * 64, stamp, stamp, stamp, stamp),
+        )
+        connection.execute(
+            "INSERT INTO coach_pings "
+            '(class_,"key",ticker,body,status,source_ref,created_at,updated_at,'
+            "thesis_evaluation_episode_id,review_cycle_id) "
+            "VALUES (?,?,?,?,'send_failed',?,?,?,?,'initial')",
+            (
+                moment.class_,
+                moment.key,
+                moment.ticker,
+                moment.body,
+                moment.source_ref,
+                stamp,
+                stamp,
+                episode_id,
+            ),
+        )
+        connection.commit()
+
+    def acknowledge_then_pass(*_a: object, **_kw: object) -> bool:
+        with sqlite3.connect(db_head) as connection:
+            acknowledge_episode(
+                connection,
+                episode_id,
+                acknowledged_at=datetime(2026, 7, 10, 12, 1, tzinfo=UTC),
+            )
+            connection.commit()
+        return True
+
+    monkeypatch.setattr(governor_mod, "collect_moments", _fake_collect_moments_factory([moment]))
+    monkeypatch.setattr(governor_mod, "freshness_ok", acknowledge_then_pass)
+    pushed: list[Moment] = []
+
+    run_governor(db_head, send_fn=lambda pid, m: pushed.append(m) or True, now=_NOW)
+
+    assert pushed == []
+    with sqlite3.connect(db_head) as connection:
+        assert connection.execute(
+            "SELECT status FROM coach_pings WHERE thesis_evaluation_episode_id=?",
+            (episode_id,),
+        ).fetchone() == ("acted",)
+
+
 def test_linked_attention_defect_fails_visibly_and_keeps_retry_state(
     db_head: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -403,6 +470,167 @@ def test_no_send_channel_still_parks_in_digest(db: Path) -> None:
     assert len(digest_pings(db)) == 1
     again = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
     assert again["seen"] == 0  # cap/no-channel overflow is never re-pushed
+
+
+def _only_ping_status(db: Path) -> str:
+    with sqlite3.connect(db) as conn:
+        rows = conn.execute("SELECT status FROM coach_pings").fetchall()
+    assert len(rows) == 1
+    return str(rows[0][0])
+
+
+class _ProcessKilled(BaseException):
+    """A kill or interrupt mid-push: it bypasses send_fn's ``except Exception``."""
+
+
+@pytest.mark.parametrize("action", ["acted", "dismissed"])
+@pytest.mark.parametrize("delivered", [False, True])
+def test_unlinked_owner_callback_during_send_preserves_terminal_state(
+    db: Path, action: str, delivered: bool
+) -> None:
+    _seed_breach(db)
+
+    def owner_reply(ping_id: int, _moment: Moment) -> bool:
+        assert _only_ping_status(db) == "sending"
+        with sqlite3.connect(db) as conn:
+            assert (
+                conn.execute(
+                    "SELECT thesis_evaluation_episode_id FROM coach_pings WHERE id=?", (ping_id,)
+                ).fetchone()[0]
+                is None
+            )
+        if action == "acted":
+            assert mark_ping_acted(ping_id, db_path=db)
+        else:
+            assert record_dismissal(ping_id, db_path=db)[0]
+        return delivered
+
+    run_governor(db, send_fn=owner_reply, now=_NOW)
+    assert _only_ping_status(db) == action
+    retried: list[Moment] = []
+    run_governor(
+        db,
+        send_fn=lambda _pid, moment: retried.append(moment) or True,
+        now=_NOW + timedelta(hours=1),
+    )
+    assert not retried and _only_ping_status(db) == action
+
+
+def test_push_interrupted_mid_flight_is_retried_not_recorded_as_sent(db: Path) -> None:
+    """The row is committed before the push. If the process dies in between,
+    the ping was never confirmed delivered, so a later run must retry it."""
+    _seed_breach(db)
+
+    def killed(_ping_id: int, _moment: Moment) -> bool:
+        raise _ProcessKilled
+
+    with pytest.raises(_ProcessKilled):
+        run_governor(db, send_fn=killed, now=_NOW)
+    assert _only_ping_status(db) != "sent"
+
+    sent: list[Moment] = []
+    run_governor(db, send_fn=lambda pid, m: sent.append(m) or True, now=_NOW + timedelta(hours=1))
+    assert [m.class_ for m in sent] == ["falsifier_breach"]
+    assert _only_ping_status(db) == "sent"
+
+
+def test_in_flight_push_from_a_live_run_is_not_duplicated(db: Path) -> None:
+    """An overlapping run must not re-push a ping another run is still sending."""
+    _seed_breach(db)
+    sent: list[Moment] = []
+
+    def overlapping_run(_ping_id: int, _moment: Moment) -> bool:
+        run_governor(db, send_fn=lambda pid, m: sent.append(m) or True, now=_NOW)
+        return True
+
+    run_governor(db, send_fn=overlapping_run, now=_NOW)
+    assert sent == []
+    assert _only_ping_status(db) == "sent"
+
+
+def test_stale_worker_completing_late_cannot_overwrite_a_newer_attempt(db: Path) -> None:
+    """Worker A stalls mid-push past SEND_LEASE; a later run sweeps and reclaims
+    the row. A's late failure must not overwrite the newer in-flight attempt."""
+    _seed_breach(db)
+    a_may_finish, a_finished = threading.Event(), threading.Event()
+    pushed: list[Moment] = []
+    errors: list[BaseException] = []
+
+    def stalled_then_failed(_ping_id: int, _moment: Moment) -> bool:
+        assert a_may_finish.wait(timeout=20)
+        return False
+
+    def run_a() -> None:
+        try:
+            run_governor(db, send_fn=stalled_then_failed, now=_NOW)
+        except BaseException as error:  # surfaced to the main thread below
+            errors.append(error)
+        finally:
+            a_finished.set()
+
+    def newer_push(_ping_id: int, moment: Moment) -> bool:
+        a_may_finish.set()
+        assert a_finished.wait(timeout=20)
+        pushed.append(moment)
+        return True
+
+    worker_a = threading.Thread(target=run_a)
+    worker_a.start()
+    for _ in range(2000):
+        with sqlite3.connect(db) as conn:
+            if conn.execute("SELECT 1 FROM coach_pings WHERE status='sending'").fetchone():
+                break
+        threading.Event().wait(0.01)
+    run_governor(db, send_fn=newer_push, now=_NOW + timedelta(hours=1))
+    worker_a.join(timeout=20)
+
+    assert errors == []
+    assert len(pushed) == 1
+    assert _only_ping_status(db) == "sent"
+    later = run_governor(
+        db, send_fn=lambda pid, m: pushed.append(m) or True, now=_NOW + timedelta(hours=2)
+    )
+    assert later["seen"] == 0 and len(pushed) == 1
+
+
+def test_push_accepted_before_a_crash_is_pushed_once_more(db: Path) -> None:
+    """Delivery is at-least-once: Telegram accepted the push, then the process
+    died before ``sent`` was written, so one later run pushes it again."""
+    _seed_breach(db)
+    pushed: list[Moment] = []
+
+    def accepted_then_killed(_ping_id: int, moment: Moment) -> bool:
+        pushed.append(moment)
+        raise _ProcessKilled
+
+    with pytest.raises(_ProcessKilled):
+        run_governor(db, send_fn=accepted_then_killed, now=_NOW)
+    for hours in (1, 2):
+        run_governor(
+            db, send_fn=lambda pid, m: pushed.append(m) or True, now=_NOW + timedelta(hours=hours)
+        )
+    assert len(pushed) == 2
+    assert _only_ping_status(db) == "sent"
+
+
+def test_expired_claim_is_swept_even_when_its_moment_is_no_longer_collected(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A claim whose process died stays truthful even if its moment disappears."""
+    import research.governor as governor_mod
+
+    _seed_breach(db)
+
+    def killed(_ping_id: int, _moment: Moment) -> bool:
+        raise _ProcessKilled
+
+    with pytest.raises(_ProcessKilled):
+        run_governor(db, send_fn=killed, now=_NOW)
+    monkeypatch.setattr(governor_mod, "collect_moments", _fake_collect_moments_factory([]))
+    run_governor(db, send_fn=lambda pid, m: True, now=_NOW + timedelta(minutes=10))
+    assert _only_ping_status(db) == "sending"
+    run_governor(db, send_fn=lambda pid, m: True, now=_NOW + timedelta(hours=1))
+    assert _only_ping_status(db) == "send_failed"
 
 
 def test_three_consecutive_dismissals_mute_the_class(db: Path) -> None:

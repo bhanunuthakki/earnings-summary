@@ -9,43 +9,37 @@ from onboard_ticker import apply_industry_template
 
 import db
 from entity_store import upsert_entity
+from models.companies import FilingRegime, InstrumentType
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
+_EQUITY = InstrumentType.EQUITY
+_ADR = InstrumentType.ADR
+_10K = FilingRegime.FORM_10K
+_20F = FilingRegime.FORM_20F
+
+# instrument_type names the listed security; filing_regime names the SEC forms.
+# A foreign private issuer that lists ordinary shares (ONON) is equity + 20-F.
+EVALUATION_NAMES: tuple[tuple[str, str, str, InstrumentType, FilingRegime, str], ...] = (
+    ("IFNNY", "Infineon Technologies AG", "evaluation", _ADR, _20F, "Semiconductors"),
+    ("PCOR", "PROCORE TECHNOLOGIES, INC.", "evaluation", _EQUITY, _10K, "Software / Technology"),
+    ("TOST", "Toast, Inc.", "evaluation", _EQUITY, _10K, "Software / Technology"),
+    (
+        "TSM",
+        "Taiwan Semiconductor Manufacturing Co Ltd",
+        "evaluation",
+        _ADR,
+        _20F,
+        "Semiconductors",
+    ),
+    ("LITE", "Lumentum Holdings Inc.", "evaluation", _EQUITY, _10K, "Technology"),
+    ("CPNG", "Coupang, Inc.", "evaluation", _EQUITY, _10K, "Consumer Discretionary"),
+    ("ONON", "On Holding AG", "evaluation", _EQUITY, _20F, "Consumer Discretionary"),
+)
+
 
 def main() -> int:
-    tickers = [
-        ("IFNNY", "Infineon Technologies AG", "evaluation", "adr", "20-F", "Semiconductors"),
-        (
-            "PCOR",
-            "PROCORE TECHNOLOGIES, INC.",
-            "evaluation",
-            "equity",
-            "10-K",
-            "Software / Technology",
-        ),
-        ("TOST", "Toast, Inc.", "evaluation", "equity", "10-K", "Software / Technology"),
-        (
-            "TSM",
-            "Taiwan Semiconductor Manufacturing Co Ltd",
-            "evaluation",
-            "adr",
-            "20-F",
-            "Semiconductors",
-        ),
-        ("LITE", "Lumentum Holdings Inc.", "evaluation", "equity", "10-K", "Technology"),
-        ("CPNG", "Coupang, Inc.", "evaluation", "equity", "10-K", "Consumer Discretionary"),
-        (
-            "ONON",
-            "On Holding AG",
-            "evaluation",
-            "foreign_private_issuer",
-            "20-F",
-            "Consumer Discretionary",
-        ),
-    ]
-
-    for ticker, name, list_type, inst_type, filing_regime, sector in tickers:
+    for ticker, name, list_type, inst_type, filing_regime, sector in EVALUATION_NAMES:
         print(f"Tracking {ticker} ({name}) as {list_type}...")
         db.track_company(ticker, name, list_type)
 
@@ -53,7 +47,7 @@ def main() -> int:
         try:
             conn.execute(
                 "UPDATE tracked_companies SET instrument_type = ?, filing_regime = ? WHERE ticker = ?",
-                (inst_type, filing_regime, ticker),
+                (inst_type.value, filing_regime.value, ticker),
             )
             conn.commit()
         finally:

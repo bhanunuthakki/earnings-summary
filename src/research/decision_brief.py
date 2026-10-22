@@ -335,6 +335,12 @@ def _read_memo_financial_cell(
     return cell
 
 
+def _require_supported_memo_pdf_scope(snapshot: ResearchSnapshotRequest) -> None:
+    analysis = snapshot.research_universe.analysis_scope
+    if analysis is not None and analysis.request.report_pdf_tables:
+        raise MemoEvidenceError("memo_report_pdf_scope_unsupported")
+
+
 def verify_memo_snapshot_reference(
     conn: sqlite3.Connection,
     reference: FinancialEvidenceReference,
@@ -342,6 +348,7 @@ def verify_memo_snapshot_reference(
     ticker: str,
     cutoff: datetime,
 ) -> None:
+    _require_supported_memo_pdf_scope(snapshot)
     cell = _read_memo_financial_cell(
         conn, reference.model_copy(update={"as_of": snapshot.cutoff_at})
     )
@@ -444,6 +451,7 @@ def verify_memo_snapshot_node(
     snapshot: ResearchSnapshotRequest,
     cutoff: datetime,
 ) -> None:
+    _require_supported_memo_pdf_scope(snapshot)
     processing_snapshot_ids = json.dumps(snapshot.processing_snapshot_ids)
     row = conn.execute(
         "SELECT node.recorded_at,run.outcome,run.document_version_id FROM evidence_nodes node "

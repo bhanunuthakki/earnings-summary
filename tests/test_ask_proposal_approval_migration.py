@@ -104,6 +104,17 @@ def test_owner_authority_round_trip_and_downgrade_refusal(
             str(row[1]) for row in connection.execute("PRAGMA table_info(research_proposals)")
         }
         assert "owner_authorization_id" in columns
+        assert {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' "
+                "AND name LIKE 'trg_owner_research_proposal_%'"
+            )
+        } == {
+            "trg_owner_research_proposal_no_replace",
+            "trg_owner_research_proposal_no_delete",
+            "trg_owner_research_proposal_identity_immutable",
+        }
         assert connection.execute("PRAGMA foreign_key_list(research_proposals)").fetchall() == []
     command.downgrade(_config(path), OWNER_PRIOR)
     assert _proposal_triggers(path) == prior_triggers
@@ -112,6 +123,11 @@ def test_owner_authority_round_trip_and_downgrade_refusal(
             str(row[1]) for row in connection.execute("PRAGMA table_info(research_proposals)")
         }
     assert "owner_authorization_id" not in columns
+    with sqlite3.connect(path) as connection:
+        assert not connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='trigger' "
+            "AND name LIKE 'trg_owner_research_proposal_%'"
+        ).fetchall()
 
     held = migrated_db(tmp_path / "owner-held.db", target=OWNER_REVISION)
     with sqlite3.connect(held) as connection:

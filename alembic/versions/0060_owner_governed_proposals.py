@@ -142,7 +142,7 @@ def upgrade() -> None:
             CHECK(json_valid(evidence_json)
                   AND json_type(evidence_json) = 'array'
                   AND json_array_length(evidence_json) > 0)
-        )
+        ) WITHOUT ROWID
         """
     )
     op.execute(
@@ -169,6 +169,17 @@ def upgrade() -> None:
             f"BEFORE {action} ON owner_proposal_authorizations BEGIN "
             "SELECT RAISE(ABORT, 'owner authorization is immutable'); END"
         )
+    op.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_owner_proposal_authorization_no_replace
+        BEFORE INSERT ON owner_proposal_authorizations
+        WHEN EXISTS (SELECT 1 FROM owner_proposal_authorizations
+                     WHERE authorization_id=NEW.authorization_id)
+        BEGIN
+            SELECT RAISE(ABORT, 'owner authorization is immutable');
+        END
+        """
+    )
     columns = {
         str(row[1])
         for row in op.get_bind().exec_driver_sql("PRAGMA table_info(research_proposals)")
@@ -180,6 +191,41 @@ def upgrade() -> None:
             "ALTER TABLE research_proposals ADD COLUMN owner_authorization_id TEXT"
         )
     _replace_proposal_triggers(_OWNER_INSERT, _OWNER_IMMUTABLE)
+    op.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_owner_research_proposal_no_replace
+        BEFORE INSERT ON research_proposals
+        WHEN EXISTS (SELECT 1 FROM research_proposals
+                     WHERE id=NEW.id AND owner_authorization_id IS NOT NULL)
+        BEGIN
+            SELECT RAISE(ABORT, 'owner proposal is immutable');
+        END
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_owner_research_proposal_identity_immutable
+        BEFORE UPDATE ON research_proposals
+        WHEN NEW.id IS NOT OLD.id AND (
+            OLD.owner_authorization_id IS NOT NULL
+            OR EXISTS (SELECT 1 FROM research_proposals
+                       WHERE id=NEW.id AND owner_authorization_id IS NOT NULL)
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'owner proposal identity is immutable');
+        END
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS trg_owner_research_proposal_no_delete
+        BEFORE DELETE ON research_proposals
+        WHEN OLD.owner_authorization_id IS NOT NULL
+        BEGIN
+            SELECT RAISE(ABORT, 'owner proposal is immutable');
+        END
+        """
+    )
 
 
 def downgrade() -> None:
@@ -193,5 +239,8 @@ def downgrade() -> None:
     ):
         raise RuntimeError("cannot downgrade while owner proposals or authorizations exist")
     _replace_proposal_triggers(_ASK_INSERT, _ASK_IMMUTABLE)
+    op.execute("DROP TRIGGER IF EXISTS trg_owner_research_proposal_no_replace")
+    op.execute("DROP TRIGGER IF EXISTS trg_owner_research_proposal_no_delete")
+    op.execute("DROP TRIGGER IF EXISTS trg_owner_research_proposal_identity_immutable")
     op.drop_column("research_proposals", "owner_authorization_id")
     op.execute("DROP TABLE IF EXISTS owner_proposal_authorizations")

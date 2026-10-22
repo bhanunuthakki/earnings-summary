@@ -155,7 +155,7 @@ def _settle_linked_carriers(
     connection.execute(
         "UPDATE coach_pings SET status='acted',updated_at=? "
         "WHERE thesis_evaluation_episode_id=? "
-        "AND status IN ('sent','digest','routed_to_brief','send_failed')",
+        "AND status IN ('sending','sent','digest','routed_to_brief','send_failed')",
         (stamp, episode_id),
     )
 

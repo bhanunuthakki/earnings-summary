@@ -21,6 +21,7 @@ from filings.inline_xbrl_processor import FILING_XBRL_PROTOCOL_SQL
 from provenance.fulltext_extractor_identity import (
     FULLTEXT_EXTRACTOR_NAME,
     resolve_fulltext_extractor_identity,
+    select_approved_fulltext_run,
 )
 from provenance.image_ocr_extraction import IMAGE_OCR_EXTRACTOR_NAME
 from provenance.search_index_lineage import IndexKind, sealed_index_lineage
@@ -307,9 +308,11 @@ def _plan_extraction_promotions(
         "AND coverage.coverage_status IN ('captured', 'extracted', 'indexed') "
         "AND run.outcome = 'succeeded' "
         f"AND run.extractor_name IN ({extractor_placeholders}) "
-        "AND EXISTS (SELECT 1 FROM v_evidence_current AS node "
+        "AND EXISTS (SELECT 1 FROM evidence_nodes AS node "
         "WHERE node.extraction_run_id = run.extraction_run_id "
-        "AND node.node_kind <> 'document' AND length(trim(node.text)) > 0) "
+        "AND node.node_kind <> 'document' AND length(trim(node.text)) > 0 "
+        "AND (run.extractor_name='fulltext-evidence-backfill' OR EXISTS ("
+        "SELECT 1 FROM v_evidence_current current WHERE current.node_id=node.node_id))) "
         "ORDER BY coverage.expected_document_id, run.completed_at DESC, "
         "run.extraction_run_id DESC",
         (*request.inventory_keys, *request.extractor_names),
@@ -522,9 +525,8 @@ def _approved_extraction_run(
             _text(row[12], "source_url"),
             _text(row[13], "media_type"),
         )
-        return (
-            _text(row[9], "extractor_code_version") == identity.code_version
-            and _text(row[11], "extractor_config_sha256") == identity.config_sha256
+        return extraction_run_id == select_approved_fulltext_run(
+            conn, document_version_id, identity
         )
     if extractor_name == IMAGE_OCR_EXTRACTOR_NAME:
         return (

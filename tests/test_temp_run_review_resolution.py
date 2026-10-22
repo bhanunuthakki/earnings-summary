@@ -78,7 +78,7 @@ def finish(repo: Path, root: Path, *, success: bool) -> None:
     )
 
 
-def test_failed_lease_stays_reserved_until_reviewed_successful_rerun(
+def test_failed_seal_releases_lease_and_payload_waits_for_reviewed_rerun(
     tmp_path: Path, leases: LeaseLedger, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo = tmp_path / "repo"
@@ -90,8 +90,8 @@ def test_failed_lease_stays_reserved_until_reviewed_successful_rerun(
     failed, failed_token = begin(repo, "failed")
     finish(repo, failed, success=False)
     original = (failed / runs.MANIFEST_NAME).read_bytes()
-    assert failed_token in leases.held
-    assert failed_token not in leases.released
+    assert failed_token not in leases.held
+    assert leases.released.count(failed_token) == 1
     successful, successful_token = begin(repo, "successful")
     with pytest.raises(ValueError, match="unverified_failure_resolution"):
         runs.resolve_failed_temp_run(
@@ -103,7 +103,7 @@ def test_failed_lease_stays_reserved_until_reviewed_successful_rerun(
             reviewed_by="synthetic reviewer",
             now=NOW + timedelta(minutes=3),
         )
-    assert failed_token in leases.held
+    assert (failed / "payload.bin").read_bytes() == b"synthetic payload"
     assert not (failed / runs.RESOLUTION_NAME).exists()
     finish(repo, successful, success=True)
     assert successful_token not in leases.held
@@ -116,7 +116,6 @@ def test_failed_lease_stays_reserved_until_reviewed_successful_rerun(
         reviewed_by="synthetic reviewer",
         now=NOW + timedelta(minutes=3),
     )
-    assert failed_token not in leases.held
     assert leases.released.count(failed_token) == 1
     assert (failed / runs.MANIFEST_NAME).read_bytes() == original
     assert resolution.failed_manifest_sha256 == hashlib.sha256(original).hexdigest()
@@ -129,7 +128,7 @@ def test_failed_lease_stays_reserved_until_reviewed_successful_rerun(
 
 
 @pytest.mark.parametrize("mismatch", ["purpose", "class", "failed_pin", "successful_pin"])
-def test_mismatched_or_pinned_rerun_cannot_release_failed_lease(
+def test_mismatched_or_pinned_rerun_cannot_resolve_failed_run(
     tmp_path: Path, leases: LeaseLedger, mismatch: str
 ) -> None:
     repo = tmp_path / "repo"
@@ -159,11 +158,102 @@ def test_mismatched_or_pinned_rerun_cannot_release_failed_lease(
             reviewed_by="synthetic reviewer",
             now=NOW + timedelta(minutes=3),
         )
-    assert token in leases.held
-    assert token not in leases.released
+    assert token not in leases.held
     assert (failed / runs.MANIFEST_NAME).read_bytes() == original
     assert not (failed / runs.RESOLUTION_NAME).exists()
     assert (failed / "payload.bin").read_bytes() == b"synthetic payload"
+
+
+def pytest_shaped_payload(root: Path) -> list[Path]:
+    """Mirror pytest numbered dirs: a `current` link and a hard-linked fixture."""
+    numbered = root / "fixtures" / "test_case0"
+    numbered.mkdir(parents=True)
+    (numbered / "fixture.db").write_bytes(b"synthetic fixture")
+    (numbered / "shared.db").write_bytes(b"synthetic shared fixture")
+    os.link(numbered / "shared.db", numbered / "shared-alias.db")
+    (root / "fixtures" / "test_casecurrent").symlink_to(numbered, target_is_directory=True)
+    return [
+        root / "payload.bin",
+        numbered / "fixture.db",
+        numbered / "shared.db",
+        root / "fixtures" / "test_casecurrent",
+    ]
+
+
+def test_pytest_link_holds_do_not_block_resolution(
+    tmp_path: Path, leases: LeaseLedger, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+
+    def search_roots(_repo: Path, _code: Path | None) -> list[tuple[Path, bool]]:
+        return [(repo / ".tmp", False)]
+
+    monkeypatch.setattr(runs, "_search_roots", search_roots)
+    failed, failed_token = begin(repo, "failed")
+    # A reviewer declares exact unique files; the link stays held, never followed.
+    failed_paths = [path for path in pytest_shaped_payload(failed) if path.name != "shared.db"]
+    runs.finish_temp_run(failed, repo_root=repo, success=False, now=NOW + timedelta(minutes=1))
+    successful, successful_token = begin(repo, "successful")
+    sealed = runs.finish_temp_run(
+        successful,
+        repo_root=repo,
+        success=True,
+        disposable_paths=pytest_shaped_payload(successful),
+        now=NOW + timedelta(minutes=2),
+        allow_partial=True,
+    )
+    assert {hold.reason for hold in sealed.held_paths} == {
+        "linked_fixture",
+        "not_unique_regular_file",
+    }
+    assert not leases.held
+    assert {failed_token, successful_token} <= set(leases.released)
+    original = (failed / runs.MANIFEST_NAME).read_bytes()
+    resolution = runs.resolve_failed_temp_run(
+        failed,
+        successful_root=successful,
+        repo_root=repo,
+        disposable_paths=failed_paths,
+        reason="reviewed successful rerun",
+        reviewed_by="synthetic reviewer",
+        now=NOW + timedelta(minutes=3),
+    )
+    assert {item.relative_path for item in resolution.files} == {
+        Path("payload.bin"),
+        Path("fixtures/test_case0/fixture.db"),
+    }
+    assert (failed / runs.MANIFEST_NAME).read_bytes() == original
+    assert (failed / "fixtures" / "test_casecurrent").is_symlink()
+    report = next(item for item in runs.discover_temp_runs(repo).reports if item.root == failed)
+    assert report.resolution_status == "resolved"
+
+
+def test_unsafe_hold_on_rerun_still_blocks_resolution(tmp_path: Path, leases: LeaseLedger) -> None:
+    repo = tmp_path / "repo"
+    failed, _ = begin(repo, "failed")
+    finish(repo, failed, success=False)
+    successful, _ = begin(repo, "successful")
+    (successful / "portfolio_gc_archive.db").write_bytes(b"synthetic archive name")
+    sealed = runs.finish_temp_run(
+        successful,
+        repo_root=repo,
+        success=True,
+        disposable_paths=(successful / "payload.bin", successful / "portfolio_gc_archive.db"),
+        now=NOW + timedelta(minutes=2),
+        allow_partial=True,
+    )
+    assert [hold.reason for hold in sealed.held_paths] == ["live_or_archive_database"]
+    with pytest.raises(ValueError, match="unverified_failure_resolution"):
+        runs.resolve_failed_temp_run(
+            failed,
+            successful_root=successful,
+            repo_root=repo,
+            disposable_paths=(failed / "payload.bin",),
+            reason="synthetic attempted resolution",
+            reviewed_by="synthetic reviewer",
+            now=NOW + timedelta(minutes=3),
+        )
+    assert not (failed / runs.RESOLUTION_NAME).exists()
 
 
 def reviewed_file(repo: Path, root: Path, relative: Path, *, isolated: bool = False) -> Path:
