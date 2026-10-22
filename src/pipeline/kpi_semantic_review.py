@@ -27,7 +27,10 @@ from pipeline.kpi_legacy_disposition_capture import captured_legacy_quarantine_m
 from pipeline.kpi_semantic_scope import portfolio_tickers, scoped_kpi_definitions
 from provenance.evidence_ledger import EvidenceLocator, OfficeObjectKind
 from provenance.financial_fact_resolution import canonical_fact_relation
-from provenance.fulltext_extractor_identity import resolve_fulltext_extractor_identity
+from provenance.fulltext_extractor_identity import (
+    resolve_fulltext_extractor_identity,
+    select_approved_fulltext_run,
+)
 from runtime.deterministic import table_or_view_exists as _table_exists
 
 MAX_KPI_SEMANTIC_REVIEW_ITEMS = 5_000
@@ -598,36 +601,30 @@ def _evidence_state_and_candidates(
             KpiSemanticReviewState.NEEDS_FULLTEXT_CAPTURE,
             "fulltext_extraction_missing",
         )
-    valid_run_ids = tuple(
-        str(row["extraction_run_id"])
-        for row in runs
-        if str(row["outcome"]) == "succeeded"
-        and str(row["input_sha256"]) == source_sha
-        and str(row["extractor_name"]) == extractor.name
-        and str(row["extractor_config_sha256"]) == extractor.config_sha256
-        and str(row["extractor_code_version"]) == extractor.code_version
+    selected_run_id = select_approved_fulltext_run(
+        conn, str(binding["document_version_id"]), extractor
     )
-    if not valid_run_ids:
+    if selected_run_id is None:
         return _review_result(
             KpiSemanticReviewState.EVIDENCE_BINDING_INVALID,
             "promoted_fulltext_extraction_missing",
         )
     snapshot = snapshot_cache.get(source_doc_id)
     if snapshot is None:
-        run_marks = ",".join("?" for _ in valid_run_ids)
         kind_marks = ",".join("?" for _ in _SUBSTANTIVE_NODE_KINDS)
         rows = conn.execute(
             "SELECT node.node_id,node.node_kind,node.locator_json,node.locator_sha256,"  # nosec B608 -- SQL shape and placeholder counts come only from closed internal sets; all values remain bound
             "substr(node.text,1,?) AS bounded_text,length(node.text) AS text_length,"
             "node.extraction_run_id,run.document_version_id FROM evidence_nodes node "
             "JOIN evidence_extraction_runs run ON run.extraction_run_id=node.extraction_run_id "
-            f"WHERE node.extraction_run_id IN ({run_marks}) "
+            "WHERE node.extraction_run_id=? "
             f"AND node.node_kind IN ({kind_marks}) "
             "AND NOT EXISTS (SELECT 1 FROM evidence_nodes newer "
-            "WHERE newer.supersedes_node_id=node.node_id) ORDER BY node.node_id LIMIT ?",
+            "WHERE newer.supersedes_node_id=node.node_id "
+            "AND newer.extraction_run_id=node.extraction_run_id) ORDER BY node.node_id LIMIT ?",
             (
                 MAX_EVIDENCE_TEXT_CHARS_PER_NODE + 1,
-                *valid_run_ids,
+                selected_run_id,
                 *sorted(_SUBSTANTIVE_NODE_KINDS),
                 MAX_EVIDENCE_NODES_PER_DOCUMENT + 1,
             ),
