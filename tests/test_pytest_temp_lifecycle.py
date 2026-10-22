@@ -82,6 +82,11 @@ def test_session_hook_registers_success_and_preserves_failure(
     manifest: object = json.loads((run_root / ".earnings-temp-run.json").read_bytes())
     assert isinstance(manifest, dict)
     assert manifest["status"] == ("completed" if passed else "failed")
+    # Both outcomes end the child's peak lease at seal; failure keeps its payload.
+    sealed = temp_run_retention.TempRunManifest.model_validate(manifest)
+    assert sealed.reservation_token is not None
+    with pytest.raises(FileNotFoundError):
+        release_peak(run_root, sealed.reservation_token)
     fixture = fixture_dir / "fixture.db"
     if passed and actions:
         assert fixture.read_bytes() == b"synthetic fixture"
@@ -111,11 +116,6 @@ def test_session_hook_registers_success_and_preserves_failure(
     assert retirement.deleted == 0
     assert fixture.exists() is not passed
     assert (run_root / ".earnings-temp-run.json").is_file()
-    # Both outcomes end the child's peak lease at seal; failure keeps its payload.
-    sealed = temp_run_retention.TempRunManifest.model_validate(manifest)
-    assert sealed.reservation_token is not None
-    with pytest.raises(FileNotFoundError):
-        release_peak(run_root, sealed.reservation_token)
     # Remove only the exact child test directory that this test created. Failed
     # session protection is already proved; this test does not leave test debris.
     shutil.rmtree(run_root)
