@@ -1751,7 +1751,7 @@ def test_promoted_pdf_run_preserves_legacy_and_has_distinct_replay_identity(
         assert len(runs) == len(old_runs) + 1
         promoted_run = next(row for row in runs if row not in old_runs)
         assert promoted_run["extractor_code_version"] == (
-            "fulltext-evidence-backfill@6-pdf-public-access;pypdf=6.20.1"
+            "fulltext-evidence-backfill@6-pdf-public-access;pypdf=6.21.1"
         )
         assert promoted_run["extractor_config_sha256"] == PDF_FULLTEXT_EXTRACTOR.config_sha256
         current = resolve_fulltext_extractor_identity("report.pdf", "application/pdf")
@@ -1993,7 +1993,7 @@ def test_promoted_pdf_runtime_matches_reviewed_lock() -> None:
         for line in (PROJECT_ROOT / "requirements.lock").read_text().splitlines()
         if line.startswith("pypdf==")
     ]
-    assert PDF_FULLTEXT_PYPDF_VERSION == "6.20.1"
+    assert PDF_FULLTEXT_PYPDF_VERSION == "6.21.1"
     assert locked_versions == [PDF_FULLTEXT_PYPDF_VERSION]
 
 
