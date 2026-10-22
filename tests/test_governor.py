@@ -18,6 +18,7 @@ from research.governor import (
     collect_moments,
     digest_pings,
     get_ping,
+    mark_ping_acted,
     record_dismissal,
     run_governor,
     unmute,
@@ -480,6 +481,39 @@ def _only_ping_status(db: Path) -> str:
 
 class _ProcessKilled(BaseException):
     """A kill or interrupt mid-push: it bypasses send_fn's ``except Exception``."""
+
+
+@pytest.mark.parametrize("action", ["acted", "dismissed"])
+@pytest.mark.parametrize("delivered", [False, True])
+def test_unlinked_owner_callback_during_send_preserves_terminal_state(
+    db: Path, action: str, delivered: bool
+) -> None:
+    _seed_breach(db)
+
+    def owner_reply(ping_id: int, _moment: Moment) -> bool:
+        assert _only_ping_status(db) == "sending"
+        with sqlite3.connect(db) as conn:
+            assert (
+                conn.execute(
+                    "SELECT thesis_evaluation_episode_id FROM coach_pings WHERE id=?", (ping_id,)
+                ).fetchone()[0]
+                is None
+            )
+        if action == "acted":
+            assert mark_ping_acted(ping_id, db_path=db)
+        else:
+            assert record_dismissal(ping_id, db_path=db)[0]
+        return delivered
+
+    run_governor(db, send_fn=owner_reply, now=_NOW)
+    assert _only_ping_status(db) == action
+    retried: list[Moment] = []
+    run_governor(
+        db,
+        send_fn=lambda _pid, moment: retried.append(moment) or True,
+        now=_NOW + timedelta(hours=1),
+    )
+    assert not retried and _only_ping_status(db) == action
 
 
 def test_push_interrupted_mid_flight_is_retried_not_recorded_as_sent(db: Path) -> None:

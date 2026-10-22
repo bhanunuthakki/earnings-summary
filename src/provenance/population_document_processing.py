@@ -59,6 +59,7 @@ from provenance.research_snapshot import (
     ProcessingEvidenceReference,
     derive_obligations,
     record_disposition,
+    report_pdf_table_scope_for_obligation,
     seal_disposition,
     seal_processing_snapshot,
 )
@@ -832,6 +833,19 @@ def populate_document_processing(
                     observed_through=recorded,
                     recorded_at=recorded,
                 )
+        table_scope_options = (
+            {
+                "report_pdf_table_scopes_json": json.dumps(
+                    [
+                        item.model_dump(mode="json")
+                        for item in request.analysis_scope.request.report_pdf_tables
+                    ]
+                )
+            }
+            if request.analysis_scope is not None
+            and request.analysis_scope.request.report_pdf_tables
+            else {}
+        )
         obligations = _obligation_rows(
             conn,
             cutoff,
@@ -845,6 +859,11 @@ def populate_document_processing(
             ),
             after=request.after_processing_obligation_revision_id,
             limit=request.max_obligations,
+            defer_filing_xbrl=(
+                request.analysis_scope is not None
+                and request.analysis_scope.request.readiness_profile is not None
+            ),
+            **table_scope_options,
         )
         processed = 0
         last_id = request.after_processing_obligation_revision_id
@@ -894,8 +913,26 @@ def populate_document_processing(
                 for document_id in document_ids
             )
         )
-        totals = _obligation_totals(conn, cutoff, scoped_document_ids, recorded)
-        sealed = _sealed_disposition_count(conn, cutoff, scoped_document_ids, recorded)
+        defer_xbrl = (
+            request.analysis_scope is not None
+            and request.analysis_scope.request.readiness_profile is not None
+        )
+        totals = _obligation_totals(
+            conn,
+            cutoff,
+            scoped_document_ids,
+            recorded,
+            defer_filing_xbrl=defer_xbrl,
+            **table_scope_options,
+        )
+        sealed = _sealed_disposition_count(
+            conn,
+            cutoff,
+            scoped_document_ids,
+            recorded,
+            defer_filing_xbrl=defer_xbrl,
+            **table_scope_options,
+        )
         failed = max(totals["total"] - sealed, 0)
         if failed and not failures:
             failures["unsealed_processing_obligation"] = failed
@@ -1008,9 +1045,37 @@ def _document_scope(
     decisions, _documents, _incomplete = reporting_document_scope(
         conn, cutoff, observed_through, expected_document_ids=tuple(sorted(selected_ids))
     )
-    selected_decisions = tuple(
-        decision for decision in decisions if decision.expected_document_id in selected_ids
-    )
+    entries = {entry.expected_document_id: entry for entry in analysis_scope.entries}
+    primary_decisions = {
+        entries[decision.expected_document_id].expected_document.accession_number: decision
+        for decision in decisions
+        if decision.expected_document_id in entries
+        and entries[decision.expected_document_id].expected_document.document_type == "filing"
+        and decision.outcome == "governed_reporting"
+    }
+    selected_decisions: list[ReportingDocumentDecision] = []
+    for decision in decisions:
+        if decision.expected_document_id not in selected_ids:
+            continue
+        entry = entries[decision.expected_document_id]
+        primary = primary_decisions.get(entry.expected_document.accession_number)
+        if (
+            analysis_scope.request.readiness_profile == "complete_report_evidence/v1"
+            and entry.expected_document.document_type == "sec_exhibit"
+            and decision.outcome == "excluded_supporting"
+            and decision.reason_code == "sec_supporting_artifact"
+            and primary is not None
+            and primary.reporting_entity_id is not None
+            and decision.reporting_entity_id == primary.reporting_entity_id
+        ):
+            decision = decision.model_copy(
+                update={
+                    "outcome": "governed_reporting",
+                    "document_family": primary.document_family,
+                    "reason_code": "selected_report_original_exhibit",
+                }
+            )
+        selected_decisions.append(decision)
     grouped: dict[str, list[str]] = {}
     for decision in selected_decisions:
         if (
@@ -1020,7 +1085,7 @@ def _document_scope(
         ):
             grouped.setdefault(decision.issuer_id, []).append(decision.document_version_id)
     return (
-        selected_decisions,
+        tuple(selected_decisions),
         {
             issuer_id: tuple(sorted(set(document_ids)))
             for issuer_id, document_ids in sorted(grouped.items())
@@ -1053,6 +1118,7 @@ def _close_obligation(
         )
     else:
         lane = str(obligation["processing_lane"])
+        table_scope = None
         if lane == "filing_xbrl":
             reference = _filing_xbrl_reference(
                 conn,
@@ -1061,12 +1127,14 @@ def _close_obligation(
                 recorded_at,
             )
         else:
+            table_scope = report_pdf_table_scope_for_obligation(conn, obligation_id)
             receipt = publish_document_processing_evidence(
                 conn,
                 document_version_id=str(obligation["document_version_id"]),
                 processing_lane=lane,
                 cutoff_at=cutoff,
                 recorded_at=recorded_at,
+                **({"report_pdf_table_scope": table_scope} if table_scope is not None else {}),
             )
             verified = verify_document_processing_evidence(
                 conn,
@@ -1075,6 +1143,7 @@ def _close_obligation(
                 processing_lane=receipt.processing_lane,
                 cutoff_at=cutoff,
                 observed_through=recorded_at,
+                **({"report_pdf_table_scope": table_scope} if table_scope is not None else {}),
             )
             reference = ProcessingEvidenceReference(
                 evidence_table="document_processing_evidence_seals",
@@ -1088,7 +1157,11 @@ def _close_obligation(
             idempotency_key=disposition_id,
             processing_obligation_revision_id=obligation_id,
             terminal_status="succeeded",
-            reason_code="complete_native_lane_inventory_sealed",
+            reason_code=(
+                "report_scoped_pdf_table_inventory_sealed"
+                if lane == "pdf_table" and table_scope is not None
+                else "complete_native_lane_inventory_sealed"
+            ),
             reason_details={
                 "evidence_id": reference.evidence_id,
                 "policy_name": _POLICY.policy_name,
@@ -1458,9 +1531,38 @@ def _seal_complete_snapshots(
     analysis_scope: AnalysisEvidenceScope | None = None,
 ) -> None:
     planned: list[tuple[str, tuple[str, ...], str]] = []
+    table_scope_options = (
+        {
+            "report_pdf_table_scopes_json": json.dumps(
+                [item.model_dump(mode="json") for item in analysis_scope.request.report_pdf_tables]
+            )
+        }
+        if analysis_scope is not None and analysis_scope.request.report_pdf_tables
+        else {}
+    )
     for issuer_id, document_ids in documents_by_issuer.items():
-        totals = _obligation_totals(conn, cutoff, document_ids, recorded_at)
-        if _sealed_disposition_count(conn, cutoff, document_ids, recorded_at) != totals["total"]:
+        defer_xbrl = (
+            analysis_scope is not None and analysis_scope.request.readiness_profile is not None
+        )
+        totals = _obligation_totals(
+            conn,
+            cutoff,
+            document_ids,
+            recorded_at,
+            defer_filing_xbrl=defer_xbrl,
+            **table_scope_options,
+        )
+        if (
+            _sealed_disposition_count(
+                conn,
+                cutoff,
+                document_ids,
+                recorded_at,
+                defer_filing_xbrl=defer_xbrl,
+                **table_scope_options,
+            )
+            != totals["total"]
+        ):
             raise ValueError(
                 f"cannot seal processing snapshot for {issuer_id} with unclosed obligations"
             )
@@ -1491,6 +1593,16 @@ def _seal_complete_snapshots(
         raise
 
 
+def _pdf_table_scope_predicate(alias: str = "") -> str:
+    prefix = alias + "." if alias else ""
+    return (
+        f" AND ({prefix}processing_lane!='pdf_table' OR "  # nosec B608 -- prefix is a fixed internal alias
+        f"json_extract({prefix}source_state_json,'$.report_pdf_table_scope.scope_sha256') IS "
+        "(SELECT json_extract(value,'$.scope_sha256') FROM json_each(?) "
+        f"WHERE json_extract(value,'$.document_version_id')={prefix}document_version_id)) "
+    )
+
+
 def _obligation_rows(
     conn: sqlite3.Connection,
     cutoff: datetime,
@@ -1499,6 +1611,8 @@ def _obligation_rows(
     document_version_ids: tuple[str, ...],
     after: str | None,
     limit: int | None,
+    defer_filing_xbrl: bool = False,
+    report_pdf_table_scopes_json: str = "[]",
 ) -> list[sqlite3.Row]:
     if not document_version_ids:
         return []
@@ -1506,6 +1620,8 @@ def _obligation_rows(
         _db_time(cutoff),
         _db_time(observed_through),
         json.dumps(document_version_ids),
+        defer_filing_xbrl,
+        report_pdf_table_scopes_json,
     ]
     after_sql = ""
     if after is not None:
@@ -1516,11 +1632,13 @@ def _obligation_rows(
         limit_sql = " LIMIT ?"
         parameters.append(limit)
     return conn.execute(
-        "SELECT * FROM document_processing_obligation_revisions "
+        "SELECT * FROM document_processing_obligation_revisions "  # nosec B608 -- fixed fragments; values are bound
         "WHERE datetime(knowledge_at)<=datetime(?) "
         "AND datetime(recorded_at)<=datetime(?) "
         "AND document_version_id IN (SELECT value FROM json_each(?)) "
-        f"{after_sql} ORDER BY processing_obligation_revision_id{limit_sql}",  # nosec B608 -- fixed fragments; values are bound
+        "AND (?=0 OR processing_lane!='filing_xbrl') "
+        + _pdf_table_scope_predicate()
+        + f"{after_sql} ORDER BY processing_obligation_revision_id{limit_sql}",
         tuple(parameters),
     ).fetchall()
 
@@ -1556,21 +1674,27 @@ def _obligation_totals(
     cutoff: datetime,
     document_version_ids: tuple[str, ...],
     observed_through: datetime,
+    defer_filing_xbrl: bool = False,
+    report_pdf_table_scopes_json: str = "[]",
 ) -> dict[str, int]:
     counts = {"total": 0, "applicable": 0, "not_applicable": 0}
     if not document_version_ids:
         return counts
     for row in conn.execute(
-        "SELECT applicability,COUNT(*) "
+        "SELECT applicability,COUNT(*) "  # nosec B608 -- fixed predicate fragment; values are bound
         "FROM document_processing_obligation_revisions "
         "WHERE datetime(knowledge_at)<=datetime(?) "
         "AND datetime(recorded_at)<=datetime(?) "
         "AND document_version_id IN (SELECT value FROM json_each(?)) "
-        "GROUP BY applicability",
+        "AND (?=0 OR processing_lane!='filing_xbrl') "
+        + _pdf_table_scope_predicate()
+        + "GROUP BY applicability",
         (
             _db_time(cutoff),
             _db_time(observed_through),
             json.dumps(document_version_ids),
+            defer_filing_xbrl,
+            report_pdf_table_scopes_json,
         ),
     ):
         counts[str(row[0])] = int(row[1])
@@ -1583,12 +1707,14 @@ def _sealed_disposition_count(
     cutoff: datetime,
     document_version_ids: tuple[str, ...],
     observed_through: datetime,
+    defer_filing_xbrl: bool = False,
+    report_pdf_table_scopes_json: str = "[]",
 ) -> int:
     if not document_version_ids:
         return 0
     return int(
         conn.execute(
-            "SELECT COUNT(DISTINCT header.processing_obligation_revision_id) "
+            "SELECT COUNT(DISTINCT header.processing_obligation_revision_id) "  # nosec B608 -- fixed predicate fragment; values are bound
             "FROM document_processing_disposition_headers header "
             "JOIN document_processing_obligation_revisions obligation "
             "ON obligation.processing_obligation_revision_id="
@@ -1599,12 +1725,16 @@ def _sealed_disposition_count(
             "AND datetime(header.recorded_at)<=datetime(?) "
             "AND datetime(seal.sealed_at)<=datetime(?) "
             "AND obligation.document_version_id "
-            "IN (SELECT value FROM json_each(?))",
+            "IN (SELECT value FROM json_each(?)) "
+            "AND (?=0 OR obligation.processing_lane!='filing_xbrl')"
+            + _pdf_table_scope_predicate("obligation"),
             (
                 _db_time(cutoff),
                 _db_time(observed_through),
                 _db_time(observed_through),
                 json.dumps(document_version_ids),
+                defer_filing_xbrl,
+                report_pdf_table_scopes_json,
             ),
         ).fetchone()[0]
     )

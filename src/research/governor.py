@@ -902,7 +902,7 @@ def record_dismissal(ping_id: int, *, db_path: Path | str | None = None) -> tupl
             return True, None
         row = conn.execute(
             "SELECT class_ FROM coach_pings WHERE id = ? "
-            "AND status IN ('sent','digest','routed_to_brief','acted')",
+            "AND status IN ('sending','sent','digest','routed_to_brief','acted')",
             (ping_id,),
         ).fetchone()
         if row is None:
@@ -973,9 +973,9 @@ def record_ping_message_id(
 
 def mark_ping_acted(ping_id: int, *, db_path: Path | str | None = None) -> bool:
     """Owner's reply resolved this ping (acknowledge / annotate_decision outcome
-    in ``capture.coach_reply``) — flip it to ``acted`` from ``sent``/``digest``
-    only, mirroring ``record_dismissal``'s status-guard shape. Returns whether a
-    row was updated."""
+    in ``capture.coach_reply``) — flip it to ``acted`` from
+    ``sending``/``sent``/``digest``. The status guard mirrors
+    ``record_dismissal``. Returns whether a row was updated."""
     stamp = now_naive_utc().isoformat()
     conn = open_conn(db_path)
     try:
@@ -999,7 +999,7 @@ def mark_ping_acted(ping_id: int, *, db_path: Path | str | None = None) -> bool:
             return True
         cur = conn.execute(
             "UPDATE coach_pings SET status = 'acted', updated_at = ? "
-            "WHERE id = ? AND status IN ('sent', 'digest')",
+            "WHERE id = ? AND status IN ('sending', 'sent', 'digest')",
             (stamp, ping_id),
         )
         conn.commit()

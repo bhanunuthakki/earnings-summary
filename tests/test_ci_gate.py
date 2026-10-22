@@ -275,6 +275,9 @@ def test_native_receipt_requires_each_exact_case_to_pass(
         "test_windows_kill_on_close_job_terminates_process_and_descendant",
         "test_managed_child_is_suspended_assigned_resumed_and_kills_descendant",
         "test_managed_deadline_kills_live_worker_and_descendant",
+        "test_concurrent_processes_cannot_both_admit_over_host_limit",
+        "test_dead_holder_lease_is_reclaimed_at_admission",
+        "test_live_holder_lease_is_never_reclaimed",
     ]
     if disposition == "missing":
         cases.pop()
@@ -309,8 +312,14 @@ def test_windows_native_job_is_isolated_and_required() -> None:
     assert "--noconftest" in native_job
     assert "verify-windows-native --junit" in native_job
     assert "retention-days: 7" in native_job
-    for case in _load_helper().WINDOWS_NATIVE_CASES:
-        assert f"tests/test_job_runtime_process_tree.py::{case}" in native_job
+    helper = _load_helper()
+    for case in helper.WINDOWS_NATIVE_CASES:
+        module = (
+            "test_storage_reservation"
+            if case in helper.WINDOWS_STORAGE_LEASE_CASES
+            else "test_job_runtime_process_tree"
+        )
+        assert f"tests/{module}.py::{case}" in native_job
     assert "WINDOWS_NATIVE_RESULT: ${{ needs.windows-native.result }}" in workflow
     assert '--windows-native-result "$WINDOWS_NATIVE_RESULT"' in workflow
 

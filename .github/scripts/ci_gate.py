@@ -110,6 +110,11 @@ WINDOWS_APP_REQUIRED_CASES = frozenset(
     f"{module}::{name}"
     for module, names in {
         "tests.test_governor": (
+            *(
+                f"test_unlinked_owner_callback_during_send_preserves_terminal_state[{sent}-{action}]"
+                for sent in (False, True)
+                for action in ("acted", "dismissed")
+            ),
             "test_push_interrupted_mid_flight_is_retried_not_recorded_as_sent",
             "test_in_flight_push_from_a_live_run_is_not_duplicated",
             "test_stale_worker_completing_late_cannot_overwrite_a_newer_attempt",
@@ -172,7 +177,14 @@ WINDOWS_APP_REQUIRED_CASES = frozenset(
     for name in names
 )
 DiagnosticFingerprint = tuple[str, str, str]
-WINDOWS_NATIVE_CASES = frozenset(
+WINDOWS_STORAGE_LEASE_CASES = frozenset(
+    {
+        "test_concurrent_processes_cannot_both_admit_over_host_limit",
+        "test_dead_holder_lease_is_reclaimed_at_admission",
+        "test_live_holder_lease_is_never_reclaimed",
+    }
+)
+WINDOWS_NATIVE_CASES = WINDOWS_STORAGE_LEASE_CASES | frozenset(
     {
         "test_windows_exited_process_with_held_handle_is_dead_and_lock_is_recoverable[0]",
         "test_windows_exited_process_with_held_handle_is_dead_and_lock_is_recoverable[259]",
@@ -627,9 +639,9 @@ def _verify_windows_native(junit: Path) -> int:
     if names != Counter(WINDOWS_NATIVE_CASES) or any(
         child.tag in {"skipped", "failure", "error"} for case in cases for child in case
     ):
-        print("::error::Each of the five native Windows cases must pass exactly once.")
+        print("::error::Each of the eight native Windows cases must pass exactly once.")
         return 1
-    print("All five native Windows process-tree cases passed.")
+    print("All eight native Windows process-tree and storage-lease cases passed.")
     return 0
 
 

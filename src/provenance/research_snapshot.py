@@ -34,6 +34,7 @@ from provenance.canonical_fact_resolution import (
     CanonicalFactResolutionEngine,
     VerifiedResolutionSnapshot,
 )
+from provenance.fact_plane_v2 import CanonicalJSONObject
 from provenance.fact_read_model import FactReadModel
 from provenance.source_fact_publication import (
     VerifiedSourceFactPublication,
@@ -224,6 +225,104 @@ class DocumentProcessingSnapshotReceipt(_Frozen):
     )
 
     _sha = field_validator("member_set_sha256")(_validate_sha)
+
+
+class DeferredPdfPageError(ValueError):
+    """An anchor cannot prove membership in the reviewed PDF page population."""
+
+
+def require_included_pdf_pages(
+    conn: sqlite3.Connection,
+    report_pdf_tables: tuple[ReportPdfTableScope, ...],
+    *,
+    evidence_node_ids: tuple[str, ...] = (),
+    observation_ids: tuple[str, ...] = (),
+    cutoff: datetime,
+) -> None:
+    """Reject deferred/unknown pages, including the leaves of derived anchors.
+
+    Scope admission and certificate verification remain with their existing owners.
+    With no reviewed PDF scope this guard performs no additional reads or checks.
+    """
+    if not report_pdf_tables:
+        return
+    included = {
+        scope.document_version_id: {
+            page.page_number for page in scope.pages if page.table_requirement == "required"
+        }
+        for scope in report_pdf_tables
+    }
+
+    def require_page(document_id: str, locator: CanonicalJSONObject) -> int | None:
+        if document_id not in included:
+            return None
+        page = locator.root.get("page_number")
+        if type(page) is not int or page not in included[document_id]:
+            raise DeferredPdfPageError("deferred_pdf_page_used")
+        return page
+
+    def require_node(node_id: str, document_id: str | None = None) -> int | None:
+        row = conn.execute(
+            "SELECT run.document_version_id,node.locator_json FROM evidence_nodes node "
+            "JOIN evidence_extraction_runs run USING(extraction_run_id) WHERE node.node_id=?",
+            (node_id,),
+        ).fetchone()
+        if row is None or (document_id is not None and str(row[0]) != document_id):
+            raise DeferredPdfPageError("deferred_pdf_page_used")
+        if str(row[0]) not in included:
+            return None
+        try:
+            locator = CanonicalJSONObject.model_validate_json(str(row[1]))
+        except ValueError as exc:
+            raise DeferredPdfPageError("deferred_pdf_page_used") from exc
+        return require_page(str(row[0]), locator)
+
+    for node_id in evidence_node_ids:
+        require_node(node_id)
+
+    reader = FactReadModel(conn)
+    heights: dict[str, int] = {}
+    visiting: set[str] = set()
+    discovered: set[str] = set()
+
+    def visit(observation_id: str, depth: int) -> int:
+        if observation_id in visiting or depth > MAX_DERIVATION_DEPTH:
+            raise DeferredPdfPageError("deferred_pdf_page_derivation_bounds")
+        if observation_id in heights:
+            height = heights[observation_id]
+            if depth + height > MAX_DERIVATION_DEPTH:
+                raise DeferredPdfPageError("deferred_pdf_page_derivation_bounds")
+            return height
+        discovered.add(observation_id)
+        if len(discovered) > MAX_DERIVATION_NODES:
+            raise DeferredPdfPageError("deferred_pdf_page_derivation_bounds")
+        visiting.add(observation_id)
+        (bundle,) = reader.required_provenance_bundles((observation_id,), cutoff=cutoff)
+        height = 0
+        if bundle.observation.observation_kind == "reported":
+            evidence = bundle.evidence
+            if evidence is None:
+                raise DeferredPdfPageError("deferred_pdf_page_used")
+            page = require_node(evidence.evidence_node_id, evidence.document_version_id)
+            # Some observation locators add financial context to the node locator.
+            # If they also name a page, both anchors must agree on an included page.
+            if "page_number" in evidence.source_locator.root and page != require_page(
+                evidence.document_version_id, evidence.source_locator
+            ):
+                raise DeferredPdfPageError("deferred_pdf_page_used")
+        else:
+            derivation = bundle.derivation
+            if derivation is None or not derivation.input_observation_ids:
+                raise DeferredPdfPageError("deferred_pdf_page_used")
+            height = 1 + max(
+                visit(operand, depth + 1) for operand in derivation.input_observation_ids
+            )
+        visiting.remove(observation_id)
+        heights[observation_id] = height
+        return height
+
+    for observation_id in observation_ids:
+        visit(observation_id, 0)
 
 
 class CorpusProjectionBundle(_Frozen):

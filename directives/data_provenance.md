@@ -132,9 +132,17 @@ PDF full-text extraction uses the deliberately promoted identity in
 library version. The writer checks the loaded parser before parsing; a missing or
 different version is quarantined without recording an approved extraction run.
 Dependency updates require an explicit identity promotion and isolated parser
-validation. Readers select the approved identity independently of their installed
-libraries. Prior sealed evidence remains reconstructible under its pinned
-historical identity, but cannot authorize a new seal or current coverage.
+validation. New extraction uses pypdf 6.21.1 only. Readers select exact approved
+identities independently of their installed libraries, retaining the prior 6.19.0
+code/config pair for seals, current coverage, search and KPI evidence. Readers
+select one complete approved run per document, preferring 6.21.1 and falling back
+to 6.19.0; they never combine nodes across parser runs. Retained coverage also
+counts as complete for scheduled resume and explicit full-text backfill, so the
+promotion does not trigger re-extraction. Historical
+base `@1` sealed evidence remains reconstructible under its pinned identity, but
+cannot authorize a new seal or current coverage. The 6.21.1 writer has a distinct
+idempotency namespace to avoid colliding with 6.19.0 runs; `fulltext-pdf-v6`
+evidence keys retain explicit superseding revisions without erasing old nodes.
 
 Mutable provider caches are working projections. Before registration, exact retained FMP
 cache bytes are installed without clobbering under content-addressed
@@ -162,6 +170,12 @@ source and knowledge times, conflict history, and explicit unavailable dispositi
 Only genuinely matching retained bytes can receive a byte-verification stamp.
 
 ### Selected financial evidence and calculations
+
+The finite `native-pdf-transcript-review/v1` profile binds untimed transcript turns
+and speakers to the complete promoted native PDF text seal and exact page/character
+spans. Reviewed raw source labels supply attribution; page openings and reviewed
+speakerless headings retain unknown attribution. Timecodes remain explicitly
+unavailable, and the existing time-coded transcript profile keeps its requirements.
 
 Financials, Explore, Ask and financial decision conditions retain the exact
 selected observation and one aware knowledge cutoff. Table and series references

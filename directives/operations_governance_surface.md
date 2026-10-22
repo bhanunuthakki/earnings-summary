@@ -1559,6 +1559,20 @@ held native XBRL lane remain unresolved prerequisites. This operation is not a
 route around their applicability, corpus or completeness guards.
 
 
+### pypdf 6.21.1 PDF extractor promotion — no operational surface change
+
+New PDF full-text extraction uses pypdf 6.21.1 under a distinct idempotency
+namespace. The exact pypdf 6.19.0 extractor identity stays approved for reading,
+so existing PDF evidence keeps verifying, and retained coverage counts as complete
+for the scheduled `process_document_evidence.py --apply --resume` stage and for
+explicit full-text backfill. The promotion therefore triggers no re-extraction.
+Readers select one complete approved run per document and never combine nodes
+across parser runs. This adds no operator action, route, service, schedule,
+provider, model pin, budget, schema or live-state write. Re-extracting retained
+PDFs with 6.21.1 remains an optional, separately approved operation.
+`tests/test_document_processing_evidence.py`, `tests/test_fulltext_evidence_backfill.py`,
+`tests/test_search_corpus_builder.py` and `tests/test_kpi_semantic_review.py` check it.
+
 ### Function lifecycle collector — no operational surface change
 
 The internal `execution/inventory_function_lifecycle.py` command collects
@@ -1698,6 +1712,22 @@ remain authoritative. Regression evidence: `tests/test_sealed_snapshot_admission
 Exact-read and model-context regressions are in
 `tests/test_canonical_fact_exact_read.py`, `tests/test_meli_input_evidence.py`,
 `tests/test_cashflow_input_evidence.py` and `tests/test_memo_model_roundtrip.py`.
+
+### Native untimed PDF transcript evidence — 2026-10-19
+
+Disposition: **tested no UI or operator CLI surface change**. The new typed
+`provenance.native_pdf_transcript` library profile supplies the existing required
+transcript-turn and transcript-speaker processing lanes. A task-only qualification
+runner can call it under the existing isolated database writer boundary. It adds
+no registered operator command, dashboard control, scheduler, provider call,
+production activation or live write authority. The profile requires a verified
+promoted native PDF text seal and replays a complete exact page-span partition.
+It preserves reviewed raw speaker labels, explicit unknown attribution and
+unavailable timecodes. The existing legacy speaker/timecode guard stays in force.
+Evidence: `tests/test_native_pdf_transcript.py` and
+`tests/test_document_processing_evidence.py::test_transcript_speaker_lane_requires_immutable_speaker_and_timecodes`.
+
+
 ### Scoped issuer-document obligation bindings — 2026-10-19
 
 Disposition: **no UI or operator CLI surface change**. The native research
@@ -1726,3 +1756,64 @@ publication authority. Native regression evidence:
 `tests/test_report_canonical_financials.py` and `tests/test_nu_earnings_evidence.py`.
 
 
+### Reviewed report PDF table scope — 2026-10-19
+
+Disposition: **tested no UI or operator CLI surface change**. Existing typed
+analysis-scope and processing-library entrypoints can retain a reviewed all-page
+PDF table scope and issue a distinct report-scoped certificate. No dashboard,
+registered command, scheduler, parser, provider or production authority is added.
+The source review must be actual and precede generation. Full text and the full
+native quarantined artifact remain retained. Required quarantined pages fail
+closed. The model-input verifier rejects deferred pages, unknown pages in scoped
+documents, and derived observations with deferred source leaves through the shared
+provenance page guard. Memo financial-reference and evidence-node consumers reject
+all per-page PDF scopes with `memo_report_pdf_scope_unsupported`, including required
+pages, and retain a degraded non-decision-grade assessment until the later report
+PR implements complete page-aware admission. The processing receipt
+names scoped identities and deferred pages. Full/default certificates remain strict.
+Evidence: `tests/test_meli_input_evidence.py`,
+`tests/test_document_processing_evidence.py`,
+`tests/test_population_document_processing.py`, `tests/test_report_evidence_scope.py`
+and `tests/test_analysis_issuer_pdf_scope.py`.
+
+
+### Test-storage peak lease lifetime — 2026-10-21
+
+Disposition: **no UI or operator CLI surface change**. A disposable run's peak
+lease in `src/operations/storage_reservation.py` now covers only its live
+producer. `finish_temp_run` releases it after a passed or failed seal. The next
+admission on the same host reclaims a lease when the operating system reports
+that its holder process does not exist. Any doubt, including denied access or a
+reused process number, keeps the lease. A failed run keeps its manifest and
+payload protected until a reviewed resolution, as before. Its retained bytes
+still count through the 50 GiB free-space headroom, but no longer through the
+20 GiB concurrent-producer limit. A reviewed resolution can now bind to a passed
+rerun whose only holds are pytest links or multiply linked files. Those paths
+stay in place and are never followed or retired. Other holds still block. This
+removes the outage where ten failed local test sessions blocked all later pytest
+runs. No operator action, scheduler, service, Operations surface or retention
+window changed. Regression evidence: `tests/test_storage_reservation.py`,
+`tests/test_temp_run_review_resolution.py` and
+`tests/test_pytest_temp_lifecycle.py`.
+
+
+
+### Coach delivery confirmation and fundamentals cache revision — 2026-10-22
+
+Disposition: **tested existing operational behavior repair; no new operator action**.
+Coach delivery claims use `sending` until Telegram confirmation. A 15-minute
+expired claim becomes retryable; completion is fenced to the exact claim timestamp.
+The manual and scheduled coach entrypoints share the `notification-delivery` lane.
+Owner acknowledgement and dismissal of an unlinked `sending` carrier remain
+recordable, and completion preserves those terminal states. Acknowledgement after
+a claim cannot recall a push already in flight. Delivery is at least once: a crash
+after Telegram accepts the push but before confirmation may produce a duplicate.
+This change does not establish durable send-time frequency accounting.
+
+The cockpit fundamentals cache binds the canonical financial revision captured
+with its values in one committed read transaction and rejects changed revisions.
+Snapshot replacement still requires an explicit derived-cache refresh. No schedule,
+service, database authority, publication permission, or UI geometry changes.
+Evidence: `tests/test_governor.py`, `tests/test_run_coach_pings.py`, and
+`tests/test_cockpit_fundamentals.py`; hosted native Windows application coverage
+is distinct from deployment proof on the managed production runtime.
