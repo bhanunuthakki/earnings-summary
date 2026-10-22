@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -378,7 +379,6 @@ def test_explicit_zero_day_override_retires_recent_verified_fixture(tmp_path: Pa
 def test_windows_readonly_fixture_is_preserved_without_changing_attributes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import os
     from types import SimpleNamespace
 
     item = artifact(tmp_path, "fixture.bin", kind="disposable_test")
@@ -509,7 +509,6 @@ def test_catalog_rejects_linked_ancestor_before_descendant_probe(
     linked_component: str,
     catalog_exists: bool,
 ) -> None:
-    import os
     import stat
     from types import SimpleNamespace
 
@@ -535,3 +534,20 @@ def test_catalog_rejects_linked_ancestor_before_descendant_probe(
     monkeypatch.setattr(Path, "exists", no_descendant_probe)
     with pytest.raises(ValueError, match="catalog may not traverse links"):
         artifact_retention.load_catalog(tmp_path)
+
+
+def test_fresh_file_digest_rereads_bytes_and_ignores_metadata(tmp_path: Path) -> None:
+    manifest = tmp_path / ".earnings-temp-run.json"
+    manifest.write_bytes(b'{"status":"completed"}')
+    original = manifest.stat()
+    fresh_file_digest = cast(
+        "Callable[[Path], str]", getattr(artifact_retention, "_fresh_file_digest")
+    )
+    first = fresh_file_digest(manifest)
+    assert first == hashlib.sha256(b'{"status":"completed"}').hexdigest()
+    assert fresh_file_digest(manifest) == first
+    # Same length and restored mtime: only the bytes reveal the change.
+    manifest.write_bytes(b'{"status":"tampered!"}')
+    os.utime(manifest, ns=(original.st_atime_ns, original.st_mtime_ns))
+    assert manifest.stat().st_size == original.st_size
+    assert fresh_file_digest(manifest) == hashlib.sha256(b'{"status":"tampered!"}').hexdigest()

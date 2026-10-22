@@ -30,6 +30,18 @@ EXPECTED_DISABLED_TASKS = {
     r"\earnings-summary\refresh_cache",
     r"\earnings-summary\refresh_ir_kpis",
     r"\earnings-summary\scan_ir_transcripts",
+    # Simplification Phase 0 freeze (2026-10-20): outside the core research jobs.
+    r"\earnings-summary\coach_pings",
+    r"\earnings-summary\decision_nudge",
+    r"\earnings-summary\grade_calibration",
+    r"\earnings-summary\ledger_synthesis",
+    r"\earnings-summary\monthly_calibration_scorecard",
+    r"\earnings-summary\red_team",
+    r"\earnings-summary\submit_saydo_batch",
+    r"\earnings-summary\tenet_accountability",
+    r"\earnings-summary\thesis_collision",
+    r"\earnings-summary\weekly_packet",
+    r"\earnings-summary\weekly_score_stances",
 }
 
 
