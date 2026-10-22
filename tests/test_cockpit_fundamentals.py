@@ -6,6 +6,7 @@ import json
 import shutil
 import sqlite3
 from collections.abc import Callable, Iterator
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 
@@ -445,3 +446,106 @@ def test_same_database_capture_invalidates_the_cache(
     cockpit = build_cockpit_rows(conn, repo_root)
     row = {item.base.ticker: item for item in cockpit["evaluation"]}["SYNTH"]
     assert (row.rev_yoy_pct, row.fcf_margin_pct) == compute_from_db(conn)["SYNTH"]
+
+
+def test_snapshot_reuses_publications_only_within_one_read(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from provenance import source_fact_publication as publication
+
+    _publish(conn, _quarter_rows())
+    original = getattr(publication, "_verify_source_fact_publication")
+    calls: list[str] = []
+
+    def counted(
+        connection: sqlite3.Connection,
+        *,
+        publication_id: str,
+        cutoff: datetime,
+        observed_through: datetime | None,
+    ) -> publication.VerifiedSourceFactPublication:
+        calls.append(publication_id)
+        return original(
+            connection,
+            publication_id=publication_id,
+            cutoff=cutoff,
+            observed_through=observed_through,
+        )
+
+    monkeypatch.setattr(publication, "_verify_source_fact_publication", counted)
+    first = compute_snapshot(conn, cutoff=STAMP)
+    assert calls
+    assert len(calls) == len(set(calls))
+    first_calls = list(calls)
+    calls.clear()
+    second = compute_snapshot(conn, cutoff=STAMP)
+    assert first == second
+    assert calls == first_calls
+    from contextlib import nullcontext
+
+    import cockpit_fundamentals
+
+    def uncached_scope(connection: sqlite3.Connection) -> nullcontext[None]:
+        return nullcontext()
+
+    monkeypatch.setattr(cockpit_fundamentals, "publication_verification_scope", uncached_scope)
+    calls.clear()
+    uncached = compute_snapshot(conn, cutoff=STAMP)
+    assert uncached == first
+    assert len(calls) > len(first_calls)
+
+
+def test_publication_scope_keeps_clocks_and_connections_separate(
+    conn: sqlite3.Connection, head_template: Path
+) -> None:
+    from datetime import timedelta
+
+    from provenance.source_fact_publication import (
+        PublicationVerificationError,
+        publication_verification_scope,
+        verify_source_fact_publication,
+    )
+
+    _publish(conn, _quarter_rows())
+    conn.execute("BEGIN")
+    with publication_verification_scope(conn):
+        verify_source_fact_publication(conn, publication_id="report-publication", cutoff=STAMP)
+        with pytest.raises(PublicationVerificationError):
+            verify_source_fact_publication(
+                conn, publication_id="report-publication", cutoff=STAMP - timedelta(days=3650)
+            )
+        with pytest.raises(PublicationVerificationError, match="publication_ledger_malformed"):
+            verify_source_fact_publication(
+                conn,
+                publication_id="report-publication",
+                cutoff=STAMP,
+                observed_through=STAMP - timedelta(seconds=1),
+            )
+        with sqlite3.connect(head_template) as other, pytest.raises(PublicationVerificationError):
+            verify_source_fact_publication(other, publication_id="report-publication", cutoff=STAMP)
+    conn.rollback()
+
+
+@pytest.mark.parametrize("replace_transaction", [False, True])
+def test_publication_scope_rejects_changed_snapshot(
+    conn: sqlite3.Connection, replace_transaction: bool
+) -> None:
+    from provenance.source_fact_publication import (
+        publication_verification_scope,
+        verify_source_fact_publication,
+    )
+
+    _publish(conn, _quarter_rows())
+    conn.execute("BEGIN")
+    with (
+        pytest.raises((RuntimeError, sqlite3.OperationalError)),
+        publication_verification_scope(conn),
+    ):
+        verify_source_fact_publication(conn, publication_id="report-publication", cutoff=STAMP)
+        if replace_transaction:
+            conn.rollback()
+            conn.execute("BEGIN")
+        else:
+            conn.execute("INSERT INTO tenants(id,created_at) VALUES ('scope-test','2026-01-01')")
+        verify_source_fact_publication(conn, publication_id="report-publication", cutoff=STAMP)
+    conn.rollback()
