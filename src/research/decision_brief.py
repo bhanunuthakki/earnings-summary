@@ -1228,6 +1228,8 @@ def _assess_decision_brief(
         raise ValueError("memo cutoff must have a timezone")
     cutoff = as_of.astimezone(UTC)
     reasons: set[str] = set()
+    if artifact.publication_status == "draft_preview":
+        raise MemoEvidenceError("memo_draft_preview_not_accepted")
     body_path = repo_root / (artifact.body_path or "")
     try:
         validate_report_artifact_path(repo_root, body_path)

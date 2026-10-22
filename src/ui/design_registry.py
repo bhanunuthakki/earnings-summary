@@ -646,6 +646,7 @@ _BHA_89_TO_92_ADDITIONAL_EMITTERS = (
     "pipeline/work_os_research.py",
     "pipeline/you_said.py",
     "report/renderers/offline_document.py",
+    "report/renderers/bound_draft.py",
     "report/renderers/markdown.py",
     "report/renderers/workspace_decision_card.py",
     "report/renderers/workspace_html.py",

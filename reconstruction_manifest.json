@@ -329,7 +329,12 @@
         "src/research/proposal_approval.py",
         "alembic/versions/0060_owner_governed_proposals.py",
         "src/research/nu_earnings_evidence.py",
-        "src/research/memo_report_evidence.py"
+        "src/research/memo_report_evidence.py",
+        "src/research/report_contract.py",
+        "src/research/earnings_report_contract.py",
+        "src/research/report_preview.py",
+        "src/report/renderers/bound_draft.py",
+        "execution/preview_report_draft.py"
       ],
       "dependencies": [
         "financial_compute_engine"
@@ -340,7 +345,8 @@
         "pytest tests/test_owner_proposal_approval.py tests/test_ask_proposal_approval.py -q",
         "pytest tests/test_decision_brief.py tests/test_memo_claim_support.py -q",
         "pytest tests/test_memo_context_v2.py tests/test_memo_model_evidence.py tests/test_memo_model_roundtrip.py tests/test_memo_peer_roundtrip.py -q",
-        "pytest tests/test_nu_earnings_evidence.py tests/test_decision_brief_report_scope.py -q"
+        "pytest tests/test_nu_earnings_evidence.py tests/test_decision_brief_report_scope.py -q",
+        "pytest tests/test_report_contract.py tests/test_report_preview.py tests/test_earnings_brief.py tests/test_earnings_readout.py -q"
       ],
       "documentation": [
         "HOW_TO_USE_REPORTS.md",

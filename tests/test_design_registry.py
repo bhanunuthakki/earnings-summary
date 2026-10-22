@@ -116,9 +116,10 @@ def test_registry_is_frozen_typed_and_complete() -> None:
         entry = next(item for item in registry.VISUAL_EMITTER_MANIFEST if item.path == producer)
         assert entry.disposition is registry.EmitterDisposition.NONVISUAL
         assert producer not in registry.REGISTERED
-    # The retired key-metrics renderer no longer contributes an emitter.
-    assert len(registry.REGISTERED) == 113
-    assert len(registry.VISUAL_EMITTER_MANIFEST) == 161
+    # The manual draft renderer uses the existing report visual family.
+    assert "report/renderers/bound_draft.py" in registry.REGISTERED
+    assert len(registry.REGISTERED) == 114
+    assert len(registry.VISUAL_EMITTER_MANIFEST) == 162
     calculation_evidence = next(
         entry
         for entry in registry.VISUAL_EMITTER_MANIFEST
@@ -144,7 +145,7 @@ def test_registry_is_frozen_typed_and_complete() -> None:
     assert workbook_adapter.adapter_kinds == frozenset({registry.EvidenceAdapter.PYTHON_CSS})
     assert workbook_adapter.owner == "dcf-workbook"
     assert workbook_adapter.path not in registry.GOVERNED
-    assert len(registry.GOVERNED) == 134
+    assert len(registry.GOVERNED) == 135
     assert (
         frozenset(
             {

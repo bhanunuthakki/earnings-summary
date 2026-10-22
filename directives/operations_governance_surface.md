@@ -1894,3 +1894,24 @@ operator action, financial admission or live activation. Evidence:
 The model input re-verification correction preserves the retained snapshot resolution clocks and independently checks the current selected observation. It adds no operator command, write authority, provider call or production operation. Existing model input and readiness interfaces own the behavior.
 
 MELI persistence also retains the full existing model-engine output in the assumption snapshot for exact memo reconstruction. This adds no new operator interface or authority. Historical incomplete model runs remain retained and cannot pass the integrated memo output commitment.
+
+
+### Manual earnings draft preview — 2026-10-22
+
+`execution/preview_report_draft.py` accepts an explicit read-only `--db`, output
+`--repo-root`, structured `--draft`, and `--post-quarter` for POST. Invoke it through
+`execution/sqlite_bootstrap.py`. It binds supplied paragraphs to an admitted
+snapshot, resolved listing, source nodes and canonical financial references in one
+caller-preserving read transaction. POST baseline selection shares that snapshot.
+The command writes a `draft_preview` through the existing report artifact owner.
+Draft, binding and baseline receipts remain beside the saved body and standalone
+page. Source locators and reported/inference labels remain visible on reopening.
+
+The receipt certifies source/numerical binding only. Completeness stays unassessed,
+semantic review stays required, and decision-grade stays false. Draft previews do
+not replace latest reports and the decision-brief assessor rejects their acceptance.
+Late PRE binding remains historical reconstruction even with an earlier draft date.
+Selected legacy PRE baselines do not acquire verified binding. Scheduled generators
+and financial state remain unchanged. There are no provider calls or new routes.
+Evidence: `tests/test_report_contract.py`, `tests/test_report_preview.py`, existing
+artifact-index and PRE/POST regressions, and isolated rendered preview receipts.
