@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "2ef864999ade4c4f9fa9b2717864deaa8910e7cf",
+  "scoped_commit": "d84f58ca9b6a62f3c2bcf6e81c5a254937c12a05",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "c10655da14f8fe50f45e158077b963c46bdeff060f5c84fa2d00c5a72629efd4",
+  "source_sha256": "859387e4929ae708adb907efc8cf2b8a7eaec97d563d5cfa296d50b2b7290af8",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -2285,9 +2285,9 @@
         "path": "execution/comments_server_work_os_routes.py",
         "module": "execution.comments_server_work_os_routes",
         "lines": {
-          "physical": 323,
-          "nonblank": 300,
-          "noncomment": 287
+          "physical": 326,
+          "nonblank": 303,
+          "noncomment": 286
         },
         "internal_fan_out": 13,
         "responsibilities": [
@@ -14835,9 +14835,9 @@
         "path": "src/pipeline/research_cockpit.py",
         "module": "pipeline.research_cockpit",
         "lines": {
-          "physical": 1624,
-          "nonblank": 1471,
-          "noncomment": 1326
+          "physical": 1627,
+          "nonblank": 1474,
+          "noncomment": 1327
         },
         "internal_fan_out": 21,
         "responsibilities": [

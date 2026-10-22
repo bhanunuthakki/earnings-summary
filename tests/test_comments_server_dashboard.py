@@ -1158,3 +1158,78 @@ def test_vendored_font_route_serves_immutable_binaries(client: Any) -> None:
     assert client.get("/src/ui/vendor/fonts/missing-latin.woff2").status_code == 404
     assert client.get("/src/ui/vendor/fonts/inter-latin.css").status_code == 404
     assert client.get("/src/ui/vendor/fonts/../../tokens.py").status_code == 404
+
+
+def test_portfolio_skips_fundamentals_without_poisoning_full_cockpit(
+    app_repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from comments_server_cockpit_memo import CockpitDataMemo, CockpitDataReservation
+
+    import pipeline.research_cockpit as cockpit
+    from pipeline.work_os_earnings import EarningsReadoutProjection, EarningsReadoutSummary
+
+    calls: list[str] = []
+
+    def cached(*_args: object) -> dict[str, tuple[float, float]]:
+        calls.append("cache")
+        return {}
+
+    def compute(*_args: object) -> dict[str, tuple[float, float]]:
+        calls.append("compute")
+        return {"NU": (38.0, 22.0), "MELI": (25.0, 18.0)}
+
+    def readouts(
+        _conn: sqlite3.Connection, tickers: list[str], *, coverage_roles: dict[str, str]
+    ) -> EarningsReadoutProjection:
+        assert set(tickers) == {"NU", "MELI"}
+        assert coverage_roles == {"NU": "portfolio", "MELI": "evaluation"}
+        return EarningsReadoutProjection(
+            status="ok",
+            readouts={
+                "MELI": EarningsReadoutSummary(
+                    artifact_id=7,
+                    ticker="MELI",
+                    fiscal_period="2026-06-30",
+                    period_label="Q2",
+                    generated_at=None,
+                    route="/earnings-readout/MELI",
+                    coverage_role="evaluation",
+                )
+            },
+            warnings=[],
+        )
+
+    monkeypatch.setattr(cockpit, "read_materialized_fundamentals", cached)
+    monkeypatch.setattr(cockpit, "_eval_fundamentals", compute)
+    patch_server_seam(monkeypatch, "load_latest_earnings_readouts", readouts)
+    patch_server_seam(
+        monkeypatch,
+        "fetch_live_portfolio",
+        lambda: LivePortfolio(available=False, api_url="http://tracker.test", error="unavailable"),
+    )
+    patch_server_seam(monkeypatch, "fetch_portfolio_allocation", _available_allocation)
+    app = comments_server.create_app(app_repo)
+    memo = cast(object, app.config["COCKPIT_DATA_MEMO"])
+    assert isinstance(memo, CockpitDataMemo)
+    # A slow full projection must not block or supply the portfolio projection.
+    memo_key = cast(object, app.config["COCKPIT_DATA_MEMO_KEY"])
+    assert isinstance(memo_key, str)
+    reservation = memo.get_or_reserve(memo_key)
+    assert isinstance(reservation, CockpitDataReservation)
+    local_client = app.test_client()
+    try:
+        response = local_client.get("/api/work-os/portfolio")
+        assert response.status_code == 200
+        assert response.get_json()["earnings_readouts"][0]["ticker"] == "MELI"
+        assert response.get_json()["status"] == "degraded"
+        assert calls == []
+        assert memo.entry_count() == 0
+    finally:
+        memo.abandon(reservation)
+    evaluation = local_client.get("/api/work-os/evaluation")
+    assert evaluation.status_code == 200
+    assert calls == ["cache", "compute"]
+    assert memo.entry_count() == 1
+    overview = local_client.get("/api/panel/overview")
+    assert overview.status_code == 200
+    assert calls == ["cache", "compute"]
