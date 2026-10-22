@@ -11,6 +11,9 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from typing import Literal, cast
 
@@ -472,6 +475,60 @@ def record_bundle(
     return {"candidates": candidates, "resolution": resolution}
 
 
+class _PublicationReadScope:
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self.conn = conn
+        self.initial_changes = conn.total_changes
+        self.initial_factory = conn.row_factory
+        self.verified: dict[tuple[str, datetime, datetime], VerifiedSourceFactPublication] = {}
+
+    def assert_unchanged(self) -> None:
+        if (
+            not self.conn.in_transaction
+            or self.conn.total_changes != self.initial_changes
+            or self.conn.row_factory is not self.initial_factory
+        ):
+            self.verified.clear()
+            raise RuntimeError("publication verification scope changed database read state")
+
+
+_publication_read_scope: ContextVar[_PublicationReadScope | None] = ContextVar(
+    "publication_read_scope", default=None
+)
+
+
+@contextmanager
+def publication_verification_scope(conn: sqlite3.Connection) -> Generator[None]:
+    """Reuse full verification only inside one synchronous caller-owned snapshot.
+
+    Individual membership and admission checks still run. A savepoint detects
+    transaction replacement before a result can escape; writes invalidate the
+    scope. No verification survives the call or crosses connection boundaries.
+    """
+    if not conn.in_transaction:
+        raise RuntimeError("publication verification scope requires a read transaction")
+    scope = _PublicationReadScope(conn)
+    conn.execute("SAVEPOINT publication_verification_scope")
+    token = _publication_read_scope.set(scope)
+    completed = False
+    try:
+        yield
+        scope.assert_unchanged()
+        conn.execute("RELEASE SAVEPOINT publication_verification_scope")
+        completed = True
+    finally:
+        _publication_read_scope.reset(token)
+        scope.verified.clear()
+        if conn.row_factory is not scope.initial_factory:
+            conn.row_factory = scope.initial_factory
+        if not completed and conn.in_transaction:
+            try:
+                conn.execute("ROLLBACK TO SAVEPOINT publication_verification_scope")
+                conn.execute("RELEASE SAVEPOINT publication_verification_scope")
+            except sqlite3.OperationalError:
+                pass  # A replaced transaction must not be rolled back on the caller's behalf.
+
+
 def verify_source_fact_publication(
     conn: sqlite3.Connection,
     *,
@@ -481,13 +538,28 @@ def verify_source_fact_publication(
 ) -> VerifiedSourceFactPublication:
     """Recompute one publication under explicit knowledge and system clocks."""
 
+    scope = _publication_read_scope.get()
+    if scope is not None and scope.conn is not conn:
+        scope = None
     try:
-        return _verify_source_fact_publication(
+        key = (publication_id, _utc(cutoff), _utc(observed_through or cutoff))
+        if scope is not None:
+            scope.assert_unchanged()
+            cached = scope.verified.get(key)
+            if cached is not None:
+                return cached
+        verified = _verify_source_fact_publication(
             conn,
             publication_id=publication_id,
             cutoff=cutoff,
             observed_through=observed_through,
         )
+        if scope is not None:
+            scope.assert_unchanged()
+            if len(scope.verified) >= 4096:
+                scope.verified.clear()
+            scope.verified[key] = verified
+        return verified
     except PublicationVerificationError:
         raise
     except sqlite3.OperationalError as exc:

@@ -74,7 +74,7 @@ def load_research_method(mode: ResearchMode, *, source_path: Path | None = None)
     elif mode not in ("company", "earnings", "thesis"):
         raise ResearchOutputContractError(f"Unknown research mode: {mode}")
     return ResearchMethod(
-        version="public-evidence@1",
+        version="public-evidence@2",
         source_sha256=hashlib.sha256(raw).hexdigest(),
         mode=mode,
         instructions="\n\n".join(sections[title] for title in selected),

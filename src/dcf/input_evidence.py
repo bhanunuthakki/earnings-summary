@@ -733,6 +733,9 @@ def verify_model_inputs(
     selections = {
         read.canonical_metric_cell_id: read for read in resolver.read_as_known(cell_ids, cutoff)
     }
+    # Original resolution revisions are checked below against the verified
+    # snapshot membership and its sealed projection. A later resolution can
+    # select the same observation; verify its current publication once.
     bundles = {
         read.bundle.observation.observation_id: read.bundle
         for read in selections.values()
@@ -806,7 +809,6 @@ def verify_model_inputs(
             resolution is None
             or resolution.status != "resolved"
             or resolution.selected_observation_id != ref.observation_id
-            or resolution.canonical_resolution_revision_id != ref.canonical_resolution_revision_id
             or binding is None
             or binding.binding_status != "bound"
             or binding.canonical_metric_cell_id != ref.canonical_metric_cell_id

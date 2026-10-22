@@ -36,6 +36,30 @@ It adds no artifact schema, accepted threshold, acquisition route or write permi
    sections below. Keep only decision-relevant detail in the synthesis and retain
    its underlying evidence. An unresolved material question is a valid finding.
 
+### Match depth to the decision
+
+Start with the smallest source-backed analysis that can explain the direction of
+the business and the investment case. Use existing scope, uncertainty, assumption
+and evidence-readiness fields. Increase detail when a plausible answer could
+change the thesis, valuation range, risk judgment or proposed capital action.
+Do not require a DCF, a complete filing archive or a new stock-specific gate for
+every preliminary assessment. Preserve the stronger gates for claims that need them.
+
+For each unresolved material question, name the affected conclusion or model
+driver. State whether a reasonable resolution could reverse the view. Use an
+existing scenario or sensitivity to bound the effect when possible. A nonmaterial
+gap remains a visible limitation. A potentially decisive gap makes the affected
+conclusion conditional or withheld; it does not suppress unrelated supported findings.
+
+Keep reported figures faithful to their source, basis, period and units. Label
+estimates, proxies and assumptions. Use rounded displays or ranges when finer
+precision would overstate knowledge. Unsupported facts, calculation errors,
+known contradictions and unmarked assumptions still block the affected output.
+Do not treat decision-grade metadata or optional execution environments as a
+substitute for checking the actual financial reasoning and demonstrated arithmetic.
+Stop when the evidence is sufficient for the stated decision. Record the specific
+new decision or evidence that would justify deeper work.
+
 ## Moat: test the economic mechanism
 
 For each material claimed advantage, connect: **advantage → economic mechanism →

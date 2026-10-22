@@ -325,7 +325,7 @@ def test_real_cli_dry_apply_replay(
     def now(_tz: object) -> datetime:
         return STAMP
 
-    monkeypatch.setattr(cli, "datetime", SimpleNamespace(now=now))
+    monkeypatch.setattr("execution.publish_meli_reported_tables.datetime", SimpleNamespace(now=now))
     argv = [
         "--db",
         path,

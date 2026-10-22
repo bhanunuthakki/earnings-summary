@@ -1,0 +1,87 @@
+{
+  "schema_version": "hero-mvp-owner-decisions/v1",
+  "recorded_at": "2026-10-18",
+  "source": "Direct owner messages in this chat. Instruction/answer fields are quoted; question/boundary fields summarize their scope. The chat remains authority.",
+  "decisions": [
+    {
+      "id": "execution",
+      "instruction": "Improve the plan until Opus rates you >85, then proceed with execution",
+      "boundary": "Local code, isolated verification and retained-source qualification. Production writes, publication, deployment, installs and paid API remain excluded."
+    },
+    {
+      "id": "chisle",
+      "instruction": "Make sure to use Chisle for execution"
+    },
+    {
+      "id": "nu",
+      "answer": "Q2 2026 historical reconstruction"
+    },
+    {
+      "id": "meli_period",
+      "answer": "Use latest published period at qualification"
+    },
+    {
+      "id": "joint_meli",
+      "answer": "DCF and brief are interdependent and mingled deliverables, i.e. assumptions and approach for DCF are part and parcel of the narrative and assessment in the brief. This is a core part of fundamental financial and valuation analysis, i.e. what we're assuming about the business is inseparable from a deep understanding of it"
+    },
+    {
+      "id": "report_scope",
+      "question": "For the first accepted NU and integrated MELI brief/DCF MVPs, verify fully the complete report's required statements, operating/credit analysis, narrative, assumptions and workbook; explicitly defer broader package/native-XBRL work. This requires a versioned readiness-contract change, without reduced accuracy or missing critical facts.",
+      "answer": "Verify complete report scope first (Recommended)"
+    },
+    {
+      "id": "source_pass",
+      "answer": "Approve the bounded pass for both (Recommended)",
+      "boundary": "12 selected issuer/SEC documents, 250 MiB, 45 minutes plus one recovery. Completed; no extension to 213 files approved."
+    },
+    {
+      "id": "market_pass",
+      "question": "Obtain only the latest completed-session MELI close and dated NU pre/post closes with source timestamps and retained evidence; 4 responses, 2 MiB, 10 minutes, no paid API/production writes.",
+      "answer": "Approve this bounded market-data pass"
+    },
+    {
+      "id": "sec_timing",
+      "question": "Treat a SEC filing as eligible only after the end of the next EDGAR business day following acceptance, as a conservative labelled policy rule, not exact public-release proof; known dissemination problems hold.",
+      "answer": "Approve the labelled SEC timing rule"
+    },
+    {
+      "id": "meli_metadata_refresh",
+      "question": "Refresh MELI SEC submissions metadata at final qualification only if the retained check is more than 24 hours old. One response from https://data.sec.gov/submissions/CIK0001099590.json, 2 MiB and 5 minutes; no financial filing download or production writes.",
+      "answer": "Approve this conditional metadata check"
+    },
+    {
+      "id": "submission_extension",
+      "question": "17 complete SEC submission files: 13 NU event 6-Ks, two MELI event 8-Ks, two MELI filing packages for missing originals. 100 MiB additional within the existing 250 MiB overall source cap, 45 minutes plus one recovery, no production writes. Reuse retained primary filings. Exact accession/URL manifest retained.",
+      "answer": "Approve the bounded submission pass"
+    },
+    {
+      "id": "execute_existing_snapshots",
+      "instruction": "Approve existing snapshots and 83/100 score, execute",
+      "boundary": "Use ordered native K_pre/K_post snapshots for first NU pair on the same canonical fact plane. General historical reconstruction after later facts is deferred. Owner accepts prior83/100 advisory score and authorizes execution; financial accuracy, evidence and artifact acceptance checks remain required."
+    },
+    {
+      "id": "report_tables_only",
+      "question": "Verify every table used in the brief and DCF; retain other pages as explicit unresolved extraction gaps. No report claim verification is waived.",
+      "answer": "Verify tables used in the reports; retain other gaps",
+      "question_item_id": "call_68135f3d2b284a0caec4aac4265cb7b5"
+    },
+    {
+      "id": "protected_window_execution_exception",
+      "question": "Allow this existing qualification run through today\u2019s 03:00\u201305:00 Pacific protected window, with serial author/Opus calls and unchanged limits.",
+      "answer": "Allow this run to continue",
+      "question_item_id": "call_fd3ff1ff4fac44eea99f81ab16d1fa9f"
+    },
+    {
+      "id": "single_larger_artifact_review",
+      "question": "Increase input cap to 220,000 tokens for one complete NU/MELI Opus artifact review. Four-review and 20,000-output-token limits plus all source and production boundaries remain unchanged.",
+      "answer": "Approve the single larger review (Recommended)",
+      "question_item_id": "call_b6fee91246774526a7dc6225e0b7142f"
+    },
+    {
+      "id": "decision_proportionate_research_depth",
+      "recorded_at": "2026-10-20T02:00:33.953288+00:00",
+      "instruction": "Remember to not get caught up in minutiae and one-off adjustments that are idiosyncratic to specific stocks for the MVP. Focus on making sure that the reports generated will have numbers that are directionally correct with uncertainty or assumptions clearly recorded (and a scalable system if it doesn't already exist for doing so, i.e. phased ratchet up of detail/depth required without compromising directional narratives and insights, i.e. like what an actual financial analyst would do --> start with 80/20 and then improve fidelity, depth, accuracy as needed based on the gravity of the decision)",
+      "boundary": "Reuse the shared research method and existing scope/uncertainty controls. Correct errors that can change interpretation. Defer extra stock-specific qualification gates and optional environment/completeness checks. Source fidelity, explicit assumptions and calculation verification remain required. No production/source/spend authority expands."
+    }
+  ]
+}

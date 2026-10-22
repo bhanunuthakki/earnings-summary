@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from materialized_cache import cache_metadata, read_fresh_payload, write_payload_atomically
 from provenance.evidence_revision import canonical_financial_revision
+from provenance.source_fact_publication import publication_verification_scope
 from sources.canonical_financial_series import (
     CanonicalFinancialObservation,
     CanonicalFinancialReadError,
@@ -551,7 +552,8 @@ def compute_snapshot(
             cadences=_CADENCES,
             cutoff=cutoff_at,
         )
-        fundamentals = {ticker: _compute_ticker(conn, ticker, cutoff_at) for ticker in tickers}
+        with publication_verification_scope(conn):
+            fundamentals = {ticker: _compute_ticker(conn, ticker, cutoff_at) for ticker in tickers}
         return CockpitFundamentalsSnapshot(
             cutoff=cutoff_at,
             ticker_universe=tickers,

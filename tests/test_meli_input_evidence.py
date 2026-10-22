@@ -189,6 +189,8 @@ def _seed_real_inputs(
     security_scope: bool = False,
     page_number: int | None = None,
     page_overrides: dict[str, int] | None = None,
+    requirements: tuple[evidence.InputRequirement, ...] | None = None,
+    amounts_override: dict[str, float] | None = None,
 ) -> dict[str, evidence.FactBinding]:
     """No mocking source publication, ontology, binding, resolver or fact reader."""
     seed_foundation(conn, source_path=source_path)
@@ -256,7 +258,8 @@ def _seed_real_inputs(
         "reported_current_operating_lease_liabilities": 513,
         "reported_noncurrent_operating_lease_liabilities": 2037,
     }
-    requirements = meli_inputs.requirements_for(END)
+    amounts.update(amounts_override or {})
+    requirements = requirements if requirements is not None else meli_inputs.requirements_for(END)
     role_requirements = {req.role: req for req in requirements}
     facts: list[ReportedSourceFact] = []
     for index, req in enumerate(requirements):
@@ -279,7 +282,7 @@ def _seed_real_inputs(
                 ]
             )
         )
-        if req.period_end is not None:
+        if req.period_end is not None and req.key not in (amounts_override or {}):
             amount *= (
                 Decimal(".9")
                 if key.endswith("_fy")
@@ -346,6 +349,7 @@ def _seed_real_inputs(
                     "currency": req.currency,
                     "fiscal_period": None,
                     "accounting_basis": req.accounting_basis or "us_gaap",
+                    "consolidation_scope": req.consolidation_scope,
                 }
             )
             .model_dump(mode="json")
@@ -619,7 +623,7 @@ def _seed_real_inputs(
                 "accounting_basis": cell.accounting_basis,
                 "concept_name": cell.concept_name,
                 "concept_namespace": "us-gaap",
-                "consolidation_scope": "consolidated",
+                "consolidation_scope": req.consolidation_scope,
                 "period_kind": req.period_kind,
                 "reporting_entity_id": "reporting-1",
                 "schema_version": "source-definition-identity/v1",
@@ -723,7 +727,7 @@ def _seed_real_inputs(
                 scope_security_id=cell.scope_security_id,
                 unit_family=family,
                 accounting_basis=cell.accounting_basis,
-                consolidation_scope="consolidated",
+                consolidation_scope=req.consolidation_scope,
                 effective_at=STAMP,
                 knowledge_at=STAMP,
                 recorded_at=STAMP,
@@ -820,6 +824,12 @@ def _request(
         },
     )
     return request.model_copy(update={"assumption_review": review})
+
+
+# Shared admitted-source fixture builders for native model-reader regressions.
+synthetic_input_values = _inputs
+seed_real_input_facts = _seed_real_inputs
+synthetic_model_snapshot = _snapshot
 
 
 @pytest.fixture
@@ -2007,6 +2017,18 @@ def test_real_builder_persistence_keeps_subsecond_calculation_clock(
         "BEAR_SEED",
         meli.redesign_mod.ScenarioDeltas(growth_near=-0.03, exit_multiple=-2),
     )
+
+    def timestamp_workbook(
+        _assumptions: meli.Assum,
+        _model: meli.Mirror,
+        path: Path,
+        _holdings: dict[str, object] | None,
+    ) -> None:
+        # This test owns persistence clocks. The separate artifact-engine suite
+        # proves formula recalculation, saved caches and financial parity.
+        path.write_bytes(b"synthetic timestamp-only workbook")
+
+    monkeypatch.setattr(meli, "build", timestamp_workbook)
     meli.build(assumptions, model, destination, None)
     os.utime(destination, (NOW.timestamp(), NOW.timestamp()))
     assert meli.persist_dcf_run(
@@ -2369,3 +2391,52 @@ def test_input_preview_cli_refuses_source_root_before_database_access(
     assert refusal["reason_code"] == "source_authority_unavailable"
     assert refusal["model_ready"] is False
     assert not database.exists() and not output.exists()
+
+
+@pytest.mark.parametrize("knowledge_shift_seconds", [0, 1])
+def test_identical_later_resolution_preserves_exact_model_snapshot(
+    source_context: evidence.SourceReadContext,
+    real_inputs: tuple[sqlite3.Connection, evidence.ModelInputRequest],
+    knowledge_shift_seconds: int,
+) -> None:
+    """Another population pass must not replace the model's saved K/O selection."""
+    conn, request = real_inputs
+    original_values, original = meli_inputs.prepare_meli_inputs(
+        conn, request, effective_inputs=_inputs(), as_of=NOW, source_context=source_context
+    )
+    ref = request.facts["comm_rev0_fy"]
+    later = NOW + timedelta(seconds=2)
+    replay = CanonicalFactResolutionEngine(conn).resolve(
+        ref.canonical_metric_cell_id,
+        NOW + timedelta(seconds=knowledge_shift_seconds),
+        ResolutionPolicy(name="synthetic", version="1", config={}),
+        recorded_at=later,
+    )
+    assert replay.status == "resolved"
+    assert replay.selected_observation_id == ref.observation_id
+    assert replay.canonical_resolution_revision_id != ref.canonical_resolution_revision_id
+    conn.commit()
+    verified = meli_inputs.verify_meli_inputs(
+        conn, original, effective_inputs=original_values, as_of=later, source_context=source_context
+    )
+    assert verified.inputs == original.inputs
+    assert verified.request == original.request
+    assert verified.model_output_sha256 == original.model_output_sha256
+    # Keeping the same observation does not authorize changing the saved
+    # resolution revision to one outside the original sealed projection.
+    tainted = request.model_copy(
+        update={
+            "facts": {
+                **request.facts,
+                "comm_rev0_fy": ref.model_copy(
+                    update={
+                        "canonical_resolution_revision_id": replay.canonical_resolution_revision_id
+                    }
+                ),
+            }
+        }
+    )
+    with pytest.raises(evidence.InputEvidenceError, match="input_outside_canonical_snapshot"):
+        meli_inputs.prepare_meli_inputs(
+            conn, tainted, effective_inputs=_inputs(), as_of=later, source_context=source_context
+        )
