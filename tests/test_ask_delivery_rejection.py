@@ -46,11 +46,13 @@ def test_unsupported_auditor_verdict_never_reaches_delivery_or_assistant_store(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     migrated_db: Callable[..., Path],
-    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Exercise delivery, not population admission: retrieval is a fixture boundary."""
 
     db_path = migrated_db(tmp_path / "delivery.db")
+    # Alembic can replace root handlers during the first fixture migration.
+    monkeypatch.setattr(engine.log, "handlers", [*engine.log.handlers, caplog.handler])
     session = store.create_session(scope="portfolio", title="Synthetic delivery", db_path=db_path)
     answer = "Synthetic revenue was 200 USD [1]."
     calls: list[str] = []
@@ -167,7 +169,7 @@ def test_unsupported_auditor_verdict_never_reaches_delivery_or_assistant_store(
     )
     assert calls == ["ask_answer", "ask_claim_audit"]
     assert [item["type"] for item in events] == ["error"]
-    assert "unsupported substantive claim" in capsys.readouterr().err
+    assert "unsupported substantive claim" in caplog.text
     with sqlite3.connect(db_path) as conn:
         assert (
             conn.execute("SELECT COUNT(*) FROM ask_turns WHERE role='assistant'").fetchone()[0] == 0
@@ -181,7 +183,7 @@ def test_runtime_byte_drift_stops_request_before_any_provider_or_delivery(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     migrated_db: Callable[..., Path],
-    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
     component: str,
 ) -> None:
     """Wire the real byte verifier into a fixture readiness boundary, with no model load."""
@@ -209,6 +211,8 @@ def test_runtime_byte_drift_stops_request_before_any_provider_or_delivery(
     verify_runtime_artifact(artifact, runtime_root, sources)
     (runtime_root / component).write_bytes(b"changed")
     db_path = migrated_db(tmp_path / "runtime-drift.db")
+    # Alembic can replace root handlers during the first fixture migration.
+    monkeypatch.setattr(engine.log, "handlers", [*engine.log.handlers, caplog.handler])
     session = store.create_session(scope="portfolio", title="Synthetic runtime", db_path=db_path)
     verified: list[str] = []
     calls: list[str] = []
@@ -239,7 +243,7 @@ def test_runtime_byte_drift_stops_request_before_any_provider_or_delivery(
     assert verified == [component]
     assert calls == []
     assert [item["type"] for item in events] == ["error"]
-    assert "runtime artifact no longer matches local bytes" in capsys.readouterr().err
+    assert "runtime artifact no longer matches local bytes" in caplog.text
     with sqlite3.connect(db_path) as conn:
         assert (
             conn.execute("SELECT COUNT(*) FROM ask_turns WHERE role='assistant'").fetchone()[0] == 0
