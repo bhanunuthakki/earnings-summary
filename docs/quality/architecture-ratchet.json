@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "fca01a5fb4b4dc97e5c1ed0c1bf6ac1afdebc7df",
+  "scoped_commit": "3a3839ccd66743749200345fef412c02c1833c74",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "03f654abf31d5fd4b048c8c9b3d1266ae28a1c799f42df0dd7acb4d8551b4f0c",
+  "source_sha256": "2f669c2c5d167e8923b2d0405fdef5aa1a6d568f52d3c0ba6498353698a36c1a",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1456,
-    "total_noncomment_loc": 556541,
+    "total_noncomment_loc": 556581,
     "modules_over_1000_loc": 107,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -13178,16 +13178,16 @@
         "path": "src/operations/storage_reservation.py",
         "module": "operations.storage_reservation",
         "lines": {
-          "physical": 158,
-          "nonblank": 137,
-          "noncomment": 137
+          "physical": 203,
+          "nonblank": 179,
+          "noncomment": 175
         },
         "internal_fan_out": 0,
         "responsibilities": [
           "filesystem"
         ],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
       },
       {
         "path": "src/operations/temp_coverage.py",
@@ -13209,9 +13209,9 @@
         "path": "src/operations/temp_run_retention.py",
         "module": "operations.temp_run_retention",
         "lines": {
-          "physical": 877,
-          "nonblank": 809,
-          "noncomment": 807
+          "physical": 887,
+          "nonblank": 815,
+          "noncomment": 809
         },
         "internal_fan_out": 0,
         "responsibilities": [

@@ -670,7 +670,7 @@ jobs:
         run: |
           python -m venv "$env:RUNNER_TEMP/native-venv"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & "$env:RUNNER_TEMP/native-venv/Scripts/python.exe" -m pip install "pytest>=8" "defusedxml==0.7.1"
+          & "$env:RUNNER_TEMP/native-venv/Scripts/python.exe" -m pip install "pytest>=8" "defusedxml==0.7.1" "pydantic==2.13.4"
       - name: Exercise original native Windows cases without application fixtures
         shell: pwsh
         run: |
@@ -679,7 +679,10 @@ jobs:
             "tests/test_job_runtime_process_tree.py::test_windows_exited_process_with_held_handle_is_dead_and_lock_is_recoverable[259]" `
             tests/test_job_runtime_process_tree.py::test_windows_kill_on_close_job_terminates_process_and_descendant `
             tests/test_job_runtime_process_tree.py::test_managed_child_is_suspended_assigned_resumed_and_kills_descendant `
-            tests/test_job_runtime_process_tree.py::test_managed_deadline_kills_live_worker_and_descendant
+            tests/test_job_runtime_process_tree.py::test_managed_deadline_kills_live_worker_and_descendant `
+            tests/test_storage_reservation.py::test_concurrent_processes_cannot_both_admit_over_host_limit `
+            tests/test_storage_reservation.py::test_dead_holder_lease_is_reclaimed_at_admission `
+            tests/test_storage_reservation.py::test_live_holder_lease_is_never_reclaimed
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python .github/scripts/ci_gate.py verify-windows-native --junit "$env:RUNNER_TEMP/native-process-tree.xml"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

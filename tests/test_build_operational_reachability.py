@@ -220,12 +220,12 @@ def test_actual_head_is_supported() -> None:
         )
         for line in (123, 913)
     ]
-    # Keep the exact managed-startup and shared-ledger admission test children.
-    # Reject any other additions in these files.
+    # Keep the exact managed-startup, shared-ledger admission, and dead/live
+    # lease-holder test children. Reject any other additions in these files.
     for source, lines in (
         ("tests/test_sqlite_bootstrap.py", (32, 108)),
         ("tests/test_weekly_cleanup.py", (190,)),
-        ("tests/test_storage_reservation.py", (54,)),
+        ("tests/test_storage_reservation.py", (61, 121, 139)),
     ):
         assert [edge for edge in graph.unknown_edges if edge.source == source] == [
             GraphEdge(
@@ -239,9 +239,9 @@ def test_actual_head_is_supported() -> None:
             )
             for line in lines
         ]
-    # Retain the 159 existing test seams and one shared-ledger admission child.
-    # No production gap is admitted.
-    assert len(graph.unknown_edges) == 160
+    # Retain the 159 existing test seams, one shared-ledger admission child and
+    # the dead/live lease-holder children. No production gap is admitted.
+    assert len(graph.unknown_edges) == 162
     assert [
         edge for edge in graph.unknown_edges if edge.source == "tests/test_db_writer_gate.py"
     ] == [

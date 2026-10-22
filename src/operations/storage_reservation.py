@@ -108,6 +108,45 @@ def _store(volume: Path) -> Path:
     )
 
 
+def holder_alive(pid: int) -> bool:
+    """Only a definite absence on this host ends a lease; any doubt keeps it held."""
+    if pid == os.getpid():
+        return True
+    if os.name == "nt":
+        from ctypes import wintypes
+
+        loader = getattr(ctypes, "WinDLL", None)
+        last_error = getattr(ctypes, "get_last_error", None)
+        if not callable(loader) or not callable(last_error):
+            return True
+        kernel32 = loader("kernel32", use_last_error=True)
+        # Handles are pointer-sized; default C int signatures would truncate them.
+        kernel32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, wintypes.LPDWORD)
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return last_error() != 87
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.pointer(code)):
+                return True
+            return code.value == 259
+        finally:
+            # A failed close leaks one query handle; it never changes the answer.
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
 def reserve_peak(
     root: Path,
     expected_bytes: int,
@@ -117,7 +156,7 @@ def reserve_peak(
     reserve_bytes: int = 50 * GIB,
     store: Path | None = None,
 ) -> str:
-    """Reserve a declared peak; unresolved leases stay held until explicit release."""
+    """Reserve a declared peak held until release or until its holder process is gone."""
     if expected_bytes < 0 or expected_bytes > ordinary_limit:
         raise ValueError("expected peak exceeds the ordinary run limit")
     directory = store or _store(root)
@@ -128,7 +167,13 @@ def reserve_peak(
             _safe_path(path)
             if not stat.S_ISREG(path.lstat().st_mode):
                 raise ValueError("reservation must be a regular file")
-            leases.append(_Lease.model_validate_json(path.read_bytes()))
+            lease = _Lease.model_validate_json(path.read_bytes())
+            # The ledger is per host, so a crashed producer cannot grow its peak;
+            # its retained bytes still count through the free-space headroom check.
+            if holder_alive(lease.pid):
+                leases.append(lease)
+            else:
+                path.unlink()
         reserved = sum(lease.expected_bytes for lease in leases)
         if reserved + expected_bytes > host_limit:
             raise ValueError("concurrent disposable storage exceeds the host limit")
@@ -145,7 +190,7 @@ def reserve_peak(
 
 
 def release_peak(root: Path, token: str, *, store: Path | None = None) -> None:
-    """Release only the exact root-bound lease after producer closure."""
+    """Release only the exact root-bound lease at producer closure, passed or failed."""
     if len(token) != 32 or any(c not in "0123456789abcdef" for c in token):
         raise ValueError("invalid reservation identity")
     directory = store or _store(root)
