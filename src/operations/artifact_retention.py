@@ -26,6 +26,9 @@ _MANIFEST_CACHE_INPUT_LIMIT = 16 * 1024 * 1024
 _MANIFEST_CACHE: OrderedDict[str, tuple[dict[str, object], dict[str, object] | None]] = (
     OrderedDict()
 )
+# Bytes already hashed in this process, newest last. Fresh bytes that are equal to
+# one of them have that digest, so revalidation compares instead of rehashing.
+_MANIFEST_DIGESTS: list[tuple[bytes, str]] = []
 _MANIFEST_CACHE_LOCK = RLock()
 
 
@@ -54,12 +57,23 @@ def _decode_manifest(data: bytes) -> tuple[dict[str, object], dict[str, object] 
     return record, index
 
 
-def _manifest_view(data: bytes) -> _ManifestSnapshot:
-    """Reuse parsing only after hashing freshly read bytes, never filesystem metadata."""
-    digest = hashlib.sha256(data).hexdigest()
-    if len(data) > _MANIFEST_CACHE_INPUT_LIMIT:
-        return _ManifestSnapshot(digest, *_decode_manifest(data))
+def _fresh_digest(data: bytes) -> str:
+    """SHA-256 of freshly read bytes, reused only when the bytes are identical."""
     with _MANIFEST_CACHE_LOCK:
+        digest = next((known for seen, known in _MANIFEST_DIGESTS if seen == data), None)
+        if digest is None:
+            digest = hashlib.sha256(data).hexdigest()
+            _MANIFEST_DIGESTS.append((data, digest))
+            del _MANIFEST_DIGESTS[:-2]
+        return digest
+
+
+def _manifest_view(data: bytes) -> _ManifestSnapshot:
+    """Reuse parsing only for freshly read bytes, never filesystem metadata."""
+    if len(data) > _MANIFEST_CACHE_INPUT_LIMIT:
+        return _ManifestSnapshot(hashlib.sha256(data).hexdigest(), *_decode_manifest(data))
+    with _MANIFEST_CACHE_LOCK:
+        digest = _fresh_digest(data)
         cached = _MANIFEST_CACHE.get(digest)
         if cached is not None:
             _MANIFEST_CACHE.move_to_end(digest)
@@ -287,6 +301,14 @@ def _approved_root(root: Path, repo_root: Path) -> bool:
     return any(scope in root.parents for scope in windows_roots)
 
 
+def _fresh_file_digest(path: Path, limit: int = _MANIFEST_CACHE_INPUT_LIMIT) -> str:
+    """Digest of a small file's freshly read bytes; repeated lifecycle checks reuse
+    the digest only for byte-identical content, so per-file validation stays linear."""
+    with path.open("rb") as handle:
+        data = handle.read(limit + 1)
+    return _hash(path) if len(data) > limit else _fresh_digest(data)
+
+
 def _hash(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -506,7 +528,7 @@ def _validate_proofs(item: Artifact) -> str | None:
             metadata = proof.path.lstat()
             if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 2 * 1024 * 1024:
                 return "invalid_retirement_proof"
-            if _hash(proof.path) != proof.sha256:
+            if _fresh_file_digest(proof.path) != proof.sha256:
                 return "retirement_proof_changed"
         except OSError:
             return "retirement_proof_unavailable"
@@ -560,7 +582,7 @@ def _validate_file(item: Artifact, repo_root: Path, live_db: Path | None) -> str
                     return "unverified_fixture_ownership"
                 manifest_digest = snapshot.sha256
             else:
-                manifest_digest = _hash(item.lifecycle_manifest)
+                manifest_digest = _fresh_file_digest(item.lifecycle_manifest)
             if manifest_digest != item.lifecycle_manifest_sha256:
                 return "lifecycle_manifest_changed"
         if fixture:
@@ -662,7 +684,7 @@ def _validate_file(item: Artifact, repo_root: Path, live_db: Path | None) -> str
             return "file_changed_during_validation"
         if item.lifecycle_manifest is not None and (
             not _safe_ancestors(item.lifecycle_manifest)
-            or _hash(item.lifecycle_manifest) != item.lifecycle_manifest_sha256
+            or _fresh_file_digest(item.lifecycle_manifest) != item.lifecycle_manifest_sha256
         ):
             return "lifecycle_manifest_changed"
         if reason := _validate_proofs(item):

@@ -222,7 +222,11 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
             disposable_paths=_collection_disposable_paths(),
             allow_partial=True,
         )
-        if exitstatus == 0:
+        # A GitHub Actions runner is discarded after its job, so retiring its payload
+        # adds no storage value; the run is still sealed and its lease released.
+        # Exact retirement re-reads the run manifest per file, which costs minutes
+        # for a large shard and exceeded the job timeout.
+        if exitstatus == 0 and os.environ.get("GITHUB_ACTIONS") != "true":
             atexit.register(_retire_collection_temp_run)
     except (OSError, ValueError):
         import warnings
