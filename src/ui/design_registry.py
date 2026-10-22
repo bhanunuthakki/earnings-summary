@@ -982,6 +982,15 @@ VISUAL_EMITTER_MANIFEST = (
             "design-system",
             "Vendored Alpine runtime mutates consumer-owned markup; application surfaces own design.",
         ),
+        VisualEmitterEntry(
+            "execution/meli_workbook_adapter.mjs",
+            EmitterDisposition.NONVISUAL,
+            frozenset({EvidenceAdapter.PYTHON_CSS}),
+            frozenset({EvidenceMode.STATIC}),
+            "dcf-workbook",
+            "Formats XLSX worksheet cells and verifies recalculation; JavaScript object literals "
+            "resemble CSS but emit no HTML, CSS or browser DOM.",
+        ),
     )
     + tuple(
         VisualEmitterEntry(

@@ -151,9 +151,13 @@ def test_analyst_prose_may_carry_model_values_but_facts_may_not() -> None:
     )
 
     value = {
+        "model": "meli_platform_sotp",
         "source": "scenario",
         "key": "vps",
         "scenario": "base",
+        "period": None,
+        "wacc_delta": None,
+        "credit_ke_delta": None,
         "unit": "USD_per_share",
         "displayed_unit": "USD_per_share",
         "display_format": "number2",

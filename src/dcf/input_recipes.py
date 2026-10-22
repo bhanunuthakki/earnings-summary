@@ -16,7 +16,7 @@ from dcf.input_evidence import (
 
 
 def model_engine(recipe: str) -> str:
-    if recipe == meli_inputs.RECIPE:
+    if meli_inputs.is_meli_recipe(recipe):
         return "meli_platform_sotp"
     if recipe == cashflow_inputs.RECIPE:
         return cashflow_inputs.ENGINE
@@ -26,8 +26,8 @@ def model_engine(recipe: str) -> str:
 def effective_numeric_inputs(recipe: str, values: Mapping[str, object]) -> dict[str, float]:
     model_engine(recipe)
     return (
-        meli_inputs.effective_numeric_inputs(values)
-        if recipe == meli_inputs.RECIPE
+        meli_inputs.effective_numeric_inputs(values, recipe=recipe)
+        if meli_inputs.is_meli_recipe(recipe)
         else cashflow_inputs.effective_numeric_inputs(values)
     )
 
@@ -41,7 +41,7 @@ def prepare_model_inputs(
     source_context: SourceReadContext | None = None,
 ) -> tuple[dict[str, float], ModelInputReceipt]:
     model_engine(request.recipe)
-    if request.recipe == meli_inputs.RECIPE:
+    if meli_inputs.is_meli_recipe(request.recipe):
         return meli_inputs.prepare_meli_inputs(
             conn,
             request,
@@ -67,7 +67,7 @@ def verify_model_input_receipt(
     source_context: SourceReadContext | None = None,
 ) -> ModelInputReceipt:
     model_engine(receipt.recipe)
-    if receipt.recipe == meli_inputs.RECIPE:
+    if meli_inputs.is_meli_recipe(receipt.recipe):
         return meli_inputs.verify_meli_inputs(
             conn,
             receipt,
@@ -88,6 +88,6 @@ def model_output(recipe: str, inputs: Mapping[str, float]) -> dict[str, object]:
     model_engine(recipe)
     return (
         meli_inputs.model_output(inputs)
-        if recipe == meli_inputs.RECIPE
+        if meli_inputs.is_meli_recipe(recipe)
         else cashflow_inputs.model_output(inputs)
     )

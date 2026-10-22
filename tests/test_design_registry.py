@@ -118,7 +118,7 @@ def test_registry_is_frozen_typed_and_complete() -> None:
         assert producer not in registry.REGISTERED
     # The retired key-metrics renderer no longer contributes an emitter.
     assert len(registry.REGISTERED) == 113
-    assert len(registry.VISUAL_EMITTER_MANIFEST) == 160
+    assert len(registry.VISUAL_EMITTER_MANIFEST) == 161
     calculation_evidence = next(
         entry
         for entry in registry.VISUAL_EMITTER_MANIFEST
@@ -135,6 +135,15 @@ def test_registry_is_frozen_typed_and_complete() -> None:
         if entry.path == "operations/backup_observer.py"
     )
     assert backup_observer.disposition is registry.EmitterDisposition.NONVISUAL
+    workbook_adapter = next(
+        entry
+        for entry in registry.VISUAL_EMITTER_MANIFEST
+        if entry.path == "execution/meli_workbook_adapter.mjs"
+    )
+    assert workbook_adapter.disposition is registry.EmitterDisposition.NONVISUAL
+    assert workbook_adapter.adapter_kinds == frozenset({registry.EvidenceAdapter.PYTHON_CSS})
+    assert workbook_adapter.owner == "dcf-workbook"
+    assert workbook_adapter.path not in registry.GOVERNED
     assert len(registry.GOVERNED) == 134
     assert (
         frozenset(

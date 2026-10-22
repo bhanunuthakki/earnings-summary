@@ -12,8 +12,12 @@ import sqlite3
 from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
+
+from pydantic import Field, ValidationError
 
 from dcf.input_evidence import (
+    FrozenModel,
     InputEvidenceError,
     InputRequirement,
     ModelCalculation,
@@ -23,9 +27,10 @@ from dcf.input_evidence import (
     canonical_digest,
     verify_model_inputs,
 )
-from dcf.meli_model import validate_credit_terminal
+from dcf.meli_model import implied_credit_terminal_roe, validate_credit_terminal
 
 RECIPE = "meli-platform-sotp-inputs/v4"
+FINANCING_RECIPE = "meli-platform-sotp-inputs/v5"
 MILLIONS = Decimal("0.000001")
 REPORTED_DRIVER_KEYS = frozenset({"comm_rev0", "fpay_rev0", "cb0", "shares", "net_cash"})
 ASSUMPTION_KEYS = frozenset(
@@ -65,6 +70,93 @@ ASSUMPTION_KEYS = frozenset(
         "derive_capm",
     }
 )
+FINANCING_ASSUMPTION_KEYS = ASSUMPTION_KEYS | {"financing_other_expenses_reserve"}
+
+
+class MeliFinancingContext(FrozenModel):
+    """One source-bound financing event after the reported balance-sheet date."""
+
+    schema_version: Literal["meli_financing_bridge.v1"] = "meli_financing_bridge.v1"
+    event_key: str = Field(min_length=1, max_length=256)
+    contract_period_end: date
+    closing_period_end: date
+    diagnostics: Literal["meli-report-driver-checks/v1"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+
+def is_meli_recipe(recipe: str) -> bool:
+    return recipe in {RECIPE, FINANCING_RECIPE}
+
+
+def assumption_keys_for_recipe(recipe: str) -> frozenset[str]:
+    if recipe == RECIPE:
+        return ASSUMPTION_KEYS
+    if recipe == FINANCING_RECIPE:
+        return FINANCING_ASSUMPTION_KEYS
+    raise InputEvidenceError("input_recipe_unsupported")
+
+
+def _financing_context(request: ModelInputRequest, *, as_of: datetime) -> MeliFinancingContext:
+    if request.recipe != FINANCING_RECIPE or request.recipe_context is None:
+        raise InputEvidenceError("meli_financing_context_required")
+    try:
+        context = MeliFinancingContext.model_validate(request.recipe_context)
+    except ValidationError as exc:
+        raise InputEvidenceError("meli_financing_context_invalid") from exc
+    if (
+        as_of.tzinfo is None
+        or not request.financial_period_end
+        < context.contract_period_end
+        <= context.closing_period_end
+        <= as_of.date()
+    ):
+        raise InputEvidenceError("meli_financing_event_period_invalid")
+    return context
+
+
+def requirements_for_request(
+    request: ModelInputRequest, *, as_of: datetime
+) -> tuple[InputRequirement, ...]:
+    """Retain the original reported anchor; bind event facts to their own dates."""
+    if not is_meli_recipe(request.recipe):
+        raise InputEvidenceError("input_recipe_mismatch")
+    base = requirements_for(request.financial_period_end)
+    if request.recipe == RECIPE:
+        if request.recipe_context is not None:
+            raise InputEvidenceError("meli_recipe_issuer_or_context_mismatch")
+        return base
+    context = _financing_context(request, as_of=as_of)
+    return (
+        *base,
+        _money(
+            "financing_issued_principal",
+            instant=True,
+            accounting_basis="other",
+            constraints={
+                "event_key": context.event_key,
+                "financing_measure": "issued_principal",
+                "completion": "closed",
+            },
+        ).model_copy(
+            update={"period_end": context.closing_period_end, "consolidation_scope": "other"}
+        ),
+        InputRequirement(
+            key="financing_underwriting_purchase_fraction",
+            role="meli.financing_underwriting_purchase_fraction",
+            unit_key="pure",
+            currency=None,
+            period_kind="instant",
+            period_end=context.contract_period_end,
+            accounting_basis="other",
+            consolidation_scope="other",
+            definition_constraints={
+                "event_key": context.event_key,
+                "purchase_basis": "underwriter_purchase_price",
+                "excludes_other_expenses": True,
+            },
+        ),
+    )
 
 
 def _money(
@@ -216,10 +308,12 @@ def requirements_for(period_end: date) -> tuple[InputRequirement, ...]:
     return (*flows, *POINT_REQUIREMENTS)
 
 
-def effective_numeric_inputs(values: Mapping[str, object]) -> dict[str, float]:
+def effective_numeric_inputs(
+    values: Mapping[str, object], *, recipe: str = RECIPE
+) -> dict[str, float]:
     """Extract the fixed economic driver set; repricing does not change this hash."""
     out: dict[str, float] = {}
-    for key in REPORTED_DRIVER_KEYS | ASSUMPTION_KEYS:
+    for key in REPORTED_DRIVER_KEYS | assumption_keys_for_recipe(recipe):
         value = values.get(key)
         if (
             isinstance(value, bool)
@@ -341,6 +435,53 @@ def calculate_actuals(
             value=actuals["net_cash"],
         )
     )
+    if receipt.recipe == FINANCING_RECIPE:
+        _financing_context(receipt.request, as_of=receipt.verified_at)
+        reserve = receipt.request.assumptions.get("financing_other_expenses_reserve")
+        if reserve is None or reserve.value < 0:
+            raise InputEvidenceError("meli_financing_expense_reserve_required")
+        principal = values.get("financing_issued_principal")
+        fraction = values.get("financing_underwriting_purchase_fraction")
+        if (
+            principal is None
+            or not math.isfinite(principal)
+            or principal <= 0
+            or fraction is None
+            or not math.isfinite(fraction)
+            or not 0 < fraction <= 1
+        ):
+            raise InputEvidenceError("meli_financing_reported_inputs_invalid")
+        actuals["baseline_net_cash"] = actuals["net_cash"]
+        actuals["financing_issued_principal"] = principal
+        actuals["financing_underwriting_purchase_fraction"] = fraction
+        actuals["financing_cash_before_other_expenses"] = principal * fraction
+        actuals["financing_other_expenses_reserve"] = reserve.value
+        actuals["net_cash"] += principal * fraction - principal - reserve.value
+        calculations[-1] = calculations[-1].model_copy(update={"key": "baseline_net_cash"})
+        calculations.extend(
+            (
+                ModelCalculation(
+                    key="financing_cash_before_other_expenses",
+                    formula="issued_principal_times_underwriter_purchase_fraction",
+                    operands=(
+                        "financing_issued_principal",
+                        "financing_underwriting_purchase_fraction",
+                    ),
+                    value=actuals["financing_cash_before_other_expenses"],
+                ),
+                ModelCalculation(
+                    key="net_cash",
+                    formula="baseline_net_cash_plus_financing_cash_minus_principal_minus_expense_reserve",
+                    operands=(
+                        "baseline_net_cash",
+                        "financing_cash_before_other_expenses",
+                        "financing_issued_principal",
+                        "financing_other_expenses_reserve",
+                    ),
+                    value=actuals["net_cash"],
+                ),
+            )
+        )
     return actuals, tuple(calculations)
 
 
@@ -353,6 +494,131 @@ def model_output(inputs: Mapping[str, float]) -> dict[str, object]:
     for key, value in inputs.items():
         setattr(model, key, int(value) if key in {"years", "derive_capm"} else value)
     return asdict(mirror(model))
+
+
+BRIDGE_SENSITIVITY_CASES = (
+    ("funding", "credit_funding_debt_allocation", (0, 2744, 5430, 8372)),
+    ("financing_reserve", "financing_other_expenses_reserve", (0, 5, 10, 20)),
+    ("credit_liquidity", "credit_cash_allocation", (0, 500, 1000)),
+    ("operating_liquidity", "operating_cash_reserve", (0, 1500, 3000)),
+)
+MELI_DIAGNOSTIC_UNITS = (
+    dict.fromkeys(
+        (
+            "commerce_profit_proxy_year0",
+            "payments_profit_proxy_year0",
+            "credit_profit_proxy_year0",
+            "profit_proxy_year0",
+            "profit_proxy_variance",
+            "residual_credit_profit_calibration",
+            "calibrated_profit_sum",
+            "calibrated_profit_variance",
+            "forward_profit_year1",
+            "forward_profit_variance",
+        ),
+        "USD_m",
+    )
+    | dict.fromkeys(("profit_proxy_variance_fraction", "credit_cost_calibration"), "fraction")
+    | {
+        f"{prefix}_{value}_vps": "USD_per_share"
+        for prefix, _, values in BRIDGE_SENSITIVITY_CASES
+        for value in values
+    }
+    | dict.fromkeys(
+        (
+            "credit_cost_600bp_vps",
+            "credit_cost_800bp_vps",
+            "credit_cost_1000bp_vps",
+            "credit_cost_1200bp_vps",
+            "credit_cost_calibrated_vps",
+        ),
+        "USD_per_share",
+    )
+)
+
+
+def driver_diagnostics(
+    receipt: ModelInputReceipt,
+    actuals: Mapping[str, float],
+    inputs: Mapping[str, float],
+) -> tuple[ModelCalculation, ...]:
+    """Model-owned checks, never reported segment results or a historical bridge.
+
+    The source-qualified caller owns admission. Counterfactual cash allocations
+    use the same reported bindings and native bridge, not a patched net_cash.
+    Reported annualized NIMAL and an ending book make year-zero profit a proxy. The
+    residual cost calibration is an analyst allocation, not observed costs.
+    """
+    _reconcile(actuals, inputs)
+    values: dict[str, float] = {}
+    values["commerce_profit_proxy_year0"] = actuals["comm_rev0"] * inputs["comm_margin_near"]
+    values["payments_profit_proxy_year0"] = actuals["fpay_rev0"] * inputs["fpay_margin_near"]
+    values["credit_profit_proxy_year0"] = actuals["cb0"] * (
+        actuals["nimal_actual"] - inputs["credit_opex_ratio"]
+    )
+    values["profit_proxy_year0"] = sum(values.values())
+    values["profit_proxy_variance"] = values["profit_proxy_year0"] - actuals["operating_income"]
+    if actuals["operating_income"] == 0 or actuals["cb0"] <= 0:
+        raise InputEvidenceError("meli_profit_bridge_denominator_invalid")
+    values["profit_proxy_variance_fraction"] = (
+        values["profit_proxy_variance"] / actuals["operating_income"]
+    )
+    values["residual_credit_profit_calibration"] = (
+        actuals["operating_income"]
+        - values["commerce_profit_proxy_year0"]
+        - values["payments_profit_proxy_year0"]
+    )
+    values["credit_cost_calibration"] = actuals["nimal_actual"] - (
+        values["residual_credit_profit_calibration"] / actuals["cb0"]
+    )
+    values["calibrated_profit_sum"] = (
+        values["commerce_profit_proxy_year0"]
+        + values["payments_profit_proxy_year0"]
+        + values["residual_credit_profit_calibration"]
+    )
+    values["calibrated_profit_variance"] = (
+        values["calibrated_profit_sum"] - actuals["operating_income"]
+    )
+    observed, forward = review_drivers(actuals, inputs)["aggregate_profit_proxy"]
+    values["forward_profit_year1"] = forward
+    values["forward_profit_variance"] = forward - observed
+    for prefix, key, cases in BRIDGE_SENSITIVITY_CASES:
+        for value in cases:
+            assumptions = dict(receipt.request.assumptions)
+            assumptions[key] = assumptions[key].model_copy(update={"value": float(value)})
+            variant = receipt.model_copy(
+                update={"request": receipt.request.model_copy(update={"assumptions": assumptions})}
+            )
+            varied_actuals, _ = calculate_actuals(variant)
+            varied = effective_numeric_inputs(
+                {**inputs, **{name: varied_actuals[name] for name in REPORTED_DRIVER_KEYS}},
+                recipe=receipt.recipe,
+            )
+            varied[key] = float(value)
+            output = model_output(varied)
+            values[f"{prefix}_{value}_vps"] = float(str(output["vps"]))
+    for label, cost in (
+        ("600bp", 0.06),
+        ("800bp", 0.08),
+        ("1000bp", 0.10),
+        ("1200bp", 0.12),
+        ("calibrated", values["credit_cost_calibration"]),
+    ):
+        varied = dict(inputs) | {"credit_opex_ratio": cost}
+        varied["credit_terminal_roe"] = implied_credit_terminal_roe(varied)
+        validate_credit_terminal(varied)
+        values[f"credit_cost_{label}_vps"] = float(str(model_output(varied)["vps"]))
+    if set(values) != set(MELI_DIAGNOSTIC_UNITS) or not all(map(math.isfinite, values.values())):
+        raise InputEvidenceError("meli_driver_diagnostics_invalid")
+    return tuple(
+        ModelCalculation(
+            key=key,
+            formula="meli_reported_baseline_and_explicit_analyst_driver_check/v1",
+            operands=("verified_reported_inputs", "reviewed_effective_inputs"),
+            value=value,
+        )
+        for key, value in values.items()
+    )
 
 
 def review_drivers(
@@ -434,16 +700,16 @@ def prepare_meli_inputs(
 ) -> tuple[dict[str, float], ModelInputReceipt]:
     if request.ticker != "MELI":
         raise InputEvidenceError("input_recipe_issuer_mismatch")
-    if request.recipe_context is not None:
-        raise InputEvidenceError("meli_recipe_issuer_or_context_mismatch")
-    proposed = {key: value for key, value in effective_inputs.items() if key in ASSUMPTION_KEYS}
+    requirements = requirements_for_request(request, as_of=as_of)
+    assumption_keys = assumption_keys_for_recipe(request.recipe)
+    proposed = {key: value for key, value in effective_inputs.items() if key in assumption_keys}
     proof = verify_model_inputs(
         conn,
         request,
-        recipe=RECIPE,
-        requirements=requirements_for(request.financial_period_end),
+        recipe=request.recipe,
+        requirements=requirements,
         effective_inputs=proposed,
-        assumption_keys=ASSUMPTION_KEYS,
+        assumption_keys=assumption_keys,
         as_of=as_of,
         source_context=source_context,
     )
@@ -451,6 +717,11 @@ def prepare_meli_inputs(
     complete = {**proposed, **{key: actuals[key] for key in REPORTED_DRIVER_KEYS}}
     _reconcile(actuals, complete)
     _verify_review(proof, actuals, complete, as_of)
+    if (
+        request.recipe == FINANCING_RECIPE
+        and _financing_context(request, as_of=as_of).diagnostics is not None
+    ):
+        calculations += driver_diagnostics(proof, actuals, complete)
     return complete, proof.model_copy(
         update={
             "effective_inputs_sha256": canonical_digest(complete),
@@ -474,7 +745,7 @@ def verify_meli_inputs(
         or receipt.source_integrity != "present_bytes_verified"
     ):
         raise InputEvidenceError("model_input_source_legacy_receipt_unverified")
-    if receipt.recipe != RECIPE or receipt.verified_at > as_of:
+    if not is_meli_recipe(receipt.recipe) or receipt.verified_at > as_of:
         raise InputEvidenceError("model_input_receipt_recipe_or_clock_invalid")
     complete, verified = prepare_meli_inputs(
         conn,

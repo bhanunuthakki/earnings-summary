@@ -19,9 +19,9 @@ from quality.test_db_invocations import collect_invocations
 
 TESTS_DIR = Path(__file__).resolve().parent
 # Resolved and unresolved AST upgrade candidates; old substring count was 109.
-# One explicit historical one-step control was added for 0059.
+# Two explicit historical one-step controls were added for 0059 and 0061.
 # They use cached predecessor fixtures; application fixtures still use migrated_db.
-_MAX_DIRECT_CHAIN_BUILDERS = 102
+_MAX_DIRECT_CHAIN_BUILDERS = 103
 
 
 def _calls_upgrade(source: str, path: str) -> bool:
@@ -55,6 +55,7 @@ def test_no_new_direct_migration_builders() -> None:
     "name,revision",
     [
         ("test_scoped_research_universe_migration.py", "0059_scoped_research_universe_commitments"),
+        ("test_corpus_fts_bulk_validation.py", "0061_bulk_lexical_projection_coverage"),
     ],
 )
 def test_new_migration_controls_keep_explicit_historical_targets(name: str, revision: str) -> None:

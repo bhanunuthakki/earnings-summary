@@ -1413,14 +1413,23 @@ def _verify_complete_chunk_stage(
 ) -> int:
     """Prove all deterministic chunks exist exactly and no extra row exists."""
 
+    # FTS5's chunk_id is UNINDEXED. Read it once, with FTS as the outer
+    # scan, instead of scanning the entire projection for every chunk.
+    lexical_rows = {
+        str(row[0]): (int(row[1]), row[2], row[3])
+        for row in conn.execute(
+            "SELECT lexical.chunk_id, COUNT(*), MIN(lexical.text), MAX(lexical.text) "
+            "FROM search_lexical_chunks AS lexical CROSS JOIN search_chunks AS chunk "
+            "ON chunk.chunk_id = lexical.chunk_id WHERE chunk.manifest_id = ? "
+            "GROUP BY lexical.chunk_id",
+            (manifest_id,),
+        )
+    }
     expected_count = 0
     for expected in _iter_manifest_chunks(conn, memberships, request, chunker_sha):
         expected_count += 1
         _require_exact_chunk(conn, expected)
-        row = conn.execute(
-            "SELECT COUNT(*), MIN(text), MAX(text) FROM search_lexical_chunks WHERE chunk_id = ?",
-            (expected.chunk_id,),
-        ).fetchone()
+        row = lexical_rows.get(expected.chunk_id)
         if (
             row is None
             or int(row[0]) != 1

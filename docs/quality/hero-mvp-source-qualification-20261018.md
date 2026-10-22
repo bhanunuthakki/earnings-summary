@@ -53,8 +53,8 @@ The configured filing-XBRL processor resolver returns
 `installation_not_configured`. This blocks that native processing lane; it does
 not block the independent CompanyFacts lane. No installation or sandbox change
 was attempted. Public filing dates are not exact publication timestamps. SEC
-acceptance is an available-by witness for that archived SEC copy, not proof of
-the issuer’s earliest release time.
+acceptance records a filing event. Dissemination can follow later. It does not
+prove exact public availability or the issuer’s earliest release time.
 
 Historical source selection is implemented separately from historical financial
 snapshot acceptance. Cross-review confirmed that an issuer-wide fact projection
@@ -82,3 +82,21 @@ in existing owners, with zero new executable modules. The old LOC ceiling failed
 before its explicit refresh. No other growth metric, scanner, fan-out, cycle or
 duplication limit was increased. Existing literal attribute dispositions move to
 their new source lines; their classifications and target sets remain unchanged.
+
+### Execution evidence, 2026-10-19
+
+The approved 17 complete SEC submissions were captured. Their exact raw bytes
+contain 412 indexed members. Capture used 61,385,911 new source bytes; the retained
+source total is 80,866,485 bytes. All 17 parent hashes and identities replayed.
+No separate generated financial table pages were requested.
+
+Both issuer identities are admitted in an isolated Windows qualification database.
+MELI's retained SEC root contains 812 accessions. Its sealed inventory has 554
+expected documents, with capture status recorded separately. Both selected MELI
+primary filings passed native text extraction. The four MELI submission containers
+supplied 24 additional original documents through native, replayable member import.
+These steps do not establish financial admission or report acceptance.
+
+The owner accepted the existing ordered snapshots and the 83/100 advisory score
+on 2026-10-19. Execution is authorized. The broader historical resolver migration
+is deferred. Production state has not been changed.

@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
+from provenance.analysis_scope import AnalysisEvidenceScope
 from provenance.evidence_ledger import EvidenceLedger, EvidenceLocator, EvidenceNode, ExtractionRun
 from provenance.evidence_native_candidates import (
     resolve_local_storage_uri,
@@ -84,6 +85,9 @@ class ReportedTableRequest(_Closed):
     content_roots: tuple[Path, ...] = Field(min_length=1)
     recorded_at: datetime
     apply: bool = False
+    analysis_scope: AnalysisEvidenceScope | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator("recorded_at")
     @classmethod
@@ -166,9 +170,16 @@ def load_reported_table_evidence(
     *,
     allow_annual_statements: bool = False,
 ) -> ReportedTableEvidence:
+    if request.analysis_scope is not None:
+        scope = request.analysis_scope
+        if request.recorded_at < scope.request.observed_through:
+            raise ValueError("reported statement scope is not visible at publication time")
     try:
         package = load_captured_sec_filing_package(
-            conn, inventory_key=request.inventory_key, accession_number=request.accession_number
+            conn,
+            inventory_key=request.inventory_key,
+            accession_number=request.accession_number,
+            analysis_scope=request.analysis_scope,
         )
     except SecNativeCaptureError as error:
         raise ValueError(str(error)) from error

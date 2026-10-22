@@ -202,3 +202,34 @@ def test_one_peer_issuer_cannot_split_into_alias_contexts() -> None:
         MemoContextReviewV2.model_validate(
             _review(schema_version="memo_context_review.v2", supporting_contexts=[context, alias])
         )
+
+
+@pytest.mark.parametrize("versioned", [False, True])
+def test_json_review_preserves_strict_nested_financial_datetimes(versioned: bool) -> None:
+    from sources.report_financials import FinancialEvidenceReference
+
+    reference = FinancialEvidenceReference(
+        ticker="NU",
+        concept="revenue",
+        canonical_metric_cell_id="cell",
+        observation_id="observation",
+        canonical_resolution_revision_id="resolution",
+        metric_definition_revision_id="definition",
+        as_of=STAMP,
+        resolution_observed_through=STAMP,
+    )
+    payload = _review()
+    payload["claims"] = [
+        {
+            "block_id": "b" * 64,
+            "passage": "Revenue baseline.",
+            "kind": "reported_fact",
+            "rationale": "Synthetic parser regression; no source qualification claimed.",
+            "financial_references": (reference,),
+        }
+    ]
+    if versioned:
+        payload["schema_version"] = "memo_context_review.v2"
+    model = MemoContextReviewV2 if versioned else MemoContextReview
+    original = model.model_validate(payload)
+    assert parse_memo_context_review(original.model_dump_json()) == original

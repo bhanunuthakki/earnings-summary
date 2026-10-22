@@ -718,3 +718,16 @@ its immutable resolution receipt remains intact. Derived publication and
 financial consumers use this same check. Financial binding replay requires the
 complete committed review, unchanged current mapping and definition, and exact
 reviewed clocks.
+
+A reviewed memo can use `MemoObservationSum` for a signed USD-million sum of reported monetary observations that are not standard report-table concepts. Each operand pins the observation, canonical cell, resolution and metric-definition revision in the same sealed research snapshot. `read_memo_observation_sum` reads the existing canonical financial projection and original provenance; it does not create a report-table alias or a new fact. Its currency, accounting basis, reporting entity, security scope, consolidation scope, dimensions and exact period must agree. Stock and flow observations cannot be mixed. The native whole-output verifier replays the sum and binds every displayed number. Analyst review must still establish additivity and disclose any difference from a management metric's perimeter or basis.
+
+MELI's optional `meli-report-driver-checks/v1` recipe context adds model-owned
+diagnostic calculations to the source-qualified input receipt. These include
+funding/reserve/liquidity counterfactuals, credit-cost stresses with coherent
+terminal returns, and an explicit aggregate-profit allocation bridge. A residual
+calibration is an analyst allocation, never a reported segment profit or cost.
+Annualized margin and ending-book proxies retain their period limitations. The
+original source bindings are reused; cash counterfactuals rerun the native bridge
+rather than patching net cash. Report selectors and workbook expectations read
+the same receipt calculations. Legacy contexts do not claim these diagnostics.
+Workbook edits do not renew financial qualification.

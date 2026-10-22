@@ -1517,6 +1517,14 @@ completeness memberships. TTM, net cash, economic allocations, model-role
 bindings and assumptions are outside this operation. The existing three-member
 NIMAL/liquidity/debt publisher keeps its recipe and immutable identities.
 
+Both MELI displayed-source publishers accept optional `--analysis-scope <receipt>`.
+They replay that receipt and require its exact inventory, current primary versions,
+physical clocks and selected document membership. Only an explicit
+`complete_report_evidence/v1` receipt permits primary-only loading before package
+children are captured. Without that profile the complete-package gate stays in
+force. This option does not admit facts or qualify a model. Dry-run stays the
+default; apply retains the existing source-publication write boundary.
+
 The publisher reuses the qualified native HTML hierarchy/replay and captured
 primary-filing authority. It reads displayed rows, headers, subsections and
 footnotes only. It does not invoke the held filing-native XBRL processor or use
@@ -1766,10 +1774,10 @@ The source review must be actual and precede generation. Full text and the full
 native quarantined artifact remain retained. Required quarantined pages fail
 closed. The model-input verifier rejects deferred pages, unknown pages in scoped
 documents, and derived observations with deferred source leaves through the shared
-provenance page guard. Memo financial-reference and evidence-node consumers reject
-all per-page PDF scopes with `memo_report_pdf_scope_unsupported`, including required
-pages, and retain a degraded non-decision-grade assessment until the later report
-PR implements complete page-aware admission. The processing receipt
+provenance page guard. Memo financial-reference and evidence-node consumers now verify each source
+page against the reviewed scope. Deferred pages, unknown page locators, missing
+anchors and derivation leaves outside the scope fail closed. Evidence:
+`tests/test_report_pdf_table_scope.py` and `tests/test_decision_brief.py`. The processing receipt
 names scoped identities and deferred pages. Full/default certificates remain strict.
 Evidence: `tests/test_meli_input_evidence.py`,
 `tests/test_document_processing_evidence.py`,
@@ -1859,3 +1867,30 @@ Decision admission reconstructs
 the retained authorization and verifies its evidence-manifest digest before any
 file replacement or decision receipt. These checks preserve existing Ask behavior.
 Evidence: `tests/test_owner_proposal_approval.py`.
+### Bulk corpus lexical coverage checks — 2026-10-19
+
+Disposition: **tested no UI or operator CLI surface change**. The existing
+corpus library checks persisted FTS rows in one bulk read. Migration 0061 replaces
+the exact lexical coverage trigger with a grouped scan through the normal
+Alembic path. Missing, duplicate, altered and extra target rows still fail.
+Corpus identities, commitments, immutable guards and exact replay remain intact.
+No collection, financial admission, scheduler, service or publication authority
+changes. Evidence: `tests/test_corpus_fts_bulk_validation.py`,
+`tests/test_search_corpus_builder.py` and `tests/test_search_projection_seals.py`.
+
+### MELI Scenario cache and provenance repair — 2026-10-19
+
+Disposition: **tested no operator CLI surface change**. The existing workbook
+library refreshes three unchanged Scenario formulas after native data-table
+calculation. The saved workbook records Bear provenance from the existing thesis,
+seed or explicit-vector route. Explicit vectors keep acceptance recorded
+separately. The recalculation receipt checks all three Scenario outputs and the
+same provenance before export and after reopen. Saved XML and synthetic edit
+controls preserve the formulas, native tables and numeric caches. This adds no
+operator action, financial admission or live activation. Evidence:
+`tests/test_meli_workbook_recalculation.py` and
+`tests/test_platform_scenario_emission.py`.
+
+The model input re-verification correction preserves the retained snapshot resolution clocks and independently checks the current selected observation. It adds no operator command, write authority, provider call or production operation. Existing model input and readiness interfaces own the behavior.
+
+MELI persistence also retains the full existing model-engine output in the assumption snapshot for exact memo reconstruction. This adds no new operator interface or authority. Historical incomplete model runs remain retained and cannot pass the integrated memo output commitment.

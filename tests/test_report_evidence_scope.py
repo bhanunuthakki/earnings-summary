@@ -382,6 +382,47 @@ def test_scoped_loader_pins_versions_even_after_current_coverage_changes(
         conn.close()
 
 
+@pytest.mark.parametrize("invalid", ["json", "schema", "oversize"])
+def test_publication_scope_file_is_bounded_and_validation_does_not_echo_input(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], invalid: str
+) -> None:
+    from execution.publish_meli_reported_tables import main
+
+    artifact = tmp_path / "scope.json"
+    if invalid == "oversize":
+        with artifact.open("wb") as handle:
+            handle.truncate(16 * 1024 * 1024 + 1)
+    else:
+        artifact.write_text(
+            "invalid" if invalid == "json" else '{"private-payload": "do-not-echo"}'
+        )
+    assert (
+        main(
+            [
+                "--db",
+                str(tmp_path / "absent.db"),
+                "--inventory-key",
+                "test",
+                "--accession",
+                "0000000001-26-000001",
+                "--document-version-id",
+                "test",
+                "--fulltext-run-id",
+                "test",
+                "--content-root",
+                str(tmp_path),
+                "--analysis-scope",
+                str(artifact),
+            ]
+        )
+        == 3
+    )
+    output = capsys.readouterr().out
+    assert json.loads(output)["outcome"] == "unavailable"
+    assert "private-payload" not in output and "do-not-echo" not in output
+    assert not (tmp_path / "absent.db").exists()
+
+
 def test_report_population_does_not_attempt_prior_native_xbrl_obligations(
     tmp_path: Path, migrated_db: Callable[..., Path]
 ) -> None:

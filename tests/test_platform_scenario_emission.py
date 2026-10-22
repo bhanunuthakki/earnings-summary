@@ -348,7 +348,7 @@ def _sheet_scenarios(dest: Path) -> tuple[dict[str, float], str]:
     """``({scenario_name: value_per_share}, provenance_note)`` from the
     workbook's Scenario sheet — rows 3-5 (Bear/Base/Bull) + the provenance
     note cell on row 6."""
-    ws = openpyxl.load_workbook(str(dest))["Scenario"]
+    ws = openpyxl.load_workbook(str(dest), data_only=True)["Scenario"]
     fvs = {str(ws[f"A{r}"].value): float(cast("float", ws[f"E{r}"].value)) for r in (3, 4, 5)}
     assert str(ws["A6"].value) == "Bear provenance"
     return fvs, str(ws["B6"].value)
@@ -385,10 +385,16 @@ def test_nu_sheet_bear_seed_fallback_labeled(tmp_path: Path) -> None:
     assert "seed fallback" in provenance_note
 
 
+def _require_workbook_runtime() -> None:
+    if not os.environ.get("DCF_ARTIFACT_NODE") and not os.environ.get("DCF_ARTIFACT_NODE_MODULES"):
+        pytest.skip("Real artifact engine requires explicit loader-supplied runtime paths")
+
+
 def test_meli_sheet_bear_matches_persisted_snapshot_thesis(
     tmp_path: Path,
     consistent_meli_case: tuple[meli.Assum, dict[str, object]],
 ) -> None:
+    _require_workbook_runtime()
     s, holdings = consistent_meli_case
     m = meli.mirror(s)
     dest = tmp_path / "MELI.xlsx"
@@ -404,6 +410,7 @@ def test_meli_sheet_bear_seed_fallback_labeled(
     tmp_path: Path,
     consistent_meli_case: tuple[meli.Assum, dict[str, object]],
 ) -> None:
+    _require_workbook_runtime()
     s, _ = consistent_meli_case
     m = meli.mirror(s)
     dest = tmp_path / "MELI_seed.xlsx"
