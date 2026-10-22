@@ -175,8 +175,9 @@ def upgrade() -> None:
     }
     if "owner_authorization_id" not in columns:
         op.execute(
-            "ALTER TABLE research_proposals ADD COLUMN owner_authorization_id TEXT "
-            "REFERENCES owner_proposal_authorizations(authorization_id)"
+            # Code-level referential integrity, like every research table: the insert
+            # trigger requires a matching immutable authorization row.
+            "ALTER TABLE research_proposals ADD COLUMN owner_authorization_id TEXT"
         )
     _replace_proposal_triggers(_OWNER_INSERT, _OWNER_IMMUTABLE)
 

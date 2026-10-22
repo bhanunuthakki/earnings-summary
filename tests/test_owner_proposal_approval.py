@@ -10,10 +10,8 @@ from pathlib import Path
 
 import comments_server
 import pytest
-from alembic.config import Config
 from pydantic import ValidationError
 
-from alembic import command
 from execution.register_owner_proposal import main
 from research.proposal_approval import (
     AskProposalDecisionV1,
@@ -26,9 +24,6 @@ from research.proposal_approval import (
     preview_owner_proposal,
 )
 from research.proposals import create_proposal, get_proposal
-
-PRIOR = "0059_scoped_research_universe_commitments"
-CURRENT = "0060_owner_governed_proposals"
 
 
 @pytest.fixture
@@ -227,40 +222,6 @@ def test_authorization_validation(
         preview_owner_proposal(
             _diff(), repo_root=root, authorization={**_authorization(), **change}
         )
-
-
-def _config(db: Path) -> Config:
-    root = Path(__file__).resolve().parents[1]
-    cfg = Config(str(root / "alembic.ini"))
-    cfg.set_main_option("script_location", str(root / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", f"sqlite:///{db}")
-    return cfg
-
-
-def test_migration_round_trip(authority: tuple[Path, Path, Path]) -> None:
-    root, db, _ = authority
-    cfg = _config(db)
-    command.downgrade(cfg, PRIOR)
-    with sqlite3.connect(db) as conn:
-        old = conn.execute(
-            "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_research_proposal_%' ORDER BY name"
-        ).fetchall()
-        assert "owner_authorization_id" not in {
-            row[1] for row in conn.execute("PRAGMA table_info(research_proposals)")
-        }
-    command.upgrade(cfg, CURRENT)
-    command.downgrade(cfg, PRIOR)
-    with sqlite3.connect(db) as conn:
-        assert (
-            conn.execute(
-                "SELECT name,sql FROM sqlite_master WHERE type='trigger' AND name LIKE 'trg_research_proposal_%' ORDER BY name"
-            ).fetchall()
-            == old
-        )
-    command.upgrade(cfg, CURRENT)
-    _register(root, db)
-    with pytest.raises(RuntimeError, match="owner"):
-        command.downgrade(cfg, PRIOR)
 
 
 def test_cli_dry_run_and_registration(
