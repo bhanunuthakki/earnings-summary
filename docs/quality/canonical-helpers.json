@@ -1130,28 +1130,52 @@
       "canonical_extra": null,
       "canonical_target": null,
       "disposition": "retained",
-      "end_line": 154,
+      "end_line": 159,
       "family": "tickers",
       "file": "execution/extract_kpis_from_summaries.py",
-      "line": 142,
+      "historical_captures": [
+        {
+          "canonical_extra": null,
+          "canonical_target": null,
+          "capture_commit": "95d69f8274f21ae4d227584540bdcbff7d1235fe",
+          "capture_status": "historical retained implementation superseded by shared database ownership",
+          "disposition": "retained",
+          "end_line": 154,
+          "family": "tickers",
+          "file": "execution/extract_kpis_from_summaries.py",
+          "line": 142,
+          "name": "_resolve_tickers",
+          "referenced": {
+            "SQLiteConnectionRole": {
+              "import_module": "sqlite_runtime",
+              "import_name": "SQLiteConnectionRole"
+            },
+            "connect_sqlite": {
+              "import_module": "sqlite_runtime",
+              "import_name": "connect_sqlite"
+            },
+            "db": {
+              "import_module": "db",
+              "import_name": "db"
+            }
+          },
+          "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+          "scope": "module",
+          "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+          "unresolved": []
+        }
+      ],
+      "line": 150,
       "name": "_resolve_tickers",
       "referenced": {
-        "SQLiteConnectionRole": {
-          "import_module": "sqlite_runtime",
-          "import_name": "SQLiteConnectionRole"
-        },
-        "connect_sqlite": {
-          "import_module": "sqlite_runtime",
-          "import_name": "connect_sqlite"
-        },
         "db": {
           "import_module": "db",
           "import_name": "db"
         }
       },
-      "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+      "retained_reason": "Retain the governed roster selection: the CLI supplies its resolved shared connection, an explicit ticker is uppercased, and roster selection preserves DISTINCT, ACTIVE_LIST_TYPES_SQL, and ORDER BY ticker. These selection semantics are unchanged; only database ownership moves to the caller. The previous checkout-default capture is preserved as history.",
       "scope": "module",
-      "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+      "source": "def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    cur = conn.cursor()\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    return [r[0] for r in rows]",
       "unresolved": []
     },
     {

@@ -30,83 +30,90 @@ import argparse
 import json
 import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:  # direct script invocation
+    from _lib import PROJECT_ROOT, add_database_argument, require_db_path
+except ImportError:  # pragma: no cover - package import fallback
+    from execution._lib import PROJECT_ROOT, add_database_argument, require_db_path
 
-import db  # noqa: E402
-from compute.kpi_extract_summaries import (  # noqa: E402
+import db
+from compute.kpi_extract_summaries import (
     TickerExtractionLog,
     capture_for_ticker,
     extract_for_ticker,
     write_log,
 )
-from pipeline.run_accounting import (  # noqa: E402
+from db_paths import db_path_context
+from pipeline.run_accounting import (
     PipelineRunSuppressedError,
     suppression_payload,
 )
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def main() -> int:
     args = _parse_args()
     repo_root = args.repo_root.resolve()
-    db_path = repo_root / "data" / "portfolio.db"
-    if not db_path.exists():
-        print(f"[error] no DB at {db_path}", file=sys.stderr)
+    try:
+        db_path = require_db_path(args.db_path)
+    except (OSError, RuntimeError) as exc:
+        print(f"[error] refusing to run: {exc}", file=sys.stderr)
         return 1
 
-    tickers = _resolve_tickers(repo_root, args)
-    if not tickers:
-        print("[]")
-        return 0
-
-    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
-    conn.row_factory = sqlite3.Row
     results: list[TickerExtractionLog] = []
     summary_lines: list[dict[str, object]] = []
-    try:
-        for ticker in tickers:
-            if args.capture:
-                log = capture_for_ticker(
-                    ticker,
-                    repo_root,
-                    conn,
-                    source_group=args.source,
-                    refresh=args.refresh,
+    with (
+        db_path_context(db_path),
+        closing(
+            connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        ) as conn,
+    ):
+        conn.row_factory = sqlite3.Row
+        tickers = _resolve_tickers(conn, args)
+        if not tickers:
+            print("[]")
+            return 0
+        try:
+            for ticker in tickers:
+                if args.capture:
+                    log = capture_for_ticker(
+                        ticker,
+                        repo_root,
+                        conn,
+                        source_group=args.source,
+                        refresh=args.refresh,
+                    )
+                else:
+                    log = extract_for_ticker(
+                        ticker,
+                        repo_root,
+                        conn,
+                        refresh=args.refresh,
+                        source_group=args.source,
+                    )
+                results.append(log)
+                summary_lines.append(
+                    {
+                        "ticker": log.ticker,
+                        "extracted_quarters": len(log.quarters_extracted),
+                        "skipped_quarters": len(log.quarters_skipped_no_missing),
+                        "kpis_inserted": log.kpis_inserted_total,
+                        "elapsed_ms": log.elapsed_ms,
+                        "error": log.error,
+                    }
                 )
-            else:
-                log = extract_for_ticker(
-                    ticker,
-                    repo_root,
-                    conn,
-                    refresh=args.refresh,
-                    source_group=args.source,
+                print(
+                    f"[{log.ticker}] extracted={len(log.quarters_extracted)} "
+                    f"skipped={len(log.quarters_skipped_no_missing)} "
+                    f"kpis_inserted={log.kpis_inserted_total} "
+                    f"elapsed={log.elapsed_ms}ms" + (f" error={log.error}" if log.error else ""),
+                    file=sys.stderr,
                 )
-            results.append(log)
-            summary_lines.append(
-                {
-                    "ticker": log.ticker,
-                    "extracted_quarters": len(log.quarters_extracted),
-                    "skipped_quarters": len(log.quarters_skipped_no_missing),
-                    "kpis_inserted": log.kpis_inserted_total,
-                    "elapsed_ms": log.elapsed_ms,
-                    "error": log.error,
-                }
-            )
-            print(
-                f"[{log.ticker}] extracted={len(log.quarters_extracted)} "
-                f"skipped={len(log.quarters_skipped_no_missing)} "
-                f"kpis_inserted={log.kpis_inserted_total} "
-                f"elapsed={log.elapsed_ms}ms" + (f" error={log.error}" if log.error else ""),
-                file=sys.stderr,
-            )
-    except PipelineRunSuppressedError as exc:
-        print(json.dumps(suppression_payload(exc)))
-        return 0
-    finally:
-        conn.close()
+        except PipelineRunSuppressedError as exc:
+            print(json.dumps(suppression_payload(exc)))
+            return 0
 
     log_path = write_log(repo_root, results)
     print(json.dumps({"summary": summary_lines, "log": str(log_path)}, indent=2))
@@ -135,22 +142,20 @@ def _parse_args() -> argparse.Namespace:
         default="earnings",
         help="Which document family to extract from (default: earnings)",
     )
-    p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    add_database_argument(p)
+    p.add_argument("--repo-root", type=Path, default=PROJECT_ROOT, help="Source and artifact root")
     return p.parse_args()
 
 
-def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:
+def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:
     if args.ticker:
         return [args.ticker.upper()]
-    db_path = repo_root / "data" / "portfolio.db"
-    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
     cur = conn.cursor()
     cur.execute(
         f"SELECT DISTINCT ticker FROM tracked_companies "
         f"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker"
     )
     rows = cur.fetchall()
-    conn.close()
     return [r[0] for r in rows]
 
 
