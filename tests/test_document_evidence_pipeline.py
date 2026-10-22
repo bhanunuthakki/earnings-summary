@@ -453,3 +453,93 @@ def test_pagination_seeks_both_primary_key_bounds(
     assert len(document_search) == 1
     assert "INTEGER PRIMARY KEY" in document_search[0]
     assert "rowid>?" in document_search[0] and "rowid<?" in document_search[0]
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_retained_pdf_coverage_skips_backfill_and_scheduled_resume(
+    connection: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    resume: bool,
+) -> None:
+    from datetime import UTC, datetime
+
+    from execution import process_document_evidence as cli
+    from provenance.evidence_backfill import ensure_legacy_document_evidence
+    from provenance.evidence_ledger import (
+        EvidenceLedger,
+        EvidenceLocator,
+        EvidenceNode,
+        ExtractionRun,
+    )
+    from provenance.fulltext_backfill import FullTextBackfillRequest, backfill_fulltext_evidence
+    from provenance.fulltext_extractor_identity import RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0
+
+    document_id = _seed(connection, tmp_path, suffix=".pdf")
+    ensure_legacy_document_evidence(connection, repo_root=tmp_path, document_id=document_id)
+    version = connection.execute(
+        "SELECT document_version_id,blob_sha256 FROM evidence_document_versions WHERE legacy_document_id=?",
+        (document_id,),
+    ).fetchone()
+    identity = RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0
+    stamp = datetime(2026, 9, 18, 12, tzinfo=UTC)
+    ledger = EvidenceLedger(connection)
+    ledger.persist(
+        ExtractionRun(
+            extraction_run_id="retained-pdf",
+            idempotency_key="retained-pdf",
+            document_version_id=str(version[0]),
+            input_sha256=str(version[1]),
+            extractor_name=identity.name,
+            extractor_code_version=identity.code_version,
+            extractor_config_sha256=identity.config_sha256,
+            output_sha256="c" * 64,
+            started_at=stamp,
+            completed_at=stamp,
+            outcome="succeeded",
+        )
+    )
+    ledger.persist(
+        EvidenceNode(
+            node_id="retained-page",
+            evidence_key="retained-page",
+            revision=1,
+            extraction_run_id="retained-pdf",
+            node_kind="pdf_page",
+            text="Reported revenue.",
+            locator=EvidenceLocator(source_ref="ACME.pdf", page_number=1),
+            recorded_at=stamp,
+        )
+    )
+    connection.commit()
+    before_runs = tuple(connection.execute("SELECT * FROM evidence_extraction_runs"))
+    before_nodes = tuple(connection.execute("SELECT * FROM evidence_nodes"))
+    if resume:
+        monkeypatch.setattr(cli, "PROJECT_ROOT", tmp_path)
+        database = str(connection.execute("PRAGMA database_list").fetchone()[2])
+        argv = [
+            "--db",
+            database,
+            "--repo-root",
+            str(tmp_path),
+            "--apply",
+            "--resume",
+            "--batch-size",
+            "2",
+        ]
+        for _ in range(2):
+            assert cli.main(argv) == 2  # Missing source inventories stay degraded.
+            receipt = tmp_path / ".tmp/operations/runtime/document-evidence.latest.json"
+            result = cli.DocumentEvidenceResumeReceipt.model_validate_json(
+                receipt.read_text()
+            ).result
+            assert result.extracted == 0
+            assert result.items[0].status == "already-covered"
+    else:
+        backfill = backfill_fulltext_evidence(
+            connection, FullTextBackfillRequest(repo_root=tmp_path, apply=True)
+        )
+        assert backfill.documents_skipped_covered == 1
+        assert backfill.documents_extracted == backfill.records_created == 0
+    assert tuple(connection.execute("SELECT * FROM evidence_extraction_runs")) == before_runs
+    assert tuple(connection.execute("SELECT * FROM evidence_nodes")) == before_nodes

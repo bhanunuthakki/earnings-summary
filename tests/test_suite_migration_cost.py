@@ -19,7 +19,9 @@ from quality.test_db_invocations import collect_invocations
 
 TESTS_DIR = Path(__file__).resolve().parent
 # Resolved and unresolved AST upgrade candidates; old substring count was 109.
-_MAX_DIRECT_CHAIN_BUILDERS = 101
+# One explicit historical one-step control was added for 0059.
+# They use cached predecessor fixtures; application fixtures still use migrated_db.
+_MAX_DIRECT_CHAIN_BUILDERS = 102
 
 
 def _calls_upgrade(source: str, path: str) -> bool:
@@ -47,6 +49,45 @@ def test_no_new_direct_migration_builders() -> None:
         "Use the cached migrated_db fixture for current-schema application tests. "
         "For historical migration behavior, keep an explicit historical target."
     )
+
+
+@pytest.mark.parametrize(
+    "name,revision",
+    [
+        ("test_scoped_research_universe_migration.py", "0059_scoped_research_universe_commitments"),
+    ],
+)
+def test_new_migration_controls_keep_explicit_historical_targets(name: str, revision: str) -> None:
+    source = (TESTS_DIR / name).read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=name)
+    constants = {
+        node.targets[0].id: node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Constant)
+    }
+    assert constants["CURRENT"] == revision
+    invocations = collect_invocations(name, tree, hashlib.sha256(source.encode()).hexdigest())
+    calls = {
+        (node.lineno, node.col_offset, node.end_lineno, node.end_col_offset): node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+    }
+    upgrades = [item for item in invocations if item.evidence == "call:upgrade"]
+    assert upgrades
+    for item in upgrades:
+        call = calls[
+            (
+                item.locator.start_line,
+                item.locator.start_col,
+                item.locator.end_line,
+                item.locator.end_col,
+            )
+        ]
+        assert len(call.args) == 2
+        assert isinstance(call.args[1], ast.Name) and call.args[1].id == "CURRENT"
 
 
 def test_the_ratchet_is_not_slack() -> None:

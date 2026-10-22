@@ -40,10 +40,12 @@ from provenance.evidence_native_candidates import (
 )
 from provenance.fulltext_extractor_identity import (
     BASE_FULLTEXT_EXTRACTOR,
+    PDF_FULLTEXT_EXTRACTOR,
     PDF_FULLTEXT_PYPDF_VERSION,
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
     FulltextExtractorIdentity,
     resolve_fulltext_extractor_identity,
+    select_approved_fulltext_run,
 )
 from provenance.ooxml_extraction import (
     OfficeExtractionError,
@@ -1572,6 +1574,8 @@ def _has_substantive_coverage(
     document_version_id: str,
     identity: FulltextExtractorIdentity,
 ) -> bool:
+    if identity == PDF_FULLTEXT_EXTRACTOR:
+        return select_approved_fulltext_run(conn, document_version_id, identity) is not None
     node_predicate = (
         "(node.node_kind <> 'document' OR "
         "(node.parent_node_id IS NOT NULL AND node.text LIKE "

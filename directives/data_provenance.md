@@ -74,12 +74,49 @@ acceptance times fail closed. This mode does not waive package dependencies,
 processing lanes, financial admission or narrative verification. V1 serialized
 requests and scope identities remain unchanged.
 
-Historical v2 financial Research Snapshots currently fail with
-`historical_research_fact_source_closure_unavailable`. Document selection alone
-does not constrain an issuer-wide canonical fact projection to public evidence
-available at the historical cutoff. Remove this hold only when selected reported
-facts and every derived operand prove lineage to the exact original selected
-source versions. Both the default and custom verifier paths retain this hold.
+Historical financial Research Snapshots additionally require exact financial
+source closure. The verifier checks native canonical resolution and the complete
+required publication set, including dissenting candidates and unrelated members
+of those publications. Every reported leaf of every selected observation and
+derived operand must resolve to an exact original selected document version.
+Missing, changed, outside-scope or unadmitted evidence blocks assembly. Both the
+default and custom verifier paths require this native proof. Admission and operand
+seals must be available by physical knowledge cutoff K; this conservatively holds
+evidence recorded between K and the later observation cutoff O.
+
+The owner-approved `complete_report_evidence/v1` profile uses a v3 scope identity
+for its original boundary; explicit issuer PDFs and reviewed page scopes use
+additive later scope identities without changing that profile.
+It preserves the current complete inventory and every package dependency entry.
+Generated/supporting dependency capture and native filing-XBRL processing are
+deferred; their coverage is not relabelled complete or not applicable. Declared
+original SEC exhibits still require capture. In nonhistorical bounded scopes they
+also enter the research document population, with exact native text and corpus
+proof. Historical scopes retain explicit original selections. This profile supplies
+no implicit nonmaterial-exhibit disposition. Exact primary capture,
+complete qualified text, financial admission, source closure, semantic definitions,
+comparability, canonical resolution and all reader proofs remain required. The
+same financial source closure applies to this bounded profile. Report acceptance
+also requires a fixed, independently declared critical evidence population, whole
+output verification, joint brief/model/scenario proof and recalculated workbook
+parity. Its result is scoped to the complete report and does not claim whole
+filing or issuer decision-grade coverage. Unprofiled v1/v2 scope identities remain
+unchanged. Historical financial readiness always retains a bounded label and
+`decision_grade=False`; original document closure does not establish exact public
+availability or complete historical report acceptance.
+
+Analysis Evidence Scope v7 can retain a reviewed per-page PDF table boundary.
+The full native artifact and all qualified text remain immutable evidence. A
+separate scoped certificate verifies only required, valid native child pages;
+quarantined required pages fail. Deferred pages remain visible and cannot supply
+report anchors, including fulltext numbers, derived financial leaves or model
+inputs. The page review commits exact source hashes and the existing ten-topic
+MELI report source population before generation. Replacement observations and
+source nodes require exact native snapshot membership. The existing complete
+output and report-population checks also bind actual claims to that declared
+population. Full/unprofiled evidence cannot consume a scoped table certificate.
+No detector identity, semantic admission, financial accuracy or full-letter table
+completion is inferred from a reviewed deferral.
 
 ### Progressive proof and legacy repair (2026-09-19)
 
@@ -95,9 +132,17 @@ PDF full-text extraction uses the deliberately promoted identity in
 library version. The writer checks the loaded parser before parsing; a missing or
 different version is quarantined without recording an approved extraction run.
 Dependency updates require an explicit identity promotion and isolated parser
-validation. Readers select the approved identity independently of their installed
-libraries. Prior sealed evidence remains reconstructible under its pinned
-historical identity, but cannot authorize a new seal or current coverage.
+validation. New extraction uses pypdf 6.21.1 only. Readers select exact approved
+identities independently of their installed libraries, retaining the prior 6.19.0
+code/config pair for seals, current coverage, search and KPI evidence. Readers
+select one complete approved run per document, preferring 6.21.1 and falling back
+to 6.19.0; they never combine nodes across parser runs. Retained coverage also
+counts as complete for scheduled resume and explicit full-text backfill, so the
+promotion does not trigger re-extraction. Historical
+base `@1` sealed evidence remains reconstructible under its pinned identity, but
+cannot authorize a new seal or current coverage. The 6.21.1 writer has a distinct
+idempotency namespace to avoid colliding with 6.19.0 runs; `fulltext-pdf-v6`
+evidence keys retain explicit superseding revisions without erasing old nodes.
 
 Mutable provider caches are working projections. Before registration, exact retained FMP
 cache bytes are installed without clobbering under content-addressed

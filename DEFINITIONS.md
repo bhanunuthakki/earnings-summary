@@ -573,6 +573,18 @@ corpus, and Research Universe must contain the same exact primary document set.
 Different scopes remain separate; retrieval mode changes cannot replace a terminal
 within the same scope.
 
+
+**Resolution materialization clock.** A report-table financial reference can retain
+`resolution_observed_through=O` for a canonical resolution physically recorded
+between its knowledge cutoff K and O. Source facts, financial roles, ontology
+admission and bindings remain bounded by K. This field does not grant later
+financial evidence. A Research Snapshot consumer requires exact K and the
+snapshot's exact recorded-at O, plus the sealed resolution revision. NU PRE/POST
+baselines retain the same exact cell and Observation Version. Each immutable
+context preserves its own sealed resolution revision; a later materialization
+can change that revision only after both native reads verify the same source. O is omitted
+for legacy references; series references cannot use this adapter.
+
 ## Research Snapshot Admission
 
 **Definition.** A typed, fail-closed verification result proving that a Research Snapshot contains exactly one valid terminal member for every requested lane and that every referenced commitment and clock still matches immutable live evidence.
