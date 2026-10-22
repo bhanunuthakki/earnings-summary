@@ -1350,7 +1350,7 @@ def _transcript_docs(
 
 
 def _parse_transcript_lines(path: Path) -> list[tuple[int, str, str]] | None:
-    """Read + squash one transcript file into ``(line_no, snippet, squashed)``
+    """Read + squash one transcript file into ``(line_no, text, squashed)``
     for the substantive lines (>= 40 chars).
 
     The read + per-line squash is the heavy half of transcript retrieval and is
@@ -1366,8 +1366,37 @@ def _parse_transcript_lines(path: Path) -> list[tuple[int, str, str]] | None:
         flat = " ".join(line.split())
         if len(flat) < 40:  # skip headers/blank/speaker-only lines
             continue
-        out.append((line_no, flat[:_TRANSCRIPT_SNIPPET_CHARS], _squash(flat)))
+        out.append((line_no, flat, _squash(flat)))
     return out
+
+
+def _transcript_excerpt(text: str, terms: list[str]) -> str:
+    """Keep a bounded source slice around the strongest local query match."""
+    if len(text) <= _TRANSCRIPT_SNIPPET_CHARS:
+        return text
+    matches = [
+        (match.start(), match.end(), _squash_word(match.group().lower()))
+        for match in re.finditer(r"[a-z0-9&%.\-]+", text, re.IGNORECASE)
+        if _squash_word(match.group().lower()) in terms
+    ]
+    start = left = right = best = 0
+    counts: dict[str, int] = {}
+    for left, (position, _, _) in enumerate(matches):
+        while right < len(matches) and matches[right][1] <= position + _TRANSCRIPT_SNIPPET_CHARS:
+            term = matches[right][2]
+            counts[term] = counts.get(term, 0) + 1
+            right += 1
+        if len(counts) > best:
+            slack = _TRANSCRIPT_SNIPPET_CHARS - (matches[right - 1][1] - position)
+            start, best = max(0, position - min(100, slack)), len(counts)
+        if left < right:
+            term = matches[left][2]
+            counts[term] -= 1
+            if not counts[term]:
+                del counts[term]
+        else:
+            right = left + 1
+    return text[start : start + _TRANSCRIPT_SNIPPET_CHARS]
 
 
 def _scored_transcript_lines(
@@ -1394,11 +1423,12 @@ def _scored_transcript_lines(
         if not parsed:
             continue
         call_label = _period_label(period_end, fpt)
-        for line_no, snippet, squashed_line in parsed:
+        for line_no, text, squashed_line in parsed:
             squashed = f" {squashed_line} "
             score = sum(1 for t in terms if f" {t} " in squashed)
             if score <= 0:
                 continue
+            snippet = _transcript_excerpt(text, terms)
             scored.append(
                 (
                     score,
