@@ -24,9 +24,9 @@ from src.operations.temp_run_retention import discover_temp_runs
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("passed", [True, False])
+@pytest.mark.parametrize(("passed", "actions"), [(True, False), (False, False), (True, True)])
 def test_session_hook_registers_success_and_preserves_failure(
-    tmp_path: Path, passed: bool, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, passed: bool, actions: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     source = tmp_path / "synthetic-project"
     tests = source / "tests"
@@ -53,6 +53,10 @@ def test_session_hook_registers_success_and_preserves_failure(
         EARNINGS_SUMMARY_DB_PATH=str(source / "synthetic-only.db"),
         EARNINGS_SUMMARY_MANAGED_TEST_TEMPS="1",
     )
+    # A discarded Actions runner seals its run but skips at-exit retirement.
+    environment.pop("GITHUB_ACTIONS", None)
+    if actions:
+        environment["GITHUB_ACTIONS"] = "true"
     result = subprocess.run(
         [
             sys.executable,
@@ -78,7 +82,17 @@ def test_session_hook_registers_success_and_preserves_failure(
     manifest: object = json.loads((run_root / ".earnings-temp-run.json").read_bytes())
     assert isinstance(manifest, dict)
     assert manifest["status"] == ("completed" if passed else "failed")
+    # Both outcomes end the child's peak lease at seal; failure keeps its payload.
+    sealed = temp_run_retention.TempRunManifest.model_validate(manifest)
+    assert sealed.reservation_token is not None
+    with pytest.raises(FileNotFoundError):
+        release_peak(run_root, sealed.reservation_token)
     fixture = fixture_dir / "fixture.db"
+    if passed and actions:
+        assert fixture.read_bytes() == b"synthetic fixture"
+        assert not list((run_root / ".earnings-temp-retirement").glob("*.jsonl"))
+        shutil.rmtree(run_root)
+        return
     if passed:
         assert not fixture.exists(), "successful payload retires at child process exit"
         assert list((run_root / ".earnings-temp-retirement").glob("*.jsonl"))
@@ -104,12 +118,6 @@ def test_session_hook_registers_success_and_preserves_failure(
     assert (run_root / ".earnings-temp-run.json").is_file()
     # Remove only the exact child test directory that this test created. Failed
     # session protection is already proved; this test does not leave test debris.
-    if not passed:
-        sealed = temp_run_retention.TempRunManifest.model_validate(manifest)
-        if sealed.reservation_token is not None:
-            # This failure was intentional and verified. Release its exact lease
-            # before the test removes the owned reproduction it no longer needs.
-            release_peak(run_root, sealed.reservation_token)
     shutil.rmtree(run_root)
 
 

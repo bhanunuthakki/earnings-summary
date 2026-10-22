@@ -28,6 +28,12 @@ from dcf.readiness import load_valuation_readiness
 from dcf.specialized_price import SpecializedPriceObservation
 from execution import build_meli_platform_dcf as meli
 from execution import preview_meli_inputs as preview_cli
+from provenance.analysis_scope import (
+    AnalysisEvidenceScope,
+    AnalysisScopeRequest,
+    ReportPdfPageSelection,
+    ReportPdfTableScope,
+)
 from provenance.canonical_fact_resolution import (
     CanonicalFactResolutionEngine,
     ResolutionPolicy,
@@ -35,6 +41,9 @@ from provenance.canonical_fact_resolution import (
 )
 from provenance.fact_plane_v2 import (
     CanonicalJSONObject,
+    DerivationInputV2,
+    DerivationSealV2,
+    DerivedFactObservationV2,
     ExtractionRunCompletenessSealV2,
     FactCellV2,
     FactDimensionV2,
@@ -57,6 +66,12 @@ from provenance.metric_ontology import (
     SourceObservationTaxonomyAssertion,
     SourceTaxonomyComponent,
 )
+from provenance.report_evidence_contract import (
+    MELI_REPORT_EVIDENCE_RECIPE,
+    MELI_REPORT_EVIDENCE_REQUIREMENTS,
+    MemoReportSourcePopulation,
+    MemoReportSourceRequirement,
+)
 from provenance.reporting_entity_registry import (
     EvidenceSubjectBindingRevision,
     ReportingEntityRegistry,
@@ -64,6 +79,7 @@ from provenance.reporting_entity_registry import (
 )
 from provenance.research_snapshot import ResearchSnapshotRequest
 from provenance.source_fact_repository import (
+    DerivedSourceFact,
     ReportedSourceFact,
     SourceFactPublication,
     SourceFactRepository,
@@ -171,6 +187,8 @@ def _seed_real_inputs(
     shared_revenues: bool = False,
     extra_country: bool = False,
     security_scope: bool = False,
+    page_number: int | None = None,
+    page_overrides: dict[str, int] | None = None,
 ) -> dict[str, evidence.FactBinding]:
     """No mocking source publication, ontology, binding, resolver or fact reader."""
     seed_foundation(conn, source_path=source_path)
@@ -334,6 +352,10 @@ def _seed_real_inputs(
         )
         node = f"meli-node-{index}"
         source_locator: dict[str, object] = {"path": key}
+        if page_number is not None:
+            source_locator["page_number"] = page_number
+        if page_overrides is not None and key in page_overrides:
+            source_locator["page_number"] = page_overrides[key]
         if key == "reported_available_cash_and_investments":
             source_locator.update(
                 {
@@ -852,6 +874,231 @@ def shared_revenue_inputs(
     monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
     try:
         yield conn, _request(conn, refs, source_context)
+    finally:
+        conn.close()
+
+
+def reviewed_pdf_table_scope(
+    observation_id: str, *, document_version_id: str = "document-1", reviewed_at: datetime = NOW
+) -> ReportPdfTableScope:
+    population = MemoReportSourcePopulation.model_construct(
+        recipe=MELI_REPORT_EVIDENCE_RECIPE,
+        requirements=tuple(
+            MemoReportSourceRequirement(
+                requirement=name,
+                observation_ids=(observation_id,),
+                rationale="Synthetic reviewed model source population",
+            )
+            for name in MELI_REPORT_EVIDENCE_REQUIREMENTS
+        ),
+    )
+    population = MemoReportSourcePopulation.model_validate(
+        {
+            **population.model_dump(),
+            "population_sha256": evidence.canonical_digest(population.model_dump()),
+        }
+    )
+    scope = ReportPdfTableScope.model_construct(
+        document_version_id=document_version_id,
+        raw_pdf_sha256="a" * 64,
+        artifact_id="reviewed-pdf-artifact",
+        artifact_sha256="b" * 64,
+        pages=(
+            ReportPdfPageSelection(
+                page_number=1,
+                page_sha256="c" * 64,
+                table_requirement="required",
+                rationale="Synthetic required financial table page",
+            ),
+            ReportPdfPageSelection(
+                page_number=2,
+                page_sha256="d" * 64,
+                table_requirement="deferred",
+                defer_basis="outside_report_population",
+                rationale="Synthetic page outside the reviewed population",
+            ),
+        ),
+        source_population=population,
+        reviewer="synthetic analyst",
+        reviewed_at=reviewed_at,
+        rationale="Synthetic reviewed two-page PDF scope",
+    )
+    payload = scope.model_dump(mode="json")
+    return ReportPdfTableScope.model_validate(
+        {**payload, "scope_sha256": evidence.canonical_digest(payload)}
+    )
+
+
+@pytest.mark.parametrize(
+    ("scoped", "page_number", "derived", "rejected"),
+    [
+        (True, 2, False, True),
+        (True, None, False, True),
+        (True, 3, False, True),
+        (True, 2, True, True),
+        (True, 1, False, False),
+        (False, None, False, False),
+    ],
+    ids=["deferred", "unknown", "out-of-range", "derived-deferred-leaf", "included", "unscoped"],
+)
+def test_model_input_reviewed_pdf_pages(
+    source_context: evidence.SourceReadContext,
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    scoped: bool,
+    page_number: int | None,
+    derived: bool,
+    rejected: bool,
+) -> None:
+    conn = sqlite3.connect(migrated_db(tmp_path / "pdf-model-inputs.db"))
+    try:
+        refs = _seed_real_inputs(
+            conn,
+            source_path=source_context.content_roots[0] / "fixture.json",
+            page_number=1 if derived else page_number,
+            # Only the derived anchor's sealed leaf belongs to the deferred page.
+            page_overrides={meli_inputs.requirements_for(END)[0].key: 2} if derived else None,
+        )
+        snapshot = _snapshot()
+        seal_model_projection_context(conn, snapshot)
+
+        def coverage(
+            _conn: sqlite3.Connection, _request: evidence.ModelInputRequest, _cutoff: datetime
+        ) -> tuple[ResearchSnapshotRequest, str, tuple[str, ...]]:
+            return snapshot, "b" * 64, ("inventory",)
+
+        monkeypatch.setattr(evidence, "verify_source_coverage", coverage)
+        request = _request(conn, refs, source_context)
+        key = next(iter(request.facts))
+        source_id = request.facts[key].observation_id
+        if derived:
+            cell = make_cell("pdf-derived")
+            observation = DerivedFactObservationV2(
+                observation_id="pdf-derived",
+                idempotency_key="pdf-derived",
+                fact_cell_id=cell.fact_cell_id,
+                observation_kind="derived",
+                value_kind="numeric",
+                numeric_value="200",
+                method_name="formula-engine",
+                method_version="v1",
+                method_config_sha256=sha256("formula-method"),
+                revision_kind="initial",
+                effective_at=STAMP,
+                knowledge_at=STAMP,
+                recorded_at=STAMP,
+                formula_id="double",
+                formula_version="v1",
+            )
+            SourceFactRepository(conn).publish(
+                SourceFactPublication(
+                    publication_id="pdf-derived",
+                    idempotency_key="pdf-derived",
+                    derived_facts=(DerivedSourceFact(cell=cell, observation=observation),),
+                    derivations=(
+                        DerivationSealV2(
+                            derivation_seal_id="pdf-derived-seal",
+                            idempotency_key="pdf-derived-seal",
+                            derived_observation_id=observation.observation_id,
+                            ordered_inputs=(
+                                DerivationInputV2(
+                                    edge_id="pdf-derived-edge",
+                                    idempotency_key="pdf-derived-edge",
+                                    derived_observation_id=observation.observation_id,
+                                    input_position=0,
+                                    input_observation_id=source_id,
+                                    input_role="base",
+                                    recorded_at=STAMP,
+                                ),
+                            ),
+                            input_basis="as_reported",
+                            formula_definition_sha256=sha256("formula-definition"),
+                            formula_config_sha256=sha256("formula-config"),
+                            seal_method="canonical-json",
+                            seal_method_version="v1",
+                            effective_at=STAMP,
+                            knowledge_at=STAMP,
+                            recorded_at=STAMP,
+                        ),
+                    ),
+                )
+            )
+            request = request.model_copy(
+                update={
+                    "facts": {
+                        **request.facts,
+                        key: request.facts[key].model_copy(
+                            update={"observation_id": observation.observation_id}
+                        ),
+                    }
+                }
+            )
+        if scoped:
+            # As in real_inputs, isolate source-coverage admission while retaining
+            # real sealed facts and the validated reviewed page-scope contract.
+            analysis = AnalysisEvidenceScope.model_construct(
+                request=AnalysisScopeRequest(
+                    purpose="Synthetic model input page boundary",
+                    issuer_id="issuer-1",
+                    inventory_key="inventory",
+                    required_period_ends=(END,),
+                    cutoff_at=NOW,
+                    observed_through=NOW,
+                    readiness_profile="complete_report_evidence/v1",
+                    report_pdf_tables=(reviewed_pdf_table_scope(source_id),),
+                )
+            )
+            snapshot = snapshot.model_copy(
+                update={
+                    "research_universe": snapshot.research_universe.model_copy(
+                        update={"analysis_scope": analysis}
+                    )
+                }
+            )
+
+        def verify() -> evidence.ModelInputReceipt:
+            return evidence.verify_model_inputs(
+                conn,
+                request,
+                recipe=meli_inputs.RECIPE,
+                requirements=meli_inputs.requirements_for(END),
+                effective_inputs={key: item.value for key, item in request.assumptions.items()},
+                assumption_keys=meli_inputs.ASSUMPTION_KEYS,
+                as_of=NOW,
+                source_context=source_context,
+            )
+
+        if rejected:
+            with pytest.raises(
+                evidence.InputEvidenceError, match=r"^model_input_deferred_pdf_page_used$"
+            ):
+                verify()
+            if not derived:
+                # Isolate the source-membership call: skipping the earlier
+                # observation check must still reject the exact evidence node.
+                shared_guard = evidence.require_included_pdf_pages
+
+                def node_only_guard(
+                    conn: sqlite3.Connection,
+                    scopes: tuple[ReportPdfTableScope, ...],
+                    *,
+                    evidence_node_ids: tuple[str, ...] = (),
+                    observation_ids: tuple[str, ...] = (),
+                    cutoff: datetime,
+                ) -> None:
+                    del observation_ids
+                    shared_guard(conn, scopes, evidence_node_ids=evidence_node_ids, cutoff=cutoff)
+
+                monkeypatch.setattr(evidence, "require_included_pdf_pages", node_only_guard)
+                with pytest.raises(
+                    evidence.InputEvidenceError, match=r"^model_input_deferred_pdf_page_used$"
+                ):
+                    verify()
+        else:
+            receipt = verify()
+            assert receipt.source_integrity == "present_bytes_verified"
+            assert len(receipt.inputs) == len(request.facts)
     finally:
         conn.close()
 

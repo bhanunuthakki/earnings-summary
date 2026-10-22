@@ -25,6 +25,8 @@ from provenance.fulltext_extractor_identity import (
     PDF_TABLE_EXTRACTOR_NAME,
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
     pdf_table_extractor_code_version,
+    readable_fulltext_extractor_identities,
+    select_approved_fulltext_run,
 )
 from provenance.native_pdf_transcript import (
     EXTRACTOR_CONFIG_SHA256 as PDF_TRANSCRIPT_CONFIG_SHA256,
@@ -1020,13 +1022,32 @@ def _node_derived(
         )
         retained_identities = {
             (identity.code_version, identity.config_sha256)
-            for identity in (BASE_FULLTEXT_EXTRACTOR, PDF_FULLTEXT_EXTRACTOR)
+            for identity in (
+                BASE_FULLTEXT_EXTRACTOR,
+                *readable_fulltext_extractor_identities(PDF_FULLTEXT_EXTRACTOR),
+            )
         }
         if (
             _require_text(run, "extractor_code_version"),
             _require_sha(run, "extractor_config_sha256"),
         ) not in retained_identities:
             raise DocumentProcessingEvidenceIntegrityError("pdf_extractor_identity_not_approved")
+    elif lane == "pdf_text":
+        selected_run_id = select_approved_fulltext_run(
+            conn,
+            _require_text(document, "document_version_id"),
+            PDF_FULLTEXT_EXTRACTOR,
+            observed_through=cutoff_at,
+        )
+        if selected_run_id is None:
+            raise DocumentProcessingEvidenceMissingError("native_extraction_run_missing")
+        run = _run(
+            conn,
+            _require_text(document, "document_version_id"),
+            cutoff_at,
+            extractor_name=extractor_name,
+            pinned_run_id=selected_run_id,
+        )
     else:
         run = _run(
             conn,

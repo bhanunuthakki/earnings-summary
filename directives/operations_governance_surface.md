@@ -41,6 +41,18 @@ inventory. The cleanup does not infer ownership or deletion rights from that cou
 
 ## Outcome
 
+### Linear fixture retirement validation and Actions runner exit (2026-10-21)
+Disposition: **no surface change** (internal performance change inside existing retention; not an operator workflow). Exact retirement re-read and re-hashed the run's `.earnings-temp-run.json` up to three times per payload file. For a large pytest shard (22,182 files, a 5 MiB manifest) that took 383 s at process exit, and CI shard 4 hung after its tests passed until the 40-minute job timeout. `src/operations/artifact_retention.py` still reads fresh manifest and proof bytes for every validation and never trusts file metadata; it now reuses a SHA-256 only for byte-identical content already hashed in the process (`_fresh_digest`, `_fresh_file_digest`). The same run now exits in 208 s locally; the remaining cost is the deliberate per-file fresh read. `tests/conftest.py` skips the at-exit payload retirement on GitHub Actions runners, which are discarded after the job; those runs are still sealed `completed` with their lease released, and fixtures stay inside the admitted temporary roots. Batching validations under one manifest read would make retirement linear but changes its freshness guarantee, so it is left to the retention owner. Evidence: `tests/test_artifact_retention.py::test_fresh_file_digest_rereads_bytes_and_ignores_metadata` (same-length tamper with a restored mtime is detected), `tests/test_pytest_temp_lifecycle.py` (local successful runs still retire at exit; an Actions run seals and keeps its payload; failed runs stay protected), and the unchanged retention suites.
+
+### Peripheral scheduled-task freeze (2026-10-20)
+Disposition: **no surface change** (enabled-state change to existing tasks; no task, wrapper, cadence, write lane or service ownership changed). Simplification Phase 0 sets `Settings/Enabled` to `false` in the tracked XML for `coach_pings`, `decision_nudge`, `grade_calibration`, `monthly_calibration_scorecard`, `ledger_synthesis`, `red_team`, `tenet_accountability`, `thesis_collision`, `weekly_score_stances`, `weekly_packet` and `submit_saydo_batch`. These jobs are outside the briefs, reports, portfolio decisions, Q&A and data-plane jobs. The existing Jobs projection derives `required_disabled` from each XML, so it stays truthful: until the canonical host re-registers the tasks, a host state of `Ready` shows as a policy violation, not as healthy. Registration on the host is a separate deployment step that this change does not perform. Their artifacts become stale rather than deleted; re-enabling restores them. Evidence: `execution/generate_cron_artifacts.py --check` (45 tasks validated) and the existing `required_disabled` cases in `tests/test_operations_snapshot.py` and `tests/test_operations_panel.py`.
+
+### Lazy `operations` package exports (2026-10-20)
+Disposition: **no surface change** (import-time refactor). `src/operations/__init__.py` resolves its five public exports on first access instead of importing the registry, evals and domain code eagerly. The public export set in `docs/quality/compatibility-baseline.json` is unchanged. Importing `operations.journal` from a job wrapper now loads 176 modules in 0.07 s instead of 618 modules in 0.99 s. Evidence: the `tests/test_operations_*.py` and `tests/test_job_runtime*.py` suites.
+
+### Read-only research tool server (2026-10-20)
+Disposition: **no surface change** (internal CLI for an orchestrator agent; not an operator workflow). `execution/serve_research_tools.py` serves `src/ask/tool_server.py` over MCP stdio for a client session that starts it. It requires an explicit database through `require_db_path`, opens it only with the `READ_ONLY` role, never calls the LLM pack router or any model, and writes nothing. No scheduler task, managed service, route, panel, alert or operator action is added. Evidence: `tests/test_ask_tool_server.py` (byte-identical database after a tool call, ticker path-traversal rejection, ledger numbering and status labels, claim binding, JSON-RPC handshake and a stdio subprocess round trip).
+
 ### Folded-module reference sweep and review-identity digest cleanup (2026-10-13)
 Disposition: **no surface change** (prose-only reference corrections plus one digest-registry entry removal; not an operator workflow). The stale prose references left by the 27f0e240 module folds now name their retained homes: the canonical next-dollar directive's module list names `book_risk.py` (not the folded `covariance.py`), the QA walkthrough's `REVIEW_FULL_VERDICT` row cites `src/ask/engine.py:161` where the flag is read, and the seven source docstrings/comments (`src/compute/key_metrics.py`, `execution/extract_key_metrics.py`, `src/redteam/__init__.py`, `src/redteam/lenses.py`, `src/discovery/store.py`, `execution/comments_server_shared.py`, `src/ask/engine.py`) point at `src/pipeline/explore_panel.py`, `src/redteam/engine.py`, and `ask.engine`/`run_chat_command` instead of the folded modules. `REVIEW_CODE_IDENTITY_DEPENDENCY_CLASSES` no longer digests the phantom topology-observer path (that module folded into `src/operations/host_runtime.py`, which remains a listed dependency); `execution/extract_key_metrics.py` keeps byte-identical CLI behavior (line-neutral docstring-plus-import-block diff; `--help`, defaults, and the bandit/canonical-helpers line-pinned receipts unchanged) while its legacy per-file `sys.path` bootstrap and `# noqa: E402` directives were replaced by the shared `execution/_lib.py` bootstrap seam, and its stale `execution_sys_path_mutations` allowlist entry was removed together (allowlist 308 → 307). No operator action, alert, panel, route, scheduler task, managed service, flag, or default changed: the Ask command routing (`COMMAND_PREFIXES`, `run_chat_command`), the `REVIEW_FULL_VERDICT` default-on kill switch, and the operations review bundle's identity/digest contract are unchanged, and every listed review-identity dependency still binds the digest. Evidence: serial `tests/test_operations_review_bundle.py` green (its registry iteration proves each remaining dependency — `src/operations/host_runtime.py` included — binds `review_code_identity`), `execution/extract_key_metrics.py --help` direct-invocation parity after the bootstrap change, `make instruction-check`, `scripts/check_architecture_boundaries.py`, and the standing changed-file gates (format, lint, strict pyright, suppressions) green, and the folded-destination reference sweep over the VAL-CROSS-004 scope returning zero live operational references (remaining hits are history-classified directives per `directives/directive_manifest.json` and committed receipt artifacts).
 ### Sealed citation source-version viewer route (2026-10-08)
@@ -1547,6 +1559,20 @@ held native XBRL lane remain unresolved prerequisites. This operation is not a
 route around their applicability, corpus or completeness guards.
 
 
+### pypdf 6.21.1 PDF extractor promotion — no operational surface change
+
+New PDF full-text extraction uses pypdf 6.21.1 under a distinct idempotency
+namespace. The exact pypdf 6.19.0 extractor identity stays approved for reading,
+so existing PDF evidence keeps verifying, and retained coverage counts as complete
+for the scheduled `process_document_evidence.py --apply --resume` stage and for
+explicit full-text backfill. The promotion therefore triggers no re-extraction.
+Readers select one complete approved run per document and never combine nodes
+across parser runs. This adds no operator action, route, service, schedule,
+provider, model pin, budget, schema or live-state write. Re-extracting retained
+PDFs with 6.21.1 remains an optional, separately approved operation.
+`tests/test_document_processing_evidence.py`, `tests/test_fulltext_evidence_backfill.py`,
+`tests/test_search_corpus_builder.py` and `tests/test_kpi_semantic_review.py` check it.
+
 ### Function lifecycle collector — no operational surface change
 
 The internal `execution/inventory_function_lifecycle.py` command collects
@@ -1737,11 +1763,35 @@ analysis-scope and processing-library entrypoints can retain a reviewed all-page
 PDF table scope and issue a distinct report-scoped certificate. No dashboard,
 registered command, scheduler, parser, provider or production authority is added.
 The source review must be actual and precede generation. Full text and the full
-native quarantined artifact remain retained. Required quarantined pages and all
-deferred-page report/model anchor paths fail closed. The processing receipt names
-scoped identities and deferred pages. Full/default certificates remain strict.
-Evidence: `tests/test_report_pdf_table_scope.py`,
+native quarantined artifact remain retained. Required quarantined pages fail
+closed. The model-input verifier rejects deferred pages, unknown pages in scoped
+documents, and derived observations with deferred source leaves through the shared
+provenance page guard. Memo financial-reference and evidence-node consumers reject
+all per-page PDF scopes with `memo_report_pdf_scope_unsupported`, including required
+pages, and retain a degraded non-decision-grade assessment until the later report
+PR implements complete page-aware admission. The processing receipt
+names scoped identities and deferred pages. Full/default certificates remain strict.
+Evidence: `tests/test_meli_input_evidence.py`,
 `tests/test_document_processing_evidence.py`,
-`tests/test_population_document_processing.py` and
-`tests/test_decision_brief_report_scope.py`.
+`tests/test_population_document_processing.py`, `tests/test_report_evidence_scope.py`
+and `tests/test_analysis_issuer_pdf_scope.py`.
 
+
+### Test-storage peak lease lifetime — 2026-10-21
+
+Disposition: **no UI or operator CLI surface change**. A disposable run's peak
+lease in `src/operations/storage_reservation.py` now covers only its live
+producer. `finish_temp_run` releases it after a passed or failed seal. The next
+admission on the same host reclaims a lease when the operating system reports
+that its holder process does not exist. Any doubt, including denied access or a
+reused process number, keeps the lease. A failed run keeps its manifest and
+payload protected until a reviewed resolution, as before. Its retained bytes
+still count through the 50 GiB free-space headroom, but no longer through the
+20 GiB concurrent-producer limit. A reviewed resolution can now bind to a passed
+rerun whose only holds are pytest links or multiply linked files. Those paths
+stay in place and are never followed or retired. Other holds still block. This
+removes the outage where ten failed local test sessions blocked all later pytest
+runs. No operator action, scheduler, service, Operations surface or retention
+window changed. Regression evidence: `tests/test_storage_reservation.py`,
+`tests/test_temp_run_review_resolution.py` and
+`tests/test_pytest_temp_lifecycle.py`.

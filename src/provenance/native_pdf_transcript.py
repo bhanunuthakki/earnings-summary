@@ -16,7 +16,10 @@ from typing import Literal, Self
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from provenance.evidence_ledger import EvidenceLedger, EvidenceLocator, EvidenceNode, ExtractionRun
-from provenance.fulltext_extractor_identity import PDF_FULLTEXT_EXTRACTOR
+from provenance.fulltext_extractor_identity import (
+    PDF_FULLTEXT_EXTRACTOR,
+    readable_fulltext_extractor_identities,
+)
 from runtime.deterministic import as_utc
 from runtime.deterministic import sha256_text as _sha
 
@@ -226,17 +229,19 @@ def _source_pages(
         "SELECT * FROM evidence_extraction_runs WHERE extraction_run_id=?",
         (request.fulltext_extraction_run_id,),
     )
+    approved_identities = {
+        (identity.name, identity.code_version, identity.config_sha256)
+        for identity in readable_fulltext_extractor_identities(PDF_FULLTEXT_EXTRACTOR)
+    }
     if (
         run["extractor_name"],
         run["extractor_code_version"],
         run["extractor_config_sha256"],
+    ) not in approved_identities or (
         run["input_sha256"],
         run["document_version_id"],
         run["outcome"],
     ) != (
-        PDF_FULLTEXT_EXTRACTOR.name,
-        PDF_FULLTEXT_EXTRACTOR.code_version,
-        PDF_FULLTEXT_EXTRACTOR.config_sha256,
         request.input_sha256,
         request.document_version_id,
         "succeeded",

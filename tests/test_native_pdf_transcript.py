@@ -6,11 +6,14 @@ import hashlib
 import json
 import sqlite3
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from provenance import document_processing_evidence as processing
+from provenance import native_pdf_transcript as transcript
 from provenance.document_processing_evidence import (
     DocumentProcessingEvidenceError,
     publish_document_processing_evidence,
@@ -25,7 +28,12 @@ from provenance.evidence_ledger import (
     ExtractionRun,
     SourceObservation,
 )
-from provenance.fulltext_extractor_identity import PDF_FULLTEXT_EXTRACTOR
+from provenance.fulltext_extractor_identity import (
+    BASE_FULLTEXT_EXTRACTOR,
+    PDF_FULLTEXT_EXTRACTOR,
+    RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0,
+    FulltextExtractorIdentity,
+)
 from provenance.native_pdf_transcript import (
     NativePdfTranscriptError,
     NativePdfTranscriptRequest,
@@ -55,7 +63,14 @@ def _sha(text: str) -> str:
 
 
 @pytest.fixture
-def native_source(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[sqlite3.Connection]:
+def native_source(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[sqlite3.Connection]:
+    identity = getattr(request, "param", PDF_FULLTEXT_EXTRACTOR)
+    assert isinstance(identity, FulltextExtractorIdentity)
     path = tmp_path / "synthetic-native-transcript.db"
     migrated_db(path)
     conn = sqlite3.connect(path)
@@ -143,9 +158,9 @@ def native_source(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[
             idempotency_key="pdf-run",
             document_version_id="native-call",
             input_sha256=digest,
-            extractor_name=PDF_FULLTEXT_EXTRACTOR.name,
-            extractor_code_version=PDF_FULLTEXT_EXTRACTOR.code_version,
-            extractor_config_sha256=PDF_FULLTEXT_EXTRACTOR.config_sha256,
+            extractor_name=identity.name,
+            extractor_code_version=identity.code_version,
+            extractor_config_sha256=identity.config_sha256,
             output_sha256=_sha(output),
             started_at=T0,
             completed_at=T0,
@@ -177,13 +192,16 @@ def native_source(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[
             "INSERT INTO ocr_preflight_pages VALUES (?,?,?,?,?)",
             ("pdf-assessment", number, len(normalized), _sha(normalized), 0),
         )
-    publish_document_processing_evidence(
-        conn,
-        document_version_id="native-call",
-        processing_lane="pdf_text",
-        cutoff_at=T1,
-        recorded_at=T1,
-    )
+    # Historical seals retain their exact identity after the reader policy changes.
+    with monkeypatch.context() as historical_policy:
+        historical_policy.setattr(processing, "PDF_FULLTEXT_EXTRACTOR", identity)
+        publish_document_processing_evidence(
+            conn,
+            document_version_id="native-call",
+            processing_lane="pdf_text",
+            cutoff_at=T1,
+            recorded_at=T1,
+        )
     conn.commit()
     yield conn
     conn.close()
@@ -208,6 +226,12 @@ def _request(conn: sqlite3.Connection) -> NativePdfTranscriptRequest:
     )
 
 
+@pytest.mark.parametrize(
+    "native_source",
+    [RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0, PDF_FULLTEXT_EXTRACTOR],
+    indirect=True,
+    ids=["pypdf-6.19.0", "pypdf-6.21.1"],
+)
 def test_complete_exact_partition_keeps_unknown_and_both_lanes(native_source: sqlite3.Connection):
     conn = native_source
     request = _request(conn)
@@ -271,6 +295,133 @@ def test_complete_exact_partition_keeps_unknown_and_both_lanes(native_source: sq
             ).member_count
             == receipt.span_count
         )
+
+
+@pytest.mark.parametrize("native_source", [RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0], indirect=True)
+@pytest.mark.parametrize("complete_promotion", [False, True])
+def test_no_ocr_selection_keeps_one_run_and_transcript_replays_its_pin(
+    native_source: sqlite3.Connection, complete_promotion: bool
+) -> None:
+    conn = native_source
+    request = _request(conn)
+    receipt = publish_native_pdf_transcript(conn, request, apply=True)
+    promoted = tuple(
+        EvidenceNode(
+            node_id="promoted:" + node_id,
+            evidence_key=node_id,
+            revision=2,
+            supersedes_node_id=node_id,
+            extraction_run_id="promoted-pdf-run",
+            parent_node_id="promoted:" + parent_id if parent_id else None,
+            node_kind=kind,
+            text=text,
+            locator=EvidenceLocator.model_validate_json(locator),
+            recorded_at=T0,
+        )
+        for node_id, parent_id, kind, text, locator in conn.execute(
+            "SELECT node_id,parent_node_id,node_kind,text,locator_json FROM evidence_nodes "
+            "WHERE extraction_run_id='pdf-run' ORDER BY rowid"
+        )
+        if complete_promotion or node_id != "source-page-2"
+    )
+    ledger = EvidenceLedger(conn)
+    ledger.persist(
+        ExtractionRun(
+            extraction_run_id="promoted-pdf-run",
+            idempotency_key="promoted-pdf-run",
+            document_version_id="native-call",
+            input_sha256=request.input_sha256,
+            extractor_name=PDF_FULLTEXT_EXTRACTOR.name,
+            extractor_code_version=PDF_FULLTEXT_EXTRACTOR.code_version,
+            extractor_config_sha256=PDF_FULLTEXT_EXTRACTOR.config_sha256,
+            output_sha256=_sha(
+                json.dumps(
+                    [node.model_dump(mode="json", exclude_none=True) for node in promoted],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            ),
+            started_at=T0,
+            completed_at=T0,
+            outcome="succeeded",
+        )
+    )
+    for node in promoted:
+        ledger.persist(node)
+    proof = publish_document_processing_evidence(
+        conn,
+        document_version_id="native-call",
+        processing_lane="pdf_ocr",
+        cutoff_at=T3,
+        recorded_at=T3,
+    )
+    assert proof.extraction_run_id == ("promoted-pdf-run" if complete_promotion else "pdf-run")
+    members = {
+        row[0]
+        for row in conn.execute(
+            "SELECT native_id FROM document_processing_evidence_members WHERE evidence_seal_id=?",
+            (proof.evidence_seal_id,),
+        )
+    }
+    assert members == (
+        {node.node_id for node in promoted[1:]}
+        if complete_promotion
+        else {page.evidence_node_id for page in request.pages}
+    )
+    assert (
+        verify_document_processing_evidence(
+            conn,
+            proof.evidence_seal_id,
+            document_version_id="native-call",
+            processing_lane="pdf_ocr",
+            cutoff_at=T3,
+        ).extraction_run_id
+        == proof.extraction_run_id
+    )
+    # The complete promoted run is already visible at the review's original cutoff.
+    # Replay must still use the retained run and seal recorded in the review.
+    assert (
+        verify_native_pdf_transcript(
+            conn, receipt.extraction_run_id, observed_through=T3
+        ).review_sha256
+        == receipt.review_sha256
+    )
+
+
+@pytest.mark.parametrize(
+    ("native_source", "reason"),
+    [
+        (BASE_FULLTEXT_EXTRACTOR, "native_pdf_transcript_source_extractor_not_approved"),
+        (
+            replace(PDF_FULLTEXT_EXTRACTOR, code_version="unapproved@1"),
+            "pdf_extractor_identity_not_approved",
+        ),
+        (
+            replace(PDF_FULLTEXT_EXTRACTOR, config_sha256="f" * 64),
+            "pdf_extractor_identity_not_approved",
+        ),
+        (replace(PDF_FULLTEXT_EXTRACTOR, name="unapproved"), "native_extraction_run_missing"),
+    ],
+    indirect=["native_source"],
+    ids=["legacy-base", "unapproved-code", "unapproved-config", "unapproved-name"],
+)
+def test_transcript_replay_rejects_unapproved_source_identity(
+    native_source: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, reason: str
+) -> None:
+    conn = native_source
+    name, code, config = conn.execute(
+        "SELECT extractor_name,extractor_code_version,extractor_config_sha256 "
+        "FROM evidence_extraction_runs WHERE extraction_run_id='pdf-run'"
+    ).fetchone()
+    identity = replace(PDF_FULLTEXT_EXTRACTOR, name=name, code_version=code, config_sha256=config)
+    with monkeypatch.context() as historical_policy:
+        historical_policy.setattr(processing, "PDF_FULLTEXT_EXTRACTOR", identity)
+        historical_policy.setattr(transcript, "PDF_FULLTEXT_EXTRACTOR", identity)
+        receipt = publish_native_pdf_transcript(conn, _request(conn), apply=True)
+    before = conn.total_changes
+    with pytest.raises((NativePdfTranscriptError, DocumentProcessingEvidenceError), match=reason):
+        verify_native_pdf_transcript(conn, receipt.extraction_run_id, observed_through=T3)
+    assert conn.total_changes == before
 
 
 @pytest.mark.parametrize("change", ["invented_speaker", "missing_page", "page_hash", "wrong_run"])

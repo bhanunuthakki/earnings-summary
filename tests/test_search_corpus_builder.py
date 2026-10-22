@@ -24,7 +24,9 @@ from provenance.evidence_ledger import (
 )
 from provenance.fulltext_extractor_identity import (
     PDF_FULLTEXT_EXTRACTOR,
+    RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0,
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
+    FulltextExtractorIdentity,
 )
 from provenance.semantic_disposition import (
     SemanticDisposition,
@@ -275,7 +277,13 @@ def _seed_structured_hierarchy(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _seed_pdf_with_governed_ocr(conn: sqlite3.Connection) -> None:
+def _seed_pdf_with_governed_ocr(
+    conn: sqlite3.Connection,
+    identity: FulltextExtractorIdentity = PDF_FULLTEXT_EXTRACTOR,
+    *,
+    media_type: str = "application/pdf",
+    native_only: bool = False,
+) -> None:
     blob_sha = "d" * 64
     ocr_config_sha = "e" * 64
     ledger = EvidenceLedger(conn)
@@ -283,7 +291,7 @@ def _seed_pdf_with_governed_ocr(conn: sqlite3.Connection) -> None:
         ContentBlob(
             sha256=blob_sha,
             byte_size=100,
-            media_type="application/pdf",
+            media_type=media_type,
             storage_uri="file:///acme.pdf",
             recorded_at=STAMP,
         )
@@ -326,8 +334,8 @@ def _seed_pdf_with_governed_ocr(conn: sqlite3.Connection) -> None:
             document_version_id="pdf-document",
             input_sha256=blob_sha,
             extractor_name="fulltext-evidence-backfill",
-            extractor_config_sha256=PDF_FULLTEXT_EXTRACTOR.config_sha256,
-            extractor_code_version=PDF_FULLTEXT_EXTRACTOR.code_version,
+            extractor_config_sha256=identity.config_sha256,
+            extractor_code_version=identity.code_version,
             output_sha256=C,
             started_at=STAMP,
             completed_at=STAMP,
@@ -408,7 +416,7 @@ def _seed_pdf_with_governed_ocr(conn: sqlite3.Connection) -> None:
             "native-preflight@1",
             A,
             2,
-            "ocr_required",
+            "native_sufficient" if native_only else "ocr_required",
             None,
             STAMP,
         ),
@@ -419,9 +427,12 @@ def _seed_pdf_with_governed_ocr(conn: sqlite3.Connection) -> None:
         "requires_ocr) VALUES (?,?,?,?,?)",
         (
             ("pdf-assessment", 1, 24, A, False),
-            ("pdf-assessment", 2, 5, B, True),
+            ("pdf-assessment", 2, 5, B, not native_only),
         ),
     )
+    if native_only:
+        conn.commit()
+        return
     conn.execute(
         "INSERT INTO ocr_extraction_governance "
         "(extraction_run_id,assessment_id,engine_name,engine_version,"
@@ -1075,13 +1086,19 @@ def test_nonsemantic_exclusion_cannot_be_automated(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "identity", [PDF_FULLTEXT_EXTRACTOR, RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0]
+)
+@pytest.mark.parametrize("media_type", ["application/pdf", "application/octet-stream"])
 def test_pdf_chunks_select_native_or_accepted_ocr_once_per_page(
     tmp_path: Path,
     migrated_db: Callable[..., Path],
+    identity: FulltextExtractorIdentity,
+    media_type: str,
 ) -> None:
     conn = _conn(tmp_path, migrated_db)
     try:
-        _seed_pdf_with_governed_ocr(conn)
+        _seed_pdf_with_governed_ocr(conn, identity, media_type=media_type)
         request = _request(
             apply=False,
             inventory=(
@@ -1443,5 +1460,82 @@ def test_cli_uses_closed_inventory_file_and_defaults_to_read_only_dry_run(
     conn = sqlite3.connect(db_path)
     try:
         assert conn.execute("SELECT COUNT(*) FROM search_corpus_manifests").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("complete_promotion", [False, True])
+@pytest.mark.parametrize("media_type", ["application/pdf", "application/octet-stream"])
+def test_pdf_selection_uses_one_complete_run_when_promotion_omits_page(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    complete_promotion: bool,
+    media_type: str,
+) -> None:
+    conn = _conn(tmp_path, migrated_db)
+    try:
+        _seed_pdf_with_governed_ocr(
+            conn,
+            RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0,
+            media_type=media_type,
+            native_only=True,
+        )
+        ledger = EvidenceLedger(conn)
+        ledger.persist(
+            ExtractionRun(
+                extraction_run_id="promoted-run",
+                idempotency_key="promoted-run",
+                document_version_id="pdf-document",
+                input_sha256="d" * 64,
+                extractor_name=PDF_FULLTEXT_EXTRACTOR.name,
+                extractor_config_sha256=PDF_FULLTEXT_EXTRACTOR.config_sha256,
+                extractor_code_version=PDF_FULLTEXT_EXTRACTOR.code_version,
+                output_sha256=C,
+                started_at=STAMP,
+                completed_at=STAMP,
+                outcome="succeeded",
+            )
+        )
+        for page in range(1, 3 if complete_promotion else 2):
+            ledger.persist(
+                EvidenceNode(
+                    node_id=f"promoted-page-{page}",
+                    evidence_key=f"pdf:native:page:{page}",
+                    revision=2,
+                    supersedes_node_id=f"native-page-{page}",
+                    extraction_run_id="promoted-run",
+                    node_kind="pdf_page",
+                    text=f"Promoted page {page}",
+                    locator=EvidenceLocator(
+                        source_ref="https://sec.test/acme.pdf", page_number=page
+                    ),
+                    recorded_at=STAMP,
+                )
+            )
+        request = _request(
+            apply=False,
+            inventory=(
+                ExpectedDocument(
+                    expected_document_key="ACME:annual-report",
+                    document_version_id="pdf-document",
+                    membership_status="included",
+                    reason="coverage:extracted",
+                ),
+            ),
+        ).model_copy(
+            update={"required_extractor_names": (PDF_FULLTEXT_EXTRACTOR.name, "governed-pdf-ocr")}
+        )
+        result = build_grounded_search_corpus(conn, request)
+        prefix = "promoted" if complete_promotion else "native"
+        assert {chunk.evidence_node_id for chunk in result.planned_chunks} == {
+            f"{prefix}-page-1",
+            f"{prefix}-page-2",
+        }
+        assert (
+            conn.execute(
+                "SELECT count(*) FROM evidence_nodes WHERE extraction_run_id='native-pdf-run'"
+            ).fetchone()[0]
+            == 2
+        )
     finally:
         conn.close()

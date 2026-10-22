@@ -396,7 +396,10 @@ class ImmediateFixtureTest(unittest.TestCase):
         terminal = self.payload("fixtures/terminal.log")
         unknown = self.payload("session-output.json")
         sessionfinish = cast(Callable[[object, int], None], namespace["pytest_sessionfinish"])
-        sessionfinish(None, 0)
+        # Off a GitHub Actions runner, success registers the exit retirement.
+        with patch.dict(os.environ):
+            os.environ.pop("GITHUB_ACTIONS", None)
+            sessionfinish(None, 0)
         self.assertTrue(
             payload.exists(),
             "session/plugin consumers retain payload until process exit",
@@ -409,6 +412,25 @@ class ImmediateFixtureTest(unittest.TestCase):
         self.assertFalse(fixture_database.exists())
         for retained in [junit, terminal, unknown]:
             self.assertTrue(retained.exists())
+        # A discarded Actions runner seals success but registers no exit retirement.
+        actions_run = self.repo / ".tmp/actions-run"
+        runs.begin_temp_run(
+            actions_run,
+            repo_root=self.repo,
+            disposable_class="isolated_test_fixture",
+            purpose="actions hook fixture",
+            min_free_bytes=0,
+        )
+        kept = actions_run / "payload.bin"
+        kept.write_bytes(b"actions payload")
+        namespace["_test_db_dir"] = actions_run
+        with patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}):
+            sessionfinish(None, 0)
+        self.assertEqual(callbacks, [])
+        self.assertTrue(kept.exists())
+        self.assertEqual(
+            json.loads((actions_run / runs.MANIFEST_NAME).read_text())["status"], "completed"
+        )
         for status in (1, 2):
             second = self.repo / f".tmp/failed-run-{status}"
             runs.begin_temp_run(
