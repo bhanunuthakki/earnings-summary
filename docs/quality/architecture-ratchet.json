@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "d84f58ca9b6a62f3c2bcf6e81c5a254937c12a05",
+  "scoped_commit": "a2029404384d0edcf94a035fe7eaf35bd5dbd181",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "859387e4929ae708adb907efc8cf2b8a7eaec97d563d5cfa296d50b2b7290af8",
+  "source_sha256": "34c80bf24dcac317a94396837851740bdd166023e4d299387b3d6f37f538cfd5",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1458,
-    "total_noncomment_loc": 557816,
+    "total_noncomment_loc": 557880,
     "modules_over_1000_loc": 107,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -6000,9 +6000,9 @@
         "path": "execution/run_weekly_cleanup.py",
         "module": "execution.run_weekly_cleanup",
         "lines": {
-          "physical": 1213,
-          "nonblank": 1106,
-          "noncomment": 1094
+          "physical": 1284,
+          "nonblank": 1171,
+          "noncomment": 1158
         },
         "internal_fan_out": 0,
         "responsibilities": [
