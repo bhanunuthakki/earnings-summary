@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "d61eb246798683a73c9a930dda197554e1941625",
+  "scoped_commit": "68a47914fb0e08e2e92621ab6f7c8af2d41467ad",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "ed3902d1c4acb39cca71e90bf057d550e672154a509b6ee85955c8028c3dd3b4",
+  "source_sha256": "3a6f75f9378fbcc99d38733be174fdde796d44099f23ba3879f2082073ca5526",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1468,
-    "total_noncomment_loc": 561956,
+    "total_noncomment_loc": 562136,
     "modules_over_1000_loc": 108,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -3012,9 +3012,9 @@
         "path": "execution/extract_kpis_from_summaries.py",
         "module": "execution.extract_kpis_from_summaries",
         "lines": {
-          "physical": 163,
-          "nonblank": 144,
-          "noncomment": 144
+          "physical": 165,
+          "nonblank": 146,
+          "noncomment": 146
         },
         "internal_fan_out": 6,
         "responsibilities": [
@@ -8418,11 +8418,11 @@
         "path": "src/compute/kpi_extract_summaries.py",
         "module": "compute.kpi_extract_summaries",
         "lines": {
-          "physical": 1564,
-          "nonblank": 1415,
-          "noncomment": 1313
+          "physical": 1718,
+          "nonblank": 1575,
+          "noncomment": 1474
         },
-        "internal_fan_out": 19,
+        "internal_fan_out": 21,
         "responsibilities": [
           "database",
           "filesystem",
@@ -14310,9 +14310,9 @@
         "path": "src/pipeline/kpi_persistence.py",
         "module": "pipeline.kpi_persistence",
         "lines": {
-          "physical": 1022,
-          "nonblank": 931,
-          "noncomment": 828
+          "physical": 1039,
+          "nonblank": 948,
+          "noncomment": 842
         },
         "internal_fan_out": 12,
         "responsibilities": [
@@ -14953,9 +14953,9 @@
         "path": "src/pipeline/run_accounting.py",
         "module": "pipeline.run_accounting",
         "lines": {
-          "physical": 509,
-          "nonblank": 463,
-          "noncomment": 459
+          "physical": 512,
+          "nonblank": 466,
+          "noncomment": 462
         },
         "internal_fan_out": 3,
         "responsibilities": [

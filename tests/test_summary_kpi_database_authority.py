@@ -81,3 +81,83 @@ def test_invalid_database_stops_before_connection_or_extraction(
     monkeypatch.setattr(cli, "extract_for_ticker", forbidden)
     assert cli.main() == 1
     assert not database.exists()
+
+
+@pytest.mark.parametrize("capture", [False, True])
+@pytest.mark.parametrize("mixed", [False, True])
+def test_extraction_errors_return_failure_and_preserve_structured_results(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    capture: bool,
+    mixed: bool,
+) -> None:
+    import json
+
+    database = migrated_db(tmp_path / "result.sqlite")
+    tickers = ["NU", "ZZ"] if mixed else ["NU"]
+    with sqlite3.connect(database) as conn:
+        conn.executemany(
+            "INSERT INTO tracked_companies (ticker,name,list_type) VALUES (?,?,'portfolio')",
+            [(t, f"Synthetic {t}") for t in tickers],
+        )
+    argv = ["summary-kpis", "--all", "--db-path", str(database), "--repo-root", str(tmp_path)]
+    if capture:
+        argv.append("--capture")
+    monkeypatch.setattr(sys, "argv", argv)
+
+    def extract(ticker: str, *args: object, **kwargs: object) -> TickerExtractionLog:
+        return TickerExtractionLog(
+            ticker=ticker,
+            error="synthetic extraction failure" if ticker == "NU" else None,
+            kpis_inserted_total=0 if ticker == "NU" else 2,
+        )
+
+    monkeypatch.setattr(cli, "capture_for_ticker", extract)
+    monkeypatch.setattr(cli, "extract_for_ticker", extract)
+    assert cli.main() == 1
+    result = json.loads(capsys.readouterr().out)
+    assert [r["ticker"] for r in result["summary"]] == tickers
+    assert result["summary"][0]["error"] == "synthetic extraction failure"
+    if mixed:
+        assert result["summary"][1]["error"] is None
+        assert result["summary"][1]["kpis_inserted"] == 2
+
+
+def test_active_suppression_keeps_explicit_cli_result(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import json
+
+    from models.runs import StageStatus
+    from pipeline.run_accounting import PipelineRunSuppressedError
+
+    database = migrated_db(tmp_path / "suppression.sqlite")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "summary-kpis",
+            "--ticker",
+            "NU",
+            "--db-path",
+            str(database),
+            "--repo-root",
+            str(tmp_path),
+        ],
+    )
+
+    def suppressed(*args: object, **kwargs: object) -> TickerExtractionLog:
+        raise PipelineRunSuppressedError("pipeline-test", "active-test", StageStatus.IN_PROGRESS)
+
+    monkeypatch.setattr(cli, "extract_for_ticker", suppressed)
+    assert cli.main() == 0
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "already_running",
+        "pipeline_key": "pipeline-test",
+        "attempt_id": "active-test",
+    }

@@ -1165,3 +1165,32 @@ def test_guard_raises_when_strict(conn: sqlite3.Connection) -> None:
         )
     # Strict mode raises instead of writing — no row logged.
     assert conn.execute("SELECT COUNT(*) FROM validation_issues").fetchone()[0] == 0
+
+
+def test_legacy_cross_source_duplicate_preserves_retained_fact_semantics(
+    legacy_conn: sqlite3.Connection,
+) -> None:
+    first = _money_manifest(
+        period_end=datetime(2025, 6, 30),
+        source_doc_id=100,
+        value=Decimal("12"),
+        unit=Unit.MILLIONS,
+        basis=KpiAccountingBasis.NON_GAAP,
+    )
+    incoming = _money_manifest(
+        period_end=datetime(2025, 6, 30),
+        source_doc_id=200,
+        value=Decimal("13"),
+        unit=Unit.MILLIONS,
+        basis=KpiAccountingBasis.GAAP,
+    )
+    assert persist_manifest(legacy_conn, run_id="legacy-first", manifest=first).inserted == 1
+    before = [tuple(row) for row in legacy_conn.execute("SELECT * FROM kpi_fact_semantic_contexts")]
+    result = persist_manifest(legacy_conn, run_id="legacy-different-source", manifest=incoming)
+    assert result.inserted == 0
+    assert result.skipped_existing == 1
+    assert [
+        tuple(row) for row in legacy_conn.execute("SELECT * FROM kpi_fact_semantic_contexts")
+    ] == before
+    retained = legacy_conn.execute("SELECT value,source_doc_id FROM kpi_facts").fetchone()
+    assert tuple(retained) == (12, 100)

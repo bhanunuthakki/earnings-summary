@@ -1,9 +1,9 @@
 """Stages 2-3 of the KPI cascade: extract tier_1 KPIs from `.tmp/` LLM summaries.
 
-Reads the holdings JSON's tier_1_kpis for each ticker, asks Claude Haiku to
-pull values from the existing on-disk LLM summary files, and persists into
-kpi_facts via the existing manifest pipeline. Idempotent on (ticker, period,
-KPI name); a value present from any earlier source is not re-extracted.
+Reads each holding's tier_1_kpis and extracts the full list from each distinct
+summary through the governed model route. Exact completed material inputs skip
+model work. Empty and partial responses complete bounded processing; unreturned
+metrics remain unknown. Facts persist through the existing manifest pipeline.
 
 `--source` selects the document family:
   earnings  Stage 2: per-quarter call summary + investor-update variant
@@ -117,7 +117,7 @@ def main() -> int:
 
     log_path = write_log(repo_root, results)
     print(json.dumps({"summary": summary_lines, "log": str(log_path)}, indent=2))
-    return 0
+    return 1 if any(log.error for log in results) else 0
 
 
 def _parse_args() -> argparse.Namespace:
@@ -128,7 +128,9 @@ def _parse_args() -> argparse.Namespace:
     g.add_argument("--ticker", help="Single ticker")
     g.add_argument("--all", action="store_true", help="All portfolio + watchlist tickers")
     p.add_argument(
-        "--refresh", action="store_true", help="Re-extract even if all KPIs already present"
+        "--refresh",
+        action="store_true",
+        help="Repeat completed allowlist extraction; active allowlist attempts remain protected",
     )
     p.add_argument(
         "--capture",

@@ -371,6 +371,8 @@ def record_stage(
     period_end: datetime | None = None,
     error_msg: str | None = None,
     started_at: datetime | None = None,
+    *,
+    commit: bool = True,
 ) -> None:
     """Insert one stage_transitions row.
 
@@ -416,7 +418,8 @@ def record_stage(
                 error_msg,
             ),
         )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def end_run(

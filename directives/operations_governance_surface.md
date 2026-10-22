@@ -1,5 +1,32 @@
 # Operations & Governance Surface Impact
 
+### Summary KPI processing completion (2026-10-22)
+
+Disposition: **existing extraction and CLI correction; no new operator action or
+schedule**. Allowlist extraction uses the existing pipeline-attempt ledger before
+model work. Its identity binds captured summary and holdings bytes, requested
+metrics, effective units, source and parent identity, extraction contract and
+resolved model route. Existing facts no longer narrow another source's request.
+Exact completed attempts skip model work and allow later documents to continue.
+Allowlist `--refresh` repeats completed work but does not replace an active writer.
+
+The existing stage journal records requested, returned and unknown metrics plus
+persistence counts. Completion means bounded processing, not complete disclosure
+or semantic admission. Final input checks, fact writes and stage completion share
+one transaction. Failed writes roll back and remain retryable. Database rejection
+propagates from the shared KPI writer; a duplicate must identify a retained fact.
+The CLI preserves structured results and returns a failure exit code when any
+ticker records an error, including capture-mode errors.
+
+Summary-derived facts retain their existing non-admitted status. Source-evidence
+requirements, historical observations, original-source parent rules and capture
+processing remain unchanged. No new collection or live execution is authorized.
+Distinct source versions now receive the full configured metric request; initial
+model work can therefore increase. Purpose, prompt, response schema, model policy
+and analytical depth remain unchanged. Validation belongs to
+`test_summary_kpi_completion.py`, `test_summary_kpi_database_authority.py` and
+`test_pipeline_kpi_persistence.py`, with shared-writer caller regressions.
+
 ### Raw IR narrative cache validity (2026-10-22)
 
 Disposition: **existing local extraction and reader hardening; no new operator

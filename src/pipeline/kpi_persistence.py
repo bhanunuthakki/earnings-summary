@@ -589,8 +589,25 @@ def _insert_kpi_fact(
             source_doc_id,
         ),
     ).fetchone()
+    if (
+        existing is None
+        and conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='uq_kpi_facts_logical'"
+        ).fetchone()
+        is not None
+    ):
+        # Explicit pre-0059 compatibility: that index deduplicates across sources.
+        existing = conn.execute(
+            "SELECT id FROM kpi_facts WHERE ticker=? AND period_end=? "
+            "AND fiscal_period_type=? AND kpi_definition_id=? ORDER BY id DESC LIMIT 1",
+            (ticker.upper(), period_end, fiscal_period_type.value, kpi_definition_id),
+        ).fetchone()
+        if existing is not None:
+            # A different legacy source retained the old row. Its semantics must
+            # not be replaced with the incoming document's semantic context.
+            return None, False, None, False
     if existing is None:
-        return None, False, None, False
+        raise sqlite3.IntegrityError("KPI insert produced no row and no retained duplicate")
     return (
         int(existing["id"] if hasattr(existing, "keys") else existing[0]),
         False,
