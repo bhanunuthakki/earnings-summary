@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "02873a810952db812867c77c9ea3df3ed3a5a6f2",
+  "scoped_commit": "912ec1565f8af0dccf0e932eb838c569893a709a",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "bee4a57ce6f56265b45fd7c34bb55f839fc793ac0312a2f5ef33202f15a13e65",
+  "source_sha256": "f27b980cbb0718ad78932bdd887e75c7ee14ec68f7abd943d85f236b56fc6662",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,8 +23,8 @@
   },
   "metrics": {
     "executable_modules": 1458,
-    "total_noncomment_loc": 557789,
-    "modules_over_1000_loc": 107,
+    "total_noncomment_loc": 557855,
+    "modules_over_1000_loc": 108,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
     "max_internal_fan_out": 40,
@@ -7981,11 +7981,11 @@
         "path": "src/cockpit_fundamentals.py",
         "module": "cockpit_fundamentals",
         "lines": {
-          "physical": 644,
-          "nonblank": 581,
-          "noncomment": 581
+          "physical": 646,
+          "nonblank": 583,
+          "noncomment": 583
         },
-        "internal_fan_out": 3,
+        "internal_fan_out": 4,
         "responsibilities": [
           "database",
           "network"
@@ -17116,17 +17116,17 @@
         "path": "src/provenance/source_fact_publication.py",
         "module": "provenance.source_fact_publication",
         "lines": {
-          "physical": 1043,
-          "nonblank": 959,
-          "noncomment": 959
+          "physical": 1115,
+          "nonblank": 1023,
+          "noncomment": 1023
         },
         "internal_fan_out": 1,
         "responsibilities": [
           "database",
           "network"
         ],
-        "public_functions": 13,
-        "fully_annotated_public_functions": 13
+        "public_functions": 14,
+        "fully_annotated_public_functions": 14
       },
       {
         "path": "src/provenance/source_fact_repository.py",
