@@ -1,9 +1,10 @@
 from pathlib import Path
+from typing import BinaryIO
 
 from pypdf import PdfReader
 
 
-def extract_text_from_pdf(filepath: str | Path) -> str:
+def extract_text_from_pdf(filepath: str | Path | BinaryIO) -> str:
     """
     Extracts text from a PDF file.
     """

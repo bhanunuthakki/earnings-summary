@@ -19,6 +19,7 @@ from typing import cast
 
 import pytest
 
+from compute.ir_narrative import extract_for_ticker
 from execution import discover_ir_documents_all as batch
 from execution import onboard_ticker
 
@@ -537,9 +538,12 @@ def test_cached_existing_narrative_does_not_dirty_brief_or_rerun_children(
     source = tmp_path / "ir_documents" / "NU" / "2026-06-30" / "ir_presentation__abcd1234.pdf"
     source.parent.mkdir(parents=True)
     source.write_bytes(b"source already downloaded")
-    cache = tmp_path / "data" / "ir_narrative" / "NU" / "ir_presentation__2026-06-30.txt"
-    cache.parent.mkdir(parents=True)
-    cache.write_text("processed narrative", encoding="utf-8")
+
+    def narrative(_payload: object) -> str:
+        return "processed narrative " * 20
+
+    monkeypatch.setattr("parser.extract_text_from_pdf", narrative)
+    assert extract_for_ticker(tmp_path, "NU")["processed"] == 1
     fake = _RecordingRun(downloaded={"NU": 0})
     _install(monkeypatch, fake, ["NU"])
     assert batch.main(["--repo-root", str(tmp_path), "--db", str(db)]) == 0

@@ -1,5 +1,29 @@
 # Operations & Governance Surface Impact
 
+### Raw IR narrative cache validity (2026-10-22)
+
+Disposition: **existing local extraction and reader hardening; no new operator
+action or schedule**. `compute.ir_narrative` owns one validity check for the
+producer, pending-work detection and prompt reader. One atomically replaced JSON
+envelope per ticker/document-type/period binds exact ordered source bytes,
+extraction settings and code, parser version, source dispositions and output hash.
+The existing adjacent-file `hold_run_lock` serializes writers for each ticker's
+narrative cache; it does not open a database.
+
+Legacy text files remain intact but unverified. Existing local extraction rebuilds
+the cache from held PDFs; no source collection, financial write or model call is
+added. Failed replacement preserves the preceding envelope. Empty extraction is
+recorded so it does not create repeated work. The reader selects the preferred
+candidate once, then emits an explicit gap if it cannot validate that candidate;
+it does not substitute an older cache. Source-less legacy caches remain gaps,
+not executable pending work. Document priority, text limits, normalization and
+management-claim framing remain unchanged. This proves local cache validity,
+not source-acquisition completeness or financial admission.
+
+Validation belongs to `test_ir_narrative_extract.py`, `test_llm_ir_anchor.py` and
+`test_discover_ir_documents_all.py`. Existing source and legacy-file retention
+remain with their established owners; this change creates no revision archive.
+
 ### Extraction failure and database ownership cleanup (2026-10-22)
 
 Disposition: **existing CLI hardening; no new operational surface**. Financial
