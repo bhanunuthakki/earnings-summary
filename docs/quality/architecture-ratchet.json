@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "75c1cfc1e1c43b28edebd8268d93a17ceef8fdb6",
+  "scoped_commit": "2e39777b703c90d4e640038e6b76c972e81ec33d",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "cd43662ff40a4f905f0bcc078e7e55966f73e833d40d1b9dbb1459b7f4243210",
+  "source_sha256": "20f8a40bce97efaa78c75ce98ae92f525913619afe0ac6ebf3757a7b420e1f6e",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1457,
-    "total_noncomment_loc": 557407,
+    "total_noncomment_loc": 557477,
     "modules_over_1000_loc": 107,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -5636,11 +5636,11 @@
         "path": "execution/run_coach_pings.py",
         "module": "execution.run_coach_pings",
         "lines": {
-          "physical": 124,
-          "nonblank": 101,
-          "noncomment": 95
+          "physical": 138,
+          "nonblank": 112,
+          "noncomment": 103
         },
-        "internal_fan_out": 5,
+        "internal_fan_out": 6,
         "responsibilities": [
           "network"
         ],
@@ -7965,11 +7965,11 @@
         "path": "src/cockpit_fundamentals.py",
         "module": "cockpit_fundamentals",
         "lines": {
-          "physical": 619,
-          "nonblank": 557,
-          "noncomment": 557
+          "physical": 644,
+          "nonblank": 581,
+          "noncomment": 581
         },
-        "internal_fan_out": 2,
+        "internal_fan_out": 3,
         "responsibilities": [
           "database",
           "network"
@@ -14819,8 +14819,8 @@
         "path": "src/pipeline/research_cockpit.py",
         "module": "pipeline.research_cockpit",
         "lines": {
-          "physical": 1623,
-          "nonblank": 1470,
+          "physical": 1624,
+          "nonblank": 1471,
           "noncomment": 1326
         },
         "internal_fan_out": 21,
@@ -16078,16 +16078,16 @@
         "path": "src/provenance/evidence_revision.py",
         "module": "provenance.evidence_revision",
         "lines": {
-          "physical": 74,
-          "nonblank": 62,
-          "noncomment": 62
+          "physical": 96,
+          "nonblank": 80,
+          "noncomment": 80
         },
         "internal_fan_out": 0,
         "responsibilities": [
           "database"
         ],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 3,
+        "fully_annotated_public_functions": 3
       },
       {
         "path": "src/provenance/fact_plane_v2.py",
@@ -19258,9 +19258,9 @@
         "path": "src/research/governor.py",
         "module": "research.governor",
         "lines": {
-          "physical": 1014,
-          "nonblank": 935,
-          "noncomment": 864
+          "physical": 1043,
+          "nonblank": 963,
+          "noncomment": 884
         },
         "internal_fan_out": 8,
         "responsibilities": [

@@ -1795,3 +1795,25 @@ runs. No operator action, scheduler, service, Operations surface or retention
 window changed. Regression evidence: `tests/test_storage_reservation.py`,
 `tests/test_temp_run_review_resolution.py` and
 `tests/test_pytest_temp_lifecycle.py`.
+
+
+
+### Coach delivery confirmation and fundamentals cache revision — 2026-10-22
+
+Disposition: **tested existing operational behavior repair; no new operator action**.
+Coach delivery claims use `sending` until Telegram confirmation. A 15-minute
+expired claim becomes retryable; completion is fenced to the exact claim timestamp.
+The manual and scheduled coach entrypoints share the `notification-delivery` lane.
+Owner acknowledgement and dismissal of an unlinked `sending` carrier remain
+recordable, and completion preserves those terminal states. Acknowledgement after
+a claim cannot recall a push already in flight. Delivery is at least once: a crash
+after Telegram accepts the push but before confirmation may produce a duplicate.
+This change does not establish durable send-time frequency accounting.
+
+The cockpit fundamentals cache binds the canonical financial revision captured
+with its values in one committed read transaction and rejects changed revisions.
+Snapshot replacement still requires an explicit derived-cache refresh. No schedule,
+service, database authority, publication permission, or UI geometry changes.
+Evidence: `tests/test_governor.py`, `tests/test_run_coach_pings.py`, and
+`tests/test_cockpit_fundamentals.py`; hosted native Windows application coverage
+is distinct from deployment proof on the managed production runtime.

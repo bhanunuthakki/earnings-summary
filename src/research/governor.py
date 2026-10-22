@@ -70,10 +70,17 @@ Governor rules, all deterministic, ZERO LLM:
   are market events, coach items are behavioral asks — never pooled.
 - **auto-mute**: ``MUTE_AFTER`` consecutive dismissals of a class mutes it
   until explicitly cleared — dismissals train the coach; it never argues.
-- one row per moment forever (UNIQUE class+key) — a moment is never re-pushed.
-  Single exception: ``send_failed`` (an attempted push that died in flight)
-  stays eligible, and the next run re-attempts delivery on the same row —
-  an undelivered ping was never a nag.
+- one row per moment forever (UNIQUE class+key) — a delivered moment is not
+  re-pushed. ``send_failed`` (a push that failed or was never confirmed) stays
+  eligible, and the next run re-attempts delivery on the same row — an
+  undelivered ping was never a nag. A push is claimed as ``sending`` and
+  becomes ``sent`` only after the push is confirmed; a ``sending`` claim older
+  than ``SEND_LEASE`` (its process died mid-push) is swept to ``send_failed``.
+  Delivery is therefore at-least-once: a crash after Telegram accepted a push
+  but before ``sent`` was written pushes it once more. Every status write is
+  conditional on the row this run claimed, so an acknowledgement committed
+  before the claim cancels the push; one committed after the claim cannot stop
+  a push already in flight.
 
 The Telegram send is injected (``send_fn``) so the core is pure; the dismiss
 button routes back through ``research_notify`` (``cp:dismiss:<id>``).
@@ -121,6 +128,8 @@ CLASSES: tuple[str, ...] = (
 DAILY_CAP = 2
 WEEKLY_CAP = 8
 MUTE_AFTER = 3
+# Telegram sends time out after 60s; a younger ``sending`` row belongs to a live run.
+SEND_LEASE = timedelta(minutes=15)
 ANNOTATION_AGE_HOURS = 24
 INTENT_FOLLOWUP_DAYS = 14
 
@@ -675,6 +684,11 @@ def run_governor(
 ) -> dict[str, int]:
     """One governed pass: collect → freshness-gate → cap → send/digest.
 
+    Callers must hold the ``notification-delivery`` job lane (``JobLock``) for
+    the whole pass, as ``execution/run_coach_pings.py`` and the scheduler do:
+    the cap check and the creation of a moment's row are not atomic across
+    concurrent passes.
+
     ``send_fn(ping_id, moment) -> bool`` performs the push (Telegram). No
     ``send_fn`` at all (dry-run / no bot configured) downgrades the ping to
     the quiet digest — that IS the delivery surface then. A ``send_fn`` that
@@ -724,20 +738,28 @@ def run_governor(
             "attention_updated_at",
         }
         has_attention_schema = required_attention_columns.issubset(attention_columns)
+        # An expired claim is an unconfirmed attempt whether or not its moment
+        # is still collected: make it retryable instead of stuck in flight.
+        conn.execute(
+            "UPDATE coach_pings SET status = 'send_failed', updated_at = ? "
+            "WHERE status = 'sending' AND updated_at <= ?",
+            (stamp.isoformat(), (stamp - SEND_LEASE).isoformat()),
+        )
+        conn.commit()
         for moment in moments:
             if has_episode_link:
                 prior = conn.execute(
-                    "SELECT id,status,thesis_evaluation_episode_id FROM coach_pings "
+                    "SELECT id,status,updated_at,thesis_evaluation_episode_id FROM coach_pings "
                     "WHERE class_ = ? AND key = ?",
                     (moment.class_, moment.key),
                 ).fetchone()
             else:
                 prior = conn.execute(
-                    "SELECT id,status FROM coach_pings WHERE class_ = ? AND key = ?",
+                    "SELECT id,status,updated_at FROM coach_pings WHERE class_ = ? AND key = ?",
                     (moment.class_, moment.key),
                 ).fetchone()
             prior_id = None if prior is None else int(prior[0])
-            linked_episode_id = None if prior is None or not has_episode_link else prior[2]
+            linked_episode_id = None if prior is None or not has_episode_link else prior[3]
             if linked_episode_id is not None and prior_id is not None:
                 if not has_attention_schema:
                     missing = sorted(required_attention_columns - attention_columns)
@@ -770,7 +792,7 @@ def run_governor(
                 status = "skipped_stale"
             else:
                 day, week = _sent_counts(conn, stamp)
-                status = "digest" if (day >= DAILY_CAP or week >= WEEKLY_CAP) else "sent"
+                status = "digest" if (day >= DAILY_CAP or week >= WEEKLY_CAP) else "sending"
             if prior is None:
                 cur = conn.execute(
                     """
@@ -791,50 +813,57 @@ def run_governor(
                 )
                 ping_id = int(cur.lastrowid or 0)
             else:
-                # A prior run's push died mid-flight — re-run the gates on the
-                # SAME row (UNIQUE class+key), then retry the delivery below.
+                # A prior push failed or was never confirmed — re-run the gates
+                # on the SAME row (UNIQUE class+key), then retry the delivery
+                # below. Conditional on the observed row: an acknowledgement or a
+                # sibling run that changed it since then wins.
                 ping_id = int(prior[0])
-                conn.execute(
-                    "UPDATE coach_pings SET status = ?, updated_at = ? WHERE id = ?",
-                    (status, iso, ping_id),
+                claimed = conn.execute(
+                    "UPDATE coach_pings SET status = ?, updated_at = ? "
+                    "WHERE id = ? AND status = ? AND updated_at = ?",
+                    (status, iso, ping_id, str(prior[1]), str(prior[2])),
                 )
+                if claimed.rowcount != 1:
+                    conn.commit()
+                    continue
             conn.commit()
-            if status == "sent":
+            if status == "sending":
                 if send_fn is None:
                     # No push channel — not a send failure; park in the digest.
                     delivered, fallback = False, "digest"
                 else:
                     delivered, fallback = bool(send_fn(ping_id, moment)), "send_failed"
-                if not delivered:
-                    completed = conn.execute(
-                        "UPDATE coach_pings SET status = ?, updated_at = ? "
-                        "WHERE id = ? AND status = 'sent'",
-                        (fallback, iso, ping_id),
-                    )
-                    conn.commit()
-                    if completed.rowcount == 1:
-                        status = fallback
-                    else:
-                        current = conn.execute(
-                            "SELECT status FROM coach_pings WHERE id=?", (ping_id,)
-                        ).fetchone()
-                        if current is None:
-                            raise RuntimeError(
-                                f"coach ping {ping_id} disappeared during delivery completion"
-                            )
-                        current_status = str(current[0])
-                        if current_status == "sent":
-                            raise RuntimeError(
-                                f"coach ping {ping_id} delivery completion lost its CAS"
-                            )
-                        if current_status not in tally and current_status not in {
-                            "acted",
-                            "dismissed",
-                        }:
-                            raise RuntimeError(
-                                f"coach ping {ping_id} has unexpected status {current_status!r}"
-                            )
-                        status = current_status
+                final = "sent" if delivered else fallback
+                # Fenced to this run's claim: a stale worker resuming after its
+                # lease was swept and reclaimed cannot overwrite the newer attempt.
+                completed = conn.execute(
+                    "UPDATE coach_pings SET status = ?, updated_at = ? "
+                    "WHERE id = ? AND status = 'sending' AND updated_at = ?",
+                    (final, iso, ping_id, iso),
+                )
+                conn.commit()
+                if completed.rowcount == 1:
+                    status = final
+                else:
+                    current = conn.execute(
+                        "SELECT status, updated_at FROM coach_pings WHERE id=?", (ping_id,)
+                    ).fetchone()
+                    if current is None:
+                        raise RuntimeError(
+                            f"coach ping {ping_id} disappeared during delivery completion"
+                        )
+                    current_status = str(current[0])
+                    if current_status == "sending" and str(current[1]) == iso:
+                        raise RuntimeError(f"coach ping {ping_id} delivery completion lost its CAS")
+                    if current_status not in tally and current_status not in {
+                        "acted",
+                        "dismissed",
+                        "sending",
+                    }:
+                        raise RuntimeError(
+                            f"coach ping {ping_id} has unexpected status {current_status!r}"
+                        )
+                    status = current_status
             if status in tally:
                 tally[status] += 1
     finally:
@@ -873,7 +902,7 @@ def record_dismissal(ping_id: int, *, db_path: Path | str | None = None) -> tupl
             return True, None
         row = conn.execute(
             "SELECT class_ FROM coach_pings WHERE id = ? "
-            "AND status IN ('sent','digest','routed_to_brief','acted')",
+            "AND status IN ('sending','sent','digest','routed_to_brief','acted')",
             (ping_id,),
         ).fetchone()
         if row is None:
@@ -925,14 +954,14 @@ def record_ping_message_id(
     column (migration 0188). Swallows ``sqlite3.OperationalError`` so an
     un-migrated DB (column missing) never breaks a send; returns whether the
     write happened."""
-    stamp = now_naive_utc().isoformat()
     # This method intentionally supports a pre-0188 compatibility window: the
     # missing-column OperationalError below is the documented no-op signal.
+    # It leaves ``updated_at`` alone: during a push that column fences the claim.
     conn = open_conn(db_path, schema_preflight=False)
     try:
         conn.execute(
-            "UPDATE coach_pings SET telegram_message_id = ?, updated_at = ? WHERE id = ?",
-            (message_id, stamp, ping_id),
+            "UPDATE coach_pings SET telegram_message_id = ? WHERE id = ?",
+            (message_id, ping_id),
         )
         conn.commit()
         return True
@@ -944,9 +973,9 @@ def record_ping_message_id(
 
 def mark_ping_acted(ping_id: int, *, db_path: Path | str | None = None) -> bool:
     """Owner's reply resolved this ping (acknowledge / annotate_decision outcome
-    in ``capture.coach_reply``) — flip it to ``acted`` from ``sent``/``digest``
-    only, mirroring ``record_dismissal``'s status-guard shape. Returns whether a
-    row was updated."""
+    in ``capture.coach_reply``) — flip it to ``acted`` from
+    ``sending``/``sent``/``digest``. The status guard mirrors
+    ``record_dismissal``. Returns whether a row was updated."""
     stamp = now_naive_utc().isoformat()
     conn = open_conn(db_path)
     try:
@@ -970,7 +999,7 @@ def mark_ping_acted(ping_id: int, *, db_path: Path | str | None = None) -> bool:
             return True
         cur = conn.execute(
             "UPDATE coach_pings SET status = 'acted', updated_at = ? "
-            "WHERE id = ? AND status IN ('sent', 'digest')",
+            "WHERE id = ? AND status IN ('sending', 'sent', 'digest')",
             (stamp, ping_id),
         )
         conn.commit()
