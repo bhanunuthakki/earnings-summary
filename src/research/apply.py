@@ -55,7 +55,15 @@ if TYPE_CHECKING:
 
 # Only these kinds mutate live state on approve -> must clear the higher bar.
 MUTATING_KINDS: frozenset[str] = frozenset(
-    {"dcf", "thesis", "code", "ask_thesis_edit", "ask_kpi_edit"}
+    {
+        "dcf",
+        "thesis",
+        "code",
+        "ask_thesis_edit",
+        "ask_kpi_edit",
+        "owner_thesis_edit",
+        "owner_kpi_edit",
+    }
 )
 
 # Keys in an evidence item that count as a concrete doorway (Law 2).
@@ -203,7 +211,7 @@ def _load_applier(kind: str) -> ApplierFn | None:
     try:
         module = (
             "research.ask_proposal_artifact"
-            if kind in {"ask_thesis_edit", "ask_kpi_edit"}
+            if kind in {"ask_thesis_edit", "ask_kpi_edit", "owner_thesis_edit", "owner_kpi_edit"}
             else f"research.{kind}_artifact"
         )
         importlib.import_module(module)
@@ -296,7 +304,7 @@ def apply_governed_proposal(
         applier = _MUTATING_APPLIERS.get(kind) or _load_applier(kind)
         if applier is None:
             return f"{kind}: apply not yet wired"
-        if kind in {"ask_thesis_edit", "ask_kpi_edit"}:
+        if kind in {"ask_thesis_edit", "ask_kpi_edit", "owner_thesis_edit", "owner_kpi_edit"}:
             return applier(proposal_id, db_path=db_path, proposal=prop, **applier_context)
         return applier(proposal_id, db_path=db_path)
     return f"{kind}: apply not yet wired"

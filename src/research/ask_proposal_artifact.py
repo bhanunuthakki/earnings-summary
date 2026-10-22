@@ -172,3 +172,6 @@ def apply_ask_proposal(
 
 register_mutating_applier("ask_thesis_edit", apply_ask_proposal)
 register_mutating_applier("ask_kpi_edit", apply_ask_proposal)
+
+register_mutating_applier("owner_thesis_edit", apply_ask_proposal)
+register_mutating_applier("owner_kpi_edit", apply_ask_proposal)
