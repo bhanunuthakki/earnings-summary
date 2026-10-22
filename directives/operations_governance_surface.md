@@ -1,5 +1,28 @@
 # Operations & Governance Surface Impact
 
+### Extraction failure and database ownership cleanup (2026-10-22)
+
+Disposition: **existing CLI hardening; no new operational surface**. Financial
+same-document correction lookup and update errors now propagate. `extract_facts`
+rolls back pending writes before recording a failed stage and failed run, then
+stops. Previously committed documents remain intact. If failure bookkeeping also
+fails, the command reports that failure and preserves the original exception.
+Freeze triggers, source admission and observation history are unchanged.
+
+`extract_kpis_from_summaries` now uses `require_db_path` once, with optional
+`--db-path`, and shares the target across roster reads, extraction and scoped LLM
+bookkeeping. `--repo-root` selects source/artifact files only. The command rejects
+an unavailable or prohibited checkout database before extraction. Existing
+dispatcher and comment-processing invocations remain valid with the configured
+database. No collection, schedule, model, prompt or analysis-depth change is made.
+
+The unreferenced `src/parser.py` filename parser and automatic renaming function
+are removed. PDF/text readers, the filing-section filename parser and the
+registered metadata classifier remain. Validation belongs to
+`test_restatement_detector.py`, `test_extract_facts_database_failure.py`,
+`test_summary_kpi_database_authority.py` and the retained intake, IR, filing,
+summary-KPI and dispatch suites.
+
 The existing daily database backup and weekly filesystem cleanup jobs own file
 retention. Backups keep the latest verified completed member per source and
 family. Snapshot, archive and required upload failures preserve the last good
