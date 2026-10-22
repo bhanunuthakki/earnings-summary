@@ -922,6 +922,16 @@
     },
     {
       "disposition": "internal_python_target",
+      "evidence": "The stdio round trip runs sys.executable with the fixed repository execution/serve_research_tools.py entrypoint and a pytest-owned temporary database; no target is caller supplied.",
+      "fingerprint": "116ff52943a5d5039d59ff4cbcb7c9451b8ba9d386e7257e9b7fc0c6b5c23186",
+      "line": 448,
+      "path": "tests/test_ask_tool_server.py",
+      "targets": [
+        "execution/serve_research_tools.py"
+      ]
+    },
+    {
+      "disposition": "internal_python_target",
       "evidence": "The help probe runs sys.executable with the fixed repository execution/sqlite_bootstrap.py entrypoint and execution/audit_kpi_revision_shadow_census.py --help; neither target is caller supplied.",
       "fingerprint": "6406141a7ab18cc08103750f6e4651bc8187ccf9a289a556c15c5f8ed924bd31",
       "line": 87,
@@ -985,7 +995,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "57ccfbc77394b9356910de767c747eb659f7df5740efc4d8ff1720f95ec248ba",
+      "source_sha256": "5882b38518439699646a37213a53f8f9b12c44fb1b7d9ff74643a14f65bbb55e",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",
