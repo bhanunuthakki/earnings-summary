@@ -43,7 +43,12 @@ from provenance.metric_ontology import (
     canonical_json,
     sha256_json,
 )
-from provenance.research_snapshot import ResearchSnapshotRequest, verify_research_snapshot
+from provenance.research_snapshot import (
+    DeferredPdfPageError,
+    ResearchSnapshotRequest,
+    require_included_pdf_pages,
+    verify_research_snapshot,
+)
 from provenance.sec_package_subject_witness import (
     SecPackageSubjectWitnessError,
     verify_sec_package_subject_witness,
@@ -695,6 +700,17 @@ def verify_model_inputs(
         if effective_inputs.get(key) != assumption.value:
             raise InputEvidenceError(f"assumption_value_mismatch:{key}")
     snapshot, member_sha, inventories = verify_source_coverage(conn, request, cutoff)
+    analysis = snapshot.research_universe.analysis_scope
+    pdf_scopes = analysis.request.report_pdf_tables if analysis is not None else ()
+    try:
+        require_included_pdf_pages(
+            conn,
+            pdf_scopes,
+            observation_ids=tuple(ref.observation_id for ref in request.facts.values()),
+            cutoff=cutoff,
+        )
+    except DeferredPdfPageError as exc:
+        raise InputEvidenceError("model_input_deferred_pdf_page_used") from exc
     reader, resolver, ontology = (
         FactReadModel(conn),
         CanonicalFactResolutionEngine(conn),
@@ -873,6 +889,15 @@ def verify_model_inputs(
             not in snapshot.research_universe.document_version_ids
         ):
             raise InputEvidenceError(f"input_outside_source_universe:{requirement.key}")
+        try:
+            require_included_pdf_pages(
+                conn,
+                pdf_scopes,
+                evidence_node_ids=(bundle.evidence.evidence_node_id,),
+                cutoff=cutoff,
+            )
+        except DeferredPdfPageError as exc:
+            raise InputEvidenceError("model_input_deferred_pdf_page_used") from exc
         if requirement.annual and (
             fact.period_start is None
             or not 350 <= (fact.period_end - fact.period_start).days <= 380
