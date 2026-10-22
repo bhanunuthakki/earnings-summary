@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "b41bc90c84c38775eca0b160446eda4b464d61be",
+  "scoped_commit": "780e2bd17288efca10c8955644ef1540fd598e0d",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "a41dca49990b115bb7eb3e5f972c6706c6df2d28f8738fe6e415c93357427f3c",
+  "source_sha256": "b85b78adb029bd32ea66b1fe1cbee02d442c25f935a4721f7e6eeab113e5cf93",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1454,
-    "total_noncomment_loc": 555866,
+    "executable_modules": 1456,
+    "total_noncomment_loc": 556405,
     "modules_over_1000_loc": 107,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -6238,6 +6238,19 @@
         "fully_annotated_public_functions": 2
       },
       {
+        "path": "execution/serve_research_tools.py",
+        "module": "execution.serve_research_tools",
+        "lines": {
+          "physical": 34,
+          "nonblank": 24,
+          "noncomment": 24
+        },
+        "internal_fan_out": 2,
+        "responsibilities": [],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
         "path": "execution/session_context_pack.py",
         "module": "execution.session_context_pack",
         "lines": {
@@ -7539,6 +7552,21 @@
         ],
         "public_functions": 14,
         "fully_annotated_public_functions": 14
+      },
+      {
+        "path": "src/ask/tool_server.py",
+        "module": "ask.tool_server",
+        "lines": {
+          "physical": 544,
+          "nonblank": 483,
+          "noncomment": 475
+        },
+        "internal_fan_out": 8,
+        "responsibilities": [
+          "network"
+        ],
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
       },
       {
         "path": "src/ask/turn_cache.py",
@@ -12874,9 +12902,9 @@
         "path": "src/operations/__init__.py",
         "module": "operations",
         "lines": {
-          "physical": 11,
-          "nonblank": 10,
-          "noncomment": 10
+          "physical": 46,
+          "nonblank": 34,
+          "noncomment": 34
         },
         "internal_fan_out": 3,
         "responsibilities": [],
@@ -12887,9 +12915,9 @@
         "path": "src/operations/artifact_retention.py",
         "module": "operations.artifact_retention",
         "lines": {
-          "physical": 906,
-          "nonblank": 831,
-          "noncomment": 813
+          "physical": 928,
+          "nonblank": 849,
+          "noncomment": 829
         },
         "internal_fan_out": 0,
         "responsibilities": [
