@@ -1559,6 +1559,20 @@ held native XBRL lane remain unresolved prerequisites. This operation is not a
 route around their applicability, corpus or completeness guards.
 
 
+### pypdf 6.21.1 PDF extractor promotion — no operational surface change
+
+New PDF full-text extraction uses pypdf 6.21.1 under a distinct idempotency
+namespace. The exact pypdf 6.19.0 extractor identity stays approved for reading,
+so existing PDF evidence keeps verifying, and retained coverage counts as complete
+for the scheduled `process_document_evidence.py --apply --resume` stage and for
+explicit full-text backfill. The promotion therefore triggers no re-extraction.
+Readers select one complete approved run per document and never combine nodes
+across parser runs. This adds no operator action, route, service, schedule,
+provider, model pin, budget, schema or live-state write. Re-extracting retained
+PDFs with 6.21.1 remains an optional, separately approved operation.
+`tests/test_document_processing_evidence.py`, `tests/test_fulltext_evidence_backfill.py`,
+`tests/test_search_corpus_builder.py` and `tests/test_kpi_semantic_review.py` check it.
+
 ### Function lifecycle collector — no operational surface change
 
 The internal `execution/inventory_function_lifecycle.py` command collects

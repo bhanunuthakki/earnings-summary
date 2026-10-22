@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "780e2bd17288efca10c8955644ef1540fd598e0d",
+  "scoped_commit": "fca01a5fb4b4dc97e5c1ed0c1bf6ac1afdebc7df",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "b85b78adb029bd32ea66b1fe1cbee02d442c25f935a4721f7e6eeab113e5cf93",
+  "source_sha256": "03f654abf31d5fd4b048c8c9b3d1266ae28a1c799f42df0dd7acb4d8551b4f0c",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1456,
-    "total_noncomment_loc": 556405,
+    "total_noncomment_loc": 556541,
     "modules_over_1000_loc": 107,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -165,9 +165,9 @@
         "path": "execution/apply_kpi_semantic_refresh.py",
         "module": "execution.apply_kpi_semantic_refresh",
         "lines": {
-          "physical": 2002,
-          "nonblank": 1900,
-          "noncomment": 1887
+          "physical": 2004,
+          "nonblank": 1902,
+          "noncomment": 1889
         },
         "internal_fan_out": 17,
         "responsibilities": [
@@ -14315,9 +14315,9 @@
         "path": "src/pipeline/kpi_semantic_review.py",
         "module": "pipeline.kpi_semantic_review",
         "lines": {
-          "physical": 1049,
-          "nonblank": 987,
-          "noncomment": 987
+          "physical": 1046,
+          "nonblank": 984,
+          "noncomment": 984
         },
         "internal_fan_out": 8,
         "responsibilities": [
@@ -15982,9 +15982,9 @@
         "path": "src/provenance/document_processing_evidence.py",
         "module": "provenance.document_processing_evidence",
         "lines": {
-          "physical": 2296,
-          "nonblank": 2185,
-          "noncomment": 2179
+          "physical": 2317,
+          "nonblank": 2206,
+          "noncomment": 2200
         },
         "internal_fan_out": 5,
         "responsibilities": [
@@ -16234,9 +16234,9 @@
         "path": "src/provenance/fulltext_backfill.py",
         "module": "provenance.fulltext_backfill",
         "lines": {
-          "physical": 1876,
-          "nonblank": 1692,
-          "noncomment": 1676
+          "physical": 1880,
+          "nonblank": 1696,
+          "noncomment": 1680
         },
         "internal_fan_out": 4,
         "responsibilities": [
@@ -16251,16 +16251,17 @@
         "path": "src/provenance/fulltext_extractor_identity.py",
         "module": "provenance.fulltext_extractor_identity",
         "lines": {
-          "physical": 126,
-          "nonblank": 109,
-          "noncomment": 107
+          "physical": 249,
+          "nonblank": 225,
+          "noncomment": 220
         },
-        "internal_fan_out": 1,
+        "internal_fan_out": 2,
         "responsibilities": [
+          "database",
           "network"
         ],
-        "public_functions": 2,
-        "fully_annotated_public_functions": 2
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
       },
       {
         "path": "src/provenance/gc_recovery.py",
@@ -17069,9 +17070,9 @@
         "path": "src/provenance/source_coverage_refresh.py",
         "module": "provenance.source_coverage_refresh",
         "lines": {
-          "physical": 751,
-          "nonblank": 702,
-          "noncomment": 701
+          "physical": 753,
+          "nonblank": 704,
+          "noncomment": 703
         },
         "internal_fan_out": 6,
         "responsibilities": [
@@ -19798,9 +19799,9 @@
         "path": "src/search/corpus_builder.py",
         "module": "search.corpus_builder",
         "lines": {
-          "physical": 1882,
-          "nonblank": 1726,
-          "noncomment": 1719
+          "physical": 1879,
+          "nonblank": 1723,
+          "noncomment": 1716
         },
         "internal_fan_out": 8,
         "responsibilities": [

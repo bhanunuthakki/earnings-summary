@@ -54,7 +54,12 @@ from pipeline.kpi_semantics import (
     KpiUnitScale,
 )
 from provenance.evidence_ledger import EvidenceLocator
-from provenance.fulltext_extractor_identity import resolve_fulltext_extractor_identity
+from provenance.fulltext_extractor_identity import (
+    PDF_FULLTEXT_EXTRACTOR,
+    RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0,
+    FulltextExtractorIdentity,
+    resolve_fulltext_extractor_identity,
+)
 
 NOW = datetime(2026, 8, 30, 12, tzinfo=UTC)
 SOURCE_SHA = "a" * 64
@@ -440,8 +445,17 @@ def _decisions(
     )
 
 
-def test_builds_deterministic_source_bound_refresh_manifest(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "identity", [PDF_FULLTEXT_EXTRACTOR, RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0]
+)
+def test_builds_deterministic_source_bound_refresh_manifest(
+    tmp_path: Path, identity: FulltextExtractorIdentity
+) -> None:
     conn = _database()
+    conn.execute(
+        "UPDATE evidence_extraction_runs SET extractor_code_version=?,extractor_config_sha256=?",
+        (identity.code_version, identity.config_sha256),
+    )
     review_batch = _review(conn, tmp_path)
     review_export = _export(review_batch)
     decisions = _decisions(review_export)
