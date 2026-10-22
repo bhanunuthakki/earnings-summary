@@ -316,7 +316,10 @@
         "src/research/decision_brief_workflow.py",
         "src/research/decision_brief.py",
         "src/research/memo_claim_support.py",
-        "src/research/memo_model_evidence.py"
+        "src/research/memo_model_evidence.py",
+        "execution/register_owner_proposal.py",
+        "src/research/proposal_approval.py",
+        "alembic/versions/0060_owner_governed_proposals.py"
       ],
       "dependencies": [
         "financial_compute_engine"
@@ -324,6 +327,7 @@
       "test_commands": [
         "pytest tests/test_advisor_memos.py -q",
         "pytest tests/test_qualitative_stress.py -q",
+        "pytest tests/test_owner_proposal_approval.py tests/test_ask_proposal_approval.py -q",
         "pytest tests/test_decision_brief.py tests/test_memo_claim_support.py -q",
         "pytest tests/test_memo_context_v2.py tests/test_memo_model_evidence.py tests/test_memo_model_roundtrip.py tests/test_memo_peer_roundtrip.py -q"
       ],

@@ -28,6 +28,7 @@ from pydantic import (
     TypeAdapter,
     ValidationError,
     field_validator,
+    model_validator,
 )
 
 from compute.holdings_sanitize import sanitize_holdings_scalars
@@ -343,25 +344,15 @@ def _validated_content(
     )
 
 
-def create_ask_proposal(
-    raw_diff: object,
-    *,
-    repo_root: Path,
-    db_path: Path | str,
-    exchange_request_id: str,
-) -> AskProposalRefV1:
-    """Validate and persist one immutable actionable Ask diff."""
-
-    if (
-        not 1 <= len(exchange_request_id) <= 128
-        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", exchange_request_id) is None
-    ):
-        raise ProposalValidationError("Ask exchange request_id is invalid")
+def _prepare_diff(
+    raw_diff: object, *, repo_root: Path
+) -> tuple[AskProposalContentV1, str, str, str]:
+    """One validator and canonical serializer for Ask and owner registration."""
 
     try:
         diff = _AskDiffInput.model_validate(raw_diff)
     except ValidationError as exc:
-        raise ProposalValidationError("Ask proposal diff is invalid") from exc
+        raise ProposalValidationError("proposal diff is invalid") from exc
     match = _TARGET_FILE_RE.fullmatch(diff.target_file)
     if match is None:
         raise ProposalValidationError("proposal target_file is not a canonical holdings file")
@@ -388,21 +379,182 @@ def create_ask_proposal(
     }
     content_json = _canonical_json(content_payload)
     content_sha256 = _sha256_bytes(content_json.encode("utf-8"))
+    return content, content_json, content_sha256, _sha256_bytes(target_bytes)
+
+
+def create_ask_proposal(
+    raw_diff: object,
+    *,
+    repo_root: Path,
+    db_path: Path | str,
+    exchange_request_id: str,
+) -> AskProposalRefV1:
+    """Validate and persist one immutable actionable Ask diff."""
+
+    if (
+        not 1 <= len(exchange_request_id) <= 128
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*", exchange_request_id) is None
+    ):
+        raise ProposalValidationError("Ask exchange request_id is invalid")
+
+    content, content_json, content_sha256, precondition = _prepare_diff(
+        raw_diff, repo_root=repo_root
+    )
     proposal_id = create_proposal(
         task_id=None,
         kind="ask_thesis_edit" if content.kind == "thesis" else "ask_kpi_edit",
-        ticker=ticker,
+        ticker=content.ticker,
         title=content.summary,
         body_md=content.summary,
         evidence_json="[]",
         provenance="derived",
         canonical_content_json=content_json,
         canonical_content_sha256=content_sha256,
-        target_precondition_sha256=_sha256_bytes(target_bytes),
+        target_precondition_sha256=precondition,
         ask_exchange_request_id=exchange_request_id,
         db_path=db_path,
     )
     return _ref(proposal_id, 0, "pending")
+
+
+class OwnerProposalEvidenceV1(BaseModel):
+    """Retained evidence locator and exact bytes committed by the owner."""
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    path: str = Field(min_length=1)
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class OwnerProposalAuthorizationV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    authorization_id: str = Field(
+        min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    )
+    ticker: str = Field(pattern=r"^[A-Z0-9][A-Z0-9.-]{0,23}$")
+    user_id: str = Field(min_length=1, max_length=128)
+    statement: str = Field(min_length=1, max_length=2000)
+    source_ref: str = Field(max_length=512)
+    evidence: list[OwnerProposalEvidenceV1] = Field(min_length=1)
+    evidence_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    canonical_content_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _evidence_digest(cls, value: object) -> object:
+        if isinstance(value, dict):
+            payload = dict(cast("dict[str, object]", value))
+            if "evidence" in payload:
+                payload.setdefault("evidence_sha256", _sha256_json(payload["evidence"]))
+            return payload
+        return value
+
+    @model_validator(mode="after")
+    def _verify_evidence_digest(self) -> OwnerProposalAuthorizationV1:
+        if self.evidence_sha256 != _sha256_json(
+            [item.model_dump(mode="json") for item in self.evidence]
+        ):
+            raise ValueError("owner authorization evidence hash mismatch")
+        return self
+
+
+class OwnerProposalPreviewV1(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["owner_thesis_edit", "owner_kpi_edit"]
+    content: AskProposalContentV1
+    canonical_content_json: str
+    canonical_content_sha256: str
+    target_precondition_sha256: str
+    authorization: OwnerProposalAuthorizationV1
+
+
+def preview_owner_proposal(
+    raw_diff: object, *, repo_root: Path, authorization: object
+) -> OwnerProposalPreviewV1:
+    """Validate without opening a database; fill omitted authorization hashes."""
+
+    content, content_json, digest, precondition = _prepare_diff(raw_diff, repo_root=repo_root)
+    if isinstance(authorization, dict):
+        payload = dict(cast("dict[str, object]", authorization))
+        payload.setdefault("canonical_content_sha256", digest)
+        authorization = payload
+    try:
+        auth = OwnerProposalAuthorizationV1.model_validate(authorization)
+    except ValidationError as exc:
+        raise ProposalValidationError("owner authorization is invalid") from exc
+    if auth.canonical_content_sha256 != digest:
+        raise ProposalValidationError("owner authorization canonical content hash mismatch")
+    if auth.ticker != content.ticker:
+        raise ProposalValidationError("owner authorization ticker does not match the proposal")
+    return OwnerProposalPreviewV1(
+        kind="owner_thesis_edit" if content.kind == "thesis" else "owner_kpi_edit",
+        content=content,
+        canonical_content_json=content_json,
+        canonical_content_sha256=digest,
+        target_precondition_sha256=precondition,
+        authorization=auth,
+    )
+
+
+def create_owner_proposal(
+    raw_diff: object,
+    *,
+    repo_root: Path,
+    db_path: Path | str,
+    authorization: OwnerProposalAuthorizationV1,
+) -> AskProposalRefV1:
+    """Atomically register hash-bound authorization and a separately decidable diff."""
+
+    # Revalidate even model instances; frozen models may still contain mutable lists.
+    preview = preview_owner_proposal(
+        raw_diff, repo_root=repo_root, authorization=authorization.model_dump(mode="json")
+    )
+    auth = preview.authorization
+    evidence_json = _canonical_json([item.model_dump(mode="json") for item in auth.evidence])
+    connection = open_conn(db_path)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            "INSERT INTO owner_proposal_authorizations "
+            "(authorization_id,ticker,user_id,statement,source_ref,evidence_json,"
+            "evidence_sha256,canonical_content_sha256,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (
+                auth.authorization_id,
+                auth.ticker,
+                auth.user_id,
+                auth.statement,
+                auth.source_ref,
+                evidence_json,
+                auth.evidence_sha256,
+                auth.canonical_content_sha256,
+                now_iso(),
+            ),
+        )
+        proposal_id = create_proposal(
+            task_id=None,
+            kind=preview.kind,
+            ticker=auth.ticker,
+            title=preview.content.summary,
+            body_md=preview.content.summary,
+            evidence_json=evidence_json,
+            provenance="derived",
+            canonical_content_json=preview.canonical_content_json,
+            canonical_content_sha256=preview.canonical_content_sha256,
+            target_precondition_sha256=preview.target_precondition_sha256,
+            owner_authorization_id=auth.authorization_id,
+            actionable_at=now_iso(),
+            connection=connection,
+            db_path=db_path,
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+    return _ref(proposal_id, 0, "pending", actionable=True)
 
 
 def _content(prop: ResearchProposal) -> AskProposalContentV1:
@@ -547,6 +699,9 @@ def _row_to_proposal(row: sqlite3.Row) -> ResearchProposal:
         ),
         ask_exchange_request_id=(
             None if row["ask_exchange_request_id"] is None else str(row["ask_exchange_request_id"])
+        ),
+        owner_authorization_id=(
+            None if row["owner_authorization_id"] is None else str(row["owner_authorization_id"])
         ),
         actionable_at=None if row["actionable_at"] is None else str(row["actionable_at"]),
         invalidated_at=(None if row["invalidated_at"] is None else str(row["invalidated_at"])),
@@ -767,23 +922,49 @@ def decide_ask_proposal(
             if prop.actionable_at is None or prop.invalidated_at is not None:
                 raise ProposalConflictError(
                     "proposal_inactive",
-                    "proposal is not actionable because its Ask exchange did not complete",
+                    "proposal is not actionable",
                     proposal_id=prop.id,
                     current_proposal_revision=detail.proposal_revision,
                     current_status=detail.status,
                 )
-            exchange_row = connection.execute(
-                "SELECT status FROM ask_exchanges WHERE request_id=?",
-                (prop.ask_exchange_request_id,),
-            ).fetchone()
-            if exchange_row is None or str(exchange_row["status"]) != "completed":
-                raise ProposalConflictError(
-                    "proposal_inactive",
-                    "proposal is not actionable because its Ask exchange is unavailable",
-                    proposal_id=prop.id,
-                    current_proposal_revision=detail.proposal_revision,
-                    current_status=detail.status,
-                )
+            if prop.kind in {"owner_thesis_edit", "owner_kpi_edit"}:
+                authorization_row = connection.execute(
+                    "SELECT * FROM owner_proposal_authorizations WHERE authorization_id=? "
+                    "AND ticker=? AND canonical_content_sha256=?",
+                    (prop.owner_authorization_id, prop.ticker, prop.canonical_content_sha256),
+                ).fetchone()
+                if authorization_row is None:
+                    raise ProposalConflictError(
+                        "proposal_inactive",
+                        "owner proposal authorization is unavailable or does not match",
+                        proposal_id=prop.id,
+                        current_proposal_revision=detail.proposal_revision,
+                        current_status=detail.status,
+                    )
+                try:
+                    retained_authorization = dict(authorization_row)
+                    retained_authorization["evidence"] = json.loads(
+                        str(retained_authorization.pop("evidence_json"))
+                    )
+                    retained_authorization.pop("created_at")
+                    OwnerProposalAuthorizationV1.model_validate(retained_authorization)
+                except (ValueError, KeyError) as exc:
+                    raise StoredProposalError(
+                        "stored owner proposal authorization is invalid"
+                    ) from exc
+            else:
+                exchange_row = connection.execute(
+                    "SELECT status FROM ask_exchanges WHERE request_id=?",
+                    (prop.ask_exchange_request_id,),
+                ).fetchone()
+                if exchange_row is None or str(exchange_row["status"]) != "completed":
+                    raise ProposalConflictError(
+                        "proposal_inactive",
+                        "proposal is not actionable because its Ask exchange is unavailable",
+                        proposal_id=prop.id,
+                        current_proposal_revision=detail.proposal_revision,
+                        current_status=detail.status,
+                    )
             next_revision = detail.proposal_revision + 1
             target_postcondition_sha256: str | None = None
             applied = False

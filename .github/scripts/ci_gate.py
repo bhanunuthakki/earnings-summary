@@ -96,6 +96,7 @@ TERMINAL_SUCCESS_RESULTS = {"success", "skipped"}
 # The application harness on a hosted Windows VM: every file must report cases,
 # and none may be skipped, fail or error.
 WINDOWS_APP_TEST_FILES = (
+    "tests/test_owner_proposal_approval.py",
     "tests/test_storage_reservation.py",
     "tests/test_job_runtime.py",
     "tests/test_run_coach_pings.py",
@@ -109,6 +110,24 @@ WINDOWS_APP_TEST_FILES = (
 WINDOWS_APP_REQUIRED_CASES = frozenset(
     f"{module}::{name}"
     for module, names in {
+        "tests.test_owner_proposal_approval": (
+            "test_register_and_approve_through_existing_routes[False]",
+            "test_register_and_approve_through_existing_routes[True]",
+            "test_sql_replace_cannot_erase_owner_authority[owner_proposal_authorizations]",
+            "test_sql_replace_cannot_erase_owner_authority[research_proposals]",
+            "test_authorization_and_link_are_immutable",
+            "test_decision_revalidates_retained_authorization_evidence_digest",
+            *(
+                f"test_id_updates_cannot_move_or_replace_retained_owner_proposals[{operation}-{column}]"
+                for operation in ("move_owner", "replace_owner", "replace_legacy")
+                for column in ("id", "rowid", "_rowid_", "oid")
+            ),
+            *(
+                f"test_authorization_replacement_cannot_target_hidden_row_identity[{column}]"
+                for column in ("rowid", "_rowid_", "oid")
+            ),
+            "test_hash_mismatch_and_atomic_registration",
+        ),
         "tests.test_governor": (
             *(
                 f"test_unlinked_owner_callback_during_send_preserves_terminal_state[{sent}-{action}]"

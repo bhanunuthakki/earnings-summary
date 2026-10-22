@@ -1817,3 +1817,45 @@ service, database authority, publication permission, or UI geometry changes.
 Evidence: `tests/test_governor.py`, `tests/test_run_coach_pings.py`, and
 `tests/test_cockpit_fundamentals.py`; hosted native Windows application coverage
 is distinct from deployment proof on the managed production runtime.
+
+
+### Owner-reviewed governed proposal registration — 2026-10-21
+
+Disposition: **deliberate exclusion from the Operations workspace**. The manual
+CLI is the primary registration surface:
+`execution/register_owner_proposal.py --db <explicit-db> --repo-root <state-root>
+--diff <diff.json> --authorization <authorization.json> [--apply]` validates one
+closed thesis or KPI-tier diff. The default dry run opens no database and prints
+the canonical content, content hash, exact target-file precondition and normalized
+authorization. `--apply` registers a pending, actionable `owner_thesis_edit` or
+`owner_kpi_edit`; it does not approve or replace the holdings file. Registration
+atomically retains the immutable owner authorization, evidence manifest and its
+hash alongside the proposal. Authorization JSON contains `authorization_id`,
+`ticker`, `user_id`, `statement`, `source_ref`, and nonempty `evidence` objects
+with `path` and `sha256`. The CLI computes omitted `canonical_content_sha256`
+and `evidence_sha256` values; supplied mismatches refuse registration.
+
+The existing `/api/research/proposals/<id>` detail and `/decision` route remain
+the decision surface. Owner proposals require matching hash-bound authorization;
+Ask proposals still require a completed exchange. Both use the existing revision
+CAS, decision receipt, exact target-file drift guard, canonical applier, mirror
+refresh and thesis ledger behavior. Migration 0060 refuses downgrade when owner
+proposals or authorization records remain, preserving retained approval evidence.
+The typed owners are `OwnerProposalAuthorizationV1`, `OwnerProposalPreviewV1`
+and `ResearchProposal`; the Operations registry, snapshot and visible Jobs,
+Sources, Data and Actions contracts remain unchanged. No scheduler, service,
+provider call, automatic decision or Operations-page control is added. Tests in
+`tests/test_owner_proposal_approval.py` cover route
+approval, whole-tier registration, receipts/replay, mirrors/ledger, drift,
+authorization and link immutability, transactional rollback, read-only dry run,
+Ask insert refusal and migration round trips.
+
+
+Owner-governed authorization and proposal retention also reject SQL replacement,
+and owner-governed proposals cannot be deleted, re-keyed, or overwritten by an
+ID update from another row, including SQLite's rowid aliases. The new
+authorization table has no hidden row identity that replacement can target.
+Decision admission reconstructs
+the retained authorization and verifies its evidence-manifest digest before any
+file replacement or decision receipt. These checks preserve existing Ask behavior.
+Evidence: `tests/test_owner_proposal_approval.py`.

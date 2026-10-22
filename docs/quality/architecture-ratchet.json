@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "2e39777b703c90d4e640038e6b76c972e81ec33d",
+  "scoped_commit": "3f848c2e1bbc8bb905aa8ecd86c02fee29d43c01",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "20f8a40bce97efaa78c75ce98ae92f525913619afe0ac6ebf3757a7b420e1f6e",
+  "source_sha256": "b25260b786bbb1c8beba3b9aede697a894c263e3283d136b667f5220357fe7f4",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1457,
-    "total_noncomment_loc": 557477,
+    "executable_modules": 1458,
+    "total_noncomment_loc": 557725,
     "modules_over_1000_loc": 107,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -5328,6 +5328,22 @@
         ],
         "public_functions": 4,
         "fully_annotated_public_functions": 4
+      },
+      {
+        "path": "execution/register_owner_proposal.py",
+        "module": "execution.register_owner_proposal",
+        "lines": {
+          "physical": 64,
+          "nonblank": 56,
+          "noncomment": 56
+        },
+        "internal_fan_out": 2,
+        "responsibilities": [
+          "database",
+          "filesystem"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
       },
       {
         "path": "execution/rehearse_data_backbone.py",
@@ -19087,9 +19103,9 @@
         "path": "src/research/apply.py",
         "module": "research.apply",
         "lines": {
-          "physical": 302,
-          "nonblank": 254,
-          "noncomment": 227
+          "physical": 310,
+          "nonblank": 262,
+          "noncomment": 235
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -19118,9 +19134,9 @@
         "path": "src/research/ask_proposal_artifact.py",
         "module": "research.ask_proposal_artifact",
         "lines": {
-          "physical": 174,
-          "nonblank": 162,
-          "noncomment": 162
+          "physical": 177,
+          "nonblank": 164,
+          "noncomment": 164
         },
         "internal_fan_out": 5,
         "responsibilities": [
@@ -19398,9 +19414,9 @@
         "path": "src/research/proposal_approval.py",
         "module": "research.proposal_approval",
         "lines": {
-          "physical": 896,
-          "nonblank": 787,
-          "noncomment": 787
+          "physical": 1077,
+          "nonblank": 947,
+          "noncomment": 946
         },
         "internal_fan_out": 9,
         "responsibilities": [
@@ -19408,16 +19424,16 @@
           "filesystem",
           "network"
         ],
-        "public_functions": 7,
-        "fully_annotated_public_functions": 7
+        "public_functions": 9,
+        "fully_annotated_public_functions": 9
       },
       {
         "path": "src/research/proposals.py",
         "module": "research.proposals",
         "lines": {
-          "physical": 844,
-          "nonblank": 767,
-          "noncomment": 731
+          "physical": 867,
+          "nonblank": 790,
+          "noncomment": 754
         },
         "internal_fan_out": 5,
         "responsibilities": [

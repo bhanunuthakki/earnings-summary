@@ -692,6 +692,7 @@ jobs:
             tests/test_job_runtime.py `
             tests/test_run_coach_pings.py `
             tests/test_governor.py `
+            tests/test_owner_proposal_approval.py `
             tests/test_cockpit_fundamentals.py `
             tests/test_sqlite_bootstrap.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
