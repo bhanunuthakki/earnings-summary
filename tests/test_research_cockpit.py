@@ -1728,3 +1728,44 @@ def test_tier1_delta_retains_both_exact_selected_input_rows(conn: sqlite3.Connec
         assert reference.fact_id == row["id"]
         assert reference.source_doc_id == row["source_doc_id"]
         assert reference.original_value == str(row["value"])
+
+
+@pytest.mark.parametrize("cached", [False, True])
+def test_portfolio_projection_omits_unused_fundamentals_with_payload_parity(
+    conn: sqlite3.Connection,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cached: bool,
+) -> None:
+    import pipeline.research_cockpit as cockpit
+    from integrations.portfolio_allocation import unavailable_portfolio_allocation
+    from integrations.portfolio_tracker_client import LivePortfolio
+    from pipeline.work_os_portfolio import build_work_os_portfolio
+
+    values = {"NU": (38.0, 22.0), "V": (12.0, 55.0)}
+
+    def cache_values(*_args: object) -> dict[str, tuple[float, float]]:
+        return values if cached else {}
+
+    def compute_values(*_args: object) -> dict[str, tuple[float, float]]:
+        return values
+
+    monkeypatch.setattr(cockpit, "read_materialized_fundamentals", cache_values)
+    monkeypatch.setattr(cockpit, "_eval_fundamentals", compute_values)
+    full = build_cockpit_rows(conn, repo_root, now=NOW)
+    assert _by_ticker(full["portfolio"])["NU"].rev_yoy_pct == 38.0
+
+    def forbidden(*_args: object) -> None:
+        pytest.fail("portfolio hydration must not read or compute unused fundamentals")
+
+    monkeypatch.setattr(cockpit, "read_materialized_fundamentals", forbidden)
+    monkeypatch.setattr(cockpit, "_eval_fundamentals", forbidden)
+    reduced = build_cockpit_rows(conn, repo_root, now=NOW, include_fundamentals=False)
+    assert {role: {row.base.ticker for row in rows} for role, rows in reduced.items()} == {
+        role: {row.base.ticker for row in rows} for role, rows in full.items()
+    }
+    live = LivePortfolio(available=False, api_url="http://tracker.test")
+    allocation = unavailable_portfolio_allocation("portfolio_allocation_unavailable")
+    assert build_work_os_portfolio(reduced["portfolio"], live, allocation, generated_at=NOW) == (
+        build_work_os_portfolio(full["portfolio"], live, allocation, generated_at=NOW)
+    )

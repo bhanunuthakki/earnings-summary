@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import concurrent.futures
 import sqlite3
+import time
 from datetime import UTC, datetime
 from typing import cast
 
 from comments_server_context import ServerContext
 from comments_server_evaluation_projection import resolve_work_os_evaluation_item
-from flask import Flask, request
+from flask import Flask, g, request
 
 import ticker_validation
 from integrations.portfolio_allocation import fetch_portfolio_allocation
@@ -30,16 +31,15 @@ from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 def register_work_os_routes(app: Flask, ctx: ServerContext) -> None:
     client_error = ctx.client_error
-    cockpit_rows_snapshot = ctx.cockpit_rows_snapshot
     db_path = ctx.db_path
-    get_read_db = ctx.get_read_db
     repo_root = ctx.repo_root
-    resolved_db_path = ctx.resolved_db_path
 
     @app.route("/api/work-os/portfolio", methods=["GET"])
     def work_os_portfolio_api():
         """Portfolio-only research state for Cockpit and Company Desk."""
-        conn = get_read_db()
+        conn = ctx.get_read_db()
+        # Preserve the build-start freshness bound even without a full memo.
+        g.cockpit_memo_expires_at = time.monotonic() + ctx.cockpit_memo.ttl_seconds
         # The two tracker fetch groups — the legacy/v1 live-portfolio group and
         # the v1 allocation group — are independent snapshots of one tracker
         # process, so they overlap on a request-scoped 2-worker pool instead of
@@ -53,7 +53,10 @@ def register_work_os_routes(app: Flask, ctx: ServerContext) -> None:
         ) as tracker_pool:
             live_future = tracker_pool.submit(fetch_live_portfolio)
             allocation_future = tracker_pool.submit(fetch_portfolio_allocation)
-            rows_by_role = cockpit_rows_snapshot(conn)
+            # Growth/margin/attractiveness are not part of this payload. Avoid
+            # their expensive canonical fallback and the full memo's in-flight
+            # wait. Keep both rosters for the earnings-readout projection.
+            rows_by_role = build_cockpit_rows(conn, repo_root, include_fundamentals=False)
             rows = rows_by_role.get("portfolio", [])
             evaluation_rows = rows_by_role.get("evaluation", [])
             coverage_roles = {
@@ -97,8 +100,8 @@ def register_work_os_routes(app: Flask, ctx: ServerContext) -> None:
     @app.route("/api/work-os/evaluation", methods=["GET"])
     def work_os_evaluation_api():
         """Complete company and ETF evaluation coverage for the Research Engine."""
-        conn = get_read_db()
-        rows = cockpit_rows_snapshot(conn).get("evaluation", [])
+        conn = ctx.get_read_db()
+        rows = ctx.cockpit_rows_snapshot(conn).get("evaluation", [])
         payload = build_work_os_evaluation(rows, repo_root, conn)
         response = app.json.response(payload.model_dump(mode="json"))
         response.headers["Cache-Control"] = "no-store"
@@ -136,7 +139,7 @@ def register_work_os_routes(app: Flask, ctx: ServerContext) -> None:
         review_body = cast("dict[str, object]", body)
         fingerprint = str(review_body.get("suggestion_fingerprint") or "").strip()
 
-        read_conn = get_read_db()
+        read_conn = ctx.get_read_db()
         item = resolve_work_os_evaluation_item(
             read_conn,
             repo_root,
@@ -179,7 +182,7 @@ def register_work_os_routes(app: Flask, ctx: ServerContext) -> None:
             return client_error("conflict_error: only an owner-reviewed label can be retired", 409)
 
         writer = connect_sqlite(
-            resolved_db_path,
+            ctx.resolved_db_path,
             role=SQLiteConnectionRole.WRITER,
             schema_preflight=True,
         )
@@ -220,7 +223,7 @@ def register_work_os_routes(app: Flask, ctx: ServerContext) -> None:
     @app.route("/api/work-os/open-loops", methods=["GET"])
     def work_os_open_loops_api():
         """Generation 3 Today Console aggregated open-loops priority queue."""
-        conn = get_read_db()
+        conn = ctx.get_read_db()
         open_loops: list[dict[str, object]] = []
 
         try:
