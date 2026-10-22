@@ -500,6 +500,7 @@ def build_cockpit_rows(
     repo_root: Path,
     *,
     now: datetime | None = None,
+    include_fundamentals: bool = True,
 ) -> dict[str, list[CockpitRow]]:
     """Assemble ``{"portfolio": [...], "evaluation": [...]}``. Portfolio is
     attention-sorted (breach first, then pending alerts, then new docs, then
@@ -535,8 +536,10 @@ def build_cockpit_rows(
     # Fast path: precomputed cache written by the morning pipeline (stage 0d).
     # Falls back to the live DB scan when the cache is absent (fresh install,
     # test env, dev run without the morning pipeline).
-    fundamentals = read_materialized_fundamentals(repo_root, conn)
-    if not fundamentals:
+    # Only portfolio hydration omits these unused values. Reduced rows must
+    # not enter the full memo or serve evaluation/overview consumers.
+    fundamentals = read_materialized_fundamentals(repo_root, conn) if include_fundamentals else {}
+    if include_fundamentals and not fundamentals:
         fundamentals = _eval_fundamentals(conn)
     # Portfolio fit per evaluation name (PR3): a pure disk read of the cache the
     # morning pipeline materialised (stage 0f). Absent (fresh install / no

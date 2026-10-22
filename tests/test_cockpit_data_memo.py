@@ -1,8 +1,8 @@
 """M2 F5: the shared cockpit-data memo — one ``build_cockpit_rows`` per cold
 paint cycle instead of one per route.
 
-The three paint-cycle routes (``/api/panel/overview``,
-``/api/work-os/portfolio``, ``/api/work-os/evaluation``) share one
+The full-data routes (``/api/panel/overview`` and
+``/api/work-os/evaluation``) share one
 data-level memo keyed on DATA identity (repo root + resolved DB path + schema
 revision), never the request path. These tests pin the contract the validation
 suite asserts (VAL-SERVE-018..023):
@@ -84,9 +84,12 @@ def build_calls(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     calls: list[int] = []
     real_build = build_cockpit_rows
 
-    def counting_build(conn: sqlite3.Connection, repo_root: Path) -> dict[str, list[Any]]:
-        calls.append(1)
-        return real_build(conn, repo_root)
+    def counting_build(
+        conn: sqlite3.Connection, repo_root: Path, *, include_fundamentals: bool = True
+    ) -> dict[str, list[Any]]:
+        if include_fundamentals:
+            calls.append(1)
+        return real_build(conn, repo_root, include_fundamentals=include_fundamentals)
 
     patch_server_seam(monkeypatch, "build_cockpit_rows", counting_build)
     return calls
@@ -237,8 +240,11 @@ def test_work_os_mapped_mutation_drops_the_memo_too(
     assert resp.status_code == 200
     assert _memo_of(client.application).entry_count() == 0
 
-    # The evicted work-os surface re-runs its route → memo miss → rebuild.
-    rebuilt = client.get("/api/work-os/portfolio")
+    # The portfolio projection stays separate; evaluation rebuilds full data.
+    portfolio = client.get("/api/work-os/portfolio")
+    assert portfolio.status_code == 200
+    assert len(build_calls) == 1
+    rebuilt = client.get("/api/work-os/evaluation")
     assert rebuilt.status_code == 200
     assert rebuilt.headers["X-Panel-Cache"] == "miss"
     assert len(build_calls) == 2
@@ -566,5 +572,32 @@ def test_slow_cold_build_cannot_receive_a_new_response_cache_lifetime(
     patch_server_seam(monkeypatch, "build_cockpit_rows", slow_build)
     for _ in range(2):
         assert client.get("/api/panel/overview").status_code == 200
+        assert _memo_of(client.application).entry_count() == 0
+    assert len(calls) == 2
+
+
+def test_slow_tracker_cannot_extend_portfolio_research_freshness(
+    client: FlaskClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import comments_server_work_os_routes
+
+    from integrations.portfolio_tracker_client import LivePortfolio
+
+    clock = [10.0]
+    timer = SimpleNamespace(monotonic=lambda: clock[0])
+    for module in (panel_cache_module, comments_server_work_os_routes):
+        monkeypatch.setattr(module, "time", timer, raising=False)
+    calls: list[int] = []
+
+    def slow_tracker() -> LivePortfolio:
+        calls.append(1)
+        clock[0] += 31.0
+        return LivePortfolio(available=False, api_url="http://tracker.test")
+
+    patch_server_seam(monkeypatch, "fetch_live_portfolio", slow_tracker)
+    for _ in range(2):
+        response = client.get("/api/work-os/portfolio")
+        assert response.status_code == 200
+        assert response.headers["X-Panel-Cache"] == "miss"
         assert _memo_of(client.application).entry_count() == 0
     assert len(calls) == 2
