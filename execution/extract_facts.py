@@ -21,25 +21,27 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:  # direct script invocation
+    from _lib import PROJECT_ROOT
+except ImportError:  # pragma: no cover - package import fallback
+    from execution._lib import PROJECT_ROOT
 
-from compute.as_reported import extract_as_reported_facts  # noqa: E402
-from compute.balance_sheet import extract_balance_sheet_facts  # noqa: E402
-from compute.cashflow import extract_cashflow_facts  # noqa: E402
-from compute.income_statement import extract_income_statement_facts  # noqa: E402
-from compute.segment_oi_10k import extract_segment_oi_facts  # noqa: E402
-from compute.segments import extract_segment_facts  # noqa: E402
-from compute.segments_nu import extract_nu_segment_facts  # noqa: E402
-from models.companies import ListType  # noqa: E402
-from models.runs import StageName, StageStatus  # noqa: E402
-from pipeline.invocation_fingerprint import file_fingerprint  # noqa: E402
-from pipeline.queries import (  # noqa: E402
+from compute.as_reported import extract_as_reported_facts
+from compute.balance_sheet import extract_balance_sheet_facts
+from compute.cashflow import extract_cashflow_facts
+from compute.income_statement import extract_income_statement_facts
+from compute.segment_oi_10k import extract_segment_oi_facts
+from compute.segments import extract_segment_facts
+from compute.segments_nu import extract_nu_segment_facts
+from models.companies import ListType
+from models.runs import StageName, StageStatus
+from pipeline.invocation_fingerprint import file_fingerprint
+from pipeline.queries import (
     ANALYZED_LIST_TYPES,
     open_db,
     tracked_companies_for_user,
 )
-from pipeline.run_accounting import (  # noqa: E402
+from pipeline.run_accounting import (
     JsonValue,
     PipelineRunSuppressedError,
     end_run,
@@ -156,6 +158,23 @@ def _run_extraction(
         extractor = _resolve_extractor(ticker, doc_type)
         try:
             n = extractor(conn, doc_id, project_root)
+        except sqlite3.Error as exc:
+            # Receipt writers commit. Discard pending extraction writes first.
+            try:
+                conn.rollback()
+                record_stage(
+                    conn,
+                    run_id,
+                    ticker,
+                    StageName.COMPUTE,
+                    StageStatus.FAILED,
+                    error_msg=f"{doc_type}#{doc_id}: {type(exc).__name__}: {exc}"[:500],
+                )
+            except sqlite3.Error as bookkeeping_error:
+                sys.stderr.write(
+                    f"Stage failure bookkeeping failed: {type(bookkeeping_error).__name__}\n"
+                )
+            raise
         except (ValueError, OSError, KeyError, json.JSONDecodeError) as e:
             record_stage(
                 conn,
@@ -222,7 +241,22 @@ def main() -> int:
         except PipelineRunSuppressedError as exc:
             print(json.dumps(suppression_payload(exc)))
             return 0
-        total, ok, failed = _run_extraction(conn, run_id, docs, PROJECT_ROOT)
+        try:
+            total, ok, failed = _run_extraction(conn, run_id, docs, PROJECT_ROOT)
+        except sqlite3.Error as exc:
+            try:
+                conn.rollback()
+                end_run(
+                    conn,
+                    run_id,
+                    StageStatus.FAILED,
+                    error_summary=f"{type(exc).__name__}: {exc}"[:500],
+                )
+            except sqlite3.Error as bookkeeping_error:
+                sys.stderr.write(
+                    f"Run failure bookkeeping failed: {type(bookkeeping_error).__name__}\n"
+                )
+            raise
 
         terminal = StageStatus.OK if failed == 0 else StageStatus.FAILED
         end_run(

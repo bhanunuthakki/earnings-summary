@@ -279,7 +279,8 @@ def _correct_same_document_fact(
     Returns the corrected row id when a heal was applied; None when there is no
     incumbent for the key, the incumbent already matches (identical replay — a
     true no-op), the safety rail blocked the write, or the schema predates the
-    `extracted_by` audit column (synthetic pre-0054 fixtures)."""
+    `extracted_by` audit column (synthetic pre-0054 fixtures). Database and
+    invariant failures propagate to the transaction owner; they are not replays."""
     if schema_profile is not None:
         has_extracted_by = schema_profile.has_extracted_by
     else:
@@ -302,15 +303,16 @@ def _correct_same_document_fact(
             (ticker.upper(), period_end, fiscal_period_type, line_item, source_doc_id),
         ).fetchone()
     except sqlite3.Error as exc:
-        log.warning(
+        log.error(
             {
                 "event": "restatement_same_doc_lookup_failed",
+                "outcome": "raised",
                 "ticker": ticker,
                 "line_item": line_item,
                 "error": str(exc),
             }
         )
-        return None
+        raise
     if row is None:
         return None
     inc_id = int(row["id"] if hasattr(row, "keys") else row[0])
@@ -340,15 +342,16 @@ def _correct_same_document_fact(
             (new_value_str, currency, unit, inc_id),
         )
     except sqlite3.Error as exc:
-        log.warning(
+        log.error(
             {
                 "event": "restatement_same_doc_correction_failed",
+                "outcome": "raised",
                 "ticker": ticker,
                 "line_item": line_item,
                 "error": str(exc),
             }
         )
-        return None
+        raise
 
     log.info(
         {

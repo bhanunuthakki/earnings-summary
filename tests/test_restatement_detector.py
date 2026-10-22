@@ -293,6 +293,82 @@ def test_financial_fact_sqlite_invariant_failure_aborts_batch(
         conn.close()
 
 
+@pytest.mark.parametrize("failure", ["lookup", "update"])
+def test_same_document_database_failure_aborts_batch(fixture_db: Path, failure: str) -> None:
+    """A rejected correction is a failed batch, never a successful replay."""
+    conn = sqlite3.connect(str(fixture_db))
+    conn.row_factory = sqlite3.Row
+    attempted: list[str] = []
+    try:
+        doc = _insert_document(
+            conn,
+            ticker="MELI",
+            source_type="sec_xbrl",
+            doc_type="sec_10q",
+            period_end="2026-03-31 00:00:00",
+            fetched_at="2026-05-01 12:00:00",
+            sha256="a" * 64,
+        )
+        fact_id = _seed_ff_row(
+            conn,
+            ticker="MELI",
+            period_end="2026-03-31 00:00:00",
+            fiscal_period_type="Q1",
+            line_item="revenue",
+            value="6065000000",
+            source_doc_id=doc,
+            extracted_by="sec_xbrl",
+        )
+        conn.commit()
+        if failure == "update":
+            conn.execute(
+                "CREATE TRIGGER reject_correction BEFORE UPDATE ON financial_facts "
+                "BEGIN SELECT RAISE(ABORT, 'accepted fact is immutable'); END"
+            )
+        else:
+
+            def deny_correction_lookup(
+                action: int,
+                table: str | None,
+                column: str | None,
+                database: str | None,
+                trigger: str | None,
+            ) -> int:
+                if (
+                    action == sqlite3.SQLITE_READ
+                    and table == "financial_facts"
+                    and column == "currency"
+                ):
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            conn.set_authorizer(deny_correction_lookup)
+
+        with pytest.raises(sqlite3.DatabaseError):
+            for line_item in ("revenue", "gross_profit"):
+                attempted.append(line_item)
+                insert_with_restatement_detection(
+                    conn,
+                    ticker="MELI",
+                    period_end=datetime.fromisoformat("2026-03-31"),
+                    fiscal_period_type="Q1",
+                    line_item=line_item,
+                    value=Decimal("8845000000"),
+                    currency="USD",
+                    unit="actual",
+                    source_doc_id=doc,
+                    extracted_by="sec_xbrl",
+                )
+        conn.set_authorizer(None)
+        assert attempted == ["revenue"]
+        rows = conn.execute("SELECT id, value FROM financial_facts").fetchall()
+        assert [(row["id"], Decimal(str(row["value"]))) for row in rows] == [
+            (fact_id, Decimal("6065000000"))
+        ]
+    finally:
+        conn.close()
+
+
 def test_restatement_chain_two_rows_with_supersedes_link(fixture_db: Path) -> None:
     """The brief's example: AMZN Q1 2023 revenue from FMP first (Q-filing),
     then from FMP again (FY-filing restated value). Both rows survive;
