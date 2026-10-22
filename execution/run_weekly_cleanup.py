@@ -40,7 +40,7 @@ from src.operations.temp_coverage import TempCoverage, inventory_temp_coverage
 from src.operations.temp_run_retention import discover_temp_runs
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-POLICY_VERSION = "weekly-cleanup-v5"
+POLICY_VERSION = "weekly-cleanup-v6"
 DEFAULT_DISPOSABLE_RETENTION_DAYS = 30
 DEFAULT_CACHE_RETENTION_DAYS = 7
 Collector: TypeAlias = Callable[[Path, datetime, "_Counts"], list["Candidate"]]
@@ -66,7 +66,7 @@ class CleanupSummary(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    policy_version: Literal["weekly-cleanup-v5"]
+    policy_version: Literal["weekly-cleanup-v6"]
     idempotency_key: str = Field(min_length=1)
     mode: Literal["dry_run", "apply"]
     files_scanned: int = Field(ge=0)
@@ -526,6 +526,75 @@ def _is_recovery_material(path: Path, root: Path | None = None) -> bool:
     )
 
 
+def _health_json_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    payload = dict(pairs)
+    if len(payload) != len(pairs):
+        raise ValueError("duplicate health receipt fields")
+    return payload
+
+
+def _completed_job_health(path: Path) -> tuple[dict[str, object], datetime] | None:
+    """Recognize only successful completed receipts from the owned producer."""
+    if _is_reparse_or_symlink(path):
+        return None
+    try:
+        raw: object = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_health_json_fields
+        )
+        if not isinstance(raw, dict):
+            return None
+        payload = cast("dict[str, object]", raw)
+        write_sets = payload.get("write_sets")
+        if not isinstance(write_sets, list) or not all(
+            isinstance(item, str) for item in cast("list[object]", write_sets)
+        ):
+            return None
+        if (
+            payload.get("schema_version") != "2"
+            or payload.get("job") != path.parent.name
+            or payload.get("status") != "ok"
+            or type(payload.get("exit_code")) is not int
+            or payload.get("exit_code") != 0
+            or payload.get("severity") != "info"
+            or payload.get("journal_state") not in (None, "complete")
+            or any(
+                payload.get(key) is not None
+                for key in ("detail", "journal_detail_code", "journal_reason")
+            )
+        ):
+            return None
+        started, ended = payload.get("started_at"), payload.get("ended_at")
+        if not isinstance(started, str) or not isinstance(ended, str):
+            return None
+        start, end = datetime.fromisoformat(started), datetime.fromisoformat(ended)
+        if start.tzinfo is None or end.tzinfo is None or end < start:
+            return None
+        return payload, end
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+
+
+def _job_health_disposable(path: Path, tmp_root: Path) -> bool:
+    """Keep latest, failed and uncertain health evidence, including at unlink."""
+    root = tmp_root / "job_health"
+    if root not in path.parents:
+        return True
+    if len(path.relative_to(root).parts) != 2 or path.name == "latest.json":
+        return False
+    receipt = _completed_job_health(path)
+    latest = _completed_job_health(path.with_name("latest.json"))
+    if receipt is None or latest is None or receipt[1] >= latest[1]:
+        return False
+    ended = receipt[0]["ended_at"]
+    latest_ended = latest[0]["ended_at"]
+    assert isinstance(ended, str) and isinstance(latest_ended, str)
+    if path.name != ended.replace(":", "-").replace("+", "_") + ".json":
+        return False
+    newest = path.with_name(latest_ended.replace(":", "-").replace("+", "_") + ".json")
+    # The alias alone is insufficient: keep a real newer completion receipt.
+    return _completed_job_health(newest) == latest
+
+
 def _collect_tmp_unclassified(tmp_root: Path, cutoff: datetime, counts: _Counts) -> list[Candidate]:
     """Collect generic disposable files while preserving owned and recovery state."""
     candidates: list[Candidate] = []
@@ -544,7 +613,7 @@ def _collect_tmp_unclassified(tmp_root: Path, cutoff: datetime, counts: _Counts)
             continue
         if relative.parts and relative.parts[0] in _OWNED_TMP_ROOTS:
             continue
-        if path.name.startswith("temp_audio_"):
+        if path.name.startswith("temp_audio_") or not _job_health_disposable(path, tmp_root):
             continue
         if _is_recovery_material(path, tmp_root) or _checkpoint_is_active(path, tmp_root, counts):
             continue
@@ -756,6 +825,8 @@ def _candidate_still_disposable(candidate: Candidate, repo_root: Path, counts: _
         return False
     tmp_root = repo_root / ".tmp"
     if tmp_root in path.parents:
+        if not _job_health_disposable(path, tmp_root):
+            return False
         if _is_protected_tmp_material(path, tmp_root) or _within_tmp_source_checkout(
             path.parent, tmp_root
         ):

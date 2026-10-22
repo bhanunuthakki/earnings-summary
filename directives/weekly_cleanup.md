@@ -17,6 +17,11 @@ allowlist and execution mechanics, not a second retention policy or schedule.
   checkpoint trees and recovery material.
 - `.tmp/cron_runs/`: regular files past the canonical disposable cutoff, except active
   checkpoint trees and recovery material.
+- `.tmp/job_health/<job>/`: only old, completed successful receipts with a matching
+  newer persisted successful receipt can expire. Keep `latest.json`, the newest
+  timestamped receipt, failures, partial or locked runs, nonzero results, unfinished
+  journal work and malformed records. Recheck this proof before unlink. Missing,
+  invalid or inconsistent latest receipts retain the job's historical evidence.
 - `.tmp/news_cache/*.json`: entries whose payload `cached_at` is past the
   canonical cache cutoff. Invalid or missing timestamps are retained.
 - `.tmp/pdf_pages/`: regular files past the canonical disposable cutoff, except active

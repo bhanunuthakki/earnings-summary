@@ -917,7 +917,7 @@ def test_dry_run_is_allowlist_only_and_reports_jsonl(
     assert checkpoint.exists()
     assert lock.exists()
     assert summary.mode == "dry_run"
-    assert summary.idempotency_key == "weekly_cleanup:2026-W31:weekly-cleanup-v5"
+    assert summary.idempotency_key == "weekly_cleanup:2026-W31:weekly-cleanup-v6"
     assert summary.would_delete == 1
     assert summary.deleted == 0
     assert summary.bytes == len("old")
@@ -1535,3 +1535,119 @@ def test_windows_readonly_unregistered_file_is_skipped_without_cleanup_failure(
     assert result.policies["cron_logs_30d"].skipped_error == 0
     assert result.policies["cron_logs_30d"].skipped_unsafe == 1
     assert file.exists()
+
+
+def _job_health(root: Path, day: int, **changes: object) -> Path:
+    directory = root / ".tmp/job_health/example"
+    directory.mkdir(parents=True, exist_ok=True)
+    ended = f"2026-04-{day:02d}T01:00:00+00:00"
+    payload: dict[str, object] = {
+        "schema_version": "2",
+        "job": "example",
+        "write_sets": [],
+        "started_at": f"2026-04-{day:02d}T00:00:00+00:00",
+        "ended_at": ended,
+        "status": "ok",
+        "exit_code": 0,
+        "severity": "info",
+        "journal_state": "complete",
+        "detail": None,
+    }
+    payload.update(changes)
+    path = directory / (ended.replace(":", "-").replace("+", "_") + ".json")
+    path.write_text(json.dumps(payload))
+    _age(path, 90)
+    return path
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"status": "failed"},
+        {"status": "partial"},
+        {"status": "skipped_locked"},
+        {"exit_code": 1},
+        {"exit_code": False},
+        {"exit_code": "0"},
+        {"ended_at": None},
+        {"ended_at": "invalid"},
+        {"status": "running"},
+        {"journal_state": "unavailable"},
+        {"severity": "warning"},
+        {"write_sets": None},
+        {"write_sets": [1]},
+    ],
+)
+def test_job_health_failure_or_unknown_is_retained(
+    tmp_path: Path, changes: dict[str, object]
+) -> None:
+    prior = _job_health(tmp_path, 1, **changes)
+    newest = _job_health(tmp_path, 2)
+    latest = newest.with_name("latest.json")
+    latest.write_bytes(newest.read_bytes())
+    _age(latest, 90)
+    assert _run(tmp_path, "--apply").deleted == 0
+    assert prior.exists() and newest.exists() and latest.exists()
+
+
+def test_only_old_completed_job_health_can_expire(tmp_path: Path) -> None:
+    prior = _job_health(tmp_path, 1)
+    newest = _job_health(tmp_path, 2)
+    latest = newest.with_name("latest.json")
+    latest.write_bytes(newest.read_bytes())
+    _age(latest, 90)
+    assert _run(tmp_path).would_delete == 1
+    assert _run(tmp_path, "--apply").deleted == 1
+    assert not prior.exists()
+    assert newest.exists() and latest.exists()
+
+
+def test_job_health_rechecks_failure_and_newest_before_unlink(tmp_path: Path) -> None:
+    prior = _job_health(tmp_path, 1)
+    newest = _job_health(tmp_path, 2)
+    latest = newest.with_name("latest.json")
+    latest.write_bytes(newest.read_bytes())
+    counts = getattr(cleanup, "_Counts")()
+    candidates = getattr(cleanup, "_collect_tmp_unclassified")(tmp_path / ".tmp", NOW, counts)
+    candidate = next(item for item in candidates if item.path == prior)
+    assert getattr(cleanup, "_candidate_still_disposable")(candidate, tmp_path, counts)
+    newest.unlink()
+    assert not getattr(cleanup, "_candidate_still_disposable")(candidate, tmp_path, counts)
+    newest = _job_health(tmp_path, 2)
+    metadata = prior.stat()
+    # Same-size content and restored mtime bypass the ordinary identity check.
+    prior.write_text(prior.read_text().replace('"ok"', '"no"'))
+    os.utime(prior, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+    assert not getattr(cleanup, "_candidate_still_disposable")(candidate, tmp_path, counts)
+
+
+@pytest.mark.parametrize("target", ["prior", "latest"])
+@pytest.mark.parametrize("content", ["{", "[]", "{}"])
+def test_malformed_job_health_is_held(tmp_path: Path, target: str, content: str) -> None:
+    prior = _job_health(tmp_path, 1)
+    newest = _job_health(tmp_path, 2)
+    latest = newest.with_name("latest.json")
+    latest.write_bytes(newest.read_bytes())
+    (prior if target == "prior" else latest).write_text(content)
+    for path in (prior, newest, latest):
+        _age(path, 90)
+    assert _run(tmp_path, "--apply").deleted == 0
+
+
+def test_health_receipts_from_other_jobs_do_not_supersede(tmp_path: Path) -> None:
+    prior = _job_health(tmp_path, 1)
+    newest = _job_health(tmp_path, 2, job="different")
+    newest.with_name("latest.json").write_bytes(newest.read_bytes())
+    assert _run(tmp_path, "--apply").deleted == 0
+    assert prior.exists()
+
+
+def test_duplicate_failure_field_in_health_receipt_is_held(tmp_path: Path) -> None:
+    prior = _job_health(tmp_path, 1)
+    newest = _job_health(tmp_path, 2)
+    newest.with_name("latest.json").write_bytes(newest.read_bytes())
+    prior.write_text(
+        prior.read_text().replace('"status": "ok"', '"status": "failed", "status": "ok"')
+    )
+    _age(prior, 90)
+    assert _run(tmp_path, "--apply").deleted == 0
