@@ -422,7 +422,7 @@ def test_strict_inventory_excludes_unapproved_external_documents() -> None:
     "target",
     [
         "http://cdn.x/results.pdf",
-        "https://user:pass@cdn.x/results.pdf",
+        "https://user:pass@cdn.x/results.pdf",  # pragma: allowlist secret
         "https://cdn.x/news/q3-2025-earnings-release",
         "https://127.0.0.1/results.pdf",
     ],
