@@ -13,17 +13,24 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
+import json
 import os
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Literal
 
 from _lib import log_event
 from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from alembic.util.exc import CommandError
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Connection, Engine
 
 from alembic import command
 from run_lock import hold_run_lock
@@ -37,6 +44,10 @@ from sqlite_runtime import (
 
 ACTIVE_BASE = "0001_initial_schema"
 ACTIVE_HEAD = expected_head()
+_HERO_REVISION = "0060_bulk_lexical_projection_coverage"
+_HERO_PREDECESSOR = "0059_scoped_research_universe_commitments"
+_OWNER_REVISION = "0060_owner_governed_proposals"
+_LEXICAL_REVISION = "0061_bulk_lexical_projection_coverage"
 _MANAGED_RUNTIME_REPOSITORY = "earnings-summary"
 _WINDOWS_CSIDL_PROFILE = 0x0028
 
@@ -270,6 +281,123 @@ def _replace_single_revision(db_path: Path, *, expected: str, target: str) -> No
         conn.close()
 
 
+def _migration_engine(db_path: Path) -> Engine:
+    return create_engine(
+        "sqlite://",
+        creator=lambda: connect_sqlite(
+            db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=False
+        ),
+    )
+
+
+def _schema_objects(bind: Connection) -> dict[str, tuple[str, str, str, str]]:
+    # Alembic table rebuilds can emit the same constraints in a different order.
+    # Sort table definition lines, and retain ordered xinfo so this cannot hide
+    # a column reorder. Trigger/view/index SQL must still match exactly.
+    objects: dict[str, tuple[str, str, str, str]] = {}
+    rows = bind.exec_driver_sql(
+        "SELECT type,name,tbl_name,sql FROM sqlite_schema "
+        "WHERE name NOT GLOB 'sqlite_*' AND sql IS NOT NULL"
+    ).fetchall()
+    for row in rows:
+        kind, name, table, sql = (str(value) for value in row)
+        columns = ""
+        if kind == "table":
+            sql = json.dumps(
+                sorted(
+                    line.strip().rstrip(",").strip() for line in sql.splitlines() if line.strip()
+                )
+            )
+            columns = json.dumps(
+                [
+                    tuple(column)
+                    for column in bind.exec_driver_sql(
+                        'SELECT cid,name,type,"notnull",dflt_value,pk,hidden FROM pragma_table_xinfo(?)',
+                        (name,),
+                    )
+                ]
+            )
+        objects[f"{kind}:{name}"] = (kind, table, sql, columns)
+    return objects
+
+
+def _bridge_hero_revision(db_path: Path, repo_root: Path, script: ScriptDirectory) -> None:
+    """Apply the missing owner migration only to the exact retained Hero schema.
+
+    The old branch and merged graph share all migrations through 0059. The old
+    0060 changed only the lexical trigger, now owned by 0061. Build that exact
+    schema from the active migration owners instead of guessing from a few columns.
+    All target DDL and revision changes share one explicit SQLite transaction.
+    """
+
+    owner = script.get_revision(_OWNER_REVISION)
+    lexical = script.get_revision(_LEXICAL_REVISION)
+    if owner.down_revision != _HERO_PREDECESSOR or lexical.down_revision != _OWNER_REVISION:
+        raise UpgradeDatabaseError("pre-integration Hero migration graph differs from its owner")
+
+    with TemporaryDirectory(prefix="earnings-hero-schema-") as temporary:
+        reference_path = Path(temporary) / "reference.sqlite3"
+        command.upgrade(_config(repo_root, reference_path, archived=False), _HERO_PREDECESSOR)
+        reference_engine = _migration_engine(reference_path)
+        try:
+            with reference_engine.begin() as reference:
+                with Operations.context(MigrationContext.configure(reference)):
+                    lexical.module.upgrade()
+                expected = _schema_objects(reference)
+        finally:
+            reference_engine.dispose()
+
+    engine = _migration_engine(db_path)
+    try:
+        with engine.connect() as bind:
+            # SQLAlchemy's logical transaction alone does not make SQLite DDL
+            # atomic. Start the physical transaction before the first DDL.
+            bind.exec_driver_sql("BEGIN IMMEDIATE")
+            try:
+                revisions = tuple(
+                    str(row[0])
+                    for row in bind.exec_driver_sql("SELECT version_num FROM alembic_version")
+                )
+                if revisions != (_HERO_REVISION,):
+                    raise UpgradeDatabaseError(
+                        "pre-integration Hero revision changed under recovery"
+                    )
+                actual = _schema_objects(bind)
+                differences = sorted(
+                    name
+                    for name in expected.keys() | actual.keys()
+                    if expected.get(name) != actual.get(name)
+                )
+                if differences:
+                    raise UpgradeDatabaseError(
+                        "pre-integration Hero schema differs from its migration owners: "
+                        + ",".join(differences)
+                    )
+                with Operations.context(MigrationContext.configure(bind)):
+                    owner.module.upgrade()
+                    lexical.module.upgrade()
+                result = bind.exec_driver_sql(
+                    "UPDATE alembic_version SET version_num=? WHERE version_num=?",
+                    (_LEXICAL_REVISION, _HERO_REVISION),
+                )
+                if result.rowcount != 1:
+                    raise UpgradeDatabaseError("pre-integration Hero revision update failed")
+                bind.commit()
+            except BaseException:
+                bind.rollback()
+                raise
+    finally:
+        engine.dispose()
+    log_event(
+        "database_hero_revision_bridged",
+        from_revision=_HERO_REVISION,
+        to_revision=_LEXICAL_REVISION,
+        validated_schema_sha256=hashlib.sha256(
+            json.dumps(expected, sort_keys=True).encode()
+        ).hexdigest(),
+    )
+
+
 def upgrade_database(
     db_path: Path,
     *,
@@ -399,11 +527,18 @@ def upgrade_database(
         if chosen_backup is not None:
             _backup_database(db_path, chosen_backup)
 
-        if from_revision is None or from_revision in active_revisions:
+        if from_revision == _HERO_REVISION:
+            if live_database or not allow_isolated_db:
+                raise UpgradeDatabaseError(
+                    "pre-integration Hero recovery requires an isolated database"
+                )
+            _integrity_check(db_path)
+            _bridge_hero_revision(db_path, repo_root, active_script)
             command.upgrade(active, "head")
-            status: Literal["created", "upgraded", "bridged", "already_current"] = (
-                "created" if not existed else "upgraded"
-            )
+            status: Literal["created", "upgraded", "bridged", "already_current"] = "bridged"
+        elif from_revision is None or from_revision in active_revisions:
+            command.upgrade(active, "head")
+            status = "created" if not existed else "upgraded"
         else:
             if "operation_events" in _user_tables(db_path):
                 raise UpgradeDatabaseError(

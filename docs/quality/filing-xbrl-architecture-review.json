@@ -4,12 +4,12 @@
   "scanner_unchanged": true,
   "measurement": {
     "executable_modules": {
-      "prior": 1470,
-      "current": 1470
+      "prior": 1472,
+      "current": 1472
     },
     "total_noncomment_loc": {
-      "prior": 563239,
-      "current": 563268
+      "prior": 563851,
+      "current": 563880
     },
     "modules_over_1000_loc": {
       "prior": 108,
@@ -33,6 +33,6 @@
     }
   },
   "baseline_update": "Complete unchanged-scanner receipt regenerated intentionally for reviewed feature growth. Full checks and Opus activation review remain required.",
-  "integrated_main": "697b9e35dd4273563c61da776494dd6a3f94d2e5",
+  "integrated_main": "65bda94ddb4be092a9c2122ae0d489cf9b66d2c5",
   "additional_noncomment_loc": 29
 }

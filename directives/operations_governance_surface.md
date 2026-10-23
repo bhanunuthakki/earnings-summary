@@ -2006,3 +2006,69 @@ the JSON output. Counts do not certify completeness or readiness.
 evaluator remain the verification authorities. See
 `docs/architecture/cohort-rollout-readiness.md` for invocation, representative
 cohort criteria, and the bounded population sequence.
+
+### Isolated pre-integration Hero revision recovery — 2026-10-22
+
+The existing `upgrade_database.py --allow-isolated-db` action can recover the
+retained `0060_bulk_lexical_projection_coverage` branch revision. It first creates
+and verifies the normal pre-upgrade backup under the shared writer lock. It checks
+the complete schema against a temporary reference built from migration 0059 and
+the unchanged lexical migration owner. Table comparison permits only the existing
+constraint-order spelling variation and retains ordered column metadata. Extra,
+missing, altered and partly migrated objects stop recovery. A single physical
+SQLite transaction applies owner migration 0060, verifies the already installed
+0061 lexical guard, and advances the revision. An interrupted transaction rolls
+back both schema and revision. The compatibility event records the checked schema
+SHA-256; the existing upgrade receipt retains the source revision and backup path.
+The temporary reference is deleted. This path requires an isolated target and does
+not change canonical-host migration protections, financial admission, services or
+publication authority. Evidence: `tests/test_upgrade_hero_revision_bridge.py` and
+`tests/test_upgrade_database.py`.
+
+### Bounded NU Q2 2025 historical ratio publication — 2026-10-22
+
+The reusable `nu_historical_backfill` boundary prepares exactly three reviewed IR
+observations from two fixed document hashes. It rechecks local raw bytes and the
+complete approved Office/PDF fulltext output. Workbook selectors require the
+exact bilingual sheet, June 2025 header, labels and Brazil scope witnesses. The
+publisher rechecks the prepared digest and writes one atomic source-fact graph
+through the existing evidence and publication owners. The caller retains the
+writer lock and commit. Read-only preparation never writes SQLite. The resulting
+publication makes no issuer/archive/document completeness claim. NPL definitions
+retain Brazil consumer credit excluding SMEs, use `other` consolidation scope,
+and explicitly remain incomparable with consolidated NPL. Risk-adjusted NIM
+retains its annualized Holdings meaning. Original ratio tokens and source-bound
+definitions remain available; pure-ratio normalization is explicit. Semantic
+admission uses the existing exact reviewed-source owner as a separate action.
+Publication does not admit a historical public-day witness, activate a report,
+change a thesis rule, or authorize production writes. Evidence:
+`tests/test_nu_historical_backfill.py`; native Windows source replay remains a
+required operation check.
+
+The architecture measurement is deliberately refreshed for this repair: two
+executable modules and 612 noncomment lines above the previous baseline. They
+own exact NU source publication and claim-preserving financial links; the
+migration bridge and narrow owner-calculation guard extend existing owners.
+The scanner, duplication limits, dependency limits and all verification gates
+remain unchanged. Source publication, semantic admission and report acceptance
+remain separate operations.
+
+### Indexed inventory verification cost repair — 2026-10-22
+
+Source-coverage assessment retains exact lexical representation verification.
+The query groups the global FTS population once before checking the selected
+manifest and extraction. Missing rows, duplicate identities anywhere in the
+FTS population and changed text still fail. The check does not add a cache,
+change seals or lower source admission. A retained Windows inventory operation
+exposed the previous per-chunk full scans; a read-only process stack confirmed
+the active call site. The task-owned operation was stopped before inventory
+revision 3 admission. Its committed source captures remain available for an
+exact resumption after the query repair. Corruption and SQLite-work-budget
+regressions prove the retained behavior and bounded query structure. This
+changes verification cost only and adds no operator action or public route.
+
+Test completion also retains the existing fixture protection rules. Each file
+checks a held-path set and its ancestors. The three existing operation owners
+build that set once. This removes repeated scans of all held paths without
+changing retention authority, symlink handling or path boundaries. Evidence:
+`tests/test_temp_run_retention.py` includes boundary and bounded-work regressions.
