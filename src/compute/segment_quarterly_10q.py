@@ -55,6 +55,7 @@ from llm.structured import StructuredParseError, call_llm_structured
 from models.facts import FactLocator, FiscalPeriodType, SegmentDimension, SegmentDimType, Unit
 from pipeline.segment_junction_writer import write_segment_facts_junction
 from pipeline.segment_quarterly_coverage import record_coverage
+from provenance.financial_fact_resolution import canonical_fact_relation
 from table_extractors.base import iter_xbrl_table, parse_units
 from table_extractors.generic_xbrl_capture import _is_detail_section
 from table_extractors.period_axis import (
@@ -752,9 +753,10 @@ def _cross_check_consolidated(
     if not row:
         return
     seg_sum = sum((Decimal(str(r[0])) for r in row), start=Decimal("0"))
+    fact_relation = canonical_fact_relation(conn, "financial_facts").sql
     rev_row = conn.execute(
-        """
-        SELECT value FROM financial_facts
+        f"""
+        SELECT value FROM {fact_relation}
         WHERE ticker = ? AND line_item = 'revenue' AND fiscal_period_type = ?
           AND strftime('%Y', period_end) = ?
         ORDER BY id DESC LIMIT 1

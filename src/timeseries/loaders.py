@@ -596,6 +596,7 @@ def load_financial_fact_provenance(
     try:
         if not _has_table(db_conn, "financial_facts"):
             return None
+        fact_relation = canonical_fact_relation(db_conn, "financial_facts").sql
         has_documents = _has_table(db_conn, "documents")
         if not has_documents:
             row = db_conn.execute(
@@ -605,12 +606,12 @@ def load_financial_fact_provenance(
                        ff.period_end,
                        ff.fiscal_period_type,
                        ff.value
-                FROM financial_facts ff
+                FROM {fact_relation} ff
                 WHERE ff.ticker = ?
                   AND ff.line_item = ?
                   AND ff.fiscal_period_type IN ({placeholders})
                   AND ff.id = (
-                    SELECT MAX(ff2.id) FROM financial_facts ff2
+                    SELECT MAX(ff2.id) FROM {fact_relation} ff2
                     WHERE ff2.ticker = ff.ticker
                       AND ff2.line_item = ff.line_item
                       AND ff2.period_end = ff.period_end
@@ -651,7 +652,7 @@ def load_financial_fact_provenance(
                    ff.value,
                    d.fetched_at,
                    {tier_select}
-            FROM financial_facts ff
+            FROM {fact_relation} ff
             JOIN documents d ON d.id = ff.source_doc_id
             WHERE ff.ticker = ?
               AND ff.line_item = ?
@@ -659,7 +660,7 @@ def load_financial_fact_provenance(
               {as_of_clause}
               AND ff.id = (
                 SELECT ff2.id
-                FROM financial_facts ff2
+                FROM {fact_relation} ff2
                 JOIN documents d2 ON d2.id = ff2.source_doc_id
                 WHERE ff2.ticker = ff.ticker
                   AND ff2.line_item = ff.line_item
@@ -956,6 +957,7 @@ def _financial_series_with_provenance(
     try:
         if not _has_table(conn, "financial_facts") or not _has_table(conn, "documents"):
             return []
+        fact_relation = canonical_fact_relation(conn, "financial_facts").sql
         has_tier = _has_column(conn, "documents", "source_quality_tier")
         rank_expr = _tier_rank_case_sql("d.source_quality_tier") if has_tier else "0"
         tier_select = (
@@ -998,14 +1000,14 @@ def _financial_series_with_provenance(
                    d.doc_type,
                    {accession_select},
                    {tier_select}
-            FROM financial_facts ff
+            FROM {fact_relation} ff
             JOIN documents d ON d.id = ff.source_doc_id
             WHERE ff.ticker = ?
               AND ff.line_item = ?
               AND ff.fiscal_period_type IN ({placeholders})
               AND ff.id = (
                 SELECT ff2.id
-                FROM financial_facts ff2
+                FROM {fact_relation} ff2
                 JOIN documents d2 ON d2.id = ff2.source_doc_id
                 WHERE ff2.ticker = ff.ticker
                   AND ff2.line_item = ff.line_item

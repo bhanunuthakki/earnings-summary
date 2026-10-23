@@ -1397,6 +1397,8 @@ def _llm_extract_enumerate(
     run_id: str | None = None,
     exchange_observer: Callable[[StructuredCallResult[list[_EnumeratedKpi]]], None] | None = None,
     source_scope: Literal["summary_current", "direct_pdf_rich"] = "summary_current",
+    source_guardrail: Callable[[object], tuple[bool, str]] | None = None,
+    raw_response_observer: Callable[[str, str], None] | None = None,
 ) -> list[dict[str, object]]:
     """One governed structured call — enumerate labeled this-period numeric facts (no
     allowlist). Returns a list of ``{label, value, unit, source_excerpt}`` dicts.
@@ -1418,6 +1420,13 @@ def _llm_extract_enumerate(
             purpose="kpi_summary_enumerate",
             expect="array",
             schema=TypeAdapter(list[_EnumeratedKpi]),
+            domain_guardrail=source_guardrail,
+            raw_response_observer=raw_response_observer,
+            repair_prompt=(
+                (lambda _error: ir_supplement_capture.repair_supplement_prompt(prompt))
+                if source_guardrail is not None
+                else None
+            ),
             ticker=ticker,
             run_id=run_id,
             model=model,
@@ -2174,6 +2183,8 @@ def capture_for_ir_pdf_docs(
 
             def extract_section(
                 text: str,
+                source_body: str,
+                retain_raw: Callable[[SupplementExchange], None],
                 *,
                 model: str = model,
                 backend: str = backend,
@@ -2189,11 +2200,81 @@ def capture_for_ir_pdf_docs(
                     raise ValueError("IR continuation model route changed during extraction")
                 exchange: StructuredCallResult[list[_EnumeratedKpi]] | None = None
 
-                def observe(value: StructuredCallResult[list[_EnumeratedKpi]]) -> None:
-                    nonlocal exchange
-                    exchange = value
-
                 with db_path_context(db_path), capture_call_records() as captured:
+
+                    def attributed(submitted_prompt: str, raw_response: str) -> SupplementExchange:
+                        response_sha = hashlib.sha256(raw_response.encode()).hexdigest()
+                        producing = next(
+                            (
+                                record
+                                for record in reversed(captured())
+                                if record.purpose == "kpi_summary_enumerate"
+                                and record.run_id == run_id
+                                and record.error is None
+                                and record.outcome == "success"
+                                and record.response_sha256 == response_sha
+                            ),
+                            None,
+                        )
+                        if producing is None or not producing.provider or not producing.transport:
+                            raise ValueError(
+                                "IR actual successful governed call cannot be attributed"
+                            )
+                        final_prompt_sha = producing.prompt_sha256
+                        call = conn.execute(
+                            "SELECT id FROM llm_calls WHERE run_id=? AND purpose=? AND model=? "
+                            "AND prompt_sha256=? AND response_sha256=? AND provider=? AND transport=? "
+                            "AND error IS NULL AND outcome='success' ORDER BY id DESC LIMIT 1",
+                            (
+                                run_id,
+                                "kpi_summary_enumerate",
+                                producing.model,
+                                final_prompt_sha,
+                                response_sha,
+                                producing.provider,
+                                producing.transport,
+                            ),
+                        ).fetchone()
+                        if call is None:
+                            raise ValueError(
+                                "IR producing governed call was not retained in the selected database"
+                            )
+                        return SupplementExchange(
+                            raw_response=raw_response,
+                            submitted_prompt=submitted_prompt,
+                            model=producing.model,
+                            provider=producing.provider,
+                            transport=producing.transport,
+                            prompt_sha256=final_prompt_sha,
+                            response_sha256=response_sha,
+                            llm_call_id=int(call[0]),
+                            run_id=run_id,
+                        )
+
+                    def observe_raw(submitted_prompt: str, raw_response: str) -> None:
+                        retain_raw(attributed(submitted_prompt, raw_response))
+
+                    def observe(value: StructuredCallResult[list[_EnumeratedKpi]]) -> None:
+                        nonlocal exchange
+                        exchange = value
+                        # Backward-compatible successful-exchange observers also
+                        # retain before post-schema domain checks in this owner.
+                        observe_raw(value.prompt, value.raw_response)
+
+                    def source_guardrail(value: object) -> tuple[bool, str]:
+                        try:
+                            rows = _validated_enumerated_rows(
+                                value,
+                                source_scope="direct_pdf_rich",
+                                saturation_limit=max_facts_per_doc,
+                            )
+                            ir_supplement_capture.require_native_source_quotes(
+                                [row.model_dump(mode="json") for row in rows], source_body
+                            )
+                        except ValueError as error:
+                            return False, str(error)
+                        return True, ""
+
                     with suppress(SupplementSaturatedError):
                         _llm_extract_enumerate(
                             ticker,
@@ -2206,58 +2287,12 @@ def capture_for_ir_pdf_docs(
                             run_id=run_id,
                             exchange_observer=observe,
                             source_scope="direct_pdf_rich",
+                            source_guardrail=source_guardrail,
+                            raw_response_observer=observe_raw,
                         )
-                    records = captured()
-                if exchange is None:
-                    raise ValueError("IR governed structured exchange is unavailable")
-                response_sha = hashlib.sha256(exchange.raw_response.encode()).hexdigest()
-                final_prompt_sha = hashlib.sha256(
-                    effective_prompt(exchange.prompt).encode()
-                ).hexdigest()
-                producing = next(
-                    (
-                        record
-                        for record in reversed(records)
-                        if record.purpose == "kpi_summary_enumerate"
-                        and record.run_id == run_id
-                        and record.error is None
-                        and record.outcome == "success"
-                        and record.response_sha256 == response_sha
-                        and record.prompt_sha256 == final_prompt_sha
-                    ),
-                    None,
-                )
-                if producing is None or not producing.provider or not producing.transport:
-                    raise ValueError("IR actual successful governed call cannot be attributed")
-                call = conn.execute(
-                    "SELECT id FROM llm_calls WHERE run_id=? AND purpose=? AND model=? "
-                    "AND prompt_sha256=? AND response_sha256=? AND provider=? AND transport=? "
-                    "AND error IS NULL AND outcome='success' ORDER BY id DESC LIMIT 1",
-                    (
-                        run_id,
-                        "kpi_summary_enumerate",
-                        producing.model,
-                        final_prompt_sha,
-                        response_sha,
-                        producing.provider,
-                        producing.transport,
-                    ),
-                ).fetchone()
-                if call is None:
-                    raise ValueError(
-                        "IR producing governed call was not retained in the selected database"
-                    )
-                return SupplementExchange(
-                    raw_response=exchange.raw_response,
-                    submitted_prompt=exchange.prompt,
-                    model=producing.model,
-                    provider=producing.provider,
-                    transport=producing.transport,
-                    prompt_sha256=final_prompt_sha,
-                    response_sha256=response_sha,
-                    llm_call_id=int(call[0]),
-                    run_id=run_id,
-                )
+                    if exchange is None:
+                        raise ValueError("IR governed structured exchange is unavailable")
+                    return attributed(exchange.prompt, exchange.raw_response)
 
             def validate_rows(raw: object) -> list[dict[str, object]]:
                 return [
@@ -2297,7 +2332,7 @@ def capture_for_ir_pdf_docs(
                     "source_scope": "direct_pdf_rich",
                     "max_chunks": max_chunks,
                     "max_structured_calls": max_structured_calls,
-                    "continuation_version": "ir-supplement-native-continuation-v2",
+                    "continuation_version": "ir-supplement-native-continuation-v3-semantic-repair",
                     "prompt_sha256": prompt_sha256,
                     "schema_sha256": schema_sha256,
                     "projection_identity": projection_identity,

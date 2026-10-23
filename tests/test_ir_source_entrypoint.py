@@ -457,7 +457,10 @@ def test_capped_lower_range_bound_recurses_and_retains_complete_raw_population(
     assert result.error is None
     assert len(responses) == 3
     artifacts = [
-        json.loads(str(row[0])) for row in conn.execute("SELECT content_json FROM llm_artifacts")
+        json.loads(str(row[0]))
+        for row in conn.execute(
+            "SELECT content_json FROM llm_artifacts WHERE superseded_by_id IS NULL"
+        )
     ]
     assert sorted(artifact["status"] for artifact in artifacts) == [
         "processed",
@@ -484,7 +487,7 @@ def test_capped_lower_range_bound_recurses_and_retains_complete_raw_population(
     replay = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, max_facts_per_doc=3)
     assert replay.error is None
     assert len(responses) == 3
-    assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 3
+    assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 6
 
 
 def test_unsaturated_lone_guidance_bound_fails_closed(
@@ -518,7 +521,13 @@ def test_unsaturated_lone_guidance_bound_fails_closed(
     )
     result = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, max_facts_per_doc=3)
     assert result.error and "both exact endpoints" in result.error
-    assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 0
+    artifacts = [
+        json.loads(str(row[0]))
+        for row in conn.execute("SELECT content_json FROM llm_artifacts ORDER BY id")
+    ]
+    assert [artifact["status"] for artifact in artifacts] == ["pending", "rejected"]
+    assert artifacts[-1]["rows"] == []
+    assert artifacts[-1]["exchange"]["raw_response"]
     assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone()[0] == 0
 
 
@@ -557,7 +566,13 @@ def test_capped_rows_still_reject_numeric_token_outside_source_quote(
     )
     result = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, max_facts_per_doc=3)
     assert result.error and "numeric token must occur" in result.error
-    assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 0
+    artifacts = [
+        json.loads(str(row[0]))
+        for row in conn.execute("SELECT content_json FROM llm_artifacts ORDER BY id")
+    ]
+    assert [artifact["status"] for artifact in artifacts] == ["pending", "rejected"]
+    assert artifacts[-1]["rows"] == []
+    assert artifacts[-1]["exchange"]["raw_response"]
     assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone()[0] == 0
 
 
@@ -690,3 +705,91 @@ def test_full_entrypoint_two_empty_pages_retain_distinct_calls_and_cache_replay(
     ] == clocks_before
     assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("responses_kind", ["quote_then_valid", "quote_twice", "json_then_quote"])
+def test_source_quote_repair_retains_every_raw_response_with_two_request_limit(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    responses_kind: str,
+) -> None:
+    import llm.structured as structured
+
+    _entrypoint_fixture(conn, tmp_path, monkeypatch, mock_enumerator=False)
+    valid = {
+        "label": "Margin",
+        "value": 10,
+        "unit": "percent",
+        "source_excerpt": "Margin North 10%",
+        "source_value_text": "10%",
+        "reported_period_end": "2026-06-30",
+        "period_role": "current",
+        "accounting_basis": "management",
+        "consolidation_scope": "segment",
+        "dimensions": {"Geography": "North"},
+        "source_unit_scale": "none",
+    }
+    invalid = {**valid, "source_excerpt": "Margin South 10%"}
+    bad = json.dumps([invalid])
+    good = json.dumps([valid])
+    outputs = {
+        "quote_then_valid": [bad, good],
+        "quote_twice": [bad, bad],
+        "json_then_quote": ["not JSON", bad],
+    }[responses_kind]
+    calls: list[tuple[str, str]] = []
+
+    def governed_transport(prompt: str, **kwargs: object) -> str:
+        assert len(calls) < 2, "semantic validation must not create a third request"
+        raw = outputs[len(calls)]
+        calls.append((prompt, raw))
+        effective = apply_prompt_override("kpi_summary_enumerate", None, prompt)
+        record_llm_call(
+            started_at=datetime.now(UTC),
+            elapsed_ms=0,
+            model="fixture-primary" if len(calls) == 1 else "fixture-repair",
+            prompt_sha=sha(effective),
+            prompt_chars=len(effective),
+            purpose="kpi_summary_enumerate",
+            ticker="TEST",
+            scope=None,
+            run_id=str(kwargs["run_id"]),
+            response_text=raw,
+            provider="fixture",
+            transport="fixture",
+            outcome="success",
+        )
+        return raw
+
+    monkeypatch.setattr(structured, "call_llm", governed_transport)
+    first = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, max_structured_calls=2)
+    assert len(calls) == 2
+    if responses_kind == "quote_then_valid":
+        assert first.error is None
+    else:
+        assert first.error is not None
+    artifacts = [
+        json.loads(str(row[0])) for row in conn.execute("SELECT content_json FROM llm_artifacts")
+    ]
+    retained = [
+        item["raw_response"]
+        for artifact in artifacts
+        for item in artifact.get("attempts", [artifact.get("exchange", {})])
+        if "raw_response" in item
+    ]
+    assert all(raw in retained for raw in outputs)
+    ids = {row[0] for row in conn.execute("SELECT id FROM llm_calls")}
+    retained_ids = {
+        item["llm_call_id"]
+        for artifact in artifacts
+        for item in artifact.get("attempts", [artifact.get("exchange", {})])
+        if "llm_call_id" in item
+    }
+    assert ids == retained_ids
+    second = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, max_structured_calls=2)
+    assert len(calls) == 2, "exact failed or repaired replay must not call a provider again"
+    assert (second.error is None) == (first.error is None)
+    assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM fact_observations_v2").fetchone()[0] == 0

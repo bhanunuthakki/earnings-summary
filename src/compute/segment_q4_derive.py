@@ -40,6 +40,7 @@ from models.facts import FiscalPeriodType, SegmentDimension, SegmentDimType, Uni
 from pipeline.restatement_detector import is_later_filing
 from pipeline.segment_junction_writer import write_segment_facts_junction
 from pipeline.segment_quarterly_coverage import record_coverage
+from provenance.financial_fact_resolution import canonical_fact_relation
 
 METHOD_VERSION = "segment_q4_derive_v1"
 _Q2Q3_METHOD_VERSION = "segment_q2q3_derive_v1"  # compute.segment_quarterly_10q's tag
@@ -611,9 +612,10 @@ def _cross_check_consolidated(
     ).fetchall()
     if not seg_rows:
         return
+    fact_relation = canonical_fact_relation(conn, "financial_facts").sql
     rev_row = conn.execute(
-        """
-        SELECT value FROM financial_facts
+        f"""
+        SELECT value FROM {fact_relation}
         WHERE ticker = ? AND line_item = 'revenue' AND fiscal_period_type = 'Q4'
           AND strftime('%Y', period_end) = ?
         ORDER BY id DESC LIMIT 1

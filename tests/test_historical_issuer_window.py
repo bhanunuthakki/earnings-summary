@@ -90,3 +90,79 @@ def test_historical_extension_is_versioned_exact_and_bounded() -> None:
                 },
             }
         )
+
+
+def test_fiscal_reported_window_preserves_exact_calendar_and_legacy_wire() -> None:
+    from datetime import UTC, datetime
+
+    from pipeline.issuer_document_inventory import (
+        FiscalPeriodWitness,
+        IssuerDocumentInventoryRequest,
+    )
+    from pipeline.source_policy import fiscal_quarter_end
+
+    base = request_fixture()
+    legacy_payload = base.inventory_request.model_dump(mode="json")
+    assert "fiscal_period_witness" not in legacy_payload
+    assert base.inventory_request.canonical_json == __import__("json").dumps(
+        legacy_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    witness = FiscalPeriodWitness(
+        issuer_id="synthetic:issuer",
+        profile_revision_id="synthetic:profile",
+        fiscal_year_end="01-31",
+        document_version_id="synthetic:document",
+        document_sha256="b" * 64,
+        knowledge_cutoff=datetime(2026, 10, 1, tzinfo=UTC),
+        observed_through=datetime(2026, 10, 1, tzinfo=UTC),
+    )
+    inv = IssuerDocumentInventoryRequest.model_validate(
+        {
+            **legacy_payload,
+            "fiscal_year": 2027,
+            "fiscal_quarter": 2,
+            "period_end": "2026-07-31",
+            "fiscal_period_witness": witness,
+        }
+    )
+    window = HistoricalIssuerDocumentWindow(
+        period_ends=(
+            date(2025, 7, 31),
+            date(2025, 10, 31),
+            date(2026, 1, 31),
+            date(2026, 4, 30),
+            date(2026, 7, 31),
+        ),
+        reviewed_by="synthetic-owner",
+        review_reference_sha256="c" * 64,
+        fiscal_period_witness=witness,
+    )
+    staged = IssuerDocumentStagingRequest(
+        schema_version="issuer_document_staging_request.v2",
+        attempt_id=base.attempt_id,
+        inventory_request=inv,
+        inventory_request_sha256=inv.request_sha256,
+        historical_window=window,
+    )
+    assert issuer_request_period_is_allowed(
+        staged, fiscal_year_end_month=1, as_of=date(2026, 10, 31)
+    )
+    assert issuer_request_period_is_allowed(
+        staged, fiscal_year_end_month=12, as_of=date(2026, 10, 31)
+    )
+    with pytest.raises(ValidationError):
+        IssuerDocumentStagingRequest.model_validate(
+            {
+                **staged.model_dump(),
+                "historical_window": window.model_copy(update={"fiscal_period_witness": None}),
+            }
+        )
+    with pytest.raises(ValidationError):
+        IssuerDocumentInventoryRequest.model_validate(
+            {**inv.model_dump(), "period_end": "2026-07-30"}
+        )
+    with pytest.raises(ValueError, match="non-month-end"):
+        fiscal_quarter_end(fiscal_year=2026, fiscal_quarter=4, fiscal_year_end="01-30")
+    assert fiscal_quarter_end(fiscal_year=2027, fiscal_quarter=1, fiscal_year_end="01-31") == date(
+        2026, 4, 30
+    )

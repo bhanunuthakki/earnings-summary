@@ -146,7 +146,7 @@ def test_apply_captures_evidence_and_exact_replay_creates_nothing(
     )
     conn.commit()
 
-    assert first.records_created == 19
+    assert first.records_created == 21
     assert second.records_created == 0
     row = conn.execute(
         "SELECT i.issuer_id, i.normalized_value, r.outcome "
@@ -595,4 +595,299 @@ def test_selected_ticker_scope_cannot_add_an_untracked_security(
             request=request,
         )
     assert conn.execute("SELECT COUNT(*) FROM issuer_entities").fetchone()[0] == 0
+    conn.close()
+
+
+def test_ordinary_ticker_bootstrap_binds_both_subject_keys(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    from provenance.reporting_entity_registry import ReportingEntityRegistry
+
+    path = _database(tmp_path, migrated_db)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
+    )
+    conn.commit()
+    raw = _body({"cik_str": 123456, "ticker": "ACME", "title": "Acme Corporation"})
+    first = bootstrap_issuer_reporting_registry(
+        conn, raw_body=raw, request=_request(tmp_path, apply=True)
+    )
+    issuer = first.results[0].canonical_issuer_id
+    assert issuer is not None
+    registry = ReportingEntityRegistry(conn)
+    for key in ("legacy-ticker:ACME", issuer):
+        subject = registry.canonicalize_recorded_subject(key, knowledge_at=STAMP)
+        assert subject.issuer_id == issuer
+        assert subject.reporting_entity_id == "reporting:sec:0000123456"
+        assert subject.material_dissent is False
+    before = conn.execute("SELECT COUNT(*) FROM recorded_subject_binding_revisions").fetchone()
+    replay = bootstrap_issuer_reporting_registry(
+        conn, raw_body=raw, request=_request(tmp_path, apply=True)
+    )
+    assert replay.records_created == 0
+    assert (
+        conn.execute("SELECT COUNT(*) FROM recorded_subject_binding_revisions").fetchone() == before
+    )
+    conn.close()
+
+
+@pytest.mark.parametrize("key_kind", ["legacy", "canonical"])
+@pytest.mark.parametrize("conflict", ["issuer", "reporting_entity", "dissent", "unresolved"])
+def test_ticker_bootstrap_preserves_conflicting_subject_resolution(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    key_kind: str,
+    conflict: str,
+) -> None:
+    from provenance.reporting_entity_registry import (
+        EvidenceSubjectBindingRevision,
+        ReportingEntity,
+        ReportingEntityRegistry,
+    )
+
+    path = _database(tmp_path, migrated_db)
+    conn = sqlite3.connect(path)
+    conn.executemany(
+        "INSERT INTO tracked_companies VALUES (?, 'bhanu', ?, ?, 'portfolio', NULL)",
+        [(1, "ACME", "Acme"), (2, "OTHER", "Other")],
+    )
+    conn.commit()
+    raw = _body(
+        {"cik_str": 123456, "ticker": "ACME", "title": "Acme Corporation"},
+        {"cik_str": 654321, "ticker": "OTHER", "title": "Other Corporation"},
+    )
+    initial = bootstrap_issuer_reporting_registry(
+        conn, raw_body=raw, request=_request(tmp_path, apply=True)
+    )
+    issuers = {r.ticker: r.canonical_issuer_id for r in initial.results}
+    issuer = issuers["ACME"]
+    assert issuer is not None
+    key = "legacy-ticker:ACME" if key_kind == "legacy" else issuer
+    previous = conn.execute(
+        "SELECT binding_revision_id,revision FROM recorded_subject_binding_revisions "
+        "WHERE recorded_issuer_id=? ORDER BY revision DESC LIMIT 1",
+        (key,),
+    ).fetchone()
+    revision = 1 if previous is None else int(previous[1]) + 1
+    if conflict == "reporting_entity":
+        ReportingEntityRegistry(conn).persist(
+            ReportingEntity(
+                reporting_entity_id="reporting:alternate-acme",
+                idempotency_key="reporting:alternate-acme",
+                issuer_id=issuer,
+                reporting_entity_kind="legal_registrant",
+                display_name="Alternate Acme registrant",
+                created_at=STAMP,
+            )
+        )
+    ReportingEntityRegistry(conn).persist(
+        EvidenceSubjectBindingRevision(
+            binding_revision_id="test-conflict",
+            idempotency_key="test-conflict",
+            recorded_issuer_id=key,
+            revision=revision,
+            issuer_id=None
+            if conflict == "unresolved"
+            else issuers["OTHER"]
+            if conflict == "issuer"
+            else issuer,
+            reporting_entity_id=(
+                None
+                if conflict == "unresolved"
+                else "reporting:alternate-acme"
+                if conflict == "reporting_entity"
+                else "reporting:sec:0000654321"
+                if conflict == "issuer"
+                else "reporting:sec:0000123456"
+            ),
+            security_id=None,
+            outcome="unresolved" if conflict == "unresolved" else "selected",
+            decision_kind="manual",
+            reason_code="test_explicit_resolution",
+            reason_details=(("test", conflict),),
+            material_dissent=conflict == "dissent",
+            effective_at=STAMP,
+            knowledge_at=STAMP,
+            recorded_at=STAMP,
+            supersedes_binding_revision_id=None if previous is None else str(previous[0]),
+        )
+    )
+    conn.commit()
+    before = conn.total_changes
+    for apply in (False, True):
+        with pytest.raises(SecCompanyTickerContractError, match=r"subject.*conflict"):
+            bootstrap_issuer_reporting_registry(
+                conn, raw_body=raw, request=_request(tmp_path, apply=apply)
+            )
+        assert conn.total_changes == before
+    assert conn.execute(
+        "SELECT binding_revision_id FROM recorded_subject_binding_revisions "
+        "WHERE recorded_issuer_id=? ORDER BY revision DESC LIMIT 1",
+        (key,),
+    ).fetchone() == ("test-conflict",)
+    conn.close()
+
+
+def test_subject_binding_constraint_failure_rolls_back_whole_bootstrap(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    path = _database(tmp_path, migrated_db)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
+    )
+    conn.execute(
+        "CREATE TRIGGER reject_canonical_subject BEFORE INSERT ON recorded_subject_binding_revisions "
+        "WHEN NEW.recorded_issuer_id NOT LIKE 'legacy-ticker:%' "
+        "BEGIN SELECT RAISE(ABORT, 'synthetic subject constraint'); END"
+    )
+    conn.commit()
+    raw = _body({"cik_str": 123456, "ticker": "ACME", "title": "Acme Corporation"})
+    with pytest.raises(sqlite3.IntegrityError, match="synthetic subject constraint"):
+        bootstrap_issuer_reporting_registry(
+            conn, raw_body=raw, request=_request(tmp_path, apply=True)
+        )
+    assert conn.in_transaction is False
+    for table in (
+        "issuer_entities",
+        "reporting_entities",
+        "recorded_subject_binding_revisions",
+        "evidence_source_observations",
+        "source_obligation_revisions",
+    ):
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone() == (0,)
+    conn.close()
+
+
+def test_ticker_bootstrap_preserves_existing_selected_security(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    from provenance.issuer_registry import IssuerRegistry, Security
+    from provenance.reporting_entity_registry import (
+        EvidenceSubjectBindingRevision,
+        ReportingEntityRegistry,
+        SecurityReportingEntityRevision,
+    )
+
+    path = _database(tmp_path, migrated_db)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
+    )
+    conn.commit()
+    raw = _body({"cik_str": 123456, "ticker": "ACME", "title": "Acme Corporation"})
+    initial = bootstrap_issuer_reporting_registry(
+        conn, raw_body=raw, request=_request(tmp_path, apply=True)
+    )
+    issuer = initial.results[0].canonical_issuer_id
+    assert issuer is not None
+    IssuerRegistry(conn).persist(
+        Security(
+            security_id="security:acme",
+            idempotency_key="security:acme",
+            issuer_id=issuer,
+            security_kind="common_stock",
+            created_at=STAMP,
+        )
+    )
+    registry = ReportingEntityRegistry(conn)
+    registry.persist(
+        SecurityReportingEntityRevision(
+            relationship_revision_id="security-acme-reporting",
+            idempotency_key="security-acme-reporting",
+            relationship_key="security:acme:reports-through",
+            revision=1,
+            security_id="security:acme",
+            reporting_entity_id="reporting:sec:0000123456",
+            relationship_kind="reports_through",
+            decision_kind="manual",
+            reason_code="test_selected_security",
+            reason_details=(("test", "existing reporting relationship"),),
+            effective_at=STAMP,
+            knowledge_at=STAMP,
+            recorded_at=STAMP,
+        )
+    )
+    old = conn.execute(
+        "SELECT binding_revision_id,revision FROM recorded_subject_binding_revisions "
+        "WHERE recorded_issuer_id='legacy-ticker:ACME' ORDER BY revision DESC LIMIT 1"
+    ).fetchone()
+    assert old is not None
+    registry.persist(
+        EvidenceSubjectBindingRevision(
+            binding_revision_id="selected-security",
+            idempotency_key="selected-security",
+            recorded_issuer_id="legacy-ticker:ACME",
+            revision=int(old[1]) + 1,
+            issuer_id=issuer,
+            reporting_entity_id="reporting:sec:0000123456",
+            security_id="security:acme",
+            outcome="selected",
+            decision_kind="manual",
+            reason_code="test_selected_security",
+            reason_details=(("test", "preserve selection"),),
+            material_dissent=False,
+            effective_at=STAMP,
+            knowledge_at=STAMP,
+            recorded_at=STAMP,
+            supersedes_binding_revision_id=str(old[0]),
+        )
+    )
+    conn.commit()
+    replay = bootstrap_issuer_reporting_registry(
+        conn, raw_body=raw, request=_request(tmp_path, apply=True)
+    )
+    assert replay.records_created == 0
+    assert (
+        registry.canonicalize_recorded_subject("legacy-ticker:ACME", knowledge_at=STAMP).security_id
+        == "security:acme"
+    )
+    conn.close()
+
+
+def test_new_subject_on_retained_authority_uses_current_knowledge_clock(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    from datetime import timedelta
+
+    from provenance.reporting_entity_registry import ReportingEntityRegistry
+
+    path = _database(tmp_path, migrated_db)
+    conn = sqlite3.connect(path)
+    conn.execute(
+        "INSERT INTO tracked_companies VALUES (1, 'bhanu', 'ACME', 'Acme', 'portfolio', NULL)"
+    )
+    conn.commit()
+    raw = _body(
+        {"cik_str": 123456, "ticker": "ACME", "title": "Acme Corporation"},
+        {"cik_str": 123456, "ticker": "ALIAS", "title": "Acme Corporation"},
+    )
+    first = bootstrap_issuer_reporting_registry(
+        conn, raw_body=raw, request=_request(tmp_path, apply=True)
+    )
+    conn.execute(
+        "INSERT INTO tracked_companies VALUES (2, 'bhanu', 'ALIAS', 'Acme', 'portfolio', NULL)"
+    )
+    conn.commit()
+    later = STAMP + timedelta(days=1)
+    applied = bootstrap_issuer_reporting_registry(
+        conn,
+        raw_body=raw,
+        request=_request(tmp_path, apply=True, recorded_at=later).model_copy(
+            update={"ticker_scope": ("ALIAS",)}
+        ),
+    )
+    assert applied.source_observation_id == first.source_observation_id
+    registry = ReportingEntityRegistry(conn)
+    with pytest.raises(LookupError, match="no selected resolution"):
+        registry.canonicalize_recorded_subject("legacy-ticker:ALIAS", knowledge_at=STAMP)
+    assert (
+        registry.canonicalize_recorded_subject("legacy-ticker:ALIAS", knowledge_at=later).issuer_id
+        == first.results[0].canonical_issuer_id
+    )
     conn.close()

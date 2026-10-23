@@ -14,8 +14,18 @@ from pathlib import Path, PurePosixPath
 from typing import Literal, Self, TypeAlias, cast, overload
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
+from pipeline.source_policy import fiscal_quarter_end
 from provenance.verifier_identity import verifier_source_artifact_sha256
 from runtime.deterministic import canonical_json as _canonical_json
 from runtime.deterministic import sha256_text as _sha256_text
@@ -69,7 +79,39 @@ class ExpectedIssuerDocument(_ClosedModel):
         return value
 
 
-class IssuerDocumentInventoryRequest(_ClosedModel):
+class FiscalPeriodWitness(_ClosedModel):
+    """Existing source-backed profile and reported document identity, never a new calendar store."""
+
+    issuer_id: str = Field(min_length=1)
+    profile_revision_id: str = Field(min_length=1)
+    fiscal_year_end: str = Field(pattern=r"^\d{2}-\d{2}$")
+    document_version_id: str = Field(min_length=1)
+    document_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    knowledge_cutoff: datetime
+    observed_through: datetime
+
+    @model_validator(mode="after")
+    def _clocks(self) -> Self:
+        if any(c.tzinfo is None for c in (self.knowledge_cutoff, self.observed_through)):
+            raise ValueError("fiscal witness clocks require timezones")
+        if self.observed_through < self.knowledge_cutoff:
+            raise ValueError("fiscal witness observation cutoff precedes knowledge cutoff")
+        fiscal_quarter_end(fiscal_year=2000, fiscal_quarter=4, fiscal_year_end=self.fiscal_year_end)
+        return self
+
+
+class _FiscalRequest(_ClosedModel):
+    fiscal_period_witness: FiscalPeriodWitness | None = None
+
+    @model_serializer(mode="wrap")
+    def _legacy_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        result = cast("dict[str, object]", handler(self))
+        if self.fiscal_period_witness is None:
+            result.pop("fiscal_period_witness", None)
+        return result
+
+
+class IssuerDocumentInventoryRequest(_FiscalRequest):
     """Closed expected URL/doc-type population from the source-discovery outcome."""
 
     schema_version: Literal["issuer_document_inventory_request.v1"] = (
@@ -85,8 +127,17 @@ class IssuerDocumentInventoryRequest(_ClosedModel):
     def _closed_set(self) -> Self:
         if self.ticker != self.ticker.strip().upper() or not _TICKER.fullmatch(self.ticker):
             raise ValueError("ticker must be canonical uppercase")
-        if self.period_end != _quarter_end(self.fiscal_year, self.fiscal_quarter):
-            raise ValueError("period_end must be the requested calendar-quarter end")
+        expected_end = (
+            _quarter_end(self.fiscal_year, self.fiscal_quarter)
+            if self.fiscal_period_witness is None
+            else fiscal_quarter_end(
+                fiscal_year=self.fiscal_year,
+                fiscal_quarter=self.fiscal_quarter,
+                fiscal_year_end=self.fiscal_period_witness.fiscal_year_end,
+            )
+        )
+        if self.period_end != expected_end:
+            raise ValueError("period_end must match the requested fiscal quarter")
         keys = [(item.source_url, item.document_type) for item in self.expected_documents]
         if keys != sorted(keys):
             raise ValueError("expected_documents must be sorted by URL and document type")
@@ -255,6 +306,7 @@ def _build_v1_inventory(
         # Establish exactly one SQLite reader snapshot before any registry
         # query.  In WAL mode this pins the reader to one committed WAL frame.
         conn.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
+        validate_fiscal_period_witness(conn, request=request)
         binding = _database_binding(conn, before)
         records = tuple(
             _load_expected_document(conn, root=root, request=request, expected=expected)
@@ -393,7 +445,7 @@ class ExpectedIssuerDocumentAlias(ExpectedIssuerDocument):
     alias: IssuerDocumentAliasBinding
 
 
-class IssuerDocumentAliasInventoryRequest(_ClosedModel):
+class IssuerDocumentAliasInventoryRequest(_FiscalRequest):
     schema_version: Literal["issuer_document_inventory_request.v2_alias"] = (
         "issuer_document_inventory_request.v2_alias"
     )
@@ -415,11 +467,17 @@ class IssuerDocumentAliasInventoryRequest(_ClosedModel):
             fiscal_year=self.fiscal_year,
             fiscal_quarter=self.fiscal_quarter,
             period_end=self.period_end,
+            fiscal_period_witness=self.fiscal_period_witness,
             expected_documents=tuple(
                 ExpectedIssuerDocument(source_url=item.source_url, document_type=item.document_type)
                 for item in self.expected_documents
             ),
         )
+        if self.fiscal_period_witness is not None and (
+            self.fiscal_period_witness.knowledge_cutoff != self.knowledge_cutoff
+            or self.fiscal_period_witness.observed_through != self.observed_through
+        ):
+            raise ValueError("alias and fiscal witness clocks must match")
         if any(clock.tzinfo is None for clock in (self.knowledge_cutoff, self.observed_through)):
             raise ValueError("alias cutoffs require explicit timezones")
         if self.observed_through < self.knowledge_cutoff:
@@ -717,6 +775,7 @@ def _build_alias_inventory(
         else:
             conn.execute("BEGIN")
         conn.execute("SELECT 1 FROM sqlite_schema LIMIT 1").fetchone()
+        validate_fiscal_period_witness(conn, request=request)
         binding = _database_binding(conn, before)
         records: list[IssuerDocumentAliasInventoryRecord] = []
         for expected in request.expected_documents:
@@ -818,6 +877,92 @@ def build_issuer_document_inventory(
         request=request,
         transaction_open=transaction_open,
     )
+
+
+def validate_fiscal_period_witness(
+    conn: sqlite3.Connection, *, request: IssuerDocumentInventoryRequestAny
+) -> None:
+    witness = request.fiscal_period_witness
+    if witness is None:
+        return
+    if request.period_end != fiscal_quarter_end(
+        fiscal_year=request.fiscal_year,
+        fiscal_quarter=request.fiscal_quarter,
+        fiscal_year_end=witness.fiscal_year_end,
+    ):
+        raise IssuerDocumentInventoryError("fiscal_witness_period_mismatch")
+    profile = _alias_row(
+        conn, "issuer_profile_revisions", "profile_revision_id", witness.profile_revision_id
+    )
+    version = _alias_row(
+        conn, "evidence_document_versions", "document_version_id", witness.document_version_id
+    )
+    details = json.loads(str(profile["reason_details_json"]))
+    details = dict(details)
+    observation_id = details.get("source_observation_id")
+    if not isinstance(observation_id, str):
+        raise IssuerDocumentInventoryError("fiscal_profile_source_missing")
+    source = _alias_row(conn, "evidence_source_observations", "observation_id", observation_id)
+    cik_assertions = conn.execute(
+        "SELECT DISTINCT normalized_value FROM issuer_identifier_assertions "
+        "WHERE issuer_id=? AND identifier_type='sec_cik' AND source_observation_id=?",
+        (witness.issuer_id, observation_id),
+    ).fetchall()
+    if len(cik_assertions) != 1 or source["source_url"] != (
+        f"https://data.sec.gov/submissions/CIK{cik_assertions[0][0]}.json"
+    ):
+        raise IssuerDocumentInventoryError("fiscal_profile_authority_mismatch")
+    document_source = _alias_row(
+        conn, "evidence_source_observations", "observation_id", str(version["observation_id"])
+    )
+    subject = conn.execute(
+        "SELECT issuer_id,outcome,material_dissent,knowledge_at,recorded_at,effective_at "
+        "FROM recorded_subject_binding_revisions "
+        "WHERE recorded_issuer_id=? ORDER BY revision DESC LIMIT 1",
+        (f"legacy-ticker:{request.ticker}",),
+    ).fetchone()
+    if subject is None or tuple(subject[:3]) != (witness.issuer_id, "selected", 0):
+        raise IssuerDocumentInventoryError("fiscal_subject_mismatch")
+    _alias_clock(subject[3], witness.knowledge_cutoff)
+    _alias_clock(subject[4], witness.observed_through)
+    _alias_clock(subject[5], witness.knowledge_cutoff)
+    if (
+        profile["issuer_id"] != witness.issuer_id
+        or profile["status"] != "active"
+        or profile["fiscal_year_end"] != witness.fiscal_year_end
+        or details.get("field_locator") != "/fiscalYearEnd"
+        or details.get("source_sha256") != source["blob_sha256"]
+        or source["source_kind"] != "sec_submissions"
+        or document_source["blob_sha256"] != witness.document_sha256
+        or version["issuer_id"] not in (witness.issuer_id, f"legacy-ticker:{request.ticker}")
+        or version["ticker"] != request.ticker
+        or version["blob_sha256"] != witness.document_sha256
+        or version["period_end"] is None
+        or datetime.fromisoformat(str(version["period_end"])).date() != request.period_end
+    ):
+        raise IssuerDocumentInventoryError("fiscal_witness_identity_mismatch")
+    for row, field, cutoff in (
+        (profile, "knowledge_at", witness.knowledge_cutoff),
+        (profile, "effective_at", witness.knowledge_cutoff),
+        (profile, "recorded_at", witness.observed_through),
+        (source, "observed_at", witness.knowledge_cutoff),
+        (source, "retrieved_at", witness.observed_through),
+        (version, "recorded_at", witness.observed_through),
+        (document_source, "observed_at", witness.knowledge_cutoff),
+        (document_source, "retrieved_at", witness.observed_through),
+    ):
+        _alias_clock(row[field], cutoff)
+    newer = conn.execute(
+        "SELECT knowledge_at,recorded_at FROM issuer_profile_revisions "
+        "WHERE issuer_id=? AND revision>?",
+        (witness.issuer_id, profile["revision"]),
+    ).fetchall()
+    if any(
+        _alias_visible(row[0], witness.knowledge_cutoff)
+        and _alias_visible(row[1], witness.observed_through)
+        for row in newer
+    ):
+        raise IssuerDocumentInventoryError("fiscal_profile_superseded")
 
 
 def _database_binding(conn: sqlite3.Connection, bundle: _DatabaseBundle) -> DatabaseBinding:

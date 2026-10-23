@@ -112,18 +112,9 @@ AUDITED_LEGACY_FACT_READS = {
     "src/allocation/eligibility.py": 1,
     "src/bear_case_grader.py": 1,
     "src/competitive/holdings_sync.py": 1,
-    "src/compute/fmp_derived_kpis.py": 1,
-    # Shared fact-aware unit resolution moved this existing read out of the
-    # seeding CLI so Ask approval and seeding use one deterministic authority.
-    "src/compute/kpi_definition_units.py": 1,
     "src/compute/kpi_extract_summaries.py": 2,
-    "src/compute/metrics_engine/io.py": 8,
-    "src/compute/say_do.py": 1,
-    "src/compute/segment_q4_derive.py": 1,
-    "src/compute/segment_quarterly_10q.py": 1,
-    "src/compute/segments.py": 1,
+    "src/compute/metrics_engine/io.py": 6,
     "src/credibility/observations.py": 3,
-    "src/dcf/fact_drivers.py": 1,
     "src/decision_conditions.py": 2,
     "src/pipeline/confidence.py": 2,
     "src/pipeline/explore_panel.py": 1,
@@ -147,21 +138,14 @@ AUDITED_LEGACY_FACT_READS = {
     "src/provenance/financial_fact_resolution.py": 4,
     "src/provenance/integrity_audit.py": 1,
     "src/provenance/legacy_canonical_parity.py": 2,
-    "src/report/metrics_view.py": 1,
-    "src/report/sections/financials.py": 2,
     "src/synthesis/lenses/_shared.py": 1,
     # Admitted semantic persistence validates the exact legacy projection row's
     # stored unit before appending context. This is a write-boundary guard, not
     # an analytical reader, and retires with the legacy KPI projection.
     "src/pipeline/kpi_semantics.py": 1,
-    # One direct legacy financial-fact read moved behind the canonical relation
-    # resolver; the frozen literal legacy-read debt therefore shrinks by one.
     # The KPI pick-pair read joins raw kpi_facts to the per-connection
-    # materialized pick (winners of the resolved relation + admission +
-    # identity, built once per connection), so the raw read is
-    # provenance-equivalent to the resolved-relation read it replaced; the
-    # audited count grows by exactly that one read.
-    "src/timeseries/loaders.py": 5,
+    # materialized pick of guarded, admitted winners.
+    "src/timeseries/loaders.py": 1,
     "src/triggers/kpi_inflection.py": 1,
     "src/user_state/kpi_catalog.py": 1,
     "src/viewspec/engine.py": 1,

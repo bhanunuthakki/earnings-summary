@@ -46,6 +46,7 @@ from pipeline.segment_junction_writer import (
     write_segment_facts_junction,
     write_segment_facts_via_junction,
 )
+from provenance.financial_fact_resolution import canonical_fact_relation
 
 # Tag for SegmentDimension.extracted_by — mirrors the convention other segment
 # writers use (e.g. segment_quarterly_10q.py's EXTRACTOR_ID) so a row's origin
@@ -104,8 +105,9 @@ def _lookup_period_revenue(
     can't disprove it. quarterly_refresh orders docs so income_statement runs
     first; the None branch only triggers on bootstrap / partial-data states.
     """
+    fact_relation = canonical_fact_relation(conn, "financial_facts").sql
     cur = conn.execute(
-        "SELECT value FROM financial_facts "
+        f"SELECT value FROM {fact_relation} "
         "WHERE ticker = ? AND period_end = ? AND fiscal_period_type = ? "
         "AND line_item = 'revenue' LIMIT 1",
         (ticker.upper(), period_end, period_type.value),

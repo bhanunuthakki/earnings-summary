@@ -14,6 +14,119 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 SemanticStatus = Literal["required", "not_required", "review_required", "quarantined"]
 DecisionKind = Literal["deterministic", "human", "model_assisted"]
 _Mode = Literal["dry_run", "apply"]
+_DocumentVersionSql = Literal["run.document_version_id", ":document_version_id"]
+
+
+def semantic_quarantine_available(conn: sqlite3.Connection) -> bool:
+    """Preserve pre-disposition schemas and reject a damaged installed ledger."""
+
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' "
+        "AND name='document_semantic_disposition_revisions'"
+    ).fetchone()
+    if exists is None:
+        installed = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='fact_observations_v2'"
+        ).fetchone()
+        if installed is not None:
+            raise RuntimeError("document semantic disposition ledger is missing")
+        return False
+    required = {
+        "assessment_id",
+        "idempotency_key",
+        "document_version_id",
+        "revision",
+        "semantic_status",
+        "reason_code",
+        "reason_details_json",
+        "decision_kind",
+        "reviewer_identity",
+        "policy_name",
+        "policy_version",
+        "policy_config_sha256",
+        "effective_at",
+        "knowledge_at",
+        "recorded_at",
+        "supersedes_assessment_id",
+        "material_dissent",
+    }
+    actual = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(document_semantic_disposition_revisions)")
+    }
+    if not required.issubset(actual):
+        raise RuntimeError("document semantic disposition ledger is incomplete")
+    return True
+
+
+def _clock_at_or_before_sql(column: str) -> str:
+    """Compare UTC seconds and all six stored fractional digits."""
+
+    seconds = f"strftime('%Y-%m-%dT%H:%M:%S',{column})"
+    cutoff_seconds = "strftime('%Y-%m-%dT%H:%M:%S',:cutoff)"
+    micros = f"CASE WHEN substr({column},20,1)='.' THEN substr({column},21,6) ELSE '000000' END"
+    cutoff_micros = "CASE WHEN substr(:cutoff,20,1)='.' THEN substr(:cutoff,21,6) ELSE '000000' END"
+    return (
+        f"({seconds}<{cutoff_seconds} OR "
+        f"({seconds}={cutoff_seconds} AND {micros}<={cutoff_micros}))"
+    )
+
+
+def _malformed_clock_sql(alias: str) -> str:
+    columns = ("effective_at", "knowledge_at", "recorded_at")
+    six_digits = "[0-9][0-9][0-9][0-9][0-9][0-9]"
+    return " OR ".join(
+        f"datetime({alias}.{column}) IS NULL OR "
+        f"(substr({alias}.{column},20,1)='.' AND "
+        f"(substr({alias}.{column},21,6) NOT GLOB '{six_digits}' "
+        f"OR substr({alias}.{column},27,1) NOT IN ('','+','-','Z')))"
+        for column in columns
+    )
+
+
+def _visible_clocks_sql(alias: str) -> str:
+    return "".join(
+        f"AND {_clock_at_or_before_sql(alias + '.' + column)} "
+        for column in ("effective_at", "knowledge_at", "recorded_at")
+    )
+
+
+def explicit_document_quarantine_sql(
+    document_version_sql: _DocumentVersionSql, *, as_known: bool
+) -> str:
+    """Exclude malformed clocks or the latest visible explicit quarantine."""
+
+    decision_visible = _visible_clocks_sql("decision") if as_known else ""
+    newer_visible = _visible_clocks_sql("newer") if as_known else ""
+    return (
+        "(EXISTS (SELECT 1 FROM document_semantic_disposition_revisions AS malformed "
+        f"WHERE malformed.document_version_id={document_version_sql} "
+        f"AND ({_malformed_clock_sql('malformed')})) OR "
+        "EXISTS (SELECT 1 FROM document_semantic_disposition_revisions AS decision "
+        f"WHERE decision.document_version_id={document_version_sql} "
+        "AND decision.semantic_status='quarantined' "
+        + decision_visible
+        + "AND NOT EXISTS (SELECT 1 FROM document_semantic_disposition_revisions AS newer "
+        "WHERE newer.document_version_id=decision.document_version_id "
+        "AND newer.revision>decision.revision " + newer_visible + ")))"
+    )
+
+
+def document_semantically_quarantined_as_known(
+    conn: sqlite3.Connection, *, document_version_id: str, cutoff: datetime
+) -> bool:
+    """A missing decision preserves existing read behavior; a visible quarantine blocks it."""
+
+    if not semantic_quarantine_available(conn):
+        return False
+    predicate = explicit_document_quarantine_sql(":document_version_id", as_known=True)
+    return (
+        conn.execute(
+            f"SELECT 1 WHERE {predicate}",  # nosec B608 -- closed, owner-generated SQL
+            {"document_version_id": document_version_id, "cutoff": cutoff.isoformat()},
+        ).fetchone()
+        is not None
+    )
 
 
 class SemanticDisposition(BaseModel):

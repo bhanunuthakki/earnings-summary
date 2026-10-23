@@ -2,8 +2,15 @@
 
 Owner request: complete coverage and pipeline work, use Chisle and Sol workers,
 and obtain a fresh independent GPT-6.1 score above 90/100 after each major step.
-Status: foundation release in validation; live population and the full roadmap remain open.
-Baseline: main 65bda94ddb4be092a9c2122ae0d489cf9b66d2c5.
+Status: foundation release deployed and live-verified; portfolio population and fidelity evaluation are active. Full coverage is not yet accepted.
+Current deployed baseline: main c635c7fa3778a50c3ae3e23342e3d79d66958112.
+
+The owner confirmed continuation on October 23 with every portfolio company as
+the required first cohort. Use the five most recent reported fiscal quarters
+for each company. Keep completed but unreleased periods explicitly pending.
+Portfolio funds remain a separate source population. Evaluation and watchlist
+work follows the required portfolio cohort. Keep the exact roster and private
+coverage manifests in the existing task evidence, outside public documentation.
 
 ## Scope and authority
 
@@ -129,6 +136,38 @@ means focused searches, small reads, existing owners and no added dependency
 when installed tools suffice. Do not add a second tracking or audit system.
 
 ## Current state
+
+- Foundation deployment supersedes the earlier release-pending notes below:
+  PR1722 is merged as `c635c7fa`, with all 3,780 installed code files verified,
+  full CI passed, service and task restoration verified, and independent
+  post-deployment review at 97/100 with no deployment blockers. This establishes
+  the code release, not data coverage, model fidelity or financial admission.
+- Portfolio continuation: reconcile retained documents and existing source
+  identities before new collection. Repair missing subject bindings through the
+  existing bootstrap owner. Verify fiscal periods against reported dates rather
+  than assuming calendar-quarter ends. Extend the existing semantic quarantine
+  rule through financial readers before restoring a historically misclassified
+  document. The prepared model evaluation uses an isolated synthetic database
+  and exact deployed source bytes; it cannot publish financial observations.
+  Each major change and evaluation still needs its independent review and the
+  applicable deterministic gates.
+- The first real PDF model attempt rejected a quote that did not occur in its
+  native source section. The deployed code retained only the response hash, so
+  that response cannot be reconstructed or graded. No financial rows were
+  published. The follow-up repair retains raw responses before validation and
+  shares a two-request ceiling between JSON and source-quote repair. Its 62
+  focused tests pass and independent code review scored 94/100. Actual model
+  fidelity remains pending in a separate synthetic attempt; the first attempt
+  remains unchanged.
+- The source-backed fiscal calendar and subject-binding repair passes 192
+  affected tests. Twelve new fiscal regressions fail against the predecessor
+  owners. Independent review is pending. This repairs acquisition eligibility;
+  it does not establish that the required source population has been collected.
+- Financial source quarantine now reaches the direct financial consumers. Their
+  independent reviews scored 94/100 and 95/100. A further persisted-calculation
+  gap remains under repair: every required input must remain usable at the
+  reader's cutoff. Preserve the saved calculation and reject its use when an
+  input is quarantined. No production quarantine was applied in this step.
 
 - Plan: independent review improved from 86/100 to 93/100 with no plan blockers.
   The exact reviewed plan hash and scope are in
