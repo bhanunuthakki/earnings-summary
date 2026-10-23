@@ -253,3 +253,30 @@ def test_deleted_tracked_files_are_ignored_but_untracked_files_are_scanned(
     untracked.write_text("account id: 8\n", encoding="utf-8")
 
     assert verify(tmp_path) == ["account-level-fact in: notes/untracked.md"]
+
+
+def test_outgoing_history_rejects_private_material_removed_from_final_tree(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    note = tmp_path / "note.md"
+    note.write_text("public\n", encoding="utf-8")
+    _commit(tmp_path, "public base")
+    base = subprocess.check_output(
+        ["git", "-C", tmp_path, "rev-parse", "HEAD"], text=True, env=_git_env()
+    ).strip()
+    note.write_text("account balance: 123\n", encoding="utf-8")
+    _commit(tmp_path, "private intermediate")
+    note.write_text("public\n", encoding="utf-8")
+    _commit(tmp_path, "remove private material")
+
+    assert verify(tmp_path) == []
+    assert public_guard.audit_outgoing_history(tmp_path, base) == {
+        "account-level-fact": {"files": 1, "refs": 1}
+    }
+
+
+def test_outgoing_history_requires_a_valid_base(tmp_path: Path) -> None:
+    _init_repo(tmp_path)
+    (tmp_path / "README.md").write_text("public\n", encoding="utf-8")
+    _commit(tmp_path, "public root")
+    with pytest.raises(subprocess.CalledProcessError):
+        public_guard.audit_outgoing_history(tmp_path, "missing-base")

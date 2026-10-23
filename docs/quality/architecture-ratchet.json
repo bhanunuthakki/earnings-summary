@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "cb2ee717047bba926beb36b819f29d79501fb3f8",
+  "scoped_commit": "e4ccb4516c084c752681c626d2ea7a9188f3f04c",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "3ae500efec49689cd626b4dab86a7a62ab67f52e6b5c780b86ff54c6d85b19e6",
+  "source_sha256": "0666e42079126aedbbb79328654932ce6a5c43bda23f818326cfba23e9b19936",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1474,
-    "total_noncomment_loc": 566310,
+    "executable_modules": 1476,
+    "total_noncomment_loc": 566613,
     "modules_over_1000_loc": 109,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -2846,6 +2846,19 @@
           "noncomment": 49
         },
         "internal_fan_out": 2,
+        "responsibilities": [],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
+        "path": "execution/export_shareable_report.py",
+        "module": "execution.export_shareable_report",
+        "lines": {
+          "physical": 27,
+          "nonblank": 20,
+          "noncomment": 20
+        },
+        "internal_fan_out": 1,
         "responsibilities": [],
         "public_functions": 1,
         "fully_annotated_public_functions": 1
@@ -6916,9 +6929,9 @@
         "path": "execution/verify_public_tree.py",
         "module": "execution.verify_public_tree",
         "lines": {
-          "physical": 342,
-          "nonblank": 302,
-          "noncomment": 302
+          "physical": 388,
+          "nonblank": 342,
+          "noncomment": 342
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -6926,8 +6939,8 @@
           "network",
           "process"
         ],
-        "public_functions": 9,
-        "fully_annotated_public_functions": 9
+        "public_functions": 10,
+        "fully_annotated_public_functions": 10
       },
       {
         "path": "execution/verify_reader_parity.py",
@@ -12503,9 +12516,9 @@
         "path": "src/log_redact.py",
         "module": "log_redact",
         "lines": {
-          "physical": 136,
-          "nonblank": 120,
-          "noncomment": 120
+          "physical": 134,
+          "nonblank": 118,
+          "noncomment": 118
         },
         "internal_fan_out": 0,
         "responsibilities": [],
@@ -19221,6 +19234,22 @@
         "internal_fan_out": 5,
         "responsibilities": [
           "database"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
+        "path": "src/report/shareable.py",
+        "module": "report.shareable",
+        "lines": {
+          "physical": 272,
+          "nonblank": 246,
+          "noncomment": 245
+        },
+        "internal_fan_out": 2,
+        "responsibilities": [
+          "filesystem",
+          "network"
         ],
         "public_functions": 1,
         "fully_annotated_public_functions": 1

@@ -3,12 +3,32 @@
 from __future__ import annotations
 
 import io
+import traceback
 import urllib.error
+from email.message import EmailMessage
 from pathlib import Path
 
 import pytest
 
 from capture import telegram, token_store
+
+
+def test_download_failure_does_not_expose_token_in_displayed_traceback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    marker = "123456:SYNTHETIC-TELEGRAM-CREDENTIAL"
+
+    def fail(url: str, **_kwargs: object) -> object:
+        raise OSError(f"download failed for {url}")
+
+    monkeypatch.setattr(telegram.urllib.request, "urlopen", fail)
+    with pytest.raises(telegram.TelegramError) as caught:
+        telegram.download_file(marker, "voice/file.oga", tmp_path / "voice.oga")
+
+    assert marker not in str(caught.value)
+    assert marker not in "".join(traceback.format_exception(caught.value))
+    assert caught.value.__suppress_context__ is True
+    assert caught.value.__cause__ is None
 
 
 def test_http_error_surfaces_api_description_without_leaking_token(
@@ -19,7 +39,7 @@ def test_http_error_surfaces_api_description_without_leaking_token(
             "https://api.telegram.org/botSECRET/sendMessage",
             400,
             "Bad Request",
-            {},
+            EmailMessage(),
             io.BytesIO(b'{"ok":false,"description":"Bad Request: chat not found"}'),
         )
 
@@ -181,14 +201,18 @@ def test_edit_message_posts_text_and_strips_keyboard_by_default(
 ) -> None:
     seen: dict[str, object] = {}
 
-    def _fake_request(url: str, *, data: dict[str, object] | None = None, timeout: float = 60):
+    def _fake_request(
+        url: str, *, data: dict[str, object] | None = None, timeout: float = 60
+    ) -> dict[str, object]:
         seen["url"] = url
         seen["data"] = data
         return {}
 
     monkeypatch.setattr(telegram, "_request", _fake_request)
     telegram.edit_message("tok", 111, 9, "new body")
-    assert "editMessageText" in seen["url"]
+    url = seen["url"]
+    assert isinstance(url, str)
+    assert "editMessageText" in url
     data = seen["data"]
     assert data == {
         "chat_id": 111,
@@ -201,14 +225,16 @@ def test_edit_message_posts_text_and_strips_keyboard_by_default(
 def test_edit_message_carries_an_explicit_keyboard(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, object] = {}
 
-    def _fake_request(url: str, *, data: dict[str, object] | None = None, timeout: float = 60):
+    def _fake_request(
+        url: str, *, data: dict[str, object] | None = None, timeout: float = 60
+    ) -> dict[str, object]:
         seen["data"] = data
         return {}
 
     monkeypatch.setattr(telegram, "_request", _fake_request)
     kb = telegram.inline_keyboard([[("Dismiss", "cp:dismiss:1")]])
     telegram.edit_message("tok", 111, 9, "new body", reply_markup=kb)
-    assert seen["data"]["reply_markup"] == kb
+    assert seen["data"] == {"chat_id": 111, "message_id": 9, "text": "new body", "reply_markup": kb}
 
 
 def test_edit_message_raises_telegram_error_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
