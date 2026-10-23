@@ -85,6 +85,7 @@ from pipeline.run_accounting import (
     record_stage,
     start_run,
 )
+from provenance.financial_fact_resolution import require_summary_anchor_coherence
 from provenance.immutable_artifact import assert_artifact_unchanged, read_stable_artifact
 from provenance.llm_extracted_parent import resolve_parent
 
@@ -430,6 +431,13 @@ def extract_for_ticker(
                 deduplicate_completed=not refresh,
                 force=False,
             )
+            anchor_identity = require_summary_anchor_coherence(
+                conn,
+                document_id=doc_id,
+                ticker=ticker,
+                doc_type=spec.doc_type,
+                summary_sha256=source_snapshot.file_sha256,
+            )
             extracted = _llm_extract(
                 ticker,
                 period_label,
@@ -464,6 +472,14 @@ def extract_for_ticker(
                 db_path=db_path,
             ):
                 raise ValueError("summary extraction model route changed before persistence")
+            if anchor_identity != require_summary_anchor_coherence(
+                conn,
+                document_id=doc_id,
+                ticker=ticker,
+                doc_type=spec.doc_type,
+                summary_sha256=source_snapshot.file_sha256,
+            ):
+                raise ValueError("summary anchor selection changed before persistence")
             manifest = _build_manifest(
                 ticker,
                 period_end,

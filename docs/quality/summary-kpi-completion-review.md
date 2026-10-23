@@ -53,3 +53,42 @@ The whole-tree static gate passes at 2,872 retained files, with existing ceiling
 unchanged at 2,012 Pyright diagnostics and 1,838 suppressions. The directive
 manifest and actual-head reachability closure test pass. These checks do not
 replace the incomplete full suite.
+
+## Follow-up: summary anchor preflight
+
+Sol added a summary-only, read-only guard at the existing financial evidence owner.
+It runs after completed-attempt suppression and before model work. Missing or
+inconsistent anchors produce failed attempts with zero model calls. A selected
+current binding cannot fall back to direct lineage when invalid. Valid scoped
+bindings keep their content hash separate from the containing blob hash. Existing
+issuer projections support recorded IDs and corrected aliases without creating or
+approving mappings. The final transaction compares the selected immutable identity.
+
+The guard establishes stored anchor coherence. It does not certify physical blob
+availability, registry admission, revocation handling, complete write eligibility
+or financial admission. General `_evidence_context` callers, database triggers,
+capture processing, extraction prompt/model policy and completion identity remain
+unchanged. Earlier completed empty attempts remain historical processing receipts.
+
+The new missing-anchor regression failed before implementation because it observed
+one unwanted model call. The final focused suite passes 40 tests. The owner matrix
+passed 233 tests before the last failed-run parameter was added; the focused rerun
+includes that added case. These counts overlap. Changed-file format, lint and types
+pass. Cases include scope/whole-blob distinction, invalid current bindings despite
+valid fallback evidence, recorded issuer IDs and aliases, lineage drift, anchor
+repair followed by retry and retained historical completion.
+
+Astra independently reviewed the frozen source and gave advisory acceptance with
+no blocking defect. It accepted the unchanged scanner's measured 562,136 -> 562,294
+noncomment production lines (+158) as an explicit LOC-only baseline refresh.
+All other architecture constraints remain. Source identity:
+`2d190e478ac0ca1d45297358218c49c05900be6c6ff211cab8c15c4b1be0c517`.
+All 203 reachability disposition source bodies, line fingerprints and targets were
+verified unchanged before aggregate provenance was rebound. This follow-up changes
+no schema and creates no new evidence store, registry or pipeline.
+
+Follow-up local gate: `make check-fast` passes with 183 changed tests. The whole-tree
+static gate passes with the same 2,872 retained files, 2,012 existing diagnostics and
+1,838 suppressions. The directive manifest validates. The previously known full-suite
+teardown blocker remains open; no full-suite pass or production activation is claimed.
+The actual-head reachability closure test also passes.

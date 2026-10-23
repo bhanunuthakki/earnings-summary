@@ -1,5 +1,23 @@
 # Operations & Governance Surface Impact
 
+### Summary anchor preflight (2026-10-22)
+
+Disposition: **existing extraction preflight; no new operator action or schedule**.
+After the existing run reservation, allowlist summary extraction checks anchor
+coherence at `financial_fact_resolution`. Missing or inconsistent anchors fail the
+attempt before model work. A current explicit binding cannot fall back to direct
+lineage when it is invalid. Valid scope hashes remain distinct from whole-blob
+hashes. Recorded issuer IDs and existing canonical mappings remain supported;
+the check does not create or approve issuer mappings.
+
+The selected immutable identity is checked again inside the persistence transaction.
+Changed lineage prevents fact writes. Completed attempts, including earlier empty
+results, retain their processing history and skip before this preflight. Completion
+identity, general fact resolution, capture processing, database triggers and semantic
+admission remain unchanged. The check reads stored lineage only; it does not collect,
+repair or create evidence. Validation belongs to `test_summary_kpi_completion.py`,
+with the existing fact-resolution and binding regressions.
+
 ### Summary KPI processing completion (2026-10-22)
 
 Disposition: **existing extraction and CLI correction; no new operator action or

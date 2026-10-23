@@ -46,6 +46,11 @@ from pipeline.kpi_semantics import (
     normalize_source_numeric,
     parse_source_numeric,
 )
+from provenance.issuer_registry import evidence_document_relation
+from provenance.legacy_document_evidence import (
+    LegacyDocumentEvidenceBindingRevision,
+    LegacyDocumentScopeLocator,
+)
 from provenance.observation_resolution import (
     ObservationDimension,
     ObservationResolutionLedger,
@@ -1455,6 +1460,150 @@ def _fact_row(conn: sqlite3.Connection, fact_table: FactTable, row_id: int) -> s
     if not isinstance(row, sqlite3.Row):
         raise RuntimeError("fact cutover requires sqlite3.Row row_factory")
     return row
+
+
+@dataclass(frozen=True, slots=True)
+class SummaryAnchorIdentity:
+    """Selected stored summary anchor; this does not establish financial admission."""
+
+    binding: LegacyDocumentEvidenceBindingRevision | None
+    document_version_id: str
+    extraction_run_id: str
+    evidence_node_id: str
+    observation_id: str
+    issuer_id: str
+    projected_issuer_id: str
+    blob_sha256: str
+    input_sha256: str
+
+
+def require_summary_anchor_coherence(
+    conn: sqlite3.Connection,
+    *,
+    document_id: int,
+    ticker: str,
+    doc_type: str,
+    summary_sha256: str,
+) -> SummaryAnchorIdentity:
+    """Check existing summary anchor coherence without reading or creating evidence.
+
+    An explicit current binding owns selection, including a scoped node in a
+    larger source blob. Only an absent binding permits legacy direct selection.
+    The database fact-write gate and semantic admission remain independent.
+    """
+    document = conn.execute(
+        "SELECT ticker,source_type,doc_type,sha256 FROM documents WHERE id=?",
+        (document_id,),
+    ).fetchone()
+    if document is None or (
+        str(document[0]).upper() != ticker.upper()
+        or document[1] != SourceType.LLM_EXTRACTED.value
+        or document[2] != doc_type
+        or document[3] != summary_sha256
+    ):
+        raise ValueError("summary_anchor_document_identity_mismatch")
+    current = conn.execute(
+        "SELECT * FROM v_legacy_document_evidence_bindings_current WHERE legacy_document_id=?",
+        (document_id,),
+    ).fetchone()
+    binding: LegacyDocumentEvidenceBindingRevision | None = None
+    if current is not None:
+        binding = LegacyDocumentEvidenceBindingRevision(
+            binding_revision_id=str(current["binding_revision_id"]),
+            idempotency_key=str(current["idempotency_key"]),
+            legacy_document_id=int(current["legacy_document_id"]),
+            revision=int(current["revision"]),
+            document_version_id=str(current["document_version_id"]),
+            evidence_node_id=str(current["evidence_node_id"]),
+            scope_locator=LegacyDocumentScopeLocator.model_validate_json(
+                str(current["scope_locator_json"])
+            ),
+            scope_locator_sha256=str(current["scope_locator_sha256"]),
+            scope_content_sha256=str(current["scope_content_sha256"]),
+            effective_at=_datetime(current["effective_at"], field="effective_at"),
+            knowledge_at=_datetime(current["knowledge_at"], field="knowledge_at"),
+            recorded_at=_datetime(current["recorded_at"], field="recorded_at"),
+            supersedes_binding_revision_id=_optional_text(
+                current["supersedes_binding_revision_id"]
+            ),
+        )
+        if binding.scope_content_sha256 != summary_sha256:
+            raise ValueError("summary_anchor_scope_hash_mismatch")
+    chain_sql = (
+        "SELECT version.document_version_id,version.legacy_document_id,version.ticker,"
+        "version.document_type,version.issuer_id,version.blob_sha256,version.observation_id,"
+        "source.blob_sha256 AS source_sha,blob.sha256 AS blob_sha,"
+        "run.input_sha256,run.extraction_run_id,run.outcome,"
+        "node.node_id,node.node_kind,parent.ticker AS parent_ticker "
+        "FROM evidence_nodes node JOIN evidence_extraction_runs run "
+        "ON run.extraction_run_id=node.extraction_run_id "
+        "JOIN evidence_document_versions version ON version.document_version_id=run.document_version_id "
+        "LEFT JOIN evidence_source_observations source ON source.observation_id=version.observation_id "
+        "LEFT JOIN evidence_content_blobs blob ON blob.sha256=version.blob_sha256 "
+        "LEFT JOIN documents parent ON parent.id=version.legacy_document_id "
+    )
+    direct_sql = (
+        "WHERE version.legacy_document_id=? AND run.outcome='succeeded' AND node.node_kind='document' "
+        "ORDER BY version.version_sequence DESC,node.revision DESC,run.completed_at DESC,node.node_id DESC LIMIT 1"
+    )
+    selected = conn.execute(
+        chain_sql + ("WHERE node.node_id=?" if binding is not None else direct_sql),
+        (binding.evidence_node_id if binding is not None else document_id,),
+    ).fetchone()
+    if selected is None:
+        raise ValueError("summary_anchor_missing_or_invalid")
+    if (
+        str(selected["ticker"]).upper() != ticker.upper()
+        or not str(selected["issuer_id"] or "").strip()
+        or selected["outcome"] != "succeeded"
+        or selected["blob_sha256"] != selected["source_sha"]
+        or selected["blob_sha256"] != selected["blob_sha"]
+        or selected["input_sha256"] != selected["blob_sha256"]
+        or (
+            selected["legacy_document_id"] is not None
+            and str(selected["parent_ticker"]).upper() != ticker.upper()
+        )
+    ):
+        raise ValueError("summary_anchor_chain_identity_mismatch")
+    if binding is not None:
+        if selected["document_version_id"] != binding.document_version_id:
+            raise ValueError("summary_anchor_binding_version_mismatch")
+    elif selected["document_type"] != doc_type or selected["blob_sha256"] != summary_sha256:
+        raise ValueError("summary_anchor_direct_identity_mismatch")
+    relation = evidence_document_relation(conn)
+    projected = conn.execute(
+        f"SELECT issuer_id FROM {relation} WHERE document_version_id=?",  # nosec B608 -- canonical owner returns a fixed relation name
+        (selected["document_version_id"],),
+    ).fetchone()
+    if projected is None or not str(projected[0] or "").strip():
+        raise ValueError("summary_anchor_issuer_unresolved")
+    if binding is not None:
+        # Compare only the applicable direct lineage for these same bytes.
+        direct = conn.execute(
+            chain_sql + "WHERE version.legacy_document_id=? AND version.blob_sha256=? "
+            "AND version.document_type=? AND UPPER(version.ticker)=? "
+            "AND run.outcome='succeeded' AND node.node_kind='document' "
+            "ORDER BY version.version_sequence DESC,node.revision DESC,run.completed_at DESC,node.node_id DESC LIMIT 1",
+            (document_id, summary_sha256, doc_type, ticker.upper()),
+        ).fetchone()
+        if direct is not None and direct["issuer_id"] != selected["issuer_id"]:
+            direct_projected = conn.execute(
+                f"SELECT issuer_id FROM {relation} WHERE document_version_id=?",  # nosec B608 -- canonical owner returns a fixed relation name
+                (direct["document_version_id"],),
+            ).fetchone()
+            if direct_projected is None or direct_projected[0] != projected[0]:
+                raise ValueError("summary_anchor_issuer_conflict_unresolved")
+    return SummaryAnchorIdentity(
+        binding=binding,
+        document_version_id=str(selected["document_version_id"]),
+        extraction_run_id=str(selected["extraction_run_id"]),
+        evidence_node_id=str(selected["node_id"]),
+        observation_id=str(selected["observation_id"]),
+        issuer_id=str(selected["issuer_id"]),
+        projected_issuer_id=str(projected[0]),
+        blob_sha256=str(selected["blob_sha256"]),
+        input_sha256=str(selected["input_sha256"]),
+    )
 
 
 def _evidence_context(conn: sqlite3.Connection, document_id: int) -> _EvidenceContext:
