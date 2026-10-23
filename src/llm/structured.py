@@ -52,6 +52,11 @@ _RETRY_PREAMBLE = (
 )
 
 
+def repair_structured_prompt(prompt: str) -> str:
+    """The canonical default prompt for one structured-output repair request."""
+    return _RETRY_PREAMBLE + prompt
+
+
 def _safe_raw_head(raw: str, limit: int) -> str:
     """Bound and redact provider output before it reaches logs/exceptions."""
     return redact(raw[:limit])
@@ -192,7 +197,7 @@ def call_llm_structured(
 
     # Attempt 2: Same tier with repair preamble
     raw_retry = call_llm(
-        _RETRY_PREAMBLE + prompt,
+        repair_structured_prompt(prompt),
         purpose=purpose,
         ticker=ticker,
         scope=scope,
@@ -241,7 +246,7 @@ def call_llm_structured(
             )
 
             raw_escalated = call_llm(
-                _RETRY_PREAMBLE + prompt,
+                repair_structured_prompt(prompt),
                 purpose=purpose,
                 model=target_model,
                 backend=None,
@@ -302,7 +307,10 @@ def call_llm_structured_with_raw(
     *,
     purpose: str,
     schema: TypeAdapter[T],
-    repair_prompt: Callable[[str], str],
+    repair_prompt: Callable[[str], str] | None = None,
+    expect: Literal["object", "array"] = "object",
+    model: str | None = None,
+    backend: str | None = None,
     ticker: str | None = None,
     scope: str | None = None,
     run_id: str | None = None,
@@ -311,9 +319,8 @@ def call_llm_structured_with_raw(
 ) -> StructuredCallResult[T]:
     """Schema-decode with one governed repair while preserving exact exchange bytes.
 
-    The repair callback is required so a versioned ``RenderedPrompt`` can
-    remain versioned on the second attempt; blindly prefixing a string would
-    erase the prompt-registry identity from the ledger.
+    Registered ``RenderedPrompt`` callers supply a repair callback to retain
+    prompt identity. Plain-string callers can use the canonical default repair.
     """
 
     effective_profile = structured_capability_profile(capability_profile)
@@ -325,10 +332,12 @@ def call_llm_structured_with_raw(
         scope=scope,
         run_id=run_id,
         db_path=db_path,
+        model=model,
+        backend=backend,
         capability_profile=effective_profile,
     )
     try:
-        payload = parse_json_payload(raw, expect="object")
+        payload = parse_json_payload(raw, expect=expect)
         return StructuredCallResult(
             value=schema.validate_python(payload),
             raw_response=raw,
@@ -344,7 +353,9 @@ def call_llm_structured_with_raw(
                 "raw_head": _safe_raw_head(raw, 200),
             }
         )
-        current_prompt = repair_prompt(str(first_exc))
+        current_prompt = (
+            repair_prompt(str(first_exc)) if repair_prompt else repair_structured_prompt(prompt)
+        )
     raw = call_llm(
         current_prompt,
         purpose=purpose,
@@ -352,10 +363,12 @@ def call_llm_structured_with_raw(
         scope=scope,
         run_id=run_id,
         db_path=db_path,
+        model=model,
+        backend=backend,
         capability_profile=effective_profile,
     )
     try:
-        payload = parse_json_payload(raw, expect="object")
+        payload = parse_json_payload(raw, expect=expect)
         return StructuredCallResult(
             value=schema.validate_python(payload),
             raw_response=raw,

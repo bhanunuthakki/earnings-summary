@@ -1075,10 +1075,10 @@
       "canonical_extra": null,
       "canonical_target": null,
       "disposition": "retained",
-      "end_line": 87,
+      "end_line": 99,
       "family": "tickers",
       "file": "execution/extract_facts.py",
-      "line": 81,
+      "line": 82,
       "name": "_resolve_tickers",
       "referenced": {
         "ANALYZED_LIST_TYPES": {
@@ -1094,10 +1094,43 @@
           "import_name": "tracked_companies_for_user"
         }
       },
-      "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+      "retained_reason": "Retain the existing domain selector. Explicit bulk tickers now require the selected current user's eligible tracked companies and never authorize an unrelated issuer. Extraction retains its existing single-ticker and classified-default behavior; backpopulation returns list-type coordinates for its manifest. Those default scopes and return contracts differ, so they are not interchangeable deterministic primitives. The exact former implementation remains in historical_captures.",
       "scope": "module",
-      "source": "def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:\n    \"\"\"Return the list of tickers to extract for, per CLI args.\"\"\"\n    if args.ticker:\n        return [args.ticker.upper()]\n    list_types = frozenset(ListType) if args.include_index_members else ANALYZED_LIST_TYPES\n    companies = tracked_companies_for_user(conn, only_classified=True, list_types=list_types)\n    return [c.ticker for c in companies]",
-      "unresolved": []
+      "source": "def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:\n    \"\"\"Return the list of tickers to extract for, per CLI args.\"\"\"\n    if getattr(args, \"tickers\", None) is not None:\n        requested = list(\n            dict.fromkeys(t.strip().upper() for t in args.tickers.split(\",\") if t.strip())\n        )\n        eligible = {\n            c.ticker.upper()\n            for c in tracked_companies_for_user(conn, list_types=frozenset(ListType))\n        }\n        if not requested or any(t not in eligible for t in requested):\n            raise ValueError(\"--tickers must name eligible tracked companies for the current user\")\n        return requested\n    if args.ticker:\n        return [args.ticker.upper()]\n    list_types = frozenset(ListType) if args.include_index_members else ANALYZED_LIST_TYPES\n    companies = tracked_companies_for_user(conn, only_classified=True, list_types=list_types)\n    return [c.ticker for c in companies]",
+      "unresolved": [],
+      "historical_captures": [
+        {
+          "canonical_extra": null,
+          "canonical_target": null,
+          "disposition": "retained",
+          "end_line": 87,
+          "family": "tickers",
+          "file": "execution/extract_facts.py",
+          "line": 81,
+          "name": "_resolve_tickers",
+          "referenced": {
+            "ANALYZED_LIST_TYPES": {
+              "import_module": "pipeline.queries",
+              "import_name": "ANALYZED_LIST_TYPES"
+            },
+            "ListType": {
+              "import_module": "models.companies",
+              "import_name": "ListType"
+            },
+            "tracked_companies_for_user": {
+              "import_module": "pipeline.queries",
+              "import_name": "tracked_companies_for_user"
+            }
+          },
+          "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+          "scope": "module",
+          "source": "def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:\n    \"\"\"Return the list of tickers to extract for, per CLI args.\"\"\"\n    if args.ticker:\n        return [args.ticker.upper()]\n    list_types = frozenset(ListType) if args.include_index_members else ANALYZED_LIST_TYPES\n    companies = tracked_companies_for_user(conn, only_classified=True, list_types=list_types)\n    return [c.ticker for c in companies]",
+          "unresolved": [],
+          "capture_commit": "65bda94ddb4be092a9c2122ae0d489cf9b66d2c5",
+          "capture_status": "Historical selector superseded by reviewed explicit current-user bulk scope."
+        }
+      ],
+      "source_commit": "cb2ee717"
     },
     {
       "canonical_extra": null,
@@ -1643,10 +1676,10 @@
       "canonical_extra": null,
       "canonical_target": null,
       "disposition": "retained",
-      "end_line": 176,
+      "end_line": 182,
       "family": "tickers",
       "file": "execution/fmp_backpop.py",
-      "line": 166,
+      "line": 172,
       "name": "_resolve_tickers",
       "referenced": {
         "ANALYZED_LIST_TYPES": {
@@ -1657,15 +1690,48 @@
           "import_module": "pipeline.queries",
           "import_name": "_tracked_for_user"
         },
-        "cast": {
-          "import_module": "typing",
-          "import_name": "cast"
+        "ListType": {
+          "import_module": "models.companies",
+          "import_name": "ListType"
         }
       },
-      "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+      "retained_reason": "Retain the existing domain selector. Explicit bulk tickers now require the selected current user's eligible tracked companies and never authorize an unrelated issuer. Extraction retains its existing single-ticker and classified-default behavior; backpopulation returns list-type coordinates for its manifest. Those default scopes and return contracts differ, so they are not interchangeable deterministic primitives. The exact former implementation remains in historical_captures.",
       "scope": "module",
-      "source": "def _resolve_tickers(conn: sqlite3.Connection, explicit: list[str] | None) -> list[tuple[str, str]]:\n    if explicit:\n        placeholders = \",\".join(\"?\" for _ in explicit)\n        rows = conn.execute(\n            f\"SELECT ticker, list_type FROM tracked_companies WHERE ticker IN ({placeholders})\",\n            [t.upper() for t in explicit],\n        ).fetchall()\n        found = {cast(\"str\", r[0]).upper(): cast(\"str\", r[1]) for r in rows}\n        return [(t.upper(), found.get(t.upper(), \"none\")) for t in explicit]\n    companies = _tracked_for_user(conn, list_types=ANALYZED_LIST_TYPES)\n    return [(c.ticker.upper(), c.list_type.value) for c in companies]",
-      "unresolved": []
+      "source": "def _resolve_tickers(conn: sqlite3.Connection, explicit: list[str] | None) -> list[tuple[str, str]]:\n    companies = _tracked_for_user(\n        conn, list_types=frozenset(ListType) if explicit is not None else ANALYZED_LIST_TYPES\n    )\n    eligible = {c.ticker.upper(): c.list_type.value for c in companies}\n    if explicit is not None:\n        requested = list(dict.fromkeys(t.upper() for t in explicit))\n        if not requested or any(t not in eligible for t in requested):\n            raise ValueError(\"--tickers must name eligible tracked companies for the current user\")\n        return [(t, eligible[t]) for t in requested]\n    return list(eligible.items())",
+      "unresolved": [],
+      "historical_captures": [
+        {
+          "canonical_extra": null,
+          "canonical_target": null,
+          "disposition": "retained",
+          "end_line": 176,
+          "family": "tickers",
+          "file": "execution/fmp_backpop.py",
+          "line": 166,
+          "name": "_resolve_tickers",
+          "referenced": {
+            "ANALYZED_LIST_TYPES": {
+              "import_module": "pipeline.queries",
+              "import_name": "ANALYZED_LIST_TYPES"
+            },
+            "_tracked_for_user": {
+              "import_module": "pipeline.queries",
+              "import_name": "_tracked_for_user"
+            },
+            "cast": {
+              "import_module": "typing",
+              "import_name": "cast"
+            }
+          },
+          "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+          "scope": "module",
+          "source": "def _resolve_tickers(conn: sqlite3.Connection, explicit: list[str] | None) -> list[tuple[str, str]]:\n    if explicit:\n        placeholders = \",\".join(\"?\" for _ in explicit)\n        rows = conn.execute(\n            f\"SELECT ticker, list_type FROM tracked_companies WHERE ticker IN ({placeholders})\",\n            [t.upper() for t in explicit],\n        ).fetchall()\n        found = {cast(\"str\", r[0]).upper(): cast(\"str\", r[1]) for r in rows}\n        return [(t.upper(), found.get(t.upper(), \"none\")) for t in explicit]\n    companies = _tracked_for_user(conn, list_types=ANALYZED_LIST_TYPES)\n    return [(c.ticker.upper(), c.list_type.value) for c in companies]",
+          "unresolved": [],
+          "capture_commit": "65bda94ddb4be092a9c2122ae0d489cf9b66d2c5",
+          "capture_status": "Historical selector superseded by reviewed explicit current-user bulk scope."
+        }
+      ],
+      "source_commit": "cb2ee717"
     },
     {
       "canonical_extra": null,
@@ -7694,5 +7760,13 @@
       "retained": 63,
       "total": 116
     }
+  },
+  "pipeline_completion_reconciliation": {
+    "source_commit": "cb2ee717",
+    "updated_sites": [
+      "execution/extract_facts.py",
+      "execution/fmp_backpop.py"
+    ],
+    "scope": "Refresh exactly two retained domain selector source captures for the reviewed current-user bulk scope; preserve historical bytes. No test or scanner change."
   }
 }

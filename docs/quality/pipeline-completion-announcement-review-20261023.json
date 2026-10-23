@@ -1,0 +1,80 @@
+{
+  "scope": "earnings_announcement_classification_local_source_and_native_readonly_proof",
+  "review_kind": "ad_hoc_independent",
+  "reviewer_model": "gpt-6.1-sol",
+  "reviewer_task": "/root/announcement_judge",
+  "artifacts": {
+    "src/models/documents.py": {
+      "sha256": "dff9ffc4f0f01977956f6fb779b8434ef10e5ec42704d5d82a5e4bb608489826"
+    },
+    "src/ir_uploads.py": {
+      "sha256": "109cfaa7730d4e62ae3759ab18f810cb25fdab9ed18d60b66421dcbc547a3131"
+    },
+    "src/ir_pipeline/discover/_docmeta.py": {
+      "sha256": "ba3e91424c86e4eb6e24de54adda725dc820c295e7924affc7099328a09c6698"
+    },
+    "src/ir_pipeline/discover/generic.py": {
+      "sha256": "b24f1c87abe5823c5c58d8c89a01a823ba8e1d5a3529090c0b5b734bb8edfcca"
+    },
+    "src/provenance/reporting_document_scope.py": {
+      "sha256": "ea28b6a01bc2819b4b4f5a1e72eff82ce8e28aa45c104730e8d0289197f916fd"
+    },
+    "tests/test_ir_earnings_announcement.py": {
+      "sha256": "9ba74a7485e5ebd6972399caaa4e802c2c45cfc08aa58775a8ee6c10164172cf"
+    }
+  },
+  "attempts": [
+    {
+      "score": 85,
+      "verdict": "HOLD",
+      "finding": "future conference date falsely accepted as publication date"
+    },
+    {
+      "score": 89,
+      "verdict": "HOLD",
+      "finding": "Audio Replay caption bypasses negative calendar lexicon"
+    },
+    {
+      "score": 94,
+      "verdict": "PASS",
+      "components": {
+        "sources": 19,
+        "lineage": 24,
+        "execution": 19,
+        "recovery": 14,
+        "verification": 8,
+        "reuse": 10
+      },
+      "blocking_findings": []
+    }
+  ],
+  "deterministic_evidence": {
+    "targeted_serial_tests": 72,
+    "elapsed_seconds": 4.32,
+    "ruff": "PASS",
+    "native_readonly_receipt_sha256": {
+      "sha256": "ba1eb0d9e31b027cd7e36ceb3f765876ae1d97bcf38bacb9d16d3d22a8e2b1c6"
+    },
+    "native_pypdf": "6.21.1",
+    "native_exact_source_hashes_verified": true,
+    "native_actual_pdf_results": [
+      {
+        "document_id": 12676,
+        "doc_type": "ir_earnings_announcement",
+        "publication_date": "2026-07-14"
+      },
+      {
+        "document_id": 12679,
+        "doc_type": "ir_press_release",
+        "fiscal_period_end": "2026-06-30"
+      }
+    ]
+  },
+  "limits": [
+    "native proof classified retained staged bytes; did not modify registered metadata",
+    "local source review does not establish production correction or financial coverage",
+    "missing affirmative publication evidence remains unidentified"
+  ],
+  "calibrated_governance_receipt": false,
+  "publication_digest_format": "Public digest values use named sha256 or subject_commit members. Original review bytes remain retained in task evidence; this is a display-only transformation."
+}

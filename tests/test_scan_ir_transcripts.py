@@ -67,7 +67,9 @@ def _false(*_a: object, **_k: object) -> bool:
 
 
 def _fetch_hit(_spec: object, **_k: object) -> object:
-    return SimpleNamespace(status="acquired", result=SimpleNamespace(source_name="issuer_ir"))
+    return SimpleNamespace(
+        status="acquired", result=SimpleNamespace(source_name="issuer_ir", receipt_id="a" * 64)
+    )
 
 
 def _fetch_none(_spec: object, **_k: object) -> object | None:
@@ -76,6 +78,20 @@ def _fetch_none(_spec: object, **_k: object) -> object | None:
 
 def _fetch_boom(_spec: object, **_k: object) -> object:
     raise RuntimeError("playwright exploded")
+
+
+def _no_env(_root: Path) -> None:
+    pass
+
+
+def _nu_target(_ticker: str | None) -> list[tuple[str, int]]:
+    return [("NU", 12)]
+
+
+def _fetch_without_receipt(*_args: object, **_kwargs: object) -> object:
+    return SimpleNamespace(
+        status="acquired", result=SimpleNamespace(source_name="issuer_ir", receipt_id="")
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +238,17 @@ def test_run_ingest_disables_promotion_and_preserves_child_rc(
     monkeypatch.setattr(subprocess, "run", fake_run)
     monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
-    assert mod._run_ingest(tmp_path, dry_run=False) == 9
+    assert (
+        mod._run_ingest(
+            tmp_path,
+            tmp_path / "authority.sqlite",
+            "NU",
+            None,
+            owner_requested=False,
+            dry_run=False,
+        )
+        == 9
+    )
     assert captured["cmd"][-1] == "--no-promote"
     assert captured["kwargs"]["cwd"] == str(tmp_path)
     assert mod._terminal_exit_code(9) == 9
@@ -381,3 +407,172 @@ def test_last_earnings_date_none_on_garbled_json(tmp_path: Path) -> None:
     fmp.mkdir(parents=True)
     (fmp / "NU_earnings_calendar.json").write_text("{not json", encoding="utf-8")
     assert last_earnings_date(tmp_path, "NU") is None
+
+
+@pytest.mark.parametrize("owner_requested", [False, True])
+def test_main_routes_explicit_database_state_and_exact_fetch_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, owner_requested: bool
+) -> None:
+    mod = _load_module()
+    state = tmp_path / "state"
+    state.mkdir()
+    database = state / "authority.sqlite"
+    database.touch()
+    for field in ("DB_PATH", "DATA_DIR", "FMP_DIR", "PROJECT_ROOT", "STATE_ROOT"):
+        monkeypatch.setattr(mod.db, field, getattr(mod.db, field))
+    for field in ("RAW_DIR", "STAGING_DIR"):
+        monkeypatch.setattr(mod.fetch_qa_transcript, field, getattr(mod.fetch_qa_transcript, field))
+    monkeypatch.setattr(mod, "load_project_env", _no_env)
+    monkeypatch.setattr(mod, "last_earnings_date", _earnings)
+    monkeypatch.setattr(mod, "due_for_scan", _true)
+    monkeypatch.setattr(mod, "recent_fiscal_quarters", _quarters)
+    monkeypatch.setattr(mod, "_ingested_evidence_exists", _false)
+    monkeypatch.setattr(mod, "_raw_exists", _false)
+    seen: dict[str, Any] = {}
+
+    def resolve(ticker: str | None) -> list[tuple[str, int]]:
+        assert Path(mod.db.DB_PATH) == database
+        assert Path(mod.db.DATA_DIR) == state / "data"
+        assert ticker == ("NU" if owner_requested else None)
+        return [("NU", 12)]
+
+    def fetch(spec: object, **kwargs: Any) -> object:
+        seen["fetch"] = kwargs
+        assert state / "transcripts/raw" == mod.fetch_qa_transcript.RAW_DIR
+        assert state / ".tmp/transcript-acquisition" == mod.fetch_qa_transcript.STAGING_DIR
+        return _fetch_hit(spec)
+
+    def run(cmd: list[str], **kwargs: Any) -> _FakeProc:
+        seen["cmd"] = cmd
+        seen["cwd"] = kwargs["cwd"]
+        return _FakeProc()
+
+    monkeypatch.setattr(mod, "_resolve_tickers", resolve)
+    monkeypatch.setattr(mod, "fetch_qa", fetch)
+    monkeypatch.setattr(mod.subprocess, "run", run)
+    argv = ["scan", "--db", str(database), "--repo-root", str(state)]
+    if owner_requested:
+        argv.extend(["--ticker", "NU"])
+    monkeypatch.setattr(sys, "argv", argv)
+
+    assert mod.main() == 0
+    assert seen["fetch"]["db_path"] == database
+    assert seen["fetch"]["owner_requested"] is owner_requested
+    cmd = seen["cmd"]
+    assert str(PROJECT_ROOT / "execution/ingest_transcripts_state.py") in cmd
+    assert cmd[cmd.index("--db") + 1] == str(database)
+    assert cmd[cmd.index("--repo-root") + 1] == str(state)
+    assert cmd[cmd.index("--ticker") + 1] == "NU"
+    assert cmd[cmd.index("--receipt-id") + 1] == "a" * 64
+    assert ("--owner-requested" in cmd) is owner_requested
+    assert "--no-promote" in cmd
+    assert seen["cwd"] == str(state)
+    assert not (state / "data/portfolio.db").exists()
+
+
+def test_main_dry_run_uses_configured_database_without_download_or_ingest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    mod = _load_module()
+    state = tmp_path / "state"
+    state.mkdir()
+    database = state / "configured.sqlite"
+    database.write_bytes(b"unchanged database")
+    monkeypatch.setenv("EARNINGS_SUMMARY_DB_PATH", str(database))
+    monkeypatch.setattr(mod, "load_project_env", _no_env)
+    for field in ("DB_PATH", "DATA_DIR", "FMP_DIR", "PROJECT_ROOT", "STATE_ROOT"):
+        monkeypatch.setattr(mod.db, field, getattr(mod.db, field))
+    for field in ("RAW_DIR", "STAGING_DIR"):
+        monkeypatch.setattr(mod.fetch_qa_transcript, field, getattr(mod.fetch_qa_transcript, field))
+    monkeypatch.setattr(mod, "_resolve_tickers", _nu_target)
+    monkeypatch.setattr(mod, "last_earnings_date", _earnings)
+    monkeypatch.setattr(mod, "due_for_scan", _true)
+    monkeypatch.setattr(mod, "recent_fiscal_quarters", _quarters)
+    monkeypatch.setattr(mod, "_ingested_evidence_exists", _false)
+    monkeypatch.setattr(mod, "fetch_qa", _fetch_boom)
+    monkeypatch.setattr(mod.subprocess, "run", _fetch_boom)
+    monkeypatch.setattr(sys, "argv", ["scan", "--repo-root", str(state), "--dry-run"])
+
+    assert mod.main() == 0
+    assert Path(mod.db.DB_PATH) == database
+    assert database.read_bytes() == b"unchanged database"
+    assert not (state / "data/portfolio.db").exists()
+    assert json.loads(capsys.readouterr().out)["status_counts"] == {"would_fetch": 1}
+
+
+def test_scan_one_refuses_acquired_result_without_exact_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    monkeypatch.setattr(mod, "last_earnings_date", _earnings)
+    monkeypatch.setattr(mod, "recent_fiscal_quarters", _quarters)
+    monkeypatch.setattr(mod, "_ingested_evidence_exists", _false)
+    monkeypatch.setattr(mod, "_raw_exists", _false)
+    monkeypatch.setattr(mod, "fetch_qa", _fetch_without_receipt)
+    result = mod.scan_one("NU", 12, tmp_path, _TODAY, 14, False, tmp_path / "db", False)
+    assert result.status == "error"
+
+
+def test_pending_ingest_keeps_legacy_period_scope_explicit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    monkeypatch.setattr(mod, "last_earnings_date", _earnings)
+    monkeypatch.setattr(mod, "recent_fiscal_quarters", _quarters)
+    monkeypatch.setattr(mod, "_ingested_evidence_exists", _false)
+    monkeypatch.setattr(mod, "_raw_exists", _true)
+    result = mod.scan_one("NU", 12, tmp_path, _TODAY, 14, False, tmp_path / "db", False)
+    assert result.receipt_id is None
+    assert result.ingest_scope == "legacy_pending_ticker_retained_periods"
+
+
+def test_invalid_explicit_database_stops_before_roster_or_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    monkeypatch.setattr(mod, "load_project_env", _no_env)
+    monkeypatch.setattr(mod, "_resolve_tickers", _fetch_boom)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "scan",
+            "--repo-root",
+            str(tmp_path),
+            "--db",
+            str(tmp_path / "missing.sqlite"),
+        ],
+    )
+    with pytest.raises(FileNotFoundError):
+        mod.main()
+    assert not (tmp_path / "missing.sqlite").exists()
+    assert not (tmp_path / "data/portfolio.db").exists()
+
+
+def test_mismatched_database_state_stops_before_roster_fetch_or_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mod = _load_module()
+    state = tmp_path / "state"
+    state.mkdir()
+    database = tmp_path / "outside.sqlite"
+    database.write_bytes(b"unchanged")
+    monkeypatch.setattr(mod, "load_project_env", _no_env)
+    monkeypatch.setattr(mod, "_resolve_tickers", _fetch_boom)
+    monkeypatch.setattr(mod, "fetch_qa", _fetch_boom)
+    monkeypatch.setattr(mod.subprocess, "run", _fetch_boom)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "scan",
+            "--repo-root",
+            str(state),
+            "--db",
+            str(database),
+        ],
+    )
+    with pytest.raises(ValueError, match=r"database.*state root"):
+        mod.main()
+    assert database.read_bytes() == b"unchanged"
+    assert not (state / "data/portfolio.db").exists()

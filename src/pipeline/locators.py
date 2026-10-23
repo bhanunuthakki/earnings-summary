@@ -228,8 +228,9 @@ class PdfQuoteLocator:
     its escape hatch; a fabricated page is worse than an honest legacy row.
     """
 
-    def __init__(self, pdf_path: Path) -> None:
+    def __init__(self, pdf_path: Path, *, raw_bytes: bytes | None = None) -> None:
         self._pdf_path = pdf_path
+        self._raw_bytes = raw_bytes
         self._page_texts: list[str] | None = None
         self._indexed = False
 
@@ -239,19 +240,28 @@ class PdfQuoteLocator:
             # importing it lazily keeps locators importable everywhere.
             from pipeline.pdf_render import extract_page_texts
 
-            self._page_texts = extract_page_texts(self._pdf_path)
+            self._page_texts = extract_page_texts(self._pdf_path, raw_bytes=self._raw_bytes)
             self._indexed = True
         return self._page_texts
 
-    def __call__(self, quote: str | None) -> FactLocator | None:
+    def __call__(self, quote: str | None, *, page_number: int | None = None) -> FactLocator | None:
         if quote is None or not quote.strip():
             return None
         page_texts = self._index()
         if not page_texts:
             return None
+        if page_number is not None:
+            if page_number < 1 or page_number > len(page_texts):
+                return None
+            page_texts = [
+                text if index == page_number else ""
+                for index, text in enumerate(page_texts, start=1)
+            ]
         from pipeline.pdf_render import find_page_for_quote
 
-        hit = find_page_for_quote(self._pdf_path, quote, page_texts=page_texts)
+        hit = find_page_for_quote(
+            self._pdf_path, quote, page_texts=page_texts, raw_bytes=self._raw_bytes
+        )
         if hit is None:
             return None
         page, bbox = hit

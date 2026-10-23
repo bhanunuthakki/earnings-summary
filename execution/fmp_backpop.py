@@ -37,29 +37,35 @@ time (see directives/fmp_backpop.md and directives/edgar_pipeline.md).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import sqlite3
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from db_paths import require_db_path
+from run_lock import hold_run_lock
+from runtime.job_runtime import JobLock
+from runtime.python_process import managed_python_prefix
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "execution"))
+
+import save_fmp_data as fmp_save
+
+from models.companies import ListType
+from pipeline.fmp_doc_index import index_fmp_files_for_ticker
+from pipeline.queries import ANALYZED_LIST_TYPES, open_db
+from pipeline.queries import tracked_companies_for_user as _tracked_for_user
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-from runtime.python_process import managed_python_prefix  # noqa: E402
-
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import save_fmp_data as fmp_save  # noqa: E402
-
-from pipeline.fmp_doc_index import index_fmp_files_for_ticker  # noqa: E402
-from pipeline.queries import ANALYZED_LIST_TYPES, open_db  # noqa: E402
-from pipeline.queries import tracked_companies_for_user as _tracked_for_user  # noqa: E402
-
-BACKPOP_DIR = PROJECT_ROOT / ".tmp" / "fmp_backpop"
 
 # The 6 (endpoint, period) manifest keys EDGAR's TAG_LADDERS give SEC-sourced
 # coverage for (income/balance/cashflow statements, annual + quarter). These
@@ -164,45 +170,150 @@ def build_manifest(
 
 
 def _resolve_tickers(conn: sqlite3.Connection, explicit: list[str] | None) -> list[tuple[str, str]]:
-    if explicit:
-        placeholders = ",".join("?" for _ in explicit)
-        rows = conn.execute(
-            f"SELECT ticker, list_type FROM tracked_companies WHERE ticker IN ({placeholders})",
-            [t.upper() for t in explicit],
-        ).fetchall()
-        found = {cast("str", r[0]).upper(): cast("str", r[1]) for r in rows}
-        return [(t.upper(), found.get(t.upper(), "none")) for t in explicit]
-    companies = _tracked_for_user(conn, list_types=ANALYZED_LIST_TYPES)
-    return [(c.ticker.upper(), c.list_type.value) for c in companies]
+    companies = _tracked_for_user(
+        conn, list_types=frozenset(ListType) if explicit is not None else ANALYZED_LIST_TYPES
+    )
+    eligible = {c.ticker.upper(): c.list_type.value for c in companies}
+    if explicit is not None:
+        requested = list(dict.fromkeys(t.upper() for t in explicit))
+        if not requested or any(t not in eligible for t in requested):
+            raise ValueError("--tickers must name eligible tracked companies for the current user")
+        return [(t, eligible[t]) for t in requested]
+    return list(eligible.items())
 
 
-def _run_fetch(manifest_path: Path, max_calls: int) -> int:
+def _run_fetch(
+    manifest_path: Path,
+    max_calls: int,
+    repo_root: Path,
+    db_path: Path,
+    tickers: list[tuple[str, str]],
+    receipt_path: Path,
+    lock_proof: str,
+) -> int:
     cmd = [
         *managed_python_prefix(PROJECT_ROOT),
         str(PROJECT_ROOT / "execution" / "save_fmp_data.py"),
+        "--repo-root",
+        str(repo_root),
+        "--db",
+        str(db_path),
+        "--tickers",
+        ",".join(t for t, _ in tickers),
+        "--work-receipts",
+        str(receipt_path),
         "--manifest",
         str(manifest_path),
         "--max-calls",
         str(max_calls),
     ]
-    proc = subprocess.run(cmd, check=False)
+    proc = subprocess.run(
+        cmd,
+        check=False,
+        env={
+            **os.environ,
+            "EARNINGS_SUMMARY_DB_PATH": str(db_path),
+            "EARNINGS_SUMMARY_JOB_LOCK_PROOF": lock_proof,
+        },
+    )
     return proc.returncode
 
 
-def _run_index(conn: sqlite3.Connection, tickers: list[tuple[str, str]]) -> int:
+def _reconcile_fetch_receipts(
+    receipt_path: Path,
+    manifest: list[dict[str, str]],
+    repo_root: Path,
+    started_at: datetime,
+) -> dict[str, int | str]:
+    """Verify exact attempted work and captured bytes; never infer completeness."""
+    try:
+        payload: object = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError("FMP work receipts are missing or invalid") from exc
+    if not isinstance(payload, list):
+        raise ValueError("FMP work receipts must be a list")
+    try:
+        receipts = [
+            fmp_save.FmpWorkReceipt.model_validate(row) for row in cast("list[object]", payload)
+        ]
+    except ValueError as exc:
+        raise ValueError("FMP work receipts violate the typed contract") from exc
+    expected = {(r["ticker"], r["endpoint"], r["period"]) for r in manifest}
+    keys = [(r.ticker, r.endpoint, r.period) for r in receipts]
+    if len(expected) != len(manifest) or len(keys) != len(set(keys)) or set(keys) != expected:
+        raise ValueError("FMP receipts do not match the exact manifest")
+    observed_at = datetime.now(UTC).replace(tzinfo=None)
+    catalog = {
+        ticker: {
+            (job["path"], job["period"]): job["suffix"] for job in fmp_save.per_ticker_jobs(ticker)
+        }
+        for ticker in {row["ticker"] for row in manifest}
+    }
+    successes = 0
+    empty = 0
+    for receipt in receipts:
+        suffix = catalog[receipt.ticker].get((receipt.endpoint, receipt.period))
+        if suffix is None:
+            raise ValueError("FMP receipt coordinates are absent from the endpoint catalog")
+        if not started_at <= receipt.captured_at <= observed_at:
+            raise ValueError("FMP work receipt capture time is outside this attempt")
+        if receipt.outcome is fmp_save.FmpWorkReceiptOutcome.EMPTY:
+            if receipt.http_status != 200:
+                raise ValueError("FMP empty receipt requires HTTP 200")
+            empty += 1
+            continue
+        if receipt.outcome is not fmp_save.FmpWorkReceiptOutcome.SUCCESS:
+            raise ValueError(f"FMP work did not succeed: {receipt.outcome.value}")
+        assert receipt.file_path is not None
+        path = (repo_root / receipt.file_path).resolve()
+        try:
+            path.relative_to((repo_root / "data/historical/fmp").resolve())
+        except ValueError as exc:
+            raise ValueError("FMP receipt path is outside the retained FMP directory") from exc
+        if (
+            path
+            != (repo_root / "data/historical/fmp" / f"{receipt.ticker}_{suffix}.json").resolve()
+        ):
+            raise ValueError("FMP receipt file does not match its catalog coordinates")
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            raise ValueError("Retained FMP receipt bytes are unavailable") from exc
+        if digest != receipt.content_sha256:
+            raise ValueError("FMP receipt content hash does not match retained bytes")
+        successes += 1
+    return {
+        "jobs_succeeded": successes,
+        "jobs_unavailable": empty,
+        "acquisition_status": "partial_unavailable" if empty else "manifest_verified",
+        "archive_completeness": "unverified",
+    }
+
+
+def _run_index(conn: sqlite3.Connection, tickers: list[tuple[str, str]], repo_root: Path) -> int:
     total = 0
     for ticker, _ in tickers:
-        total += index_fmp_files_for_ticker(conn, ticker, PROJECT_ROOT)
+        total += index_fmp_files_for_ticker(conn, ticker, repo_root)
     return total
 
 
-def _run_extract() -> int:
+def _run_extract(
+    repo_root: Path, db_path: Path, tickers: list[tuple[str, str]], *, lock_proof: str | None = None
+) -> int:
     cmd = [
         *managed_python_prefix(PROJECT_ROOT),
         str(PROJECT_ROOT / "execution" / "extract_facts.py"),
-        "--all",
+        "--repo-root",
+        str(repo_root),
+        "--db",
+        str(db_path),
+        "--tickers",
+        ",".join(t for t, _ in tickers),
     ]
-    proc = subprocess.run(cmd, check=False)
+    child_env = {**os.environ, "EARNINGS_SUMMARY_DB_PATH": str(db_path)}
+    if lock_proof is not None:
+        child_env["EARNINGS_SUMMARY_JOB_LOCK_PROOF"] = lock_proof
+    proc = subprocess.run(cmd, check=False, env=child_env)
     return proc.returncode
 
 
@@ -213,12 +324,13 @@ def main() -> int:
     parser.add_argument(
         "--tickers", help="Comma-separated ticker subset (default: portfolio+watchlist+evaluation)"
     )
-    parser.add_argument("--db", default=str(PROJECT_ROOT / "data" / "portfolio.db"))
+    parser.add_argument("--db", type=Path)
+    parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     parser.add_argument(
         "--apply",
         action="store_true",
         help="Actually fetch (save_fmp_data), index (fmp_doc_index), and extract "
-        "(extract_facts --all). Without this flag, only the manifest + report are written.",
+        "(extract_facts --tickers). Without this flag, only the manifest + report are written.",
     )
     parser.add_argument(
         "--max-calls",
@@ -231,19 +343,34 @@ def main() -> int:
     if args.apply and args.max_calls is None:
         parser.error("--apply requires --max-calls (a ~6-monthly paid window must be bounded)")
 
-    conn = open_db(args.db)
+    if args.max_calls is not None and args.max_calls <= 0:
+        parser.error("--max-calls must be positive")
+    try:
+        db_path = require_db_path(args.db)
+    except (RuntimeError, FileNotFoundError) as exc:
+        parser.error(str(exc))
+    repo_root = args.repo_root.expanduser().resolve()
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
     try:
         explicit = (
             [t.strip().upper() for t in args.tickers.split(",") if t.strip()]
-            if args.tickers
+            if args.tickers is not None
             else None
         )
-        tickers = _resolve_tickers(conn, explicit)
+        try:
+            tickers = _resolve_tickers(conn, explicit)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if not tickers:
+            print(json.dumps({"tickers": 0, "status": "no_eligible_tickers"}))
+            return 0
         manifest, decisions = build_manifest(conn, tickers)
 
-        BACKPOP_DIR.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
-        manifest_path = BACKPOP_DIR / f"manifest_{stamp}.json"
+        backpop_dir = repo_root / ".tmp" / "fmp_backpop"
+        backpop_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%dT%H%M%S%f")
+        manifest_path = backpop_dir / f"manifest_{stamp}.json"
+        receipt_path = manifest_path.with_name("receipts_" + manifest_path.name)
         manifest_path.write_text(json.dumps({"items": manifest}, indent=2), encoding="utf-8")
 
         total_jobs = sum(d.jobs_total for d in decisions)
@@ -256,8 +383,13 @@ def main() -> int:
             "jobs_total_catalog": total_jobs,
             "jobs_included_in_manifest": total_included,
             "jobs_skipped_via_edgar": total_skipped,
-            "manifest_path": str(manifest_path.relative_to(PROJECT_ROOT)),
-            "applied": args.apply,
+            "manifest_path": str(manifest_path),
+            "applied": False,
+            "apply_requested": args.apply,
+            "db_path": str(db_path),
+            "repo_root": str(repo_root),
+            "ticker_scope": [t for t, _ in tickers],
+            "receipt_path": str(receipt_path),
         }
         print(json.dumps(summary, indent=2))
         if not args.apply:
@@ -268,20 +400,79 @@ def main() -> int:
             return 0
 
         assert args.max_calls is not None
-        fetch_rc = _run_fetch(manifest_path, args.max_calls)
-        indexed = _run_index(conn, tickers)
-        extract_rc = _run_extract()
+        # The retained-artifact owner spans capture and dependent processing.
+        # The child validates this claim instead of acquiring the same lock.
+        with JobLock(repo_root, "fmp-backpop", ["fmp-fetch-artifacts"], wait_s=0) as artifact_lock:
+            started_at = datetime.now(UTC).replace(tzinfo=None)
+            fetch_rc = _run_fetch(
+                manifest_path,
+                args.max_calls,
+                repo_root,
+                db_path,
+                tickers,
+                receipt_path,
+                artifact_lock.inheritance_proof(),
+            )
+            if fetch_rc:
+                print(
+                    json.dumps(
+                        {
+                            "fetch_exit_code": fetch_rc,
+                            "status": "fetch_failed",
+                            "acquisition_status": "unverified",
+                        }
+                    )
+                )
+                return fetch_rc
+            try:
+                acquisition = _reconcile_fetch_receipts(
+                    receipt_path, manifest, repo_root, started_at
+                )
+            except (OSError, ValueError) as exc:
+                print(
+                    json.dumps(
+                        {
+                            "status": "fetch_reconciliation_failed",
+                            "reason": str(exc)
+                            if isinstance(exc, ValueError)
+                            else "receipt_unavailable",
+                            "acquisition_status": "unverified",
+                            "receipt_path": str(receipt_path),
+                        }
+                    )
+                )
+                return 1
+            with hold_run_lock(db_path, owner="fmp_backpop"):
+                writer = open_db(db_path)
+                try:
+                    indexed = _run_index(writer, tickers, repo_root)
+                except Exception:
+                    writer.rollback()
+                    print(
+                        json.dumps({"status": "index_failed", "acquisition_status": "unverified"})
+                    )
+                    raise
+                finally:
+                    writer.close()
+                extract_rc = _run_extract(
+                    repo_root, db_path, tickers, lock_proof=artifact_lock.inheritance_proof()
+                )
         print(
             json.dumps(
                 {
                     "fetch_exit_code": fetch_rc,
+                    "applied": True,
+                    "status": "extracted" if extract_rc == 0 else "extract_failed",
                     "documents_indexed": indexed,
                     "extract_exit_code": extract_rc,
+                    **acquisition,
+                    "index_scope": "all_retained_documents_for_exact_tickers",
                 },
                 indent=2,
             )
         )
-        return fetch_rc or extract_rc
+        return extract_rc
+
     finally:
         conn.close()
 

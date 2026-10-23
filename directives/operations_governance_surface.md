@@ -2113,3 +2113,105 @@ checks a held-path set and its ancestors. The three existing operation owners
 build that set once. This removes repeated scans of all held paths without
 changing retention authority, symlink handling or path boundaries. Evidence:
 `tests/test_temp_run_retention.py` includes boundary and bounded-work regressions.
+
+
+### Explicit FMP bulk backpopulation scope
+
+`execution/fmp_backpop.py` remains the manual bulk interface. It selects one
+validated explicit/configured database, one retained artifact root, and an exact
+current-user ticker scope. Dry-run planning opens SQLite read-only. Apply needs
+a positive attempt limit. The existing artifact lock spans fetch through
+extraction; a child must validate the exact live ancestor proof. The database
+lock covers indexing/extraction only. The attempt limit includes retries and
+fallback requests; account/schema failure stops plural work and records
+`prerequisite_not_attempted` for dependent remaining coordinates.
+The code checkout supplies executables; the selected root supplies retained data.
+
+The existing fetch CLI adds plural `--work-receipts` for a multi-entry manifest.
+Each member uses the existing typed per-work receipt schema. The singular
+`--work-receipt` interface retains its one-entry contract. The bulk orchestrator
+checks the exact coordinate population, capture times and retained content hashes.
+A successful process exit cannot replace that reconciliation. Missing, denied,
+failed or budget-not-attempted prerequisites block dependent indexing/extraction.
+A verified empty response remains an unavailable coverage disposition.
+
+The existing extraction CLI accepts `--repo-root` and exact `--tickers`, preserving
+its `--ticker` and `--all` modes. Bulk propagation uses the exact selection and
+database rather than the ambient checkout default or expanded active universe.
+The existing batch extractor, source fact writer and financial resolver retain
+ownership. This adds no scheduler, automatic activation, store or dashboard action.
+The manifest and receipt outcomes are operational evidence; archive completeness,
+financial admission and reader parity require their existing separate checks.
+
+
+### Direct supplement page continuation
+
+The existing direct `ir_supplement` KPI extraction function uses native PDF page
+and line sections, not a truncated document prefix. Its default 80,000-character
+input and 200-fact saturation limit apply per section. Internal parameters bound
+processing to 256 chunks and 256 logical structured model requests, including the
+reserved primary/repair pair. Provider transport retries retain their separate
+existing route controls. No CLI option, schedule, dashboard action or provider
+route is added.
+
+The existing derived LLM artifact store retains source/model/prompt/schema-bound
+chunk responses for exact replay. This cache does not confer acquisition,
+extraction completeness or semantic admission. Known OCR-required page assessments,
+blank pages, unsupported quotes, failed sections and budget exhaustion remain
+unresolved. Nonblank page text can omit visual facts. Absent page assessments
+remain unknown. The exact raw source and its immutable binding must match before
+model calls; the source must remain unchanged before financial persistence.
+
+After all planned sections pass, this path retains the governed raw responses
+and page-bound candidates in the existing immutable evidence ledger. Capture does
+not write these unreviewed rows through the legacy KPI writer. A missing source
+context review remains `pending_source_context_review`.
+
+The separate `persist_ir_source_context_review` interface records a manual review
+of the exact document, source hash, extraction run, configuration and candidate
+population. It accepts or rejects every retained candidate. Accepted coordinates
+need field-specific source witnesses, explicit period, scope, accounting basis,
+unit wording and scale. Automatic capture can discover an existing exact review;
+it cannot create that review. A source-only publication uses the existing
+`SourceFactRepository` and its `as_reported` reader. Its observations anchor the
+review node and retain the raw candidate identity in their locators. Source
+corrections supersede observations. Same-input replay preserves original clocks.
+
+The source-only extraction seal covers the declared candidate population. It does
+not prove document financial recall, archive completeness, an admitted metric
+definition, comparability, or canonical reader readiness. These remain separate
+existing gates. Original-presentation migration retains its separate owner.
+Representative approved-runtime/model qualification governs promotion.
+
+### Earnings-date announcements
+
+The existing IR classifier distinguishes `ir_earnings_announcement` from a results
+release. A future results notice uses its supported publication date. It does not
+supply a fiscal quarter or a financial results event. An explicit publication
+label or recognized wire-service dateline supplies the date; a future calendar
+caption, filename year or fiscal period cannot replace it. Missing evidence
+remains `publication_date_unidentified`.
+
+Existing registration excludes announcements from quarterly and analytical event
+indexes. The source inventory marks them as supporting documents. Discovery keeps
+spreadsheet, presentation and transcript hints. Supporting HTML notices do not
+loosen the existing financial-release HTML boundary. This classification change
+does not rewrite historical document metadata or activate a new collection job.
+
+
+### Transcript scan database and retained-input scope
+
+`scan_ir_transcripts.py --db` selects the validated explicit or configured
+database. Its state root uses the existing configured-root owner. The selected
+database must map to that same state root through the existing fetch adapter;
+a contradictory pair fails before collection or child execution. It does not
+create or infer a checkout-local database.
+
+New fetch success requires an acquisition receipt. The scan invokes the existing
+state ingester for the exact ticker, database, state root, receipt and automatic
+or owner-requested context. Legacy pending files keep the existing retained-period
+selection and authority checks for that ticker. That mode is explicit; it is not
+an exact-new-receipt population claim. `ingest_transcripts_state.py --dry-run`
+forwards the existing child mode. It does not promise byte-unchanged SQLite files:
+the legacy connection owner can still apply its normal journal policy. No new
+collector, ingester, schedule, provider route or financial schema is introduced.

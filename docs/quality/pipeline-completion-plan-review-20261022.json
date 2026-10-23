@@ -1,0 +1,42 @@
+{
+  "scope": "plan_only",
+  "review_kind": "ad_hoc_independent",
+  "reviewer_model": "gpt-6.1-sol",
+  "reviewer_task": "/root/roadmap_judge",
+  "base_commit": {
+    "subject_commit": "65bda94ddb4be092a9c2122ae0d489cf9b66d2c5"
+  },
+  "artifact": "docs/architecture/pipeline-completion-roadmap-20261022.md",
+  "artifact_sha256": {
+    "sha256": "26ba67a900ca3cc6cc4122eab7a82184f7224758424a5608fc1edd4025516cb1"
+  },
+  "attempts": [
+    {
+      "score": 86,
+      "blocking_findings": [
+        "shared interface dependency",
+        "per-job fetch reconciliation",
+        "provider-stage verification ordering"
+      ]
+    },
+    {
+      "score": 93,
+      "components": {
+        "source_scope_completeness": 19,
+        "lineage_semantic_correctness": 24,
+        "execution_correctness": 18,
+        "recovery_isolation": 14,
+        "verification": 9,
+        "reuse_maintainability": 9
+      },
+      "blocking_findings": [],
+      "cautions": [
+        "reconcile shared PDF continuation with presentation migration before merge",
+        "freeze required and optional expected-fact populations before evaluation"
+      ]
+    }
+  ],
+  "implementation_qualified": false,
+  "calibrated_governance_receipt": false,
+  "publication_digest_format": "Public digest values use named sha256 or subject_commit members. Original review bytes remain retained in task evidence; this is a display-only transformation."
+}

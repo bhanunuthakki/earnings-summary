@@ -883,6 +883,25 @@ def _detect_doc_type(
             earliest_pos = pos
             earliest_idx = idx
             earliest_match = (doc_type, label, m.group(0))
+    # A scheduling headline is stronger than a generic publication dateline.
+    # Restrict this to the opening title lines. Earlier results, transcript,
+    # or presentation evidence keeps later forward-looking prose from winning.
+    title = "\n".join(text.splitlines()[:3])
+    notice = re.search(
+        r"^[^\n]{0,100}\b(?:to|will)\s+(?:announce|report|release)\b"
+        r"[^\n]{0,100}\b(?:results|earnings)\b[ \t]*$",
+        title,
+        re.IGNORECASE | re.MULTILINE,
+    )
+    if notice is not None and not any(
+        hit is not None and hit.start() < notice.start()
+        for _kind, rule, label in _DOC_TYPE_RULES
+        if label != "press_release_dateline"
+        for hit in [rule.search(text)]
+    ):
+        return DocType.IR_EARNINGS_ANNOUNCEMENT, [
+            f"earnings_announcement_title:{notice.group(0)!r}"
+        ]
     if earliest_match is not None:
         doc_type, label, hit = earliest_match
         return doc_type, [f"{label}:{hit!r}@{earliest_pos}"]
@@ -1166,6 +1185,36 @@ def _detect_event_period_end(text: str, filename: str) -> tuple[date | None, lis
     return None, []
 
 
+def _detect_publication_period_end(text: str) -> tuple[date | None, list[str]]:
+    """Require an explicit publication label or a stamped wire-service dateline."""
+    for line in text.splitlines():
+        label = re.match(
+            r"\s*(?:Published(?:\s+on)?|Publication\s+date)\s*:\s*", line, re.IGNORECASE
+        )
+        if label is not None:
+            published, evidence = _detect_event_period_end(line[label.end() :], "")
+            if published is not None:
+                return published, [f"publication_label:{line!r}", *evidence]
+    dateline_rule = next(
+        rule for _kind, rule, label in _DOC_TYPE_RULES if label == "press_release_dateline"
+    )
+    for hit in dateline_rule.finditer(text):
+        # Capitalization and a comma cannot prove that a calendar caption is a
+        # publication location. Only an affirmative wire-service stamp qualifies.
+        stamp = re.match(
+            r"\s*(?:/PR\s?Newswire/|\((?:BUSINESS\s+WIRE|GLOBE\s+NEWSWIRE)\))",
+            text[hit.end() :],
+            re.IGNORECASE,
+        )
+        if stamp is None:
+            continue
+        dateline = hit.group(0)
+        published, evidence = _detect_event_period_end(dateline, "")
+        if published is not None:
+            return published, [f"publication_wire_dateline:{dateline!r}", *evidence]
+    return None, []
+
+
 def _filename_period_hint(name: str) -> tuple[tuple[int, int] | None, list[str]]:
     """Best-effort period hint from filename — used to disambiguate when
     content gives a less-specific match (e.g. cover slide doesn't say which Q).
@@ -1339,14 +1388,20 @@ def classify_ir_file(
             )
         cal = calendar_override
 
+    # Earnings notices use publication date; other IR_EVENT materials use event date.
     # IR_EVENT (investor day, broker conference, capital markets day) is keyed
     # by event date, not fiscal quarter. Pull the first explicit date out of
     # the cover-page text; fall back to a year-only filename hint.
-    if doc_type == DocType.IR_EVENT:
-        event_period_end, event_evidence = _detect_event_period_end(text, path.name)
+    if doc_type in {DocType.IR_EVENT, DocType.IR_EARNINGS_ANNOUNCEMENT}:
+        if doc_type is DocType.IR_EARNINGS_ANNOUNCEMENT:
+            event_period_end, event_evidence = _detect_publication_period_end(text)
+            missing_date_reason = "publication_date_unidentified"
+        else:
+            event_period_end, event_evidence = _detect_event_period_end(text, path.name)
+            missing_date_reason = "event_date_unidentified"
         if event_period_end is None:
             return CategorizationFailure(
-                reason="event_date_unidentified",
+                reason=missing_date_reason,
                 text_sample=text[:600],
                 ticker_guess=ticker,
                 doc_type_guess=doc_type,
