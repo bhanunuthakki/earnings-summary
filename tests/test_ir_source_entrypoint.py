@@ -457,7 +457,10 @@ def test_capped_lower_range_bound_recurses_and_retains_complete_raw_population(
     assert result.error is None
     assert len(responses) == 3
     artifacts = [
-        json.loads(str(row[0])) for row in conn.execute("SELECT content_json FROM llm_artifacts")
+        json.loads(str(row[0]))
+        for row in conn.execute(
+            "SELECT content_json FROM llm_artifacts WHERE superseded_by_id IS NULL"
+        )
     ]
     assert sorted(artifact["status"] for artifact in artifacts) == [
         "processed",
@@ -484,7 +487,7 @@ def test_capped_lower_range_bound_recurses_and_retains_complete_raw_population(
     replay = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, max_facts_per_doc=3)
     assert replay.error is None
     assert len(responses) == 3
-    assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 3
+    assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 6
 
 
 def test_unsaturated_lone_guidance_bound_fails_closed(
@@ -518,7 +521,13 @@ def test_unsaturated_lone_guidance_bound_fails_closed(
     )
     result = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, max_facts_per_doc=3)
     assert result.error and "both exact endpoints" in result.error
-    assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 0
+    artifacts = [
+        json.loads(str(row[0]))
+        for row in conn.execute("SELECT content_json FROM llm_artifacts ORDER BY id")
+    ]
+    assert [artifact["status"] for artifact in artifacts] == ["pending", "rejected"]
+    assert artifacts[-1]["rows"] == []
+    assert artifacts[-1]["exchange"]["raw_response"]
     assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone()[0] == 0
 
 
@@ -557,7 +566,13 @@ def test_capped_rows_still_reject_numeric_token_outside_source_quote(
     )
     result = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, max_facts_per_doc=3)
     assert result.error and "numeric token must occur" in result.error
-    assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 0
+    artifacts = [
+        json.loads(str(row[0]))
+        for row in conn.execute("SELECT content_json FROM llm_artifacts ORDER BY id")
+    ]
+    assert [artifact["status"] for artifact in artifacts] == ["pending", "rejected"]
+    assert artifacts[-1]["rows"] == []
+    assert artifacts[-1]["exchange"]["raw_response"]
     assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone()[0] == 0
 
 
@@ -690,3 +705,207 @@ def test_full_entrypoint_two_empty_pages_retain_distinct_calls_and_cache_replay(
     ] == clocks_before
     assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    "responses_kind",
+    [
+        "quote_then_valid",
+        "quote_twice",
+        "json_then_quote",
+        "whitespace_primary",
+        "numeric_then_valid",
+        "json_then_numeric",
+    ],
+)
+def test_source_quote_repair_retains_every_raw_response_with_two_request_limit(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    responses_kind: str,
+) -> None:
+    import llm.structured as structured
+
+    _entrypoint_fixture(conn, tmp_path, monkeypatch, mock_enumerator=False)
+    valid = {
+        "label": "Margin",
+        "value": 10,
+        "unit": "percent",
+        "source_excerpt": "Margin North 10%",
+        "source_value_text": "10%",
+        "reported_period_end": "2026-06-30",
+        "period_role": "current",
+        "accounting_basis": "management",
+        "consolidation_scope": "segment",
+        "dimensions": {"Geography": "North"},
+        "source_unit_scale": "none",
+    }
+    guidance_quote = (
+        "We expect third quarter 2026 total revenue to be in the range of $61-64 billion."
+    )
+    guidance = [
+        {
+            **valid,
+            "label": "Revenue guidance",
+            "value": value * 1_000_000_000,
+            "unit": "actual",
+            "currency": "USD",
+            "source_excerpt": guidance_quote,
+            "source_value_text": str(value),
+            "reported_period_end": "2026-09-30",
+            "period_role": "guidance",
+            "range_bound": bound,
+            "consolidation_scope": "consolidated",
+            "dimensions": {},
+            "source_unit_scale": "billions",
+        }
+        for value, bound in [(61, "lower"), (64, "upper")]
+    ]
+    bad_guidance = [guidance[0], {**guidance[1], "source_value_text": "$64"}]
+    invalid = {**valid, "source_excerpt": "Margin South 10%"}
+    bad = json.dumps([invalid])
+    good = json.dumps([valid])
+    if responses_kind == "whitespace_primary":
+        monkeypatch.setattr(
+            __name__ + ".RICH_PAGE", RICH_PAGE.replace("Margin North 10%", "Margin\nNorth 10%")
+        )
+    outputs = {
+        "numeric_then_valid": [json.dumps(bad_guidance), json.dumps(guidance)],
+        "json_then_numeric": ["not JSON", json.dumps(bad_guidance)],
+        "whitespace_primary": [good],
+        "quote_then_valid": [bad, good],
+        "quote_twice": [bad, bad],
+        "json_then_quote": ["not JSON", bad],
+    }[responses_kind]
+    calls: list[tuple[str, str]] = []
+
+    def governed_transport(prompt: str, **kwargs: object) -> str:
+        assert len(calls) < 2, "semantic validation must not create a third request"
+        raw = outputs[len(calls)]
+        calls.append((prompt, raw))
+        effective = apply_prompt_override("kpi_summary_enumerate", None, prompt)
+        record_llm_call(
+            started_at=datetime.now(UTC),
+            elapsed_ms=0,
+            model="fixture-primary" if len(calls) == 1 else "fixture-repair",
+            prompt_sha=sha(effective),
+            prompt_chars=len(effective),
+            purpose="kpi_summary_enumerate",
+            ticker="TEST",
+            scope=None,
+            run_id=str(kwargs["run_id"]),
+            response_text=raw,
+            provider="fixture",
+            transport="fixture",
+            outcome="success",
+        )
+        return raw
+
+    monkeypatch.setattr(structured, "call_llm", governed_transport)
+    first = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, max_structured_calls=2)
+    expected_calls = 1 if responses_kind == "whitespace_primary" else 2
+    assert len(calls) == expected_calls
+    if responses_kind in {"quote_then_valid", "whitespace_primary", "numeric_then_valid"}:
+        assert first.error is None
+    else:
+        assert first.error is not None
+    if responses_kind == "numeric_then_valid":
+        assert "direct IR PDF numeric token must occur in its exact source quote" in calls[1][0]
+        assert "literal tokens 10 and 20" in calls[1][0]
+    artifacts = [
+        json.loads(str(row[0])) for row in conn.execute("SELECT content_json FROM llm_artifacts")
+    ]
+    retained = [
+        item["raw_response"]
+        for artifact in artifacts
+        for item in artifact.get("attempts", [artifact.get("exchange", {})])
+        if "raw_response" in item
+    ]
+    assert all(raw in retained for raw in outputs)
+    ids = {row[0] for row in conn.execute("SELECT id FROM llm_calls")}
+    retained_ids = {
+        item["llm_call_id"]
+        for artifact in artifacts
+        for item in artifact.get("attempts", [artifact.get("exchange", {})])
+        if "llm_call_id" in item
+    }
+    assert ids == retained_ids
+    second = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, max_structured_calls=2)
+    assert len(calls) == expected_calls, (
+        "exact failed or repaired replay must not call a provider again"
+    )
+    assert (second.error is None) == (first.error is None)
+    assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM fact_observations_v2").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("quote", "invalid_token", "literal_token"),
+    [
+        (
+            "We expect third quarter 2026 total revenue to be in the range of $61-64 billion.",
+            "$64",
+            "64",
+        ),
+        (
+            "We now expect full year 2026 total expenses to be in the range of $165-169 billion.",
+            "$169",
+            "169",
+        ),
+        (
+            "We anticipate 2026 capital expenditures, including principal payments on finance leases, to be in the range of $130-145 billion,",
+            "$145",
+            "145",
+        ),
+        ("narrowed from our prior outlook of $125-145 billion.", "$145", "145"),
+        (
+            "we expect our tax rate for the remaining quarters of 2026 to be between 15-17%,",
+            "15%",
+            "15",
+        ),
+        ("an increase from our prior outlook of 13-16%.", "13%", "13"),
+    ],
+)
+def test_retained_page2_range_tokens_require_literal_endpoint(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    quote: str,
+    invalid_token: str,
+    literal_token: str,
+) -> None:
+    # Actual rejected primary/repair tokens; this synthetic fixture does not
+    # publish or qualify their financial context from quote membership alone.
+    _entrypoint_fixture(conn, tmp_path, monkeypatch, mock_enumerator=False)
+    monkeypatch.setattr(__name__ + ".RICH_PAGE", quote)
+    monetary = "$" in quote
+    row: dict[str, object] = {
+        "label": "Retained endpoint",
+        "value": int(literal_token) * (1_000_000_000 if monetary else 1),
+        "unit": "actual" if monetary else "percent",
+        "currency": "USD" if monetary else None,
+        "source_excerpt": quote,
+        "source_value_text": invalid_token,
+        "reported_period_end": "2026-12-31",
+        "period_role": "guidance",
+        "accounting_basis": "management",
+        "consolidation_scope": "consolidated",
+        "source_unit_scale": "billions" if monetary else "none",
+    }
+
+    def returned_row(prompt: str, **kwargs: object) -> object:
+        return [row]
+
+    monkeypatch.setattr(
+        summaries,
+        "call_llm_structured_with_raw",
+        partial(_recorded_governed_call, response=returned_row),
+    )
+    rejected = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn)
+    assert rejected.error and "numeric token must occur" in rejected.error
+    row["source_value_text"] = literal_token
+    accepted = summaries.capture_for_ir_pdf_docs("TEST", tmp_path, conn, refresh=True)
+    assert accepted.error is None
+    assert conn.execute("SELECT COUNT(*) FROM source_fact_publications").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM fact_observations_v2").fetchone()[0] == 0

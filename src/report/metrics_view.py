@@ -12,9 +12,10 @@ the retired ``build_diligence.py``, removed 2026-07-25).
 These helpers inline the identical dedup + pivot, but with ``WHERE ticker = ?``
 applied *before* the partition, so the window only sorts that one ticker's slice
 — served by the ticker-led UNIQUE index ``uq_financial_facts_provenance`` from
-``0011_facts_unique_indexes.py``. The result rows are column-identical to the
-views, so a caller that previously ran ``SELECT * FROM metrics WHERE ticker = ?``
-can swap to :func:`metrics_rows` with no shape change.
+``0011_facts_unique_indexes.py``. The result columns match the views. Rows
+match on pre-cutover data. On a cutover database, these helpers read the shared
+canonical fact relation. The old views can disagree because they rank raw
+documents by id and do not exclude quarantined sources.
 
 No extra index is needed: the window function forces a sort step regardless of
 indexing, and the existing ticker-led unique index already serves the
@@ -22,17 +23,18 @@ indexing, and the existing ticker-led unique index already serves the
 
 INVARIANT: the column lists below MUST stay identical to the view DDL in the
 latest migration that (re)defines them. ``tests/test_metrics_view_parity.py``
-guards this — it asserts these helpers return the same rows as the real
-migration-built views for a seeded multi-ticker DB, so a future migration that
-changes a view fails the test until this file is updated in lockstep.
+guards pre-cutover row parity against the real migration-built views. Canonical
+resolution and quarantine tests cover the installed read policy.
 """
 
 from __future__ import annotations
 
 import sqlite3
 
-# The per-ticker dedup CTE: identical to the view's, plus ``WHERE ticker = ?``
-# inside the scan so the ROW_NUMBER partition only covers this ticker's facts.
+from provenance.financial_fact_resolution import canonical_fact_relation
+
+# The per-ticker dedup CTE keeps the view's pivot and winner order. The shared
+# relation excludes selected facts from explicitly quarantined source documents.
 _DEDUP_CTE = """dedup AS (
     SELECT
         ticker,
@@ -50,7 +52,7 @@ _DEDUP_CTE = """dedup AS (
                 line_item
             ORDER BY source_doc_id DESC, period_end DESC
         ) AS rn
-    FROM financial_facts
+    FROM {fact_relation}
     WHERE ticker = ?
 )"""
 
@@ -136,7 +138,8 @@ _RATIOS_SQL = f"WITH {_DEDUP_CTE},\nmetrics AS (\n{_METRICS_SELECT}\n)\n{_RATIOS
 def _fetch_dicts(conn: sqlite3.Connection, sql: str, ticker: str) -> list[dict[str, object]]:
     """Run a ticker-scoped query and return plain dicts, independent of whatever
     ``row_factory`` the caller's connection happens to use."""
-    cur = conn.execute(sql, (ticker,))
+    fact_relation = canonical_fact_relation(conn, "financial_facts").sql
+    cur = conn.execute(sql.format(fact_relation=fact_relation), (ticker,))
     cols = [d[0] for d in cur.description]
     return [dict(zip(cols, row, strict=False)) for row in cur.fetchall()]
 

@@ -83,20 +83,24 @@ def _capture(
     }
     defaults.update(limits)
 
-    def governed_extract(text: str) -> SupplementExchange:
+    def governed_extract(
+        text: str, _body: str, retain_raw: Callable[[SupplementExchange], None]
+    ) -> SupplementExchange:
         try:
             rows = extract(text)
         except SupplementSaturatedError:
             saturated_row: dict[str, object] = {"source_excerpt": text[:80]}
             rows = [saturated_row] * capture.max_facts
         prompt = capture.prompt(text)
-        return _synthetic_exchange(
+        exchange = _synthetic_exchange(
             conn,
             prompt,
             rows,
             model=capture.model,
             effective_prompt=capture.effective_prompt(prompt),
         )
+        retain_raw(exchange)
+        return exchange
 
     capture = SupplementCapture(
         conn=conn,
@@ -252,7 +256,7 @@ def test_saturated_single_source_line_fails_without_truncation(
         )
 
 
-def test_quote_not_in_section_rejected_and_not_cached(
+def test_quote_not_in_section_retained_as_rejected_not_processed(
     conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     job = _capture(
@@ -260,7 +264,15 @@ def test_quote_not_in_section_rejected_and_not_cached(
     )
     with pytest.raises(ValueError, match="quote does not occur"):
         job.capture(b"original source")
-    assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 0
+    versions = [
+        json.loads(row[0])
+        for row in conn.execute("SELECT content_json FROM llm_artifacts ORDER BY id")
+    ]
+    assert [version["status"] for version in versions] == ["pending", "rejected"]
+    assert versions[-1]["rows"] == []
+    assert "Invented 99%" in versions[-1]["exchange"]["raw_response"]
+    with pytest.raises(ValueError, match="explicit refresh"):
+        job.capture(b"original source")
 
 
 def test_cache_output_tamper_cannot_replay(
@@ -477,7 +489,13 @@ def test_direct_capture_retains_distinct_candidates_without_legacy_projection(
     assert conn.execute("SELECT COUNT(*) FROM kpi_definitions WHERE ticker='TEST'").fetchone()[
         0
     ] == (2 if existing_aliases else 0)
-    assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 2
+    assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 4
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM llm_artifacts WHERE superseded_by_id IS NULL"
+        ).fetchone()[0]
+        == 2
+    )
     assert (
         conn.execute(
             "SELECT COUNT(*) FROM evidence_nodes WHERE node_id LIKE 'ir-pdf-candidate:%'"
@@ -525,7 +543,9 @@ def test_empty_processed_response_is_cached_without_fact_recall_claim(
             b"original source"
         ) == [(1, [])]
     assert len(calls) == 1
-    payload = conn.execute("SELECT content_json FROM llm_artifacts").fetchone()[0]
+    payload = conn.execute(
+        "SELECT content_json FROM llm_artifacts WHERE superseded_by_id IS NULL"
+    ).fetchone()[0]
     assert "processed" in payload and "complete" not in payload
 
 
@@ -684,7 +704,6 @@ def test_live_prompt_override_repair_and_fallback_metadata_bind_cache(
     import llm.structured as structured
     from llm.ledger import record_llm_call
     from llm.prompt_ab import PromptEdit, apply_prompt_override, write_prompt_override
-    from llm.structured import repair_structured_prompt
 
     source, _ = _retained_source(conn, tmp_path)
     original_raw = source.read_bytes()
@@ -779,7 +798,7 @@ def test_live_prompt_override_repair_and_fallback_metadata_bind_cache(
             ).fetchone()[0]
             == 0
         )
-        assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM llm_artifacts").fetchone()[0] == 3
         return
     assert first.error is None and first.kpis_inserted_total == 0
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
@@ -799,7 +818,7 @@ def test_live_prompt_override_repair_and_fallback_metadata_bind_cache(
         exchange["provider"] == "fallback-provider"
         and exchange["transport"] == "fallback-transport"
     )
-    assert exchange["submitted_prompt"] == repair_structured_prompt(calls[2][0])
+    assert exchange["submitted_prompt"] == continuation.repair_supplement_prompt(calls[2][0])
     assert exchange["prompt_sha256"] == hashlib.sha256(calls[3][1].encode()).hexdigest()
     assert artifact["llm_call_id"] == exchange["llm_call_id"]
     assert (
@@ -839,3 +858,17 @@ def test_capture_rejects_caller_transaction_before_source_preparation(
     assert conn.execute("SELECT COUNT(*) FROM pipeline_attempts").fetchone()[0] == 0
     conn.rollback()
     assert conn.execute("SELECT COUNT(*) FROM owner_work").fetchone()[0] == 0
+
+
+def test_numeric_repair_feedback_is_specific_bounded_and_primary_unchanged() -> None:
+    primary = "unchanged source prompt"
+    numeric_error = "direct IR PDF numeric token must occur in its exact source quote"
+    repaired = continuation.repair_supplement_prompt(primary, numeric_error)
+    assert numeric_error in repaired
+    assert "$10-20" in repaired and "3-5%" in repaired
+    assert "literal tokens 10 and 20" in repaired
+    assert "literal tokens 3 and 5%" in repaired
+    assert primary in repaired
+    assert "untrusted-secret-content" not in continuation.repair_supplement_prompt(
+        primary, "untrusted-secret-content"
+    )

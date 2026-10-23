@@ -23,6 +23,8 @@ from llm_artifact_store import (
     read_current,
     upsert,
 )
+from log_redact import redact
+from pipeline.locators import locate_char_span
 from provenance.fulltext_backfill import project_pdf_page_texts
 from provenance.ocr_extraction import PDFPreflight, normalize_extracted_text
 
@@ -47,12 +49,53 @@ class SupplementExchange(BaseModel):
     run_id: str = Field(min_length=1)
 
 
+_SUPPLEMENT_REPAIR_FEEDBACK = {
+    "": "The response failed JSON, row schema or source validation.",
+    "direct IR PDF numeric token must occur in its exact source quote": "direct IR PDF numeric token must occur in its exact source quote",
+    "source numeric token must occur in source_excerpt": "source numeric token must occur in source_excerpt",
+    "IR extracted quote does not occur in its native source section": "IR extracted quote does not occur in its native source section",
+    "direct IR PDF guidance range repeats an endpoint": "direct IR PDF guidance range repeats an endpoint",
+    "direct IR PDF guidance range requires both exact endpoints": "direct IR PDF guidance range requires both exact endpoints",
+}
+
+
+def repair_supplement_prompt(prompt: str, error: str = "") -> str:
+    """Controlled repair-only feedback; never interpolate unknown error text."""
+    feedback = _SUPPLEMENT_REPAIR_FEEDBACK.get(error, _SUPPLEMENT_REPAIR_FEEDBACK[""])
+    return repair_structured_prompt(prompt) + (
+        "\nSOURCE VALIDATION: " + feedback + ". "
+        "Each source_excerpt must occur verbatim in EXTRACT ONLY FROM THIS SOURCE SECTION "
+        "(or the supplied page when no section marker exists). Do not repair spelling, "
+        "spacing, punctuation or context. "
+        "source_value_text must be a literal substring of source_excerpt, not a formatted value. "
+        "For a range, do not add a currency or percent symbol absent from that endpoint. "
+        "Synthetic examples: $10-20 permits literal tokens 10 and 20, not $20; "
+        "3-5% permits literal tokens 3 and 5%, not 3%. "
+        "Keep currency, unit and scale in their separate fields and each numeric value in "
+        "the required full-unit convention. Keep both endpoints as separate rows with "
+        "the same source_excerpt and label. Omit any row you cannot support exactly."
+    )
+
+
+def require_native_source_quotes(rows: list[dict[str, object]], body: str) -> None:
+    for row in rows:
+        quote = row.get("source_excerpt")
+        if (
+            not isinstance(quote, str)
+            or not quote
+            or locate_char_span(quote, body, whitespace_only=True) is None
+        ):
+            raise ValueError("IR extracted quote does not occur in its native source section")
+
+
 class _ChunkResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["processed", "saturated"]
+    status: Literal["pending", "rejected", "processed", "saturated"]
     rows: list[dict[str, object]]
     exchange: SupplementExchange
+    attempts: list[SupplementExchange] = Field(min_length=1, max_length=2)
+    validation_error: str | None = None
 
 
 @dataclass
@@ -71,7 +114,7 @@ class SupplementCapture:
     max_chunks: int
     max_structured_calls: int
     prompt: Callable[[str], str]
-    extract: Callable[[str], SupplementExchange]
+    extract: Callable[[str, str, Callable[[SupplementExchange], None]], SupplementExchange]
     validate_rows: Callable[[object], list[dict[str, object]]]
     effective_prompt: Callable[[str], str]
     override_identity: Callable[[], str]
@@ -220,67 +263,100 @@ class SupplementCapture:
             str(self.max_facts),
             str(self.max_input_chars),
             prompt,
+            *[repair_supplement_prompt(prompt, error) for error in _SUPPLEMENT_REPAIR_FEEDBACK],
         ]
-        version = "ir-supplement-native-continuation-v2"
+        version = "ir-supplement-native-continuation-v6-native-hyphen-wrap"
         scope = f"ir_supplement:{self.document_id}:page:{page}:section:{start}:{len(body)}"
         expected_sha = compute_input_sha256(prompt_version=version, cache_inputs=inputs)
         artifact = read_current(
             ticker=self.ticker, purpose="kpi_summary_enumerate", scope=scope, conn=self.conn
         )
         result: _ChunkResult | None = None
-        if (
-            not self.refresh
-            and artifact
-            and artifact_is_reusable(artifact, input_sha256=expected_sha)
-        ):
-            result = _ChunkResult.model_validate(artifact.content_json)
-            self._validated(result, body, prompt)
-            if (
-                artifact.model != result.exchange.model
-                or artifact.llm_call_id != result.exchange.llm_call_id
-            ):
-                raise ValueError("IR cached artifact producing-call attribution mismatch")
+        if not self.refresh and artifact and artifact.input_sha256 == expected_sha:
+            cached_result = _ChunkResult.model_validate(artifact.content_json)
+            if cached_result.status in {"pending", "rejected"}:
+                self._validated_attempts(cached_result, prompt)
+                raise ValueError(
+                    "IR cached section remains unresolved; explicit refresh is required: "
+                    + (cached_result.validation_error or cached_result.status)
+                )
+            if artifact_is_reusable(artifact, input_sha256=expected_sha):
+                result = cached_result
+                self._validated(result, body, prompt)
+                if (
+                    artifact.model != result.exchange.model
+                    or artifact.llm_call_id != result.exchange.llm_call_id
+                ):
+                    raise ValueError("IR cached artifact producing-call attribution mismatch")
         if result is None:
             if self.structured_calls_reserved + 2 > self.max_structured_calls:
                 raise ValueError(
                     f"IR continuation structured-call budget exhausted at page {page}, offset {start}"
                 )
             self.structured_calls_reserved += 2
-            exchange = self.extract(model_text)
-            if self.override_identity() != override_identity:
-                raise ValueError("IR prompt override changed during extraction")
-            rows = self.validate_rows(parse_json_payload(exchange.raw_response, expect="array"))
-            saturated = len(rows) >= self.max_facts
-            result = _ChunkResult(
-                status="saturated" if saturated else "processed",
-                rows=[] if saturated else rows,
-                exchange=exchange,
-            )
-            self._validated(result, body, prompt)
-            artifact_id, _ = upsert(
-                UpsertRequest(
-                    ticker=self.ticker,
-                    purpose="kpi_summary_enumerate",
-                    scope=scope,
-                    content_json=result.model_dump(mode="json"),
-                    model=result.exchange.model,
-                    llm_call_id=result.exchange.llm_call_id,
-                    prompt_version=version,
-                    cache_inputs=inputs,
-                    source_doc_ids=[self.document_id],
-                    force_new_version=self.refresh,
-                ),
-                conn=self.conn,
-            )
-            if artifact_id is None:
-                self.conn.rollback()
-                raise ValueError("IR continuation response cache write failed")
-            self.conn.commit()
-            cached = read_current(
-                ticker=self.ticker, purpose="kpi_summary_enumerate", scope=scope, conn=self.conn
-            )
-            if cached is None or not artifact_is_reusable(cached, input_sha256=expected_sha):
-                raise ValueError("IR continuation response cache verification failed")
+            attempts: list[SupplementExchange] = []
+
+            def store(value: _ChunkResult) -> None:
+                artifact_id, _ = upsert(
+                    UpsertRequest(
+                        ticker=self.ticker,
+                        purpose="kpi_summary_enumerate",
+                        scope=scope,
+                        content_json=value.model_dump(mode="json"),
+                        model=value.exchange.model,
+                        llm_call_id=value.exchange.llm_call_id,
+                        prompt_version=version,
+                        cache_inputs=inputs,
+                        source_doc_ids=[self.document_id],
+                        force_new_version=True,
+                    ),
+                    conn=self.conn,
+                )
+                if artifact_id is None:
+                    self.conn.rollback()
+                    raise RuntimeError("IR continuation response cache write failed")
+                self.conn.commit()
+                saved = read_current(
+                    ticker=self.ticker, purpose="kpi_summary_enumerate", scope=scope, conn=self.conn
+                )
+                if saved is None or not artifact_is_reusable(saved, input_sha256=expected_sha):
+                    raise RuntimeError("IR continuation response cache verification failed")
+
+            def retain_raw(exchange: SupplementExchange) -> None:
+                if attempts and exchange == attempts[-1]:
+                    return
+                if len(attempts) >= 2:
+                    raise ValueError("IR section exceeds its two governed request slots")
+                attempts.append(exchange)
+                store(_ChunkResult(status="pending", rows=[], exchange=exchange, attempts=attempts))
+
+            try:
+                exchange = self.extract(model_text, body, retain_raw)
+                retain_raw(exchange)
+                if self.override_identity() != override_identity:
+                    raise ValueError("IR prompt override changed during extraction")
+                rows = self.validate_rows(parse_json_payload(exchange.raw_response, expect="array"))
+                saturated = len(rows) >= self.max_facts
+                result = _ChunkResult(
+                    status="saturated" if saturated else "processed",
+                    rows=[] if saturated else rows,
+                    exchange=exchange,
+                    attempts=attempts,
+                )
+                self._validated(result, body, prompt)
+            except Exception as error:
+                if attempts:
+                    store(
+                        _ChunkResult(
+                            status="rejected",
+                            rows=[],
+                            exchange=attempts[-1],
+                            attempts=attempts,
+                            validation_error=redact(error),
+                        )
+                    )
+                raise
+            store(result)
         self.exchanges.append(result.exchange)
         if result.status == "processed":
             self.processed_models.add(result.exchange.model)
@@ -296,9 +372,18 @@ class SupplementCapture:
         cut = newline + 1
         return self._section(page, start, body[:cut]) + self._section(page, start + cut, body[cut:])
 
-    def _validated(self, result: _ChunkResult, body: str, prompt: str) -> None:
-        exchange = result.exchange
-        if exchange.submitted_prompt not in {prompt, repair_structured_prompt(prompt)}:
+    def _validated_attempts(self, result: _ChunkResult, prompt: str) -> None:
+        if result.exchange != result.attempts[-1]:
+            raise ValueError("IR final governed exchange differs from retained attempts")
+        for exchange in result.attempts:
+            self._validated_exchange(exchange, prompt)
+
+    def _validated_exchange(self, exchange: SupplementExchange, prompt: str) -> None:
+        if exchange.submitted_prompt not in {
+            prompt,
+            repair_structured_prompt(prompt),
+            *[repair_supplement_prompt(prompt, error) for error in _SUPPLEMENT_REPAIR_FEEDBACK],
+        }:
             raise ValueError("IR final submitted prompt does not match the source section")
         effective = self.effective_prompt(exchange.submitted_prompt)
         if hashlib.sha256(effective.encode()).hexdigest() != exchange.prompt_sha256:
@@ -322,7 +407,12 @@ class SupplementCapture:
             or call["outcome"] != "success"
         ):
             raise ValueError("IR producing governed call metadata is missing or mismatched")
+
+    def _validated(self, result: _ChunkResult, body: str, prompt: str) -> None:
+        self._validated_attempts(result, prompt)
+        exchange = result.exchange
         source_rows = self.validate_rows(parse_json_payload(exchange.raw_response, expect="array"))
+        require_native_source_quotes(source_rows, body)
         if result.status == "saturated":
             if result.rows or len(source_rows) < self.max_facts:
                 raise ValueError("IR saturated cache does not match its governed response")
@@ -332,7 +422,4 @@ class SupplementCapture:
             source_rows, sort_keys=True
         ) != json.dumps(result.rows, sort_keys=True):
             raise ValueError("IR cached rows do not match the final governed response")
-        for row in result.rows:
-            quote = row.get("source_excerpt")
-            if not isinstance(quote, str) or quote not in body:
-                raise ValueError("IR extracted quote does not occur in its native source section")
+        require_native_source_quotes(result.rows, body)

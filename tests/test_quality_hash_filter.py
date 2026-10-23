@@ -61,6 +61,7 @@ CANONICAL_PATHS = (
     "docs/quality/duplicates-ratchet.json",
     "docs/quality/lifecycle-inventory.json",
     "docs/quality/performance-baseline.json",
+    "docs/quality/portfolio-coverage-growth-20261023.json",
     "docs/quality/reachability-check.json",
     "docs/quality/pipeline-completion-announcement-review-20261023.json",
     "docs/quality/pipeline-completion-bulk-review-20261023.json",
