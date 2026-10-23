@@ -13,7 +13,9 @@ from typing import cast
 
 import pytest
 
+from compute import segments
 from execution import extract_facts as cli
+from models.fmp_payloads import FmpSegmentRecord
 from pipeline import fmp_batch, quarterly_refresh
 from pipeline.quarterly_refresh import StageResult, StageStatus
 from provenance.evidence_backfill import ensure_legacy_document_evidence
@@ -68,6 +70,45 @@ def _record(**fields: object) -> dict[str, object]:
         "reportedCurrency": "USD",
         **fields,
     }
+
+
+@pytest.mark.parametrize("extractor_fails", [False, True])
+def test_batch_does_not_commit_or_rollback_caller_pending_writes(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    extractor_fails: bool,
+) -> None:
+    document_id = _document(conn, tmp_path, "fmp_income_statement", [_record(revenue=1)])
+    conn.execute("CREATE TEMP TABLE caller_pending (value INTEGER)")
+    conn.execute("INSERT INTO caller_pending VALUES (7)")
+    calls: list[str] = []
+
+    def extract(_conn: sqlite3.Connection, _document_id: int, _root: Path) -> int:
+        calls.append("extract")
+        if extractor_fails:
+            raise ValueError("synthetic parse failure")
+        return 0
+
+    def resolve(_ticker: str, _doc_type: str) -> fmp_batch.Extractor:
+        return extract
+
+    def report(_outcome: fmp_batch.DocumentOutcome) -> None:
+        calls.append("report")
+
+    monkeypatch.setattr(fmp_batch, "_resolve_extractor", resolve)
+    with pytest.raises(RuntimeError, match="active transaction"):
+        fmp_batch.extract_documents(
+            conn,
+            [(document_id, "TEST", "fmp_income_statement")],
+            tmp_path,
+            report=report,
+        )
+    assert calls == []
+    assert conn.in_transaction
+    assert conn.execute("SELECT value FROM caller_pending").fetchone()[0] == 7
+    conn.rollback()
+    assert conn.execute("SELECT COUNT(*) FROM caller_pending").fetchone()[0] == 0
 
 
 @pytest.mark.parametrize("route", ["cli", "quarterly"])
@@ -154,6 +195,184 @@ def test_routes_preserve_order_lineage_restatement_and_replay(
     assert not conn.in_transaction
 
 
+@pytest.mark.parametrize(
+    ("held_revenue", "segment_value", "expected_rows", "expected_failures"),
+    [(None, 500, 0, 2), (None, 0, 0, 2), (1000, 500, 1, 1), (0, 0, 1, 1), (0, 500, 0, 1)],
+)
+def test_segment_prerequisite_truth_after_malformed_income(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    held_revenue: int | None,
+    segment_value: int,
+    expected_rows: int,
+    expected_failures: int,
+) -> None:
+    if held_revenue is not None:
+        held = _document(conn, tmp_path, "fmp_income_statement", [_record(revenue=held_revenue)])
+        initial = fmp_batch.extract_documents(
+            conn, [(held, "TEST", "fmp_income_statement")], tmp_path
+        )
+        assert initial.rows_inserted == 1
+    malformed = _document(
+        conn, tmp_path, "fmp_income_statement", [_record(date="invalid", revenue=900)]
+    )
+    segment = _document(
+        conn, tmp_path, "fmp_segment_product", [_record(data={"Cloud": segment_value})]
+    )
+    outcomes: list[fmp_batch.DocumentOutcome] = []
+    result = fmp_batch.extract_documents(
+        conn,
+        [(malformed, "TEST", "fmp_income_statement"), (segment, "TEST", "fmp_segment_product")],
+        tmp_path,
+        report=outcomes.append,
+    )
+    assert (result.rows_inserted, result.failed) == (expected_rows, expected_failures)
+    assert conn.execute("SELECT COUNT(*) FROM segment_dimensions").fetchone()[0] == expected_rows
+    if held_revenue is None:
+        assert outcomes[-1].error is not None
+        assert "prerequisite_unavailable" in str(outcomes[-1].error)
+        assert "2024-12-31" in str(outcomes[-1].error)
+    else:
+        assert outcomes[-1].error is None
+    assert not conn.in_transaction
+
+
+def test_mixed_segment_periods_commit_only_reconciled_rows_and_report_partial_count(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    held = _document(conn, tmp_path, "fmp_income_statement", [_record(revenue=1000)])
+    fmp_batch.extract_documents(conn, [(held, "TEST", "fmp_income_statement")], tmp_path)
+    segment = _document(
+        conn,
+        tmp_path,
+        "fmp_segment_product",
+        [
+            _record(date="2024-09-30", period="Q3", data={"Unknown": 400}),
+            _record(data={"Cloud": 500}),
+            _record(date="2024-06-30", period="Q2", data={}),
+        ],
+    )
+    source = Path(
+        conn.execute("SELECT file_path FROM documents WHERE id=?", (segment,)).fetchone()[0]
+    )
+    raw_capture = source.read_bytes()
+    read_records = segments.read_records_json
+    parsed: list[Path] = []
+
+    def read_once(path: Path) -> list[dict[str, object]]:
+        parsed.append(path)
+        return read_records(path)
+
+    monkeypatch.setattr(segments, "read_records_json", read_once)
+    outcomes: list[fmp_batch.DocumentOutcome] = []
+    for run_number, expected_inserted in enumerate([1, 0], start=1):
+        result = fmp_batch.extract_documents(
+            conn,
+            [(segment, "TEST", "fmp_segment_product")],
+            tmp_path,
+            report=outcomes.append,
+        )
+        assert (result.rows_inserted, result.failed) == (expected_inserted, 1)
+        assert outcomes[-1].rows_inserted == expected_inserted
+        error = outcomes[-1].error
+        assert isinstance(error, segments.SegmentPrerequisiteUnavailableError)
+        assert error.coordinates == (("TEST", "2024-09-30", "Q3"),)
+        assert error.committed_rows_inserted == expected_inserted
+        assert parsed == [source] * run_number
+        assert source.read_bytes() == raw_capture
+        assert "2024-09-30" in str(outcomes[-1].error)
+        assert "2024-06-30" not in str(outcomes[-1].error)
+        assert not conn.in_transaction
+    rows = conn.execute("SELECT dim_name,value FROM segment_dimensions").fetchall()
+    assert [tuple(row) for row in rows] == [("Cloud", 500)]
+
+
+def test_legacy_dedup_rows_do_not_prove_reconciliation(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+) -> None:
+    payload = _record(data={"Cloud": 500})
+    document = _document(conn, tmp_path, "fmp_segment_product", [payload])
+    record = FmpSegmentRecord.model_validate(payload)
+    segments.insert_segment_facts(
+        conn, segments.extract_facts_from_record(record, document, "revenue_by_product")
+    )
+    conn.commit()
+    result = fmp_batch.extract_documents(
+        conn, [(document, "TEST", "fmp_segment_product")], tmp_path
+    )
+    assert (result.rows_inserted, result.failed) == (0, 1)
+    assert conn.execute("SELECT COUNT(*) FROM segment_dimensions").fetchone()[0] == 1
+
+
+def test_segment_parse_failure_before_commit_has_no_committed_partial_count(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+) -> None:
+    held = _document(conn, tmp_path, "fmp_income_statement", [_record(revenue=1000)])
+    fmp_batch.extract_documents(conn, [(held, "TEST", "fmp_income_statement")], tmp_path)
+    segment = _document(
+        conn,
+        tmp_path,
+        "fmp_segment_product",
+        [
+            _record(date="2024-09-30", period="Q3", data={"Unknown": 400}),
+            _record(data={"Cloud": 500}),
+            _record(date="invalid", data={"Malformed": 1}),
+        ],
+    )
+    outcomes: list[fmp_batch.DocumentOutcome] = []
+    result = fmp_batch.extract_documents(
+        conn,
+        [(segment, "TEST", "fmp_segment_product")],
+        tmp_path,
+        report=outcomes.append,
+    )
+    assert (result.rows_inserted, result.failed) == (0, 1)
+    assert outcomes[-1].rows_inserted == 0
+    assert conn.execute("SELECT COUNT(*) FROM segment_dimensions").fetchone()[0] == 0
+    assert not conn.in_transaction
+
+
+@pytest.mark.parametrize("route", ["cli", "quarterly"])
+def test_partial_segment_prerequisite_failure_reaches_public_route_accounting(
+    conn: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    route: str,
+) -> None:
+    _document(conn, tmp_path, "fmp_income_statement", [_record(revenue=1000)])
+    _document(
+        conn,
+        tmp_path,
+        "fmp_segment_product",
+        [
+            _record(data={"Cloud": 500}),
+            _record(date="2024-09-30", period="Q3", data={"Unknown": 400}),
+        ],
+    )
+    if route == "quarterly":
+        result = _stage_extract_fmp_facts(conn, ticker="TEST", project_root=tmp_path)
+        assert result.status == StageStatus.FAILED
+        assert result.rows_processed == 2
+        assert "prerequisite_unavailable" in result.notes
+        assert "2024-09-30" in result.notes
+    else:
+        monkeypatch.setattr(cli, "PROJECT_ROOT", tmp_path)
+        database = str(conn.execute("PRAGMA database_list").fetchone()[2])
+        monkeypatch.setattr(
+            sys, "argv", ["extract-facts", "--ticker", "TEST", "--db", database, "--force"]
+        )
+        assert cli.main() == 1
+        summary = json.loads(capsys.readouterr().out)
+        assert (summary["facts_inserted"], summary["documents_failed"]) == (2, 1)
+    assert conn.execute("SELECT COUNT(*) FROM segment_dimensions").fetchone()[0] == 1
+    assert not conn.in_transaction
+
+
 @pytest.mark.parametrize("doc_type", fmp_batch.SUPPORTED_DOC_TYPES)
 def test_every_dispatch_accepts_valid_zero_documents(
     conn: sqlite3.Connection,
@@ -219,7 +438,13 @@ def test_each_record_extractor_rolls_back_before_failure_accounting(
         record = _record(netCashProvidedByOperatingActivities=100)
     else:
         record = _record(data={"revenueremainingperformanceobligation": 100})
-    _document(conn, tmp_path, doc_type, [record, {**record, "date": "invalid"}])
+    held_rows = 0
+    if "segment" in doc_type:
+        held = _document(conn, tmp_path, "fmp_income_statement", [_record(revenue=1000)])
+        held_rows = fmp_batch.extract_documents(
+            conn, [(held, "TEST", "fmp_income_statement")], tmp_path
+        ).rows_inserted
+    document = _document(conn, tmp_path, doc_type, [record, {**record, "date": "invalid"}])
     outcomes: list[fmp_batch.DocumentOutcome] = []
     statements: list[str] = []
     conn.set_trace_callback(statements.append)
@@ -229,8 +454,11 @@ def test_each_record_extractor_rolls_back_before_failure_accounting(
         assert any(f"INTO {target} " in statement for statement in statements)
         assert "COMMIT" not in statements
         assert not conn.in_transaction
-        assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == 0
-        assert conn.execute("SELECT COUNT(*) FROM fact_observation_revisions").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == held_rows
+        assert (
+            conn.execute("SELECT COUNT(*) FROM fact_observation_revisions").fetchone()[0]
+            == held_rows
+        )
         assert conn.execute("SELECT COUNT(*) FROM segment_periods").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM segment_dimensions").fetchone()[0] == 0
         # A receipt writer can now commit without retaining the first record.
@@ -239,7 +467,7 @@ def test_each_record_extractor_rolls_back_before_failure_accounting(
 
     result = fmp_batch.extract_documents(
         conn,
-        fmp_batch.select_documents(conn, ["TEST"]),
+        [(document, "TEST", doc_type)],
         tmp_path,
         report=report,
     )

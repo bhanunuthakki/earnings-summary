@@ -527,11 +527,14 @@ def test_compute_segments_emits_v2_fmp_json_table_locator_on_fixture(
     Full functional coverage (including the re-ingest locator-backfill proof)
     lives in tests/test_compute_segments.py; this is the lightweight,
     self-contained CI-guard-file fixture the registration above asks for."""
+    import hashlib
     import json
     import sqlite3
     from datetime import datetime
 
+    from compute.income_statement import extract_income_statement_facts
     from compute.segments import extract_segment_facts
+    from provenance.evidence_backfill import ensure_legacy_document_evidence
 
     assert "compute.segments" in REGISTERED_FMP_JSON_TABLE_LOCATOR_EMITTERS
 
@@ -549,6 +552,30 @@ def test_compute_segments_emits_v2_fmp_json_table_locator_on_fixture(
         (datetime.now(),),
     )
     conn.commit()
+
+    income = tmp_path / "synthetic_income.json"
+    income.write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": "MELI",
+                    "date": "2025-12-31",
+                    "period": "Q4",
+                    "reportedCurrency": "USD",
+                    "revenue": 6_000_000_000,
+                }
+            ]
+        )
+    )
+    body = income.read_bytes()
+    conn.execute(
+        "INSERT INTO documents (id,ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,raw_bytes_size) "
+        "VALUES (2,'MELI','fmp','fmp_income_statement',?,?,?,'ok',?)",
+        (str(income), hashlib.sha256(body).hexdigest(), datetime.now(), len(body)),
+    )
+    ensure_legacy_document_evidence(conn, repo_root=tmp_path, document_id=2)
+    conn.commit()
+    extract_income_statement_facts(conn, 2, tmp_path)
 
     project_root = tmp_path
     fmp_dir = project_root / "data" / "historical" / "fmp"

@@ -47,7 +47,7 @@ from pipeline.document_completeness import (
     DocumentCompletenessStatus,
     document_completeness,
 )
-from pipeline.fmp_batch import extract_documents, select_documents
+from pipeline.fmp_batch import DocumentOutcome, extract_documents, select_documents
 from pipeline.sec_xbrl import ingest_for_ticker as ingest_sec_for_ticker
 from pipeline.segment_cache_audit import audit_ticker_cache, segment_cache_present
 from pipeline.source_policy import (
@@ -272,15 +272,19 @@ def _stage_extract_fmp_facts(
             rows_processed=0,
             notes="no FMP fact-producing documents",
         )
-    result = extract_documents(conn, docs, project_root)
+    outcomes: list[DocumentOutcome] = []
+    result = extract_documents(conn, docs, project_root, report=outcomes.append)
+    failure_notes = "; ".join(
+        redact(outcome.error) for outcome in outcomes if outcome.error is not None
+    )
     return StageResult(
         name=StageName.EXTRACT_FMP_FACTS,
         status=StageStatus.FAILED if result.failed else StageStatus.OK,
         rows_processed=result.rows_inserted,
         notes=(
             f"{result.documents} docs scanned; {result.rows_inserted} new fact rows; "
-            f"{result.failed} failures"
-        ),
+            f"{result.failed} failures" + (f"; {failure_notes}" if failure_notes else "")
+        )[:500],
     )
 
 

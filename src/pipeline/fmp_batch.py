@@ -18,7 +18,7 @@ from compute.balance_sheet import extract_balance_sheet_facts
 from compute.cashflow import extract_cashflow_facts
 from compute.income_statement import extract_income_statement_facts
 from compute.segment_oi_10k import extract_segment_oi_facts
-from compute.segments import extract_segment_facts
+from compute.segments import SegmentPrerequisiteUnavailableError, extract_segment_facts
 from compute.segments_nu import extract_nu_segment_facts
 
 Extractor = Callable[[sqlite3.Connection, int, Path], int]
@@ -102,7 +102,11 @@ def extract_documents(
     A report callback may commit accounting. It only runs after extraction has
     committed or pending failed writes have been rolled back. Its own database
     failure halts the batch, and must not replace an original extraction error.
+    The connection must have no active transaction on entry: document extractors
+    commit, so this operation cannot isolate another owner's pending writes.
     """
+    if conn.in_transaction:
+        raise RuntimeError("FMP extraction cannot enter with an active transaction")
     inserted = failed = 0
     for doc_id, ticker, doc_type in documents:
         try:
@@ -120,6 +124,22 @@ def extract_documents(
                 with suppress(sqlite3.Error):
                     conn.rollback()
             raise
+        except SegmentPrerequisiteUnavailableError as exc:
+            # Only pending work is rolled back. The segment owner explicitly
+            # committed the independent reconciled periods before this outcome.
+            conn.rollback()
+            inserted += exc.committed_rows_inserted
+            failed += 1
+            if report is not None:
+                report(
+                    DocumentOutcome(
+                        doc_id,
+                        ticker,
+                        doc_type,
+                        rows_inserted=exc.committed_rows_inserted,
+                        error=exc,
+                    )
+                )
         except (ValueError, OSError, KeyError) as exc:
             conn.rollback()
             failed += 1

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Callable, Iterator
@@ -11,7 +12,9 @@ from pathlib import Path
 
 import pytest
 
+from compute.income_statement import extract_income_statement_facts
 from compute.segments import (
+    SegmentPrerequisiteUnavailableError,
     extract_facts_from_record,
     extract_segment_facts,
     insert_segment_facts,
@@ -28,6 +31,7 @@ from models.facts import (
 )
 from models.fmp_payloads import FmpSegmentRecord
 from pipeline.segment_junction_writer import write_segment_facts_junction
+from provenance.evidence_backfill import ensure_legacy_document_evidence
 
 _PRODUCT_SAMPLE = {
     "date": "2025-12-31",
@@ -244,10 +248,13 @@ def test_reconciliation_accepts_under_revenue(conn: sqlite3.Connection) -> None:
     assert passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=7) is True
 
 
-def test_reconciliation_no_revenue_accepts(conn: sqlite3.Connection) -> None:
-    """If income_statement hasn't been ingested yet, can't disprove — accept."""
+def test_reconciliation_no_revenue_is_degraded(conn: sqlite3.Connection) -> None:
+    """Unavailable prerequisite cannot establish reconciled segment admission."""
     record = FmpSegmentRecord.model_validate(_GEO_SAMPLE)
-    assert passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=1) is True
+    with pytest.raises(SegmentPrerequisiteUnavailableError) as missing:
+        passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=1)
+    assert missing.value.coordinates == (("GOOG", "2025-12-31", "FY"),)
+    assert missing.value.committed_rows_inserted == 0
 
 
 def test_insert_segment_facts_writes_to_junction(conn: sqlite3.Connection) -> None:
@@ -350,7 +357,7 @@ def _write_meli_cache(project_root: Path, record: dict[str, object]) -> None:
     )
 
 
-def _insert_meli_document(conn: sqlite3.Connection) -> None:
+def _insert_meli_document(conn: sqlite3.Connection, project_root: Path) -> None:
     conn.execute(
         "INSERT INTO documents "
         "(id, ticker, source_type, doc_type, file_path, sha256, fetched_at, "
@@ -362,6 +369,29 @@ def _insert_meli_document(conn: sqlite3.Connection) -> None:
         (datetime.now(),),
     )
     conn.commit()
+    income = project_root / "synthetic_income.json"
+    income.write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": "MELI",
+                    "date": "2025-12-31",
+                    "period": "Q4",
+                    "reportedCurrency": "USD",
+                    "revenue": 6_000_000_000,
+                }
+            ]
+        )
+    )
+    body = income.read_bytes()
+    conn.execute(
+        "INSERT INTO documents (id,ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,raw_bytes_size) "
+        "VALUES (2,'MELI','fmp','fmp_income_statement',?,?,?,'ok',?)",
+        (str(income), hashlib.sha256(body).hexdigest(), datetime.now(), len(body)),
+    )
+    ensure_legacy_document_evidence(conn, repo_root=project_root, document_id=2)
+    conn.commit()
+    extract_income_statement_facts(conn, 2, project_root)
 
 
 _MELI_RECORD: dict[str, object] = {
@@ -382,7 +412,7 @@ def test_extract_segment_facts_emits_v2_fmp_json_table_locator(
     response, same convention as `compute.as_reported.extract_facts_from_record`
     for the identical `data: {name -> value}` envelope shape."""
     conn = prov_conn
-    _insert_meli_document(conn)
+    _insert_meli_document(conn, tmp_path)
     _write_meli_cache(tmp_path, _MELI_RECORD)
 
     inserted = extract_segment_facts(conn, 1, tmp_path)
@@ -415,7 +445,7 @@ def test_extract_segment_facts_backfills_null_locator_on_reingest(
     natural key already matches), and a locator that already exists is never
     clobbered by a later write."""
     conn = prov_conn
-    _insert_meli_document(conn)
+    _insert_meli_document(conn, tmp_path)
     _write_meli_cache(tmp_path, _MELI_RECORD)
 
     # Simulate the PRE-fix legacy state directly: same (ticker, period,
