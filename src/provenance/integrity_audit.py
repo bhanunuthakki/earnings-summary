@@ -40,6 +40,10 @@ from provenance.filing_xbrl_extraction_ledger import (
     FilingXbrlExtractionDispositionRecord,
     FilingXbrlExtractionDispositionSeal,
 )
+from provenance.financial_fact_resolution import (
+    HistoricalFactAuthorityUnavailableError,
+    diagnose_fact_compatibility_drift_as_known,
+)
 from provenance.metric_ontology import MetricOntology
 from provenance.population_completeness import PopulationTemporalScope
 from provenance.research_snapshot import (
@@ -93,6 +97,9 @@ class AuditOptions(BaseModel):
     repo_root: Path | None = None
     content_roots: tuple[Path, ...] = ()
     max_verify_bytes: int = Field(default=100 * 1024 * 1024, ge=0)
+    fact_drift_effective_at: datetime | None = None
+    fact_drift_known_at: datetime | None = None
+    fact_drift_only: bool = False
 
     @model_validator(mode="after")
     def _require_root_for_byte_verification(self) -> AuditOptions:
@@ -100,6 +107,16 @@ class AuditOptions(BaseModel):
             raise ValueError(
                 "repo_root or at least one content_root is required when verify_bytes is enabled"
             )
+        if (self.fact_drift_effective_at is None) != (self.fact_drift_known_at is None):
+            raise ValueError("fact compatibility drift requires both temporal cutoffs")
+        if self.fact_drift_only and self.fact_drift_known_at is None:
+            raise ValueError("fact-drift-only audit requires temporal cutoffs")
+        if self.fact_drift_effective_at is not None and (
+            self.fact_drift_effective_at.tzinfo is None
+            or self.fact_drift_known_at is None
+            or self.fact_drift_known_at.tzinfo is None
+        ):
+            raise ValueError("fact compatibility drift cutoffs must be timezone-aware")
         return self
 
 
@@ -116,6 +133,31 @@ class IntegrityFinding(BaseModel):
     samples: tuple[str, ...]
 
 
+class FactCompatibilityAuditTable(BaseModel):
+    """Value-free status for one requested compatibility table."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    fact_table: Literal["financial_facts", "kpi_facts"]
+    status: Literal["complete", "unavailable"]
+    scanned_count: int | None
+    selected_count: int | None
+    drift_count: int | None
+    sample_complete: bool | None
+
+
+class FactCompatibilityAuditScope(BaseModel):
+    """Exact cutoffs and coverage retained even when no drift is found."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    mode: Literal["drift_only", "full"]
+    effective_at: datetime
+    known_at: datetime
+    sample_limit: int
+    tables: tuple[FactCompatibilityAuditTable, ...]
+
+
 class IntegrityAuditSummary(BaseModel):
     """Closed stdout contract for the command-line entrypoint."""
 
@@ -126,6 +168,7 @@ class IntegrityAuditSummary(BaseModel):
     findings: tuple[IntegrityFinding, ...]
     has_blockers: bool
     tables_present: tuple[str, ...]
+    fact_drift_scope: FactCompatibilityAuditScope | None = None
 
 
 class CutoverAuditOptions(BaseModel):
@@ -595,6 +638,15 @@ def audit_connection(conn: sqlite3.Connection, options: AuditOptions) -> Integri
     """Inspect a SQLite connection without issuing any mutating statement."""
     tables = _table_names(conn)
     findings: list[IntegrityFinding] = []
+    if options.fact_drift_only:
+        fact_drift_scope = _audit_fact_compatibility_drift(conn, tables, findings, options)
+        return IntegrityAuditSummary(
+            generated_at=datetime.now(UTC),
+            findings=tuple(findings),
+            has_blockers=bool(findings),
+            tables_present=tuple(sorted(tables)),
+            fact_drift_scope=fact_drift_scope,
+        )
     if options.deep_sqlite_checks:
         _audit_sqlite_pragmas(conn, findings, options)
     _audit_document_parents(conn, tables, findings, options)
@@ -605,6 +657,9 @@ def audit_connection(conn: sqlite3.Connection, options: AuditOptions) -> Integri
     _audit_evidence_replica_links(conn, tables, findings, options)
     _audit_observation_resolution(conn, tables, findings, options)
     _audit_fact_resolution_cutover(conn, tables, findings, options)
+    fact_drift_scope = None
+    if options.fact_drift_known_at is not None and options.fact_drift_effective_at is not None:
+        fact_drift_scope = _audit_fact_compatibility_drift(conn, tables, findings, options)
     _audit_fact_match_proofs(conn, tables, findings, options)
     _audit_fact_plane_v2(conn, tables, findings, options)
     _audit_filing_xbrl_processor_closure(conn, tables, findings, options)
@@ -626,6 +681,7 @@ def audit_connection(conn: sqlite3.Connection, options: AuditOptions) -> Integri
         findings=tuple(findings),
         has_blockers=any(finding.severity is Severity.BLOCKER for finding in findings),
         tables_present=tuple(sorted(tables)),
+        fact_drift_scope=fact_drift_scope,
     )
 
 
@@ -4397,6 +4453,84 @@ def _audit_observation_resolution(
             query_context="sqlite_master trigger inventory",
             samples=(expected_finality,),
         )
+
+
+def _audit_fact_compatibility_drift(
+    conn: sqlite3.Connection,
+    tables: set[str],
+    findings: list[IntegrityFinding],
+    options: AuditOptions,
+) -> FactCompatibilityAuditScope:
+    effective_at = options.fact_drift_effective_at
+    known_at = options.fact_drift_known_at
+    if effective_at is None or known_at is None:
+        raise ValueError("fact compatibility drift cutoffs are required")
+    reports: list[FactCompatibilityAuditTable] = []
+    conn.execute("SAVEPOINT fact_compatibility_audit_read")
+    try:
+        for fact_table in ("financial_facts", "kpi_facts"):
+            if fact_table not in tables:
+                receipt = None
+            else:
+                try:
+                    receipt = diagnose_fact_compatibility_drift_as_known(
+                        conn,
+                        fact_table=fact_table,
+                        effective_at=effective_at,
+                        known_at=known_at,
+                        sample_limit=options.sample_limit,
+                    )
+                except HistoricalFactAuthorityUnavailableError:
+                    receipt = None
+            if receipt is None:
+                reports.append(
+                    FactCompatibilityAuditTable(
+                        fact_table=fact_table,
+                        status="unavailable",
+                        scanned_count=None,
+                        selected_count=None,
+                        drift_count=None,
+                        sample_complete=None,
+                    )
+                )
+                _add(
+                    findings,
+                    code=f"{fact_table.upper()}_AS_KNOWN_COMPATIBILITY_DRIFT_UNAVAILABLE",
+                    severity=Severity.BLOCKER,
+                    remediation=RemediationClass.HARD_STOP,
+                    count=1,
+                    query_context="as-known drift total unavailable; 1 audit unable to run",
+                    samples=(),
+                )
+                continue
+            reports.append(
+                FactCompatibilityAuditTable(
+                    fact_table=fact_table,
+                    status="complete",
+                    scanned_count=receipt.scanned_count,
+                    selected_count=receipt.selected_count,
+                    drift_count=receipt.drift_count,
+                    sample_complete=receipt.sample_complete,
+                )
+            )
+            _add(
+                findings,
+                code=f"{fact_table.upper()}_AS_KNOWN_COMPATIBILITY_DRIFT",
+                severity=Severity.BLOCKER,
+                remediation=RemediationClass.MANUAL,
+                count=receipt.drift_count,
+                query_context="same canonical as-known selection; drift count is complete",
+                samples=tuple(sample.model_dump_json() for sample in receipt.samples),
+            )
+    finally:
+        conn.execute("RELEASE SAVEPOINT fact_compatibility_audit_read")
+    return FactCompatibilityAuditScope(
+        mode="drift_only" if options.fact_drift_only else "full",
+        effective_at=effective_at,
+        known_at=known_at,
+        sample_limit=options.sample_limit,
+        tables=tuple(reports),
+    )
 
 
 def _audit_fact_resolution_cutover(

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+import subprocess
+import sys
+import traceback
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
@@ -56,7 +59,9 @@ from provenance.financial_fact_resolution import (
     HistoricalFactAuthorityUnavailableError,
     canonical_fact_row_ids_as_known,
     canonical_fact_selections_as_known,
+    diagnose_fact_compatibility_drift_as_known,
 )
+from provenance.integrity_audit import AuditOptions, audit_connection
 from provenance.issuer_registry import IssuerEntity, IssuerRegistry
 from provenance.reporting_entity_registry import (
     EvidenceSubjectBindingRevision,
@@ -1058,6 +1063,321 @@ def test_canonical_fact_selections_fail_closed_on_partial_authority_and_fact_dri
             effective_at=NOW,
             known_at=NOW,
         )
+
+
+def test_as_known_compatibility_diagnostic_reports_only_identity_and_field_names() -> None:
+    conn = _database()
+    clean_id = _fact(conn, logical_key="clean")
+    drift_id = _fact(conn, logical_key="drift")
+    conn.execute("UPDATE kpi_facts SET value='99.0' WHERE id=?", (drift_id,))
+
+    receipt = diagnose_fact_compatibility_drift_as_known(
+        conn, fact_table="kpi_facts", effective_at=NOW, known_at=NOW, sample_limit=1
+    )
+    assert receipt.selected_count == 2
+    assert receipt.drift_count == 1
+    assert len(receipt.samples) == 1
+    sample = receipt.samples[0]
+    assert sample.fact_row_id == drift_id
+    assert sample.observation_id == f"kpi-observation-{drift_id}"
+    assert sample.mismatch_fields == ("numeric_value",)
+    assert "99.0" not in str(receipt)
+    assert clean_id != drift_id
+    with pytest.raises(HistoricalFactAuthorityUnavailableError):
+        canonical_fact_selections_as_known(
+            conn, fact_table="kpi_facts", effective_at=NOW, known_at=NOW
+        )
+
+    audit = audit_connection(
+        conn,
+        AuditOptions(
+            deep_sqlite_checks=False,
+            fact_drift_effective_at=NOW,
+            fact_drift_known_at=NOW,
+            fact_drift_only=True,
+            sample_limit=1,
+        ),
+    )
+    finding = next(
+        item for item in audit.findings if item.code == "KPI_FACTS_AS_KNOWN_COMPATIBILITY_DRIFT"
+    )
+    assert finding.count == 1
+    assert audit.fact_drift_scope is not None
+    assert audit.fact_drift_scope.mode == "drift_only"
+    assert audit.fact_drift_scope.effective_at == NOW
+    assert audit.fact_drift_scope.known_at == NOW
+    assert audit.fact_drift_scope.tables[1].scanned_count == 2
+    assert audit.fact_drift_scope.tables[1].selected_count == 2
+    assert audit.fact_drift_scope.tables[1].drift_count == 1
+    assert audit.fact_drift_scope.tables[0].status == "unavailable"
+    assert len(finding.samples) == 1
+    assert "99.0" not in finding.samples[0]
+
+    partial = _database()
+    _fact(partial)
+    partial.execute("DROP TABLE fact_resolution_outcomes")
+    unavailable = audit_connection(
+        partial,
+        AuditOptions(
+            fact_drift_effective_at=NOW,
+            fact_drift_known_at=NOW,
+            fact_drift_only=True,
+        ),
+    )
+    assert any(
+        item.code == "KPI_FACTS_AS_KNOWN_COMPATIBILITY_DRIFT_UNAVAILABLE"
+        for item in unavailable.findings
+    )
+    assert not any(
+        item.code == "KPI_FACTS_AS_KNOWN_COMPATIBILITY_DRIFT" for item in unavailable.findings
+    )
+    assert unavailable.fact_drift_scope is not None
+    assert unavailable.fact_drift_scope.tables[1].drift_count is None
+
+
+def test_as_known_drift_count_is_complete_when_samples_are_bounded() -> None:
+    conn = _database()
+    first = _fact(conn, logical_key="first")
+    second = _fact(conn, logical_key="second")
+    conn.execute("UPDATE kpi_facts SET value='31.0' WHERE id=?", (first,))
+    conn.execute("UPDATE kpi_facts SET locator='changed' WHERE id=?", (second,))
+    conn.commit()
+    conn.execute("PRAGMA query_only=ON")
+
+    receipt = diagnose_fact_compatibility_drift_as_known(
+        conn, fact_table="kpi_facts", effective_at=NOW, known_at=NOW, sample_limit=1
+    )
+    assert receipt.selected_count == 2
+    assert receipt.drift_count == 2
+    assert receipt.sample_complete is False
+    assert len(receipt.samples) == 1
+    assert receipt.samples[0].mismatch_fields == ("numeric_value",)
+    assert "31.0" not in receipt.model_dump_json()
+    assert "changed" not in receipt.model_dump_json()
+
+
+def test_as_known_drift_audit_reports_empty_and_missing_table_authority() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    options = AuditOptions(
+        fact_drift_only=True, fact_drift_effective_at=NOW, fact_drift_known_at=NOW
+    )
+    empty = audit_connection(conn, options)
+    assert empty.has_blockers
+    assert empty.fact_drift_scope is not None
+    assert [row.status for row in empty.fact_drift_scope.tables] == [
+        "unavailable",
+        "unavailable",
+    ]
+    assert all(row.drift_count is None for row in empty.fact_drift_scope.tables)
+
+    partial = _database()
+    _fact(partial)
+    one_table = audit_connection(partial, options)
+    assert one_table.fact_drift_scope is not None
+    assert one_table.fact_drift_scope.tables[0].status == "unavailable"
+    assert one_table.fact_drift_scope.tables[1].status == "complete"
+    assert one_table.fact_drift_scope.tables[1].drift_count == 0
+    assert one_table.has_blockers
+
+
+@pytest.mark.parametrize(
+    ("column", "bad_value"),
+    [
+        ("period_end", "PRIVATE_DATE_SENTINEL"),
+        ("value", "PRIVATE_NUMERIC_SENTINEL"),
+        ("source_doc_id", "PRIVATE_SOURCE_SENTINEL"),
+    ],
+)
+def test_as_known_drift_audit_hides_malformed_compatibility_values(
+    tmp_path: Path, column: str, bad_value: str
+) -> None:
+    path = tmp_path / "fact-drift.db"
+    conn = _database(path)
+    fact_id = _fact(conn)
+    conn.execute(f"UPDATE kpi_facts SET {column}=? WHERE id=?", (bad_value, fact_id))
+    conn.commit()
+    conn.close()
+
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(root / "execution" / "audit_evidence_integrity.py"),
+            "--db-path",
+            str(path),
+            "--fact-drift-only",
+            "--fact-drift-effective-at",
+            NOW.isoformat(),
+            "--fact-drift-known-at",
+            NOW.isoformat(),
+            "--strict",
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert bad_value not in result.stdout + result.stderr
+    assert "KPI_FACTS_AS_KNOWN_COMPATIBILITY_DRIFT_UNAVAILABLE" in result.stdout
+
+
+def test_normal_as_known_reader_hides_malformed_stored_value() -> None:
+    conn = _database()
+    fact_id = _fact(conn)
+    marker = "PRIVATE_READER_DATE_SENTINEL"
+    conn.execute("UPDATE kpi_facts SET period_end=? WHERE id=?", (marker, fact_id))
+    with pytest.raises(HistoricalFactAuthorityUnavailableError) as failure:
+        canonical_fact_selections_as_known(
+            conn, fact_table="kpi_facts", effective_at=NOW, known_at=NOW
+        )
+    assert marker not in "".join(traceback.format_exception(failure.value))
+
+
+def test_as_known_drift_audit_holds_dangling_compatibility_row() -> None:
+    conn = _database()
+    fact_id = _fact(conn)
+    conn.execute("DELETE FROM kpi_facts WHERE id=?", (fact_id,))
+    audit = audit_connection(
+        conn,
+        AuditOptions(fact_drift_only=True, fact_drift_effective_at=NOW, fact_drift_known_at=NOW),
+    )
+    assert audit.fact_drift_scope is not None
+    assert audit.fact_drift_scope.tables[1].status == "unavailable"
+    assert audit.fact_drift_scope.tables[1].drift_count is None
+
+
+def test_as_known_drift_audit_batches_full_clean_population() -> None:
+    conn = _database()
+    for index in range(80):
+        _fact(conn, logical_key=f"batch-{index}")
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    receipt = diagnose_fact_compatibility_drift_as_known(
+        conn, fact_table="kpi_facts", effective_at=NOW, known_at=NOW, sample_limit=1
+    )
+    conn.set_trace_callback(None)
+    reads = [
+        statement for statement in statements if statement.lstrip().upper().startswith("SELECT")
+    ]
+    assert receipt.scanned_count == 80
+    assert receipt.selected_count == 80
+    assert receipt.drift_count == 0
+    assert receipt.sample_complete is True
+    assert receipt.samples == ()
+    assert len(reads) <= 20
+
+
+@pytest.mark.parametrize(
+    ("table", "column"),
+    [
+        ("reported_observations", "period_end"),
+        ("reported_observations", "available_at"),
+        ("reported_observations", "recorded_at"),
+        ("fact_observation_revisions", "captured_at"),
+        ("observation_resolution_revisions", "knowledge_cutoff"),
+        ("observation_resolution_revisions", "effective_at"),
+        ("observation_resolution_revisions", "recorded_at"),
+        ("fact_resolution_outcomes", "recorded_at"),
+    ],
+)
+def test_as_known_drift_audit_rejects_malformed_newer_immutable_clock(
+    table: str, column: str
+) -> None:
+    conn = _database()
+    _fact(conn, logical_key="clock-history")
+    newer = _fact(
+        conn, logical_key="clock-history", known_at=NOW + timedelta(hours=1), value="13.0"
+    )
+    marker = "PRIVATE_IMMUTABLE_CLOCK_SENTINEL"
+    key_column = (
+        "observation_id"
+        if table in {"reported_observations", "fact_observation_revisions"}
+        else "resolution_id"
+    )
+    key = (
+        f"kpi-observation-{newer}"
+        if key_column == "observation_id"
+        else "kpi-resolution-clock-history-2"
+    )
+    conn.execute(f"UPDATE {table} SET {column}=? WHERE {key_column}=?", (marker, key))
+    cutoff = NOW + timedelta(days=1)
+    with pytest.raises(HistoricalFactAuthorityUnavailableError) as failure:
+        canonical_fact_selections_as_known(
+            conn, fact_table="kpi_facts", effective_at=cutoff, known_at=cutoff
+        )
+    assert marker not in "".join(traceback.format_exception(failure.value))
+    audit = audit_connection(
+        conn,
+        AuditOptions(
+            fact_drift_only=True, fact_drift_effective_at=cutoff, fact_drift_known_at=cutoff
+        ),
+    )
+    assert audit.fact_drift_scope is not None
+    table_report = audit.fact_drift_scope.tables[1]
+    assert table_report.status == "unavailable"
+    assert (table_report.scanned_count, table_report.selected_count, table_report.drift_count) == (
+        None,
+        None,
+        None,
+    )
+    assert marker not in audit.model_dump_json()
+
+
+def test_as_known_drift_audit_rejects_missing_newer_outcome() -> None:
+    conn = _database()
+    _fact(conn, logical_key="outcome-history")
+    _fact(conn, logical_key="outcome-history", known_at=NOW + timedelta(hours=1), value="13.0")
+    conn.execute(
+        "DELETE FROM fact_resolution_outcomes "
+        "WHERE resolution_id='kpi-resolution-outcome-history-2'"
+    )
+    cutoff = NOW + timedelta(days=1)
+    with pytest.raises(HistoricalFactAuthorityUnavailableError):
+        canonical_fact_selections_as_known(
+            conn, fact_table="kpi_facts", effective_at=cutoff, known_at=cutoff
+        )
+    audit = audit_connection(
+        conn,
+        AuditOptions(
+            fact_drift_only=True, fact_drift_effective_at=cutoff, fact_drift_known_at=cutoff
+        ),
+    )
+    assert audit.fact_drift_scope is not None
+    assert audit.fact_drift_scope.tables[1].status == "unavailable"
+    assert audit.fact_drift_scope.tables[1].drift_count is None
+
+
+@pytest.mark.parametrize("missing_table", ["fact_observation_revisions", "reported_observations"])
+def test_as_known_drift_audit_rejects_missing_newer_selected_observation(
+    missing_table: str,
+) -> None:
+    conn = _database()
+    _fact(conn, logical_key="missing-observation-history")
+    newer = _fact(
+        conn,
+        logical_key="missing-observation-history",
+        known_at=NOW + timedelta(hours=1),
+        value="13.0",
+    )
+    conn.execute(
+        f"DELETE FROM {missing_table} WHERE observation_id=?",
+        (f"kpi-observation-{newer}",),
+    )
+    cutoff = NOW + timedelta(days=1)
+    with pytest.raises(HistoricalFactAuthorityUnavailableError):
+        canonical_fact_selections_as_known(
+            conn, fact_table="kpi_facts", effective_at=cutoff, known_at=cutoff
+        )
+    audit = audit_connection(
+        conn,
+        AuditOptions(
+            fact_drift_only=True, fact_drift_effective_at=cutoff, fact_drift_known_at=cutoff
+        ),
+    )
+    assert audit.fact_drift_scope is not None
+    assert audit.fact_drift_scope.tables[1].status == "unavailable"
 
 
 @pytest.mark.usefixtures("semantic_recording_clock")

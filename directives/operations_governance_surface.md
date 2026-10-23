@@ -2191,3 +2191,20 @@ connections; visible report content remains subject to the owner's sharing decis
 The private report and live dashboard retain their existing behavior. This local,
 explicit file operation adds no dashboard action, scheduler, provider call or database
 write. See `docs/security/information-boundaries.md` for the invocation and boundaries.
+### As-known fact compatibility drift diagnostic (2026-10-23)
+
+`execution/audit_evidence_integrity.py` accepts `--fact-drift-only`,
+`--fact-drift-effective-at`, and `--fact-drift-known-at` for a read-only,
+dual-cutoff audit. The diagnostic uses the canonical fact selector's same
+resolution, quarantine, and comparison rules. A blocker finding reports a
+complete drift count and bounded samples with fact, observation, and
+resolution identities, ticker, and mismatch field names. It never reports
+numeric values, locators, or source text. An unavailable ledger produces a
+separate blocker with an unknown drift count. This audit does not repair facts
+or change their read eligibility. The saved receipt retains the mode, both
+cutoffs, and each table's scanned, selected, and drift counts. Missing tables
+and malformed selected rows report unavailable with null counts. The sample
+completeness flag distinguishes a complete sample from a bounded one. A
+malformed immutable clock or missing selected outcome, link, or observation
+blocks the as-known read and the audit. It cannot expose an older resolution
+as a complete current answer.
