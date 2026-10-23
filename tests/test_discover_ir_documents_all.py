@@ -935,3 +935,29 @@ def test_only_failing_rescans_only_zero_doc_names(
     assert rc == 0
     ran = {t for t, _ in fake.stages}
     assert ran == {"NOW"}  # NU already has docs → excluded from the failing-only rescan
+
+
+@pytest.mark.parametrize("owner_requested", [False, True])
+def test_processing_continuation_retains_request_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    owner_requested: bool,
+) -> None:
+    fake = _RecordingRun()
+    monkeypatch.setattr(batch.subprocess, "run", fake)
+    # The exact ticker is always present, but it must not imply a request flag.
+    getattr(batch, "_run_process_stage")(
+        "NU",
+        repo_root=tmp_path,
+        db_path=tmp_path / "test.db",
+        summaries=False,
+        timeout_s=30,
+        refresh_views=False,
+        owner_requested=owner_requested,
+    )
+    evidence = [
+        command for command in fake.calls if _script_of(command) == "process_document_evidence.py"
+    ]
+    assert len(evidence) == 1
+    assert ("--requested" in evidence[0]) is owner_requested
+    assert _ticker_of(evidence[0]) == "NU"

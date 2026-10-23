@@ -111,8 +111,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr validates only the checked-in positive_fields argparse tuple.",
-      "fingerprint": "ea894cc34bcdb09758e98a589569397fba2f6587e9c3374d60ecf54ec9a34422",
-      "line": 1328,
+      "fingerprint": "789a8c053680d58715e1f2a3cced42a4aa20fad9577e0bb62b2fb090c61a2401",
+      "line": 1332,
       "path": "execution/discover_ir_documents_all.py",
       "targets": [
         "positive_fields"
@@ -1018,7 +1018,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "e322aed91c69fab31cc0f23ca792230021a22434b60a6fbbfa8b43e4f2893520",
+      "source_sha256": "805aacd5ae240b3c053f9f1d208bab2f658111425c62ca044072ebce7217af36",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

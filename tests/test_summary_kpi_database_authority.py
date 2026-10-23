@@ -161,3 +161,42 @@ def test_active_suppression_keeps_explicit_cli_result(
         "pipeline_key": "pipeline-test",
         "attempt_id": "active-test",
     }
+
+
+@pytest.mark.parametrize("requested", [False, True])
+def test_summary_cli_request_context_is_explicit_and_not_inferred_from_ticker(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    requested: bool,
+) -> None:
+    database = migrated_db(tmp_path / "request.db")
+    argv = [
+        "summary-kpis",
+        "--ticker",
+        "NU",
+        "--db-path",
+        str(database),
+        "--repo-root",
+        str(tmp_path),
+    ]
+    if requested:
+        argv.append("--requested")
+    monkeypatch.setattr(sys, "argv", argv)
+    seen: list[bool] = []
+
+    def extract(ticker: str, *args: object, **kwargs: object) -> TickerExtractionLog:
+        seen.append(bool(kwargs["requested"]))
+        return TickerExtractionLog(ticker=ticker)
+
+    monkeypatch.setattr(cli, "extract_for_ticker", extract)
+    assert cli.main() == 0
+    assert seen == [requested]
+
+
+def test_summary_cli_request_cannot_authorize_all_ticker_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["summary-kpis", "--all", "--requested"])
+    with pytest.raises(SystemExit):
+        cli.main()

@@ -36,7 +36,11 @@
         "src/search/corpus_builder.py",
         "src/provenance/canonical_fact_resolution.py",
         "src/provenance/fact_read_model.py",
-        "src/provenance/native_pdf_transcript.py"
+        "src/provenance/native_pdf_transcript.py",
+        "src/provenance/cohort_readiness.py",
+        "execution/audit_cohort_readiness.py",
+        "src/provenance/document_evidence_pipeline.py",
+        "execution/process_document_evidence.py"
       ],
       "dependencies": [
         "requirements.lock",
@@ -52,11 +56,14 @@
         "pytest tests/test_research_issuer_obligation_bindings.py -q",
         "pytest tests/test_report_financial_resolution_clock.py -q",
         "pytest tests/test_pdf_no_ocr_processing_evidence.py -q",
-        "pytest tests/test_corpus_fts_bulk_validation.py tests/test_search_corpus_builder.py tests/test_search_projection_seals.py tests/test_scoped_research_universe_migration.py -q"
+        "pytest tests/test_corpus_fts_bulk_validation.py tests/test_search_corpus_builder.py tests/test_search_projection_seals.py tests/test_scoped_research_universe_migration.py -q",
+        "pytest tests/test_cohort_readiness.py -q",
+        "pytest tests/test_document_evidence_pipeline.py -q"
       ],
       "documentation": [
         "AGENTS.md",
-        "directives/cross_asset_data_model.md"
+        "directives/cross_asset_data_model.md",
+        "docs/architecture/cohort-rollout-readiness.md"
       ],
       "version_ownership": "alembic/versions/ migration graph and alembic_version table; verification discovers the active head and requires exactly one head",
       "backup_ownership": "cron/backup_db.py online SQLite snapshot and execution/restore_drill.py throwaway restore verification; canonical Windows database authority uses WAL mode",

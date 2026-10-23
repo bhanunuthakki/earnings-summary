@@ -603,3 +603,69 @@ def test_resume_receipt_binds_source_filter_and_accepts_old_unfiltered_scope(
     receipt_path.write_text(json.dumps(old_receipt))
     assert cli.main(argv) == 2
     capsys.readouterr()
+
+
+def test_requested_context_is_scoped_and_reaches_existing_authorizer(
+    connection: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pydantic import ValidationError
+
+    document_id = _seed(connection, tmp_path, role="evaluation")
+    with pytest.raises(ValidationError, match="requires one ticker or document"):
+        DocumentEvidenceRequest(repo_root=tmp_path, requested=True)
+    seen: list[bool] = []
+    original = pipeline.authorize_collection_target_in_connection
+
+    def authorize(
+        conn: sqlite3.Connection,
+        ticker: str,
+        *,
+        requested: bool,
+        source: pipeline.CollectionSource,
+        artifact_kind: pipeline.ArtifactKind,
+    ) -> object:
+        seen.append(requested)
+        return original(
+            conn, ticker, requested=requested, source=source, artifact_kind=artifact_kind
+        )
+
+    monkeypatch.setattr(pipeline, "authorize_collection_target_in_connection", authorize)
+    result = process_document_evidence(
+        connection,
+        DocumentEvidenceRequest(
+            repo_root=tmp_path,
+            ticker="ACME",
+            document_id=document_id,
+            requested=True,
+            apply=True,
+        ),
+    )
+    assert result.items[0].status == "extracted"
+    assert seen == [True]
+
+
+def test_resume_receipt_binds_requested_context(
+    connection: sqlite3.Connection,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from execution import process_document_evidence as cli
+
+    monkeypatch.setattr(cli, "PROJECT_ROOT", tmp_path)
+    _seed(connection, tmp_path, role="evaluation")
+    database = Path(connection.execute("PRAGMA database_list").fetchone()[2])
+    argv = [
+        "--db",
+        str(database),
+        "--repo-root",
+        str(tmp_path),
+        "--ticker",
+        "ACME",
+        "--apply",
+        "--resume",
+    ]
+    assert cli.main([*argv, "--requested"]) == 2
+    with pytest.raises(ValueError, match="scope mismatch"):
+        cli.main(argv)

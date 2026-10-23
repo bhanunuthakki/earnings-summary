@@ -306,6 +306,7 @@ def _run_process_stage(
     timeout_s: float,
     deadline_at: float | None = None,
     refresh_views: bool = True,
+    owner_requested: bool = False,
 ) -> bool:
     """Continue canonical evidence, then refresh existing derived text views.
 
@@ -338,6 +339,8 @@ def _run_process_stage(
             "500",
             "--apply",
         ]
+        if owner_requested:
+            command.append("--requested")
         if before_document_id:
             command.extend(["--before-document-id", str(before_document_id)])
         try:
@@ -699,6 +702,7 @@ def _finish_discovery(
                 repo_root=repo_root,
                 db_path=db_path,
                 summaries=summaries,
+                owner_requested=owner_requested,
                 timeout_s=process_budget,
                 deadline_at=effective_deadline,
                 refresh_views=bool(
