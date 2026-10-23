@@ -1384,7 +1384,7 @@ def test_source_launcher_uses_exact_isolated_python_prefix(
     def tree_fence(_paths: object):
         phases.append("tree-enter")
         try:
-            yield "synthetic"
+            yield "windows-deny-write-acl"
         finally:
             phases.append("tree-exit")
 
@@ -1392,7 +1392,7 @@ def test_source_launcher_uses_exact_isolated_python_prefix(
     def file_fence(_paths: object):
         phases.append("file-enter")
         try:
-            yield "synthetic"
+            yield "windows-deny-write"
         finally:
             phases.append("file-exit")
 
