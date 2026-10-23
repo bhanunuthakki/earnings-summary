@@ -12,6 +12,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from compute.ir_narrative import extract_for_ticker
 from llm.anchors import (
     IR_ANCHOR_CHAR_CAP,
     compose_anchor_block,
@@ -24,12 +27,19 @@ _HEADER_PREFIX = "## IR ANCHOR (company-provided framing"
 
 
 def _write_ir(repo_root: Path, ticker: str, filename: str, body: str) -> Path:
-    """Write a narrative cache file at data/ir_narrative/<TICKER>/<filename>."""
-    d = repo_root / "data" / "ir_narrative" / ticker.upper()
-    d.mkdir(parents=True, exist_ok=True)
-    p = d / filename
-    p.write_text(body, encoding="utf-8")
-    return p
+    """Build a real envelope from synthetic source text through the producer."""
+    doctype, period = Path(filename).stem.split("__", 1)
+    source = repo_root / "ir_documents" / ticker / period / f"{doctype}__abcd1234.pdf"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(body if not body.strip() else body * (200 // len(body) + 1))
+
+    def extract(payload: bytes, _source_ref: str) -> str:
+        return payload.decode()
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr("compute.ir_narrative.project_source_text", extract)
+        assert extract_for_ticker(repo_root, ticker)["failed"] == 0
+    return repo_root / "data" / "ir_narrative" / ticker / Path(filename).with_suffix(".json")
 
 
 # --- graceful-empty paths ----------------------------------------------------
@@ -48,9 +58,9 @@ def test_dir_without_matching_files_returns_empty(tmp_path: Path) -> None:
     assert load_ir_anchor(tmp_path, "FOO") == ""
 
 
-def test_empty_body_file_returns_empty(tmp_path: Path) -> None:
+def test_empty_extraction_returns_explicit_gap(tmp_path: Path) -> None:
     _write_ir(tmp_path, "FOO", "ir_presentation__2025-Q4.txt", "   \n\n  ")
-    assert load_ir_anchor(tmp_path, "FOO") == ""
+    assert "UNAVAILABLE" in load_ir_anchor(tmp_path, "FOO")
 
 
 # --- positive path + bias framing -------------------------------------------
@@ -148,3 +158,72 @@ def test_compose_orders_ir_last_with_separators() -> None:
 def test_compose_with_only_ir_present() -> None:
     out = compose_anchor_block("", "", "IRONLY")
     assert "IRONLY" in out
+
+
+def test_new_uncached_period_blocks_older_cached_fallback(tmp_path: Path) -> None:
+    _write_ir(tmp_path, "FOO", "ir_presentation__2025-Q3.txt", "OLD VALID DECK")
+    source = tmp_path / "ir_documents/FOO/2025-Q4/ir_presentation__aaaaaaaa.pdf"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"new source not yet extracted")
+    output = load_ir_anchor(tmp_path, "FOO")
+    assert "UNAVAILABLE" in output
+    assert "2025-Q4" in output
+    assert "OLD VALID DECK" not in output
+
+
+def test_invalid_preferred_cache_does_not_fall_back(tmp_path: Path) -> None:
+    _write_ir(tmp_path, "FOO", "ir_event__2025-06-01.txt", "VALID EVENT DECK")
+    cache = _write_ir(tmp_path, "FOO", "ir_presentation__2025-Q4.txt", "PREFERRED DECK")
+    cache.write_text("{invalid json")
+    output = load_ir_anchor(tmp_path, "FOO")
+    assert "UNAVAILABLE" in output
+    assert "ir_presentation__2025-Q4" in output
+    assert "VALID EVENT DECK" not in output
+    assert "PREFERRED DECK" not in output
+
+
+def test_unreadable_newer_directory_cannot_select_older_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from compute.ir_narrative import has_pending_narrative
+
+    _write_ir(tmp_path, "FOO", "ir_presentation__2025-Q3.txt", "OLDER VERIFIED DECK")
+    newer = tmp_path / "ir_documents/FOO/2025-Q4"
+    newer.mkdir()
+    original = os.scandir
+
+    def denied(path: str | Path):
+        if Path(path) == newer:
+            raise PermissionError("newer period cannot be enumerated")
+        return original(path)
+
+    monkeypatch.setattr(os, "scandir", denied)
+    output = load_ir_anchor(tmp_path, "FOO")
+    assert "UNAVAILABLE" in output
+    assert "OLDER VERIFIED DECK" not in output
+    assert has_pending_narrative(tmp_path, "FOO")
+
+
+def test_newer_group_arriving_during_validation_returns_gap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from provenance import immutable_artifact
+
+    _write_ir(tmp_path, "FOO", "ir_presentation__2025-Q3.txt", "OLDER VERIFIED DECK")
+    source = tmp_path / "ir_documents/FOO/2025-Q3/ir_presentation__abcd1234.pdf"
+    newer = tmp_path / "ir_documents/FOO/2025-Q4/ir_presentation__bbbbbbbb.pdf"
+    original = immutable_artifact.read_stable_artifact
+
+    def read(path: Path, *, allowed_root: Path | None = None, max_bytes: int | None = None):
+        result = original(path, allowed_root=allowed_root, max_bytes=max_bytes)
+        if path == source and not newer.exists():
+            newer.parent.mkdir()
+            newer.write_bytes(b"arrived during verification")
+        return result
+
+    monkeypatch.setattr(immutable_artifact, "read_stable_artifact", read)
+    output = load_ir_anchor(tmp_path, "FOO")
+    assert "UNAVAILABLE" in output
+    assert "OLDER VERIFIED DECK" not in output

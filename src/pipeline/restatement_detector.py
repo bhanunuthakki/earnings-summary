@@ -794,7 +794,7 @@ def insert_kpi_with_restatement_detection(
                 "error": str(exc),
             }
         )
-        return (None, supersedes_id)
+        raise
 
     if cur.rowcount == 0:
         # Conflict on UNIQUE (same source_doc_id under provenance; same

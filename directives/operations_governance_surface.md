@@ -391,6 +391,21 @@ Official HTML earnings releases use the existing download, classification,
 registration, and source-URL operation. Failed HTML classification remains an
 acquisition failure. No new operation, listener, or scheduled LLM leg was added.
 
+Narrative extraction, pending checks, and prompt anchors use one verified cache
+envelope. The envelope binds all current source bytes and the extraction method.
+An unreadable, changed, or missing preferred source produces an explicit context
+gap. Legacy text caches remain retained but cannot supply prompt text.
+
+The existing summary-KPI CLI requires the configured database or an explicit
+`--db-path`; `--repo-root` selects source files only. Allowlist extraction checks
+existing evidence before a model call. Missing or mismatched evidence fails
+without a call and remains retryable after repair. The existing run ledger binds
+each completed attempt to its exact source, parent, holdings, and model route.
+Empty and partial responses record bounded processing; unreturned metrics remain
+unknown. `--refresh` repeats completed work but cannot replace an active writer.
+The capture/enumeration path is unchanged. Derived summaries do not gain financial
+admission from this completion record. No scheduler task or service was added.
+
 ### Legacy evidence backfill and managed IR byte admission
 
 `execution/backfill_evidence_ledger.py` remains an explicit, bounded manual operation;

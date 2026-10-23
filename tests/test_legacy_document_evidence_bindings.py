@@ -522,3 +522,38 @@ def test_binding_chain_is_append_only_and_node_must_belong_to_document(
             )
     finally:
         conn.close()
+
+
+def test_readiness_check_does_not_create_missing_source_evidence(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    from provenance.legacy_document_evidence import require_legacy_document_evidence
+
+    with sqlite3.connect(migrated_db(tmp_path / "readiness.db")) as conn:
+        digest = hashlib.sha256(b"synthetic summary").hexdigest()
+        conn.execute(
+            "INSERT INTO documents(ticker,source_type,doc_type,period_end,file_path,sha256,"
+            "fetched_at,fetch_status,raw_bytes_size) "
+            "VALUES ('ACME','llm_extracted','llm_summary',?,'fixture.txt',?,?,'ok',17)",
+            (STAMP, digest, STAMP),
+        )
+        document_id = int(conn.execute("SELECT id FROM documents").fetchone()[0])
+        before = conn.total_changes
+        with pytest.raises(ValueError, match="evidence version is missing"):
+            require_legacy_document_evidence(
+                conn,
+                document_id=document_id,
+                ticker="ACME",
+                source_type="llm_extracted",
+                doc_type="llm_summary",
+                period_end=STAMP,
+                source_sha256=digest,
+            )
+        assert conn.total_changes == before
+        assert conn.execute("SELECT COUNT(*) FROM evidence_document_versions").fetchone()[0] == 0
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM legacy_document_evidence_binding_revisions"
+            ).fetchone()[0]
+            == 0
+        )
