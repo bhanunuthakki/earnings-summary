@@ -308,6 +308,8 @@ def call_llm_structured_with_raw(
     purpose: str,
     schema: TypeAdapter[T],
     repair_prompt: Callable[[str], str] | None = None,
+    domain_guardrail: Callable[[object], tuple[bool, str]] | None = None,
+    raw_response_observer: Callable[[str, str], None] | None = None,
     expect: Literal["object", "array"] = "object",
     model: str | None = None,
     backend: str | None = None,
@@ -336,10 +338,19 @@ def call_llm_structured_with_raw(
         backend=backend,
         capability_profile=effective_profile,
     )
+    # Retention is not a formatting failure. An observer failure must stop
+    # before parsing or another governed request can consume quota.
+    if raw_response_observer is not None:
+        raw_response_observer(current_prompt, raw)
     try:
         payload = parse_json_payload(raw, expect=expect)
+        value = schema.validate_python(payload)
+        if domain_guardrail is not None:
+            valid, reason = domain_guardrail(value)
+            if not valid:
+                raise ValueError(reason)
         return StructuredCallResult(
-            value=schema.validate_python(payload),
+            value=value,
             raw_response=raw,
             prompt=current_prompt,
         )
@@ -367,10 +378,19 @@ def call_llm_structured_with_raw(
         backend=backend,
         capability_profile=effective_profile,
     )
+    # Retention is not a formatting failure. An observer failure must stop
+    # before parsing or another governed request can consume quota.
+    if raw_response_observer is not None:
+        raw_response_observer(current_prompt, raw)
     try:
         payload = parse_json_payload(raw, expect=expect)
+        value = schema.validate_python(payload)
+        if domain_guardrail is not None:
+            valid, reason = domain_guardrail(value)
+            if not valid:
+                raise ValueError(reason)
         return StructuredCallResult(
-            value=schema.validate_python(payload),
+            value=value,
             raw_response=raw,
             prompt=current_prompt,
         )

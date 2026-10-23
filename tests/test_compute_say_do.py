@@ -3,23 +3,35 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
+from typing import cast
 
 import pytest
 
+from compute import kpi_definition_units, say_do
 from compute.say_do import (
     CommitmentExtractionManifest,
     CommitmentInput,
     CommitmentOutcome,
-    _classify_outcome,
+    CommitmentRow,
     fetch_pending_commitments,
     match_pending,
     persist_commitment,
     persist_manifest,
 )
 from compute.thesis_evaluator import Comparator
+from dcf import fact_drivers
 from models.facts import Unit
+from provenance.financial_fact_resolution import resolve_fact_row
+from provenance.semantic_disposition import SemanticDispositionStore
+from tests import test_financial_fact_resolution_cutover as cutover
+from tests import test_financial_source_semantic_quarantine as quarantine
+from tests.test_source_fact_repository import STAMP
+
+_classify_outcome = cast(Callable[..., CommitmentOutcome], getattr(say_do, "_classify_outcome"))
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
@@ -432,3 +444,90 @@ def test_no_data_outcome_does_not_dirty_artifacts(conn: sqlite3.Connection) -> N
     results = match_pending(conn, ticker="MELI")
     assert results[0].outcome == CommitmentOutcome.NO_DATA
     assert conn.execute("SELECT COUNT(*) FROM llm_artifacts WHERE dirty=1").fetchone()[0] == 0
+
+
+def test_quarantined_kpi_cannot_grade_commitment_or_choose_fact_metadata(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    path = migrated_db(tmp_path / "say-do-quarantine.db")
+    database = sqlite3.connect(path)
+    database.row_factory = sqlite3.Row
+    database.execute("PRAGMA foreign_keys = ON")
+    try:
+        database.execute(
+            "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+            ("issuer-acme", "issuer:acme", "operating_company", STAMP),
+        )
+        getattr(cutover, "_seed_document")(
+            database, document_id=1, source_tier="sec_official", value_suffix="SEC"
+        )
+        definition = database.execute(
+            "INSERT INTO kpi_definitions (ticker,name,unit,primary_source) "
+            "VALUES ('ACME','Active customers','millions','fmp')"
+        )
+        assert definition.lastrowid is not None
+        cursor = database.execute(
+            "INSERT INTO kpi_facts "
+            "(ticker,period_end,fiscal_period_type,kpi_definition_id,value,unit,"
+            "source_doc_id,confidence,extracted_by,locator) "
+            "VALUES ('ACME',?,'Q2',?,'114.2','millions',1,0.95,'deterministic:test',"
+            '\'{"json_path":"[0].active_customers"}\')',
+            (datetime(2026, 6, 30), int(definition.lastrowid)),
+        )
+        assert cursor.lastrowid is not None
+        assert (
+            resolve_fact_row(
+                database,
+                fact_table="kpi_facts",
+                fact_row_id=int(cursor.lastrowid),
+                knowledge_cutoff=datetime.now(UTC) + timedelta(minutes=1),
+            )
+            is not None
+        )
+        lookup = getattr(say_do, "_lookup_realized_value")
+        load_name = getattr(fact_drivers, "_resolve_kpi_load_name")
+        period = datetime(2026, 6, 30)
+        assert lookup(
+            database, ticker="ACME", kpi_name="Active customers", period_target=period
+        ) == (
+            Decimal("114.2"),
+            1,
+        )
+        assert (
+            kpi_definition_units.dominant_fact_unit(database, "ACME", "Active customers")
+            == Unit.MILLIONS
+        )
+        assert load_name(database, "ACME", "ACTIVE CUSTOMERS") == "Active customers"
+
+        at = datetime.now(UTC) + timedelta(hours=1)
+        SemanticDispositionStore(database).persist(
+            getattr(quarantine, "_disposition")(
+                "document-version-1",
+                revision=1,
+                status="quarantined",
+                knowledge_at=at,
+                recorded_at=at,
+            )
+        )
+        assert (
+            lookup(database, ticker="ACME", kpi_name="Active customers", period_target=period)
+            is None
+        )
+        commitment = CommitmentRow(
+            id=1,
+            ticker="ACME",
+            period_made=datetime(2026, 4, 1),
+            period_target=period,
+            kpi_name="Active customers",
+            comparator=Comparator.GE,
+            target_value=Decimal("100"),
+            unit=Unit.MILLIONS,
+            narrative="We expect more than 100 million active customers.",
+            realized_value=None,
+            outcome=None,
+        )
+        assert say_do.match_commitment(database, commitment).outcome == CommitmentOutcome.NO_DATA
+        assert kpi_definition_units.dominant_fact_unit(database, "ACME", "Active customers") is None
+        assert load_name(database, "ACME", "ACTIVE CUSTOMERS") == "ACTIVE CUSTOMERS"
+    finally:
+        database.close()

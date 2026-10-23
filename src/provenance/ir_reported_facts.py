@@ -25,6 +25,7 @@ from pipeline.kpi_semantics import (
     parse_source_numeric,
     validate_admitted_unit_scale,
 )
+from pipeline.locators import locate_char_span
 from provenance.evidence_ledger import EvidenceLedger, EvidenceLocator, EvidenceNode, ExtractionRun
 from provenance.fact_plane_v2 import (
     CanonicalJSONObject,
@@ -229,6 +230,9 @@ class IrRawRow(BaseModel):
     exchange_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     response_row_ordinal: int = Field(ge=0)
     raw_row: dict[str, object]
+    native_source_quote: str = Field(min_length=1)
+    native_char_start: int = Field(ge=0)
+    native_char_end: int = Field(gt=0)
 
 
 class IrCandidateRetentionRequest(BaseModel):
@@ -412,7 +416,7 @@ def _retained_graph(
             + _sha([run_id, row.page_number, row.exchange_sha256, row.response_row_ordinal]),
             _json(
                 {
-                    "schema_version": "ir-pdf-unreviewed-candidate.v2",
+                    "schema_version": "ir-pdf-unreviewed-candidate.v3",
                     "row": row.model_dump(mode="json"),
                     "response_node_id": "ir-pdf-response:" + _sha([run_id, row.exchange_sha256]),
                     "recurrence": "unknown",
@@ -423,6 +427,18 @@ def _retained_graph(
         for row in request.rows
     )
     return run_id, output_sha, nodes
+
+
+def _validate_native_span(row: IrRawRow, page_text: str) -> None:
+    quote = row.raw_row.get("source_excerpt")
+    if not isinstance(quote, str) or not quote:
+        raise ValueError("IR candidate quote is absent from native PDF page")
+    span = locate_char_span(quote, page_text, whitespace_only=True)
+    if (
+        span != (row.native_char_start, row.native_char_end)
+        or page_text[row.native_char_start : row.native_char_end] != row.native_source_quote
+    ):
+        raise ValueError("IR native quote span is missing, ambiguous, or changed")
 
 
 def retain_ir_pdf_candidates(
@@ -457,9 +473,7 @@ def retain_ir_pdf_candidates(
             raise ValueError("IR candidate is absent from governed response")
         if _json(parsed_rows[row.response_row_ordinal]) != _json(row.raw_row):
             raise ValueError("IR candidate differs from its governed response")
-        quote = row.raw_row.get("source_excerpt")
-        if not isinstance(quote, str) or not quote or quote not in pages[row.page_number - 1]:
-            raise ValueError("IR candidate quote is absent from native PDF page")
+        _validate_native_span(row, pages[row.page_number - 1])
     run_id, output_sha, nodes = _retained_graph(request)
     conn.execute("BEGIN")
     try:
@@ -512,7 +526,10 @@ def retain_ir_pdf_candidates(
                     "SELECT text,locator_json FROM evidence_nodes WHERE node_id=?", (node_id,)
                 ).fetchone()
                 locator = EvidenceLocator(
-                    source_ref=request.document_version_id, page_number=row.page_number
+                    source_ref=request.document_version_id,
+                    page_number=row.page_number,
+                    char_start=row.native_char_start,
+                    char_end=row.native_char_end,
                 )
                 if prior is None or prior[0] != text_value or prior[1] != locator.canonical_json:
                     raise ValueError("IR retained candidate replay differs from existing evidence")
@@ -572,7 +589,10 @@ def retain_ir_pdf_candidates(
                     node_kind="claim",
                     text=text_value,
                     locator=EvidenceLocator(
-                        source_ref=request.document_version_id, page_number=row.page_number
+                        source_ref=request.document_version_id,
+                        page_number=row.page_number,
+                        char_start=row.native_char_start,
+                        char_end=row.native_char_end,
                     ),
                     recorded_at=request.extraction_completed_at,
                 )
@@ -601,15 +621,23 @@ def _review_candidate_rows(
     found: dict[str, IrRawRow] = {}
     for node_id in population.candidate_node_ids:
         row = conn.execute(
-            "SELECT extraction_run_id,text,parent_node_id FROM evidence_nodes WHERE node_id=?",
+            "SELECT extraction_run_id,text,parent_node_id,locator_json FROM evidence_nodes WHERE node_id=?",
             (node_id,),
         ).fetchone()
         if row is None or row[0] != population.extraction_run_id:
             raise ValueError("IR reviewed candidate node is absent from exact extraction")
         payload = json.loads(str(row[1]))
-        if payload.get("schema_version") != "ir-pdf-unreviewed-candidate.v2":
+        if payload.get("schema_version") != "ir-pdf-unreviewed-candidate.v3":
             raise ValueError("IR review candidate node is not a retained raw candidate")
         raw = IrRawRow.model_validate(payload["row"])
+        locator = EvidenceLocator(
+            source_ref=population.document_version_id,
+            page_number=raw.page_number,
+            char_start=raw.native_char_start,
+            char_end=raw.native_char_end,
+        )
+        if row[3] != locator.canonical_json:
+            raise ValueError("IR candidate native locator changed")
         expected_node_id = "ir-pdf-candidate:" + _sha(
             [
                 population.extraction_run_id,
@@ -682,7 +710,7 @@ def _validate_review(
         (population.extraction_run_id,),
     ):
         payload = json.loads(str(text_value))
-        if payload.get("schema_version") == "ir-pdf-unreviewed-candidate.v2":
+        if payload.get("schema_version") == "ir-pdf-unreviewed-candidate.v3":
             all_candidates.add(str(node_id))
     if all_candidates != set(raw_rows):
         raise ValueError("IR review population omits retained candidates")
@@ -708,12 +736,14 @@ def _validate_review(
             raise ValueError(
                 "IR guidance or unresolved forecast cannot publish as a reported actual"
             )
-        original_excerpt = source.get("source_excerpt")
+        if raw.page_number > len(pages):
+            raise ValueError("IR candidate source page is missing")
+        _validate_native_span(raw, pages[raw.page_number - 1])
+        original_excerpt = raw.native_source_quote
         original_label = source.get("source_row_label") or source.get("label")
         if (
             fact.source_row_key != entry.candidate_node_id
             or fact.page_number != raw.page_number
-            or not isinstance(original_excerpt, str)
             or original_excerpt not in fact.source_quote
             or fact.raw_label != original_label
             or fact.source_value_text != source.get("source_value_text")

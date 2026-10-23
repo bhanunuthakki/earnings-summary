@@ -286,3 +286,265 @@ def test_other_registrant_without_reporting_proof_or_with_fund_series_is_rejecte
             )
     assert conn.execute("SELECT COUNT(*) FROM issuer_entities").fetchone() == (0,)
     conn.close()
+
+
+@pytest.mark.parametrize("invalid", [None, "", "0132", "1301", "01-31", 1231, "0000"])
+def test_explicit_invalid_fiscal_year_end_fails_before_capture(
+    tmp_path: Path, migrated_db: Callable[..., Path], invalid: object
+) -> None:
+    conn = _database(tmp_path, migrated_db)
+    before = conn.total_changes
+    with pytest.raises(SecCompanyTickerContractError, match="fiscalYearEnd"):
+        bootstrap_sec_submissions_issuer(
+            conn, request=_request(tmp_path, apply=True, raw_body=_body(fiscalYearEnd=invalid))
+        )
+    assert conn.total_changes == before
+    assert not (tmp_path / "blobs").exists()
+    conn.close()
+
+
+def test_source_backed_fiscal_profile_enrichment_preserves_history_and_replays(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    conn = _database(tmp_path, migrated_db)
+    bootstrap_sec_submissions_issuer(conn, request=_request(tmp_path, apply=True))
+    admitted = RECORDED + timedelta(days=2)
+    request = _request(
+        tmp_path, apply=True, recorded_at=admitted, raw_body=_body(fiscalYearEnd="0131")
+    )
+    result = bootstrap_sec_submissions_issuer(conn, request=request)
+    rows = conn.execute(
+        "SELECT fiscal_year_end,knowledge_at,recorded_at,reason_details_json "
+        "FROM issuer_profile_revisions ORDER BY revision"
+    ).fetchall()
+    assert len(rows) == 2 and rows[0][0] is None
+    assert rows[1][0] == "01-31"
+    assert datetime.fromisoformat(rows[1][1]) == admitted
+    assert datetime.fromisoformat(rows[1][2]) == admitted
+    assert "/fiscalYearEnd" in rows[1][3]
+    assert result.source_sha256 in rows[1][3]
+    assert (
+        bootstrap_sec_submissions_issuer(
+            conn, request=request.model_copy(update={"recorded_at": admitted + timedelta(days=1)})
+        ).records_created
+        == 0
+    )
+    assert conn.execute("SELECT COUNT(*) FROM issuer_profile_revisions").fetchone() == (2,)
+    conn.close()
+
+
+def test_fiscal_inventory_witness_uses_existing_sec_profile_and_document_owners(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    from datetime import date
+
+    from pipeline.issuer_document_inventory import (
+        ExpectedIssuerDocument,
+        FiscalPeriodWitness,
+        IssuerDocumentInventoryError,
+        IssuerDocumentInventoryRequest,
+        validate_fiscal_period_witness,
+    )
+    from provenance.evidence_backfill import ensure_legacy_document_evidence
+
+    conn = _database(tmp_path, migrated_db)
+    result = bootstrap_sec_submissions_issuer(
+        conn, request=_request(tmp_path, apply=True, raw_body=_body(fiscalYearEnd="0131"))
+    )
+    raw = b"Synthetic reported Q2 FY2027 release"
+    relative = "ir_documents/NU/release.pdf"
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True)
+    path.write_bytes(raw)
+    digest = hashlib.sha256(raw).hexdigest()
+    conn.execute(
+        "INSERT INTO documents (id,ticker,source_type,doc_type,period_end,file_path,sha256,"
+        "fetched_at,fetch_status,raw_bytes_size,source_url) VALUES (1,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "NU",
+            "ir_doc",
+            "ir_press_release",
+            "2026-07-31",
+            relative,
+            digest,
+            RECORDED.isoformat(),
+            "ok",
+            len(raw),
+            "https://issuer.example/release.pdf",
+        ),
+    )
+    conn.row_factory = sqlite3.Row
+    ensure_legacy_document_evidence(conn, repo_root=tmp_path, document_id=1)
+    profile = conn.execute("SELECT profile_revision_id FROM issuer_profile_revisions").fetchone()
+    version = conn.execute("SELECT document_version_id FROM evidence_document_versions").fetchone()
+    assert profile is not None and version is not None
+    witness = FiscalPeriodWitness(
+        issuer_id=result.canonical_issuer_id,
+        profile_revision_id=profile[0],
+        fiscal_year_end="01-31",
+        document_version_id=version[0],
+        document_sha256=digest,
+        knowledge_cutoff=RECORDED + timedelta(days=1),
+        observed_through=RECORDED + timedelta(days=1),
+    )
+    request = IssuerDocumentInventoryRequest(
+        ticker="NU",
+        fiscal_year=2027,
+        fiscal_quarter=2,
+        period_end=date(2026, 7, 31),
+        expected_documents=(
+            ExpectedIssuerDocument(
+                source_url="https://issuer.example/release.pdf", document_type="ir_press_release"
+            ),
+        ),
+        fiscal_period_witness=witness,
+    )
+    validate_fiscal_period_witness(conn, request=request)
+    from pipeline.issuer_document_inventory import (
+        ExpectedIssuerDocumentAlias,
+        IssuerDocumentAliasBinding,
+        IssuerDocumentAliasInventoryRequest,
+        build_issuer_document_inventory,
+        inspect_issuer_document_alias,
+    )
+
+    subject = conn.execute(
+        "SELECT binding_revision_id FROM recorded_subject_binding_revisions "
+        "WHERE recorded_issuer_id='legacy-ticker:NU' ORDER BY revision DESC LIMIT 1"
+    ).fetchone()
+    assert subject is not None
+    alias = IssuerDocumentAliasBinding(
+        document_id=1,
+        document_version_id=version[0],
+        blob_sha256=digest,
+        source_observation_id="legacy-obs-1",
+        document_link_id="legacy-primary-link:1",
+        recorded_issuer_id="legacy-ticker:NU",
+        issuer_id=result.canonical_issuer_id,
+        reporting_entity_id=result.reporting_entity_id,
+        subject_binding_revision_id=subject[0],
+        registered_source_url="https://issuer.example/release.pdf",
+        lineage_sha256="0" * 64,
+    )
+    expected = ExpectedIssuerDocumentAlias(
+        source_url="https://issuer.example/release.pdf",
+        document_type="ir_press_release",
+        alias=alias,
+    )
+    alias_request = IssuerDocumentAliasInventoryRequest(
+        ticker="NU",
+        fiscal_year=2027,
+        fiscal_quarter=2,
+        period_end=date(2026, 7, 31),
+        fiscal_period_witness=witness,
+        knowledge_cutoff=witness.knowledge_cutoff,
+        observed_through=witness.observed_through,
+        expected_documents=(expected,),
+    )
+    lineage = inspect_issuer_document_alias(conn, expected=expected, request=alias_request)
+    lineage_sha = hashlib.sha256(
+        json.dumps(lineage, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    alias_request = alias_request.model_copy(
+        update={
+            "expected_documents": (
+                expected.model_copy(
+                    update={"alias": alias.model_copy(update={"lineage_sha256": lineage_sha})}
+                ),
+            )
+        }
+    )
+    conn.commit()
+    receipt = build_issuer_document_inventory(
+        conn,
+        database_path=tmp_path / "submissions-identity.db",
+        repo_root=tmp_path,
+        request=alias_request,
+    )
+    assert receipt.request.period_end == date(2026, 7, 31)
+    assert receipt.request.fiscal_period_witness == witness
+    assert receipt.records[0].document_id == 1 and receipt.records[0].sha256 == digest
+    for field, bad in [
+        ("document_sha256", "0" * 64),
+        ("issuer_id", "wrong-issuer"),
+        ("fiscal_year_end", "12-31"),
+    ]:
+        bad_witness = witness.model_copy(update={field: bad})
+        # model_copy is deliberately adversarial: the database boundary must reject it.
+        with pytest.raises(IssuerDocumentInventoryError):
+            validate_fiscal_period_witness(
+                conn, request=request.model_copy(update={"fiscal_period_witness": bad_witness})
+            )
+    with pytest.raises(IssuerDocumentInventoryError, match="after_cutoff"):
+        validate_fiscal_period_witness(
+            conn,
+            request=request.model_copy(
+                update={
+                    "fiscal_period_witness": witness.model_copy(
+                        update={"knowledge_cutoff": OBSERVED - timedelta(days=1)}
+                    )
+                }
+            ),
+        )
+    bootstrap_sec_submissions_issuer(
+        conn,
+        request=_request(
+            tmp_path,
+            apply=True,
+            raw_body=_body(fiscalYearEnd="1231"),
+            recorded_at=RECORDED + timedelta(hours=1),
+        ),
+    )
+    with pytest.raises(IssuerDocumentInventoryError, match="superseded"):
+        validate_fiscal_period_witness(conn, request=request)
+    conn.close()
+
+
+def test_cached_submissions_profile_enrichment_uses_new_admission_clock(
+    tmp_path: Path, migrated_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from provenance import issuer_registry_bootstrap as owner
+    from provenance.issuer_registry import IssuerRegistry
+
+    conn = _database(tmp_path, migrated_db)
+    request = _request(tmp_path, apply=True, raw_body=_body(fiscalYearEnd="0131"))
+    original = getattr(owner, "_persist_profile")
+
+    def predecessor(
+        conn: sqlite3.Connection,
+        registry: IssuerRegistry,
+        *,
+        issuer_id: str,
+        legal_name: str,
+        observation_id: str,
+        source_sha: str,
+        recorded_at: datetime,
+        reason_code: str,
+        explicit_fiscal_year_end: str | None = None,
+        enrichment_recorded_at: datetime | None = None,
+    ) -> int:
+        return original(
+            conn,
+            registry,
+            issuer_id=issuer_id,
+            legal_name=legal_name,
+            observation_id=observation_id,
+            source_sha=source_sha,
+            recorded_at=recorded_at,
+            reason_code=reason_code,
+        )
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(owner, "_persist_profile", predecessor)
+        bootstrap_sec_submissions_issuer(conn, request=request)
+    later = RECORDED + timedelta(days=3)
+    bootstrap_sec_submissions_issuer(
+        conn, request=request.model_copy(update={"recorded_at": later})
+    )
+    rows = conn.execute(
+        "SELECT fiscal_year_end,knowledge_at FROM issuer_profile_revisions ORDER BY revision"
+    ).fetchall()
+    assert rows[0][0] is None and rows[1][0] == "01-31"
+    assert datetime.fromisoformat(rows[1][1]) == later
+    assert conn.execute("SELECT COUNT(*) FROM evidence_source_observations").fetchone() == (1,)
+    conn.close()

@@ -79,7 +79,7 @@ def conn(head_template: Path, tmp_path: Path) -> Iterator[sqlite3.Connection]:
     c.close()
 
 
-def _bind_document_evidence(
+def bind_document_evidence(
     conn: sqlite3.Connection,
     *,
     ticker: str,
@@ -266,7 +266,7 @@ def _seed(c: sqlite3.Connection) -> None:
     tier2_id = c.execute("SELECT last_insert_rowid()").fetchone()[0]
     doc_ids = [int(r[0]) for r in c.execute("SELECT id FROM documents ORDER BY id")]
     for doc_id in doc_ids:
-        _bind_document_evidence(c, ticker="NU", document_id=doc_id)
+        bind_document_evidence(c, ticker="NU", document_id=doc_id)
     c.execute(
         "INSERT INTO transcripts (document_id, ticker, period_end, has_qa_section) "
         "VALUES (?, 'NU', '2026-03-31', 1)",
@@ -334,9 +334,12 @@ def _seed(c: sqlite3.Connection) -> None:
     # The consolidated baseline's production view requires cutover evidence
     # rows that this focused cockpit fixture does not seed. Keep a canonical
     # relation over the fixture facts so reader parity is exercised directly.
+    # Keep the view's cutover identity column even though these focused tests
+    # do not seed immutable observation revisions.
     c.execute("DROP VIEW IF EXISTS v_kpi_facts_resolved_current")
     c.execute(
-        "CREATE VIEW v_kpi_facts_resolved_current AS SELECT * FROM kpi_facts WHERE ticker = 'NU'"
+        "CREATE VIEW v_kpi_facts_resolved_current AS "
+        "SELECT *, NULL AS reported_observation_id FROM kpi_facts WHERE ticker = 'NU'"
     )
     c.commit()
 

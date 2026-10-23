@@ -49,6 +49,7 @@ from compute.kpi_resolver import kpi_group_key
 from dcf import redesign as redesign_mod
 from models.facts import Unit
 from models.unit_convert import convert_unit
+from provenance.financial_fact_resolution import canonical_fact_relation
 from provenance.overrides import (
     DEFAULT_USER_ID,
     FINANCIAL_FACT,
@@ -350,9 +351,11 @@ def _resolve_kpi_load_name(conn: sqlite3.Connection, ticker: str, requested: str
     [] and the caller surfaces 'no observations')."""
     target = kpi_group_key(requested)
     try:
+        fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
         rows = conn.execute(
             "SELECT kd.name AS name, COUNT(*) AS n "
-            "FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+            f"FROM {fact_relation} kf "  # nosec B608 -- canonical resolver owns relation; values bound
+            "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
             "WHERE kf.ticker = ? GROUP BY kd.name",
             (ticker.upper(),),
         ).fetchall()
