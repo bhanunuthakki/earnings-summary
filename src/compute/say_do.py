@@ -217,7 +217,7 @@ def _lookup_realized_value(
     fact_relation = canonical_fact_relation(conn, "kpi_facts").sql
     cur = conn.execute(
         "SELECT kf.value, kf.source_doc_id "
-        f"FROM {fact_relation} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "
+        f"FROM {fact_relation} kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id "  # nosec B608 -- canonical resolver owns relation; values bound
         "WHERE kf.ticker = ? AND kd.name = ? AND kf.period_end = ? "
         "LIMIT 1",
         (ticker.upper(), kpi_name, period_target),

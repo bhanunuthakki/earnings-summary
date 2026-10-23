@@ -345,7 +345,9 @@ def locate_char_span(
     """Best-effort ``(char_start, char_end)`` of ``quote`` inside ``source_text``.
 
     ``whitespace_only=True`` resolves a unique whitespace-equivalent native
-    span, with no case or other character changes. Ambiguous matches fail.
+    span, with no case or other character changes. A native physical newline
+    after a preserved ASCII hyphen between ASCII letters is allowed. Other
+    word separators and numeric hyphens stay strict. Ambiguous matches fail.
 
     The default is an EXACT (non-normalized) substring find -- the common case, since most
     LLM-returned anchors reproduce the source's literal whitespace/case.
@@ -363,7 +365,22 @@ def locate_char_span(
         tokens = quote.split()
         if not tokens:
             return None
-        pattern = r"\s+".join(re.escape(token) for token in tokens)
+        token_patterns: list[str] = []
+        for token in tokens:
+            pieces: list[str] = []
+            for index, char in enumerate(token):
+                pieces.append(re.escape(char))
+                if (
+                    char == "-"
+                    and 0 < index < len(token) - 1
+                    and token[index - 1] in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+                    and token[index + 1] in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+                ):
+                    # Keep the literal hyphen. Permit one physical source line
+                    # break, not a space or deletion of a word boundary.
+                    pieces.append(r"(?:[^\S\r\n]*(?:\r\n|\r|\n)[^\S\r\n]*)?")
+            token_patterns.append("".join(pieces))
+        pattern = r"\s+".join(token_patterns)
         matches = list(re.finditer("(?=(" + pattern + "))", source_text))
         if len(matches) != 1:
             return None

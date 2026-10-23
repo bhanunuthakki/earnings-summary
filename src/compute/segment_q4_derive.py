@@ -614,12 +614,9 @@ def _cross_check_consolidated(
         return
     fact_relation = canonical_fact_relation(conn, "financial_facts").sql
     rev_row = conn.execute(
-        f"""
-        SELECT value FROM {fact_relation}
-        WHERE ticker = ? AND line_item = 'revenue' AND fiscal_period_type = 'Q4'
-          AND strftime('%Y', period_end) = ?
-        ORDER BY id DESC LIMIT 1
-        """,
+        f"SELECT value FROM {fact_relation} "  # nosec B608 -- canonical resolver owns relation; values bound
+        "WHERE ticker = ? AND line_item = 'revenue' AND fiscal_period_type = 'Q4' "
+        "AND strftime('%Y', period_end) = ? ORDER BY id DESC LIMIT 1",
         (ticker, str(fiscal_year)),
     ).fetchone()
     if rev_row is None:
