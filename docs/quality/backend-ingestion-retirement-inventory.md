@@ -26,3 +26,80 @@ Start with the **FMP family consolidation**. It replaces one complete active bat
 Do not add another attempt, inventory, cache or publication store. Existing `pipeline.run_accounting` owns logical fingerprints/attempts; `document_evidence_pipeline`/fulltext owners own deterministic source processing; managed IR owns prepared publication/recovery; `SourceFactRepository` owns native immutable graph publication. Their different receipts prove different properties. A narrow public operation can absorb an old procedure; a new framework is unnecessary.
 
 No physical legacy fact-table/module retirement is authorized by this inventory. `directives/data_provenance.md` §11 requires strict reader/writer audits across two quarterly cycles and one annual cycle, followed by separate approval/migration/rollback proof. Preserve immutable source bytes, observations, unknown/novel values, admission states and historical reconstruction. Keep the eight logical DAG stages; remove duplicate executions and alternate authority, not the stage semantics. Before any deletion, perform the required transitive production reachability scan and update actual scheduler/UI/CLI callers. No candidate here is declared runtime-unused.
+
+## Measured terminal cut population
+
+Static source inventory only. Baseline `c978523d84a4efea07858e7029307dd588d2a841`; current worktree HEAD `f1056db487f55883d90289d4ba7a74a027d5db03` plus its present diff. No test, runtime, deadness or achieved-net-cut claim. No execution scope expansion.
+
+Measurement: Python AST top-level function body interval from `body[0].lineno` through `end_lineno`, inclusive. This includes docstrings, comments/blank lines inside that interval, SQL and prompts; excludes signature/decorators, imports, model declarations and inter-function whitespace. Nested code belongs only to its enclosing function. Each interval below is disjoint; no file total is added to procedure totals. Gross means candidate body size, never net savings.
+
+| Named procedure (file/body span current) | Actual production caller(s) | Gross body lines c978 → current | Retirement boundary / existing replacement | Qualification gate |
+|---|---|---:|---|---|
+| `src/ir_pipeline/ingest.py::ingest_spreadsheet_kpis` (204–311) | refresh_ir_kpis.main | 70 → 108 | **KPI terminal.** Typed parser → SourceFactRepository.publish; retain acquisition/parser. | Unknown/rejected capture without fact ID; exact semantic/source handoff; replay/partial recovery parity. |
+| `src/pipeline/kpi_persistence.py::persist_manifest` (843–1039) | IR spreadsheet; kpi_extract_summaries; extract_kpis_from_ir; generic_xbrl_capture; issuer_fact_manifest; competitive.category_share/transcript_mentions | 197 → 197 | **All KPI producers.** Existing source publication and definition/admission owners; remove legacy manifest-to-row executor. | Every listed producer migrates; preserve range/scale/currency, novel/rejected capture and run accounting. Moving this body is not a cut. |
+| `src/pipeline/kpi_persistence.py::_insert_kpi_fact` (524–616) | persist_manifest; persist_kpi_value_at_exact_definition → kpi_source_review | 93 → 93 | **All KPI producers + review.** SourceFactRepository.publish with existing semantic/definition bindings. | Migrate reviewed re-capture too; retain supersession, precision, credibility and exact payload parity. |
+| `src/pipeline/restatement_detector.py::insert_kpi_with_restatement_detection` (633–811) | kpi_persistence._insert_kpi_fact; fmp_derived_kpis; metrics_engine.io (two writes); sec_fpi_ingest | 179 → 179 | **All KPI producers.** Native immutable observation versions plus canonical resolution. | Migrate derived metrics and FPI writers too; source tier, same-document replay and earlier/later filing semantics remain. |
+| `src/pipeline/restatement_detector.py::insert_with_restatement_detection` (416–610) | compute._common.insert_financial_facts; pipeline.sec_xbrl; pipeline.sec_fpi_ingest | 195 → 195 | **All financial producers.** Same native publication/resolution owners. | FMP statements/as-reported, S1, SEC CompanyFacts and foreign financial writes migrate; same-document correction needs explicit immutable replacement semantics. |
+| `src/provenance/financial_fact_resolution.py::prepare_reviewed_kpi_native_projection` (136–363) | population_source_facts._validate_reviewed_projections | 228 → 228 | **KPI bridge terminal.** Producer supplies reviewed source-backed definition/binding in native publication directly. | No legacy KPI capture as prerequisite; historical reviewed projection replay remains reconstructible. |
+| `src/provenance/population_source_facts.py::_population_plan` (696–893) | populate_source_fact_plane (dry plan and locked re-plan) | 198 → 198 | **Shared financial + KPI bridge.** Direct producers publish closed graphs through SourceFactRepository.publish. | BOTH financial and KPI writers migrate; complete legacy corpus/backfill/checkpoint replay retained; §11 gate before physical retirement. |
+| `src/provenance/population_source_facts.py::_source_rows` (935–1071) | _population_plan; _build_run_publication_rows; _nearest_prior_eligible_observation_id | 137 → 137 | **Shared financial + KPI bridge.** Direct source facts, without re-reading fact_observation_revisions. | Same shared gate; SQL has no KPI-only filter and joins legacy observations/evidence for all fact tables. |
+| `src/provenance/population_source_facts.py::_source_fact_from_row` (1351–1571) | _population_plan; _build_run_publication_rows | 221 → 221 | **Shared financial + KPI bridge.** Existing ReportedSourceFact/FactCellV2 supplied by source adapter. | Same shared gate; both legacy financial and KPI namespace/basis/dimensions branches must disappear before whole-body retirement. |
+| `src/provenance/financial_fact_resolution.py::resolve_fact_logical_key` (1001–1127) | resolve_fact_row; execute_fact_cutover | 127 → 127 | **Shared financial + KPI resolution.** CanonicalFactResolutionEngine for fully migrated native facts. | All legacy writers and historical reader/cutover obligations retire; preserve selection/conflict/override clocks. Not removed by spreadsheet migration. |
+| `src/compute/kpi_extract_summaries.py::extract_for_ticker` (307–501) | extract_kpis_from_summaries.main (allowlist mode) | 195 → 195 | **R4 summary-exclusive.** Original registered source → existing extract_kpis_from_ir/typed manifest path. | Automatic transcript/text and IR coverage; catalog/one-off, locators/speaker, empty/partial/rejected/replay parity. |
+| `src/compute/kpi_extract_summaries.py::capture_for_ticker` (1270–1360) | extract_kpis_from_summaries.main (--capture) | 91 → 91 | **R4 summary-exclusive.** Original-source capture_for_ir_pdf_docs plus qualified original transcript/text capture. | PDF supplement-only capability is insufficient; preserve long-tail and all actual source groups before removing job. |
+| `src/compute/kpi_extract_summaries.py::_llm_extract` (812–878) | extract_for_ticker only | 67 → 67 | **R4 summary-exclusive.** Original-source extraction call; no second call over narrative summary. | Prove factual/coverage parity. Narrative generation remains; no unconditional total-model-call saving. |
+| `src/compute/kpi_extract_summaries.py::_build_manifest` (971–1040) | extract_for_ticker only | 70 → 70 | **R4 summary-exclusive.** Existing original-source manifest/source-context construction. | Preserve exact unit/currency, source excerpts and non-admitted historical summary dispositions. |
+| `src/provenance/financial_fact_resolution.py::require_summary_anchor_coherence` (1488–1606) | extract_for_ticker only (before/after allowlist call) | 119 → 119 | **R4 summary-exclusive.** Original document identity/locator instead of generated summary parent/period join. | No production caller remains; keep historical summary parent bindings/data. Do not delete shared _evidence_context. |
+
+## The full sequence and its terminal boundary
+
+`refresh_ir_kpis.main → ingest_spreadsheet_kpis → persist_manifest → _insert_kpi_fact → insert_kpi_with_restatement_detection → resolve_fact_row → resolve_fact_logical_key`. Legacy fact insertion is also captured by the existing observation bridge (`capture_fact_row_observation/_capture_fact_row/_plan_fact_row` and database-trigger paths). Reviewed promotion then uses `prepare_reviewed_kpi_native_projection → _validate_reviewed_projections → populate_source_fact_plane/_population_plan → _source_rows/_source_fact_from_row → SourceFactRepository.publish`. Direct publication can remove the intermediate write/capture/re-read sequence only after the producer supplies the complete preserved source and semantic context.
+
+The shared bridge public caller is `execution/populate_source_fact_plane.py:52`; `src/sources/foreign_normalization_run.py:406,422` also invokes it for non-native source documents. `_source_fact_from_row` explicitly selects `urn:earnings-summary:legacy:kpi` versus `urn:earnings-summary:legacy:financial` and distinct accounting-basis rules (`population_source_facts.py:1363–1396`). `_source_rows` reads `fact_observation_revisions` without a KPI filter (`928–1071`). These whole procedures are conditional on **both financial and KPI** producer migration; they are not a spreadsheet/KPI-only cut.
+
+Concrete financial keep-alive path: `compute.income_statement`, `balance_sheet`, `cashflow`, `as_reported`, `s1_financials`, and `execution/extract_s1_financials` call `compute._common.insert_financial_facts`; that calls financial `insert_with_restatement_detection`. SEC CompanyFacts (`pipeline.sec_xbrl:2170`) and foreign-source ingestion (`pipeline.sec_fpi_ingest:575`) also call it directly. Financial and KPI restatement both call `resolve_fact_row`, whose logical-key ledger remains shared. The historical selector `canonical_fact_selections_as_known` also remains used by `timeseries.kpi_revision_shadow`; legacy `canonical_fact_relation` remains used in report/Ask/timeseries/thesis/metrics/DCFs. Moving only producers does not establish historical reader retirement.
+
+All KPI producer migration must include review (`kpi_source_review → persist_kpi_value_at_exact_definition`), original IR/manual manifests, generic XBRL, issuer manifests, competitive captures, FMP derived KPIs, metrics-engine derived writes, and FPI KPI writes. The spreadsheet is one producer in this set. `canonical_metric_name` is shared by spreadsheet canonicalization and `persist_manifest`; its naming/definition semantics must remain owned, even if a legacy database implementation later retires.
+
+The present R5 typed parser handoff and issuer-collision guard do not satisfy native-writer qualification. Unknown/rejected observations without a legacy fact ID remain an explicit blocker. Existing document reservation and per-period commits differ from atomic native graph publication; no equivalence is assumed.
+
+## R4 exclusive helper tail and required shared code
+
+Production call search finds this additional summary-exclusive helper tail in `src/compute/kpi_extract_summaries.py` (all baseline/current spans equal):
+- `_allowlist_document_state`: 513–567, **55** gross body lines; caller: extract_for_ticker.
+- `_list_sources`: 573–588, **16** gross body lines; caller: extract_for_ticker and capture_for_ticker.
+- `_tier_1_names`: 592–603, **12** gross body lines; caller: extract_for_ticker.
+- `_fact_units_by_name`: 607–630, **24** gross body lines; caller: extract_for_ticker.
+- `_canonical_units_from_holdings`: 639–701, **63** gross body lines; caller: extract_for_ticker.
+- `_ensure_summary_document_row`: 713–776, **64** gross body lines; caller: extract_for_ticker and capture_for_ticker.
+- `_canonical_summary_period_end`: 786–798, **13** gross body lines; caller: extract_for_ticker and capture_for_ticker.
+
+Tail subtotal **247**. Together with the five R4 rows above, this is **789** distinct body lines. The old summary CLI adds `main` **64**, `_parse_args` **26**, `_resolve_tickers` **9** (= **99**, separate non-overlapping intervals), for **888** measured summary-exclusive body lines. This is a bounded population, not the full file size or a promised net cut. CLI callers that must change: `execution/refresh_dispatch.py:343`, `execution/process_report_comments.py:648,674`.
+
+Retain `capture_for_ir_pdf_docs`, `_llm_extract_enumerate`, `_build_capture_manifest`, `_doc_already_captured`, `_persist_accounted`, `_locator_for_excerpt`, numeric/semantic/period helpers, logging and shared models: original PDF capture still calls them (`kpi_extract_summaries.py:1557–1642`, `execution/extract_kpis_from_ir.py:76,360`). Retain summary/narrative cache outputs, source documents, parent bindings, historical rejected/non-admitted observations and receipts. `_llm_extract` and `_build_manifest` are exclusive; the enumerate/capture helpers are not.
+
+## Gross file context, not additional candidate credit
+
+| File | Physical source lines c978/current | Sum of disjoint top-level function bodies c978/current | Consequence |
+|---|---:|---:|---|
+| `src/pipeline/kpi_persistence.py` | 1039/1039 | 685/685 | 18 functions; full 685 is not all removable: validation helpers are also called by locators, validation_engine, reader_tier_audit, fix_kpi_series and override tools. |
+| `src/provenance/population_source_facts.py` | 2182/2182 | 1502/1502 | 38 functions; shared legacy financial/KPI bridge and ontology verification, not a KPI-only module retirement. |
+| `src/provenance/financial_fact_resolution.py` | 2362/2362 | 1757/1757 | 54 functions; shared capture, canonical/historical readers and backfill, not a spreadsheet-only module retirement. |
+| `src/compute/kpi_resolver.py` | 1665/1665 | 1043/1043 | 30 top-level functions plus resolver memo class; historical/semantic readers and name/definition logic stay until their consumers migrate. |
+
+The dominant potential terminal population is the **shared legacy financial/KPI bridge and resolution/capture closure**, conditional on migration of both writer families and separate historical-reader qualification. Its file sizes explain why a spreadsheet-only MVP leaves substantial backend structure. The table measures representative whole procedures in that closure; it does not count their modules or helpers twice, and it does not establish that moving the same transformation into a native adapter reduces code.
+
+Physical legacy retirement still follows `directives/data_provenance.md:616–629`: strict no-legacy-read/write audits across two complete quarterly cycles and one annual cycle, then separate owner approval, migration and rollback proof. No rehearsal starts that window. Existing immutable historical facts and migration evidence remain durable.
+
+## Source bindings
+
+- `execution/extract_kpis_from_summaries.py` current SHA256 `69e147ed67bb2b30e9a6ab3cc7f98716f87816f2ac5f1bcc153cfcb242572aee`.
+- `src/compute/kpi_extract_summaries.py` current SHA256 `b042fa9e97e07fff2437edfb7acc42d7130b336d5ae513a9d77d626b5b9869dd`.
+- `src/compute/kpi_resolver.py` current SHA256 `d6bb7346e04a0944d80944fb38dfcfe1d096e544d3649574cc2e5728de750a26`.
+- `src/ir_pipeline/ingest.py` current SHA256 `cf270172509a3b2a926e299624f6f80d75411166e838e398b39356085546f2c2`.
+- `src/pipeline/kpi_persistence.py` current SHA256 `8546f918eb276b97d34851d6347a2ec4de1f575453391272c925afb7f2115a5d`.
+- `src/pipeline/restatement_detector.py` current SHA256 `235f25fd1fc2ee11b83e4d91f6b6a788f87b14f5040633188eec947cee3768b1`.
+- `src/provenance/financial_fact_resolution.py` current SHA256 `ab77d38b0a86c67fbf35ccac8f408d0c2e05fd16dfc59f20c918cd39903599b0`.
+- `src/provenance/population_source_facts.py` current SHA256 `7846d21f2063ddb4c3a02a10a66e21601def62d5e9f55744687a09dc87ae6285`.
+
+Prepared from the retained backend-ingestion-retirement inventory, `git show c978523d:<path>`, current AST spans, and `rg` production call searches in `src/` and `execution/`. Tests were not executed. No tracked file was changed for this inventory.
