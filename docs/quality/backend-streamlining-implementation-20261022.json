@@ -52,9 +52,20 @@
     "R2",
     "R3-adapter",
     "R5-handoff",
+    "R5-ingest-cleanup",
     "R6",
+    "R6-terminal-series",
+    "R6-quarterly",
     "R7-SayDo",
-    "R8-setup"
+    "R8-setup",
+    "R9-metrics-fixture",
+    "R9-FMP-fixture",
+    "F1-sandbox",
+    "F2-on-demand-memos",
+    "G1-reachability",
+    "G2-legacy-guard",
+    "P1-parser",
+    "D1-dead-adapter"
   ],
   "first_review": {
     "effort": "high",
@@ -442,7 +453,7 @@
     "transaction_audit": "The only stage before FMP that can write is optional SEC ingest; ingest_for_ticker commits at its commit phase and rolls back a started transaction on failure. Segment cache validation is read-only. Supplied-record refresh_cache retains its separate commit=False caller-owned path. No cross-document atomicity claim."
   },
   "r1_pending_revision": "Resolved, accepted and committed3065638a; later checkpoint proxyR1 score96.",
-  "remaining_work": "Continue producer, consumer, and setup cuts under independent 6.1 Sol proxy review; complete combined applicable checks; retain original architecture-baseline failure explicitly. No further Astra or Opus dependency. No release/live completion claimed.",
+  "remaining_work": "Further feature cuts await owner choices on guided exercises and Telegram coach delivery. R3 product completion, R4 held-source retirement and R5 native promotion remain unqualified. The original source/large-module ceilings still fail. Preserve deep research and recovery; do not remove explicitly retained core capabilities or change live state without its authority.",
   "review_kind": "Owner-selected independent GPT-6.1 Sol proxy; earlier exact Opus receipts preserved as history. No formal model-purpose qualification claimed.",
   "review_route_update": {
     "authority": "Owner latest steering allows independent6.1Sol proxies and no further Astra requirement.",
@@ -807,7 +818,7 @@
     "transport": "claude_membership"
   },
   "static_count_clarification": "Old2012/1835 values are previous configured ceilings, not a paired prechange measurement of actual diagnostics/suppressions. Revised measured1826/1811 values tighten those ceilings.",
-  "status": "LOCAL_CHECKPOINTS_ACCEPTED; reachability and legacy inventory accepted at97 overall; original structural baseline FAIL; full roadmap open",
+  "status": "LOCAL_CHECKPOINTS_ACCEPTED; latest parser/dead-adapter96; combined scoped validation PASS; original structural baseline FAIL; wider roadmap open",
   "third_independent_sol_proxy_review": {
     "binding_sha256": "53493b3675b5a59400c3527a8954914d8a50ea0ae9d09a819d27d854d8c897d0",
     "effort": "high",
@@ -2269,19 +2280,18 @@
     "wire_amendment": ".tmp/r5-capture-wire-amendment.md"
   },
   "current_combined_source": {
-    "head": "86617f00",
-    "source_sha256": "78ff1c24dc3a018f843c3cdf980efc4d3b30ea62532a69c631b821ebebeddd99",
-    "noncomment_source_loc": 563583,
+    "head": "4596e3ab with frozen parser/dead-adapter changes",
+    "source_sha256": "74c45fd06f55177f565bdd025c109c57fb23a65df216e74354560a402c47d3c9",
+    "noncomment_source_loc": 563380,
     "original": 562282,
-    "delta": 1301,
+    "delta": 1098,
     "large_modules": 25,
     "original_large_modules": 24,
     "original_architecture_result": "FAIL",
     "duplication_result": "PASS against unchanged original baseline",
-    "measurement": ".tmp/streamlining-architecture-comparison-checkpoint7.json",
-    "configured_baseline": "ORIGINAL_ACTIVE_BASELINE_RESTORED; no transition exception approved. Earlier configured passes used the explicitly unapproved proposal, retained separately.",
-    "baseline_disposition": ".tmp/architecture-active-baseline-disposition.json",
-    "source_hash_scope": "Recorded measurement input tree. Later changes only reconcile tests and reviewed manifests; src/execution remain byte-identical to this measurement."
+    "measurement": ".tmp/parser-retirement-final/architecture-current.json",
+    "comparison": ".tmp/parser-retirement-final/architecture-comparison.json",
+    "configured_baseline": "ORIGINAL_ACTIVE_BASELINE; no exception approved."
   },
   "combined_full_gate": {
     "status": "FAILED_COMPLETE_SUITE_WITH_CLEAN_TEARDOWN",
@@ -2821,7 +2831,16 @@
     "graph": ".tmp/reachability-reconciliation/raw-qualified.json",
     "source_sha256": "379738f162bc3cb9225d7562a313ee6c3b7bceca4fc7c396c40034374f43cec9",
     "qualification": "85 passed in 73.70s; final graph COMPLETE/PASS, 161 nonproduction unknown edges, zero production unknown/unresolved, zero diagnostics; scanner unchanged.",
-    "review_score": 97
+    "review_score": 97,
+    "latest_carry_forward": {
+      "receipt": ".tmp/parser-retirement-final/provenance-rebind.json",
+      "source_sha256": "b80769ecdfe26b2301cee0c222a7487fa48d054c3a32f8ee9ceb5833e6804f5d",
+      "sites_unchanged": 202,
+      "internal_target_files_unchanged": 86,
+      "classification_or_scanner_changes": false,
+      "normal_scanner": "COMPLETE/PASS",
+      "regression_receipt": ".tmp/parser-retirement-final/affected-receipt.json"
+    }
   },
   "static_checkpoint8": {
     "receipt": ".tmp/streamlining-static-checkpoint8.json",
@@ -2999,5 +3018,286 @@
       "final_graph_source_digest": "379738f162bc3cb9225d7562a313ee6c3b7bceca4fc7c396c40034374f43cec9"
     },
     "root_binding_check": "All inspected source and proof hashes match immediately before checkpoint commit."
+  },
+  "parser_dead_adapter_checkpoint": {
+    "state": "INDEPENDENT_PROXY_ACCEPTED_AND_COMBINED_SCOPED_CHECKS_PASSED",
+    "review": {
+      "review_kind": "Independent owner-requested implementation judge proxy; advisory, not a formally qualified frontier Judge seat",
+      "reviewer": "GPT-6.1 Sol proxy as briefed",
+      "subject_commit": "4596e3ab1903da338722624531e6efaa77eb62a9",
+      "scope": [
+        "P1-parser",
+        "D1-dead-adapter"
+      ],
+      "verdict": "ACCEPT",
+      "score": 96,
+      "criteria_maximums": {
+        "goal_fit_simplicity": 30,
+        "correctness_preservation": 30,
+        "performance_setup_plan": 20,
+        "scope_acceptance": 20
+      },
+      "criteria_scores": {
+        "goal_fit_simplicity": 28,
+        "correctness_preservation": 29,
+        "performance_setup_plan": 19,
+        "scope_acceptance": 20
+      },
+      "aggregation": "Arithmetic mean of the two independently scored units, by criterion.",
+      "owner_gate": {
+        "strictly_greater_than_90_overall": true,
+        "strictly_greater_than_90_every_unit": true,
+        "all_units_accept": true,
+        "no_blockers": true,
+        "note": "This computes the owner-defined unit gate only. It does not confer formal Judge qualification or release authority."
+      },
+      "units": [
+        {
+          "id": "P1-parser",
+          "verdict": "ACCEPT",
+          "score": 94,
+          "criteria_scores": {
+            "goal_fit_simplicity": 26,
+            "correctness_preservation": 29,
+            "performance_setup_plan": 19,
+            "scope_acceptance": 20
+          },
+          "source_sha256": "6181a36ee85a4e349bcfb112e40fedef07db62eb4d2e82d4b3fb6d74940c3b64",
+          "findings": [
+            {
+              "severity": "information",
+              "location": "src/compute/kpi_extract_summaries.py:960",
+              "finding": "One row-to-KpiValue loop now owns decimal parsing, unit fallback, currency validation, excerpt handling, locator resolution and value construction. The allowlist wrapper retains dictionary keys and its existing public alias. No procedure was added. Independent AST comparison found only the Iterable import and the two builders changed."
+            },
+            {
+              "severity": "information",
+              "location": "src/compute/kpi_extract_summaries.py:1090",
+              "finding": "The construction surface grows by three typed optional arguments. named_rows overrides the positional rows input, and origin selects confidence, escape-hatch and admission branches. This is a real but bounded interface cost, reflected in the simplicity score. Existing callers use only the two intended combinations. The common loop removes more policy duplication than these arguments add."
+            },
+            {
+              "severity": "information",
+              "location": "src/compute/kpi_extract_summaries.py:1120",
+              "finding": "The allowlist keeps its confidence clamp, verbatim key, Stage A hatch, synthesized-source quarantine and canonical units. Capture keeps label strip/truncation/blank skip, fixed confidence, quote-locator priority, Stage B hatch and source-tier admission. Currency failure still precedes confidence, locator and semantic work. The generator retains row-by-row failure order."
+            },
+            {
+              "severity": "information",
+              "location": "src/compute/kpi_extract_summaries.py:1183",
+              "finding": "The model_validate construction preserves explicit-field membership by supplying canonical_units only for allowlist and origin only for capture. The reviewed harness compares full JSON, exclude_unset output, manifest/value fields_set, exception type/message and ordered events. This addresses the main compatibility risk of the shared constructor."
+            },
+            {
+              "severity": "information",
+              "finding": "The measured reduction is 47 physical lines, 29 executable lines and 101 AST nodes. Documentation shortening contributes to the physical reduction. This receipt does not describe all 47 lines as code removal."
+            }
+          ],
+          "supplied_execution_evidence": {
+            "parity": "1700 baseline/candidate pairs over 94 input cases: 1158 complete manifests and 542 exceptions. Harness assertions compare both implementations before recording results.",
+            "tests": "136 existing tests passed in 17.43s; affected-receipt exit code 0, elapsed 18.971s, no surviving owned process group reported.",
+            "static": "Supplied Ruff format/lint success; hash-bound Pyright receipt reports 0 errors, 0 warnings, 0 information diagnostics."
+          },
+          "independent_verification": [
+            "All P1 manifest hashes and byte lengths match frozen files and current source.",
+            "The before source exactly matches Git 4596e3ab.",
+            "Top-level AST count is unchanged; only the import and two builders differ. Wire schemas, prompts, source selection, persistence and semantic helpers are unchanged.",
+            "The frozen result file contains 1700 cases with the supplied output/exception totals across allowlist, summary and PDF modes.",
+            "Reviewed the complete ordinary manifest/field membership, representative hit/miss/raise locator results and event sequences, and the full comparison harness including malformed units, nonfinite values, label differences, logging failure and error ordering."
+          ],
+          "blockers": [],
+          "required_changes": []
+        },
+        {
+          "id": "D1-dead-adapter",
+          "verdict": "ACCEPT",
+          "score": 98,
+          "criteria_scores": {
+            "goal_fit_simplicity": 30,
+            "correctness_preservation": 29,
+            "performance_setup_plan": 19,
+            "scope_acceptance": 20
+          },
+          "findings": [
+            {
+              "severity": "information",
+              "location": "src/report/metrics_view.py (deleted)",
+              "finding": "The removed adapter has no current tracked runtime, manual, CLI, scheduled or canonical-document caller found by focused reference inspection. Its only inbound frozen graph edge is its dedicated parity test. The source defines SQL read helpers; it has no command parser, main entry point, import-time write, durable serializer or re-export."
+            },
+            {
+              "severity": "information",
+              "location": "src/report/sections/evaluation_snapshot.py:39",
+              "finding": "Git history d4e5d32b3 removes the former metrics_view import/loaders and uses read_financial_table. The current report builder still invokes evaluation_snapshot. The source bytes and retained current call were inspected independently."
+            },
+            {
+              "severity": "information",
+              "location": "tests/test_metrics_view_parity.py (deleted)",
+              "finding": "Both deleted tests compare the removed implementation with archived metrics/ratios view DDL or exercise its sort/scope helpers. They are implementation parity tests, not the current canonical financial resolver, historical migration/replay, provenance or report acceptance oracles. Current and archived schemas, histories and retained consumer tests remain unchanged."
+            },
+            {
+              "severity": "information",
+              "location": "tests/test_legacy_fact_access_architecture.py:149",
+              "finding": "Independent AST comparison confirms that removing only the exact src/report/metrics_view.py inventory key makes the baseline file identical to the candidate. All 39 assertions and 9 test functions remain unchanged. No other reader allowance was removed or weakened."
+            }
+          ],
+          "supplied_execution_evidence": {
+            "tests": "77 retained consumer/architecture tests passed in 27.30s.",
+            "static": "Hash-bound supplied format/lint/type/diff logs report success, including whole-file Pyright 0 diagnostics.",
+            "graph": "Frozen graph subject is 86617f00f0ab6da8dd792dc3f24dc14b843198bf, not the current candidate. Source/test bindings agree, and current focused references supplement that historical graph. No fresh whole-tree closure is claimed."
+          },
+          "independent_verification": [
+            "Verified frozen packet, every listed proof hash, deleted-source/test baseline hashes, absence of both deleted files, inventory candidate hash and graph hash.",
+            "Read the deleted baseline source and both parity tests.",
+            "Performed focused baseline and current tracked reference queries, including module/function names; current executable/manual references were absent outside generated/history quality artifacts.",
+            "Read retained canonical evaluation and public scale/margin/CAGR cases, source-chip source-pick cases, and current/pre-cutover metrics-engine test structure. The separate canonical/legacy provenance parity suite remains present.",
+            "Parsed the frozen graph independently: candidate is not a root and its sole inbound edge is from its dedicated test. Historical quality baselines remain historical evidence."
+          ],
+          "blockers": [],
+          "required_changes": []
+        }
+      ],
+      "blockers": [],
+      "required_changes": [],
+      "limits": [
+        "Advisory independent review only. No Opus identity or purpose-qualified blocking Judge status is claimed.",
+        "The judge ran no pytest, source scanner, database access, service, network request or model call. Test execution and cleanup results are supplied worker evidence; hashes, source, AST, Git history, focused references and frozen data were checked independently.",
+        "No runtime performance benchmark was run. The changes add no provider call, query, dependency or service setup. No measured speedup is claimed.",
+        "External/manual imports outside the repository were not inspected. The adapter has no documented supported external API or repository command path found in the inspected scope.",
+        "Acceptance is limited to these two source-bound units. Whole-branch source+1301 structural failure, a fresh combined graph, full-suite acceptance, release, deployment, live verification and real held-company report acceptance are outside this receipt and are not passed or waived.",
+        "No claim is made that this unit review alone completes the wider research-procedure cleanup. Deep NU PRE/POST, MELI research, Q&A, portfolio decisions and provenance/history/unknown-state acceptance remain with the root task."
+      ],
+      "inspected_sha256s": {
+        ".tmp/kpi-row-consolidation/manifest.json": "c70d0c4851260caf3d62bee9e5df3b56b633a249e0a38763d9d88a5876e56f90",
+        ".tmp/dead-metrics-adapter/source-frozen.json": "45d11c068bcef01f8ab47e8ee9a562463c0b9eeb7af22197e1a8a278b8ba9d05",
+        ".tmp/kpi-row-consolidation/before-4596e3ab.py": "b042fa9e97e07fff2437edfb7acc42d7130b336d5ae513a9d77d626b5b9869dd",
+        ".tmp/kpi-row-consolidation/parity.py": "84b254b6f5286552aa55fbeca69dd704c50005b20304c98faf11f21357a636cc",
+        ".tmp/kpi-row-consolidation/parity.json": "864ec6019dec33c5d9b7f90d962e4677e9f29730fbef453c792352599a2abf51",
+        ".tmp/kpi-row-consolidation/parity-summary.json": "1dbc33ba92f2aeb88bb25c3d407fe3b83f03020246bad3150ebc776f8bfaf8d1",
+        ".tmp/kpi-row-consolidation/parity.log": "aba79bde727a3edb9315eef3257e05b7fb9de6f3bae7f49c5fa24cd740888e17",
+        ".tmp/kpi-row-consolidation/source.diff": "3b9cd3485943a154626c7a7abaa6c9c8e61c467a995307600d2240ccef636800",
+        ".tmp/kpi-row-consolidation/source-measurement.json": "e4078c4c191a040511b4c949174ddae99c7b2758858e77282b2af06e826faf58",
+        ".tmp/kpi-row-consolidation/affected.log": "3f4132d6addc86773f7d17706b0ebb15fb065bc4114f37687739224a898b3b4f",
+        ".tmp/kpi-row-consolidation/affected-receipt.json": "baef98451a25433f076a398e2fc11480a19952a6fce1af07e39224dbc9f70375",
+        ".tmp/kpi-row-consolidation/run-tests.py": "4309d5374ba9ffdd7c30bc3179beebecc34b0c9f8d9e6c0a2348ae8a50bcdc1a",
+        ".tmp/kpi-row-consolidation/pyright.json": "b92ab0f66c4fe7df50c4e7d050221c138b3603eaa5d91b134e7038f27a74e7b9",
+        "src/compute/kpi_extract_summaries.py": "6181a36ee85a4e349bcfb112e40fedef07db62eb4d2e82d4b3fb6d74940c3b64",
+        ".tmp/dead-metrics-adapter/before-bindings.json": "666905ebdc6b7d2e9b1011518671ba22022b88f4ecadbc75bfc8c20685c26622",
+        ".tmp/dead-metrics-adapter/inventory-ast-proof.json": "e359577277b5428ac0f710c61946cdda2e5015df971b2f6f0d0a1b6144857367",
+        ".tmp/dead-metrics-adapter/killproof.md": "424f03e2e6186dffd25b3775dbddc2ab9bc87089ae35d7b21227c58d48bc0309",
+        ".tmp/dead-metrics-adapter/current-reference-audit.log": "ca18f375b2ccd5f31b99de6cb427c323b2670a7a170f06a3b56e2ebc1e99d7a6",
+        ".tmp/dead-metrics-adapter/removal.patch": "67a9c850a221ab3bcd395e8b932b9380f59d45a069e1c7005956978a4aaf20d3",
+        ".tmp/dead-metrics-adapter/diff-stat.txt": "90e8311a7758f697f47ee4004884d0c025a37aac8b669699cdab8f3c95ba7422",
+        ".tmp/dead-metrics-adapter/diff-check.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        ".tmp/dead-metrics-adapter/format.log": "fd2299c9f1c6dc869070883e281051bfe93aacf66c1a3b0069f45b4aa410ca50",
+        ".tmp/dead-metrics-adapter/lint.log": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18",
+        ".tmp/dead-metrics-adapter/types.log": "6d88a1b220adb7a3d62092b6e38431f0b3fe8babe9864fab90e5849766260332",
+        ".tmp/dead-metrics-adapter/tests.log": "30e61ce169de07e31c69bfa7ef5567ab9dbf4e59ee89055f49b8ec83c1eb746c",
+        ".tmp/next-dead-code-candidate.md": "326a54fe18fd0eb0e1e6e9435766be66e22d96b24f12f93591b40049ea044aae",
+        ".tmp/reachability-reconciliation/raw-qualified.json": "482e3a5acb8bcdc16e927f7392db3c48474d2ca6aa36ea2900ca865de109c7b1",
+        "tests/test_legacy_fact_access_architecture.py": "b707f4f78c0bcc5b07cd1b3103a13503ce4510722e0bdb02ab400586164bfa52",
+        "src/report/sections/evaluation_snapshot.py": "b03fa52ad66015f02f5c5a9a4a6a0202a806eebe7ac2a02db24d68a0f0aaf8ad",
+        "src/report/builder.py": "418fba59d6281f30ed42307c3025713f762d86896eb5ef9eee9dd51efde5e6d3",
+        "src/pipeline/kpi_persistence.py": "8546f918eb276b97d34851d6347a2ec4de1f575453391272c925afb7f2115a5d",
+        "src/models/kpis.py": "7d5e0c564d5af0c98bbf7c205c6f1ef257bb25540937828c43417c6001f6bade",
+        "tests/test_evaluation_snapshot_canonical.py": "14d9e031ae610f9e47f1da24a3af014d0ab7c607c29757d6b3532f8c6b9523e6",
+        "tests/test_evaluation_snapshot_scaling.py": "4a39915cf7ce7a770406fbdde27e7a52801e1544a56b42440453e20c2dc647e7",
+        "tests/test_source_chips.py": "4ff576b3b68a9390a96da77d0be5834a293e158e38a5a23c5153ea08ec967d5f",
+        "tests/test_metrics_engine_io.py": "fd979ce54bb8434ef44b80fcc542e63b8f8163d4f3618e72f61f6d9350f6bce3",
+        "tests/test_legacy_canonical_fact_parity.py": "4e99926562646acb8a7db8e01a9cb63e6d29156d0565fcabe2c9aa95d3d5aed0"
+      },
+      "deleted_baseline_sha256s": {
+        "src/report/metrics_view.py": "aab5ff6f10947813ed83cba69794fa69288ea2d8ee8781e1df0dce850b668f5c",
+        "tests/test_metrics_view_parity.py": "6354b2651ace3f1e2b12155df76113c555944cecfdfaac4bf0259918a1de70d8"
+      }
+    },
+    "raw_receipt": ".tmp/parser-retirement-independent-review.json",
+    "review_sha256": "b18b2ed15e05e01456c410ed8fa2c6ddacf94331b264f95b186edbab891aacf4",
+    "root_binding_check": "All inspected source/proof hashes match; both retired files absent.",
+    "parser_evidence": ".tmp/kpi-row-consolidation/manifest.json",
+    "retirement_evidence": ".tmp/dead-metrics-adapter/source-frozen.json",
+    "source_physical_lines_removed": 232,
+    "retired_implementation_test_lines": 154,
+    "removed_inventory_lines": 1,
+    "tracked_tests_added": 0,
+    "operator_surface_disposition": "No operator capability changes. Existing extraction entrypoints, sources, prompts, routes, writers, admission policy and history remain; old SQL adapter has no active caller. Retained consumer tests and before/current complete manifest comparisons validate this internal-only change.",
+    "combined_checks": ".tmp/parser-retirement-final/",
+    "final_checks": {
+      "state": "SCOPED_VALIDATION_PASS_ORIGINAL_STRUCTURAL_FAIL",
+      "subject_commit": "4596e3ab1903da338722624531e6efaa77eb62a9",
+      "static_receipt": ".tmp/streamlining-static-checkpoint9.json",
+      "static_receipt_sha256": "035e9a47ec2bc9ad824a361adedd6c5d31fd58def3d6a7808f4709a5ceb70078",
+      "changed_files": 81,
+      "retained_files": 2872,
+      "whole_pyright_diagnostics": 1826,
+      "whole_suppressions": 1811,
+      "tests": {
+        "receipt": ".tmp/parser-retirement-final/affected-receipt.json",
+        "passed": 97,
+        "skipped": 5,
+        "skip_reason": "Optional mission-local benchmark databases not provisioned",
+        "elapsed_seconds": 99.62,
+        "remaining_owned_processes": []
+      },
+      "graph": {
+        "receipt": ".tmp/parser-retirement-final/reachability.json",
+        "sha256": "13c959a6cbd7aeb55baed3fe13be8b0454097f6d6b5e4483c602eb2ba8cf3262",
+        "collection_status": "COMPLETE",
+        "closure_status": "PASS",
+        "source_sha256": "b80769ecdfe26b2301cee0c222a7487fa48d054c3a32f8ee9ceb5833e6804f5d",
+        "stats": {
+          "files": 3511,
+          "edges": 38806,
+          "unknown": 161,
+          "diagnostics": 0,
+          "production_unknown": 0,
+          "production_unresolved": 0
+        }
+      },
+      "provenance_update": ".tmp/parser-retirement-final/provenance-rebind.json",
+      "architecture_comparison": {
+        "schema_version": "architecture-ratchet-v1",
+        "status": "FAIL",
+        "scoped_commit": "4596e3ab1903da338722624531e6efaa77eb62a9",
+        "baseline_commit": "36735db5c1ff065cc85975d0de1727b27c7afed3",
+        "current_source_sha256": "74c45fd06f55177f565bdd025c109c57fb23a65df216e74354560a402c47d3c9",
+        "baseline_source_sha256": "5bfd7adc255f2eb0f3f43eba8ca0b95e2554d8db50398ad75a0eefc0cf1ff8f1",
+        "regressions": [
+          "total_noncomment_loc increased from 562282 to 563380",
+          "modules_over_2000_loc increased from 24 to 25"
+        ],
+        "scanner_mismatch": false
+      },
+      "duplicates_comparison": {
+        "schema_version": "duplicate-ratchet-v1",
+        "status": "PASS",
+        "scoped_commit": "4596e3ab1903da338722624531e6efaa77eb62a9",
+        "baseline_commit": "82bf9753dd9218761c9b44a8f47c2d744a31d82d",
+        "scanner_mismatch": false,
+        "regressions": [],
+        "exact_totals": {
+          "groups": 4,
+          "participating_functions": 8,
+          "duplicated_loc": 158
+        },
+        "near_miss_totals": {
+          "groups": 145,
+          "participating_functions": 234,
+          "duplicated_loc": 9753
+        }
+      },
+      "duplicates_capture_note": "Completed CLI baseline comparison returned exit0 and this exact JSON on tool stdout. The CLI ignores --out in baseline mode; the observed JSON was persisted without another scan.",
+      "public_tree": {
+        "command": "/Applications/earnings-summary/.venv/bin/python execution/verify_public_tree.py",
+        "exit_code": 0,
+        "output": "Public-tree verification passed.",
+        "scope": "Observed final invocation after checkpoint report update."
+      },
+      "limits": [
+        "No complete full-suite rerun; earlier complete suite remains a failed historical run.",
+        "No original structural exception, deployment, live scheduler change or investment acceptance.",
+        "Task supervisors report no remaining owned processes; no service or listener was launched."
+      ]
+    }
+  },
+  "further_dead_code_assessment": {
+    "note": ".tmp/next-dead-code-candidate-2.md",
+    "status": "NO_FURTHER_BACKEND_ONLY_REMOVAL_JUSTIFIED_IN_INSPECTED_SET",
+    "reason": "A calibration badge remains a ratified feature without a replacement oracle; the KPI catalog has real scratch-seeder callers; DCF authoring and MELI/SEC capabilities have explicit retention boundaries. No unapproved feature or promised capability was removed."
   }
 }

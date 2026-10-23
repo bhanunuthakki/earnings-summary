@@ -1,6 +1,7 @@
-# Backend streamlining: first implementation checkpoint
+# Backend streamlining: implementation checkpoints
 
-Status: **first scoped checkpoint accepted by independent Sol proxy: 92/100**.
+Status: **latest bounded parser and dead-adapter checkpoint accepted by independent Sol proxy: 96/100**.
+The original structural gate still fails. Final combined scoped checks pass.
 Started 2026-10-22; revised 2026-10-23 Pacific. Base: `c978523d`.
 Branch: `codex/research-procedure-cleanup`. R1 corrections are at `3065638a`,
 R2/R3 at `3980b0ad`, R5 issuer protection at `24e2373a`, R6 at `b7f4b998`,
@@ -422,6 +423,46 @@ acceptance pending. The receipt explicitly retains the native workbook parity
 requirement. These reports support preserving analytical depth; they do not qualify
 R4 raw-presentation retirement or whole-application semantic acceptance. No artifact,
 model, policy or live state was changed by this reconciliation.
+
+### Shared KPI parser and unused SQL adapter
+
+The next bounded checkpoint is accepted by independent Sol at **96/100**:
+shared parser **94**, unused adapter removal **98**, no blockers. The two changes
+remove **232 physical source lines**, with no new tracked tests.
+
+The curated and broad KPI paths now use one row-to-value parser and validated
+manifest constructor. Their two existing construction entrypoints remain. Three
+typed construction arguments carry the existing origin, unit and exact-name
+contracts. This adds a small interface cost; it removes the second decoding loop.
+The cut removes 47 physical lines, including documentation, and 29 executable
+lines. **1,700 before/current comparisons** match full manifests, explicit-field
+membership, errors and ordered locator/log calls. **136 existing tests pass**.
+No prompt, route, source selection, writer or admission rule changes.
+
+The unused `report.metrics_view` adapter loses its only remaining caller: its own
+implementation parity test. Its last production caller had already moved to the
+canonical reader. Delete 185 source lines, 154 lines of dedicated tests and only
+its exact legacy-inventory entry. Current and historical financial-view tests,
+canonical admission, report evaluation and source-provenance tests remain.
+**77 retained-consumer tests pass**. No runtime speedup is claimed for dead code.
+
+The combined source now measures **563,380 noncomment lines**, versus the original
+562,282: **+1,098**. That is 203 fewer than the preceding checkpoint. Large modules
+remain 25 versus 24. The original structural gate still fails; duplication passes
+its unchanged baseline. These internal changes add no operator action or stored
+authority. Final format, lint and strict typing pass for **81 changed files**.
+The complete static ceiling checks 2,872 retained files without increased diagnostic
+or suppression totals. Final dependency/helper qualification passes **97 tests**,
+with five optional benchmark cases skipped. All 202 disposition sites and 86 internal
+target files remain byte-identical; only exact global provenance changes. The normal
+unchanged scanner reports COMPLETE/PASS, with zero unknown or unresolved production
+edges and zero diagnostics. Supervisors report no remaining owned test/static processes.
+No full-suite rerun is claimed. See `.tmp/parser-retirement-final/final-checks.json`.
+
+A further bounded dead-code search found no additional justified backend-only
+removal. A calibration badge is a ratified feature without a proved replacement;
+the KPI catalog has real scratch-seeder callers; DCF authoring and MELI/SEC helpers
+have explicit retention boundaries. Further feature cuts need owner choices.
 
 ## Gates that remain open
 

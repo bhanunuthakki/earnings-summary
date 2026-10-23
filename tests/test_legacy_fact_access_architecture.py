@@ -149,7 +149,6 @@ AUDITED_LEGACY_FACT_READS = {
     "src/provenance/financial_fact_resolution.py": 4,
     "src/provenance/integrity_audit.py": 1,
     "src/provenance/legacy_canonical_parity.py": 2,
-    "src/report/metrics_view.py": 1,
     "src/report/sections/financials.py": 2,
     "src/synthesis/lenses/_shared.py": 1,
     # Admitted semantic persistence validates the exact legacy projection row's

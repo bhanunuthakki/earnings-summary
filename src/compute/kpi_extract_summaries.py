@@ -28,7 +28,7 @@ import logging
 import re
 import sqlite3
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -968,75 +968,17 @@ def _build_manifest(
     conn: sqlite3.Connection | None = None,
     source_text: str | None = None,
 ) -> KpiExtractionManifest:
-    values: list[KpiValue] = []
-    for name, payload in extracted.items():
-        v = parse_decimal_value(payload.get("value"))
-        if v is None:
-            continue
-        unit_raw = str(payload.get("unit") or "actual")
-        try:
-            unit = Unit(unit_raw)
-        except ValueError:
-            unit = Unit.ACTUAL
-        currency_raw = payload.get("currency")
-        currency = _currency_for_monetary_value(currency_raw, unit, name)
-        conf_raw = payload.get("confidence", 0.85)
-        try:
-            confidence = (
-                max(0.0, min(1.0, float(conf_raw)))
-                if isinstance(conf_raw, (str, int, float))
-                else 0.85
-            )
-        except ValueError:
-            confidence = 0.85
-        excerpt_raw = payload.get("source_excerpt")
-        excerpt = (
-            excerpt_raw.strip()[:1024]
-            if isinstance(excerpt_raw, str) and excerpt_raw.strip()
-            else None
-        )
-        locator = _locator_for_excerpt(
-            excerpt=excerpt,
-            doc_id=doc_id,
-            source_text=source_text,
-            conn=conn,
-            ticker=ticker,
-            period_end=period_end,
-            kpi_name=name,
-            default=_NO_LOCATOR_ALLOWLIST,
-        )
-        values.append(
-            KpiValue(
-                name=name,
-                value=v,
-                unit=unit,
-                currency=currency,
-                confidence=confidence,
-                source_excerpt=excerpt,
-                source_value_text=(
-                    str(payload["source_value_text"])
-                    if payload.get("source_value_text") is not None
-                    else None
-                ),
-                locator=locator,
-                semantic_context=_semantic_context_for_payload(
-                    name=name,
-                    payload=payload,
-                    expected_period_end=period_end,
-                    allow_admission=False,
-                ),
-            )
-        )
-
-    return KpiExtractionManifest(
-        ticker=ticker,
-        period_end=period_end,
-        fiscal_period_type=fpt,
-        source_doc_id=doc_id,
-        primary_source=SourceType.LLM_EXTRACTED,
-        model_name=FAST_CLASSIFIER_MODEL,
-        canonical_units=canonical_units or {},
-        values=values,
+    return _build_capture_manifest(
+        ticker,
+        period_end,
+        fpt,
+        doc_id,
+        [],
+        conn=conn,
+        source_text=source_text,
+        origin=DefinitionOrigin.ANALYST,
+        canonical_units=canonical_units,
+        named_rows=extracted.items(),
     )
 
 
@@ -1156,53 +1098,52 @@ def _build_capture_manifest(
     locate_quote: Callable[[str | None], FactLocator | None] | None = None,
     conn: sqlite3.Connection | None = None,
     source_text: str | None = None,
+    origin: DefinitionOrigin = DefinitionOrigin.CAPTURE,
+    canonical_units: dict[str, Unit] | None = None,
+    named_rows: Iterable[tuple[str, dict[str, object]]] | None = None,
 ) -> KpiExtractionManifest:
-    """Convert enumerated rows to a CAPTURE manifest. Names are passed verbatim;
-    persist_manifest (origin=CAPTURE) canonicalizes them on write.
+    """Build source rows; persistence canonicalizes CAPTURE labels.
 
-    ``primary_source`` is the tier the captured facts ingest at. The on-disk
-    brief/press path leaves the default ``LLM_EXTRACTED`` (the brief itself is an
-    LLM artifact). The supplement/data-pack PDF path passes ``IR_DOC`` — the PDF
-    is the issuer's own document, so its enumerated values outrank the LLM brief
-    long tail on read (the tier-aware loader prefers IR_DOC over LLM_EXTRACTED for
-    the same definition+period), exactly as the audited IR spreadsheet does.
-
-    ``locate_quote`` (provenance click-through Phase B, §3.2): the supplement
-    PDF path passes a ``pipeline.locators.PdfQuoteLocator`` so each value whose
-    ``source_excerpt`` is found verbatim in the source PDF persists with a
-    renderable ``pdf_slide`` locator (page number + bbox where
-    ``page.search_for`` derives one) instead of the escape hatch.
-
-    ``source_text``/``conn`` (Phase C, §3.3): when ``locate_quote`` is absent
-    or returns nothing for a given row, ``_locator_for_excerpt`` verifies the
-    excerpt against ``source_text`` (the on-disk brief itself) instead — the
-    on-disk-summary enumerate path (``capture_for_ticker``) passes these; the
-    PDF-supplement path leaves them ``None`` since ``locate_quote`` already
-    covers it. An excerpt that can't be located/verified by EITHER path keeps
-    the escape hatch — an honest legacy row beats a fabricated anchor.
+    PDF capture uses IR_DOC and a quote locator. Summary capture retains the
+    LLM_EXTRACTED tier. A missing quote locator falls back to text verification;
+    an unverified excerpt retains the escape hatch and its validation signal.
     """
+    if named_rows is None:
+        named_rows = (
+            (name, row) for row in rows if (name := str(row.get("label") or "").strip()[:200])
+        )
     values: list[KpiValue] = []
-    for row in rows:
-        name = str(row.get("label") or "").strip()[:200]
-        if not name:
-            continue
-        v = parse_decimal_value(row.get("value"))
+    for name, payload in named_rows:
+        v = parse_decimal_value(payload.get("value"))
         if v is None:
             continue
+        unit_raw = str(payload.get("unit") or "actual")
         try:
-            unit = Unit(str(row.get("unit") or "actual"))
+            unit = Unit(unit_raw)
         except ValueError:
             unit = Unit.ACTUAL
-        currency = _currency_for_monetary_value(row.get("currency"), unit, name)
-        excerpt_raw = row.get("source_excerpt")
+        currency_raw = payload.get("currency")
+        currency = _currency_for_monetary_value(currency_raw, unit, name)
+        confidence = 0.85
+        if origin is DefinitionOrigin.ANALYST:
+            conf_raw = payload.get("confidence", 0.85)
+            try:
+                confidence = (
+                    max(0.0, min(1.0, float(conf_raw)))
+                    if isinstance(conf_raw, (str, int, float))
+                    else 0.85
+                )
+            except ValueError:
+                confidence = 0.85
+        excerpt_raw = payload.get("source_excerpt")
         excerpt = (
             excerpt_raw.strip()[:1024]
             if isinstance(excerpt_raw, str) and excerpt_raw.strip()
             else None
         )
-        located = locate_quote(excerpt) if locate_quote is not None else None
-        if located is None:
-            located_or_hatch = _locator_for_excerpt(
+        locator = locate_quote(excerpt) if locate_quote is not None else None
+        if locator is None:
+            locator = _locator_for_excerpt(
                 excerpt=excerpt,
                 doc_id=doc_id,
                 source_text=source_text,
@@ -1210,41 +1151,53 @@ def _build_capture_manifest(
                 ticker=ticker,
                 period_end=period_end,
                 kpi_name=name,
-                default=_NO_LOCATOR_ENUMERATE,
+                default=(
+                    _NO_LOCATOR_ALLOWLIST
+                    if origin is DefinitionOrigin.ANALYST
+                    else _NO_LOCATOR_ENUMERATE
+                ),
             )
-        else:
-            located_or_hatch = located
         values.append(
             KpiValue(
                 name=name,
                 value=v,
                 unit=unit,
                 currency=currency,
-                confidence=0.85,
+                confidence=confidence,
                 source_excerpt=excerpt,
                 source_value_text=(
-                    str(row["source_value_text"])
-                    if row.get("source_value_text") is not None
+                    str(payload["source_value_text"])
+                    if payload.get("source_value_text") is not None
                     else None
                 ),
-                locator=located_or_hatch,
+                locator=locator,
                 semantic_context=_semantic_context_for_payload(
                     name=name,
-                    payload=row,
+                    payload=payload,
                     expected_period_end=period_end,
-                    allow_admission=primary_source is not SourceType.LLM_EXTRACTED,
+                    allow_admission=(
+                        origin is DefinitionOrigin.CAPTURE
+                        and primary_source is not SourceType.LLM_EXTRACTED
+                    ),
                 ),
             )
         )
-    return KpiExtractionManifest(
-        ticker=ticker,
-        period_end=period_end,
-        fiscal_period_type=fpt,
-        source_doc_id=doc_id,
-        primary_source=primary_source,
-        model_name=FAST_CLASSIFIER_MODEL,
-        origin=DefinitionOrigin.CAPTURE,
-        values=values,
+
+    return KpiExtractionManifest.model_validate(
+        {
+            "ticker": ticker,
+            "period_end": period_end,
+            "fiscal_period_type": fpt,
+            "source_doc_id": doc_id,
+            "primary_source": primary_source,
+            "model_name": FAST_CLASSIFIER_MODEL,
+            "values": values,
+            **(
+                {"canonical_units": canonical_units or {}}
+                if origin is DefinitionOrigin.ANALYST
+                else {"origin": origin}
+            ),
+        }
     )
 
 
