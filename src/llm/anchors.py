@@ -60,6 +60,7 @@ import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
+from compute.ir_narrative import load_latest_narrative
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 if TYPE_CHECKING:
@@ -109,18 +110,6 @@ OWNER_PROFILE_ANCHOR_CHAR_CAP = 1200
 
 _HOLDINGS_DIRNAME = ("micro_thesis", "holdings")
 _BEAR_CASE_CACHE_DIRNAME = ("data", "bear_case")
-_IR_NARRATIVE_DIRNAME = ("data", "ir_narrative")
-
-# Loader walks these doctypes in priority order — the first one with cached
-# narrative for the ticker wins. Maps the user-facing taxonomy
-# (deck > investor day > fact sheet > ESG) onto the on-disk doctype names
-# emitted by `src/intake.py` and cached by `src/compute/ir_narrative.py`.
-_IR_DOCTYPE_PRIORITY: tuple[str, ...] = (
-    "ir_presentation",
-    "ir_event",
-    "ir_investor_update",
-)
-
 # Fixed disambiguation header — prepended to every IR-anchor return so each
 # consumer sees the same skepticism frame. Keep this prose tight; every char
 # counts against IR_ANCHOR_CHAR_CAP.
@@ -503,50 +492,27 @@ def load_ir_anchor(repo_root: Path, ticker: str, char_cap: int = IR_ANCHOR_CHAR_
     The output has the bias-framing header prepended so every consumer treats
     the content as company spin rather than ground truth.
 
-    Returns "" when no cache exists for the ticker — recently-IPO'd names
+    Returns an explicit gap for stale/unverified inputs; never uses an older cache.
+    Returns "" when no source or cache candidate exists for the ticker — recently-IPO'd names
     typically rely on the S-1 anchor instead (see project-recently-ipod-anchor
     memory). The S-1 path is intentionally separate so the IR loader stays
     focused on a single source.
     """
-    base = repo_root.joinpath(*_IR_NARRATIVE_DIRNAME) / ticker.upper()
-    if not base.is_dir():
-        return ""
-
-    by_doctype: dict[str, list[Path]] = {dt: [] for dt in _IR_DOCTYPE_PRIORITY}
-    try:
-        entries = list(base.iterdir())
-    except OSError:
-        return ""
-    for path in entries:
-        if not path.is_file() or path.suffix != ".txt":
-            continue
-        for doctype in _IR_DOCTYPE_PRIORITY:
-            if path.name.startswith(f"{doctype}__"):
-                by_doctype[doctype].append(path)
-                break
-
-    selected: Path | None = None
-    for doctype in _IR_DOCTYPE_PRIORITY:
-        candidates = by_doctype.get(doctype, [])
-        if not candidates:
-            continue
-        selected = sorted(candidates)[-1]
-        break
-
+    selected = load_latest_narrative(repo_root, ticker)
     if selected is None:
         return ""
-
-    try:
-        body = selected.read_text(encoding="utf-8").strip()
-    except OSError:
-        return ""
-    if not body:
-        return ""
+    if selected.status != "valid":
+        return (
+            f"## IR CONTEXT UNAVAILABLE\n\nSource: {selected.source_tag}. "
+            f"Reason: {selected.reason}. Existing IR text cannot support current claims. "
+            "This gap is not evidence that management made no relevant statements."
+        )
+    body = selected.body
 
     # Reserve room for the header + a one-line source tag so the LLM can cite
     # which deck the framing came from. The minimum body budget (~200 chars)
     # keeps the section meaningful even if the caller passes a tight cap.
-    tag_line = f"\n_Source: {selected.stem}_\n\n"
+    tag_line = f"\n_Source: {selected.source_tag}_\n\n"
     header_overhead = len(_IR_BIAS_HEADER) + len(tag_line) + 4  # newlines
     body_budget = max(char_cap - header_overhead, 200)
     if len(body) > body_budget:
