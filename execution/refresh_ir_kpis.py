@@ -34,7 +34,7 @@ except ImportError:
 from ir_pipeline.config import configured_tickers, get_config, save_config
 from ir_pipeline.download import download_spreadsheet
 from ir_pipeline.ingest import ingest_spreadsheet_kpis
-from ir_pipeline.spreadsheet import parse_spreadsheet
+from ir_pipeline.spreadsheet import parse_spreadsheet_source
 from pipeline.run_accounting import (
     PipelineRunSuppressedError,
     suppression_payload,
@@ -145,7 +145,7 @@ def main() -> int:
         cfg = widen_config(cfg, path)
         save_config(cfg, repo_root)
 
-    parsed = parse_spreadsheet(path, cfg, max_quarters=args.quarters)
+    parsed = parse_spreadsheet_source(path, cfg, max_quarters=args.quarters)
     conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
     conn.row_factory = sqlite3.Row
     try:
@@ -175,7 +175,7 @@ def main() -> int:
                 "source_file": str(path),
                 "doc_id": doc_id,
                 "rows_inserted": inserted,
-                "kpis": {k: len(v) for k, v in parsed.items()},
+                "kpis": {k: len(v) for k, v in parsed.numeric_projection().items()},
             },
             indent=2,
         )

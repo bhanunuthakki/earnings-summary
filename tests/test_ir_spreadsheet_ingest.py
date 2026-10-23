@@ -14,8 +14,9 @@ parse → ingest pipeline:
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import json
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import ParamSpec, TypeVar, cast
@@ -23,15 +24,14 @@ from typing import ParamSpec, TypeVar, cast
 import openpyxl
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+import ir_pipeline.ingest as ingest_module
+from ir_pipeline.config import IrConfig, SheetKpi, get_config
+from ir_pipeline.config_builder import build_ir_config, widen_config
+from ir_pipeline.ingest import ingest_spreadsheet_kpis
+from ir_pipeline.spreadsheet import parse_spreadsheet, parse_spreadsheet_source
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
-import ir_pipeline.ingest as ingest_module  # noqa: E402
-from ir_pipeline.config import IrConfig, SheetKpi, get_config  # noqa: E402
-from ir_pipeline.config_builder import build_ir_config, widen_config  # noqa: E402
-from ir_pipeline.ingest import ingest_spreadsheet_kpis  # noqa: E402
-from ir_pipeline.spreadsheet import parse_spreadsheet  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 _Q = [dt.datetime(2025, 6, 30), dt.datetime(2025, 9, 30), dt.datetime(2025, 12, 31)]
 
@@ -382,7 +382,9 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
         results_center_url="https://example.invalid/results",
         spreadsheet_kpis=(SheetKpi("NII", "Indicators", "NII", "actual", currency="USD"),),
     )
-    period = dt.datetime(2025, 12, 31)
+    first_parsed = parse_spreadsheet_source(first_path, cfg, max_quarters=1)
+    second_parsed = parse_spreadsheet_source(second_path, cfg, max_quarters=1)
+    assert first_parsed.workbook_sha256 != second_parsed.workbook_sha256
 
     conn = connect_sqlite(
         db_path,
@@ -395,7 +397,7 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
             conn,
             "CO",
             cfg,
-            {"NII": {period: 120.0}},
+            first_parsed,
             first_path,
             repo_root=repo_root,
         )
@@ -407,14 +409,25 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
             conn,
             "CO",
             cfg,
-            {"NII": {period: 121.0}},
+            second_parsed,
             second_path,
             repo_root=repo_root,
         )
         facts = conn.execute(
-            "SELECT id, value, supersedes_id, source_doc_id FROM kpi_facts "
+            "SELECT id, value, supersedes_id, source_doc_id, locator FROM kpi_facts "
             "WHERE ticker = 'CO' ORDER BY id"
         ).fetchall()
+        from pipeline.run_accounting import PipelineRunSuppressedError
+
+        with pytest.raises(PipelineRunSuppressedError):
+            ingest_spreadsheet_kpis(
+                conn,
+                "CO",
+                cfg,
+                second_parsed.numeric_projection(),
+                second_path,
+                repo_root=repo_root,
+            )
         evidence_count = conn.execute(
             "SELECT COUNT(*) FROM evidence_document_versions WHERE legacy_document_id IN (?, ?)",
             (first_doc, second_doc),
@@ -436,3 +449,381 @@ def test_post_cutover_ingest_dual_writes_evidence_and_preserves_history(
         first_doc,
         second_doc,
     )
+
+    assert [float(fact["value"]) for fact in facts] == [120.0, 121.0]
+    for fact in facts:
+        locator = json.loads(fact["locator"])
+        assert locator["kind"] == "spreadsheet_cell"
+        assert locator["spreadsheet_cell"] == {"sheet_name": "Indicators", "cell_address": "E6"}
+
+
+@pytest.mark.parametrize("reported_label", ["NII", "Net Interest Income"])
+def test_typed_handoff_preserves_numeric_writer_semantics_and_reader_lane(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    reported_label: str,
+) -> None:
+    """Synthetic NU-shaped input compares the real writer, not NU financial coverage."""
+    from pipeline.kpi_semantics import (
+        KpiSemanticContext,
+        current_kpi_semantic_context,
+        semantic_admission_sql,
+    )
+
+    contexts: dict[str, KpiSemanticContext] = {}
+    for mode in ("numeric", "typed"):
+        root = tmp_path / mode
+        database = migrated_db(root / "data" / "portfolio.db")
+        workbook_path = root / "source.xlsx"
+        _write_sheet(workbook_path)
+        workbook = openpyxl.load_workbook(workbook_path)
+        workbook["Indicators"].cell(6, 2, reported_label)
+        workbook.save(workbook_path)
+        workbook.close()
+        config = IrConfig(
+            ticker="NU",
+            platform="mz",
+            results_center_url="https://example.invalid/results",
+            spreadsheet_kpis=(
+                SheetKpi("NII", "Indicators", reported_label, "actual", currency="USD"),
+            ),
+        )
+        parsed = parse_spreadsheet_source(workbook_path, config, max_quarters=1)
+        conn = connect_sqlite(database, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+        conn.row_factory = sqlite3.Row
+        try:
+            inserted, _ = ingest_spreadsheet_kpis(
+                conn,
+                "NU",
+                config,
+                parsed if mode == "typed" else parsed.numeric_projection(),
+                workbook_path,
+                repo_root=root,
+            )
+            assert inserted == 1
+            fact = conn.execute("SELECT id,value FROM kpi_facts WHERE ticker='NU'").fetchone()
+            assert fact is not None and float(fact["value"]) == 120.0
+            context = current_kpi_semantic_context(conn, kpi_fact_id=int(fact["id"]))
+            assert context is not None
+            contexts[mode] = context.context
+            assert context.context.status.value == "legacy_unknown"
+            assert context.context.publication_lane.value == "unclassified"
+            join, predicate = semantic_admission_sql(conn, fact_alias="kf")
+            readable = conn.execute(
+                f"SELECT kf.value FROM kpi_facts kf {join} WHERE kf.ticker='NU' AND {predicate}"
+            ).fetchall()
+            assert [float(row[0]) for row in readable] == [120.0]
+        finally:
+            conn.close()
+
+    # Only the exact source label is enriched. Basis, status, dimensions,
+    # period and publication lane stay equal to the writer's numeric default.
+    assert contexts["numeric"].metric_name_as_reported == "NII"
+    assert contexts["typed"].metric_name_as_reported == reported_label
+    assert contexts["typed"].model_dump(exclude={"metric_name_as_reported"}) == contexts[
+        "numeric"
+    ].model_dump(exclude={"metric_name_as_reported"})
+
+
+def test_unsupported_cell_is_explicitly_skipped_without_losing_other_periods(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.xlsx"
+    source.write_bytes(b"synthetic parser boundary")
+
+    class Sheet:
+        def iter_rows(self, *, values_only: bool) -> list[tuple[object, ...]]:
+            assert values_only
+            return [("Metric", *_Q), ("NII", 100.0, object(), 120.0)]
+
+    class Workbook:
+        sheetnames = ("Indicators",)
+
+        def __getitem__(self, name: str) -> Sheet:
+            assert name == "Indicators"
+            return Sheet()
+
+        def close(self) -> None:
+            pass
+
+    def loaded(*_args: object, **_kwargs: object) -> Workbook:
+        return Workbook()
+
+    monkeypatch.setattr(openpyxl, "load_workbook", loaded)
+    config = IrConfig(
+        ticker="SYNTH",
+        platform="mz",
+        results_center_url="",
+        label_col=0,
+        spreadsheet_kpis=(SheetKpi("NII", "Indicators", "NII", "actual"),),
+    )
+    parsed = parse_spreadsheet_source(source, config)
+    assert parsed.numeric_projection() == {"NII": {_Q[0]: 100.0, _Q[2]: 120.0}}
+    unsupported = [cell for cell in parsed.cells if cell.disposition == "unsupported_value"]
+    assert len(unsupported) == 1
+    assert unsupported[0].raw_value is None and unsupported[0].scaled_value is None
+    assert unsupported[0].representation == "unavailable_openpyxl_type"
+    assert unsupported[0].period_end == _Q[1]
+    assert unsupported[0].locator is not None
+    assert parse_spreadsheet(source, config) == parsed.numeric_projection()
+
+
+def test_typed_parser_keeps_whole_winner_through_both_overwrite_rules(tmp_path: Path) -> None:
+    conn = _conn()
+    conn.execute(
+        "INSERT INTO kpi_definitions (ticker,name,unit,primary_source) "
+        "VALUES ('CO','NII (USD)','actual','ir_doc')"
+    )
+    conn.commit()
+    path = tmp_path / "co.xlsx"
+    _write_sheet(path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Indicators"]
+    ws.cell(4, 6, _Q[-1])
+    ws.cell(6, 6, 121)
+    wb.save(path)
+    wb.close()
+    cfg = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="",
+        reporting_currency="USD",
+        spreadsheet_kpis=(
+            SheetKpi("NII", "Indicators", "Fee Revenue", "actual", scale=2, origin="capture"),
+            SheetKpi("NII (USD)", "Indicators", "NII", "actual", scale=3, origin="capture"),
+            SheetKpi(
+                "NII", "Indicators", "Total Available Funding", "actual", scale=4, origin="capture"
+            ),
+        ),
+    )
+    parsed = parse_spreadsheet_source(path, cfg, max_quarters=1)
+    assert parsed.numeric_projection() == {"NII": {_Q[-1]: 160000.0}, "NII (USD)": {_Q[-1]: 363.0}}
+    assert parse_spreadsheet(path, cfg, max_quarters=1) == parsed.numeric_projection()
+    assert {cell.disposition for cell in parsed.cells} >= {
+        "selected",
+        "overwritten_configured_name",
+        "overwritten_period",
+        "outside_window",
+    }
+    inserted, _ = ingest_spreadsheet_kpis(conn, "CO", cfg, parsed, path)
+    assert inserted == 1
+    row = conn.execute("SELECT value,locator FROM kpi_facts").fetchone()
+    assert float(row["value"]) == 363.0
+    assert json.loads(row["locator"])["spreadsheet_cell"] == {
+        "sheet_name": "Indicators",
+        "cell_address": "F6",
+    }
+    winner = parsed.selected_series()["NII (USD)"][_Q[-1]]
+    assert winner.raw_label == "NII" and winner.spec.kpi_name == "NII (USD)"
+    assert winner.spec.scale == 3 and winner.raw_value == 121
+    assert winner.representation == "openpyxl_data_only"
+    assert winner.header is not None and winner.header.cell_address == "F4"
+    assert winner.locator is not None
+    assert parsed.workbook_sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert parsed.workbook_bytes_size == path.stat().st_size
+
+
+def test_typed_ingest_rejects_changed_bytes_or_config_before_writes(tmp_path: Path) -> None:
+    conn = _conn()
+    path = tmp_path / "co.xlsx"
+    _write_sheet(path)
+    cfg = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="",
+        reporting_currency="USD",
+        spreadsheet_kpis=(SheetKpi("NII", "Indicators", "NII", "actual"),),
+    )
+    parsed = parse_spreadsheet_source(path, cfg)
+    wb = openpyxl.load_workbook(path)
+    wb["Indicators"].cell(6, 5, 121)
+    wb.save(path)
+    wb.close()
+    with pytest.raises(ValueError, match="bytes changed"):
+        ingest_spreadsheet_kpis(conn, "CO", cfg, parsed, path)
+    assert conn.total_changes == 0
+    fresh = parse_spreadsheet_source(path, cfg)
+    changed_config = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="changed",
+        reporting_currency="USD",
+        spreadsheet_kpis=cfg.spreadsheet_kpis,
+    )
+    with pytest.raises(ValueError, match="config changed"):
+        ingest_spreadsheet_kpis(conn, "CO", changed_config, fresh, path)
+    assert conn.total_changes == 0
+
+
+def test_typed_parser_retains_skips_and_writer_keeps_unknown_and_rejected_states(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+) -> None:
+    from pipeline.kpi_semantics import current_kpi_semantic_context
+
+    repo_root = tmp_path / "repo"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    path = repo_root / "co.xlsx"
+    _write_sheet(path)
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Indicators"]
+    ws.cell(6, 4, "pending")
+    ws.cell(4, 6, "undisclosed period")
+    ws.cell(6, 6, 777)
+    ws.cell(9, 2, "Rejected percentage")
+    ws.cell(9, 5, 2001)
+    wb.save(path)
+    wb.close()
+    cfg = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="",
+        reporting_currency="USD",
+        spreadsheet_kpis=(
+            SheetKpi("NII", "Indicators", "NII", "actual"),
+            SheetKpi("Rejected percentage", "Indicators", "Rejected percentage", "percent"),
+            SheetKpi("Absent", "Missing", "absent", "ratio"),
+        ),
+    )
+    parsed = parse_spreadsheet_source(path, cfg, max_quarters=1)
+    assert any(
+        cell.disposition == "nonnumeric" and cell.raw_value == "pending" for cell in parsed.cells
+    )
+    assert any(
+        cell.disposition == "unknown_period" and cell.raw_value == 777 and cell.period_end is None
+        for cell in parsed.cells
+    )
+    assert any(cell.disposition == "sheet_missing" for cell in parsed.cells)
+    rejected = parsed.selected_series()["Rejected percentage"][_Q[-1]]
+    assert rejected.raw_value == 2001 and rejected.scaled_value == 2001.0
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        inserted, doc_id = ingest_spreadsheet_kpis(
+            conn, "CO", cfg, parsed, path, repo_root=repo_root
+        )
+        assert inserted == 1
+        fact = conn.execute("SELECT id FROM kpi_facts").fetchone()
+        context = current_kpi_semantic_context(conn, kpi_fact_id=fact["id"])
+        assert context is not None and context.context.status.value == "legacy_unknown"
+        assert context.context.publication_lane.value == "unclassified"
+        assert context.context.metric_name_as_reported == "NII"
+        issue = conn.execute(
+            "SELECT rule,raw_value,source_doc_id FROM validation_issues"
+        ).fetchone()
+        assert issue["rule"] == "plausible_range" and "2001" in issue["raw_value"]
+        assert issue["source_doc_id"] == doc_id
+        assert parsed.selected_series()["Rejected percentage"][_Q[-1]] == rejected
+    finally:
+        conn.close()
+
+
+def test_typed_ingest_preserves_per_period_failure_and_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _conn()
+    path = tmp_path / "co.xlsx"
+    _write_sheet(path)
+    cfg = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="",
+        reporting_currency="USD",
+        spreadsheet_kpis=(SheetKpi("NII", "Indicators", "NII", "actual"),),
+    )
+    parsed = parse_spreadsheet_source(path, cfg)
+    original = ingest_module.persist_manifest
+    calls = 0
+
+    def fail_second(
+        connection: sqlite3.Connection,
+        *,
+        run_id: str,
+        manifest: ingest_module.KpiExtractionManifest,
+        commit: bool = True,
+    ) -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("second period failed")
+        return original(connection, run_id=run_id, manifest=manifest, commit=commit)
+
+    monkeypatch.setattr(ingest_module, "persist_manifest", fail_second)
+    with pytest.raises(RuntimeError, match="second period failed"):
+        ingest_spreadsheet_kpis(conn, "CO", cfg, parsed, path)
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 1
+    assert not conn.in_transaction
+    assert conn.execute("SELECT status FROM ingestion_runs").fetchone()[0] == "failed"
+    monkeypatch.setattr(ingest_module, "persist_manifest", original)
+    inserted, _ = ingest_spreadsheet_kpis(conn, "CO", cfg, parsed, path)
+    assert inserted == 2
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 3
+
+
+def test_refresh_cli_carries_actual_parser_locator_to_existing_writer(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import argparse
+    from types import SimpleNamespace
+
+    from execution import refresh_ir_kpis
+
+    repo_root = tmp_path / "repo"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    path = repo_root / "co.xlsx"
+    _write_sheet(path)
+    cfg = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="",
+        reporting_currency="USD",
+        spreadsheet_kpis=(SheetKpi("NII", "Indicators", "NII", "actual"),),
+    )
+    args = argparse.Namespace(
+        ticker="CO",
+        quarters=1,
+        file=path,
+        url=None,
+        discover=False,
+        platform=None,
+        results_center_url=None,
+        repo_root=repo_root,
+        db=db_path,
+        owner_requested=True,
+    )
+    monkeypatch.setattr(refresh_ir_kpis, "_parse_args", lambda: args)
+
+    def authorized(*_args: object, **_kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(allowed=True)
+
+    def configured(*_args: object) -> IrConfig:
+        return cfg
+
+    def widened(config: IrConfig, _path: Path) -> IrConfig:
+        return config
+
+    def saved(*_args: object) -> None:
+        pass
+
+    monkeypatch.setattr(refresh_ir_kpis, "authorize_stored_collection_target", authorized)
+    monkeypatch.setattr(refresh_ir_kpis, "get_config", configured)
+    monkeypatch.setattr("ir_pipeline.config_builder.widen_config", widened)
+    monkeypatch.setattr(refresh_ir_kpis, "save_config", saved)
+    assert refresh_ir_kpis.main() == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["rows_inserted"] == 1 and output["kpis"] == {"NII": 1}
+    with sqlite3.connect(db_path) as conn:
+        fact = conn.execute("SELECT value,locator FROM kpi_facts").fetchone()
+        source_sha = conn.execute(
+            "SELECT sha256 FROM documents WHERE id=?", (output["doc_id"],)
+        ).fetchone()[0]
+    assert float(fact[0]) == 120
+    assert json.loads(fact[1])["spreadsheet_cell"] == {
+        "sheet_name": "Indicators",
+        "cell_address": "E6",
+    }
+    assert source_sha == hashlib.sha256(path.read_bytes()).hexdigest()

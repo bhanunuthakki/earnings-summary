@@ -1,4 +1,43 @@
 {
+  "accepted_local_units": {
+    "R5-handoff": {
+      "code_and_test_sha256": {
+        "execution/refresh_ir_kpis.py": "50543a5111b42f8f539bf45a220b2f965c7ef4d2250edf8b6b5e1f1f46cae282",
+        "src/ir_pipeline/ingest.py": "bbd140087c3a7cf4ddc98f7201ff9fb8de6cae66d741e7b0c6dd56bfe1789c90",
+        "src/ir_pipeline/spreadsheet.py": "5e44df03e86f9c736280c29d603f142323229e242fbc169e8bb2c85b9718bf94",
+        "tests/test_ir_spreadsheet_ingest.py": "9b4a27e23fc82982813392a0c8c03823dea516f7dcb66aab1602d53be80d8469",
+        "tests/test_pipeline_suppression_boundaries.py": "d03e08d6ba4f44f4ef51e1b45fa3b15a8d60655d832ec0115351f40e408cdb7d"
+      },
+      "proof": "second reviewed candidate986changed-file tests and153transitive tests; R5focused15; R7focused212 incl comparison-mode goldens; no fullrelease claim",
+      "review_prompt_sha256": "67f05f10b536e75227ab8bee20d6e91269bbf39dd0a79c1ca10955337b5ffb08",
+      "scope": "Source-preserving spreadsheet parser to existing KPI writer handoff (native writer not retired)",
+      "score": 92,
+      "status": "accepted source unchanged since second review; prepared for separate local commit"
+    },
+    "R7-SayDo": {
+      "code_and_test_sha256": {
+        "execution/build_artifacts.py": "32909c4037790f9bc02d152ae40a001cd4f1304c5a324bac839fe19267fbb8a8",
+        "src/report/builder.py": "418fba59d6281f30ed42307c3025713f762d86896eb5ef9eee9dd51efde5e6d3",
+        "src/report/models.py": "8613f09820c09e6c16d38087471282c73184d9523a1034312ff3d7c92208a38a",
+        "src/report/renderers/workspace_data.py": "25cd923b12972c8dc43998c55203d20049dfaab0156c9a7a99de71c3c32a754a",
+        "src/report/renderers/workspace_html.py": "6ca3a36461e165752101c6de477dd4ff8a81bb4d55e1ab3597654dc3b62ad59b",
+        "src/report/renderers/workspace_sections/saydo.py": "05304213e58e8060bd1dd82c5c15eba63298b1c996eb04b91b2b25034a89fb27",
+        "src/report/sections/p3_data.py": "e070e5228d3bda6d3a288930b55f2b3da3d3bb3c54ccd3f5ec571120ecc3e911",
+        "src/report/sections/saydo.py": "6935a081db4dc3c04cf285a8bc89b82e3e73bfa41c95a61ece36828a80c7e9b2",
+        "tests/test_build_artifacts_native_regeneration.py": "9b9ce38132c43800307a150cce4ab4784e38f55b97dc023e89acd79035b82c1b",
+        "tests/test_report_saydo.py": "db45e791b06c32260bea2da35621896f34fe0c0a297a18fab4268382d57a40b1",
+        "tests/test_request_scoped_report_db.py": "7aa114e42cc490394ef1986968e186567036fb7ee440bffbb416bc148e20ea16",
+        "tests/test_saydo_filter_dirty_refresh.py": "a971e63ebe8fb320565c2b23be87bb7c858b6d2367aeb5611facf245a1d2d92b",
+        "tests/test_workspace_golden.py": "03dfcbba5fe2a35fe8479e1777858eff6c6aa6cae81b70337ad8406fe3733c2b",
+        "tests/test_workspace_p3_panels.py": "af514324f51f6e84549aebc41ff6b5f931884b72e1c0bf849a20ff3ab0763428"
+      },
+      "proof": "second reviewed candidate986changed-file tests and153transitive tests; R5focused15; R7focused212 incl comparison-mode goldens; no fullrelease claim",
+      "review_prompt_sha256": "67f05f10b536e75227ab8bee20d6e91269bbf39dd0a79c1ca10955337b5ffb08",
+      "scope": "Prepared Say/Do section only (generated Markdown and other panel DB reads retained)",
+      "score": 93,
+      "status": "accepted source unchanged since second review; prepared for separate local commit"
+    }
+  },
   "authority": {
     "deploy": false,
     "merge": false,
@@ -355,6 +394,13 @@
       }
     ]
   },
+  "historical_artifact_aliases": {
+    ".tmp/streamlining-architecture-candidate.json": ".tmp/streamlining-architecture-candidate-round1.json",
+    ".tmp/streamlining-architecture-comparison.json": ".tmp/streamlining-architecture-comparison-round1.json",
+    ".tmp/streamlining-opus-code-manifest.json": ".tmp/streamlining-opus-code-manifest-round1.json",
+    ".tmp/streamlining-opus-implementation-prompt.txt": ".tmp/streamlining-opus-implementation-prompt-round1.txt",
+    ".tmp/streamlining-validation-summary.json": ".tmp/streamlining-validation-summary-round1.json"
+  },
   "r1_local_unit": {
     "code_and_test_sha256": {
       "execution/extract_facts.py": "f7aa1174d774dc9558ad0cef361a51ef5e357d58feac6f331f6587f27fb7b255",
@@ -364,13 +410,370 @@
       "tests/test_fmp_batch.py": "cd0789bb11021aa39bb7059fe4dd11fd26aada10d8f061ed6755bde72393ed57",
       "tests/test_pipeline_quarterly_refresh.py": "fe71417f91697e3a19da4c96952b4666a2d0683aa1289b98525e04d904be60ef"
     },
+    "commit": "3ef4c783c348ede72939be139ab1a6b4e6053dcc",
     "proof": "58 focused FMP tests and original integrated925tests pass; unit source/tests unchanged since independent review",
     "score": 91,
-    "status": "accepted and prepared for separate local commit; other units remain in revision",
+    "status": "earlier reviewed code committed locally; later review found transaction-entry gap; revision in progress",
     "transaction_audit": "The only stage before FMP that can write is optional SEC ingest; ingest_for_ticker commits at its commit phase and rolls back a started transaction on failure. Segment cache validation is read-only. Supplied-record refresh_cache retains its separate commit=False caller-owned path. No cross-document atomicity claim."
   },
-  "remaining_work": "Resolve R2/R5/R6/R7 findings, rerun affected and integrated checks, remeasure structure, obtain fresh independent review above90 on every scoped key unit.",
+  "remaining_work": "Resolve concrete review2 findings under Astra architecture judgment, provide missing source closure, rerun affected proofs and integrated checks, obtain fresh exact subscription review above90 overall and per scoped unit. Roadmap Opus sign-off and release obligations remain open.",
   "review_kind": "owner-requested independent ad hoc review via exact Claude Opus5.5 subscription; no formal frontier qualification claimed",
+  "revised_code_manifest_sha256": "926cf2754b0706827d39c9edb1e21954d79a077460a23650d6f46c264cd59e37",
+  "revised_prompt_sha256": "67f05f10b536e75227ab8bee20d6e91269bbf39dd0a79c1ca10955337b5ffb08",
+  "revised_validation": {
+    "architecture": {
+      "baseline_refresh_status": "proposed pending independent Opus review",
+      "candidate_baseline_sha256": "99230d63a6a671e833f1ae5d17ee07c3ac629e5366b5a1ec2c337a698cd775ca",
+      "duplicate_baseline_changed": false,
+      "old_baseline_sha256": "d2878d60b3b0d88aa37e5e36f8353f0563a55de12909d4fbbd0aac4c854a8004",
+      "original_comparison": {
+        "architecture": {
+          "baseline_commit": "36735db5c1ff065cc85975d0de1727b27c7afed3",
+          "baseline_source_sha256": "5bfd7adc255f2eb0f3f43eba8ca0b95e2554d8db50398ad75a0eefc0cf1ff8f1",
+          "current_source_sha256": "fd5fa8df05d8355acbfe3a25b70997054e138bbdf6b3aba62ce9ae00887cb278",
+          "regressions": [
+            "total_noncomment_loc increased from 562282 to 563329",
+            "modules_over_2000_loc increased from 24 to 25"
+          ],
+          "scanner_mismatch": false,
+          "schema_version": "architecture-ratchet-v1",
+          "scoped_commit": "3ef4c783c348ede72939be139ab1a6b4e6053dcc",
+          "status": "FAIL"
+        },
+        "duplicates": {
+          "baseline_commit": "82bf9753dd9218761c9b44a8f47c2d744a31d82d",
+          "exact_totals": {
+            "duplicated_loc": 158,
+            "groups": 4,
+            "participating_functions": 8
+          },
+          "near_miss_totals": {
+            "duplicated_loc": 9753,
+            "groups": 145,
+            "participating_functions": 234
+          },
+          "regressions": [],
+          "scanner_mismatch": false,
+          "schema_version": "duplicate-ratchet-v1",
+          "scoped_commit": "3ef4c783c348ede72939be139ab1a6b4e6053dcc",
+          "status": "PASS"
+        },
+        "metric_changes": {
+          "modules_over_2000_loc": {
+            "after": 25,
+            "before": 24
+          },
+          "total_noncomment_loc": {
+            "after": 563329,
+            "before": 562282
+          }
+        }
+      },
+      "reason": "Recovery and exact source handoff in one existing publisher owner; explicit +1047 noncomment LOC and one >2000 module transition exception, due next producer retirement checkpoint or 2026-10-30 Pacific; no overall size cut",
+      "scanner_or_rule_changes": false,
+      "source_sha256": "fd5fa8df05d8355acbfe3a25b70997054e138bbdf6b3aba62ce9ae00887cb278",
+      "status_with_proposed_refresh": "PASS"
+    },
+    "authority": {
+      "new_persistent_store": false,
+      "new_source_collection": false,
+      "production_database_access": false,
+      "production_mutation": false,
+      "push_merge_deploy": false,
+      "schema_migration": false,
+      "test_listeners_started": 0
+    },
+    "base_commit": "c978523d84a4efea07858e7029307dd588d2a841",
+    "branch": "codex/research-procedure-cleanup",
+    "changed_python_files": {
+      "format": "PASS",
+      "lint": "PASS",
+      "prohibited_suppressions": 0,
+      "retained": 76,
+      "strict_pyright_errors": 0
+    },
+    "oracle_corrections": [
+      {
+        "after": "source fix preserves replacement transaction and pending replacement write; guard still rejects invalid snapshot",
+        "before": "two reproduced failures: replacement caller transaction was rolled back",
+        "test": "test_batch_rejects_commit_and_rebegin_that_replaces_its_snapshot"
+      },
+      {
+        "after": "spy underlying full verifier; exactly1 normalizedpublication/K/Okey, completebatch, completeactuals, serialoutputequality; final29DCFtests and153transitivechecks pass",
+        "before": "old wrapper spy observed224 cache adapter calls after internal cache moved",
+        "test": "test_statement_reader_uses_one_sealed_provenance_batch"
+      }
+    ],
+    "other_checks": {
+      "design_sync": "PASS",
+      "diff_whitespace": "PASS",
+      "reconstruction_inventory": "PASS all11subsystems",
+      "workspace_goldens": "PASS comparison mode; no regeneration"
+    },
+    "paired_operation_proof": {
+      "baseline_source": "coherent owner and consumer closure from Git c978523d",
+      "cases": 4,
+      "complete_json_equal": true,
+      "dcf_complete_actuals": 56,
+      "status": "PASS synthetic fixtures; no production latency claim",
+      "thresholds": ".tmp/reader-batch-target-check.json"
+    },
+    "proof_artifacts": {
+      ".tmp/compare_reader_reuse.py": "3e822ccee1bb786690f774872ccfa1fcf7d668b0119db318292fbaa011279b8b",
+      ".tmp/reader-batch-comparison.json": "467639d01ad1456764b5cb6190cd04723cf5fd90e58e73c3520df3d0ec21679f",
+      ".tmp/reader-batch-outputs.json": "5352ef2be8420df6d7f7aed50d5e65f4126e9bc7b8df1a3df5c45913c530a97e",
+      ".tmp/reader-batch-target-check.json": "8e9a98a8e9f90e15a85eb8079cd93a47a17d8a3909ec9d4e688eb6c4e83a04ac",
+      ".tmp/saydo-mvp/comparison.json": "5795e858f983ca973fecf62fd7b892f30049875a64f5e9e534fd07a0c6e946a9",
+      ".tmp/spreadsheet-handoff-cost.json": "bd7936aff62ef20139933751d96c9354739baa353a817b9aabba78ced948df6b",
+      ".tmp/streamlining-architecture-comparison.json": "35c4231c22fabb07a0430a314f70b1fbd83c9961271647ee01c11232738bc4ec",
+      ".tmp/streamlining-changed-static-round2.log": "5f9fa1dfe73aaa54bcfec22e62f77c25501beafe79dbf8077ed68f4cbb0bb283",
+      ".tmp/streamlining-check-fast-round2.log": "53154df8834f91effcab612ee596654065b804af6303711a438dc86816015d2f",
+      ".tmp/streamlining-reachability.json": "1581806119fe42c4b53cf1e7a98de072faf15cff80e7f430c7e00f853cf93f41",
+      ".tmp/streamlining-static-ratchet-round2.log": "94fa37aa7a62025bc404cc7be688d9916249ede226aefee37bf445b5600b22fa",
+      ".tmp/streamlining-transitive-tests-round2.log": "c5c1511f7ebf476b6093d87e4137c971ba688f9086dc1b6acc671bff15ee505c"
+    },
+    "reachability": {
+      "closure_reasons": [
+        "3 disposition diagnostics require review",
+        "188 production unknown edges require review"
+      ],
+      "closure_status": "HOLD",
+      "collection_status": "COMPLETE",
+      "source_manifest_sha256": "2beb5c3c3aa14eddb4dc08ce435b47ec21a72fa2847f0c78b6b91b8f114997c6",
+      "stats": {
+        "diagnostics": 3,
+        "edges": 38685,
+        "files": 3519,
+        "production_unknown": 188,
+        "production_unresolved": 0,
+        "unknown": 364
+      }
+    },
+    "retained_limits": [
+      "R2 calendar-year PDF presentations only",
+      "R3 completion flags/cache authority not migrated",
+      "R4 held original/brief pair not established locally; no new collection",
+      "R5 no native writer retirement or durable rejected-cell capture",
+      "R7 current/generated Markdown remains; other panels still read DB",
+      "full release suite not passed: prior full-run teardown interrupted in existing retention path",
+      "browser localfile URL rejected; no alternative route attempted",
+      "NU/MELI full semantic acceptance not rerun",
+      "old verifier-code receipt requalification not performed",
+      "global dynamic reachability closure remains HOLD",
+      "concurrent original-checkout changes not integrated"
+    ],
+    "review_state": "fresh exact Claude Opus 5.5 subscription implementation review pending; no formal frontier qualification claimed",
+    "scope": "first bounded local backend streamlining checkpoint; not full roadmap or release acceptance",
+    "static_ratchet": {
+      "before_values_kind": "previous configured ceilings, not paired prechange diagnostic measurement",
+      "config_change": "ceilings decreased to exact measured counts; no new suppressions",
+      "pyright_after": 1826,
+      "pyright_before": 2012,
+      "retained_files": 2876,
+      "status": "PASS",
+      "suppressions_after": 1811,
+      "suppressions_before": 1835
+    },
+    "test_counts_overlap": true,
+    "test_transport_incident": "An intermediate bootstrap test loaded an alternate fetch module; reserved .test source guard blocked transfer after DNS resolution. Package import was corrected. No provider source body or model call resulted. Final tests use mocked transport.",
+    "tests": [
+      {
+        "command": "make check-fast PYTHON_BIN=/Applications/earnings-summary/.venv/bin/python",
+        "log": ".tmp/streamlining-check-fast-round2.log",
+        "passed": 986,
+        "seconds": 116.75,
+        "serial": true,
+        "status": "PASS",
+        "test_files": 33
+      },
+      {
+        "command": "PYTHONPATH=src:. /Applications/earnings-summary/.venv/bin/python -m pytest -q tests/test_source_fact_repository.py tests/test_dcf_canonical_statements.py tests/test_canonical_financial_evidence.py tests/test_report_evidence_scope.py tests/test_decision_brief_report_scope.py tests/test_allocation_next_dollar_profile.py tests/test_canonical_fact_resolution.py",
+        "log": ".tmp/streamlining-transitive-tests-round2.log",
+        "passed": 153,
+        "seconds": 28.58,
+        "serial": true,
+        "status": "PASS"
+      }
+    ]
+  },
+  "revision_state": "Review2 retained; source freeze lifted for concrete fixes and evidence gaps. Prior986+153 pass describes reviewed candidate only.",
   "schema_version": 1,
-  "status": "UNDER_REVISION; overall checkpoint not accepted"
+  "second_review": {
+    "effort": "high",
+    "elapsed_seconds": 361.08,
+    "measured_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 409369,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 409369,
+      "cache_read_input_tokens": 1463,
+      "inference_geo": "global",
+      "input_tokens": 2,
+      "iterations": [
+        {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 409369,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "cache_creation_input_tokens": 409369,
+          "cache_read_input_tokens": 1463,
+          "input_tokens": 2,
+          "output_tokens": 36383,
+          "type": "message"
+        }
+      ],
+      "output_tokens": 36383,
+      "output_tokens_details": {
+        "thinking_tokens": 30475
+      },
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 0
+      },
+      "service_tier": "standard",
+      "speed": "standard"
+    },
+    "owner_gate_passed": false,
+    "requested_model": "claude-opus-5-5",
+    "resolved_models": [
+      "claude-opus-5-5"
+    ],
+    "review": {
+      "artifact": "implementation",
+      "blocking_findings": [
+        {
+          "evidence": "execution/fetch_ir_documents.py process_ticker: `_download` returning None (404, HTML-not-document, transport failure) increments `failed`. The status becomes 'failed'/'partial' and `_exit_code` returns 1. The baseline always returned status 'done' with exit 0, and the module docstring still says transport failures are 'logged and skipped'. In execution/discover_ir_documents_all.py `_finish_discovery`, `fetch_failed and not ready_work` returns `_fail(...)` before the process block. This happens even when `discovery.processing_pending` or `has_pending_narrative` is true. A single persistent dead or HTML link in the recent manifest window, which is common in crawler manifests, therefore marks the ticker FAILED on every run. It also permanently suppresses deterministic anchor/brief_dirty processing of previously registered documents. That is a regression in progressive research. register_urls likewise returns 0 (exit 1) if any one URL fails.",
+          "smallest_fix": "Report download/no-document failures separately from post-download registration, publication and projection failures (for example a `transport_skipped` count). Keep exit 0 and status non-failed for transport-only skips. In `_finish_discovery`, still run the process stage when pending work exists even if the fetch failed, and report failure separately from processing. Add tests: one dead link alongside existing registrations, and pending narrative work with a failed fetch.",
+          "title": "R2 turns best-effort transport skips into hard failures, and discovery then skips pending narrative processing"
+        },
+        {
+          "evidence": "src/pipeline/managed_ir_sources.py: `_durable_recovery` and `_read_inventory_evidence` compare the stored binding to `_publication_binding(root, db_path)`, which includes `str(_code_root())`. `replay_registered_issuer_document_publications` now runs this replay for every already-registered managed presentation URL on every fetch, manual and discovery run, through `_replay_registered_result` and `_replay_result`. The baseline skipped registered URLs. Two cases trigger the failure: a publication made from a different checkout (for example a codex worktree versus /Applications), or a configured-DB mismatch in `_configured`. Either one raises `publication_record_mismatch` or `configured_database_mismatch`. fetch_ir_documents then records `projection_failed`/`failed`, so the run fails permanently for that ticker. The test for drift only varies `classifier_code_identity` and `_policy`, never the code root.",
+          "smallest_fix": "For read-only historical inspection, validate the record against its own sealed binding plus state root, database and canonical bytes. Do not compare it to the current code root. Surface a binding difference as `requalification_required`. Add a test that publishes under one code root and replays under another.",
+          "title": "Routine historical replay fails closed on code-root binding drift, contradicting 'code drift records requalification, not caller failure'"
+        },
+        {
+          "evidence": "src/sources/discovery_financials.py now admits through `CanonicalFinancialSeriesReader.financial_definition_admission`. That function adds `reviewed_currency_matches(...)` and `_definition_semantics(...)`. The baseline discovery predicate had no reviewed-currency check and compared an explicit semantic_fields set. The implementation note says 'Admission ... remain'. Only one synthetic WIX fixture (21 references) shows equality. No evidence covers legacy-financial-slice issuers, whose mappings may lack a `source_currency` constraint. Such issuers could now silently become `unresolved`, degrading growth screens.",
+          "smallest_fix": "Either show that `_definition_semantics` equals the prior field set and that every legacy-slice mapping carries `source_currency`, with a paired test on a legacy-namespace fixture, or keep the currency check report-only via a parameter. Disclose the change explicitly if it is intended.",
+          "title": "R6 silently tightens discovery admission"
+        }
+      ],
+      "criteria": {
+        "correctness_preservation": 17,
+        "goal_fit_simplicity": 21,
+        "performance_setup_plan": 14,
+        "scope_acceptance": 14
+      },
+      "limitations": [
+        "No tools were available. No test, harness, timing, HTML hash, static check or ratchet result was reproduced; all quoted results are taken as reported evidence.",
+        "Several dependency bodies were not supplied: `reviewed_currency_matches`, `_definition_semantics`, `categorize_ir_uploads.process_ir_document`, `db_path_context`/llm_client DB access, `has_pending_narrative`, and the later quarterly-refresh stage writers. Findings that depend on them are framed as evidence gaps.",
+        "All evidence is synthetic. NU/MELI/Q&A/portfolio semantic acceptance, browser interaction and canonical-host verification were not available. The full suite did not pass; it was interrupted in teardown.",
+        "Global dynamic reachability remains HOLD (188 production unknown edges). No whole-repository caller analysis was possible.",
+        "This is an ad hoc implementation checkpoint score only. It does not authorize push, merge, deployment, collection or other live action."
+      ],
+      "required_changes": [
+        "Separate transport-only download skips from registration, publication and projection failures in fetch status and exit code. Let discovery run pending processing even when the fetch failed.",
+        "Remove current-code-root (and non-essential configured-path) equality from read-only historical replay. Report binding drift as requalification and test cross-checkout replay.",
+        "Show equivalence of discovery admission under `financial_definition_admission` on a legacy-namespace fixture, or keep the prior discovery predicate.",
+        "Map stored-value decode failures in discovery (period_end, reference validation) to per-cell unresolved rather than operation abort.",
+        "fmp_batch.extract_documents: require `not conn.in_transaction` on entry, or use per-document SAVEPOINTs, so a rollback cannot discard caller-pending writes.",
+        "Restrict the managed triage gate to the managed family so other families' rejections and low-confidence files reach existing legacy categorizer handling. Evidence a supported route for local uploads previously caught by the removed sweep.",
+        "Add a test showing real llm_client DB and state consumers resolve the explicit database and state root under `process_ir_documents`.",
+        "Restore a size bound, or document the per-operation bound, for the verification scope cache.",
+        "Proposed ratchet refresh (+1,047 noncomment LOC; managed publisher 1,725 to 2,316 lines, crossing 2,000): the exception is honestly scoped, with unchanged scanner, rules and duplication baseline. But almost all growth sits in R2, which needs revision. Re-measure after the R2 fixes and approve only then, keeping the 2026-10-30 review date."
+      ],
+      "score": 66,
+      "strengths": [
+        "Most consolidations delete real code paths: the state adapter, a duplicate FMP dispatcher and its selection query, the broad categorizer subprocess, the private verifier cache class, scalar rereads and render-time Say/Do analysis. These are not just new abstractions.",
+        "Paired measurements compare complete JSON outputs, including provenance and degraded states, against a coherent baseline closure, and report DCF parity rather than overclaiming.",
+        "Recovery design in the managed publisher (durable record, intent, canonical rows, then finalization) avoids re-download, reclassification and duplicate insertion.",
+        "Spreadsheet handoff preserves winner provenance with exact cell locators while keeping numeric equivalence.",
+        "Limits are disclosed explicitly: an unpassed full suite, synthetic-only evidence, R4 not implemented, global reachability HOLD, and no live actions. Static ceilings were tightened."
+      ],
+      "units": [
+        {
+          "findings": [
+            "Genuine retirement: two dispatch tables, two selection queries and `_safe_extract` collapse into src/pipeline/fmp_batch.py, and both real callers use it. Income-first ordering now also applies to the CLI, a correctness gain over the baseline alphabetical order.",
+            "Parse failures are now FAILED rather than valid zero. Pending writes are rolled back before `record_stage` commits, which fixes a latent baseline CLI bug where partial writes were committed by receipt accounting.",
+            "`extract_documents` calls `conn.commit()`/`conn.rollback()` on a caller-owned shared connection without a clean-connection precondition. A parse-failure rollback can discard unrelated pending caller writes, for example from a prior ticker's later stages in `refresh_portfolio`. The pipeline source closure itself disclaims isolation.",
+            "The 139-line duplicate test schema was replaced by migrated_db. The changed `stored_identity_not_found` assertion follows legitimately from the real schema."
+          ],
+          "scope": "Shared actual FMP batch owner used by extract_facts CLI and quarterly refresh",
+          "score": 86,
+          "unit": "R1",
+          "verdict": "REVISE"
+        },
+        {
+          "findings": [
+            "Strong points: one download per URL. `owner_requested` and `calendar_override` are sealed in the request with legacy-byte-preserving serialization and propagate to `_policy` and to both validations. Committed-but-unfinalized recovery reads the durable record and intent, checks `_canonical_rows`, and finalizes without download, classification or reinsertion. Same-quarter aliases and foreign MANUAL_DROP/USER_INTAKE aliases are preserved on replay. Whole-index corruption is held byte-for-byte. Legacy work is limited to the exact downloaded files. The runtime registry is scoped and restored.",
+            "Blocking: transport-only failures now produce exit 1 and discovery FAILED, and pending processing is suppressed (see blocking_findings).",
+            "Blocking: every-run historical replay fails on code-root or configured-DB binding drift (see blocking_findings).",
+            "Scope creep: for calendar-year issuers every family now passes the managed triage gate in `prepare_issuer_document_candidate`. CategorizationFailure, ticker mismatch or low confidence fail in managed staging before reaching the legacy categorizer's handling. Legacy families therefore do not fully 'retain supported routes'. Legacy files are also classified twice and leave a retained staging copy.",
+            "Removing the broad `--source-dir ir_documents` sweep may strand local uploads that relied on fetch's incidental sweep. No evidence shows a scheduled route that covers them.",
+            "The in-process `_run_categorize` catches only OSError, ValueError, ImmutableArtifactConflictError, SecureFileInstallError and sqlite3.Error. Other exceptions abort process_ticker without summary JSON. `IR_PROJECT_ROOT` is no longer set, and only some `process_ir_document` index calls received `document_index_path`.",
+            "`_historical_receipt` raises with `committed=True` even on the fresh-publication path. The `replay_registered_*` docstring says 'without writer locks', but incomplete finalization calls the locked publisher.",
+            "Every run now re-hashes the canonical PDFs of all registered managed presentations. This runtime cost is unmeasured."
+          ],
+          "scope": "Calendar-year PDF ir_presentation managed registration, automatic and manual callers, explicit recovery outcomes",
+          "score": 66,
+          "unit": "R2",
+          "verdict": "REVISE"
+        },
+        {
+          "findings": [
+            "Real deletion: all three callers (discover, onboard, refresh_dispatch) invoke the real CLI with explicit --repo-root/--db. Module-global, path and sys.argv rebinding are gone. Cache, index, event and regenerate-missing selectors are tested against an explicit state root, including `--all` and dry-run behavior.",
+            "The prior adapter called `db.set_db_path(db, state_root=state_root)` process-wide. The replacement scopes only `db_path_context(db_path)` around anchor and LLM calls, and drops the state_root binding. The tests stub `generate_*`/`load_*` and check only `resolve_db_path(None)`. Nothing shows that real llm_client internals (usage/budget/cache) resolve through the context rather than `db.DB_PATH` or a state-root binding.",
+            "Legacy completion flags and cache existence remain completion authority, as scoped."
+          ],
+          "scope": "Explicit-state adapter retirement only (process_ir_documents_state.py deleted; completion authority not migrated)",
+          "score": 88,
+          "unit": "R3-adapter",
+          "verdict": "REVISE"
+        },
+        {
+          "findings": [
+            "Traced: the numeric projection matches the old parser, including duplicate-period column overwrite, later same-name config overwrite only on non-empty series, `max_quarters` window, bool exclusion, rejected-row fallback with no series, and configured-name order. `parse_spreadsheet` is now a projection.",
+            "Winning-record provenance: the winner cell's locator, header, raw label, scale and raw value reach the writer through `selected_series`. Bytes and config are re-hashed before writes. Run-dedupe identity matches the numeric path (the test asserts suppression).",
+            "The only semantic delta is the `metric_name_as_reported` raw-label enrichment. Lane, status, basis and period are unchanged and use the same `unclassified_kpi_context` factory. Unsupported cells are explicit skips.",
+            "Synthetic cost: about +3% parse time. Durable rejected-cell capture is correctly not claimed."
+          ],
+          "scope": "Source-preserving spreadsheet parser to existing KPI writer handoff (native writer not retired)",
+          "score": 92,
+          "unit": "R5-handoff",
+          "verdict": "ACCEPT"
+        },
+        {
+          "findings": [
+            "Real retirement: `_BatchFactReadModel`, the duplicated batch savepoint guard and the scalar bundle rereads are gone. Paired synthetic output equality was reported with large select and verifier reductions; DCF shows parity.",
+            "Snapshot ownership: traced `publication_verification_scope`. Nested same-connection reuse holds. Commit+rebegin is detected at RELEASE, and the scope neither rolls back a replaced transaction nor drops the replacement write. A transaction the scope did not create is never rolled back. Row factory is restored.",
+            "Clocks: selection uses K/O, while bundle admission and lineage use K. The three production strict callers omit O. The scalar `as_known` now also admits at K. Report reason codes shift slightly for O>K derived cells (`derived_operand_selection_changed` maps to `canonical_resolution_unavailable`).",
+            "Blocking: undisclosed discovery admission tightening (see blocking_findings).",
+            "Discovery and report no longer swallow ValueError/RuntimeError. Stored-value decode outside the typed boundaries, such as `date.fromisoformat(str(period_end)[:10])` and `GrowthFactReference.model_validate`, now aborts the screen instead of degrading. This misclassifies malformed stored cells as programmer failures.",
+            "Discovery now keeps corrupt cells local instead of failing the whole history. That is an intended policy change for tamper response, but older corrupt periods outside the 9-quarter window no longer degrade the result.",
+            "The scope cache lost its 4096-entry bound, so it is bounded only by operation lifetime. Cached `PublicationVerificationError` instances are re-raised repeatedly, which grows their traceback."
+          ],
+          "scope": "Canonical ordered financial reads and one bounded recursive publication-verification cache",
+          "score": 81,
+          "unit": "R6",
+          "verdict": "REVISE"
+        },
+        {
+          "findings": [
+            "Real retirement: parse, filter, cache, anchor and verdict reads moved out of workspace_data and the renderer. The renderer consumes prepared rows and indices only, and the purity test forbids parser, filter, cache, DB and file IO.",
+            "Preservation: all parsed rows are retained and selection is stored as indices into the full population. The cache key, store and invalidation are unchanged. Non-strict valid-subset and no-valid-id caching match the baseline. Strict dirty refresh validates before writing and fails on no parsable rows. Ordinary forced builds reuse the cache (one filter call across two builds).",
+            "Verdict availability mapping (missing table or read error means unavailable, empty result means empty) matches the baseline source.",
+            "Anchor-composition failure now falls back instead of crashing render. `llm_filtered` now reflects the actual model/cache disposition, so fallback-case HTML differs from the baseline. That is truthful, but not covered by the non-LLM golden."
+          ],
+          "scope": "Prepared Say/Do section only (generated Markdown and other panel DB reads retained)",
+          "score": 93,
+          "unit": "R7-SayDo",
+          "verdict": "ACCEPT"
+        }
+      ],
+      "verdict": "REVISE"
+    },
+    "transport": "claude_membership"
+  },
+  "static_count_clarification": "Old2012/1835 values are previous configured ceilings, not a paired prechange measurement of actual diagnostics/suppressions. Revised measured1826/1811 values tighten those ceilings.",
+  "status": "UNDER_REVISION; second review66 REVISE; owner gate not passed"
 }

@@ -13,13 +13,18 @@ Returns ``{kpi_name: {period_end: value}}`` with `scale` already applied.
 from __future__ import annotations
 
 import datetime as _dt
-from dataclasses import dataclass, field
+import hashlib
+from dataclasses import asdict, dataclass, field, replace
+from io import BytesIO
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import openpyxl
+from openpyxl.utils import get_column_letter
 
-from ir_pipeline.config import IrConfig
+from ir_pipeline.config import IrConfig, SheetKpi
+from models.facts import FactLocator, LocatorKind, SpreadsheetCellRef
+from pipeline.invocation_fingerprint import payload_sha256
 
 _HEADER_SCAN_ROWS = 14
 
@@ -117,49 +122,215 @@ def _find_data_row(
     return best_idx
 
 
+SpreadsheetValue = str | int | float | _dt.datetime | _dt.date | _dt.time | _dt.timedelta | None
+
+
+SpreadsheetCellDisposition = Literal[
+    "selected",
+    "nonnumeric",
+    "unsupported_value",
+    "unknown_period",
+    "outside_window",
+    "overwritten_period",
+    "overwritten_configured_name",
+    "sheet_missing",
+    "header_missing",
+    "row_missing",
+]
+
+
+@dataclass(frozen=True)
+class SpreadsheetCellRead:
+    """One configured source selection or skip, without semantic admission."""
+
+    spec: SheetKpi
+    raw_label: str | None
+    locator: FactLocator | None
+    header: SpreadsheetCellRef | None
+    period_end: _dt.datetime | None
+    raw_value: SpreadsheetValue
+    scaled_value: float | None
+    disposition: SpreadsheetCellDisposition
+    representation: Literal["openpyxl_data_only", "unavailable_openpyxl_type"] = (
+        "openpyxl_data_only"
+    )
+
+
+@dataclass(frozen=True)
+class SpreadsheetParseResult:
+    """Bounded configured-row capture; this is not workbook completeness."""
+
+    workbook_sha256: str
+    workbook_bytes_size: int
+    config_sha256: str
+    max_quarters: int
+    cells: tuple[SpreadsheetCellRead, ...]
+    configured_name_order: tuple[str, ...]
+    parser_name: Literal["ir_pipeline.spreadsheet"] = "ir_pipeline.spreadsheet"
+    parser_version: Literal["source-handoff.v1"] = "source-handoff.v1"
+
+    def selected_series(self) -> dict[str, dict[_dt.datetime, SpreadsheetCellRead]]:
+        series: dict[str, dict[_dt.datetime, SpreadsheetCellRead]] = {
+            name: {} for name in self.configured_name_order
+        }
+        for cell in self.cells:
+            if cell.disposition == "selected" and cell.period_end is not None:
+                series[cell.spec.kpi_name][cell.period_end] = cell
+        return {
+            name: {period: values[period] for period in sorted(values)}
+            for name, values in series.items()
+        }
+
+    def numeric_projection(self) -> dict[str, dict[_dt.datetime, float]]:
+        return {
+            name: {
+                period: cell.scaled_value
+                for period, cell in series.items()
+                if cell.scaled_value is not None
+            }
+            for name, series in self.selected_series().items()
+        }
+
+
+def parse_spreadsheet_source(
+    path: Path, config: IrConfig, max_quarters: int = 8
+) -> SpreadsheetParseResult:
+    """Carry the exact parsed bytes and openpyxl cell context to the writer.
+
+    Values retain the existing float(value) * scale operation. Data-only values
+    are available Python values, not verbatim XML tokens or evaluated formulas.
+    """
+    raw = path.read_bytes()
+    wb = openpyxl.load_workbook(BytesIO(raw), data_only=True, read_only=True)
+    sheet_cache: dict[str, tuple[list[tuple[object, ...]], int, dict[int, _dt.datetime]]] = {}
+    cells: list[SpreadsheetCellRead] = []
+    winners: dict[str, dict[_dt.datetime, int]] = {}
+    try:
+        for spec in config.spreadsheet_kpis:
+            if spec.sheet not in wb.sheetnames:
+                cells.append(
+                    SpreadsheetCellRead(spec, None, None, None, None, None, None, "sheet_missing")
+                )
+                continue
+            if spec.sheet not in sheet_cache:
+                rows = cast(
+                    "list[tuple[object, ...]]",
+                    [tuple(row) for row in wb[spec.sheet].iter_rows(values_only=True)],
+                )
+                header_index, col_map = _header_row(rows)
+                sheet_cache[spec.sheet] = rows, header_index, col_map
+            rows, header_index, col_map = sheet_cache[spec.sheet]
+            if not col_map:
+                cells.append(
+                    SpreadsheetCellRead(spec, None, None, None, None, None, None, "header_missing")
+                )
+                continue
+            date_cols = sorted(col_map)
+            ri = _find_data_row(
+                rows, config.label_col, spec.row_label, date_cols, exact=spec.exact_label
+            )
+            if ri is None:
+                # Retain the first matching rejected row without selecting it.
+                ri = next(
+                    (
+                        index
+                        for index, row in enumerate(rows)
+                        if config.label_col < len(row)
+                        and _label_matches(
+                            row[config.label_col],
+                            spec.row_label.strip().lower(),
+                            exact=spec.exact_label,
+                        )
+                    ),
+                    None,
+                )
+            if ri is None:
+                cells.append(
+                    SpreadsheetCellRead(spec, None, None, None, None, None, None, "row_missing")
+                )
+                continue
+            row = rows[ri]
+            label = row[config.label_col]
+            raw_label = label if isinstance(label, str) else None
+            series: dict[_dt.datetime, int] = {}
+            for ci in range(max(len(row), len(rows[header_index]))):
+                val = row[ci] if ci < len(row) else None
+                supported = val is None or isinstance(
+                    val, (str, int, float, _dt.date, _dt.time, _dt.timedelta)
+                )
+                numeric = isinstance(val, (int, float)) and not isinstance(val, bool)
+                if ci not in col_map and (ci == config.label_col or not numeric):
+                    continue
+                period = col_map.get(ci)
+                scaled = (
+                    float(val) * spec.scale if isinstance(val, (int, float)) and numeric else None
+                )
+                address = f"{get_column_letter(ci + 1)}{ri + 1}"
+                header = SpreadsheetCellRef(
+                    sheet_name=spec.sheet,
+                    cell_address=f"{get_column_letter(ci + 1)}{header_index + 1}",
+                )
+                disposition: SpreadsheetCellDisposition = (
+                    "unsupported_value"
+                    if not supported
+                    else "unknown_period"
+                    if period is None
+                    else "nonnumeric"
+                    if not numeric
+                    else "selected"
+                )
+                index = len(cells)
+                cells.append(
+                    SpreadsheetCellRead(
+                        spec,
+                        raw_label,
+                        FactLocator(
+                            kind=LocatorKind.SPREADSHEET_CELL,
+                            spreadsheet_cell=SpreadsheetCellRef(
+                                sheet_name=spec.sheet, cell_address=address
+                            ),
+                        ),
+                        header,
+                        period,
+                        val
+                        if val is None
+                        or isinstance(val, (str, int, float, _dt.date, _dt.time, _dt.timedelta))
+                        else None,
+                        scaled,
+                        disposition,
+                        "openpyxl_data_only" if supported else "unavailable_openpyxl_type",
+                    )
+                )
+                if period is not None and numeric:
+                    if period in series:
+                        prior = series[period]
+                        cells[prior] = replace(cells[prior], disposition="overwritten_period")
+                    series[period] = index
+            if series:
+                recent = sorted(series)[-max_quarters:]
+                for period, index in series.items():
+                    if period not in recent:
+                        cells[index] = replace(cells[index], disposition="outside_window")
+                for index in winners.get(spec.kpi_name, {}).values():
+                    cells[index] = replace(cells[index], disposition="overwritten_configured_name")
+                winners[spec.kpi_name] = {period: series[period] for period in recent}
+    finally:
+        wb.close()
+    return SpreadsheetParseResult(
+        workbook_sha256=hashlib.sha256(raw).hexdigest(),
+        workbook_bytes_size=len(raw),
+        config_sha256=payload_sha256(asdict(config)),
+        max_quarters=max_quarters,
+        cells=tuple(cells),
+        configured_name_order=tuple(winners),
+    )
+
+
 def parse_spreadsheet(
     path: Path, config: IrConfig, max_quarters: int = 8
 ) -> dict[str, dict[_dt.datetime, float]]:
-    """Parse `path` per `config`; return {kpi_name: {period_end: value}}.
-
-    Only the most-recent `max_quarters` per KPI are returned. KPIs whose sheet
-    or row can't be located are skipped (not an error — sheets evolve).
-    """
-    wb = openpyxl.load_workbook(str(path), data_only=True, read_only=True)
-    # Cache each sheet's rows + header map once.
-    sheet_cache: dict[str, tuple[list[tuple[object, ...]], dict[int, _dt.datetime]]] = {}
-    out: dict[str, dict[_dt.datetime, float]] = {}
-
-    for spec in config.spreadsheet_kpis:
-        if spec.sheet not in wb.sheetnames:
-            continue
-        if spec.sheet not in sheet_cache:
-            rows = cast(
-                "list[tuple[object, ...]]",
-                [tuple(r) for r in wb[spec.sheet].iter_rows(values_only=True)],
-            )
-            _, col_map = _header_row(rows)
-            sheet_cache[spec.sheet] = (rows, col_map)
-        rows, col_map = sheet_cache[spec.sheet]
-        if not col_map:
-            continue
-        date_cols = sorted(col_map)
-        ri = _find_data_row(
-            rows, config.label_col, spec.row_label, date_cols, exact=spec.exact_label
-        )
-        if ri is None:
-            continue
-        row = rows[ri]
-        series: dict[_dt.datetime, float] = {}
-        for ci in date_cols:
-            val = row[ci] if ci < len(row) else None
-            if isinstance(val, (int, float)) and not isinstance(val, bool):
-                series[col_map[ci]] = float(val) * spec.scale
-        if series:
-            recent = sorted(series)[-max_quarters:]
-            out[spec.kpi_name] = {p: series[p] for p in recent}
-    wb.close()
-    return out
+    """Compatibility numeric projection of the source-preserving parse."""
+    return parse_spreadsheet_source(path, config, max_quarters).numeric_projection()
 
 
 def enumerate_numeric_rows(path: Path, label_col: int = 1) -> list[SheetDataRow]:
