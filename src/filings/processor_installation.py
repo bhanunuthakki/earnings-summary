@@ -30,6 +30,7 @@ class FilingXbrlInstallation(BaseModel):
     bundle_manifest: Path
     runtime_root: Path
     sandbox_launcher: Path
+    sandbox_state_root: Path | None = None
 
     @model_validator(mode="after")
     def _absolute_paths(self) -> FilingXbrlInstallation:
@@ -38,6 +39,11 @@ class FilingXbrlInstallation(BaseModel):
                 raise ValueError(
                     "installation paths must be absolute and local on the execution host"
                 )
+        if self.sandbox_state_root is not None and (
+            not self.sandbox_state_root.is_absolute()
+            or str(self.sandbox_state_root).startswith(("//", "\\\\"))
+        ):
+            raise ValueError("sandbox state root must be absolute and local")
         return self
 
 
@@ -56,10 +62,17 @@ def resolve_processor_installation(
     runtime_root: Path | None = None,
     sandbox_launcher: Path | None = None,
     bundle_python: Path | None = None,
+    sandbox_state_root: Path | None = None,
 ) -> ResolvedFilingXbrlInstallation:
     """Resolve explicit paths or one configured descriptor, then verify all sealed bytes."""
 
     direct = (bundle_manifest, runtime_root, sandbox_launcher)
+    if sandbox_state_root is not None and (
+        installation_path is not None or not all(path is not None for path in direct)
+    ):
+        raise InlineXbrlProcessorError(
+            "sandbox state authority must come from the descriptor or all explicit paths"
+        )
     if any(path is not None for path in direct):
         if installation_path is not None or not all(path is not None for path in direct):
             raise InlineXbrlProcessorError(
@@ -72,6 +85,7 @@ def resolve_processor_installation(
                 "bundle_manifest": bundle_manifest,
                 "runtime_root": runtime_root,
                 "sandbox_launcher": sandbox_launcher,
+                "sandbox_state_root": sandbox_state_root,
             }
         )
     else:
@@ -108,11 +122,19 @@ def resolve_processor_installation(
                 reason_code="installation_descriptor_invalid",
             )
         installation = FilingXbrlInstallation.model_validate_json(body)
+    if installation_path is not None and sandbox_state_root is not None:
+        raise InlineXbrlProcessorError("sandbox state authority must come from the descriptor")
     approved = load_approved_processor_bundle_manifest(installation.bundle_manifest)
+    if (
+        approved.manifest.execution.launcher_kind == "python_source"
+        and installation.sandbox_state_root is None
+    ):
+        raise InlineXbrlProcessorError("source launcher requires an explicit sandbox state root")
     python = verify_processor_installation(
         approved,
         runtime_root=installation.runtime_root,
         sandbox_launcher=installation.sandbox_launcher,
         bundle_python=bundle_python,
+        sandbox_state_root=installation.sandbox_state_root,
     )
     return ResolvedFilingXbrlInstallation(installation, approved, python)

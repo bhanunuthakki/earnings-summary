@@ -1329,7 +1329,48 @@ stable `EarningsSummaryFilingXbrlV2` profile and its V2 mutex. The mutex uses th
 protected permissions allow only LocalSystem and built-in Administrators. The
 launcher checks the effective owner and exact grants before it changes any
 profile or directory. Other operators fail closed. It preserves the existing V1
-profile. The stdout protocol remains unchanged. Native qualification must bind the exact compiled launcher before bundle approval or installation.
+profile. The stdout protocol remains unchanged.
+
+The source launcher uses the verified bundle Python with `-I -S -B`. Its
+`python_source` manifest mode binds both the Python entrypoint and the shared
+`runtime.windows_appcontainer` source in the complete runtime member set. The
+builder accepts `--launcher-kind python_source`; it checks both copied sources
+against the reviewed repository files before sealing. There is no automatic
+fallback from an executable to source. Existing executable manifests retain
+their own identity and approval requirements.
+
+Source execution does not disable Smart App Control, load a blocked assembly,
+add a certificate, or add a network capability. It keeps the private desktop,
+protected mutex, exact permission grants, suspended child ownership and full
+child-tree cleanup requirements. The launcher runs in a dedicated subprocess;
+it does not change the dashboard process's window station. Fresh native
+qualification must bind the exact interpreter, source closure and runtime
+before bundle approval or installation. Source mode is an implementation
+change, not proof of host compatibility or an installed-runtime approval.
+
+Source installations also name one explicit `sandbox_state_root`. All approved
+V2 versions share this protected operational authority. It is outside the sealed
+runtime and input trees. The controller creates an exclusive pending invocation
+record before launch. An existing record refuses another invocation. Changing
+an installation descriptor cannot authorize a different recovery authority or
+clear a pending record.
+
+The controller owns a separate Job for the launcher and its descendants. It
+starts the launcher suspended and assigns the Job before resume. Timeout or
+output overflow requests cancellation first and leaves a bounded cleanup period.
+The parser receives neither the cancellation handle nor the separate cleanup
+acknowledgement pipe. Parser stdout is never cleanup proof. The controller clears
+the pending record only after trusted acknowledgement, launcher exit, zero active
+Job processes, exact permission parity and byte verification. Forced termination
+or unproved cleanup leaves a recovery hold. If descendant stop is unproved, the
+controller also retains its write fences and owned resources. Process exit can
+close handles; it does not clear the durable recovery requirement.
+
+Use the existing descriptor for normal operation. Direct qualification calls
+must name `--sandbox-state-root` explicitly. Recovery requires the exact retained
+invocation identity, stopped-process proof, permission and byte reconciliation,
+and independent review before clearing a hold. No automatic retry or stale-grant
+removal is supported by the source launcher.
 
 The bridge gives the SEC renderer a fresh `MPLCONFIGDIR` inside its private
 temporary directory. It restores the environment and removes that directory on

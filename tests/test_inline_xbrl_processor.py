@@ -42,6 +42,7 @@ class _TestProcessorRunner(Protocol):
         bundle_python: Path,
         sandbox_launcher: Path,
         environment: Mapping[str, str] | None = None,
+        sandbox_state_root: Path | None = None,
     ) -> processor_module.InlineXbrlProcessorResult: ...
 
 
@@ -1310,3 +1311,175 @@ def test_sandbox_refusal_diagnostic_is_closed() -> None:
 
 # Reuse the real processor fixture in selected retained-run verification tests.
 measured_processor_output_fixture = _measure_output
+
+
+def test_source_launcher_uses_exact_isolated_python_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "state").mkdir()
+    request = _request(tmp_path)
+    manifest, native_launcher, bundle, runtime = _qualified_manifest(tmp_path)
+    launcher = runtime / "earnings_summary_xbrl_launcher.py"
+    launcher.write_bytes(b"sealed source")
+    support = runtime / "earnings_summary_windows_appcontainer.py"
+    support.write_bytes(b"sealed support")
+    members = tuple(
+        sorted(
+            (
+                *manifest.execution.runtime_members,
+                *(
+                    RuntimeArtifactMember(
+                        relative_path=path.name,
+                        blob_sha256=_sha(path.read_bytes()),
+                        byte_size=path.stat().st_size,
+                    )
+                    for path in (launcher, support)
+                ),
+            ),
+            key=lambda item: item.relative_path,
+        )
+    )
+    execution = manifest.execution.model_copy(
+        update={
+            "launcher_kind": "python_source",
+            "sandbox_state_root_sha256": processor_module.sandbox_state_root_sha256(
+                tmp_path / "state"
+            ),
+            "sandbox_launcher_sha256": _sha(launcher.read_bytes()),
+            "runtime_members": members,
+            "runtime_artifact_sha256": runtime_artifact_set_sha256(members),
+        }
+    )
+    manifest = manifest.model_copy(update={"execution": execution})
+    from runtime import windows_appcontainer_supervisor as supervisor_module
+
+    phases: list[str] = []
+
+    class SyntheticSupervisor:
+        stop_proved = True
+
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        def __enter__(self):
+            phases.append("claim")
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+        def run(
+            self, command: tuple[str, ...], payload: bytes, **kwargs: object
+        ) -> tuple[int, bytes, bytes]:
+            phases.append("run")
+            return fake_capped(command, payload, **kwargs)
+
+        def complete(self) -> None:
+            phases.append("complete")
+
+    monkeypatch.setattr(supervisor_module, "SourceLauncherSupervisor", SyntheticSupervisor)
+    from contextlib import contextmanager
+
+    @contextmanager
+    def tree_fence(_paths: object):
+        phases.append("tree-enter")
+        try:
+            yield "synthetic"
+        finally:
+            phases.append("tree-exit")
+
+    @contextmanager
+    def file_fence(_paths: object):
+        phases.append("file-enter")
+        try:
+            yield "synthetic"
+        finally:
+            phases.append("file-exit")
+
+    monkeypatch.setattr(processor_module, "_tree_write_denial_fence", tree_fence)
+    monkeypatch.setattr(processor_module, "_write_denial_fence", file_fence)
+    observed: list[tuple[str, ...]] = []
+
+    def fake_capped(
+        command: tuple[str, ...], _payload: bytes, **_kwargs: object
+    ) -> tuple[int, bytes, bytes]:
+        observed.append(command)
+        return 0, _canonical(_fact_output(request, execution.runtime_artifact_sha256)).encode(), b""
+
+    monkeypatch.setattr(processor_module, "run_capped_process", fake_capped)
+    with pytest.raises(InlineXbrlProcessorError, match="outside its runtime lock"):
+        _run_inline_xbrl_processor_for_test(
+            request,
+            manifest=manifest,
+            runtime_root=runtime,
+            bundle_python=bundle,
+            sandbox_launcher=native_launcher,
+            sandbox_state_root=tmp_path / "state",
+        )
+    assert not observed
+    _run_inline_xbrl_processor_for_test(
+        request,
+        manifest=manifest,
+        runtime_root=runtime,
+        bundle_python=bundle,
+        sandbox_launcher=launcher,
+        sandbox_state_root=tmp_path / "state",
+    )
+    assert observed[0][:6] == (str(bundle), "-I", "-S", "-B", str(launcher), "--contract")
+
+    assert phases == [
+        "claim",
+        "tree-enter",
+        "file-enter",
+        "run",
+        "file-exit",
+        "tree-exit",
+        "complete",
+    ]
+
+
+def test_legacy_native_manifest_canonical_has_no_new_optional_fields() -> None:
+    manifest = load_processor_bundle_manifest(ROOT / "config" / "filing_xbrl_processor_bundle.json")
+    if manifest.execution.launcher_kind is None:
+        assert '"launcher_kind"' not in manifest.canonical_json
+        assert '"support_source_sha256"' not in manifest.canonical_json
+
+
+@pytest.mark.parametrize("timeout", [901, 3600, 3601])
+def test_source_manifest_timeout_matches_native_bound(tmp_path: Path, timeout: int) -> None:
+    manifest, _launcher, _bundle, _runtime = _qualified_manifest(tmp_path)
+    source_sha, support_sha = "a" * 64, "b" * 64
+    payload = manifest.model_dump(mode="json", exclude_none=True)
+    payload["bridge_protocol_version"] = "filing-xbrl-bridge.v1"
+    payload["build_provenance"].pop("unit_source_sha256", None)
+    payload["build_provenance"].update(
+        launcher_source_sha256=source_sha, support_source_sha256=support_sha
+    )
+    execution = payload["execution"]
+    execution.update(
+        launcher_kind="python_source",
+        sandbox_state_root_sha256="c" * 64,
+        sandbox_launcher_sha256=source_sha,
+        timeout_seconds=timeout,
+    )
+    execution["runtime_members"] = sorted(
+        [
+            *execution["runtime_members"],
+            {
+                "relative_path": "earnings_summary_xbrl_launcher.py",
+                "blob_sha256": source_sha,
+                "byte_size": 1,
+            },
+            {
+                "relative_path": "earnings_summary_windows_appcontainer.py",
+                "blob_sha256": support_sha,
+                "byte_size": 1,
+            },
+        ],
+        key=lambda item: item["relative_path"],
+    )
+    if timeout > 3600:
+        with pytest.raises(ValueError):
+            ProcessorBundleManifest.model_validate(payload)
+    else:
+        assert ProcessorBundleManifest.model_validate(payload).execution.timeout_seconds == timeout

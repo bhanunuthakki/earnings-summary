@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -15,6 +16,7 @@ from filings.inline_xbrl_processor import (
     RuntimeArtifactMember,
     enumerate_closed_local_tree,
     runtime_artifact_set_sha256,
+    sandbox_state_root_sha256,
 )
 from log_redact import redact
 from provenance.immutable_artifact import (
@@ -37,6 +39,8 @@ class FilingXbrlBundleBuildRequest(_FrozenModel):
     runtime_root: Path
     sandbox_launcher: Path
     output: Path
+    launcher_kind: Literal["native_executable", "python_source"] | None = None
+    sandbox_state_root: Path | None = None
 
 
 class FilingXbrlBundleBuildResult(_FrozenModel):
@@ -72,15 +76,28 @@ def build_filing_xbrl_processor_bundle(
     if launcher.stat().st_nlink != 1:
         raise ValueError("bundle sandbox launcher has a hardlink alias")
     manifest = ProcessorBundleManifest.model_validate_json(template_bytes)
+    launcher_kind = request.launcher_kind or manifest.execution.launcher_kind
     bridge_source = PROJECT_ROOT / "execution" / "filing_xbrl_bridge.py"
-    launcher_source = PROJECT_ROOT / "execution" / "filing_xbrl_appcontainer_launcher.cs"
+    launcher_source = (
+        PROJECT_ROOT
+        / "execution"
+        / (
+            "filing_xbrl_appcontainer_launcher.py"
+            if launcher_kind == "python_source"
+            else "filing_xbrl_appcontainer_launcher.cs"
+        )
+    )
+    support_source = PROJECT_ROOT / "src" / "runtime" / "windows_appcontainer.py"
     unit_source = PROJECT_ROOT / "src" / "filings" / "xbrl_units.py"
-    for source in (bridge_source, launcher_source, unit_source):
+    sources = (bridge_source, launcher_source, unit_source)
+    if launcher_kind == "python_source":
+        sources += (support_source,)
+    for source in sources:
         require_no_reparse_points(source)
         if source.stat().st_nlink != 1:
             raise ValueError("bundle reviewed source has a hardlink alias")
     bridge_source_snapshot, bridge_source_bytes = read_stable_artifact(bridge_source)
-    launcher_source_snapshot, _launcher_source_bytes = read_stable_artifact(launcher_source)
+    launcher_source_snapshot, launcher_source_bytes = read_stable_artifact(launcher_source)
     unit_source_snapshot, unit_source_bytes = read_stable_artifact(unit_source)
 
     candidates = enumerate_closed_local_tree(
@@ -152,9 +169,28 @@ def build_filing_xbrl_processor_bundle(
     _, runtime_unit_bytes = read_stable_artifact(runtime_root / "earnings_summary_xbrl_units.py")
     if runtime_unit_bytes != unit_source_bytes:
         raise ValueError("bundle unit bytes differ from the reviewed source")
+    support_sha = None
+    state_sha = None
+    if launcher_kind == "python_source":
+        if request.sandbox_state_root is None:
+            raise ValueError("source launcher build requires explicit sandbox state root")
+        state_sha = sandbox_state_root_sha256(request.sandbox_state_root)
+        if launcher != runtime_root / "earnings_summary_xbrl_launcher.py":
+            raise ValueError("source launcher must be its exact runtime member")
+        if _launcher_bytes != launcher_source_bytes:
+            raise ValueError("bundle launcher bytes differ from the reviewed source")
+        support_snapshot, support_bytes = read_stable_artifact(support_source)
+        _, runtime_support = read_stable_artifact(
+            runtime_root / "earnings_summary_windows_appcontainer.py"
+        )
+        if runtime_support != support_bytes:
+            raise ValueError("bundle support bytes differ from the reviewed source")
+        support_sha = support_snapshot.file_sha256
     runtime_sha = runtime_artifact_set_sha256(members_tuple)
     execution = manifest.execution.model_copy(
         update={
+            "launcher_kind": launcher_kind,
+            "sandbox_state_root_sha256": state_sha,
             "bundle_python_sha256": python_members[0].blob_sha256,
             "runtime_members": members_tuple,
             "runtime_artifact_sha256": runtime_sha,
@@ -166,6 +202,7 @@ def build_filing_xbrl_processor_bundle(
             "bridge_source_sha256": bridge_source_snapshot.file_sha256,
             "launcher_source_sha256": launcher_source_snapshot.file_sha256,
             "unit_source_sha256": unit_source_snapshot.file_sha256,
+            "support_source_sha256": support_sha,
         }
     )
     sealed = ProcessorBundleManifest.model_validate(
@@ -208,6 +245,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--runtime-root", type=Path, required=True)
     parser.add_argument("--sandbox-launcher", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--launcher-kind", choices=("native_executable", "python_source"))
+    parser.add_argument("--sandbox-state-root", type=Path)
     return parser
 
 
@@ -220,6 +259,8 @@ def main(argv: list[str] | None = None) -> int:
                 runtime_root=args.runtime_root,
                 sandbox_launcher=args.sandbox_launcher,
                 output=args.output,
+                launcher_kind=args.launcher_kind,
+                sandbox_state_root=args.sandbox_state_root,
             )
         )
     except (OSError, ValueError, RuntimeError) as exc:

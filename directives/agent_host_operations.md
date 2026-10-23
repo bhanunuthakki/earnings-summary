@@ -100,10 +100,25 @@ permission to delete an existing profile or unrelated temporary files.
    parity. Keep processing on hold if any proof is missing. Never delete V1 or
    reset an existing V2 profile as incidental recovery.
 
-The existing application caller enforces the manifest's 600-second deadline and
-output caps through `run_capped_process`. Its Windows Job owns the launcher tree.
-The launcher stops its nested child Job before private UI cleanup. Direct
-unbounded launcher invocation is not an approved operational entrypoint.
+The source-mode application caller uses `SourceLauncherSupervisor` for the
+manifest deadline, bounded input/output, cooperative cancellation and an outer
+Windows Job. It assigns the suspended launcher before resume. The launcher stops
+its nested child Job before private UI cleanup. A separate control pipe supplies
+trusted cleanup acknowledgement; parser stdout is not proof. The controller
+requires launcher exit, zero active outer Job processes, full permission parity
+and unchanged runtime/input bytes before it clears the pending invocation.
+
+The source installation descriptor must name the canonical protected
+`sandbox_state_root`. All approved V2 releases share it. A pending record blocks
+another run, including after forced termination. Preserve that record and its
+exact invocation evidence for separately reviewed recovery. Unknown stop status
+also retains the current process's write fences and owner resources. Closing the
+process does not authorize removing the durable hold. No alternate state root,
+profile reset or implicit retry may bypass it.
+
+Legacy executable mode retains `run_capped_process`; that runner alone does not
+prove Windows descendant cleanup. It is not the approved replacement source path.
+Direct unbounded launcher invocation is not an operational entrypoint.
 
 ## Abandoned filing-XBRL global mutex
 

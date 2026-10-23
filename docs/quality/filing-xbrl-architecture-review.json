@@ -1,22 +1,22 @@
 {
-  "scope": "MPL private temporary configuration lifecycle; global mutex is in existing C# launcher",
-  "reason": "Required bounded configuration and identity-checked cleanup for the observed contained Matplotlib failure. No new Python module, abstraction, dependency, provider, or state store.",
+  "scope": "Owner-approved source-only filing launcher through a shared stdlib Windows AppContainer runtime; report ABI declarations reused.",
+  "reason": "Preserve kernel containment while removing the custom unsigned executable. Explicit source mode and complete source/runtime seals; no new provider, dependency, database or service. Independent review and native qualification remain required.",
   "scanner_unchanged": true,
   "measurement": {
     "executable_modules": {
-      "prior": 1472,
-      "current": 1472
+      "prior": 1474,
+      "current": 1475
     },
     "total_noncomment_loc": {
-      "prior": 563851,
-      "current": 563880
+      "prior": 566310,
+      "current": 565744
     },
     "modules_over_1000_loc": {
-      "prior": 108,
-      "current": 108
+      "prior": 109,
+      "current": 109
     },
     "modules_over_2000_loc": {
-      "prior": 24,
+      "prior": 25,
       "current": 24
     },
     "max_internal_fan_out": {
@@ -32,7 +32,7 @@
       "current": 16
     }
   },
-  "baseline_update": "Complete unchanged-scanner receipt regenerated intentionally for reviewed feature growth. Full checks and Opus activation review remain required.",
-  "integrated_main": "65bda94ddb4be092a9c2122ae0d489cf9b66d2c5",
-  "additional_noncomment_loc": 29
+  "baseline_update": "Complete unchanged-scanner receipt regenerated intentionally for the reviewed source launcher. Full checks and independent GPT-6.1 Sol activation review remain required.",
+  "integrated_main": "c635c7fa3778a50c3ae3e23342e3d79d66958112",
+  "additional_noncomment_loc": -566
 }
