@@ -11,6 +11,7 @@ import pytest
 
 from execution import extract_facts as cli
 from models.runs import StageStatus
+from pipeline import fmp_batch
 
 
 @pytest.mark.parametrize("broken_bookkeeping", [False, True])
@@ -55,7 +56,7 @@ def test_fatal_extraction_preserves_completed_work_and_aborts_pending_work(
     def resolve(*args: object) -> Callable[[sqlite3.Connection, int, Path], int]:
         return extract
 
-    monkeypatch.setattr(cli, "_resolve_extractor", resolve)
+    monkeypatch.setattr(fmp_batch, "_resolve_extractor", resolve)
     monkeypatch.setattr(cli, "_documents_for_extraction", documents)
     monkeypatch.setattr(cli, "_invocation_inputs", fingerprint)
     monkeypatch.setattr(sys, "argv", ["extract-facts", "--ticker", "NU", "--db", str(database)])

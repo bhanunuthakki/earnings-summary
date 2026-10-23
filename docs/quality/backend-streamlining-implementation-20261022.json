@@ -1,0 +1,376 @@
+{
+  "authority": {
+    "deploy": false,
+    "merge": false,
+    "production_mutation": false,
+    "push": false
+  },
+  "base_commit": "c978523d84a4efea07858e7029307dd588d2a841",
+  "first_review": {
+    "effort": "high",
+    "elapsed_seconds": 340.08,
+    "measured_usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 312047,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "cache_creation_input_tokens": 312047,
+      "cache_read_input_tokens": 1463,
+      "inference_geo": "global",
+      "input_tokens": 2,
+      "iterations": [
+        {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 312047,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "cache_creation_input_tokens": 312047,
+          "cache_read_input_tokens": 1463,
+          "input_tokens": 2,
+          "output_tokens": 30073,
+          "type": "message"
+        }
+      ],
+      "output_tokens": 30073,
+      "output_tokens_details": {
+        "thinking_tokens": 23329
+      },
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 0
+      },
+      "service_tier": "standard",
+      "speed": "standard"
+    },
+    "owner_gate_passed": false,
+    "requested_model": "claude-opus-5-5",
+    "resolved_models": [
+      "claude-opus-5-5"
+    ],
+    "review": {
+      "artifact": "implementation",
+      "blocking_findings": [
+        {
+          "evidence": "execution/fetch_ir_documents.py process_ticker records exc.committed counts but never adds the URL to `already`. On the next run the DB row's source_url places the URL in `already`, so only the skip path runs. That path calls src/pipeline/managed_ir_sources.py replay_registered_issuer_document_publications -> _replay_registered_result. _replay_registered_result first reads data/managed_ir_publications/<attempt>/publication_result.json. When _finalize_committed raised publication_committed_partial before the result was written (inventory_state failed or result_state not_started), that file does not exist. read_stable_artifact then raises OSError, which becomes 'registered_publication_result_invalid', and the run reports projection_failed/failed. Every later run repeats this, so the publication stays permanently failed. publish_prepared_issuer_documents can finalize from the durable managed_ir_publications row plus the retained attempt staging receipt, but no caller reaches it once the URL is registered. The existing test (test_missing_committed_result_blocks_projection_repair_without_source_work) deletes the result file after a full success; it does not exercise a real finalize failure.",
+          "smallest_fix": "When the result artifact is absent, have replay_registered_issuer_document_publications load the request from the attempt's staging_receipt.json, verify it against managed_ir_publications.staging_receipt_sha256, and call publish_prepared_issuer_documents to finalize. Add a test that injects a failure in _finalize_committed (inventory and result phases), reruns automatic and manual intake, and asserts finalization, projection, anchor/dirty effects and no new download or classification.",
+          "title": "Committed-but-unfinalized managed publication can never be recovered"
+        },
+        {
+          "evidence": "process_ticker now replays every already-registered URL on every categorize run, not only when the index alias needs repair. The replay goes through publish_prepared_issuer_documents -> _read_completed_receipt, which requires classifier_code_identity() and verifier_code_identity() to equal the sealed values and re-runs _policy at today's date. classifier_code_identity hashes execution/fetch_ir_documents.py and about ten other files; verifier_code_identity hashes managed_ir_sources.py, sqlite_runtime.py, job_runtime.py and others. This candidate itself edits fetch_ir_documents.py and managed_ir_sources.py. After any such edit, every committed managed presentation whose URL remains in a manifest raises staging_code_identity_changed. The skip path then increments projection_failed and failed and `continue`s before ready_existing, which produces: status failed, fetch CLI exit 1, discovery _fail (no anchor when ready_work==0), and register_urls returning 0 with ir_fetch_status 'failed'. All of this happens even though the DB row, canonical file and index alias are correct. The cost also grows quadratically: each URL replays every same-quarter publication. The evidence note treats old-receipt requalification as a deployment obligation, but this candidate makes it a recurring breakage on every code edit.",
+          "smallest_fix": "On the skip path, first check the compatibility alias against the registered documents row using a cheap read. Replay or repair only when the alias is absent or invalid. Report code-identity drift on an already-coherent registration as a distinct non-failing requalification_required outcome, not as projection_failed. Add a test that changes the identity (monkeypatch) after a successful publication and asserts that the CLI, discovery and manual adapters still succeed with no network or classifier work.",
+          "title": "Routine skip path turns code-identity or policy drift into permanent caller failure for coherent registrations"
+        },
+        {
+          "evidence": "src/index_manager.py project_ir_document (newly_published=None) returns False only when the incumbent equals one of the managed candidates. Any other incumbent, including a valid alias for a different document at the same quarter/type key (a later categorizer/user-intake or legacy registration), falls through to register_ir_document with processed=False when there is one candidate. This contradicts the docstring 'repair only an unambiguous missing alias' and the evidence claim that only a missing or invalid entry is repaired. The 'invalid_entry' test covers only an entry missing required fields. Concretely, a routine fetch run can silently replace the owner's later-selected presentation alias and clear its completion flag. That flag is narrative-completion authority that R3 explicitly kept.",
+          "smallest_fix": "Write only when the key is absent or the incumbent lacks the required projection fields or fails its schema. If the incumbent is a well-formed alias for a different document, preserve it and report a non-destructive 'alias_held_by_other_document' outcome. Add a test with a valid foreign incumbent.",
+          "title": "Replay repair overwrites a coherent non-managed alias and resets processed"
+        }
+      ],
+      "criteria": {
+        "correctness_preservation": 15,
+        "goal_fit_simplicity": 21,
+        "performance_setup_plan": 14,
+        "scope_acceptance": 13
+      },
+      "limitations": [
+        "No tools or live state: no test, harness or scan output was reproduced. All results are taken from the supplied logs and summaries.",
+        "Unchanged code needed for some checks was not supplied: the process_ticker preamble and policy filtering, the JobLock exception types, _json_field, file_fingerprint, persist_manifest default semantic context, verify_reviewed_financial_role, the discovery role-check block, refresh_ticker transaction handling, and p3 read() availability semantics. Findings that depend on them are marked unverified.",
+        "Evidence is synthetic fixtures only. The full suite did not pass (teardown interrupted). NU/MELI end-to-end semantic acceptance was not rerun. DCF parity relies on regression tests only. Browser inspection is unverified.",
+        "The global dynamic reachability closure is HOLD (188 production unknown edges); retirement of compatibility paths is proven only by bounded search.",
+        "This review does not authorize push, deployment, migration, new collection or any live action."
+      ],
+      "required_changes": [
+        "Fix the three R2 blockers: recover committed-unfinalized publications from the durable record plus staging receipt; stop replaying coherent registrations on every skip and do not fail callers on identity drift for coherent state; never overwrite a well-formed foreign alias.",
+        "R2: catch and report legacy-categorizer per-file failures as typed outcomes instead of aborting process_ticker after commits. Replace the production assert with explicit validation. Confirm the JobLock contention exception type is handled after commit.",
+        "R6: wrap stored-data parse failures in FactReadModel (clock parsing, Decimal, FactPlaneV2 decode) as FactEvidenceIntegrityError so a corrupt cell stays local. Restore cell-level handling for reviewed-role admission failures (FactAdmissionError). Add tests for a malformed stored clock and a reviewed-role admission failure in both report and discovery.",
+        "R6: document or test the read_as_known strict-adapter clock change (bundle admission O -> K) for every caller passing observed_through.",
+        "R5: add a parity test showing that the typed-path unclassified semantic context equals the writer's default context for the numeric path, or justify the lane change against NU spreadsheet consumers.",
+        "R7: either do not propagate force_refresh into Say/Do selection, or record the spend change explicitly. Restore valid-subset behaviour, or cache-safe handling, for partially invalid ids in non-strict mode.",
+        "Architecture baseline refresh: not acceptable as proposed while the R2 growth carries blockers. After the fixes, either split fetch_ir_documents.py back under 1,000 lines (for example, move managed candidate preparation and projection into src/pipeline) or record an explicit, time-bounded exception. The +876 LOC is otherwise mostly R2/R5 transition cost and is defensible once correct.",
+        "Release obligations remain: a passing full suite (teardown issue resolved), NU/MELI/Q&A/portfolio semantic acceptance, and paired DCF output/latency evidence."
+      ],
+      "score": 63,
+      "strengths": [
+        "Real procedure retirement in R1 (one FMP dispatch owner), R3 (adapter and global rebinding deleted), R6 (batch reader class and scalar rereads removed) and R7 (render-time analysis removed). The broad categorizer subprocess sweep is retired in R2.",
+        "Large, measured, output-equal query and verification reductions on paired synthetic operations, with every full-verifier key unique per operation.",
+        "Careful transaction-ownership handling in publication_verification_scope, including commit-and-rebegin replacement and caller write preservation.",
+        "Fail-closed managed staging with stable-byte reads, sealed owner_requested/calendar propagation and hash-compatible legacy serialization.",
+        "Caller exit/status truth for fetch CLI, discovery and the manual adapter is substantially improved and well tested, including process=False and repair-only model deferral.",
+        "Honest scope and limits reporting. Static ceilings are tightened, and the duplication baseline is unchanged and passing."
+      ],
+      "units": [
+        {
+          "findings": [
+            "This is a real retirement: two dispatch tables, two override maps, _safe_extract and _run_extraction are replaced by src/pipeline/fmp_batch.py. Both real callers use it.",
+            "Parse/value failures now roll back the partial document and count as failed. The old quarterly path silently counted them as valid zero-row documents. sqlite3.Error halts and rolls back.",
+            "The CLI ordering changes from (ticker, doc_type, id) to income-first. This is intentional and correct for the segment reconciliation dependency, but it is a behaviour change in the CLI.",
+            "extract_documents calls conn.rollback() on input failure. In quarterly_refresh this could discard any pending, uncommitted caller writes from earlier stages on the same connection. This is safe only if earlier stages commit; not proven in the supplied evidence.",
+            "Real migrated schema replaces the 139-line duplicate test schema. One oracle string changed (stored_identity_unavailable -> stored_identity_not_found) because the real schema is now used."
+          ],
+          "scope": "Shared FMP batch selection, ordering, dispatch and execution owner for extract_facts CLI and quarterly_refresh",
+          "score": 91,
+          "unit": "R1",
+          "verdict": "ACCEPT"
+        },
+        {
+          "findings": [
+            "Strengths: single download into owned staging, with stable-read before and after classification and a re-read at seal. owner_requested and calendar_override are sealed into the request and re-applied by both validator and publisher, with hash-compatible serialization for legacy requests. The broad categorizer subprocess sweep is replaced by exact-file legacy handoff. The incoming-URL sidecar is not used for managed inputs. Caller status, exit codes and discovery/manual outcomes are much more truthful.",
+            "Blocking: a committed publication whose finalization failed is unrecoverable, because replay requires publication_result.json and the registered URL never re-enters the fresh path.",
+            "Blocking: every run replays every registered managed URL through the code-identity and policy re-check. Any edit to identity-hashed files (this candidate edits two) turns coherent registrations into failed tickers, exit 1 and no anchor. Replay cost is O(urls x same-quarter publications) per run.",
+            "Blocking: project_ir_document overwrites a valid foreign incumbent alias and resets processed=False.",
+            "_run_categorize now runs in-process and re-raises OSError/ValueError/sqlite3.Error. One bad legacy file therefore aborts process_ticker after managed publications have committed, with no summary JSON. The previous subprocess returned a code instead. The IR_PROJECT_ROOT env binding is dropped, and set_runtime_registry mutates global state.",
+            "After a committed publication, _project_managed_presentation catches only (OSError, ValueError). If JobLock contention raises another exception type, it escapes the ticker loop after commit. Not verifiable from the supplied source.",
+            "`assert period is not None` guards production control flow and is stripped under -O.",
+            "Same-quarter multiple presentations: fresh publication overwrites the single legacy alias, which preserves existing behaviour. A missing index with two or more candidates fails every run until manual action. This is intentional fail-closed behaviour, but it has no operator recovery command.",
+            "fetch_ir_documents.py grows 856 -> 1228 noncomment LOC and crosses the 1,000-line ratchet. Most of the +876 aggregate growth is here, and the legacy route is retained alongside the new one."
+          ],
+          "scope": "Calendar-year PDF ir_presentation managed registration via automatic and explicit-URL adapters, explicit recovery outcomes, single index projection owner",
+          "score": 52,
+          "unit": "R2",
+          "verdict": "REVISE"
+        },
+        {
+          "findings": [
+            "The adapter module, its Protocol shims and the global db.set_db_path / index_manager path rebinding are removed. Index, cache and anchor paths are explicit. The database is scoped with db_path_context around model and anchor work only, and the test proves globals and argv are restored.",
+            "Relative local_path now resolves against the state root rather than the CWD. This is correct for split code/state deployments.",
+            "dry-run without --db no longer resolves a database, while an explicit --db is still validated.",
+            "main() still returns 0 regardless of per-document failures. This is unchanged from before, so caller truth relies on stdout parsing as before.",
+            "Completion flags and narrative-cache existence remain authoritative, as scoped."
+          ],
+          "scope": "Delete process_ir_documents_state.py; three callers use the real CLI with explicit --repo-root/--db; no module/path or sys.argv rebinding",
+          "score": 92,
+          "unit": "R3-adapter",
+          "verdict": "ACCEPT"
+        },
+        {
+          "findings": [
+            "Parse logic matches the old function on scale, last-N window, later-column period overwrite, and whole-series overwrite for repeated configured names. parse_spreadsheet is now a projection; one test shows equality on a mixed overwrite fixture.",
+            "Workbook hash, size and config hash are verified before any writes. Replay identity is preserved: the typed and numeric paths produce identical invocation fingerprints, and the test confirms numeric replay is suppressed after typed ingest.",
+            "Winning-record provenance follows the cell through canonical-name merges. Locators are exact worksheet addresses.",
+            "The typed path now attaches unclassified_kpi_context(legacy_unknown/unclassified) to every fact. The numeric path passes None. The evidence does not show that None produced the same semantic context and publication lane in persist_manifest. NU is the primary spreadsheet ticker, and NU semantic acceptance was not rerun.",
+            "An unexpected openpyxl value type now raises TypeError and aborts the whole parse, where the old path skipped the cell. This is low likelihood but is a new failure mode.",
+            "Per-cell dispositions are in memory only; no durable rejected-cell capture, which is consistent with the stated scope.",
+            "Cost: about +3% median parse time and lower traced heap on a synthetic shape. Acceptable."
+          ],
+          "scope": "Source-preserving spreadsheet parse result handed to the existing KPI writer; numeric dict becomes a projection; no writer retirement",
+          "score": 86,
+          "unit": "R5-handoff",
+          "verdict": "REVISE"
+        },
+        {
+          "findings": [
+            "This is a real consolidation: _BatchFactReadModel and duplicate guards are removed, and the discovery and report scalar rereads and duplicated definition-admission blocks are removed. The verifier cache is keyed on normalized (publication, K, O), confined to one snapshot, and nesting-aware.",
+            "Paired synthetic harness: equal JSON output, SELECTs down 62-68%, full verifications down to 1-2. Strong for bounded runtime work.",
+            "Snapshot ownership is correct. An owned BEGIN is rolled back only if the original snapshot survives. A commit-and-rebegin replacement is detected by the RELEASE failure and is not rolled back on the caller's behalf. Writes are detected through total_changes.",
+            "Source admission clock: read_as_known_outcomes now loads bundles at K. The old read_as_known strict adapter used O, while the report and discovery consumers already used K, so their behaviour is preserved. Any other strict-adapter caller passing observed_through>K changes semantics; the evidence covers only DCF via regression tests.",
+            "Typed-failure narrowing is incomplete. Report and discovery now catch only sqlite3.Error at the operation level and treat plain ValueError/RuntimeError as programmer errors. Stored-data malformations not wrapped in typed errors therefore abort the whole operation instead of degrading one cell. Examples: FactReadModel._datetime (datetime.fromisoformat), FactPlaneV2 parsing, and Decimal(numeric_value). report_financials also narrowed verify_reviewed_financial_role handling from (ValueError, RuntimeError, sqlite3.Error) to ValueError. If that function raises FactAdmissionError (a RuntimeError), a normal admission failure would now crash the report. The discovery outer catch lost ValueError/RuntimeError, and its unchanged role-check block was not supplied.",
+            "observation_lineage_current also narrowed its catch, so a plain ValueError from malformed stored clocks now propagates out of lineage verification."
+          ],
+          "scope": "Canonical ordered financial reads for discovery and report consumers; one bounded recursive publication-verification cache per read snapshot",
+          "score": 79,
+          "unit": "R6",
+          "verdict": "REVISE"
+        },
+        {
+          "findings": [
+            "The renderer no longer parses, filters, loads context, touches the cache or reads verdicts. The complete row population and selected indices live on the model. The dirty strict refresh fails on provider error, invalid ids and no rows without writing the cache. HTML is byte-identical and goldens pass in comparison mode.",
+            "build_report now passes force_refresh into the Say/Do selection. The old render-time filter never forced, so forced report builds now re-bill the Say/Do filter for every card. This model-spend change is not mentioned in the evidence.",
+            "Non-strict behaviour change: a model response with any out-of-range id now discards the whole selection, falls back to the first 8 rows, and does not cache. The old path kept the valid subset. Such a card is re-billed on every build.",
+            "Any ReportSpec or SayDoSection rehydrated from a persisted artifact that predates these fields would render no print-vs-guide table, because the renderer no longer parses saydo_md. Whether such a re-render path exists was not shown.",
+            "A missing management_commitments table now maps to 'unavailable' and triggers the degraded banner. Equivalence with the old p3 read() availability is not shown.",
+            "Selection is labelled LLM-filtered only for model/cache dispositions, which is more truthful than before."
+          ],
+          "scope": "Prepared Say/Do section (rows, selection, context, verdicts) consumed by renderer; generated Markdown and other panel DB reads retained",
+          "score": 85,
+          "unit": "R7-SayDo",
+          "verdict": "REVISE"
+        }
+      ],
+      "verdict": "REVISE"
+    },
+    "transport": "claude_membership"
+  },
+  "first_review_code_manifest_sha256": "51d3b4360aa59f2fe02bb8f9cb8c00896e8c79f30ae3a8e9894c76a8f5b4193b",
+  "first_review_prompt_sha256": "44923708eef28881a6aee1c466dd7a4b3f3b843c6a7e84cc0590bb243f1f59ad",
+  "first_review_validation": {
+    "architecture": {
+      "baseline_refresh_status": "proposed pending independent Opus review",
+      "candidate_baseline_sha256": "bfc34d38f36dec110d1dec942aa0ad48393e626baa07e39bad6fad99af3a2d76",
+      "duplicate_baseline_changed": false,
+      "old_baseline_sha256": "d2878d60b3b0d88aa37e5e36f8353f0563a55de12909d4fbbd0aac4c854a8004",
+      "original_comparison": {
+        "architecture": {
+          "baseline_commit": "36735db5c1ff065cc85975d0de1727b27c7afed3",
+          "baseline_source_sha256": "5bfd7adc255f2eb0f3f43eba8ca0b95e2554d8db50398ad75a0eefc0cf1ff8f1",
+          "current_source_sha256": "8d00ab03b945529f9e90c380d230a6f4c96fb28db988e4a0f4dcb63fff2336c0",
+          "regressions": [
+            "total_noncomment_loc increased from 562282 to 563158",
+            "modules_over_1000_loc increased from 107 to 108"
+          ],
+          "scanner_mismatch": false,
+          "schema_version": "architecture-ratchet-v1",
+          "scoped_commit": "c978523d84a4efea07858e7029307dd588d2a841",
+          "status": "FAIL"
+        },
+        "duplicates": {
+          "baseline_commit": "82bf9753dd9218761c9b44a8f47c2d744a31d82d",
+          "exact_totals": {
+            "duplicated_loc": 158,
+            "groups": 4,
+            "participating_functions": 8
+          },
+          "near_miss_totals": {
+            "duplicated_loc": 9753,
+            "groups": 145,
+            "participating_functions": 234
+          },
+          "regressions": [],
+          "scanner_mismatch": false,
+          "schema_version": "duplicate-ratchet-v1",
+          "scoped_commit": "c978523d84a4efea07858e7029307dd588d2a841",
+          "status": "PASS"
+        },
+        "metric_changes": {
+          "modules_over_1000_loc": {
+            "after": 108,
+            "before": 107
+          },
+          "total_noncomment_loc": {
+            "after": 563158,
+            "before": 562282
+          }
+        }
+      },
+      "reason": "source-preserving handoff, explicit policy/outcomes and recovery; no overall code-size cut",
+      "scanner_or_rule_changes": false,
+      "source_sha256": "8d00ab03b945529f9e90c380d230a6f4c96fb28db988e4a0f4dcb63fff2336c0",
+      "status_with_proposed_refresh": "PASS"
+    },
+    "authority": {
+      "new_persistent_store": false,
+      "new_source_collection": false,
+      "production_database_access": false,
+      "production_mutation": false,
+      "push_merge_deploy": false,
+      "schema_migration": false,
+      "test_listeners_started": 0
+    },
+    "base_commit": "c978523d84a4efea07858e7029307dd588d2a841",
+    "branch": "codex/research-procedure-cleanup",
+    "changed_python_files": {
+      "format": "PASS",
+      "lint": "PASS",
+      "prohibited_suppressions": 0,
+      "retained": 72,
+      "strict_pyright_errors": 0
+    },
+    "oracle_corrections": [
+      {
+        "after": "source fix preserves replacement transaction and pending replacement write; guard still rejects invalid snapshot",
+        "before": "two reproduced failures: replacement caller transaction was rolled back",
+        "test": "test_batch_rejects_commit_and_rebegin_that_replaces_its_snapshot"
+      },
+      {
+        "after": "spy underlying full verifier; exactly1 normalizedpublication/K/Okey, completebatch, completeactuals, serialoutputequality; final29DCFtests and153transitivechecks pass",
+        "before": "old wrapper spy observed224 cache adapter calls after internal cache moved",
+        "test": "test_statement_reader_uses_one_sealed_provenance_batch"
+      }
+    ],
+    "other_checks": {
+      "design_sync": "PASS",
+      "diff_whitespace": "PASS",
+      "reconstruction_inventory": "PASS all11subsystems",
+      "workspace_goldens": "PASS comparison mode; no regeneration"
+    },
+    "proof_artifacts": {
+      ".tmp/compare_reader_reuse.py": "aec0befb5a948f91c7a7ca164c2e4e6e16824ac7f29d18f12ad7522c004ccd7d",
+      ".tmp/reader-batch-comparison.json": "84d1216f9627430689452b5dde051e2ee95c68d98950c2fd9d43d63e8510b514",
+      ".tmp/reader-batch-outputs.json": "d1152e5763c2aa432e309e936ffe8f7eaefaaf5a2c6cdd704092b24599b9cced",
+      ".tmp/saydo-mvp/comparison.json": "5795e858f983ca973fecf62fd7b892f30049875a64f5e9e534fd07a0c6e946a9",
+      ".tmp/spreadsheet-handoff-cost.json": "4aef27efff9328fa0b3e7eaacf4117e1b7a6d05dc4a041fba9f5d3f6f476c2fe",
+      ".tmp/streamlining-check-fast.log": "f089fde35e02f442065d5c6a0e85d0a48df402464748c5e0fe5e2476fd515d98",
+      ".tmp/streamlining-static-ratchet-confirmed.log": "94fa37aa7a62025bc404cc7be688d9916249ede226aefee37bf445b5600b22fa",
+      ".tmp/streamlining-transitive-tests-final.log": "e848bafeb5da3f9da21f4bd8d5addbf5dd07bba6fd432e1bd3f29f3b2fb052ad"
+    },
+    "reachability": {
+      "closure_reasons": [
+        "3 disposition diagnostics require review",
+        "188 production unknown edges require review"
+      ],
+      "closure_status": "HOLD",
+      "collection_status": "COMPLETE",
+      "source_manifest_sha256": "f2e36f4dfd48a6041a813722c5996cb22191343545a1f8e9fc99c4946f2b29ab",
+      "stats": {
+        "diagnostics": 3,
+        "edges": 38655,
+        "files": 3519,
+        "production_unknown": 188,
+        "production_unresolved": 0,
+        "unknown": 364
+      }
+    },
+    "retained_limits": [
+      "R2 calendar-year PDF presentations only",
+      "R3 completion flags/cache authority not migrated",
+      "R4 held original/brief pair not established locally; no new collection",
+      "R5 no native writer retirement or durable rejected-cell capture",
+      "R7 current/generated Markdown remains; other panels still read DB",
+      "full release suite not passed: prior full-run teardown interrupted in existing retention path",
+      "browser localfile URL rejected; no alternative route attempted",
+      "NU/MELI full semantic acceptance not rerun",
+      "old verifier-code receipt requalification not performed",
+      "global dynamic reachability closure remains HOLD",
+      "concurrent original-checkout changes not integrated"
+    ],
+    "review_state": "exact ClaudeOpus5.5 subscription review pending; no formal frontier qualification claimed",
+    "scope": "first bounded local backend streamlining checkpoint; not full roadmap or release acceptance",
+    "static_ratchet": {
+      "config_change": "ceilings decreased to exact measured counts; no new suppressions",
+      "pyright_after": 1826,
+      "pyright_before": 2012,
+      "retained_files": 2876,
+      "status": "PASS",
+      "suppressions_after": 1811,
+      "suppressions_before": 1835
+    },
+    "test_counts_overlap": true,
+    "test_transport_incident": "An intermediate bootstrap test loaded an alternate fetch module; reserved .test source guard blocked transfer after DNS resolution. Package import was corrected. No provider source body or model call resulted. Final tests use mocked transport.",
+    "tests": [
+      {
+        "command": "make check-fast PYTHON_BIN=/Applications/earnings-summary/.venv/bin/python",
+        "log": ".tmp/streamlining-check-fast.log",
+        "passed": 925,
+        "seconds": 95.64,
+        "serial": true,
+        "status": "PASS",
+        "test_files": 30
+      },
+      {
+        "command": "PYTHONPATH=src:. /Applications/earnings-summary/.venv/bin/python -m pytest -q tests/test_source_fact_repository.py tests/test_dcf_canonical_statements.py tests/test_canonical_financial_evidence.py tests/test_report_evidence_scope.py tests/test_decision_brief_report_scope.py tests/test_allocation_next_dollar_profile.py tests/test_canonical_fact_resolution.py",
+        "log": ".tmp/streamlining-transitive-tests-final.log",
+        "passed": 153,
+        "seconds": 24.08,
+        "serial": true,
+        "status": "PASS"
+      }
+    ]
+  },
+  "r1_local_unit": {
+    "code_and_test_sha256": {
+      "execution/extract_facts.py": "f7aa1174d774dc9558ad0cef361a51ef5e357d58feac6f331f6587f27fb7b255",
+      "src/pipeline/fmp_batch.py": "56c510a128bfea2a04ea3c9a5aa92cea6e4710c0c6dc6f50f1bfcb80916d58a9",
+      "src/pipeline/quarterly_refresh.py": "b5de20d2a2418cdc5855d5c8bcc85b9359cd1d7dab9f3d852c338b58f18bcafc",
+      "tests/test_extract_facts_database_failure.py": "9d3a71a119aca852746bce6a1aea029b8ab31335cee3b7e49375a7e05f054cee",
+      "tests/test_fmp_batch.py": "cd0789bb11021aa39bb7059fe4dd11fd26aada10d8f061ed6755bde72393ed57",
+      "tests/test_pipeline_quarterly_refresh.py": "fe71417f91697e3a19da4c96952b4666a2d0683aa1289b98525e04d904be60ef"
+    },
+    "proof": "58 focused FMP tests and original integrated925tests pass; unit source/tests unchanged since independent review",
+    "score": 91,
+    "status": "accepted and prepared for separate local commit; other units remain in revision",
+    "transaction_audit": "The only stage before FMP that can write is optional SEC ingest; ingest_for_ticker commits at its commit phase and rolls back a started transaction on failure. Segment cache validation is read-only. Supplied-record refresh_cache retains its separate commit=False caller-owned path. No cross-document atomicity claim."
+  },
+  "remaining_work": "Resolve R2/R5/R6/R7 findings, rerun affected and integrated checks, remeasure structure, obtain fresh independent review above90 on every scoped key unit.",
+  "review_kind": "owner-requested independent ad hoc review via exact Claude Opus5.5 subscription; no formal frontier qualification claimed",
+  "schema_version": 1,
+  "status": "UNDER_REVISION; overall checkpoint not accepted"
+}

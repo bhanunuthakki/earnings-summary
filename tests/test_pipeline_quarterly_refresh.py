@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import cast
@@ -23,159 +24,58 @@ from pipeline.quarterly_refresh import (
     refresh_portfolio,
     refresh_ticker,
 )
+from provenance.evidence_backfill import ensure_legacy_document_evidence
 
 
 def _empty_artifact_batch(*_args: object, **_kwargs: object) -> dict[str, object]:
     return {}
 
 
-def _create_schema(conn: sqlite3.Connection) -> None:
-    """Mirror the production schema for the tables refresh_ticker touches."""
-    conn.executescript(
-        """
-        CREATE TABLE documents (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            source_type TEXT NOT NULL,
-            doc_type TEXT NOT NULL,
-            period_start TIMESTAMP,
-            period_end TIMESTAMP,
-            file_path TEXT NOT NULL,
-            sha256 TEXT NOT NULL,
-            fetched_at TIMESTAMP NOT NULL,
-            fetch_status TEXT NOT NULL,
-            raw_bytes_size INTEGER NOT NULL,
-            source_quality_tier TEXT NOT NULL DEFAULT 'fmp_normalized'
-        );
-        CREATE TABLE financial_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end TIMESTAMP NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            line_item TEXT NOT NULL,
-            value NUMERIC(24, 6) NOT NULL,
-            currency TEXT,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL,
-            confidence REAL DEFAULT 1.0
-        );
-        CREATE TABLE segment_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end TIMESTAMP NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            segment_name TEXT NOT NULL,
-            metric TEXT NOT NULL,
-            value NUMERIC(24, 6) NOT NULL,
-            currency TEXT,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL
-        );
-        CREATE TABLE kpi_definitions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            name TEXT NOT NULL,
-            unit TEXT NOT NULL,
-            primary_source TEXT NOT NULL,
-            fallback_source TEXT,
-            ir_url TEXT,
-            threshold_tier TEXT,
-            threshold_low REAL,
-            threshold_high REAL,
-            notes TEXT,
-            UNIQUE(ticker, name)
-        );
-        CREATE TABLE kpi_facts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_end TIMESTAMP NOT NULL,
-            fiscal_period_type TEXT NOT NULL,
-            kpi_definition_id INTEGER NOT NULL,
-            value NUMERIC(24, 6) NOT NULL,
-            unit TEXT NOT NULL,
-            source_doc_id INTEGER NOT NULL
-        );
-        CREATE UNIQUE INDEX uq_kpi_facts_provenance
-        ON kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, source_doc_id);
-        CREATE TABLE kpi_fact_semantic_contexts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            kpi_fact_id INTEGER NOT NULL UNIQUE,
-            metric_name_as_reported TEXT NOT NULL,
-            reported_period_end TEXT,
-            period_role TEXT NOT NULL,
-            publication_lane TEXT NOT NULL,
-            accounting_basis TEXT NOT NULL,
-            consolidation_scope TEXT NOT NULL,
-            dimensions_json TEXT NOT NULL,
-            unit_scale TEXT NOT NULL,
-            source_row_label TEXT,
-            source_column_header TEXT,
-            status TEXT NOT NULL,
-            reason_code TEXT
-        );
-        CREATE TABLE transcripts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            document_id INTEGER NOT NULL,
-            ticker TEXT NOT NULL,
-            call_date TIMESTAMP,
-            fiscal_period_type TEXT,
-            period_end TIMESTAMP,
-            source_url TEXT
-        );
-        CREATE TABLE transcript_segments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            transcript_id INTEGER NOT NULL,
-            seq INTEGER NOT NULL,
-            speaker TEXT,
-            speaker_role TEXT,
-            time_code_start TEXT,
-            time_code_end TEXT,
-            text TEXT NOT NULL
-        );
-        CREATE TABLE management_commitments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            period_made TIMESTAMP NOT NULL,
-            transcript_segment_id INTEGER NOT NULL,
-            period_target TIMESTAMP NOT NULL,
-            kpi_name TEXT NOT NULL,
-            comparator TEXT NOT NULL,
-            target_value NUMERIC(24, 6) NOT NULL,
-            unit TEXT NOT NULL,
-            narrative TEXT NOT NULL,
-            realized_value NUMERIC(24, 6),
-            realized_doc_id INTEGER,
-            outcome TEXT,
-            evaluated_at TIMESTAMP
-        );
-        CREATE TABLE thesis_state (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL UNIQUE,
-            thesis TEXT,
-            last_updated TIMESTAMP,
-            breach_status TEXT,
-            raw_json TEXT NOT NULL,
-            ingested_at TIMESTAMP NOT NULL
-        );
-        CREATE TABLE thesis_evaluations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            evaluated_at TIMESTAMP NOT NULL,
-            overall_status TEXT NOT NULL,
-            rule_evaluations_json TEXT NOT NULL,
-            run_id TEXT
-        );
-        """
+def test_fmp_parse_failure_is_failed_and_rolls_back_partial_document(
+    conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    from pipeline import quarterly_refresh
+
+    source = tmp_path / "income.json"
+    source.write_text(
+        json.dumps(
+            [
+                {"symbol": "TEST", "date": "2024-12-31", "period": "Q4", "revenue": 1000},
+                {"symbol": "TEST", "date": "invalid", "period": "Q4", "revenue": 2},
+            ]
+        )
     )
+    cursor = conn.execute(
+        "INSERT INTO documents (ticker, source_type, doc_type, file_path, sha256, "
+        "fetched_at, fetch_status, raw_bytes_size) "
+        "VALUES ('TEST', 'fmp', 'fmp_income_statement', ?, ?, ?, 'ok', ?)",
+        (
+            str(source),
+            hashlib.sha256(source.read_bytes()).hexdigest(),
+            datetime.now(),
+            source.stat().st_size,
+        ),
+    )
+    assert cursor.lastrowid is not None
+    ensure_legacy_document_evidence(conn, repo_root=tmp_path, document_id=cursor.lastrowid)
     conn.commit()
+
+    stage = cast(Callable[..., StageResult], getattr(quarterly_refresh, "_stage_extract_fmp_facts"))
+    result = stage(conn, ticker="TEST", project_root=tmp_path)
+
+    assert result.status == StageStatus.FAILED
+    assert result.rows_processed == 0
+    assert conn.execute("SELECT COUNT(*) FROM financial_facts").fetchone()[0] == 0
 
 
 @pytest.fixture
-def conn() -> sqlite3.Connection:
-    c = sqlite3.connect(":memory:")
+def conn(tmp_path: Path, migrated_db: Callable[..., Path]) -> Iterator[sqlite3.Connection]:
+    c = sqlite3.connect(migrated_db(tmp_path / "quarterly.sqlite"))
     c.row_factory = sqlite3.Row
-    _create_schema(c)
-    return c
+    try:
+        yield c
+    finally:
+        c.close()
 
 
 def _seed_thesis_state(
@@ -191,19 +91,40 @@ def _seed_thesis_state(
 
 def _seed_quarterly_income(conn: sqlite3.Connection, ticker: str) -> None:
     """Insert one quarterly income statement document + its 4 line items."""
+    root = Path(conn.execute("PRAGMA database_list").fetchone()[2]).parent
+    source = root / f"{ticker}_income_statement_quarterly.json"
+    source.write_text(
+        json.dumps(
+            [
+                {
+                    "symbol": ticker,
+                    "date": "2024-12-31",
+                    "period": "Q4",
+                    "reportedCurrency": "USD",
+                    "revenue": 1000,
+                    "operatingIncome": 200,
+                    "netIncome": 150,
+                    "grossProfit": 500,
+                }
+            ]
+        )
+    )
     cur = conn.execute(
         "INSERT INTO documents (ticker, source_type, doc_type, file_path, "
         "sha256, fetched_at, fetch_status, raw_bytes_size, period_end) "
-        "VALUES (?, 'fmp', 'fmp_income_statement', ?, ?, ?, 'ok', 1, ?)",
+        "VALUES (?, 'fmp', 'fmp_income_statement', ?, ?, ?, 'ok', ?, ?)",
         (
             ticker,
-            f"data/historical/fmp/{ticker}_income_statement_quarterly.json",
-            "a" * 64,
+            str(source),
+            hashlib.sha256(source.read_bytes()).hexdigest(),
             datetime.now(),
+            source.stat().st_size,
             datetime(2024, 12, 31),
         ),
     )
-    doc_id = int(cur.lastrowid) if cur.lastrowid is not None else 0
+    assert cur.lastrowid is not None
+    doc_id = cur.lastrowid
+    ensure_legacy_document_evidence(conn, repo_root=root, document_id=doc_id)
     pe = datetime(2024, 12, 31)
     for line, val in [
         ("revenue", 1000),
@@ -230,7 +151,7 @@ def _seed_ir_pdf(conn: sqlite3.Connection, ticker: str, doc_type: str = "ir_pres
             ticker,
             doc_type,
             f"ir_documents/{ticker}/2024-12-31/x.pdf",
-            "b" * 64,
+            hashlib.sha256(f"{ticker}:{doc_type}".encode()).hexdigest(),
             datetime.now(),
             datetime(2024, 12, 31),
         ),
@@ -414,7 +335,7 @@ def test_refresh_ticker_skips_sec_stage_for_unresolved_identity(
     )
     sec_stage = next(s for s in report.stages if s.name == StageName.FETCH_SEC_XBRL)
     assert sec_stage.status == StageStatus.SKIPPED
-    assert "stored_identity_unavailable" in sec_stage.notes
+    assert "stored_identity_not_found" in sec_stage.notes
 
 
 def test_quarterly_sec_stage_denies_index_member_before_network(
@@ -425,11 +346,7 @@ def test_quarterly_sec_stage_denies_index_member_before_network(
     from pipeline import quarterly_refresh as module
 
     conn.execute(
-        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, "
-        "fiscal_year_end TEXT, archived_at TEXT, instrument_type TEXT)"
-    )
-    conn.execute(
-        "INSERT INTO tracked_companies VALUES ('MELI', 'index_member', '12-31', NULL, 'equity')"
+        "INSERT INTO tracked_companies (name, ticker, list_type, fiscal_year_end, archived_at, instrument_type) VALUES ('MercadoLibre', 'MELI', 'index_member', '12-31', NULL, 'equity')"
     )
 
     def _unexpected_ingest(*_args: object, **_kwargs: object) -> object:
@@ -457,11 +374,7 @@ def test_quarterly_sec_stage_allows_explicit_evaluation(
     from pipeline.sec_xbrl import IngestStats
 
     conn.execute(
-        "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, "
-        "fiscal_year_end TEXT, archived_at TEXT, instrument_type TEXT)"
-    )
-    conn.execute(
-        "INSERT INTO tracked_companies VALUES ('MELI', 'evaluation', '12-31', NULL, 'equity')"
+        "INSERT INTO tracked_companies (name, ticker, list_type, fiscal_year_end, archived_at, instrument_type) VALUES ('MercadoLibre', 'MELI', 'evaluation', '12-31', NULL, 'equity')"
     )
     calls: list[str] = []
 
