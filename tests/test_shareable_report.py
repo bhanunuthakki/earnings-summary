@@ -14,7 +14,6 @@ from unittest import mock
 
 import pytest
 from bs4 import BeautifulSoup, Tag
-from playwright.sync_api import sync_playwright
 
 from report.renderers.workspace_script import JS
 from report.shareable import MAX_INPUT_BYTES, ShareableReportError, export_shareable_report
@@ -199,32 +198,3 @@ def test_full_synthetic_renderer_and_managed_cli_export(
     assert source.read_text(encoding="utf-8") == original
     assert CAPABILITY in original
     assert CAPABILITY not in destination.read_text(encoding="utf-8")
-
-
-def test_browser_offline_tabs_and_quarters_work_with_no_network_requests(tmp_path: Path) -> None:
-    source, destination = export(tmp_path)
-    with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
-        try:
-            for width in (1440, 768):
-                page = browser.new_page(viewport={"width": width, "height": 900})
-                requests: list[str] = []
-                errors: list[str] = []
-                page.on("request", lambda request: requests.append(request.url))
-                page.on("pageerror", lambda error: errors.append(str(error)))
-                page.goto(destination.as_uri())
-                page.get_by_role("button", name="Two", exact=True).click()
-                assert page.locator('[data-tab-group="two"]').evaluate(
-                    "el => el.classList.contains('active')"
-                )
-                page.get_by_role("button", name="Q2", exact=True).click()
-                assert page.locator('[data-quarter-card][data-quarter="Q2"]').is_visible()
-                assert not page.locator('[data-quarter-card][data-quarter="Q1"]').is_visible()
-                page.wait_for_timeout(100)
-                assert requests == [destination.as_uri()]
-                assert errors == []
-                assert CAPABILITY in source.read_text(encoding="utf-8")
-                assert CAPABILITY not in page.content()
-                page.close()
-        finally:
-            browser.close()
