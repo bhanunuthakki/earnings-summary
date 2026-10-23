@@ -1,96 +1,17 @@
-"""The nag governor — governed coach initiation (W2, 2026-07-02 grill decision #1).
+"""Collect governed research findings into the dashboard digest.
 
-The grill rescinded master_build's "pull-only / never initiates": the coach MAY
-speak first, for a set of deterministic moment classes, under a governor
-that operationalizes the owner's own kill bar ("kill it if it reads as
-nagging"):
-
-- ``falsifier_breach`` — a ``decision_condition`` alert fired on a
-  ``decided_by='owner'`` decision: *your own falsifier tripped*. The single
-  highest-value initiation the deep dive found (NU's 15-90d NPL >5% 2Q clause
-  sits at the line).
-- ``retro_annotation`` — an owner decision stub (pledge or retro-net) has sat
-  >24h without its conviction/falsifier: the ledger is accruing unusable
-  history until answered.
-- ``intent_followup`` — a standing ``kind='intent'`` note is still open after
-  a fortnight: "still live?" (re-asked at most once per fortnight via a
-  bucketed key).
-- ``capacity_breach`` (tenet-2 Phase 3) — an AFFIRMED human-capital bucket cap
-  or cash-floor policy fact is currently violated. Collection + its own
-  alerts-table episode keying live in ``research.capacity_moments``.
-- ``life_event_checkpoint`` (tenet-2 Phase 3) — an affirmed dated life event
-  enters its lookahead window; fires once, ever.
-- ``profile_drift`` (tenet-2 Phase 3) — an affirmed fact is past its review
-  horizon, or contradicted by observed state (e.g. stale tax-bucket totals
-  vs. the tracker's live read); a re-affirmation ask, never an accusation.
-- ``tenet_challenge`` (B5, 2026-07-19 program overhaul) — a standing Worldview
-  Tenet's WEEKLY accountability pass (``synthesis.tenet_accountability``, run
-  by ``execution/run_tenet_accountability.py`` off the Sat 09:00 PT cron) has
-  a persisted verdict with at least one VIOLATED owner decision. This
-  collector makes NO LLM call of its own — it only reads the verdict the
-  weekly pass already wrote onto the Tenet's ``insight_notes.meta_json``
-  (key ``"accountability"``) — and raises AT MOST ONE such moment per
-  CURRENT iso-week: the Tenet with the highest ``est_cost_usd`` (ties: most
-  violations), across every current Tenet carrying a violation. See
-  ``_tenet_challenge_moments`` below.
-- ``post_mortem`` (B6, 2026-07-19 program overhaul) — an exit post-mortem the
-  18:00 sweep auto-drafted (``synthesis.exit_postmortem.run_postmortem_drafts``)
-  has landed live on a closed ``position_entries`` row. This class makes NO
-  LLM call of its own — it only reads whether the row's three grading fields
-  are filled AND carry the ``llm_draft`` provenance marker
-  (``synthesis.exit_postmortem.drafted_awaiting_glance``) — and, unlike
-  ``tenet_challenge``, has no extra "once per week" cap of its own: the
-  anti-nag UNIQUE ``class_``+``key`` ledger (``coach_pings``) IS the
-  acknowledgment memory (see ``_post_mortem_moments`` below) — a moment is
-  collected on every governor pass for every drafted-and-unpinged entry, but
-  ``run_governor`` only ever inserts+sends the first time a given key is
-  seen, exactly like every other class here.
-
-Governor rules, all deterministic, ZERO LLM:
-
-- **freshness gate** (the owner's staleness callout): a ping fires only after
-  the underlying item is verified still-open — falsifier still present and
-  ratified, ticker still held, stub still unannotated, intent still open.
-  Can't verify → don't ping (recorded ``skipped_stale``). Extended for
-  tenet-2 Phase 3: ANY ping grounded in an ``owner_profile_facts`` row
-  (``life_event_checkpoint``, ``profile_drift``) also requires that row to
-  still be ``status='affirmed'`` AND still the latest (not superseded) —
-  ``_profile_fact_still_affirmed`` below. A ``capacity_breach`` ping requires
-  its backing alert to still be pending AND the breach condition to still
-  hold right now (``capacity_moments.capacity_breach_still_active``). Same
-  rule either way: can't verify → don't ping.
-- **frequency caps**: ≤ ``DAILY_CAP`` sends/day, ≤ ``WEEKLY_CAP``/week across
-  all classes; overflow lands ``digest`` (surfaced quietly, never pushed).
-  Competing moments contend in ``CLASS_PRIORITY`` order (money-at-risk first).
-- **budget scope (B9 audit)**: the caps govern INITIATIONS only. Exempt by
-  owner ruling (2026-07-19): capture replies (``capture.coach_reply``
-  receipts), adoption announcements (``synthesis.adoption_notify``), and the
-  one-off post-mortem backfill summary — all responses/receipts, not asks.
-  The alert feed's gating (#873-876) is a SEPARATE budget entirely: alerts
-  are market events, coach items are behavioral asks — never pooled.
-- **auto-mute**: ``MUTE_AFTER`` consecutive dismissals of a class mutes it
-  until explicitly cleared — dismissals train the coach; it never argues.
-- one row per moment forever (UNIQUE class+key) — a delivered moment is not
-  re-pushed. ``send_failed`` (a push that failed or was never confirmed) stays
-  eligible, and the next run re-attempts delivery on the same row — an
-  undelivered ping was never a nag. A push is claimed as ``sending`` and
-  becomes ``sent`` only after the push is confirmed; a ``sending`` claim older
-  than ``SEND_LEASE`` (its process died mid-push) is swept to ``send_failed``.
-  Delivery is therefore at-least-once: a crash after Telegram accepted a push
-  but before ``sent`` was written pushes it once more. Every status write is
-  conditional on the row this run claimed, so an acknowledgement committed
-  before the claim cancels the push; one committed after the claim cannot stop
-  a push already in flight.
-
-The Telegram send is injected (``send_fn``) so the core is pure; the dismiss
-button routes back through ``research_notify`` (``cp:dismiss:<id>``).
+Freshness, class priority, mutes, and linked thesis attention govern admission.
+Each class/key is retained once. Historical failed deliveries can enter the
+quiet digest on the same row after all gates pass. Expired historical sending
+leases become retryable; active leases and terminal owner actions stay intact.
+Collectors also maintain the existing capacity alerts. No Telegram or LLM calls
+are made here. The caller holds the notification-delivery job lane.
 """
 
 from __future__ import annotations
 
 import contextlib
 import sqlite3
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -122,19 +43,13 @@ CLASSES: tuple[str, ...] = (
     # drafted-and-unpinged set deterministically. See _post_mortem_moments.
     "post_mortem",
 )
-# B9 (2026-07-19 program overhaul, owner ruling: 1-2 durable items/day total):
-# raised from 1/3 now that B1-B6 classes exist — one slot was starving every
-# class behind falsifier_breach. Overflow still lands digest, never pushed.
-DAILY_CAP = 2
-WEEKLY_CAP = 8
 MUTE_AFTER = 3
-# Telegram sends time out after 60s; a younger ``sending`` row belongs to a live run.
+# Preserve the recovery boundary for historical delivery claims.
 SEND_LEASE = timedelta(minutes=15)
 ANNOTATION_AGE_HOURS = 24
 INTENT_FOLLOWUP_DAYS = 14
 
-# B9: when moments COMPETE for the day's slots, money-at-risk speaks first and
-# coaching speaks last — an explicit total order, not collection order.
+# Keep money-at-risk findings first, with a stable order within each class.
 # life_event_checkpoint sits with the capacity family (a changed circumstance
 # can invalidate sizing today); the plan's published ordering omitted it.
 # Unknown classes sort last (a future class must claim its rank explicitly).
@@ -163,9 +78,7 @@ class Moment:
 
 @dataclass(frozen=True, slots=True)
 class PingRow:
-    """A ``coach_pings`` row, as read back for the ``cp:review`` callback (the
-    Answer button on a falsifier_breach ping) — just enough to route the
-    reply."""
+    """One stored finding and its current state, including historical pings."""
 
     id: int
     class_: str
@@ -660,45 +573,20 @@ def freshness_ok(
         conn.close()
 
 
-def _sent_counts(conn: sqlite3.Connection, stamp: datetime) -> tuple[int, int]:
-    day_cut = (stamp - timedelta(days=1)).isoformat()
-    week_cut = (stamp - timedelta(days=7)).isoformat()
-    day = conn.execute(
-        "SELECT COUNT(*) FROM coach_pings WHERE status = 'sent' AND created_at >= ?",
-        (day_cut,),
-    ).fetchone()[0]
-    week = conn.execute(
-        "SELECT COUNT(*) FROM coach_pings WHERE status = 'sent' AND created_at >= ?",
-        (week_cut,),
-    ).fetchone()[0]
-    return int(day), int(week)
-
-
 def run_governor(
     db_path: Path | str | None = None,
     *,
-    send_fn: Callable[[int, Moment], bool] | None = None,
     now: datetime | None = None,
     repo_root: Path | str | None = None,
     api_url: str | None = None,
 ) -> dict[str, int]:
-    """One governed pass: collect → freshness-gate → cap → send/digest.
+    """Collect, gate, and retain findings in the quiet digest.
 
-    Callers must hold the ``notification-delivery`` job lane (``JobLock``) for
-    the whole pass, as ``execution/run_coach_pings.py`` and the scheduler do:
-    the cap check and the creation of a moment's row are not atomic across
-    concurrent passes.
-
-    ``send_fn(ping_id, moment) -> bool`` performs the push (Telegram). No
-    ``send_fn`` at all (dry-run / no bot configured) downgrades the ping to
-    the quiet digest — that IS the delivery surface then. A ``send_fn`` that
-    returns False (an ATTEMPTED push failed — Telegram down, bad token) marks
-    the row ``send_failed``: the one status the anti-nag once-forever rule
-    exempts, so the next governor run re-attempts delivery instead of
-    silently dropping a falsifier_breach the owner never saw.
-    ``repo_root`` / ``api_url`` (tenet-2 Phase 3) thread through to
-    ``collect_moments`` / ``freshness_ok`` for the ``capacity_breach`` class
-    only; every other class ignores them. Deterministic, zero LLM."""
+    Callers hold the notification-delivery JobLock for the complete pass.
+    Historical sending leases retain their recovery semantics. Retry writes
+    compare the observed status and timestamp, so owner actions win races.
+    Legacy delivery tally keys remain zero for result-shape compatibility.
+    """
     stamp = _now(now)
     tally = {
         "sent": 0,
@@ -709,9 +597,7 @@ def run_governor(
         "seen": 0,
     }
     moments = collect_moments(db_path, now=stamp, repo_root=repo_root, api_url=api_url)
-    # B9: competing moments contend for DAILY_CAP slots in priority order
-    # (money-at-risk first, coaching last) — stable within a class, so each
-    # collector's own ordering survives.
+    # Preserve class priority and each collector's stable ordering.
     moments.sort(key=lambda m: _PRIORITY_RANK.get(m.class_, len(CLASS_PRIORITY)))
     conn = open_conn(db_path)
     try:
@@ -791,10 +677,9 @@ def run_governor(
             elif not freshness_ok(moment, db_path, repo_root=repo_root, api_url=api_url):
                 status = "skipped_stale"
             else:
-                day, week = _sent_counts(conn, stamp)
-                status = "digest" if (day >= DAILY_CAP or week >= WEEKLY_CAP) else "sending"
+                status = "digest"
             if prior is None:
-                cur = conn.execute(
+                conn.execute(
                     """
                     INSERT INTO coach_pings
                         (class_, key, ticker, body, status, source_ref, created_at, updated_at)
@@ -811,12 +696,9 @@ def run_governor(
                         iso,
                     ),
                 )
-                ping_id = int(cur.lastrowid or 0)
             else:
-                # A prior push failed or was never confirmed — re-run the gates
-                # on the SAME row (UNIQUE class+key), then retry the delivery
-                # below. Conditional on the observed row: an acknowledgement or a
-                # sibling run that changed it since then wins.
+                # Recheck historical failed deliveries on the same row. An
+                # owner action or sibling run that changed the observed row wins.
                 ping_id = int(prior[0])
                 claimed = conn.execute(
                     "UPDATE coach_pings SET status = ?, updated_at = ? "
@@ -827,43 +709,6 @@ def run_governor(
                     conn.commit()
                     continue
             conn.commit()
-            if status == "sending":
-                if send_fn is None:
-                    # No push channel — not a send failure; park in the digest.
-                    delivered, fallback = False, "digest"
-                else:
-                    delivered, fallback = bool(send_fn(ping_id, moment)), "send_failed"
-                final = "sent" if delivered else fallback
-                # Fenced to this run's claim: a stale worker resuming after its
-                # lease was swept and reclaimed cannot overwrite the newer attempt.
-                completed = conn.execute(
-                    "UPDATE coach_pings SET status = ?, updated_at = ? "
-                    "WHERE id = ? AND status = 'sending' AND updated_at = ?",
-                    (final, iso, ping_id, iso),
-                )
-                conn.commit()
-                if completed.rowcount == 1:
-                    status = final
-                else:
-                    current = conn.execute(
-                        "SELECT status, updated_at FROM coach_pings WHERE id=?", (ping_id,)
-                    ).fetchone()
-                    if current is None:
-                        raise RuntimeError(
-                            f"coach ping {ping_id} disappeared during delivery completion"
-                        )
-                    current_status = str(current[0])
-                    if current_status == "sending" and str(current[1]) == iso:
-                        raise RuntimeError(f"coach ping {ping_id} delivery completion lost its CAS")
-                    if current_status not in tally and current_status not in {
-                        "acted",
-                        "dismissed",
-                        "sending",
-                    }:
-                        raise RuntimeError(
-                            f"coach ping {ping_id} has unexpected status {current_status!r}"
-                        )
-                    status = current_status
             if status in tally:
                 tally[status] += 1
     finally:
@@ -943,37 +788,8 @@ def unmute(class_: str, *, db_path: Path | str | None = None) -> bool:
         conn.close()
 
 
-def record_ping_message_id(
-    ping_id: int, message_id: int, *, db_path: Path | str | None = None
-) -> bool:
-    """Best-effort: remember which Telegram message carried this ping (B3), so a
-    later free-text REPLY can route back to the finding (``capture.coach_reply``)
-    the same way a note-card reply routes via
-    ``context_json['telegram_message_id']`` (``poller._stash_card_mid``) —
-    ``coach_pings`` has no JSON column, hence a real ``telegram_message_id``
-    column (migration 0188). Swallows ``sqlite3.OperationalError`` so an
-    un-migrated DB (column missing) never breaks a send; returns whether the
-    write happened."""
-    # This method intentionally supports a pre-0188 compatibility window: the
-    # missing-column OperationalError below is the documented no-op signal.
-    # It leaves ``updated_at`` alone: during a push that column fences the claim.
-    conn = open_conn(db_path, schema_preflight=False)
-    try:
-        conn.execute(
-            "UPDATE coach_pings SET telegram_message_id = ? WHERE id = ?",
-            (message_id, ping_id),
-        )
-        conn.commit()
-        return True
-    except sqlite3.OperationalError:
-        return False  # pre-0188 schema — no telegram_message_id column yet
-    finally:
-        conn.close()
-
-
 def mark_ping_acted(ping_id: int, *, db_path: Path | str | None = None) -> bool:
-    """Owner's reply resolved this ping (acknowledge / annotate_decision outcome
-    in ``capture.coach_reply``) — flip it to ``acted`` from
+    """A shared attention action resolved this finding — flip it to ``acted`` from
     ``sending``/``sent``/``digest``. The status guard mirrors
     ``record_dismissal``. Returns whether a row was updated."""
     stamp = now_naive_utc().isoformat()
@@ -1009,9 +825,7 @@ def mark_ping_acted(ping_id: int, *, db_path: Path | str | None = None) -> bool:
 
 
 def get_ping(ping_id: int, db_path: Path | str | None = None) -> PingRow | None:
-    """One ``coach_pings`` row by id, or None. Backs the ``cp:review`` callback
-    (the Answer button on a falsifier_breach ping) — it needs the ticker to
-    route the reply, without pulling in the full ``Moment`` collection path."""
+    """One stored finding by ID, or None, without collecting new findings."""
     conn = open_conn(db_path)
     try:
         row = conn.execute(

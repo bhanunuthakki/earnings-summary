@@ -29,8 +29,15 @@ from advisor.context import (
     TickerValuation,
     screen_swap_candidates,
 )
-from advisor.memos import generate_next_dollar_memo, run_swap_checks
-from advisor.store import AdvisorMemoRow, get_memo, insert_memo, list_memos
+from advisor.memos import generate_next_dollar_memo, persist_memo, run_swap_checks
+from advisor.store import (
+    AdvisorMemoRow,
+    get_memo,
+    insert_memo,
+    insert_stance_score,
+    list_memos,
+    list_scores_for_memos,
+)
 from dispatch_registry import Job, Registry
 from integrations.portfolio_tracker_client import (
     LivePortfolio,
@@ -605,3 +612,55 @@ def test_next_dollar_spends_nothing_on_unassessed_valuation(
     result = generate_next_dollar_memo(tmp_path, ctx=ctx)
     assert not result.ok
     assert result.skipped_reason == "valuation_evidence_not_ready"
+
+
+def test_saved_exercise_answers_notes_and_scores_remain_readable(advisor_db: Path) -> None:
+    db = advisor_db
+    questions = ["What would change your view?"]
+    answers = ["Review the next reported quarter."]
+    body = "## Think-through transcript\nQ1: What would change your view?\nA1: " + answers[0]
+    result = persist_memo(
+        db_path=db,
+        user_id="bhanu",
+        kind="socratic",
+        ticker="TEST",
+        counter_ticker=None,
+        title="SYNTHETIC saved exercise",
+        body_md=body,
+        context={"questions": questions, "answers": answers},
+        write_ledger=True,
+        stance="hold",
+        horizon_days=180,
+    )
+    assert result.ok and result.memo_id is not None
+    memo = get_memo(result.memo_id, db_path=db)
+    assert memo is not None and memo.kind == "socratic"
+    assert memo.body_md == body
+    assert memo.context == {"questions": questions, "answers": answers}
+    assert memo.stance == "hold" and memo.horizon_days == 180
+    assert memo.score_status == "pending"
+    assert memo.note_id is not None and memo.ledger_entry_id is not None
+    assert any(n.id == memo.note_id for n in list_notes(user_id="bhanu", db_path=db))
+    assert any(
+        e.id == memo.ledger_entry_id and e.entry_kind == "advisor_memo"
+        for e in list_entries(user_id="bhanu", ticker="TEST", db_path=db)
+    )
+    pending = compose_memos_page([], [memo])
+    assert "stance: hold · 180d" in pending and 'title="scoring pending"' in pending
+    insert_stance_score(
+        memo_id=memo.id,
+        verdict="correct",
+        horizon_days=180,
+        ticker="TEST",
+        benchmark_basis="tracker_spy",
+        excess_return_pct=2.0,
+        db_path=db,
+    )
+    scores = list_scores_for_memos([memo.id], db_path=db)
+    html = compose_memos_page([], list_memos(user_id="bhanu", db_path=db), scores=scores)
+    assert "Socratic" in html and "Think-through transcript" in html
+    assert answers[0] in html and "correct +2.0pp vs SPY" in html
+    assert f"note #{memo.note_id}" in html and f"ledger #{memo.ledger_entry_id}" in html
+    assert 'id="am-soc-start"' not in html and 'id="soc-flow"' not in html
+    assert "/api/socratic/" not in html and "/actions/socratic-questions" not in html
+    assert 'data-kind="next_dollar"' in html and 'data-kind="swap_checks"' in html

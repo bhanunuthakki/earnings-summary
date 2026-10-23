@@ -55,7 +55,6 @@ def test_family_master_exposes_each_composition() -> None:
         "allocation_css",
         "decisions_css",
         "memos_css",
-        "page_css",
     ):
         assert f"def {name}()" in source
 

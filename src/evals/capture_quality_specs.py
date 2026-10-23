@@ -495,22 +495,6 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
     # P2: low-frequency communication, coaching, and presentation surfaces.
     # Quality matters, but failures are reversible and rarely mutate data.
     _q(
-        "advisor_socratic_memo",
-        "P2",
-        "cold",
-        "coaching",
-        "Write a concise Socratic memo that exposes assumptions and decision gaps.",
-        "Leading questions that smuggle in an unsupported conclusion.",
-    ),
-    _q(
-        "advisor_socratic_questions",
-        "P2",
-        "cold",
-        "coaching",
-        "Ask the smallest set of questions that would materially improve the decision.",
-        "Generic questions unrelated to the actual uncertainty.",
-    ),
-    _q(
         "annual_letter",
         "P2",
         "cold",
@@ -525,14 +509,6 @@ _SPECS: tuple[CaptureQualitySpec, ...] = (
         "synthesis",
         "Brief a research artifact with provenance, relevance, and next action.",
         "A summary that obscures the source or invents an implication.",
-    ),
-    _q(
-        "coach_reply_intent",
-        "P2",
-        "cold",
-        "classification",
-        "Classify the user's coaching reply into the correct next conversational action.",
-        "Taking an irreversible or inappropriate action from ambiguous text.",
     ),
     _q(
         "event_brief",

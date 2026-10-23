@@ -142,11 +142,7 @@ def _chat_drawer_shell(body: StringIO, ticker: str, report_date: str) -> None:
         '<header class="chat-head">'
         "<div>"
         f'<div class="chat-title">Continue {_esc(ticker)} research</div>'
-        f'<div class="chat-sub">Report {_esc(report_date)} &middot; '
-        # P2.4 entry point: stances live behind the Socratic flow, never in chat.
-        f'<a href="/socratic/{_esc(ticker)}" '
-        f'data-server-path="/socratic/{_esc(ticker)}" target="_blank" '
-        'rel="noopener">think it through &rarr;</a></div>'
+        f'<div class="chat-sub">Report {_esc(report_date)}</div>'
         "</div>"
         '<button class="chat-close k-btn k-btn-quiet k-btn-sm" id="chat-close" type="button" aria-label="Close Copilot handoff">&times;</button>'
         "</header>"

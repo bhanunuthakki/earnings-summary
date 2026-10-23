@@ -212,7 +212,14 @@ def test_extracted_routes_preserve_endpoint_contract(client: FlaskClient) -> Non
     # +1 exact-edition descriptor for shared-reader reload and historical links.
     # +1 sealed evidence citation source-version viewer: the destination for
     # /source/version/<document_version_id>?node=… citations.
-    assert len(rules) == 180
+    # Owner retired only the four guided-exercise routes; history stays readable.
+    assert len(rules) == 176
+    assert not {
+        "start_socratic_questions",
+        "socratic_questions_result",
+        "socratic_memo",
+        "socratic_page",
+    }.intersection(rules)
     assert rules["peek_canonical_financial"] == "/api/peek/canonical-financial"
     assert rules["peek_financial_calculation"] == "/api/peek/financial-calculation"
     assert rules["operations_host_runtime_api"] == "/api/operations/host-runtime"

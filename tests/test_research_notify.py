@@ -1,4 +1,3 @@
-# pyright: reportUnknownArgumentType=false, reportUnknownLambdaType=false
 """Phase-1 W1-8: the Telegram research dispatch (inline-button callbacks → the
 action core) + the poller routing the callback branch."""
 
@@ -127,23 +126,6 @@ def test_dispatch_no_edit_without_message_id(db_path: Path) -> None:
     assert spy.edits == []
 
 
-def test_dispatch_stale_dismiss_edits_nothing(db_path: Path) -> None:
-    """'Already handled' re-presses (a ping not in sent/digest anymore) edit
-    nothing — only a genuinely-recorded dismissal stamps the card."""
-    spy = _Spy()
-    status = research_notify.dispatch_callback(
-        "tok",
-        _cb("cp:dismiss:999999", message_id=42, message_text="a ping"),
-        db_path=db_path,
-        send=spy.send,
-        answer=spy.answer,
-        edit=spy.edit,
-    )
-    assert status == "cp_stale"
-    assert spy.answers and spy.answers[0][1] == "Already handled."
-    assert spy.edits == []
-
-
 def test_dispatch_failed_run_edits_nothing(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LEDGER_RESEARCH_RUN", "1")
     spy = _Spy()
@@ -190,34 +172,45 @@ def test_dispatch_edit_failure_never_breaks_the_action(
     assert prop is not None and prop.status == "approved"
 
 
-def test_dispatch_cp_dismiss_stamps_and_strips(db_path: Path) -> None:
+@pytest.mark.parametrize("verb", ["dismiss", "review", "unknown"])
+def test_dispatch_old_coach_button_is_retired_without_action(
+    db_path: Path, monkeypatch: pytest.MonkeyPatch, verb: str
+) -> None:
     import sqlite3
 
-    conn = sqlite3.connect(str(db_path))
-    try:
+    from research import governor
+
+    with sqlite3.connect(db_path) as conn:
         conn.execute(
             "INSERT INTO coach_pings (class_, key, ticker, body, status, source_ref, "
-            "created_at, updated_at) VALUES ('intent_followup','intent:1:0',NULL,'x','sent',"
-            "'note:1','2026-07-10','2026-07-10')"
+            "created_at, updated_at) VALUES ('falsifier_breach','alert:1','NU','x','sent',"
+            "'decision:1','2026-07-10','2026-07-10')"
         )
-        conn.commit()
         ping_id = int(conn.execute("SELECT id FROM coach_pings").fetchone()[0])
-    finally:
-        conn.close()
 
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("retired coach button must not act")
+
+    monkeypatch.setattr(governor, "record_dismissal", forbidden)
+    monkeypatch.setattr(governor, "get_ping", forbidden)
+    monkeypatch.setattr("advisor.position_review.review_reply_text", forbidden)
     spy = _Spy()
     status = research_notify.dispatch_callback(
         "tok",
-        _cb(f"cp:dismiss:{ping_id}", message_id=3, message_text="x"),
+        _cb(f"cp:{verb}:{ping_id}", message_id=3, message_text="old finding"),
         db_path=db_path,
         send=spy.send,
         answer=spy.answer,
         edit=spy.edit,
     )
-    assert status == "cp_dismissed"
-    assert len(spy.edits) == 1
-    assert "- dismissed" in spy.edits[0][2]
-    assert spy.edits[0][3] is None
+    assert status == "cp_retired"
+    assert spy.answers == [("cq", "Coach buttons are retired. Use /review <TICKER> for a review.")]
+    assert spy.sends == [] and spy.edits == []
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute("SELECT status FROM coach_pings WHERE id=?", (ping_id,)).fetchone() == (
+            "sent",
+        )
+        assert conn.execute("SELECT COUNT(*) FROM coach_mutes").fetchone() == (0,)
 
 
 def test_dispatch_run_sends_proposal_card(db_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -225,6 +218,10 @@ def test_dispatch_run_sends_proposal_card(db_path: Path, monkeypatch: pytest.Mon
     pid = create_proposal(
         task_id=None, kind="memo", ticker="NU", title="NU memo", body_md="body", db_path=db_path
     )
+
+    def run(_task_id: int, **_kwargs: object) -> int:
+        return pid
+
     spy = _Spy()
     status = research_notify.dispatch_callback(
         "tok",
@@ -232,7 +229,7 @@ def test_dispatch_run_sends_proposal_card(db_path: Path, monkeypatch: pytest.Mon
         db_path=db_path,
         send=spy.send,
         answer=spy.answer,
-        run=lambda task_id, **kw: pid,
+        run=run,
     )
     assert status == "ran"
     assert spy.sends and "NU memo" in spy.sends[0][1]
@@ -349,116 +346,6 @@ def test_dispatch_st_unknown_note_is_acknowledged(db_path: Path) -> None:
     assert spy.answers and spy.answers[0][1] == "Unrecognized action."
 
 
-def test_dispatch_cp_review_sends_pre_analysis(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The Answer button on a falsifier_breach ping: answers the callback and
-    sends the same instant pre-analysis reply /review would, without the
-    owner retyping the command."""
-    import sqlite3
-
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute(
-            "INSERT INTO coach_pings (class_, key, ticker, body, status, source_ref, "
-            "created_at, updated_at) VALUES ('falsifier_breach','alert:1','NU','x','sent',"
-            "'decision:1','2026-07-10','2026-07-10')"
-        )
-        conn.commit()
-        ping_id = int(conn.execute("SELECT id FROM coach_pings").fetchone()[0])
-    finally:
-        conn.close()
-
-    seen: list[tuple[object, str, bool]] = []
-
-    def _fake_reply_text(repo_root: object, text: str, *, plain: bool = False) -> str:
-        seen.append((repo_root, text, plain))
-        return "NU - position review (deterministic read)"
-
-    monkeypatch.setattr(
-        "advisor.position_review.review_reply_text", _fake_reply_text, raising=False
-    )
-    spy = _Spy()
-    status = research_notify.dispatch_callback(
-        "tok", _cb(f"cp:review:{ping_id}"), db_path=db_path, send=spy.send, answer=spy.answer
-    )
-    assert status == "cp_reviewed"
-    assert spy.answers and spy.answers[0][1] == "Reviewing NU..."
-    assert spy.sends and "NU" in spy.sends[0][1]
-    assert seen and seen[0][1] == "/review NU"
-    assert seen[0][2] is True  # the Telegram cp:review reply uses the plain renderer
-
-
-def test_dispatch_cp_review_stamps_with_ticker(
-    db_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import sqlite3
-
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute(
-            "INSERT INTO coach_pings (class_, key, ticker, body, status, source_ref, "
-            "created_at, updated_at) VALUES ('falsifier_breach','alert:2','NU','x','sent',"
-            "'decision:2','2026-07-10','2026-07-10')"
-        )
-        conn.commit()
-        ping_id = int(conn.execute("SELECT id FROM coach_pings").fetchone()[0])
-    finally:
-        conn.close()
-
-    monkeypatch.setattr(
-        "advisor.position_review.review_reply_text",
-        lambda repo_root, text, **kw: "review body",
-        raising=False,
-    )
-    spy = _Spy()
-    status = research_notify.dispatch_callback(
-        "tok",
-        _cb(f"cp:review:{ping_id}", message_id=8, message_text="falsifier tripped for NU"),
-        db_path=db_path,
-        send=spy.send,
-        answer=spy.answer,
-        edit=spy.edit,
-    )
-    assert status == "cp_reviewed"
-    assert len(spy.edits) == 1
-    assert "- reviewed NU" in spy.edits[0][2]
-    assert spy.edits[0][3] is None
-
-
-def test_dispatch_cp_review_no_ticker(db_path: Path) -> None:
-    import sqlite3
-
-    conn = sqlite3.connect(str(db_path))
-    try:
-        conn.execute(
-            "INSERT INTO coach_pings (class_, key, ticker, body, status, source_ref, "
-            "created_at, updated_at) VALUES ('intent_followup','intent:1:0',NULL,'x','sent',"
-            "'note:1','2026-07-10','2026-07-10')"
-        )
-        conn.commit()
-        ping_id = int(conn.execute("SELECT id FROM coach_pings").fetchone()[0])
-    finally:
-        conn.close()
-
-    spy = _Spy()
-    status = research_notify.dispatch_callback(
-        "tok", _cb(f"cp:review:{ping_id}"), db_path=db_path, send=spy.send, answer=spy.answer
-    )
-    assert status == "cp_review_no_ticker"
-    assert spy.answers and spy.answers[0][1] == "No ticker on this ping."
-    assert not spy.sends
-
-
-def test_dispatch_cp_review_unknown_ping(db_path: Path) -> None:
-    spy = _Spy()
-    status = research_notify.dispatch_callback(
-        "tok", _cb("cp:review:999999"), db_path=db_path, send=spy.send, answer=spy.answer
-    )
-    assert status is None
-    assert spy.answers and spy.answers[0][1] == "Unrecognized action."
-
-
 # --------------------------------------------------------------------------- #
 # tr:revert:<insight_id> — undo an auto-adopted Tenet/stance (B4)
 # --------------------------------------------------------------------------- #
@@ -529,6 +416,10 @@ def test_dispatch_rx_run_enabled_runs_and_sends_proposal(
     pid = create_proposal(
         task_id=tid, kind="memo", ticker="NU", title="NU memo", body_md="body", db_path=db_path
     )
+
+    def run(_task_id: int, **_kwargs: object) -> int:
+        return pid
+
     spy = _Spy()
     status = research_notify.dispatch_callback(
         "tok",
@@ -536,7 +427,7 @@ def test_dispatch_rx_run_enabled_runs_and_sends_proposal(
         db_path=db_path,
         send=spy.send,
         answer=spy.answer,
-        run=lambda task_id, **kw: pid,
+        run=run,
     )
     assert status == "rx_ran"
     assert spy.sends and "NU memo" in spy.sends[0][1]
@@ -639,12 +530,15 @@ def test_poller_routes_callback_to_dispatch(
 
     monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_ID", "5")
     seen: list[str | None] = []
-    monkeypatch.setattr(poller.telegram, "get_updates", lambda *a, **k: [_cb("rp:approve:1")])
-    monkeypatch.setattr(
-        poller.research_notify,
-        "dispatch_callback",
-        lambda token, update, **kw: seen.append(update.callback_data),
-    )
+
+    def updates(*_args: object, **_kwargs: object) -> list[telegram.Update]:
+        return [_cb("rp:approve:1")]
+
+    def dispatch(_token: str, update: telegram.Update, **_kwargs: object) -> None:
+        seen.append(update.callback_data)
+
+    monkeypatch.setattr(poller.telegram, "get_updates", updates)
+    monkeypatch.setattr(poller.research_notify, "dispatch_callback", dispatch)
     counts = poller.poll_once(
         "tok",
         db_path=db_path,

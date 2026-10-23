@@ -550,7 +550,7 @@ def test_poll_once_skips_bot_commands(
 def test_poll_once_review_command_replies_with_pre_analysis(
     db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The coach's pings say "/review {ticker}" — the poller must answer that
+    """The manual "/review {ticker}" command must answer that
     call-to-action in-channel instead of silently swallowing it."""
     updates = [telegram.Update(update_id=50, kind="text", chat_id=1, text="/review NU")]
     _stub_updates(monkeypatch, lambda: updates)
@@ -1140,14 +1140,12 @@ def test_poll_once_card_reply_send_failure_never_propagates(
 
 
 # ---------------------------------------------------------------------------
-# coach_reply routing (B3) — a free-text reply to a governed coach ping
+# Retired coach replies follow normal capture and retain historical findings
 # ---------------------------------------------------------------------------
 
 
 def _seed_coach_ping(db_path: Path, *, mid: int, class_: str = "calibration_finding") -> int:
-    """A ``sent`` coach ping whose Telegram message id is stamped — what
-    ``run_coach_pings._send`` -> ``governor.record_ping_message_id`` writes
-    once B3's ``_send`` fix lands (migration 0188)."""
+    """A historical sent finding with its retained Telegram message ID."""
     from user_state._db import now_naive_utc
 
     stamp = now_naive_utc().isoformat()
@@ -1172,53 +1170,45 @@ def _seed_coach_ping(db_path: Path, *, mid: int, class_: str = "calibration_find
         conn.close()
 
 
-def _stub_coach_classify(monkeypatch: pytest.MonkeyPatch, intent: str) -> None:
-    from capture import coach_reply
-
-    def classify_reply(
-        ping: coach_reply.PingLike, text: str, **kwargs: object
-    ) -> coach_reply.ReplyVerdict:
-        del ping, text, kwargs
-        return coach_reply.ReplyVerdict(intent=intent)
-
-    monkeypatch.setattr(coach_reply, "classify_reply", classify_reply)
-
-
-def test_poll_once_coach_ping_reply_routes_and_never_double_lands(
-    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("direct", [False, True])
+def test_poll_once_old_coach_reply_is_ordinary_capture(
+    db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, direct: bool
 ) -> None:
-    """A reply-to-message pointing at a coach ping's stashed mid (NOT a note's
-    card mid — ``_dispatch_card_reply`` finds nothing there) routes through
-    ``capture.coach_reply``, not ordinary capture. The musing lands exactly
-    once, linked to the ping via ``context_json['coach_ping_id']``."""
+    """Old direct and recent-ping replies retain text without changing the finding."""
     ping_id = _seed_coach_ping(db_path, mid=800)
-    _stub_coach_classify(monkeypatch, "note")
-    _stub_updates(monkeypatch, lambda: [_reply_update(200, "thanks, seen it", 800)])
-    sent: list[str] = []
-    _stub_messages(monkeypatch, sent)
+    text = "thanks, seen it"
+    update = telegram.Update(
+        update_id=200,
+        kind="text",
+        chat_id=1,
+        text=text,
+        reply_to_message_id=800 if direct else None,
+    )
+    _stub_updates(monkeypatch, lambda: [update])
     counts = poller.poll_once(
         "tok",
         db_path=db_path,
         offset_path=tmp_path / "offset.json",
         audio_dir=tmp_path / "audio",
         roster=ROSTER,
-        confirm=True,
+        confirm=False,
     )
-    assert counts.get("coach_reply") == 1
-    assert counts.get("card_reply") is None
-    assert counts.get("landed") is None  # never re-counted as an ORDINARY capture
+    assert counts.get("landed") == 1
+    assert counts.get("coach_reply") is None
     musings = notes.list_notes(kind="musing", db_path=db_path)
-    assert len(musings) == 1
-    assert (musings[0].context or {}).get("coach_ping_id") == ping_id
-    assert sent == ["Noted — linked to the calibration_finding finding."]
+    assert len(musings) == 1 and musings[0].body == text
+    assert "coach_ping_id" not in (musings[0].context or {})
+    with sqlite3.connect(db_path) as conn:
+        assert conn.execute(
+            "SELECT status, telegram_message_id FROM coach_pings WHERE id=?", (ping_id,)
+        ).fetchone() == ("sent", 800)
+        assert conn.execute("SELECT COUNT(*) FROM coach_mutes").fetchone() == (0,)
 
 
 def test_poll_once_ordinary_musing_with_no_recent_ping_untouched(
     db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No coach ping in play at all (empty ``coach_pings``) — a plain musing
-    must flow through the unchanged ordinary-capture path; ``coach_reply``
-    dispatch is a pure no-op here (neither direct nor window mode matches)."""
+    """A plain musing uses ordinary capture when no historical finding exists."""
     _stub_updates(
         monkeypatch,
         lambda: [telegram.Update(update_id=201, kind="text", chat_id=1, text="MELI still cheap")],
@@ -1236,15 +1226,13 @@ def test_poll_once_ordinary_musing_with_no_recent_ping_untouched(
     assert len(notes.list_notes(kind="musing", db_path=db_path)) == 1
 
 
-def test_poll_once_pending_reply_wins_over_coach_reply(
+def test_poll_once_pending_reply_with_historical_coach_ping(
     db_path: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An active awaited-reply stash (decision-nudge fill-in / weekly-packet
-    rewrite) is checked BEFORE coach_reply in the dispatch order — a live
-    coach ping in the same window must never steal a pending fill-in."""
+    """A historical finding does not affect an active awaited-reply stash."""
     from capture import decision_nudge, pending_replies
 
-    _seed_coach_ping(db_path, mid=810)  # a live coach ping is ALSO in play
+    _seed_coach_ping(db_path, mid=810)
     pending_replies.stash(1, decision_nudge.FILL_IN_KIND, 1, db_path=db_path)
     _stub_updates(
         monkeypatch,

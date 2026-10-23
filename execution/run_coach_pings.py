@@ -1,89 +1,56 @@
-"""execution/run_coach_pings.py — the daily governed-initiation pass (W2).
+"""Run the daily dashboard findings and reconciliation pass.
 
-Collects the deterministic coaching moments (owner-falsifier breach /
-annotation-pending stub / open standing intent, plus tenet-2 Phase 3's
-capacity_breach / life_event_checkpoint / profile_drift), runs them through
-the nag governor (freshness gate → frequency caps → auto-mute), and pushes at
-most DAILY_CAP Telegram pings with a Dismiss button; overflow waits quietly in
-the digest. Zero LLM. Safe to run any number of times a day (a moment is
-considered exactly once). A ``capacity_breach`` finding also writes/refreshes
-its own ``alerts`` row (trigger_kind ``owner_capacity_breach``) so the
-morning-pipeline alert feed carries it at the same tier-1 severity as an
-owner-falsifier breach — see ``research.capacity_moments``.
+Collect deterministic findings, apply the governor's freshness and mute rules,
+and retain eligible findings in the dashboard digest. Capacity findings also
+refresh the existing owner_capacity_breach alerts. This operation writes state
+and makes no Telegram calls.
 
     python execution/run_coach_pings.py
-    python execution/run_coach_pings.py --dry-run   # collect + gate, no sends
 """
 
 from __future__ import annotations
 
 import argparse
-import contextlib
 import sys
 from contextlib import nullcontext
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-if TYPE_CHECKING:
-    from research.governor import Moment
-
-
-def _message_id_of(result: object) -> int | None:
-    """The ``message_id`` of a sendMessage result (Telegram returns the sent
-    Message), or None. Same isinstance-dict extraction as
-    ``capture.poller._message_id_of`` — duplicated locally per the repo's
-    "duplicate simple shared logic, don't modularize" convention (one 6-line
-    helper isn't worth a cross-module dependency)."""
-    if isinstance(result, dict):
-        mid = cast("dict[str, object]", result).get("message_id")
-        if isinstance(mid, int):
-            return mid
-    return None
-
-
-def ping_buttons(ping_id: int, moment: Moment) -> list[list[tuple[str, str]]]:
-    """The inline-keyboard rows for one pushed ping: a falsifier_breach with a
-    ticker gets an Answer button that fires the ping's own stated next action
-    (``/review {ticker}``) in-place, alongside Dismiss; every other moment
-    class keeps the original Dismiss-only keyboard. Pure — no network — so the
-    button shape is unit-testable without a live Telegram send."""
-    if moment.class_ == "falsifier_breach" and moment.ticker:
-        return [
-            [
-                ("Answer: review " + moment.ticker, f"cp:review:{ping_id}"),
-                ("Dismiss", f"cp:dismiss:{ping_id}"),
-            ]
-        ]
-    return [[("Dismiss", f"cp:dismiss:{ping_id}")]]
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Deprecated compatibility alias; reconciliation and digest state are still written.",
+    )
     args = parser.parse_args()
+    if args.dry_run:
+        print(
+            "--dry-run is deprecated: this pass writes reconciliation and digest state; "
+            "Telegram delivery is retired.",
+            file=sys.stderr,
+        )
     repo_root = args.repo_root.resolve()
     db_path = repo_root / "data" / "portfolio.db"
 
     from runtime.job_runtime import JobLock, inherited_lock_is_valid
 
-    # One coach-ping run at a time: the scheduler already holds this lane for
-    # scheduled runs; a manual run takes the same lane, so the governor's cap
-    # check and row creation never interleave with another run.
+    # One findings pass at a time: the scheduler already holds this lane for
+    # scheduled runs; a manual run takes the same lane, so finding admission
+    # and row creation never interleave with another run.
     inherited = inherited_lock_is_valid(repo_root, "notification-delivery")
     with (
         nullcontext() if inherited else JobLock(repo_root, "coach-pings", ["notification-delivery"])
     ):
-        return _run(repo_root, db_path, dry_run=args.dry_run)
+        return _run(repo_root, db_path)
 
 
-def _run(repo_root: Path, db_path: Path, *, dry_run: bool) -> int:
-    from collections.abc import Callable
-
+def _run(repo_root: Path, db_path: Path) -> int:
     from research.governor import run_governor
     from synthesis.auto_reconcile import auto_reconcile
 
@@ -92,44 +59,7 @@ def _run(repo_root: Path, db_path: Path, *, dry_run: bool) -> int:
     auto_tally = auto_reconcile(db_path)
     print(f"auto_reconcile: {auto_tally}", file=sys.stderr)
 
-    send_fn: Callable[[int, Moment], bool] | None = None
-    if not dry_run:
-        from capture import telegram
-        from capture.token_store import load_chat_id, load_token
-
-        try:
-            token = load_token()
-        except Exception:
-            token = None
-        chat_id = load_chat_id(repo_root / "data" / "capture" / "telegram_chat_id.json")
-        if token and chat_id:
-            bot_token, owner_chat = token, chat_id
-
-            def _send(ping_id: int, moment: Moment) -> bool:
-                try:
-                    result = telegram.send_message(
-                        bot_token,
-                        owner_chat,
-                        moment.body,
-                        reply_markup=telegram.inline_keyboard(ping_buttons(ping_id, moment)),
-                    )
-                except Exception:
-                    return False
-                mid = _message_id_of(result)
-                if mid is not None:
-                    # Best-effort (B3): remember the message id so a later
-                    # free-text reply routes back to this finding
-                    # (capture.coach_reply). A stash failure never affects the
-                    # send that already succeeded.
-                    from research.governor import record_ping_message_id
-
-                    with contextlib.suppress(Exception):
-                        record_ping_message_id(ping_id, mid, db_path=db_path)
-                return True
-
-            send_fn = _send
-
-    tally = run_governor(db_path, send_fn=send_fn, repo_root=repo_root)
+    tally = run_governor(db_path, repo_root=repo_root)
     print(f"run_coach_pings: {tally}", file=sys.stderr)
     return 0
 

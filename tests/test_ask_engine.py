@@ -688,7 +688,9 @@ def test_build_portfolio_pack_grounds_universe_and_theses(tmp_path: Path, tracke
     assert "evaluation: EVA" in ctx
     assert "TST: Compounding test-ware monopoly" in ctx
     assert "/discovery list" in ctx
-    assert "Socratic" in ctx
+    assert "/review <TICKER>" in ctx
+    assert "do not issue an in-chat trading recommendation" in ctx
+    assert "/socratic/" not in ctx
 
 
 def test_build_portfolio_pack_degrades_without_db(tmp_path: Path) -> None:

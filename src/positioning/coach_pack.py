@@ -7,7 +7,7 @@ OWNER'S POSITIONING specifically —
 
   * socratic push-back: interrogate horizon, risk capacity, life
     circumstances; challenge inconsistencies between what the owner says and
-    what the book shows (tone precedent: ``advisor/socratic.py``);
+    what the book shows;
   * grounding: the ACTIVE saved positioning (or "current book is the default
     target"), live weights, the risk snapshot, tracker sector positioning,
     style-factor loadings, crowding clusters — every number quoted from data,

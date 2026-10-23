@@ -30,6 +30,15 @@ def test_every_model_purpose_has_an_explicit_prompt_version() -> None:
     assert set(LLM_MODELS) <= set(prompt_versions.registered_purposes())
 
 
+def test_retired_exercises_and_coach_reply_leave_the_active_registry() -> None:
+    from llm.cli import LLM_MODELS
+
+    retired = {"advisor_socratic_questions", "advisor_socratic_memo", "coach_reply_intent"}
+    assert retired.isdisjoint(LLM_MODELS)
+    assert retired.isdisjoint(prompt_versions.registered_purposes())
+    assert prompt_version_for("ask_answer") == "v2"
+
+
 def test_registry_is_the_single_bump_point(monkeypatch: pytest.MonkeyPatch) -> None:
     # Bumping a graded prompt is a one-line change here; the new version then
     # flows into every record_score() for that purpose (no scattered literals).

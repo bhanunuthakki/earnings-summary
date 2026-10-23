@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import threading
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,13 +11,11 @@ from pathlib import Path
 import pytest
 
 from research.governor import (
-    DAILY_CAP,
     MUTE_AFTER,
     Moment,
     collect_moments,
     digest_pings,
     get_ping,
-    mark_ping_acted,
     record_dismissal,
     run_governor,
     unmute,
@@ -87,21 +84,21 @@ def _seed_stub(db: Path) -> int:
         conn.close()
 
 
-def test_collect_and_send_falsifier_breach(db: Path) -> None:
+def test_collect_and_digest_falsifier_breach(db: Path) -> None:
     _seed_breach(db)
-    sent: list[Moment] = []
-    tally = run_governor(db, send_fn=lambda pid, m: sent.append(m) or True, now=_NOW)
-    assert tally["sent"] == 1
-    assert sent[0].class_ == "falsifier_breach"
-    assert "NPL" in sent[0].body and "NU" in sent[0].body
+    tally = run_governor(db, now=_NOW)
+    assert tally["digest"] == 1
+    finding = digest_pings(db)[0]
+    assert finding[1] == "falsifier_breach"
+    assert "NPL" in str(finding[2]) and "NU" in str(finding[2])
     # A moment is considered exactly once — rerun sees nothing new
-    again = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
+    again = run_governor(db, now=_NOW)
     assert again["seen"] == 0
 
 
 def test_freshness_gate_blocks_stale_and_inferred(db: Path) -> None:
     did = _seed_breach(db, falsifier="Memory cycle rolls over. (inferred)")
-    tally = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
+    tally = run_governor(db, now=_NOW)
     assert tally["skipped_stale"] == 1 and tally["sent"] == 0
 
     # Ratify (marker stripped) → a NEW alert moment passes the gate
@@ -116,44 +113,42 @@ def test_freshness_gate_blocks_stale_and_inferred(db: Path) -> None:
         conn.commit()
     finally:
         conn.close()
-    tally2 = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
-    assert tally2["sent"] == 1
+    tally2 = run_governor(db, now=_NOW)
+    assert tally2["digest"] == 1
 
 
-def test_daily_cap_overflows_to_digest(db: Path) -> None:
-    # B9 raised DAILY_CAP to 2 — one more moment than the cap must overflow.
+def test_all_fresh_findings_enter_digest(db: Path) -> None:
     _seed_breach(db)
     _seed_breach(db, falsifier="a second live breach")
     _seed_stub(db)
-    tally = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
-    assert tally["sent"] == DAILY_CAP
-    assert tally["digest"] == 1
-    assert len(digest_pings(db)) == 1
+    tally = run_governor(db, now=_NOW)
+    assert tally["sent"] == 0 and tally["digest"] == 3
+    assert len(digest_pings(db)) == 3
 
 
-def test_failed_send_is_retried_on_the_next_run(db: Path) -> None:
-    """A delivery FAILURE (send_fn returned False — Telegram down) is the one
-    state the once-forever rule exempts: the next run re-attempts the push on
-    the SAME row. Once delivered, once-forever reapplies."""
+def test_historical_failed_delivery_enters_digest_on_the_same_row(db: Path) -> None:
     _seed_breach(db)
-    tally = run_governor(db, send_fn=lambda pid, m: False, now=_NOW)
-    assert tally["send_failed"] == 1 and tally["sent"] == 0 and tally["digest"] == 0
-    assert digest_pings(db) == []  # a failed push is not quietly parked in the digest
-
-    sent: list[Moment] = []
-    tally2 = run_governor(db, send_fn=lambda pid, m: sent.append(m) or True, now=_NOW)
-    assert tally2["sent"] == 1 and tally2["seen"] == 1
-    assert [m.class_ for m in sent] == ["falsifier_breach"]
-
-    conn = sqlite3.connect(str(db))
-    try:
-        rows = conn.execute("SELECT status FROM coach_pings").fetchall()
-    finally:
-        conn.close()
-    assert [str(r[0]) for r in rows] == ["sent"]  # same UNIQUE row flipped, no duplicate
-
-    tally3 = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
-    assert tally3["seen"] == 0  # delivered → considered exactly once again
+    run_governor(db, now=_NOW)
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE coach_pings SET status='send_failed'")
+        before = conn.execute("SELECT * FROM coach_pings").fetchone()
+    assert before is not None
+    tally = run_governor(db, now=_NOW)
+    assert tally == {
+        "sent": 0,
+        "digest": 1,
+        "skipped_muted": 0,
+        "skipped_stale": 0,
+        "send_failed": 0,
+        "seen": 1,
+    }
+    with sqlite3.connect(db) as conn:
+        after = conn.execute("SELECT * FROM coach_pings").fetchone()
+        columns = [str(row[1]) for row in conn.execute("PRAGMA table_info(coach_pings)")]
+    expected = list(before)
+    expected[columns.index("status")] = "digest"
+    assert after == tuple(expected)
+    assert run_governor(db, now=_NOW)["seen"] == 0
 
 
 def test_acknowledged_linked_episode_suppresses_send_failed_retry(
@@ -212,15 +207,9 @@ def test_acknowledged_linked_episode_suppresses_send_failed_retry(
         _fake_collect_moments_factory([moment]),
     )
     monkeypatch.setattr(governor_mod, "freshness_ok", _always_fresh)
-    sent: list[Moment] = []
-    tally = run_governor(
-        db_head,
-        send_fn=lambda ping_id, found: sent.append(found) or True,
-        now=_NOW,
-    )
+    tally = run_governor(db_head, now=_NOW)
 
     assert tally["sent"] == 0
-    assert sent == []
     with sqlite3.connect(db_head) as connection:
         assert connection.execute(
             "SELECT status FROM coach_pings WHERE thesis_evaluation_episode_id=?",
@@ -228,81 +217,11 @@ def test_acknowledged_linked_episode_suppresses_send_failed_retry(
         ).fetchone() == ("acted",)
 
 
-def test_late_failed_send_callback_cannot_overwrite_linked_acknowledgement(
+def test_acknowledgement_during_freshness_gate_preserves_owner_state(
     db_head: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import research.governor as governor_mod
-    from compute.thesis_episode_attention import acknowledge_episode
-
-    episode_id = "episode-governor-callback-race"
-    moment = Moment("falsifier_breach", "alert:903", "WIX", "review", "decision:3")
-    with sqlite3.connect(db_head) as connection:
-        stamp = datetime(2026, 7, 10, 12, 0, tzinfo=UTC).isoformat()
-        connection.execute(
-            "INSERT INTO thesis_evaluation_episodes "
-            "(episode_id,ticker,fingerprint_policy_version,semantic_input_json,"
-            "semantic_input_sha256,evaluator_semantic_version,result_sha256,"
-            "overall_status,provenance_completeness,first_evaluated_at,last_seen_at,"
-            "last_checked_at,duplicate_run_count,rule_evaluations_json,created_at) "
-            "VALUES (?, 'WIX','legacy_v0','{}',?,'legacy/v0',?,'warn','partial',"
-            "?,?,?,0,'[]',?)",
-            (episode_id, "c" * 64, "d" * 64, stamp, stamp, stamp, stamp),
-        )
-        connection.execute(
-            "INSERT INTO coach_pings "
-            '(class_,"key",ticker,body,status,source_ref,created_at,updated_at,'
-            "thesis_evaluation_episode_id,review_cycle_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,'initial')",
-            (
-                moment.class_,
-                moment.key,
-                moment.ticker,
-                moment.body,
-                "send_failed",
-                moment.source_ref,
-                stamp,
-                stamp,
-                episode_id,
-            ),
-        )
-        connection.commit()
-
-    monkeypatch.setattr(
-        governor_mod,
-        "collect_moments",
-        _fake_collect_moments_factory([moment]),
-    )
-    monkeypatch.setattr(governor_mod, "freshness_ok", _always_fresh)
-
-    def acknowledge_then_fail(_ping_id: int, _moment: Moment) -> bool:
-        with sqlite3.connect(db_head) as connection:
-            acknowledge_episode(
-                connection,
-                episode_id,
-                acknowledged_at=datetime(2026, 7, 10, 12, 2, tzinfo=UTC),
-            )
-            connection.commit()
-        return False
-
-    tally = run_governor(db_head, send_fn=acknowledge_then_fail, now=_NOW)
-
-    assert tally["seen"] == 1
-    assert tally["sent"] == 0
-    assert tally["send_failed"] == 0
-    with sqlite3.connect(db_head) as connection:
-        assert connection.execute(
-            "SELECT status FROM coach_pings WHERE thesis_evaluation_episode_id=?",
-            (episode_id,),
-        ).fetchone() == ("acted",)
-
-
-def test_acknowledgement_during_freshness_gate_cancels_the_retry_push(
-    db_head: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The owner acknowledges between the attention check and the push. The
-    governor must not overwrite ``acted`` and must not buzz the phone."""
+    """An owner action between the attention and freshness gates wins the retry CAS."""
     import research.governor as governor_mod
     from compute.thesis_episode_attention import acknowledge_episode
 
@@ -350,11 +269,7 @@ def test_acknowledgement_during_freshness_gate_cancels_the_retry_push(
 
     monkeypatch.setattr(governor_mod, "collect_moments", _fake_collect_moments_factory([moment]))
     monkeypatch.setattr(governor_mod, "freshness_ok", acknowledge_then_pass)
-    pushed: list[Moment] = []
-
-    run_governor(db_head, send_fn=lambda pid, m: pushed.append(m) or True, now=_NOW)
-
-    assert pushed == []
+    run_governor(db_head, now=_NOW)
     with sqlite3.connect(db_head) as connection:
         assert connection.execute(
             "SELECT status FROM coach_pings WHERE thesis_evaluation_episode_id=?",
@@ -404,7 +319,7 @@ def test_linked_attention_defect_fails_visibly_and_keeps_retry_state(
     monkeypatch.setattr(attention_mod, "get_attention", broken_attention)
 
     with pytest.raises(RuntimeError, match="attention decoder defect"):
-        run_governor(db_head, send_fn=lambda _ping_id, _moment: True, now=_NOW)
+        run_governor(db_head, now=_NOW)
 
     with sqlite3.connect(db_head) as connection:
         assert connection.execute(
@@ -452,7 +367,7 @@ def test_linked_partial_attention_schema_fails_visibly_and_keeps_retry_state(
     )
 
     with pytest.raises(RuntimeError, match="incomplete thesis episode attention schema"):
-        run_governor(db_head, send_fn=lambda _ping_id, _moment: True, now=_NOW)
+        run_governor(db_head, now=_NOW)
 
     with sqlite3.connect(db_head) as connection:
         assert connection.execute(
@@ -461,14 +376,13 @@ def test_linked_partial_attention_schema_fails_visibly_and_keeps_retry_state(
         ).fetchone() == ("send_failed",)
 
 
-def test_no_send_channel_still_parks_in_digest(db: Path) -> None:
-    """send_fn=None (dry-run / no bot configured) is NOT a send failure — the
-    quiet digest is the delivery surface, and once-forever holds."""
+def test_digest_delivery_is_idempotent(db: Path) -> None:
+    """The quiet digest is the delivery surface, and once-forever holds."""
     _seed_breach(db)
-    tally = run_governor(db, send_fn=None, now=_NOW)
+    tally = run_governor(db, now=_NOW)
     assert tally["digest"] == 1 and tally["send_failed"] == 0
     assert len(digest_pings(db)) == 1
-    again = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
+    again = run_governor(db, now=_NOW)
     assert again["seen"] == 0  # cap/no-channel overflow is never re-pushed
 
 
@@ -479,157 +393,19 @@ def _only_ping_status(db: Path) -> str:
     return str(rows[0][0])
 
 
-class _ProcessKilled(BaseException):
-    """A kill or interrupt mid-push: it bypasses send_fn's ``except Exception``."""
-
-
-@pytest.mark.parametrize("action", ["acted", "dismissed"])
-@pytest.mark.parametrize("delivered", [False, True])
-def test_unlinked_owner_callback_during_send_preserves_terminal_state(
-    db: Path, action: str, delivered: bool
-) -> None:
-    _seed_breach(db)
-
-    def owner_reply(ping_id: int, _moment: Moment) -> bool:
-        assert _only_ping_status(db) == "sending"
-        with sqlite3.connect(db) as conn:
-            assert (
-                conn.execute(
-                    "SELECT thesis_evaluation_episode_id FROM coach_pings WHERE id=?", (ping_id,)
-                ).fetchone()[0]
-                is None
-            )
-        if action == "acted":
-            assert mark_ping_acted(ping_id, db_path=db)
-        else:
-            assert record_dismissal(ping_id, db_path=db)[0]
-        return delivered
-
-    run_governor(db, send_fn=owner_reply, now=_NOW)
-    assert _only_ping_status(db) == action
-    retried: list[Moment] = []
-    run_governor(
-        db,
-        send_fn=lambda _pid, moment: retried.append(moment) or True,
-        now=_NOW + timedelta(hours=1),
-    )
-    assert not retried and _only_ping_status(db) == action
-
-
-def test_push_interrupted_mid_flight_is_retried_not_recorded_as_sent(db: Path) -> None:
-    """The row is committed before the push. If the process dies in between,
-    the ping was never confirmed delivered, so a later run must retry it."""
-    _seed_breach(db)
-
-    def killed(_ping_id: int, _moment: Moment) -> bool:
-        raise _ProcessKilled
-
-    with pytest.raises(_ProcessKilled):
-        run_governor(db, send_fn=killed, now=_NOW)
-    assert _only_ping_status(db) != "sent"
-
-    sent: list[Moment] = []
-    run_governor(db, send_fn=lambda pid, m: sent.append(m) or True, now=_NOW + timedelta(hours=1))
-    assert [m.class_ for m in sent] == ["falsifier_breach"]
-    assert _only_ping_status(db) == "sent"
-
-
-def test_in_flight_push_from_a_live_run_is_not_duplicated(db: Path) -> None:
-    """An overlapping run must not re-push a ping another run is still sending."""
-    _seed_breach(db)
-    sent: list[Moment] = []
-
-    def overlapping_run(_ping_id: int, _moment: Moment) -> bool:
-        run_governor(db, send_fn=lambda pid, m: sent.append(m) or True, now=_NOW)
-        return True
-
-    run_governor(db, send_fn=overlapping_run, now=_NOW)
-    assert sent == []
-    assert _only_ping_status(db) == "sent"
-
-
-def test_stale_worker_completing_late_cannot_overwrite_a_newer_attempt(db: Path) -> None:
-    """Worker A stalls mid-push past SEND_LEASE; a later run sweeps and reclaims
-    the row. A's late failure must not overwrite the newer in-flight attempt."""
-    _seed_breach(db)
-    a_may_finish, a_finished = threading.Event(), threading.Event()
-    pushed: list[Moment] = []
-    errors: list[BaseException] = []
-
-    def stalled_then_failed(_ping_id: int, _moment: Moment) -> bool:
-        assert a_may_finish.wait(timeout=20)
-        return False
-
-    def run_a() -> None:
-        try:
-            run_governor(db, send_fn=stalled_then_failed, now=_NOW)
-        except BaseException as error:  # surfaced to the main thread below
-            errors.append(error)
-        finally:
-            a_finished.set()
-
-    def newer_push(_ping_id: int, moment: Moment) -> bool:
-        a_may_finish.set()
-        assert a_finished.wait(timeout=20)
-        pushed.append(moment)
-        return True
-
-    worker_a = threading.Thread(target=run_a)
-    worker_a.start()
-    for _ in range(2000):
-        with sqlite3.connect(db) as conn:
-            if conn.execute("SELECT 1 FROM coach_pings WHERE status='sending'").fetchone():
-                break
-        threading.Event().wait(0.01)
-    run_governor(db, send_fn=newer_push, now=_NOW + timedelta(hours=1))
-    worker_a.join(timeout=20)
-
-    assert errors == []
-    assert len(pushed) == 1
-    assert _only_ping_status(db) == "sent"
-    later = run_governor(
-        db, send_fn=lambda pid, m: pushed.append(m) or True, now=_NOW + timedelta(hours=2)
-    )
-    assert later["seen"] == 0 and len(pushed) == 1
-
-
-def test_push_accepted_before_a_crash_is_pushed_once_more(db: Path) -> None:
-    """Delivery is at-least-once: Telegram accepted the push, then the process
-    died before ``sent`` was written, so one later run pushes it again."""
-    _seed_breach(db)
-    pushed: list[Moment] = []
-
-    def accepted_then_killed(_ping_id: int, moment: Moment) -> bool:
-        pushed.append(moment)
-        raise _ProcessKilled
-
-    with pytest.raises(_ProcessKilled):
-        run_governor(db, send_fn=accepted_then_killed, now=_NOW)
-    for hours in (1, 2):
-        run_governor(
-            db, send_fn=lambda pid, m: pushed.append(m) or True, now=_NOW + timedelta(hours=hours)
-        )
-    assert len(pushed) == 2
-    assert _only_ping_status(db) == "sent"
-
-
 def test_expired_claim_is_swept_even_when_its_moment_is_no_longer_collected(
     db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A claim whose process died stays truthful even if its moment disappears."""
     import research.governor as governor_mod
 
     _seed_breach(db)
-
-    def killed(_ping_id: int, _moment: Moment) -> bool:
-        raise _ProcessKilled
-
-    with pytest.raises(_ProcessKilled):
-        run_governor(db, send_fn=killed, now=_NOW)
+    run_governor(db, now=_NOW)
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE coach_pings SET status='sending'")
     monkeypatch.setattr(governor_mod, "collect_moments", _fake_collect_moments_factory([]))
-    run_governor(db, send_fn=lambda pid, m: True, now=_NOW + timedelta(minutes=10))
+    run_governor(db, now=_NOW + timedelta(minutes=10))
     assert _only_ping_status(db) == "sending"
-    run_governor(db, send_fn=lambda pid, m: True, now=_NOW + timedelta(hours=1))
+    run_governor(db, now=_NOW + timedelta(hours=1))
     assert _only_ping_status(db) == "send_failed"
 
 
@@ -665,7 +441,7 @@ def test_three_consecutive_dismissals_mute_the_class(db: Path) -> None:
         conn.commit()
     finally:
         conn.close()
-    tally = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
+    tally = run_governor(db, now=_NOW)
     assert tally["skipped_muted"] == 1 and tally["sent"] == 0
 
     assert unmute("intent_followup", db_path=db)
@@ -770,8 +546,8 @@ def test_intent_followup_body_points_to_the_ledger_tab_not_ledger_land(db: Path)
 
 def test_get_ping_returns_row_or_none(db: Path) -> None:
     _seed_breach(db)
-    tally = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
-    assert tally["sent"] == 1
+    tally = run_governor(db, now=_NOW)
+    assert tally["digest"] == 1
     conn = sqlite3.connect(str(db))
     try:
         ping_id = int(
@@ -786,36 +562,8 @@ def test_get_ping_returns_row_or_none(db: Path) -> None:
     assert row.id == ping_id
     assert row.class_ == "falsifier_breach"
     assert row.ticker == "NU"
-    assert row.status == "sent"
+    assert row.status == "digest"
     assert get_ping(999999, db_path=db) is None
-
-
-def test_falsifier_breach_ping_gets_the_two_button_keyboard() -> None:
-    """execution/run_coach_pings.py's Answer button — a falsifier_breach moment
-    with a ticker gets Answer+Dismiss; every other moment class (or a
-    falsifier_breach with no ticker) keeps the original Dismiss-only rows."""
-    from execution.run_coach_pings import ping_buttons
-
-    breach = Moment(
-        class_="falsifier_breach", key="alert:1", ticker="NU", body="x", source_ref="decision:1"
-    )
-    rows = ping_buttons(7, breach)
-    assert rows == [[("Answer: review NU", "cp:review:7"), ("Dismiss", "cp:dismiss:7")]]
-
-    no_ticker = Moment(
-        class_="falsifier_breach", key="alert:2", ticker=None, body="x", source_ref="decision:2"
-    )
-    assert ping_buttons(8, no_ticker) == [[("Dismiss", "cp:dismiss:8")]]
-
-    annotation = Moment(
-        class_="retro_annotation", key="annot:1", ticker="NU", body="x", source_ref="decision:1"
-    )
-    assert ping_buttons(9, annotation) == [[("Dismiss", "cp:dismiss:9")]]
-
-    intent = Moment(
-        class_="intent_followup", key="intent:1:0", ticker=None, body="x", source_ref="note:1"
-    )
-    assert ping_buttons(10, intent) == [[("Dismiss", "cp:dismiss:10")]]
 
 
 # ---------------------------------------------------------------------------
@@ -903,7 +651,7 @@ def test_tenet_challenge_run_governor_once_per_week(db_head: Path) -> None:
     _seed_tenet_with_accountability(db_head, scope_key="x", violated=[1], est_cost_usd=-100.0)
     tally1 = run_governor(db_head, now=_NOW)
     assert tally1["seen"] == 1
-    # No send_fn configured — the ping still lands (quietly) in the digest.
+    # The finding is retained in the quiet digest.
     assert tally1["digest"] == 1
 
     tally2 = run_governor(db_head, now=_NOW)
@@ -997,7 +745,7 @@ def test_post_mortem_run_governor_once_ever(db_head: Path) -> None:
     _seed_drafted_postmortem(db_head, ticker="NU")
     tally1 = run_governor(db_head, now=_NOW)
     assert tally1["seen"] == 1
-    # No send_fn configured -- the ping still lands (quietly) in the digest.
+    # The finding is retained in the quiet digest.
     assert tally1["digest"] == 1
 
     tally2 = run_governor(db_head, now=_NOW)
@@ -1008,19 +756,14 @@ def test_post_mortem_run_governor_once_ever(db_head: Path) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# B9: priority ordering + raised caps
+# Stable finding priority and historical delivery rows
 # --------------------------------------------------------------------------- #
 
 
-def test_competing_moments_send_in_class_priority_order(
+def test_findings_enter_digest_in_class_priority_order(
     db: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Money-at-risk speaks first, coaching last: with DAILY_CAP=2 and three
-    competing moments collected in the WRONG order, the two highest-priority
-    classes send and the coaching class lands digest.
-
-    This test isolates the priority-order contract for classes on the normal
-    send path."""
+    """Preserve class priority when findings are collected in another order."""
     import research.governor as governor_mod
 
     fabricated = [
@@ -1031,18 +774,20 @@ def test_competing_moments_send_in_class_priority_order(
     monkeypatch.setattr(governor_mod, "collect_moments", _fake_collect_moments_factory(fabricated))
     monkeypatch.setattr(governor_mod, "freshness_ok", _always_fresh)
 
-    sent: list[str] = []
-    tally = governor_mod.run_governor(
-        db, send_fn=lambda pid, m: sent.append(m.class_) or True, now=_NOW
-    )
-    assert tally["sent"] == 2 and tally["digest"] == 1
-    assert sent == ["falsifier_breach", "post_mortem"]
-    assert [str(p[1]) for p in digest_pings(db)] == ["intent_followup"]
+    tally = governor_mod.run_governor(db, now=_NOW)
+    assert tally["sent"] == 0 and tally["digest"] == 3
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT class_ FROM coach_pings ORDER BY id").fetchall() == [
+            ("falsifier_breach",),
+            ("post_mortem",),
+            ("intent_followup",),
+        ]
 
 
-def test_weekly_cap_is_eight(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """WEEKLY_CAP 3 -> 8 (B9): the 9th send of the week digests even on a
-    fresh day. Seed 8 already-sent rows spread earlier in the same week."""
+def test_historical_sent_rows_do_not_change_digest_delivery(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Keep sent history intact when past delivery caps have already been reached."""
     import sqlite3 as _sqlite3
 
     import research.governor as governor_mod
@@ -1065,8 +810,12 @@ def test_weekly_cap_is_eight(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fabricated = [Moment("falsifier_breach", "alert:902", "NU", "b", "decision:2")]
     monkeypatch.setattr(governor_mod, "collect_moments", _fake_collect_moments_factory(fabricated))
     monkeypatch.setattr(governor_mod, "freshness_ok", _always_fresh)
-    tally = governor_mod.run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
+    tally = governor_mod.run_governor(db, now=_NOW)
     assert tally["sent"] == 0 and tally["digest"] == 1
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM coach_pings WHERE status='sent'").fetchone() == (
+            8,
+        )
 
 
 def test_class_priority_covers_every_class() -> None:
@@ -1075,3 +824,98 @@ def test_class_priority_covers_every_class() -> None:
     from research.governor import CLASS_PRIORITY, CLASSES
 
     assert set(CLASSES) == set(CLASS_PRIORITY)
+
+
+def test_quiet_findings_are_written_directly_to_digest(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import research.governor as governor_mod
+    from user_state._db import open_conn
+
+    moment = Moment("calibration_finding", "direct-digest", None, "finding", "test:1")
+    monkeypatch.setattr(governor_mod, "collect_moments", _fake_collect_moments_factory([moment]))
+    monkeypatch.setattr(governor_mod, "freshness_ok", _always_fresh)
+    statements: list[str] = []
+
+    def traced_conn(path: Path | str | None) -> sqlite3.Connection:
+        conn = open_conn(path)
+        conn.set_trace_callback(statements.append)
+        return conn
+
+    monkeypatch.setattr(governor_mod, "open_conn", traced_conn)
+    tally = run_governor(db, now=_NOW)
+    assert tally == {
+        "sent": 0,
+        "digest": 1,
+        "skipped_muted": 0,
+        "skipped_stale": 0,
+        "send_failed": 0,
+        "seen": 1,
+    }
+    assert not any(
+        "COUNT(*)" in sql or ("'sending'" in sql and "INSERT" in sql) for sql in statements
+    )
+    assert sum("UPDATE coach_pings" in sql for sql in statements) == 1  # historical lease sweep
+
+
+@pytest.mark.parametrize(
+    ("prior_status", "age_minutes", "expected_status", "seen"),
+    [
+        ("sending", 14, "sending", 0),
+        ("sending", 15, "digest", 1),
+        ("send_failed", 60, "digest", 1),
+        ("sent", 60, "sent", 0),
+        ("acted", 60, "acted", 0),
+        ("dismissed", 60, "dismissed", 0),
+        ("digest", 60, "digest", 0),
+    ],
+)
+def test_historical_delivery_state_retains_full_row_except_recovery_fields(
+    db: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    prior_status: str,
+    age_minutes: int,
+    expected_status: str,
+    seen: int,
+) -> None:
+    import research.governor as governor_mod
+
+    moment = Moment("calibration_finding", "historical", None, "current body", "test:current")
+    before_stamp = (_NOW - timedelta(minutes=age_minutes)).isoformat()
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO coach_pings "
+            "(class_,key,ticker,body,status,source_ref,created_at,updated_at,telegram_message_id) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (
+                moment.class_,
+                moment.key,
+                "NU",
+                "historical body",
+                prior_status,
+                "test:historical",
+                before_stamp,
+                before_stamp,
+                77,
+            ),
+        )
+        before = conn.execute("SELECT * FROM coach_pings").fetchone()
+        columns = [str(row[1]) for row in conn.execute("PRAGMA table_info(coach_pings)")]
+    assert before is not None
+    monkeypatch.setattr(governor_mod, "collect_moments", _fake_collect_moments_factory([moment]))
+    monkeypatch.setattr(governor_mod, "freshness_ok", _always_fresh)
+    tally = run_governor(db, now=_NOW)
+    assert tally == {
+        "sent": 0,
+        "digest": seen,
+        "skipped_muted": 0,
+        "skipped_stale": 0,
+        "send_failed": 0,
+        "seen": seen,
+    }
+    expected = list(before)
+    expected[columns.index("status")] = expected_status
+    if seen:
+        expected[columns.index("updated_at")] = _NOW.isoformat()
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT * FROM coach_pings").fetchall() == [tuple(expected)]

@@ -228,11 +228,6 @@ LLM_MODELS: dict[str, str] = {
     # input → the cheap FAST tier; the golden set
     # (evals/golden/capture_triage.json) is its bar.
     "capture_triage": FAST_CLASSIFIER_MODEL,
-    # The Ledger reply-box coach follow-up router (src/capture/coach_reply.py,
-    # B3 — sibling PR). Registered here (this file's LLM_MODELS is the one
-    # source of truth) even though the classifying module is owned by the
-    # parallel B3 workstream. Closed enum, short input → the cheap FAST tier.
-    "coach_reply_intent": FAST_CLASSIFIER_MODEL,
     # The Sunday packet's per-item verdict pre-draft (pipeline.weekly_packet,
     # PR2 — navigation_ia.md §3.1). A short, closed-shape suggestion
     # ("ratify|drop|defer - <reason>") grounded ONLY in the item text it's
@@ -536,11 +531,6 @@ LLM_MODELS: dict[str, str] = {
     # on_exceed='skip' (migration 0190) — per-ticker batch build work should
     # degrade one card at a time, not block the whole evaluation build.
     "investment_decision_card": "claude-opus-4-8",
-    # Socratic think-through (P2.4): question generation is a short grounded
-    # task (Sonnet); the decision memo weighs the owner's answers against the
-    # evidence and commits to a scoreable stance — Opus judgment tier.
-    "advisor_socratic_questions": DEFAULT_MODEL,
-    "advisor_socratic_memo": "claude-opus-4-8",
     # Calibration coach (close_the_loops L8): names the owner's recurring biases
     # and proposes a behavioural experiment from his OWN graded track record —
     # the highest-judgement, lowest-volume call in the repo (monthly + on a

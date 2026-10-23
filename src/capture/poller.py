@@ -281,17 +281,9 @@ def _decision_draft_tap(result: ingest.IngestResult, db_path: Path | str | None)
     already-landed musing note; its OWN governed purpose
     (``decision_draft_parse``), not a branch inside ``capture.triage``.
 
-    Dispatch-ladder position: this call site lives in ``poll_once``'s
-    ordinary-capture branch, which only runs once
-    ``capture.coach_reply.dispatch`` has already returned False for this
-    update — i.e. strictly AFTER coach-reply, matching the agreed ladder
-    order (slash-commands -> pending-awaits -> card-reply -> coach-reply ->
-    ordinary capture -> this tap).
-
-    Blanket-except, like the coach_reply dispatch call site and every other
-    sibling tap (_pledge_and_annotate / _artifact_brief / _answer): a
-    draft-parser failure — or a propagated LLM hard stop — must NEVER block
-    plain capture, which has already landed by the time this runs."""
+    Runs after slash commands, pending replies, and card replies. A parser
+    failure must not block the ordinary capture that already landed.
+    """
     if result.status != "landed" or result.note_id is None:
         return
     try:
@@ -573,10 +565,8 @@ def poll_once(
                 stripped = update.text.lstrip()
                 low = stripped.lower()
                 if low.startswith("/review"):
-                    # The coach's pings tell the owner to "/review {ticker}" —
-                    # make that work in the channel that carries the ping.
-                    # Reuses the exact ask-tab parsing/rendering so the two
-                    # surfaces never drift; LLM-free and fast.
+                    # Reuse the Ask-tab parser and renderer for manual reviews.
+                    # This path is deterministic and makes no LLM call.
                     bump("command_review")
                     if confirm and update.chat_id is not None:
                         repo_root = Path(db_path).parent.parent if db_path else None
@@ -625,19 +615,6 @@ def poll_once(
             if _dispatch_card_reply(token, update, db_path):
                 bump("card_reply")
                 continue
-            # A free-text reply to a governed COACH PING (B3) — either a direct
-            # Telegram reply-to-message, or a fresh message inside the
-            # short window after the ping went out. Consumed replies never
-            # fall through to ordinary capture; a bug here must never break
-            # plain capture, hence the blanket except.
-            try:
-                from capture import coach_reply
-
-                if coach_reply.dispatch(token, update, roster=roster, db_path=db_path):
-                    bump("coach_reply")
-                    continue
-            except Exception:
-                log.warning({"event": "coach_reply_dispatch_error"}, exc_info=True)
             # A bare URL → land as an On My Mind reading (a link the analyst
             # found), not a musing.  Anything else is stream-of-consciousness.
             url = ingest.extract_url(update.text)

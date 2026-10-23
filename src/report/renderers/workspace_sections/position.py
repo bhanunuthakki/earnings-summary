@@ -23,12 +23,6 @@ __all__ = [
 ]
 
 
-# The research server the report deep-links into (report opens via file://,
-# so the doorway must be absolute) — same hardcoded base the chat drawer /
-# sources tab use (workspace_sections/boot.py, workspace_sections/sources.py).
-# The Socratic think-through page is the deterministic per-ticker decision
-# surface every other "review this name" doorway in the workspace already
-# points at (chat drawer's "think it through", the console's Memos panel).
 def _position_tab(
     body: StringIO,
     pp: PortfolioPositionSection | None,
@@ -309,8 +303,7 @@ def _position_coaching(
     graded_sell_line: str | None,
 ) -> None:
     """Position-tab coaching lines (REQ-3/REQ-6): the behavioral-guard status,
-    the graded-sells base rate when that ledger exists on this branch, and a
-    doorway into the deterministic review surface for this name.
+    the graded-sells base rate when that ledger exists on this branch.
 
     The guard phrase is derived from ``position_review_count`` so it can never
     contradict the count rendered beside it: the behavioral guard runs *inside*
@@ -329,13 +322,6 @@ def _position_coaching(
     body.write(f'<p class="coaching-line muted xsmall">{guard_line}</p>')
     if graded_sell_line:
         body.write(f'<p class="coaching-line muted xsmall">{_esc(graded_sell_line)}</p>')
-    if ticker:
-        body.write(
-            f'<a class="k-btn k-btn-quiet k-btn-sm" '
-            f'href="/socratic/{_esc(ticker.upper())}" '
-            f'data-server-path="/socratic/{_esc(ticker.upper())}" '
-            'target="_blank" rel="noopener">Review this position &rarr;</a>'
-        )
     body.write("</div>")
 
 

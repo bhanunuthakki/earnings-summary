@@ -208,8 +208,6 @@ _PROMPT_VERSIONS: dict[str, str] = {
     "platform_diagram": "v2",  # 10-K + transcript excerpts spotlighted
     "pairwise_analysis": "v2",  # composed anchor block now spotlighted
     "saydo_filter": "v2",  # composed anchor block now spotlighted
-    "advisor_socratic_questions": "v2",  # composed anchor block now spotlighted
-    "advisor_socratic_memo": "v2",  # composed anchor block now spotlighted
     # The injection-canary golden SET (evals/golden/injection_canaries.json),
     # not an LLM prompt of its own — versioned so a future canary-set revision
     # forks the security-pass-rate history cleanly. Bump when cases change.
@@ -269,7 +267,6 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # The Ledger reply-box coach follow-up router (B3 sibling PR). Registered
     # here alongside capture_triage since this file is the one source of
     # truth for prompt versions.
-    "coach_reply_intent": "v1",
     # The Ledger artifact brief (research.brief._build_prompt). Bump when the brief /
     # stress prompt is materially rewritten.
     "artifact_brief": "v1",
@@ -389,7 +386,8 @@ _PROMPT_VERSIONS: dict[str, str] = {
     # inherited the v1 fallback. These rows are behavior-preserving, but make
     # capture cohorts and eval attribution auditable.
     "advisor_swap_check": "v1",
-    "ask_answer": "v1",
+    # Retired exercise referrals now use the existing governed /review command.
+    "ask_answer": "v2",
     "ask_claim_audit": "v1",
     "bear_case_grading": "v1",
     "canonicalize_segments": "v1",

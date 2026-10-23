@@ -19,30 +19,26 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import sys
 from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-
-import db as dbmod  # noqa: E402
-from alerts.store import get_alert, list_alerts  # noqa: E402
-from integrations.portfolio_tracker_client import (  # noqa: E402
+import db as dbmod
+from alerts.store import get_alert, list_alerts
+from integrations.portfolio_tracker_client import (
     LivePortfolio,
     PortfolioAnalytics,
 )
-from owner_profile.store import append_fact, retire_fact  # noqa: E402
-from research.capacity_moments import (  # noqa: E402
+from owner_profile.store import append_fact, retire_fact
+from research.capacity_moments import (
     capacity_breach_still_active,
     collect_capacity_breach_moments,
     collect_life_event_moments,
     collect_profile_drift_moments,
 )
-from research.governor import Moment, freshness_ok, run_governor  # noqa: E402
+from research.governor import Moment, freshness_ok, run_governor
 
 _NOW = datetime(2026, 7, 17, 8, 0, 0)
 
@@ -520,8 +516,10 @@ def test_run_governor_never_resurrects_a_retired_profile_fact(
     for the direct ``freshness_ok`` unit proof of the rule itself)."""
     _root, db = repo
     fid = _seed_life_event_fact(db, event_date="2026-08-01")
-    first = run_governor(db, send_fn=lambda pid, m: False, now=_NOW)
-    assert first["send_failed"] == 1
+    first = run_governor(db, now=_NOW)
+    assert first["digest"] == 1
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE coach_pings SET status='send_failed'")
 
     conn = sqlite3.connect(str(db))
     try:
@@ -530,20 +528,18 @@ def test_run_governor_never_resurrects_a_retired_profile_fact(
     finally:
         conn.close()
 
-    second = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
+    second = run_governor(db, now=_NOW)
     assert second["sent"] == 0
     assert second["seen"] == 0  # not re-collected at all — nothing to retry
 
 
-def test_run_governor_sends_life_event_checkpoint_and_never_repeats(
+def test_run_governor_digests_life_event_checkpoint_and_never_repeats(
     repo: tuple[Path, Path],
 ) -> None:
     _root, db = repo
     _seed_life_event_fact(db, event_date="2026-08-01")
-    sent: list[Moment] = []
-    tally = run_governor(db, send_fn=lambda pid, m: sent.append(m) or True, now=_NOW)
-    assert tally["sent"] == 1
-    assert [moment.class_ for moment in sent] == ["life_event_checkpoint"]
+    tally = run_governor(db, now=_NOW)
+    assert tally["digest"] == 1
     conn = sqlite3.connect(str(db))
     try:
         row = conn.execute(
@@ -551,9 +547,9 @@ def test_run_governor_sends_life_event_checkpoint_and_never_repeats(
         ).fetchone()
     finally:
         conn.close()
-    assert row == ("life_event_checkpoint", "sent")
+    assert row == ("life_event_checkpoint", "digest")
     # Once-forever: a second run sees nothing new for this class.
-    again = run_governor(db, send_fn=lambda pid, m: True, now=_NOW)
+    again = run_governor(db, now=_NOW)
     assert again["seen"] == 0
 
 
@@ -567,8 +563,8 @@ def test_capacity_breach_class_honors_the_shared_mute_discipline(
     root, db = repo
     _seed_human_capital_fact(db, cap_pct=20.0)
     _write_weights(root, {"META": 0.15, "GOOGL": 0.10})
-    tally = run_governor(db, send_fn=lambda pid, m: True, now=_NOW, repo_root=root)
-    assert tally["sent"] == 1
+    tally = run_governor(db, now=_NOW, repo_root=root)
+    assert tally["digest"] == 1
 
     conn = sqlite3.connect(str(db))
     try:

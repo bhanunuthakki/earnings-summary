@@ -532,11 +532,6 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
         WORK_OS_EVALUATION_KIND,
     ),
     "/api/red_team/<int:item_id>/respond": (*FAMILY_PANEL_PORTFOLIO, *FAMILY_PANEL_DECISIONS),
-    "/api/socratic/memo": (
-        *FAMILY_PANEL_DECISIONS,
-        WORK_OS_EVALUATION_KIND,
-        WORK_OS_DESK_KIND,
-    ),
     "/api/coach/unmute": (WORK_OS_EVALUATION_KIND, *FAMILY_PANEL_DECISIONS),
     "/api/coach/attest-change": (*FAMILY_PANEL_DECISIONS, *FAMILY_PANEL_PORTFOLIO),
     # ---- Ask / sessions (session rename/delete changes Evaluation Dialogues
@@ -576,7 +571,6 @@ MUTATION_ROUTE_CACHE_REGISTRY: dict[str, CacheFamily] = {
     "/actions/resolve-issue": (*FAMILY_PANEL_OPERATIONS,),
     "/actions/run-eval": (*FAMILY_PANEL_OPERATIONS,),
     "/actions/run-scenario": (*FAMILY_PANEL_PORTFOLIO,),
-    "/actions/socratic-questions": (*FAMILY_PANEL_DECISIONS,),
     "/actions/advisor-memo": (*FAMILY_PANEL_DECISIONS, *FAMILY_PANEL_PORTFOLIO),
     "/actions/position-review": (*FAMILY_PANEL_DECISIONS, *FAMILY_PANEL_PORTFOLIO),
     "/actions/discovery-run": (*FAMILY_PANEL_OPERATIONS,),

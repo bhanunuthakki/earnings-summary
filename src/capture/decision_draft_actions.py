@@ -20,8 +20,7 @@ Persistence rules (verbatim from the PRD):
     that every ``confirmed``/``corrected`` row carries a ``decision_id`` — a
     draft with no actionable ``proposed_action`` (a bare rationale/
     correction/request) confirms by ATTACHING to the most recent existing
-    decision for its ticker (mirrors ``coach_reply``'s ``annotate_decision``
-    intent) rather than fabricating a new one; when no such decision exists,
+    decision for its ticker rather than fabricating a new one; when no such decision exists,
     confirming is refused (:class:`DraftActionError`) and the owner's real
     option is Dismiss (filed, not lost — the raw note stays intact either
     way).
@@ -146,8 +145,7 @@ def _maybe_note_profile_implication(draft: DecisionDraft, *, db_path: Path | str
     append_fact`` needs a CLOSED category and a schema-validated per-kind
     value dict (``owner_profile/models.py``) — there is no free-text ->
     per-kind-model extractor, and building one is explicitly out of scope
-    here (documented gap, same shape as ``capture.coach_reply._apply_outcome``'s
-    ``profile_fact`` branch). Confirming a correction therefore never mutates
+    here. Confirming a correction therefore never mutates
     the profile store directly; the raw note (already landed, unabridged)
     remains the durable record. Intentionally a no-op today — kept as its
     own function so a future structured-extraction call has a single call
@@ -233,8 +231,7 @@ def _apply_confirmed_action(
             return decision_id, "decision_recorded"
 
         # rationale / correction / request with no proposed action of its own
-        # -> attach to the most recent existing decision (coach_reply's
-        # annotate_decision shape), never fabricate a new one.
+        # -> attach to the most recent existing decision, never fabricate a new one.
         decision_id = _most_recent_decision_id(conn, ticker=ticker)
         if decision_id is None:
             raise DraftActionError(

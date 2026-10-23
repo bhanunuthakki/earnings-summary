@@ -1,7 +1,7 @@
 # Backend streamlining: implementation checkpoints
 
-Status: **latest bounded parser and dead-adapter checkpoint accepted by independent Sol proxy: 96/100**.
-The original structural gate still fails. Final combined scoped checks pass.
+Status: **latest exercise and Telegram coaching checkpoint accepted by independent Sol proxy: 96/100**.
+Production source is below the original baseline. One large-module-count gate still fails.
 Started 2026-10-22; revised 2026-10-23 Pacific. Base: `c978523d`.
 Branch: `codex/research-procedure-cleanup`. R1 corrections are at `3065638a`,
 R2/R3 at `3980b0ad`, R5 issuer protection at `24e2373a`, R6 at `b7f4b998`,
@@ -25,9 +25,10 @@ and portfolio decisions. The cleanup targets four sources of friction:
   the owner-approved standalone sandbox and monthly memo schedule are committed
   locally after 256 passing tests and independent acceptance.
 
-No analytical-depth reduction is approved. Other feature removals need an owner
-decision. Whole-branch source remains larger; the exact cost and open gates below
-are part of the checkpoint, not an accepted permanent architecture baseline.
+No analytical-depth reduction is approved. The owner has also approved retiring
+new guided exercises and Telegram coaching delivery, replies and buttons. Other
+feature removals need an owner decision. Current source is below the original
+baseline; the large-module count remains above it. No baseline exception is approved.
 
 ## Cuts and remaining boundaries
 
@@ -464,12 +465,80 @@ removal. A calibration badge is a ratified feature without a proved replacement;
 the KPI catalog has real scratch-seeder callers; DCF authoring and MELI/SEC helpers
 have explicit retention boundaries. Further feature cuts need owner choices.
 
+## Exercise and Telegram coaching retirement — 2026-10-23
+
+The owner-approved cuts remove **1,820 net physical production lines**, **33
+production functions**, and **1,400 net test lines**. No store, schema, migration,
+provider, dependency or parallel framework is added. Independent Sol accepts the
+checkpoint at **96/100**: exercises **96**, coach retirement **98**, integration **96**.
+No scoped blockers remain. All 49 implementation bindings match. This is a local
+checkpoint; no live activation is included. Its commit receipt is
+`.tmp/feature-retirement-final/local-commit.json`.
+
+- New guided exercises lose their generator, CLI, four routes, browser controller,
+  report links, exclusive styles and calibration prose projection. Saved answers,
+  scores, advisor memo kinds, note and ledger links, historical grading and direct
+  position reviews remain. **197 exercise/history/consumer tests pass**.
+- Telegram coaching loses transport, reply classification, button mutations and
+  the governor's unused send API. New findings enter the dashboard digest directly.
+  Historical sending leases and failed rows retain recovery; owner actions retain
+  their conditional write fence. Ordinary Telegram capture, manual `/review`,
+  mutes, attention checks and capacity alerts remain. **137 tests pass**.
+- Three active model/prompt/eval purposes and two retired mutation-cache entries
+  are removed. Ask retains its in-chat stance restriction and points to `/review`;
+  `ask_answer` is v2. Historical budgets and call records remain.
+
+The governor's **24 exact before/current cases** compare first and repeat tallies,
+exception type/message and every persisted row. A tested eligible finding removes
+**two SELECTs, one UPDATE and one COMMIT** across a pass and its repeat. Native
+capacity alert rows match. This is operation-count evidence, not production timing.
+
+The synthetic frontend MVP keeps saved-answer disclosure, score pills and note
+links while removing the unused exercise controls. Mouse and keyboard disclosure
+work at 1,280 and 768 pixels. No page errors, network requests or memo overflow were
+observed. Position/drawer/direct-review previews are bounded component fixtures;
+provider dispatch was not exercised in the browser. Full report comparison passes
+**46 golden tests**. Exactly three golden parts lose retired exercise links.
+
+The first retained-consumer run passed 354 tests and failed one obsolete referral
+assertion. The corrected Ask comparison passes all 44 tests; it checks the manual
+review referral, retained stance boundary and absence of the retired URL. A late
+suppression gate also found inherited test suppressions. Redundant per-test path
+setup and four untyped stubs were corrected; all assertions stay exact. The affected
+49 tests pass. The test suppression ceiling decreases from 906 to 899. Original
+failures and the superseded review remain as evidence.
+
+The normal unchanged dependency scanner reports **COMPLETE/PASS**, with no unknown
+or unresolved production edges and no diagnostics. All 202 reviewed entries and 86
+internal target files remain. Three CLI coordinates move; target sets and
+classifications do not change. The existing strict oracle/helper suite passes
+**97 tests**, with five optional benchmark cases skipped. The current-HEAD rerun and
+whole static ceiling pass after the test setup repair. The current-HEAD test
+passes in 58.83 seconds. All **115 retained changed files** pass format, lint and
+strict typing. The complete static population is **2,868 files**, with 1,826
+diagnostics and **1,804 suppressions**, seven fewer. A type-check process failed
+before diagnostics; the retry passed with a temporary 8 GiB Node heap. No project
+setting changed. Supervisors report no remaining owned processes.
+
+Production source now measures **561,856 noncomment lines**, versus the original
+562,282: **426 fewer**. Executable modules are 1,465 versus 1,469. Duplication remains
+within its unchanged baseline. Modules over 2,000 lines remain **25 versus 24**, so
+the original structural gate still fails. Read-only review found no safe material
+IR-owner deletion that would close it. Small receipt decoding duplication is a
+proposal; moving the larger recovery procedures would only move their complexity.
+
+The coach task source changes its Description only. All other XML fields match.
+The installed task and canonical host were not inspected or changed. Evidence is
+under `.tmp/feature-retirement-final/`, `.tmp/exercise-retirement/` and
+`.tmp/coach-telegram-retirement/`. Local integration is separate from deployment.
+
 ## Gates that remain open
 
-The complete release gate remains **HOLD**. A prior full-suite run reached 100%
-test progress but was interrupted in the existing temporary-retention teardown path. Its logs
-remain in `.tmp/cleanup-validation.log` and `.tmp/cleanup-teardown-sample.txt`.
-It is not a passed full suite. Full NU/MELI/Q&A/portfolio semantic acceptance and
+The complete release gate remains **HOLD**. The earlier interrupted run remains
+historical. A later complete run recorded 21,410 passed, five failed, 101 skipped
+and two passed subtests, with clean teardown. Later scoped corrections do not
+reclassify that run as passing. No complete post-correction rerun is claimed.
+Full NU/MELI/Q&A/portfolio semantic acceptance and
 canonical-host verification are not claimed. R5 native writer retirement remains
 HOLD; R3 product completion and R4 original-source numeric retirement remain open.
 

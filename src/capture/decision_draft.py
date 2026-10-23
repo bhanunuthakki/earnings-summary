@@ -27,7 +27,7 @@ dismissed|expired|parse_failed`` — ``confirmed``/``corrected``/``dismissed``/
     NULL, original_text always intact.
   * a hard STOP (budget exhausted / setup broken) propagates per the repo's
     LLM exception policy — the poller tap catches it with the same
-    blanket-except every sibling tap uses (coach_reply's dispatch call site),
+    existing bounded failure handling at the poller's draft dispatch,
     so a hard stop degrades to "no draft this time", never a broken capture.
 
 Idempotent: :func:`parse_note` looks up an existing draft for the note first

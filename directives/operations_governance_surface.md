@@ -1647,10 +1647,10 @@ builders receive `DCF_SOURCE_STATE_ROOT`. The SEC capture owner stores blobs
 under `<state-root>/data/evidence/blobs`. A code checkout, database path, or
 workbook output root grants no source-read authority. The dashboard passes its
 explicit state-root context to valuation consumers and child actions.
-`execution/run_advisor_memos.py`, `execution/run_socratic_questions.py`, and
-`execution/dcf_sheets.py import` accept the same explicit `--state-root`.
-Socratic questions and memo synthesis forward that context to their existing
+`execution/run_advisor_memos.py` and `execution/dcf_sheets.py import` accept
+that explicit `--state-root`. Advisor memo synthesis forwards it to the existing
 advisor reader. The code/output root and source state root remain separate.
+The retired new-exercise CLI has no remaining dispatch path.
 `execution/refresh_dispatch.py --state-root` retains its existing data/output
 meaning. Its separate `--source-state-root` is the model byte-read authority.
 The dashboard forwards that separate flag only from its explicit source state
@@ -2057,25 +2057,43 @@ window changed. Regression evidence: `tests/test_storage_reservation.py`,
 
 
 
-### Coach delivery confirmation and fundamentals cache revision — 2026-10-22
+### Owner-approved exercise and Telegram coaching retirement — 2026-10-23
 
-Disposition: **tested existing operational behavior repair; no new operator action**.
-Coach delivery claims use `sending` until Telegram confirmation. A 15-minute
-expired claim becomes retryable; completion is fenced to the exact claim timestamp.
-The manual and scheduled coach entrypoints share the `notification-delivery` lane.
-Owner acknowledgement and dismissal of an unlinked `sending` carrier remain
-recordable, and completion preserves those terminal states. Acknowledgement after
-a claim cannot recall a push already in flight. Delivery is at least once: a crash
-after Telegram accepts the push but before confirmation may produce a duplicate.
-This change does not establish durable send-time frequency accounting.
+Disposition: **retire new guided exercises and Telegram coaching delivery/actions**.
+The new-exercise generator, CLI, four routes, controller, report doorways, exclusive
+style and calibration prose projection are removed. The three retired LLM purposes
+leave the active model, prompt-version and eval registries. The Ask instruction
+keeps the no-in-chat-stance boundary and refers to the existing governed `/review`
+command; its prompt version is now v2. Saved answers, advisor memo kinds, notes,
+ledger links, historical grading, decision recording, research Q&A and direct
+position reviews remain. No rows, historical identities, budgets or migrations
+are deleted.
 
-The cockpit fundamentals cache binds the canonical financial revision captured
-with its values in one committed read transaction and rejects changed revisions.
-Snapshot replacement still requires an explicit derived-cache refresh. No schedule,
-service, database authority, publication permission, or UI geometry changes.
-Evidence: `tests/test_governor.py`, `tests/test_run_coach_pings.py`, and
-`tests/test_cockpit_fundamentals.py`; hosted native Windows application coverage
-is distinct from deployment proof on the managed production runtime.
+`execution/run_coach_pings.py` keeps the existing reconciliation and dashboard
+findings pass, write lane and cadence. It no longer resolves Telegram credentials
+or constructs a sender. The governor retains the quiet digest, freshness, mute,
+priority, capacity-alert and thesis-attention rules. Its unused send mode is
+retired; new eligible findings enter the digest directly. Old pending delivery
+rows retain the existing expiry/recovery rule and conditional retry fence. Sent,
+acted and dismissed history stays intact. Normal Telegram capture keeps old reply
+text without coach interpretation. Old coach buttons acknowledge retirement and
+perform no coach mutation. Ordinary Telegram cards and manual `/review` remain.
+The old `--dry-run` CLI spelling is accepted with a write warning; reconciliation
+and digest accounting still write state. This flag does not select a send mode.
+
+The checked-in coach task changes its Description only. URI, action, cadence,
+principal, settings and enabled state stay intact. No installed task, service,
+production database, provider call or Telegram message is changed by this source
+retirement. The earlier delivery-confirmation repair remains in Git history; it
+is not an active coaching transport contract after this retirement.
+
+The cockpit fundamentals cache retains its separate repair: it binds the canonical
+financial revision with values in one committed read transaction and rejects
+changed revisions. Snapshot replacement requires an explicit derived-cache refresh.
+Evidence uses the exercise/history/direct-review, governor/capacity/attention,
+capture-poller, callback, registry and workspace/design suites. Source and rendered
+receipts live in the implementation checkpoint. Hosted native Windows coverage
+and live activation remain separate from local source acceptance.
 
 
 ### Owner-reviewed governed proposal registration — 2026-10-21

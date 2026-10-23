@@ -65,7 +65,10 @@
     "G1-reachability",
     "G2-legacy-guard",
     "P1-parser",
-    "D1-dead-adapter"
+    "D1-dead-adapter",
+    "F3-exercises",
+    "F4-telegram-coaching",
+    "F5-integration"
   ],
   "first_review": {
     "effort": "high",
@@ -818,7 +821,7 @@
     "transport": "claude_membership"
   },
   "static_count_clarification": "Old2012/1835 values are previous configured ceilings, not a paired prechange measurement of actual diagnostics/suppressions. Revised measured1826/1811 values tighten those ceilings.",
-  "status": "LOCAL_CHECKPOINTS_ACCEPTED; latest parser/dead-adapter96; combined scoped validation PASS; original structural baseline FAIL; wider roadmap open",
+  "status": "LOCAL_CHECKPOINTS_ACCEPTED; latest feature-retirement96; scoped deterministic checks PASS; original large-module-count baseline FAIL; wider roadmap open",
   "third_independent_sol_proxy_review": {
     "binding_sha256": "53493b3675b5a59400c3527a8954914d8a50ea0ae9d09a819d27d854d8c897d0",
     "effort": "high",
@@ -3299,5 +3302,267 @@
     "note": ".tmp/next-dead-code-candidate-2.md",
     "status": "NO_FURTHER_BACKEND_ONLY_REMOVAL_JUSTIFIED_IN_INSPECTED_SET",
     "reason": "A calibration badge remains a ratified feature without a replacement oracle; the KPI catalog has real scratch-seeder callers; DCF authoring and MELI/SEC capabilities have explicit retention boundaries. No unapproved feature or promised capability was removed."
+  },
+  "feature_retirement_phase2": {
+    "status": "ACCEPTED_LOCAL_CHECKPOINT",
+    "owner_approval": {
+      "exercise": "Retire new exercises; keep history and direct reviews",
+      "coach": "Retire coach pings and coach reply/button actions"
+    },
+    "source_counts": {
+      "production": {
+        "files": 23,
+        "inserted": 83,
+        "deleted": 1903,
+        "net_removed": 1820
+      },
+      "tests": {
+        "files": 18,
+        "inserted": 473,
+        "deleted": 1873,
+        "net_removed": 1400
+      },
+      "other": {
+        "files": 8,
+        "inserted": 50,
+        "deleted": 34,
+        "net_removed": -16
+      }
+    },
+    "removed_production_functions": 33,
+    "source_binding": ".tmp/feature-retirement-final/source-frozen.json",
+    "source_binding_sha256": "15879d8e1c2de8cfe8b439d9a0b40e06e136f97f03683627e1c167ae4ff4d950",
+    "units": {
+      "F3-exercises": "Remove new exercise generation, CLI, four routes, controller, report doorways and exclusive calibration/style projections. Keep all historical answers, memo kinds, scores, notes, ledger links and direct reviews.",
+      "F4-telegram-coaching": "Remove sender, coach reply router, coach callback actions and unused governor send/retry procedures. Findings enter digest directly. Keep existing pending-row recovery, CAS fence, collectors, mutes, capacity alerts, ordinary capture and manual reviews.",
+      "F5-integration": "Remove three active model/prompt/eval purposes and two mutation-cache registrations. Ask retains stance restriction and refers to /review, with ask_answer v2. Exact reconstruction/boundary entries and UI master digest updated. Seven test suppressions removed; test ceiling906to899."
+    },
+    "performance": {
+      "proof": ".tmp/coach-telegram-retirement/parity-tests.txt",
+      "complete_parity_cases": 24,
+      "comparison": "Exact first/repeat tally, exception type/message and all persisted table rows. No normalization.",
+      "eligible_finding_sql_reduction": {
+        "SELECT": 2,
+        "UPDATE": 1,
+        "COMMIT": 1
+      },
+      "scope": "Synthetic first pass plus repeat; governor-owned SQLite connections only. No production latency claim."
+    },
+    "tests": {
+      "exercise": {
+        "passed": 197,
+        "seconds": 10.3,
+        "receipt": ".tmp/exercise-retirement/targeted-tests.txt"
+      },
+      "coach": {
+        "passed": 137,
+        "seconds": 19.45,
+        "receipt": ".tmp/coach-telegram-retirement/final-targeted-tests.txt"
+      },
+      "goldens": {
+        "passed": 46,
+        "seconds": 1.35,
+        "receipt": ".tmp/feature-retirement-final/golden-comparison.txt",
+        "expectation_update": "Exactly three parts lose retired exercise links; all other report content retained."
+      },
+      "retained_consumers": {
+        "first_result": "354passed,1failed: obsolete Socratic referral assertion",
+        "corrected_ask_rerun": "44passed2.94s; manualreview referral and no inchat stance boundary asserted",
+        "receipts": [
+          ".tmp/feature-retirement-final/retained-consumers.txt",
+          ".tmp/feature-retirement-final/ask-engine-final.txt"
+        ]
+      },
+      "strict_dependency_helpers": {
+        "passed": 97,
+        "skipped": 5,
+        "seconds": 178.11,
+        "receipt": ".tmp/feature-retirement-final/affected-receipt.json",
+        "skip_scope": "Optional benchmark database absent."
+      },
+      "test_setup_type_repair": {
+        "passed": 49,
+        "seconds": 7.47,
+        "proof": ".tmp/feature-retirement-final/suppression-repair-provenance.json",
+        "assertions": "All exact; no expected behavior changed."
+      },
+      "current_head_final": {
+        "passed": 1,
+        "seconds": 58.83,
+        "receipt": ".tmp/feature-retirement-final/current-head-final-test.txt",
+        "scope": "Existing strict current-tree graph oracle after setup/type repair."
+      }
+    },
+    "rendered_evidence": {
+      "root": ".tmp/exercise-retirement/",
+      "states": [
+        "history",
+        "empty",
+        "position",
+        "research-drawer",
+        "direct-review"
+      ],
+      "widths": [
+        1280,
+        768
+      ],
+      "limits": "Isolated synthetic components; drawer before reconstructed from baseline function. Direct review unavailable-source projection only; browser did not dispatch a provider or live app. Retained server/command tests cover dispatch.",
+      "observed": "Saved-history disclosure mouse/keyboard works; no horizontal overflow or page errors in memo fixtures. Root visually inspected before/after history, position and drawer."
+    },
+    "normal_reachability": {
+      "status": "PASS",
+      "collection": "COMPLETE",
+      "source_sha256": "1ee393281cd88a3b427671180435aa3a8d3cb309ddbcdaa31ef55303bfd73b7a",
+      "unknown": 161,
+      "production_unknown": 0,
+      "production_unresolved": 0,
+      "diagnostics": 0,
+      "receipt": ".tmp/feature-retirement-final/reachability.json",
+      "proofs": [
+        ".tmp/feature-retirement-final/provenance-rebind.json",
+        ".tmp/feature-retirement-final/ask-oracle-provenance-rebind.json",
+        ".tmp/feature-retirement-final/suppression-repair-provenance.json"
+      ],
+      "preservation": "202 entries and86internal target files retained. Three CLI line moves only. No scanner, classification, targetset, source-list, exemption or strict test assertion change."
+    },
+    "original_architecture": {
+      "architecture": {
+        "schema_version": "architecture-ratchet-v1",
+        "status": "FAIL",
+        "scoped_commit": "af92233f72d57f9142b650ffa57e5a9d2a98d686",
+        "baseline_commit": "36735db5c1ff065cc85975d0de1727b27c7afed3",
+        "current_source_sha256": "8fdcdf61c686908f2829db84a7db5877787cd4b118a204b37b495530dd1e9b3c",
+        "baseline_source_sha256": "5bfd7adc255f2eb0f3f43eba8ca0b95e2554d8db50398ad75a0eefc0cf1ff8f1",
+        "regressions": [
+          "modules_over_2000_loc increased from 24 to 25"
+        ],
+        "scanner_mismatch": false
+      },
+      "duplicates": {
+        "schema_version": "duplicate-ratchet-v1",
+        "status": "PASS",
+        "scoped_commit": "af92233f72d57f9142b650ffa57e5a9d2a98d686",
+        "baseline_commit": "82bf9753dd9218761c9b44a8f47c2d744a31d82d",
+        "scanner_mismatch": false,
+        "regressions": [],
+        "exact_totals": {
+          "groups": 4,
+          "participating_functions": 8,
+          "duplicated_loc": 158
+        },
+        "near_miss_totals": {
+          "groups": 145,
+          "participating_functions": 234,
+          "duplicated_loc": 9753
+        }
+      },
+      "metric_changes": {
+        "executable_modules": {
+          "before": 1469,
+          "after": 1465
+        },
+        "total_noncomment_loc": {
+          "before": 562282,
+          "after": 561856
+        },
+        "modules_over_2000_loc": {
+          "before": 24,
+          "after": 25
+        }
+      },
+      "baseline_disposition": "Original active baseline restored. It controls structural acceptance; no transition exception is approved."
+    },
+    "xml": {
+      "proof": ".tmp/feature-retirement-final/xml-description-proof.json",
+      "effect": "Source Description only; all other XML fields equal. No installed scheduler inspection or mutation."
+    },
+    "preserved_boundaries": [
+      "No database rows, schema, migration or historical identity removed.",
+      "No dependency added or removed; shared Telegram and LLM clients retained.",
+      "No new source collection, LLM/provider call, Telegram send or live host access.",
+      "No push, merge, deployment, live service or installed scheduler change.",
+      "NU/MELI depth and whole-application semantic acceptance remain separate obligations."
+    ],
+    "failed_evidence_retained": [
+      ".tmp/feature-retirement-final/integration-first.txt",
+      ".tmp/feature-retirement-final/integration-comparison.txt",
+      ".tmp/feature-retirement-final/retained-consumers.txt",
+      ".tmp/streamlining-static-checkpoint10.json",
+      ".tmp/streamlining-static-checkpoint11.json",
+      ".tmp/feature-retirement-final/suppression-repair-types-first.txt",
+      ".tmp/feature-retirement-phase2-independent-review.superseded-20261023.json",
+      ".tmp/streamlining-static-checkpoint12.json",
+      ".tmp/feature-retirement-phase2-independent-review.superseded-20261023.json",
+      ".tmp/feature-retirement-phase2-independent-review.superseded-hold-20261023.json"
+    ],
+    "next_ingestion_assessment": {
+      "status": "READ_ONLY_PROPOSAL_NOT_IMPLEMENTED",
+      "finding": "Managed IR inventory readback has two duplicate six-statement decoding sequences. Reuse its typed reader only if a bounded cut is economical. The larger metadata inspection, retained-byte replay and crash recovery procedures have distinct contracts. No safe material removal that clears the large-module gate is established.",
+      "root_disposition": "Do not split the module or raise baselines. Preserve byte, inventory, rollback and uncertain-commit semantics; larger financial-route retirement still requires qualification."
+    },
+    "storage": "Keep bounded source/proof/MVP receipts under existing .tmp ownership while wider gate/recovery questions remain. Release after durable final acceptance and no open reconstruction need. No database snapshot or live state copy created.",
+    "independent_review": {
+      "review_kind": "Owner-requested separately briefed independent GPT-6.1 Sol advisory proxy; not formal frontier qualification",
+      "receipt": ".tmp/feature-retirement-phase2-independent-review.json",
+      "sha256": "2259bb21bf4863034c9eb255a8957c962662f555eca0e4aaba18873101b17461",
+      "verdict": "ACCEPT",
+      "overall": 96,
+      "units": {
+        "F3-exercises": {
+          "score": 96,
+          "verdict": "ACCEPT",
+          "blockers": []
+        },
+        "F4-coach": {
+          "score": 98,
+          "verdict": "ACCEPT",
+          "blockers": []
+        },
+        "F5-registration-and-surface-integration": {
+          "score": 96,
+          "verdict": "ACCEPT",
+          "blockers": []
+        }
+      },
+      "required_changes": [],
+      "global_delivery_gate": {
+        "verdict": "HOLD",
+        "reason": "Scoped F3/F4/F5 source review is ACCEPT. Whole-branch architecture acceptance remains FAIL because modules_over_2000_loc is 25 versus the original 24. The static, design, reachability and scoped deterministic gates now pass. This advisory does not waive the residual original structural gate.",
+        "remaining_obligations": [
+          "Keep the residual whole-branch architecture failure explicit. Resolve it under the separately owned structural work before claiming whole-branch acceptance.",
+          "Root owns any local commit and final delivery. Later source changes require a new binding and affected evidence."
+        ]
+      },
+      "prior_receipts": [
+        ".tmp/feature-retirement-phase2-independent-review.superseded-20261023.json",
+        ".tmp/feature-retirement-phase2-independent-review.superseded-hold-20261023.json"
+      ]
+    },
+    "whole_static": {
+      "receipt": ".tmp/streamlining-static-checkpoint13.json",
+      "status": "PASS",
+      "retained_files": 2868,
+      "pyright_diagnostics": 1826,
+      "suppressions": 1804,
+      "changed_retained_files": 115,
+      "changed_format_lint_strict_types": "PASS; strict0errors0warnings",
+      "changed_suppressions": "PASS",
+      "source_unchanged": true,
+      "remaining_owned_processes": [],
+      "temporary_node_heap_mib": 8192,
+      "execution_note": "Preceding process exited250 before diagnostics. Temporary heap retry passed; no project setting changed. Another unrelated checker was observed; no isolated timing claim."
+    },
+    "contract_checks": {
+      "design_sync": "PASS",
+      "cron_xmls": 44,
+      "directive_manifest": "PASS",
+      "folder_contract": "PASS",
+      "architecture_boundaries": "PASS",
+      "reconstruction_subsystems": 11,
+      "public_tree": "PASS",
+      "receipts_root": ".tmp/feature-retirement-final/"
+    },
+    "final_checks": ".tmp/feature-retirement-final/final-checks.json",
+    "local_commit_receipt": ".tmp/feature-retirement-final/local-commit.json"
   }
 }

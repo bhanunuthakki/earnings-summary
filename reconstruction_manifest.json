@@ -110,7 +110,6 @@
         "execution/process_ir_documents.py",
         "execution/dcf_sheets.py",
         "execution/run_advisor_memos.py",
-        "execution/run_socratic_questions.py",
         "execution/publish_meli_reported_statements.py",
         "execution/plan_analysis_evidence_scope.py",
         "src/provenance/analysis_scope.py",

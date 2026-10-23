@@ -7,9 +7,6 @@ remain reviewable in one place.
 
 from __future__ import annotations
 
-from ui.controls import controls_css
-from ui.tokens import palette_css
-
 
 def _block(css: str) -> str:
     return f"<style>{css.strip()}</style>"
@@ -132,9 +129,8 @@ _DECISIONS = r"""
 """
 
 _MEMOS = r"""
-.soc-record-link { color:var(--accent); }
-.am-runbar { display:flex; align-items:center; gap:var(--sp-1); flex-wrap:wrap; background:var(--surface); border:var(--bw-thin) solid var(--border); border-radius:var(--radius); padding:var(--sp-2) var(--sp-4); margin-bottom:var(--sp-5); font-size:var(--fs-body); }.am-note,.soc-status { font-size:var(--fs-caption); }.am-log { width:100%; margin:var(--sp-2) 0 0; padding:var(--sp-2) var(--sp-3); background:var(--paper); border:var(--bw-thin) solid var(--border); border-radius:var(--radius); font-family:var(--mono); font-size:var(--fs-caption); max-height:var(--grid-card-sm); overflow-y:auto; white-space:pre-wrap; }.am-screen td { vertical-align:middle; }.am-cleared { color:var(--warn); font-weight:600; }.am-card { background:var(--surface); border:var(--bw-thin) solid var(--border); border-radius:var(--radius); padding:var(--sp-2) var(--sp-4); margin-bottom:var(--sp-2); }.am-card summary { cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:var(--sp-1); flex-wrap:wrap; }.am-card summary::-webkit-details-marker { display:none; }.am-card summary::before { content:'\25B8  '; color:var(--muted); font-family:var(--mono); }.am-card[open] summary::before { content:'\25BE  '; }.am-scope { font-family:var(--mono); font-weight:600; }.am-title { color:var(--fg-soft); font-size:var(--fs-body); }.am-stamp { margin-left:auto; color:var(--muted); font-size:var(--fs-caption); font-family:var(--mono); }.am-body { font-size:var(--fs-body); line-height:1.6; margin-top:var(--sp-3); }.am-body h2,.am-body h3,.am-body h4 { color:var(--fg); margin:var(--sp-3) 0 var(--sp-1); }.am-body h3 { font-size:var(--fs-title); }.am-body ul { padding-left:var(--sp-5); }.am-sep { width:var(--bw-thin); height:var(--sp-5); background:var(--border); display:inline-block; }.am-runbar select,.soc-controls select { padding:var(--sp-1) var(--sp-5) var(--sp-1) var(--sp-2); font-size:var(--fs-caption); font-family:var(--mono); }.am-stance { text-transform:uppercase; letter-spacing:.06em; font-size:var(--fs-caption); cursor:help; }.soc-q { margin:var(--sp-3) 0; }.soc-q label { display:block; font-size:var(--fs-body); color:var(--fg); margin-bottom:var(--sp-1); }.soc-q textarea { width:100%; resize:vertical; }.soc-controls { display:flex; align-items:center; gap:var(--sp-1); flex-wrap:wrap; margin-top:var(--sp-4); }.soc-saved { color:var(--ok); font-size:var(--fs-body); }.am-track { font-size:var(--fs-body); margin:0 0 var(--sp-3); font-variant-numeric:tabular-nums; }
-* { box-sizing:border-box; }.soc-page-body { margin:0; padding:var(--sp-4) var(--sp-5) var(--sp-6); font-family:var(--sans); background:var(--bg); color:var(--fg); line-height:1.55; font-size:var(--fs-body); }.soc-page-main { max-width:var(--grid-card-lg); margin:0 auto; }.soc-page-main h1 { font-size:var(--fs-display); margin:0 0 var(--sp-1); }.soc-page-main h2 { font-size:var(--fs-title); margin:0 0 var(--sp-1); }.soc-page-panel { background:var(--surface); border:var(--bw-thin) solid var(--border); border-radius:var(--radius); padding:var(--sp-3) var(--sp-4); margin-bottom:var(--sp-4); }.soc-page-panel .sub { color:var(--muted); font-size:var(--fs-caption); margin:0 0 var(--sp-2); }.soc-page-muted { color:var(--muted); }
+.am-runbar { display:flex; align-items:center; gap:var(--sp-1); flex-wrap:wrap; background:var(--surface); border:var(--bw-thin) solid var(--border); border-radius:var(--radius); padding:var(--sp-2) var(--sp-4); margin-bottom:var(--sp-5); font-size:var(--fs-body); }.am-note { font-size:var(--fs-caption); }.am-log { width:100%; margin:var(--sp-2) 0 0; padding:var(--sp-2) var(--sp-3); background:var(--paper); border:var(--bw-thin) solid var(--border); border-radius:var(--radius); font-family:var(--mono); font-size:var(--fs-caption); max-height:var(--grid-card-sm); overflow-y:auto; white-space:pre-wrap; }.am-screen td { vertical-align:middle; }.am-cleared { color:var(--warn); font-weight:600; }.am-card { background:var(--surface); border:var(--bw-thin) solid var(--border); border-radius:var(--radius); padding:var(--sp-2) var(--sp-4); margin-bottom:var(--sp-2); }.am-card summary { cursor:pointer; list-style:none; display:flex; align-items:baseline; gap:var(--sp-1); flex-wrap:wrap; }.am-card summary::-webkit-details-marker { display:none; }.am-card summary::before { content:'\25B8  '; color:var(--muted); font-family:var(--mono); }.am-card[open] summary::before { content:'\25BE  '; }.am-scope { font-family:var(--mono); font-weight:600; }.am-title { color:var(--fg-soft); font-size:var(--fs-body); }.am-stamp { margin-left:auto; color:var(--muted); font-size:var(--fs-caption); font-family:var(--mono); }.am-body { font-size:var(--fs-body); line-height:1.6; margin-top:var(--sp-3); }.am-body h2,.am-body h3,.am-body h4 { color:var(--fg); margin:var(--sp-3) 0 var(--sp-1); }.am-body h3 { font-size:var(--fs-title); }.am-body ul { padding-left:var(--sp-5); }.am-stance { text-transform:uppercase; letter-spacing:.06em; font-size:var(--fs-caption); cursor:help; }.am-track { font-size:var(--fs-body); margin:0 0 var(--sp-3); font-variant-numeric:tabular-nums; }
+
 """
 
 _SIZING_INTENT_REVIEW = r"""
@@ -179,7 +175,3 @@ def sizing_intent_review_css() -> str:
     """Registered visual master for the standalone sizing-intent review page."""
 
     return _block(_SIZING_INTENT_REVIEW)
-
-
-def page_css() -> str:
-    return palette_css("dark") + controls_css("dark") + memos_css()

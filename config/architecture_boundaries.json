@@ -255,7 +255,6 @@
     "execution/run_regime_backtest.py",
     "execution/run_scenario.py",
     "execution/run_session_distill.py",
-    "execution/run_socratic_questions.py",
     "execution/run_standup.py",
     "execution/run_tenet_accountability.py",
     "execution/run_thesis_collision.py",

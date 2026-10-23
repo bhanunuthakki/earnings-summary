@@ -45,9 +45,8 @@ def _excerpt(text: str, limit: int = 200) -> str:
 
 def _repo_root_for(db_path: Path | str, repo_root: Path | str | None) -> Path:
     """The repo root to resolve the Telegram secret files under. ``db_path`` is
-    conventionally ``<repo_root>/data/portfolio.db`` — the same
-    ``repo_root or db_path.parent.parent`` derivation research_notify's
-    ``cp:review`` branch uses when no explicit ``repo_root`` is given."""
+    conventionally ``<repo_root>/data/portfolio.db`` when no explicit root
+    is given. This does not make a checkout a live state authority."""
     if repo_root is not None:
         return Path(repo_root)
     return Path(db_path).resolve().parent.parent
