@@ -25,10 +25,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import sqlite3
 import time
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -84,10 +86,18 @@ from pipeline.run_accounting import (
     record_stage,
     start_run,
 )
+from pipeline.source_policy import (
+    ArtifactKind,
+    CollectionSource,
+    authorize_collection_target_in_connection,
+)
+from provenance.document_evidence_pipeline import DocumentEvidenceRequest, process_document_evidence
 from provenance.fulltext_backfill import project_source_text
 from provenance.immutable_artifact import assert_artifact_unchanged, read_stable_artifact
 from provenance.legacy_document_evidence import require_legacy_document_evidence
 from provenance.llm_extracted_parent import resolve_parent
+from run_lock import hold_run_lock
+from runtime.job_runtime import current_lock_claim, inherited_lock_is_valid
 
 # Named `logger` (not `log`) to avoid colliding with the `TickerExtractionLog`
 # locals named `log` throughout this module.
@@ -341,6 +351,8 @@ def extract_for_ticker(
     conn: sqlite3.Connection,
     refresh: bool = False,
     source_group: str = "earnings",
+    *,
+    requested: bool = False,
 ) -> TickerExtractionLog:
     ticker = ticker.upper()
     if source_group not in _SOURCE_GROUPS:
@@ -385,13 +397,17 @@ def extract_for_ticker(
             period_end = _canonical_summary_period_end(
                 conn, ticker, _period_end(ticker, quarter, year), source_path, spec.doc_type
             )
-            doc_id = _ensure_summary_document_row(
+            doc_id = _prepare_summary_document_evidence(
                 conn,
-                ticker,
-                period_end,
-                source_path,
-                spec.doc_type,
+                repo_root=repo_root,
+                db_path=db_path,
+                ticker=ticker,
+                source_path=source_path,
                 captured_bytes=source_raw,
+                doc_type=spec.doc_type,
+                period_end=period_end,
+                source_sha256=source_snapshot.file_sha256,
+                requested=requested,
             )
             document_state = _allowlist_document_state(
                 conn,
@@ -411,6 +427,7 @@ def extract_for_ticker(
                 "extractor_contract": _ALLOWLIST_EXTRACTOR_CONTRACT,
                 "ticker": ticker,
                 "source_group": source_group,
+                "owner_requested": requested,
                 "document": document_state,
                 "period_end": period_end.isoformat(),
                 "fiscal_period_type": f"Q{quarter}",
@@ -484,6 +501,7 @@ def extract_for_ticker(
                 "unreturned_kpis": [name for name in tier_1_names if name not in extracted],
                 "unreturned_disposition": "unknown",
                 "completion_scope": "bounded_processing",
+                "issuer_acquisition_completeness": "not_asserted_derived_summary",
                 "inserted": result.inserted,
                 "skipped_existing": result.skipped_existing,
                 "validation_issues": result.validation_issues,
@@ -522,6 +540,91 @@ def extract_for_ticker(
             log.error = f"{period_label}: {type(exc).__name__}: {exc}"
             break
     return _close_log(log, t0)
+
+
+def _prepare_summary_document_evidence(
+    conn: sqlite3.Connection,
+    *,
+    repo_root: Path,
+    db_path: Path,
+    ticker: str,
+    source_path: Path,
+    captured_bytes: bytes,
+    doc_type: str,
+    period_end: datetime,
+    source_sha256: str,
+    requested: bool,
+) -> int:
+    """Sequence existing registration and deterministic evidence under one DB owner."""
+    if conn.in_transaction:
+        raise RuntimeError("summary evidence preparation requires an idle connection")
+    authorization = authorize_collection_target_in_connection(
+        conn,
+        ticker,
+        requested=requested,
+        source=CollectionSource.IR,
+        artifact_kind=ArtifactKind.IR_DOCUMENT,
+    )
+    if not authorization.allowed:
+        raise ValueError("summary evidence source policy denied: " + authorization.status.value)
+    configured_database = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
+    owns_database = (
+        bool(configured_database) and Path(configured_database).resolve() == db_path.resolve()
+    )
+    inherited = owns_database and (
+        current_lock_claim(repo_root, "portfolio-db") is not None
+        or inherited_lock_is_valid(repo_root, "portfolio-db")
+    )
+    with (
+        nullcontext()
+        if inherited
+        else hold_run_lock(db_path, owner="summary-document-evidence", timeout_s=0)
+    ):
+        document_id = _ensure_summary_document_row(
+            conn,
+            ticker,
+            period_end,
+            source_path,
+            doc_type,
+            captured_bytes=captured_bytes,
+        )
+        # An invalid explicit selection must not be repaired or replaced.
+        if (
+            conn.execute(
+                "SELECT 1 FROM legacy_document_evidence_binding_revisions WHERE legacy_document_id=?",
+                (document_id,),
+            ).fetchone()
+            is not None
+        ):
+            require_legacy_document_evidence(
+                conn,
+                document_id=document_id,
+                ticker=ticker,
+                source_type=SourceType.LLM_EXTRACTED.value,
+                doc_type=doc_type,
+                period_end=period_end,
+                source_sha256=source_sha256,
+            )
+        result = process_document_evidence(
+            conn,
+            DocumentEvidenceRequest(
+                repo_root=repo_root,
+                ticker=ticker,
+                document_id=document_id,
+                source_type=SourceType.LLM_EXTRACTED,
+                requested=requested,
+                apply=True,
+                batch_size=1,
+            ),
+        )
+    if len(result.items) != 1 or result.items[0].document_id != document_id:
+        raise ValueError("summary evidence preparation did not select the exact document")
+    item = result.items[0]
+    if item.status not in {"extracted", "already-covered"}:
+        raise ValueError("summary evidence preparation incomplete: " + ",".join(item.findings))
+    # Missing issuer-inventory linkage remains degraded. A derived summary is
+    # not an issuer disclosure; the unchanged readiness gate checks its evidence.
+    return document_id
 
 
 def _allowlist_document_state(

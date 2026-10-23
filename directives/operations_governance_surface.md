@@ -398,13 +398,21 @@ gap. Legacy text caches remain retained but cannot supply prompt text.
 
 The existing summary-KPI CLI requires the configured database or an explicit
 `--db-path`; `--repo-root` selects source files only. Allowlist extraction checks
-existing evidence before a model call. Missing or mismatched evidence fails
-without a call and remains retryable after repair. The existing run ledger binds
+existing evidence before a model call. It registers the exact summary bytes and
+uses the existing document-evidence coordinator for that document ID when
+deterministic preparation is needed. Registration and preparation share the exact
+database writer lock; the lock is released before model work. Invalid explicit
+bindings fail closed. Failed preparation makes no model call and remains
+retryable. Missing issuer-inventory linkage for a derived summary stays degraded;
+it does not become an acquisition-completeness claim. The existing run ledger binds
 each completed attempt to its exact source, parent, holdings, and model route.
 Empty and partial responses record bounded processing; unreturned metrics remain
 unknown. `--refresh` repeats completed work but cannot replace an active writer.
-The capture/enumeration path is unchanged. Derived summaries do not gain financial
-admission from this completion record. No scheduler task or service was added.
+The capture/enumeration path is unchanged. `--requested` carries explicit owner
+request context for a selected ticker or document. Resume receipts bind that
+context. Existing automatic role policy is unchanged. Derived summaries do not
+gain financial admission from this completion record. No scheduler task or service
+was added.
 
 ### Legacy evidence backfill and managed IR byte admission
 

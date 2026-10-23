@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "231b42c024064479bbb16982fd2eabe9443c8543",
+  "scoped_commit": "1e55be1c90e554f36ac195b48c3f0b1760697813",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "6679543c00c124368bc7e89f3f6b3d032fb6825e8caf9538c9ae2354a033d9bf",
+  "source_sha256": "d09a04713871def2f1deecc5b27319da904a9d3109fcec41effe6072c4095131",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1468,
-    "total_noncomment_loc": 562718,
+    "executable_modules": 1470,
+    "total_noncomment_loc": 563212,
     "modules_over_1000_loc": 108,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -270,6 +270,21 @@
           "database",
           "filesystem",
           "network"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
+        "path": "execution/audit_cohort_readiness.py",
+        "module": "execution.audit_cohort_readiness",
+        "lines": {
+          "physical": 55,
+          "nonblank": 47,
+          "noncomment": 47
+        },
+        "internal_fan_out": 4,
+        "responsibilities": [
+          "database"
         ],
         "public_functions": 1,
         "fully_annotated_public_functions": 1
@@ -2654,9 +2669,9 @@
         "path": "execution/discover_ir_documents_all.py",
         "module": "execution.discover_ir_documents_all",
         "lines": {
-          "physical": 1337,
-          "nonblank": 1246,
-          "noncomment": 1236
+          "physical": 1341,
+          "nonblank": 1250,
+          "noncomment": 1240
         },
         "internal_fan_out": 11,
         "responsibilities": [
@@ -3012,9 +3027,9 @@
         "path": "execution/extract_kpis_from_summaries.py",
         "module": "execution.extract_kpis_from_summaries",
         "lines": {
-          "physical": 165,
-          "nonblank": 146,
-          "noncomment": 146
+          "physical": 174,
+          "nonblank": 155,
+          "noncomment": 155
         },
         "internal_fan_out": 6,
         "responsibilities": [
@@ -4600,13 +4615,14 @@
         "path": "execution/process_document_evidence.py",
         "module": "execution.process_document_evidence",
         "lines": {
-          "physical": 257,
-          "nonblank": 239,
-          "noncomment": 237
+          "physical": 270,
+          "nonblank": 252,
+          "noncomment": 250
         },
         "internal_fan_out": 7,
         "responsibilities": [
-          "filesystem"
+          "filesystem",
+          "network"
         ],
         "public_functions": 1,
         "fully_annotated_public_functions": 1
@@ -8418,11 +8434,11 @@
         "path": "src/compute/kpi_extract_summaries.py",
         "module": "compute.kpi_extract_summaries",
         "lines": {
-          "physical": 1748,
-          "nonblank": 1602,
-          "noncomment": 1501
+          "physical": 1851,
+          "nonblank": 1703,
+          "noncomment": 1599
         },
-        "internal_fan_out": 22,
+        "internal_fan_out": 26,
         "responsibilities": [
           "database",
           "filesystem",
@@ -15959,6 +15975,22 @@
         "fully_annotated_public_functions": 0
       },
       {
+        "path": "src/provenance/cohort_readiness.py",
+        "module": "provenance.cohort_readiness",
+        "lines": {
+          "physical": 346,
+          "nonblank": 318,
+          "noncomment": 317
+        },
+        "internal_fan_out": 2,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
         "path": "src/provenance/companyfacts_source_proof.py",
         "module": "provenance.companyfacts_source_proof",
         "lines": {
@@ -16027,9 +16059,9 @@
         "path": "src/provenance/document_evidence_pipeline.py",
         "module": "provenance.document_evidence_pipeline",
         "lines": {
-          "physical": 357,
-          "nonblank": 332,
-          "noncomment": 324
+          "physical": 364,
+          "nonblank": 338,
+          "noncomment": 330
         },
         "internal_fan_out": 5,
         "responsibilities": [

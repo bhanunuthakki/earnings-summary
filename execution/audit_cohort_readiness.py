@@ -8,9 +8,9 @@ from datetime import datetime
 from pathlib import Path
 
 try:
-    from execution._lib import command_parser
+    from execution._lib import command_parser, require_db_path
 except ModuleNotFoundError:  # managed bootstrap exposes execution/ as the import root
-    from _lib import command_parser
+    from _lib import command_parser, require_db_path
 
 from provenance.cohort_readiness import audit_cohort_readiness
 from provenance.population_completeness import PopulationTemporalScope
@@ -33,7 +33,8 @@ def main(argv: list[str] | None = None) -> int:
         scope = PopulationTemporalScope(
             knowledge_cutoff=args.knowledge_cutoff, observed_through=args.observed_through
         )
-        conn = connect_sqlite(args.db_path, role=SQLiteConnectionRole.READ_ONLY)
+        db_path = require_db_path(args.db_path)
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY)
         try:
             conn.execute("PRAGMA query_only = ON")
             conn.execute("PRAGMA temp_store = MEMORY")
@@ -41,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
             report = audit_cohort_readiness(conn, tuple(args.issuer_id), scope)
         finally:
             conn.close()
-    except (ValueError, sqlite3.Error):
+    except (OSError, RuntimeError, ValueError, sqlite3.Error):
         print(
             json.dumps({"status": "blocked", "reason": "cohort_readiness_input_or_database_error"})
         )

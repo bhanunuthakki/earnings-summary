@@ -32,8 +32,8 @@ from run_lock import RunLockHeldError, hold_run_lock
 from runtime.job_runtime import (
     JobAlreadyRunningError,
     JobLock,
+    current_lock_claim,
     inherited_lock_is_valid,
-    portfolio_db_path,
 )
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -46,6 +46,7 @@ class DocumentEvidenceResumeReceipt(BaseModel):
     repo_root: str
     ticker: str | None
     source_type: SourceType | None = None
+    requested: bool = False
     content_roots: tuple[str, ...]
     next_before_document_id: int = Field(ge=0)
     newest_document_id_seen: int = Field(ge=0)
@@ -60,6 +61,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ticker")
     parser.add_argument("--source-type", type=SourceType, choices=list(SourceType))
     parser.add_argument("--document-id", type=int)
+    parser.add_argument(
+        "--requested",
+        action="store_true",
+        help="Retain explicit owner request context for one selected ticker or document",
+    )
     parser.add_argument("--before-document-id", type=int, default=0)
     parser.add_argument("--batch-size", type=int, default=25)
     parser.add_argument("--content-root", type=Path, action="append", default=[])
@@ -84,6 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         repo_root=root,
         ticker=args.ticker,
         source_type=args.source_type,
+        requested=args.requested,
         document_id=args.document_id,
         before_document_id=args.before_document_id,
         batch_size=args.batch_size,
@@ -94,10 +101,14 @@ def main(argv: list[str] | None = None) -> int:
     if request.apply:
         try:
             with ExitStack() as stack:
-                inherited_database_lock = portfolio_db_path(
-                    PROJECT_ROOT
-                ).resolve() == args.db.resolve() and inherited_lock_is_valid(
-                    PROJECT_ROOT, "portfolio-db"
+                configured_database = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
+                inherited_database_lock = (
+                    bool(configured_database)
+                    and Path(configured_database).resolve() == args.db.resolve()
+                    and (
+                        current_lock_claim(PROJECT_ROOT, "portfolio-db") is not None
+                        or inherited_lock_is_valid(PROJECT_ROOT, "portfolio-db")
+                    )
                 )
                 if not inherited_database_lock:
                     stack.enter_context(
@@ -133,6 +144,7 @@ def _run(
             or previous.repo_root != str(request.repo_root.resolve())
             or previous.ticker != request.ticker
             or previous.source_type != request.source_type
+            or previous.requested != request.requested
             or previous.content_roots
             != tuple(str(root.resolve()) for root in request.content_roots)
         ):
@@ -200,6 +212,7 @@ def _run(
             repo_root=str(request.repo_root.resolve()),
             ticker=request.ticker,
             source_type=request.source_type,
+            requested=request.requested,
             content_roots=tuple(str(root.resolve()) for root in request.content_roots),
             next_before_document_id=cursor,
             newest_document_id_seen=newest_seen,

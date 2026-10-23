@@ -395,3 +395,89 @@ def test_newer_failed_inventory_never_falls_back_to_older_success(
     assert stage.counts["inventories"] == 1
     assert stage.counts["incomplete_inventories"] == 1
     assert "source_inventory_incomplete" in stage.blockers
+
+
+@pytest.mark.parametrize("target", ["missing", "checkout", "directory"])
+def test_cli_rejects_invalid_database_before_open(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    target: str,
+) -> None:
+    from execution import audit_cohort_readiness as cli
+
+    database = {
+        "missing": tmp_path / "missing-sensitive-name.db",
+        "checkout": Path(cli.__file__).resolve().parents[1] / "data" / "portfolio.db",
+        "directory": tmp_path,
+    }[target]
+
+    def forbidden(*args: object, **kwargs: object) -> None:
+        pytest.fail("An invalid database reached connection creation")
+
+    monkeypatch.setattr(cli, "connect_sqlite", forbidden)
+    assert (
+        cli.main(
+            [
+                "--db-path",
+                str(database),
+                "--issuer-id",
+                "issuer-a",
+                "--knowledge-cutoff",
+                STAMP.isoformat(),
+                "--observed-through",
+                STAMP.isoformat(),
+            ]
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "blocked",
+        "reason": "cohort_readiness_input_or_database_error",
+    }
+    if target == "missing":
+        assert not database.exists()
+
+
+def test_cli_accepts_explicit_configured_external_read_only_database(
+    tmp_path: Path,
+    migrated_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import db
+    from execution import audit_cohort_readiness as cli
+    from sqlite_runtime import SQLiteConnectionRole
+
+    database = migrated_db(tmp_path / "external-authority.sqlite")
+    with sqlite3.connect(database) as conn:
+        _identities(conn)
+    monkeypatch.setattr(db, "DB_PATH", str(database))
+    original_connect = cli.connect_sqlite
+    opened: list[Path] = []
+
+    def connect(path: Path, *, role: SQLiteConnectionRole) -> sqlite3.Connection:
+        assert role is SQLiteConnectionRole.READ_ONLY
+        opened.append(path)
+        return original_connect(path, role=role)
+
+    monkeypatch.setattr(cli, "connect_sqlite", connect)
+    before = database.read_bytes()
+    assert (
+        cli.main(
+            [
+                "--db-path",
+                str(database),
+                "--issuer-id",
+                "issuer-a",
+                "--knowledge-cutoff",
+                STAMP.isoformat(),
+                "--observed-through",
+                STAMP.isoformat(),
+            ]
+        )
+        == 2
+    )  # Valid source, with expected missing cohort evidence.
+    assert opened == [database.resolve()]
+    assert json.loads(capsys.readouterr().out)["issuer_scope"] == ["issuer-a"]
+    assert database.read_bytes() == before
