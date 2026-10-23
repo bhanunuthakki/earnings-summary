@@ -642,3 +642,47 @@ def test_cited_codex_web_answer_is_served_without_fallback(
     out = llm_cli.call_llm_with_web("brief please", purpose="recent_developments")
     assert calls == ["codex"], f"grounded Codex answer must not fall back, got {calls}"
     assert "ft.com" in out
+
+
+@pytest.mark.parametrize(
+    ("input_tokens", "cached_tokens", "output_tokens", "expected"),
+    [(100_000, 20_000, 10_000, 0.262), (300_000, 20_000, 10_000, 1.274)],
+)
+def test_sol_candidate_public_accounting_preserves_long_context_rates(
+    input_tokens: int, cached_tokens: int, output_tokens: int, expected: float
+) -> None:
+    assert codex_backend.estimate_api_equivalent_cost_usd(
+        model="gpt-6.1-sol",
+        input_tokens=input_tokens,
+        cached_input_tokens=cached_tokens,
+        output_tokens=output_tokens,
+    ) == pytest.approx(expected)
+
+
+def test_sol_candidate_reaches_existing_wrapper_without_down_tiering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: list[str] = []
+    recorded: list[dict[str, object]] = []
+
+    def candidate(prompt: str, *, model: str, **kwargs: object) -> SimpleNamespace:
+        requested.append(model)
+        return SimpleNamespace(
+            text="[]",
+            usage=SimpleNamespace(input_tokens=10, cached_input_tokens=0, output_tokens=1),
+        )
+
+    monkeypatch.setattr(codex_backend, "_load_wrapper", lambda: candidate)
+
+    def record_candidate(**kwargs: object) -> None:
+        recorded.append(kwargs)
+
+    monkeypatch.setattr("llm.ledger.record_llm_call", record_candidate)
+    assert (
+        codex_backend.call_codex_llm("source", purpose="kpi_summary_enumerate", model="gpt-6.1-sol")
+        == "[]"
+    )
+    assert requested == ["gpt-6.1-sol"]
+    assert recorded[0]["model"] == "codex:gpt-6.1-sol"
+    assert recorded[0]["provider"] == "openai"
+    assert recorded[0]["transport"] == "subscription_cli"
