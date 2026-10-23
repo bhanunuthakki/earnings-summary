@@ -173,3 +173,24 @@ unmet. The known full-suite teardown blocker remains open.
 Retain `.tmp/verify_derived_bundle_parity.py` and its small log until the assertions
 move into the owning test during implementation. Superseded scan payloads were
 removed after calendar closure; prior failed full-suite evidence is preserved.
+
+## Roadmap review gate: not met
+
+The latest independent Claude Opus 5.5 review returned **REVISE, 83/100**.
+There are no blocking findings, but required changes remain. This fails the
+owner's strict score-above-90 rule. No new structural application implementation
+has started. The proposed roadmap is held; its outstanding source/proof decisions
+are listed in `docs/architecture/data-model-simplification-roadmap.md`.
+
+Requested and resolved model: `claude-opus-5-5`, membership transport, high effort,
+no fallback. Reviewed proposal SHA-256: `a7269a6b4893259245cf4e2a05f27ae9486028fef848c0d1603ccb3d54549bcd`. Prompt SHA-256: `d0f713b48b0f6c5308e691a7dab209c9dc428e1214ca8ce770c9f9114901f057`.
+The tracked draft adds hold status and the pending list after that review; it is
+not presented as independently approved. Calendar acceptance remains 91/100.
+
+Source-only baseline preparation verified discovery/report modules hash-equal
+commit 630a74c5. Two exact source files and their hash receipt are retained under
+`.tmp/reader-reuse-baseline/` for the first paired reader MVP. They were not
+executed and no database was copied. Retire them after that evidence is recorded.
+Retain the latest roadmap prompt/proposal/receipt and the final calendar receipt;
+superseded bulk prompts/raw envelopes are disposable. Small failed-review findings
+remain as history. No worker, review process or test server remains active.
