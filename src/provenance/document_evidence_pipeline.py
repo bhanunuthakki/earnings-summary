@@ -10,9 +10,9 @@ import sqlite3
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from models.documents import SourceType
 from pipeline.source_policy import (
@@ -46,11 +46,18 @@ class DocumentEvidenceRequest(BaseModel):
     apply: bool = False
     ticker: str | None = None
     source_type: SourceType | None = None
+    requested: bool = False
     document_id: int | None = Field(default=None, gt=0)
     before_document_id: int = Field(default=0, ge=0)
     newer_than_document_id: int | None = Field(default=None, ge=0)
     batch_size: int = Field(default=25, ge=1, le=500)
     content_roots: tuple[Path, ...] = ()
+
+    @model_validator(mode="after")
+    def _requested_scope(self) -> Self:
+        if self.requested and self.ticker is None and self.document_id is None:
+            raise ValueError("requested evidence continuation requires one ticker or document")
+        return self
 
 
 class DocumentEvidenceItem(BaseModel):
@@ -251,7 +258,7 @@ def _process_item(
     authorization = authorize_collection_target_in_connection(
         conn,
         item.ticker,
-        requested=False,
+        requested=request.requested,
         source=CollectionSource.IR,
         artifact_kind=ArtifactKind.IR_DOCUMENT,
     )
