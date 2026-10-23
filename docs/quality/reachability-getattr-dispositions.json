@@ -131,8 +131,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "Document path extraction permits only the filepath and uri tuple.",
-      "fingerprint": "9ad361dff766080e91758cfbb3ec0d8e0a6f44bd66a1dd8a2f2343a076a122c9",
-      "line": 507,
+      "fingerprint": "aeca96fb1b83cf5c474945c4d0fae12048b520d7bc07c528367164c7255cb649",
+      "line": 510,
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "filepath",
@@ -142,8 +142,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "getattr crosses only the Arelle, lxml, and XBRL relationship adapter boundaries.",
-      "fingerprint": "c96b8cda21ec5a7fcaf87740c58558f6988665814740c68d3ecfb3482750857e",
-      "line": 955,
+      "fingerprint": "cdf886d6e9946de0f4de5bcfa1d3a5ee012987fc5de929bc201a366218272f78",
+      "line": 958,
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "arelle",
@@ -785,7 +785,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "6d28029c3b3d2b2ef83c7080505a4365d9030bdbefeb66412350ba9827142c2c",
+      "source_sha256": "6e001f2b7ce42f09a305da392a0577c6d62a8ce9237c1bc1ab20fe9304a24726",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

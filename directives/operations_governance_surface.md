@@ -1104,6 +1104,25 @@ installation descriptor. Missing, template, unapproved, source-drift and runtime
 failures are separate states. Preflight cannot approve a bundle. Protocol v2
 uses canonical XBRL measure units and a separately committed unit helper.
 
+The Windows filing-XBRL launcher gives each invocation a new noninteractive
+window station and desktop. Only the launcher owner and its AppContainer package
+receive access. The package cannot change permissions or ownership, switch the
+desktop, read the screen, use the clipboard, or install hooks. The launcher
+checks the effective permissions and low-integrity label, restores its own UI
+context, and starts the child with the private desktop. It stops the complete
+child process tree before it closes the private objects. A failed check refuses
+the invocation. This adds no network capability, loopback exemption, host-desktop
+grant, service, schedule, or installed-runtime approval. The launcher uses the stable `EarningsSummaryFilingXbrlV2` profile and its V2
+mutex. It preserves the existing V1 profile. The stdout protocol remains
+unchanged. Native qualification must
+bind the exact compiled launcher before bundle approval or installation.
+
+The bridge gives the SEC renderer a fresh `MPLCONFIGDIR` inside its private
+temporary directory. It restores the environment and removes that directory on
+success or handled failure. Four incomplete directories block another allocation
+and require recovery; the bridge does not delete prior incomplete requests.
+This avoids reading a host home configuration or writing into the sealed runtime.
+
 `provenance.integrity_audit.verify_filing_xbrl_run` is a read-only retained-run
 verifier. Its caller must hold one read transaction and supply an exact retained
 extraction-run ID. It rejects missing schema, run, input/disposition seal,

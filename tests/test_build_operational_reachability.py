@@ -225,6 +225,7 @@ def test_actual_head_is_supported() -> None:
     for source, lines in (
         ("tests/test_sqlite_bootstrap.py", (32, 108)),
         ("tests/test_weekly_cleanup.py", (190,)),
+        ("tests/test_filing_xbrl_appcontainer_launcher.py", (22, 34)),
     ):
         assert [edge for edge in graph.unknown_edges if edge.source == source] == [
             GraphEdge(
@@ -238,9 +239,9 @@ def test_actual_head_is_supported() -> None:
             )
             for line in lines
         ]
-    # Retain all 154 lock-base test seams plus the hidden-control browser probe.
+    # Retain the lock-base seams, hidden-control probe, and two native label-test calls.
     # No production gap is admitted.
-    assert len(graph.unknown_edges) == 155
+    assert len(graph.unknown_edges) == 157
     assert (
         GraphEdge(
             source="tests/test_design_computed_canary.py",

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from datetime import datetime
 from pathlib import Path
 from typing import cast
@@ -10,6 +11,72 @@ from typing import cast
 import pytest
 
 from execution import filing_xbrl_bridge as bridge
+
+_matplotlib_configuration: Callable[[], AbstractContextManager[Path]] = getattr(
+    bridge, "_matplotlib_configuration"
+)
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_matplotlib_configuration_is_private_and_removed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail: bool
+) -> None:
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    monkeypatch.setattr(bridge.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setenv("MPLCONFIGDIR", "parent-configuration")
+    allocated: list[Path] = []
+
+    def use_configuration() -> None:
+        with _matplotlib_configuration() as directory:
+            allocated.append(directory)
+            assert directory.parent == tmp_path
+            assert bridge.os.environ["MPLCONFIGDIR"] == str(directory)
+            (directory / "cache.json").write_text("{}")
+            if fail:
+                raise RuntimeError("body failed")
+
+    if fail:
+        with pytest.raises(RuntimeError, match="body failed"):
+            use_configuration()
+    else:
+        use_configuration()
+    assert len(allocated) == 1
+    assert not allocated[0].exists()
+    assert bridge.os.environ["MPLCONFIGDIR"] == "parent-configuration"
+
+
+def test_matplotlib_configuration_bounds_abandoned_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    monkeypatch.setattr(bridge.tempfile, "gettempdir", lambda: str(tmp_path))
+    for number in range(4):
+        directory = tmp_path / f"earnings-summary-xbrl-mpl-{number}"
+        directory.mkdir()
+        (directory / "preserved.txt").write_text("prior incomplete request")
+    with pytest.raises(ValueError, match="requires recovery"), _matplotlib_configuration():
+        pytest.fail("configuration must refuse allocation")
+    assert len(tuple(tmp_path.iterdir())) == 4
+    assert all((directory / "preserved.txt").is_file() for directory in tmp_path.iterdir())
+
+
+def test_matplotlib_configuration_preserves_a_replaced_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("TEMP", str(tmp_path))
+    monkeypatch.setattr(bridge.tempfile, "gettempdir", lambda: str(tmp_path))
+    replacement = tmp_path / "replacement"
+    replacement.mkdir()
+    (replacement / "preserved.txt").write_text("replacement data")
+    allocated: list[Path] = []
+    with (
+        pytest.raises(ValueError, match="identity changed"),
+        _matplotlib_configuration() as directory,
+    ):
+        allocated.append(directory)
+        directory.rename(tmp_path / "displaced")
+        replacement.rename(directory)
+    assert (allocated[0] / "preserved.txt").read_text() == "replacement data"
 
 
 def _sha(value: bytes) -> str:

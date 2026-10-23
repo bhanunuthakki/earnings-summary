@@ -1,0 +1,10 @@
+{
+  "schema_version": "filing-xbrl-bundle-approval/v1",
+  "manifest_sha256": "6e739cf97cd831163dfc95a2bafaf04567ac0fe09179e760f6285e279f3d9786",
+  "manifest_artifact_sha256": "7227d7ae82b72aeac651b10bc228aab5045e7788c03200c1b4e55950f9101676",
+  "runtime_artifact_sha256": "af4ae37b901d68b314a2a93b81ea7b3a26d55876682939066c5a4f7065586301",
+  "sandbox_launcher_sha256": "e9a2a416855b6d6998b15b363baaef00868586bc339bd52d589106e134f5bf7f",
+  "bridge_source_sha256": "9e01a0e76cfbe1fc10c2b42c64523f0166dc7a9d0807e9370b51c2404917331e",
+  "launcher_source_sha256": "03d93e5fbaf444bdb1a2bb2a4c9f14e51562877d481638955237baf980f01092",
+  "unit_source_sha256": "b9f2fc5fbac15f9d7ac2fdef339b36783479aa8730a1adedf10ec6f5c9a2281c"
+}

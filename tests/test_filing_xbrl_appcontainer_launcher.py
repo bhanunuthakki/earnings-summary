@@ -1,8 +1,55 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Requires Windows .NET Framework")
+def test_launcher_validates_low_labels_by_meaning(tmp_path: Path) -> None:
+    """Compile the retained source and exercise its actual label validator."""
+    windows = Path(os.environ["SYSTEMROOT"])
+    compiler = windows / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+    powershell = windows / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    if not compiler.is_file():
+        pytest.skip("Windows .NET Framework compiler is unavailable")
+    launcher = tmp_path / "launcher.exe"
+    subprocess.run(
+        [
+            str(compiler),
+            "/nologo",
+            "/target:exe",
+            f"/out:{launcher}",
+            str(ROOT / "execution/filing_xbrl_appcontainer_launcher.cs"),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=30,
+    )
+    result = subprocess.run(
+        [
+            str(powershell),
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            str(ROOT / "tests/native/filing_xbrl_label_checks.ps1"),
+            "-Launcher",
+            str(launcher),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    receipt = json.loads(result.stdout)
+    assert receipt["passed"] is True
+    assert len(receipt["cases"]) == 10
+    assert receipt["old_oracle_accepts_observed_form"] is False
 
 
 def test_launcher_owns_suspended_child_before_execution() -> None:
