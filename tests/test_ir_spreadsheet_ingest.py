@@ -829,6 +829,215 @@ def test_typed_ingest_preserves_per_period_failure_and_retry(
     assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 3
 
 
+@pytest.mark.parametrize("typed", [False, True])
+def test_ingest_resolves_each_configured_spec_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, typed: bool
+) -> None:
+    """Resolution includes absent and overwritten specs; selection keeps whole cells."""
+    from models.facts import Unit
+
+    conn = _conn()
+    path = tmp_path / "co.xlsx"
+    _write_sheet(path)
+    conn.execute(
+        "INSERT INTO kpi_definitions (ticker,name,unit,primary_source) "
+        "VALUES ('CO','NII (USD)','actual','ir_doc')"
+    )
+    conn.commit()
+    cfg = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="",
+        reporting_currency="USD",
+        spreadsheet_kpis=(
+            SheetKpi("NII", "Indicators", "Fee Revenue", "actual", origin="capture"),
+            SheetKpi("NII (USD)", "Indicators", "NII", "actual"),
+            SheetKpi("NII", "Indicators", "Total Available Funding", "actual", origin="capture"),
+            SheetKpi("Absent", "Missing", "Absent", "percent", origin="capture"),
+        ),
+    )
+    parsed = parse_spreadsheet_source(path, cfg, max_quarters=1)
+    resolved: list[tuple[str, Unit]] = []
+    units: list[str] = []
+    original = ingest_module.canonical_metric_name
+    original_unit: Callable[[str], Unit] = getattr(ingest_module, "_unit")
+
+    def resolve(connection: sqlite3.Connection, ticker: str, name: str, unit: Unit) -> str:
+        resolved.append((name, unit))
+        return original(connection, ticker, name, unit)
+
+    def resolve_unit(raw: str) -> Unit:
+        units.append(raw)
+        return original_unit(raw)
+
+    monkeypatch.setattr(ingest_module, "canonical_metric_name", resolve)
+    monkeypatch.setattr(ingest_module, "_unit", resolve_unit)
+    try:
+        inserted, _ = ingest_spreadsheet_kpis(
+            conn, "CO", cfg, parsed if typed else parsed.numeric_projection(), path
+        )
+        assert resolved == [("NII", Unit.ACTUAL), ("NII", Unit.ACTUAL), ("Absent", Unit.PERCENT)]
+        assert units == [spec.unit for spec in cfg.spreadsheet_kpis]
+        assert inserted == 1
+        definition = _defs(conn, "CO")["NII (USD)"]
+        assert definition["definition_origin"] == "analyst"
+        fact = _facts(conn, definition["id"])[0]
+        assert float(fact["value"]) == 120.0
+        if typed:
+            assert json.loads(fact["locator"])["spreadsheet_cell"] == {
+                "sheet_name": "Indicators",
+                "cell_address": "E6",
+            }
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("currency", [None, "ZZZ"])
+def test_ingest_validates_overwritten_absent_spec_currency(
+    tmp_path: Path, currency: str | None
+) -> None:
+    conn = _conn()
+    path = tmp_path / "co.xlsx"
+    _write_sheet(path)
+    cfg = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="",
+        spreadsheet_kpis=(
+            SheetKpi("Absent", "Missing", "Absent", "actual", currency=currency),
+            SheetKpi("Absent", "Missing", "Absent", "percent"),
+            SheetKpi("NII", "Indicators", "NII", "actual", currency="USD"),
+        ),
+    )
+    try:
+        with pytest.raises(ValueError, match=r"no explicit currency|unsupported currency"):
+            ingest_spreadsheet_kpis(conn, "CO", cfg, parse_spreadsheet_source(path, cfg), path)
+        assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM ingestion_runs").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_ingest_resolves_all_specs_before_currency_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from models.facts import Unit
+
+    conn = _conn()
+    path = tmp_path / "co.xlsx"
+    _write_sheet(path)
+    cfg = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="",
+        spreadsheet_kpis=(
+            SheetKpi("NII", "Indicators", "NII", "actual"),
+            SheetKpi("Later", "Missing", "Later", "percent", origin="capture"),
+        ),
+    )
+
+    def fail_resolution(connection: sqlite3.Connection, ticker: str, name: str, unit: Unit) -> str:
+        raise sqlite3.DatabaseError("synthetic definition resolution failure")
+
+    monkeypatch.setattr(ingest_module, "canonical_metric_name", fail_resolution)
+    try:
+        with pytest.raises(sqlite3.DatabaseError, match="synthetic definition resolution failure"):
+            ingest_spreadsheet_kpis(conn, "CO", cfg, parse_spreadsheet_source(path, cfg), path)
+        assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_ingest_rejects_conflicting_currency_after_canonical_merge(tmp_path: Path) -> None:
+    conn = _conn()
+    path = tmp_path / "co.xlsx"
+    _write_sheet(path)
+    conn.execute(
+        "INSERT INTO kpi_definitions (ticker,name,unit,primary_source) "
+        "VALUES ('CO','NII (USD)','actual','ir_doc')"
+    )
+    conn.commit()
+    cfg = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="",
+        spreadsheet_kpis=(
+            SheetKpi("NII", "Indicators", "NII", "actual", origin="capture", currency="USD"),
+            SheetKpi("NII (USD)", "Indicators", "NII", "actual", currency="EUR"),
+        ),
+    )
+    try:
+        with pytest.raises(ValueError, match="conflicting currencies"):
+            ingest_spreadsheet_kpis(conn, "CO", cfg, parse_spreadsheet_source(path, cfg), path)
+        assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_failed_period_rolls_back_partial_writes_before_failure_accounting(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    """A real second-value constraint failure cannot commit the first pending value."""
+    repo_root = tmp_path / "repo"
+    db_path = migrated_db(repo_root / "data" / "portfolio.db")
+    path = repo_root / "co.xlsx"
+    _write_sheet(path)
+    cfg = IrConfig(
+        ticker="CO",
+        platform="mz",
+        results_center_url="",
+        reporting_currency="USD",
+        spreadsheet_kpis=(
+            SheetKpi("NII", "Indicators", "NII", "actual"),
+            SheetKpi("Fee Revenue", "Indicators", "Fee Revenue", "actual"),
+        ),
+    )
+    parsed = parse_spreadsheet_source(path, cfg)
+    conn = connect_sqlite(db_path, role=SQLiteConnectionRole.WRITER, schema_preflight=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(
+            "CREATE TRIGGER fail_second_value BEFORE INSERT ON kpi_facts "
+            "WHEN NEW.period_end LIKE '2025-09-30%' AND NEW.kpi_definition_id IN "
+            "(SELECT id FROM kpi_definitions WHERE name='Fee Revenue') "
+            "BEGIN SELECT RAISE(ABORT, 'synthetic second KPI failure'); END"
+        )
+        conn.commit()
+        with pytest.raises(sqlite3.IntegrityError, match="synthetic second KPI failure"):
+            ingest_spreadsheet_kpis(conn, "CO", cfg, parsed, path, repo_root=repo_root)
+        retained = [
+            tuple(row)
+            for row in conn.execute("SELECT id,value,period_end,locator FROM kpi_facts ORDER BY id")
+        ]
+        assert len(retained) == 2
+        assert {str(row[2])[:10] for row in retained} == {"2025-06-30"}
+        assert not conn.in_transaction
+        run = conn.execute("SELECT status,error_summary FROM ingestion_runs").fetchone()
+        assert run["status"] == "failed" and "synthetic second KPI failure" in run["error_summary"]
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM fact_observation_revisions WHERE fact_table='kpi_facts'"
+            ).fetchone()[0]
+            == 2
+        )
+        conn.execute("DROP TRIGGER fail_second_value")
+        conn.commit()
+        inserted, _ = ingest_spreadsheet_kpis(conn, "CO", cfg, parsed, path, repo_root=repo_root)
+        assert inserted == 4
+        assert [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT id,value,period_end,locator FROM kpi_facts ORDER BY id LIMIT 2"
+            )
+        ] == retained
+        assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 6
+        assert [
+            row[0] for row in conn.execute("SELECT status FROM ingestion_runs ORDER BY rowid")
+        ] == ["failed", "ok"]
+    finally:
+        conn.close()
+
+
 def test_refresh_cli_carries_actual_parser_locator_to_existing_writer(
     tmp_path: Path,
     migrated_db: Callable[..., Path],

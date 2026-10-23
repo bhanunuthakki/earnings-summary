@@ -107,24 +107,6 @@ def _ensure_spreadsheet_document(
     return int(cur.lastrowid) if cur.lastrowid is not None else 0
 
 
-def _resolve_definition(
-    conn: sqlite3.Connection, ticker: str, spec: SheetKpi
-) -> tuple[str, Unit, DefinitionOrigin]:
-    """Resolve one ``SheetKpi`` to its (canonical name, unit, origin) for write.
-
-    A curated ``analyst`` row keeps its ``kpi_name`` verbatim (it already IS the
-    canonical name the report charts read) at ANALYST origin. A ``capture`` row's
-    raw label is canonicalized via ``canonical_metric_name`` — reusing an existing
-    series when one safely matches, else minting a clean CAPTURE name. Requires
-    ``conn.row_factory = sqlite3.Row`` (canonical_metric_name reads rows by key).
-    """
-    unit = _unit(spec.unit)
-    if spec.origin == "capture":
-        name = canonical_metric_name(conn, ticker, spec.kpi_name, unit)
-        return name, unit, DefinitionOrigin.CAPTURE
-    return spec.kpi_name, unit, DefinitionOrigin.ANALYST
-
-
 _ParsedValue = TypeVar("_ParsedValue", float, SpreadsheetCellRead)
 
 
@@ -137,22 +119,28 @@ def _canonicalize_parsed(
     dict[str, dict[_dt.datetime, _ParsedValue]],
     dict[str, Unit],
     dict[str, DefinitionOrigin],
+    dict[str, Currency | None],
 ]:
-    """Re-key ``parsed`` (keyed by ``SheetKpi.kpi_name``) by CANONICAL name.
+    """Resolve all specs once, then merge selected series and validate currencies.
 
-    Returns ``(series_by_name, unit_by_name, origins)`` all keyed by the resolved
-    ``kpi_definitions.name``. Two source rows that canonicalize together merge
-    (later periods overwrite); an analyst origin always wins over capture for a
-    shared name so a curated series is never demoted to the long tail.
+    Later configured names and periods overwrite; analyst origin wins a shared
+    canonical name. Even absent or overwritten specs require valid currencies.
     """
-    resolved = {
-        spec.kpi_name: _resolve_definition(conn, ticker, spec) for spec in config.spreadsheet_kpis
-    }
+    resolved: list[tuple[SheetKpi, str, Unit, DefinitionOrigin]] = []
+    for spec in config.spreadsheet_kpis:
+        unit = _unit(spec.unit)
+        capture = spec.origin == "capture"
+        name = (
+            canonical_metric_name(conn, ticker, spec.kpi_name, unit) if capture else spec.kpi_name
+        )
+        origin = DefinitionOrigin.CAPTURE if capture else DefinitionOrigin.ANALYST
+        resolved.append((spec, name, unit, origin))
+    by_config_name = {spec.kpi_name: (name, unit, origin) for spec, name, unit, origin in resolved}
     series_by_name: dict[str, dict[_dt.datetime, _ParsedValue]] = {}
     unit_by_name: dict[str, Unit] = {}
     origins: dict[str, DefinitionOrigin] = {}
     for raw_name, series in parsed.items():
-        res = resolved.get(raw_name)
+        res = by_config_name.get(raw_name)
         if res is None:
             continue
         name, unit, origin = res
@@ -160,17 +148,9 @@ def _canonicalize_parsed(
         unit_by_name[name] = unit
         if origin is DefinitionOrigin.ANALYST or name not in origins:
             origins[name] = origin
-    return series_by_name, unit_by_name, origins
-
-
-def _currency_by_name(
-    conn: sqlite3.Connection, ticker: str, config: IrConfig
-) -> dict[str, Currency | None]:
-    """Resolve explicit spreadsheet currencies onto canonical KPI names."""
     currencies: dict[str, Currency | None] = {}
     monetary = {Unit.ACTUAL, Unit.THOUSANDS, Unit.MILLIONS, Unit.BILLIONS}
-    for spec in config.spreadsheet_kpis:
-        name, unit, _ = _resolve_definition(conn, ticker, spec)
+    for spec, name, unit, _ in resolved:
         if unit not in monetary:
             currencies.setdefault(name, None)
             continue
@@ -189,7 +169,7 @@ def _currency_by_name(
         if existing is not None and existing is not currency:
             raise ValueError(f"canonical IR spreadsheet KPI {name!r} has conflicting currencies")
         currencies[name] = currency
-    return currencies
+    return series_by_name, unit_by_name, origins, currencies
 
 
 def ingest_spreadsheet_kpis(
@@ -223,14 +203,15 @@ def ingest_spreadsheet_kpis(
             raise ValueError("post-cutover IR spreadsheet ingest requires repo_root")
         ensure_legacy_document_evidence(conn, repo_root=repo_root, document_id=doc_id)
     if isinstance(parsed, SpreadsheetParseResult):
-        series_by_name, unit_by_name, origins = _canonicalize_parsed(
+        series_by_name, unit_by_name, origins, currency_by_name = _canonicalize_parsed(
             conn, ticker, config, parsed.selected_series()
         )
         numeric_parsed = parsed.numeric_projection()
     else:
-        series_by_name, unit_by_name, origins = _canonicalize_parsed(conn, ticker, config, parsed)
+        series_by_name, unit_by_name, origins, currency_by_name = _canonicalize_parsed(
+            conn, ticker, config, parsed
+        )
         numeric_parsed = parsed
-    currency_by_name = _currency_by_name(conn, ticker, config)
 
     # Regroup to one manifest per period_end (each manifest = a period's KPIs).
     by_period: dict[_dt.datetime, dict[str, float | SpreadsheetCellRead]] = {}
@@ -305,6 +286,9 @@ def ingest_spreadsheet_kpis(
             inserted += result.inserted
 
     except Exception as exc:
+        # Prior periods are committed; discard only this period's pending writes
+        # before end_run commits the failure accounting.
+        conn.rollback()
         end_run(conn, run_id, StageStatus.FAILED, error_summary=f"{type(exc).__name__}: {exc}")
         raise
     end_run(conn, run_id, StageStatus.OK)
