@@ -986,6 +986,17 @@
       ]
     },
     {
+      "disposition": "internal_python_target",
+      "evidence": "The synthetic HTML-release registration regression invokes only fixed execution/sqlite_bootstrap.py and fixed execution/categorize_ir_uploads.py through sys.executable. Its explicit database, source directory and relative root belong to pytest tmp_path. It verifies retained publisher bytes and source URL without live state, network collection or model calls. Arguments cannot select a different script.",
+      "fingerprint": "a9be80fc7e4580eed44692048ed179e1ec9fc8a7c082364755e39957aaa43129",
+      "line": 240,
+      "path": "tests/test_ir_autofetch_registration.py",
+      "targets": [
+        "execution/sqlite_bootstrap.py",
+        "execution/categorize_ir_uploads.py"
+      ]
+    },
+    {
       "disposition": "external_process",
       "evidence": "Test-only process runs configured WorkbookRuntime.node with the literal generated edits.mjs in tmp_path, no shell and timeout120s. The script imports @oai/artifact-tool plus a copied checked-in meli_workbook_adapter.mjs, edits synthetic workbooks and verifies recalculated/exported values and fixed Actuals. Runtime executable and dependency identity are configurable, not identity-verified by this test. No production data or application source is executed as a Python target.",
       "fingerprint": "036481c70183f92c7f8c2e8a6bfd1cc1b2925064f2a3f0e01b9f303e9c1ac39d",
