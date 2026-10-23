@@ -197,11 +197,12 @@ def stage(
     completed_at: datetime = STAMP,
     llm_call_id: int = 1,
     raw_period_role: str = "current",
+    model_quote: str | None = None,
 ) -> tuple[IrCandidateRetentionRequest, tuple[str, ...]]:
     raw_rows: list[dict[str, object]] = [
         {
             "label": fact.raw_label,
-            "source_excerpt": fact.source_quote,
+            "source_excerpt": model_quote or fact.source_quote,
             "source_value_text": fact.source_value_text,
             "value": str(fact.numeric_value),
             "period_role": raw_period_role,
@@ -235,6 +236,10 @@ def stage(
                 exchange_sha256=exchange.exchange_sha256,
                 response_row_ordinal=index,
                 raw_row=row,
+                native_source_quote=facts[index].source_quote,
+                native_char_start=max(0, PAGE.find(facts[index].source_quote)),
+                native_char_end=max(0, PAGE.find(facts[index].source_quote))
+                + len(facts[index].source_quote),
             )
             for index, row in enumerate(raw_rows)
         ),
@@ -291,6 +296,7 @@ def reviewed_request(
     raw_pdf_bytes: bytes = PDF_BYTES,
     knowledge_at: datetime = KNOWLEDGE,
     raw_period_role: str = "current",
+    model_quote: str | None = None,
 ) -> IrReportedPublicationRequest:
     retention, ids = stage(
         conn,
@@ -299,6 +305,7 @@ def reviewed_request(
         document_version_id=document_version_id,
         raw_pdf_bytes=raw_pdf_bytes,
         raw_period_role=raw_period_role,
+        model_quote=model_quote,
     )
     run_id = str(
         conn.execute(
@@ -630,3 +637,62 @@ def test_review_rejects_missing_field_witness(
                 ),
             ),
         )
+
+
+@pytest.mark.parametrize(
+    ("model_quote", "native_quote"),
+    [
+        ("Margin North 10%", "Margin\nNorth 10%"),
+        ("Year-over-year margin 10%", "Year-over-\nyear margin 10%"),
+    ],
+)
+def test_whitespace_quote_keeps_raw_response_and_native_review_witness(
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+    model_quote: str,
+    native_quote: str,
+) -> None:
+    native = (
+        PAGE.replace(model_quote, native_quote)
+        if model_quote in PAGE
+        else PAGE + " " + native_quote
+    )
+
+    def native_pages(raw: bytes) -> tuple[str, ...]:
+        return (native,)
+
+    monkeypatch.setattr("provenance.ir_reported_facts.project_pdf_page_texts", native_pages)
+    monkeypatch.setattr(__name__ + ".PAGE", native)
+    fact = candidate(native_quote, "10%", "10")
+    publication = reviewed_request(conn, fact, model_quote=model_quote)
+    raw_node = conn.execute(
+        "SELECT text,locator_json FROM evidence_nodes WHERE node_id LIKE 'ir-pdf-candidate:%'"
+    ).fetchone()
+    retained = json.loads(raw_node[0])["row"]
+    assert retained["raw_row"]["source_excerpt"] == model_quote
+    assert retained["native_source_quote"] == native_quote
+    locator = json.loads(raw_node[1])
+    assert native[locator["char_start"] : locator["char_end"]] == native_quote
+    receipt = publish_ir_reported_facts(conn, publication, raw_pdf_bytes=PDF_BYTES)
+    assert len(receipt.cell_ids) == 1
+    assert publication.candidates[0].source_quote == native_quote
+
+
+def test_native_span_tamper_and_ambiguous_context_fail_before_retention(
+    conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("provenance.ir_reported_facts.project_pdf_page_texts", page_texts)
+    retention, _ = stage(conn, candidate("Margin North 10%", "10%", "10"))
+    changed = retention.rows[0].model_copy(update={"native_char_start": 0})
+    with pytest.raises(ValueError, match="native quote span"):
+        retain_ir_pdf_candidates(
+            conn, retention.model_copy(update={"rows": (changed,)}), raw_pdf_bytes=PDF_BYTES
+        )
+
+    def duplicate_pages(raw: bytes) -> tuple[str, ...]:
+        return (PAGE + PAGE,)
+
+    monkeypatch.setattr("provenance.ir_reported_facts.project_pdf_page_texts", duplicate_pages)
+    with pytest.raises(ValueError, match="native quote span"):
+        retain_ir_pdf_candidates(conn, retention, raw_pdf_bytes=PDF_BYTES)

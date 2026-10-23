@@ -567,11 +567,12 @@ def _build_quarter_cells(
 
     if fields:
         tier_rank = reader_tier_rank_sql(conn)
+        fact_relation = canonical_fact_relation(conn, "financial_facts").sql
         placeholders = ",".join("?" * len(fields))
         cur = conn.execute(
             f"""
             SELECT ff.period_end, ff.fiscal_period_type, ff.line_item, ff.value, ff.source_doc_id
-            FROM financial_facts ff
+            FROM {fact_relation} ff
             JOIN documents d ON d.id = ff.source_doc_id
             WHERE ff.ticker = ?
               AND d.file_path NOT LIKE '%_ttm.json'
@@ -666,11 +667,12 @@ def _build_annual_cells(
 
     if fields:
         tier_rank = reader_tier_rank_sql(conn)
+        fact_relation = canonical_fact_relation(conn, "financial_facts").sql
         placeholders = ",".join("?" * len(fields))
         cur = conn.execute(
             f"""
             SELECT ff.period_end, ff.line_item, ff.value, ff.source_doc_id
-            FROM financial_facts ff
+            FROM {fact_relation} ff
             JOIN documents d ON d.id = ff.source_doc_id
             WHERE ff.ticker = ?
               AND d.file_path NOT LIKE '%_ttm.json'

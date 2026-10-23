@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +24,7 @@ from ask.exchange_store import (
     put_session_context,
 )
 from ask.store import delete_session, ensure_session
+from provenance.financial_fact_resolution import capture_fact_row_observation, resolve_fact_row
 from research.apply import apply_governed_proposal
 from research.proposal_approval import (
     AskProposalDecisionV1,
@@ -36,6 +39,7 @@ from research.proposal_approval import (
 )
 from research.proposals import get_proposal
 from tests.comments_server_seams import patch_server_seam
+from tests.test_research_cockpit import bind_document_evidence
 
 
 def _holdings_payload(*, thesis: str = "Old thesis") -> dict[str, object]:
@@ -366,12 +370,15 @@ def test_kpi_approval_reuses_recorded_fact_unit_and_rejects_cross_tier_duplicate
 ) -> None:
     repo_root, db_path, holdings = authority
     with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
         connection.execute("DROP TRIGGER IF EXISTS trg_kpi_facts_observation_insert")
         connection.execute(
             "INSERT INTO documents (ticker,source_type,doc_type,file_path,sha256,fetched_at,fetch_status,raw_bytes_size) "
-            "VALUES ('NU','ir_doc','earnings_release','unit.txt','unit-sha','2026-08-01','ok',0)"
+            "VALUES ('NU','ir_doc','earnings_release','unit.txt',?,'2026-08-01','ok',10)",
+            (hashlib.sha256(b"unit proof").hexdigest(),),
         )
         document_id = int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+        bind_document_evidence(connection, ticker="NU", document_id=document_id)
         connection.execute(
             "INSERT INTO kpi_definitions "
             "(ticker,name,unit,primary_source,notes,definition_origin) "
@@ -383,6 +390,16 @@ def test_kpi_approval_reuses_recorded_fact_unit_and_rejects_cross_tier_duplicate
             "value,unit,source_doc_id) VALUES ('NU','2026-06-30','Q2',?,10,'count',?)",
             (definition_id, document_id),
         )
+        fact_id = int(connection.execute("SELECT last_insert_rowid()").fetchone()[0])
+        cutoff = datetime(2026, 8, 2, tzinfo=UTC)
+        assert capture_fact_row_observation(
+            connection, fact_table="kpi_facts", fact_row_id=fact_id, recorded_at=cutoff
+        )
+        resolution = resolve_fact_row(
+            connection, fact_table="kpi_facts", fact_row_id=fact_id, knowledge_cutoff=cutoff
+        )
+        assert resolution is not None and resolution.resolution_status == "resolved"
+        connection.row_factory = None
         connection.execute(
             "INSERT INTO user_kpi_registry "
             "(user_id,ticker,kpi_name,is_thesis_breaker,scaffold_source,notes,created_at,updated_at) "

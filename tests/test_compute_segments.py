@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable, Iterator
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -28,6 +28,11 @@ from models.facts import (
 )
 from models.fmp_payloads import FmpSegmentRecord
 from pipeline.segment_junction_writer import write_segment_facts_junction
+from provenance.financial_fact_resolution import resolve_fact_row
+from provenance.semantic_disposition import SemanticDispositionStore
+from tests import test_financial_fact_resolution_cutover as cutover
+from tests import test_financial_source_semantic_quarantine as quarantine
+from tests.test_source_fact_repository import STAMP
 
 _PRODUCT_SAMPLE = {
     "date": "2025-12-31",
@@ -248,6 +253,59 @@ def test_reconciliation_no_revenue_accepts(conn: sqlite3.Connection) -> None:
     """If income_statement hasn't been ingested yet, can't disprove — accept."""
     record = FmpSegmentRecord.model_validate(_GEO_SAMPLE)
     assert passes_reconciliation(conn, record, "revenue_by_geography", source_doc_id=1) is True
+
+
+def test_reconciliation_cannot_use_quarantined_revenue(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    path = migrated_db(tmp_path / "segment-revenue-quarantine.db")
+    database = sqlite3.connect(path)
+    database.row_factory = sqlite3.Row
+    database.execute("PRAGMA foreign_keys = ON")
+    try:
+        database.execute(
+            "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+            ("issuer-acme", "issuer:acme", "operating_company", STAMP),
+        )
+        getattr(cutover, "_seed_document")(
+            database, document_id=1, source_tier="sec_official", value_suffix="SEC"
+        )
+        fact_id = getattr(cutover, "_insert_financial_fact")(
+            database, document_id=1, value="100", period_end="2026-06-30 00:00:00"
+        )
+        assert (
+            resolve_fact_row(
+                database,
+                fact_table="financial_facts",
+                fact_row_id=fact_id,
+                knowledge_cutoff=datetime.now(UTC) + timedelta(minutes=1),
+            )
+            is not None
+        )
+        record = FmpSegmentRecord.model_validate(
+            {
+                "date": "2026-06-30",
+                "symbol": "ACME",
+                "reportedCurrency": "USD",
+                "period": "Q2",
+                "fiscalYear": 2026,
+                "data": {"Product": 120},
+            }
+        )
+        assert passes_reconciliation(database, record, "revenue_by_product", 1) is False
+        at = datetime.now(UTC) + timedelta(hours=1)
+        SemanticDispositionStore(database).persist(
+            getattr(quarantine, "_disposition")(
+                "document-version-1",
+                revision=1,
+                status="quarantined",
+                knowledge_at=at,
+                recorded_at=at,
+            )
+        )
+        assert passes_reconciliation(database, record, "revenue_by_product", 1) is True
+    finally:
+        database.close()
 
 
 def test_insert_segment_facts_writes_to_junction(conn: sqlite3.Connection) -> None:

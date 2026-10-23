@@ -19,6 +19,7 @@ from provenance.fact_plane_v2 import (
     FactPlaneV2,
     ReportedFactObservationV2,
 )
+from provenance.semantic_disposition import document_semantically_quarantined_as_known
 from provenance.source_fact_publication import (
     PublicationMemberKind,
     PublicationVerificationError,
@@ -625,6 +626,44 @@ class FactReadModel:
         observation: FactObservationV2,
         *,
         cutoff: datetime,
+        _path: set[str] | None = None,
+        _admitted: set[str] | None = None,
+    ) -> None:
+        observation_id = observation.observation_id
+        path: set[str] = set() if _path is None else _path
+        admitted: set[str] = set() if _admitted is None else _admitted
+        if observation_id in path:
+            raise FactAdmissionError(
+                "derived_input_graph_unbounded",
+                record_kind="fact_observation",
+                record_id=observation_id,
+                disposition="missing_provenance",
+            )
+        if observation_id in admitted:
+            return
+        if len(path) >= 32 or len(admitted) >= 256:
+            raise FactAdmissionError(
+                "derived_input_graph_unbounded",
+                record_kind="fact_observation",
+                record_id=observation_id,
+                disposition="missing_provenance",
+            )
+        path.add(observation_id)
+        try:
+            self._admit_observation_and_inputs(
+                observation, cutoff=cutoff, path=path, admitted=admitted
+            )
+            admitted.add(observation_id)
+        finally:
+            path.remove(observation_id)
+
+    def _admit_observation_and_inputs(
+        self,
+        observation: FactObservationV2,
+        *,
+        cutoff: datetime,
+        path: set[str],
+        admitted: set[str],
     ) -> None:
         observation_id = observation.observation_id
         self._admit_record(
@@ -633,6 +672,17 @@ class FactReadModel:
             cutoff=cutoff,
         )
         if isinstance(observation, ReportedFactObservationV2):
+            if document_semantically_quarantined_as_known(
+                self._conn,
+                document_version_id=observation.document_version_id,
+                cutoff=cutoff,
+            ):
+                raise FactAdmissionError(
+                    "source_document_semantically_quarantined",
+                    record_kind="fact_observation",
+                    record_id=observation_id,
+                    disposition="quarantined",
+                )
             extraction = self._fetchone(
                 "SELECT extraction.extraction_seal_id "
                 "FROM fact_reported_observation_anchors_v2 AS anchor "
@@ -657,7 +707,7 @@ class FactReadModel:
             )
         else:
             derivation = self._fetchone(
-                "SELECT derivation_seal_id "
+                "SELECT derivation_seal_id,input_count "
                 "FROM fact_derivation_seals_v2 "
                 "WHERE output_observation_id = ? "
                 "AND knowledge_at <= ? AND recorded_at <= ?",
@@ -675,6 +725,51 @@ class FactReadModel:
                 str(derivation["derivation_seal_id"]),
                 cutoff=cutoff,
             )
+            try:
+                inputs = self._fetchall(
+                    "SELECT input_observation_id FROM fact_derivation_input_edges_v2 "
+                    "WHERE output_observation_id=? AND recorded_at<=? "
+                    "ORDER BY input_ordinal LIMIT 257",
+                    (observation_id, cutoff),
+                )
+            except sqlite3.Error as exc:
+                raise FactAdmissionError(
+                    "derived_input_graph_unavailable",
+                    record_kind="fact_observation",
+                    record_id=observation_id,
+                    disposition="missing_provenance",
+                ) from exc
+            if (
+                not inputs
+                or len(inputs) != int(str(derivation["input_count"]))
+                or len(inputs) > 256
+            ):
+                raise FactAdmissionError(
+                    "derived_input_graph_incomplete",
+                    record_kind="fact_observation",
+                    record_id=observation_id,
+                    disposition="missing_provenance",
+                )
+            for input_row in inputs:
+                input_id = str(input_row["input_observation_id"])
+                source = self._fetchone(
+                    "SELECT * FROM fact_observations_v2 "
+                    "WHERE observation_id=? AND knowledge_at<=? AND recorded_at<=?",
+                    (input_id, cutoff, cutoff),
+                )
+                if source is None:
+                    raise FactAdmissionError(
+                        "derived_input_observation_unavailable",
+                        record_kind="fact_observation",
+                        record_id=input_id,
+                        disposition="missing_provenance",
+                    )
+                self._admit_observation_graph(
+                    self._load_observation(source),
+                    cutoff=cutoff,
+                    _path=path,
+                    _admitted=admitted,
+                )
         for relation in self._bounded_relation_rows(
             observation_id,
             cutoff=cutoff,

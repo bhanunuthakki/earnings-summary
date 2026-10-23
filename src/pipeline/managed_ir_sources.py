@@ -27,14 +27,17 @@ from db_paths import configured_db_path
 from ir_uploads import CategorizationFailure, classify_ir_file
 from models.ir_uploads import CategorizationResult
 from pipeline.issuer_document_inventory import (
+    FiscalPeriodWitness,
     IssuerDocumentInventoryReceipt,
     IssuerDocumentInventoryRequest,
     build_issuer_document_inventory,
+    validate_fiscal_period_witness,
 )
 from pipeline.source_policy import (
     ArtifactKind,
     CollectionSource,
     authorize_stored_collection_target,
+    fiscal_quarter_end,
     reported_quarter_is_in_window,
 )
 from provenance.evidence_backfill import ensure_legacy_document_evidence
@@ -91,21 +94,37 @@ class HistoricalIssuerDocumentWindow(_Closed):
     period_ends: tuple[date, ...] = Field(min_length=1, max_length=12)
     reviewed_by: str = Field(min_length=1, max_length=128)
     review_reference_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fiscal_period_witness: FiscalPeriodWitness | None = None
 
     @model_validator(mode="after")
     def _closed_periods(self) -> Self:
         if tuple(sorted(set(self.period_ends))) != self.period_ends:
             raise ValueError("historical period ends must be sorted and unique")
-        if any(
-            p.month not in {3, 6, 9, 12} or p.day != (31 if p.month in {3, 12} else 30)
-            for p in self.period_ends
-        ):
-            raise ValueError("historical periods must be calendar quarter ends")
+        fye = (
+            "12-31"
+            if self.fiscal_period_witness is None
+            else self.fiscal_period_witness.fiscal_year_end
+        )
+        for period in self.period_ends:
+            if not any(
+                period
+                == fiscal_quarter_end(fiscal_year=year, fiscal_quarter=q, fiscal_year_end=fye)
+                for year in (period.year, period.year + 1)
+                for q in range(1, 5)
+            ):
+                raise ValueError("historical periods must match the source-backed fiscal calendar")
         if (self.period_ends[-1].year - self.period_ends[0].year) * 4 + (
             self.period_ends[-1].month - self.period_ends[0].month
         ) // 3 > 11:
             raise ValueError("historical period window exceeds twelve quarters")
         return self
+
+    @model_serializer(mode="wrap")
+    def _legacy_payload(self, handler: SerializerFunctionWrapHandler) -> dict[str, object]:
+        result = cast("dict[str, object]", handler(self))
+        if self.fiscal_period_witness is None:
+            result.pop("fiscal_period_witness", None)
+        return result
 
 
 class IssuerDocumentStagingRequest(_Closed):
@@ -130,6 +149,11 @@ class IssuerDocumentStagingRequest(_Closed):
             and self.inventory_request.period_end not in self.historical_window.period_ends
         ):
             raise ValueError("request period is outside reviewed historical window")
+        if self.historical_window is not None and (
+            self.historical_window.fiscal_period_witness
+            != self.inventory_request.fiscal_period_witness
+        ):
+            raise ValueError("historical window and inventory must bind the same fiscal witness")
         return self
 
     @model_serializer(mode="wrap")
@@ -555,6 +579,12 @@ def _policy(request: IssuerDocumentStagingRequest, db_path: Path) -> None:
     )
     if not auth.allowed:
         raise PreparedIssuerDocumentPublisherError("source_policy_denied")
+    if inv.fiscal_period_witness is not None:
+        conn = connect_sqlite(db_path, role=SQLiteConnectionRole.READ_ONLY, schema_preflight=True)
+        try:
+            validate_fiscal_period_witness(conn, request=inv)
+        finally:
+            conn.close()
     if not issuer_request_period_is_allowed(
         request, fiscal_year_end_month=auth.fiscal_year_end_month, as_of=date.today()
     ):
@@ -570,8 +600,15 @@ def issuer_request_period_is_allowed(
     population, source hashes, classification and publication gates still apply.
     """
     inv = request.inventory_request
+    if inv.fiscal_period_witness is not None:
+        fiscal_year_end_month = int(inv.fiscal_period_witness.fiscal_year_end[:2])
     if request.historical_window is not None:
-        return fiscal_year_end_month == 12 and all(
+        month = (
+            12
+            if inv.fiscal_period_witness is None
+            else int(inv.fiscal_period_witness.fiscal_year_end[:2])
+        )
+        return fiscal_year_end_month == month and all(
             p <= as_of for p in request.historical_window.period_ends
         )
     return fiscal_year_end_month is not None and reported_quarter_is_in_window(

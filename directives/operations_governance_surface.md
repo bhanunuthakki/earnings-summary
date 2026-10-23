@@ -1206,6 +1206,23 @@ ledger and resolved views. No daily writer task or wrapper is added.
 Operations surface disposition: **no additional scheduled writer**. A future
 scheduled backfill needs its own workload, overlap, source and activation review.
 
+### Financial source quarantine and fiscal source authority
+
+The existing semantic disposition ledger owns document quarantine. Financial
+readers use the shared resolver at their requested knowledge and recording
+cutoffs. A quarantined selected source does not reveal an older value by default.
+An explicit later resolution or release retains its own visibility cutoff.
+Document reading and retained financial history remain available for inspection.
+The application adds no quarantine store, automatic repair writer or schedule.
+
+The existing issuer bootstrap records subject bindings for both legacy ticker
+and canonical issuer references. SEC submissions can enrich the existing issuer
+profile with a verified fiscal year-end. A fiscal inventory witness binds that
+profile revision to its exact source document and issuer. The verified profile
+owns the fiscal calendar; the tracked roster still owns collection eligibility.
+Missing fiscal evidence stays unknown. Unsupported week-based calendars remain
+unresolved. These changes add no source collector or operating job.
+
 ### Investing workflow maintenance and brief inputs
 
 Disposition: **no Operations surface change**. The internal post-earnings CLI
@@ -2155,7 +2172,19 @@ existing route controls. No CLI option, schedule, dashboard action or provider
 route is added.
 
 The existing derived LLM artifact store retains source/model/prompt/schema-bound
-chunk responses for exact replay. This cache does not confer acquisition,
+chunk responses for exact replay. It records each raw primary or repair response
+before JSON or source-quote validation. Pending and rejected versions do not
+prove successful capture. JSON repair and source-quote repair share two logical
+requests per section. Unresolved rejected replay stops without another model
+call. A retention failure stops before a repair request. The primary prompt and
+model route stay unchanged; repair feedback and cache identity are versioned.
+Whitespace-only quotation differences can resolve to one exact contiguous native
+source span. The raw model row stays unchanged. The retained native quotation and
+page offsets must match the source again at review and publication. Changed text
+or an ambiguous span fails validation. Numeric source tokens remain literal;
+range endpoints cannot acquire currency or percent symbols absent from that
+endpoint. Repair feedback uses fixed known validation reasons and never copies
+arbitrary exception text into the prompt. This cache does not confer acquisition,
 extraction completeness or semantic admission. Known OCR-required page assessments,
 blank pages, unsupported quotes, failed sections and budget exhaustion remain
 unresolved. Nonblank page text can omit visual facts. Absent page assessments
