@@ -37,6 +37,8 @@ from provenance.fulltext_extractor_identity import (
     PDF_FULLTEXT_EXTRACTOR,
     PDF_TABLE_EXTRACTOR_NAME,
     RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0,
+    RETAINED_PDF_FULLTEXT_EXTRACTOR_6_21_1,
+    RETAINED_PDF_FULLTEXT_EXTRACTORS,
     STRUCTURED_WEB_ARCHIVE_FULLTEXT_EXTRACTOR,
     FulltextExtractorIdentity,
     pdf_table_extractor_code_version,
@@ -2011,9 +2013,7 @@ def test_pdf_preflight_matches_normalized_text_but_seals_raw_output(
         )
 
 
-@pytest.mark.parametrize(
-    "legacy", [BASE_FULLTEXT_EXTRACTOR, RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0]
-)
+@pytest.mark.parametrize("legacy", [BASE_FULLTEXT_EXTRACTOR, *RETAINED_PDF_FULLTEXT_EXTRACTORS])
 @pytest.mark.parametrize("unapproved_field", [None, "code", "config", "version"])
 def test_pdf_retained_seals_replay_with_exact_approved_identities(
     conn: sqlite3.Connection,
@@ -2434,12 +2434,14 @@ def test_cutover_processing_evidence_dual_clocks(
         assert len(summary.coverage) == 13
 
 
+@pytest.mark.parametrize("retained_identity", RETAINED_PDF_FULLTEXT_EXTRACTORS)
 @pytest.mark.parametrize("complete_promotion", [False, True])
 @pytest.mark.parametrize("has_assessment", [False, True])
 @pytest.mark.parametrize("promoted_clock", ["eligible", "late_completion", "late_nodes"])
 def test_pdf_seal_selects_one_complete_run_when_promotion_omits_page(
     conn: sqlite3.Connection,
     complete_promotion: bool,
+    retained_identity: FulltextExtractorIdentity,
     has_assessment: bool,
     promoted_clock: str,
 ) -> None:
@@ -2449,7 +2451,7 @@ def test_pdf_seal_selects_one_complete_run_when_promotion_omits_page(
     blob_sha = _seed_document(conn, document_version_id=document_id, media_type="application/pdf")
     text = "Reported revenue."
     for run_id, identity, page_count in (
-        ("retained", RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0, 2),
+        ("retained", retained_identity, 2),
         ("promoted", PDF_FULLTEXT_EXTRACTOR, 2 if complete_promotion else 1),
     ):
         _seed_run(
@@ -2544,3 +2546,68 @@ def test_pdf_seal_selects_one_complete_run_when_promotion_omits_page(
         ).extraction_run_id
         == selected_run_id
     )
+
+
+@pytest.mark.parametrize(
+    ("middle_pages", "promoted_pages", "expected"),
+    [
+        ((1,), (1,), "oldest"),
+        ((1,), (1, 2), "promoted"),
+        ((1, 2, 3), (1, 2), "middle"),
+        ((1, 2, 3), (1, 2, 3), "promoted"),
+        ((3,), (1, 2), "promoted"),
+    ],
+)
+@pytest.mark.parametrize(
+    "promoted_clock",
+    ["eligible", "late_completion", "late_nodes", "middle_late_completion", "middle_late_nodes"],
+)
+def test_three_pdf_generations_preserve_previous_whole_run_coverage(
+    conn: sqlite3.Connection,
+    middle_pages: tuple[int, ...],
+    promoted_pages: tuple[int, ...],
+    expected: str,
+    promoted_clock: str,
+) -> None:
+    document_id = "pdf-three-generations"
+    blob_sha = _seed_document(conn, document_version_id=document_id, media_type="application/pdf")
+    for run_id, identity, pages in (
+        ("oldest", RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0, (1, 2)),
+        ("middle", RETAINED_PDF_FULLTEXT_EXTRACTOR_6_21_1, middle_pages),
+        ("promoted", PDF_FULLTEXT_EXTRACTOR, promoted_pages),
+    ):
+        _seed_run(
+            conn,
+            document_version_id=document_id,
+            blob_sha=blob_sha,
+            run_id=run_id,
+            extractor_name=identity.name,
+            extractor_code_version=identity.code_version,
+            extractor_config_sha256=identity.config_sha256,
+            completed_at=T2
+            if (run_id == "promoted" and promoted_clock == "late_completion")
+            or (run_id == "middle" and promoted_clock == "middle_late_completion")
+            else T0,
+            node_recorded_at=T2
+            if (run_id == "promoted" and promoted_clock == "late_nodes")
+            or (run_id == "middle" and promoted_clock == "middle_late_nodes")
+            else T0,
+            children=tuple(
+                (
+                    "pdf_page",
+                    f"Reported page {page}.",
+                    EvidenceLocator(source_ref=document_id, page_number=page),
+                )
+                for page in pages
+            ),
+        )
+    before = tuple(conn.execute("SELECT * FROM evidence_nodes"))
+    if promoted_clock in {"late_completion", "late_nodes"}:
+        expected = "middle" if set(middle_pages).issuperset({1, 2}) else "oldest"
+    elif promoted_clock in {"middle_late_completion", "middle_late_nodes"}:
+        expected = "promoted" if set(promoted_pages).issuperset({1, 2}) else "oldest"
+    assert (
+        select_approved_fulltext_run(conn, document_id, PDF_FULLTEXT_EXTRACTOR, observed_through=T1)
+        == expected
+    )
+    assert tuple(conn.execute("SELECT * FROM evidence_nodes")) == before

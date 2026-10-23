@@ -2254,3 +2254,18 @@ connections; visible report content remains subject to the owner's sharing decis
 The private report and live dashboard retain their existing behavior. This local,
 explicit file operation adds no dashboard action, scheduler, provider call or database
 write. See `docs/security/information-boundaries.md` for the invocation and boundaries.
+
+### pypdf 6.21.2 identity promotion — no operational surface change
+
+New PDF full-text extraction uses the reviewed locked pypdf 6.21.2 runtime with
+its own exact code/config identity and idempotency namespace. The exact 6.21.1
+and 6.19.0 identities and namespaces stay approved for readers and retained
+coverage. The evidence namespace remains `fulltext-pdf-v6`. No old node or run
+is relabelled. Readers retain one whole run; without preflight, a newer run must
+preserve the previously selected complete page population through every prior
+generation. Retained coverage still prevents automatic re-extraction. Existing
+seals, cutoffs and financial evidence checks remain required. This changes no
+operator action, route, service, schedule, budget, schema or live-state writer.
+Tests cover three-generation partial promotions, retained seals, native transcript
+readers and exact runtime/lock identity. Any re-extraction remains separately
+approved.

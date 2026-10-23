@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "5913b1fc18be872e7297ffc55fe1e074fdc40af8",
+  "scoped_commit": "d97be09311fa21667fa7e537609831ce32340f93",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "b59f08e09fb3f61e29759f92a7bbc3e16ca990cefd165064c3fdaca2872a6a2a",
+  "source_sha256": "8a2ec01e54c0605458691630ab5abfb2eb004f93758af42cef14c9db4d0952c6",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1479,
-    "total_noncomment_loc": 569345,
+    "total_noncomment_loc": 569356,
     "modules_over_1000_loc": 111,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -16386,9 +16386,9 @@
         "path": "src/provenance/fulltext_extractor_identity.py",
         "module": "provenance.fulltext_extractor_identity",
         "lines": {
-          "physical": 249,
-          "nonblank": 225,
-          "noncomment": 220
+          "physical": 262,
+          "nonblank": 238,
+          "noncomment": 231
         },
         "internal_fan_out": 2,
         "responsibilities": [
