@@ -15,7 +15,11 @@ import pytest
 from alembic.config import Config
 
 from alembic import command
+from compute.fmp_derived_kpis import (
+    _fetch_full_kpi_series,  # pyright: ignore[reportPrivateUsage] -- exact producer seam
+)
 from execution import backfill_financial_fact_resolutions as cutover_cli
+from models.facts import Unit
 from pipeline.restatement_detector import insert_with_restatement_detection
 from provenance.evidence_ledger import (
     ContentBlob,
@@ -36,6 +40,7 @@ from provenance.financial_fact_resolution import (
 from provenance.integrity_audit import AuditOptions, audit_connection
 from run_lock import hold_run_lock
 from sqlite_runtime import SQLiteConnectionRole
+from tests.kpi_semantic_support import admit_all_kpi_facts
 from timeseries.loaders import load_financial_series
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -323,6 +328,54 @@ def _insert_kpi_fact(
     )
     assert cursor.lastrowid is not None
     return int(cursor.lastrowid)
+
+
+def test_transform_series_carries_exact_selected_legacy_identity(
+    tmp_path: Path, migrated_db: Callable[..., Path]
+) -> None:
+    path = migrated_db(tmp_path / "typed-series.db")
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        conn.execute(
+            "INSERT INTO issuer_entities VALUES (?,?,?,?)",
+            ("issuer-acme", "issuer:acme", "operating_company", STAMP),
+        )
+        _seed_document(conn, document_id=1, source_tier="sec_official", value_suffix="SEC")
+        fact_id = _insert_kpi_fact(conn, document_id=1, value="114.2", unit="millions")
+        conn.execute(
+            "INSERT INTO kpi_definitions (id,ticker,name,unit,primary_source) "
+            "VALUES (706,'ACME','Active customers','millions','sec_xbrl')"
+        )
+        conn.execute("UPDATE kpi_facts SET kpi_definition_id=706 WHERE id=?", (fact_id,))
+        admit_all_kpi_facts(conn)
+        assert (
+            resolve_fact_row(
+                conn, fact_table="kpi_facts", fact_row_id=fact_id, knowledge_cutoff=STAMP
+            )
+            is not None
+        )
+        points = _fetch_full_kpi_series(conn, "ACME", "Active customers", Unit.MILLIONS)
+        assert len(points) == 1 and points[0].selected_input is not None
+        selected = points[0].selected_input
+        link = conn.execute(
+            "SELECT fact_revision,observation_id FROM fact_observation_revisions "
+            "WHERE fact_table='kpi_facts' AND fact_row_id=? "
+            "ORDER BY fact_revision DESC LIMIT 1",
+            (fact_id,),
+        ).fetchone()
+        assert link is not None
+        assert selected.fact_table == "kpi_facts"
+        assert selected.fact_id == fact_id
+        assert selected.fact_revision == link["fact_revision"]
+        assert selected.observation_id == link["observation_id"]
+        assert selected.doc_id == 1
+        assert selected.document_version_id == "document-version-1"
+        assert selected.resolution_id is not None
+        assert selected.resolution_revision == 1
+    finally:
+        conn.close()
 
 
 def test_targeted_resolution_preview_is_read_only(tmp_path: Path) -> None:

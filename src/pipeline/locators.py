@@ -141,6 +141,7 @@ def derived_locator_from_computed_from(
 
     Returns ``None`` when ``computed_from_raw`` is absent/blank/malformed —
     callers fall back to the existing legacy-floor peek (§2.7), never raise.
+    A malformed member rejects the whole derived locator.
     """
     if computed_from_raw is None or not computed_from_raw.strip():
         return None
@@ -156,28 +157,16 @@ def derived_locator_from_computed_from(
     # downstream local as `Unknown`.
     payload = cast("dict[str, object]", raw_payload)
     raw_inputs = payload.get("inputs")
+    if not isinstance(raw_inputs, list):
+        return None
     inputs: list[DerivedInputRef] = []
-    if isinstance(raw_inputs, list):
-        for raw_item in cast("list[object]", raw_inputs):
-            if not isinstance(raw_item, dict):
-                continue
-            raw_input = cast("dict[str, object]", raw_item)
-            ref = raw_input.get("ref")
-            item = raw_input.get("item")
-            if not isinstance(ref, str) or not isinstance(item, str):
-                continue
-            period_end_raw = raw_input.get("period_end")
-            doc_id_raw = raw_input.get("doc_id")
-            tier_raw = raw_input.get("tier")
-            inputs.append(
-                DerivedInputRef(
-                    ref=ref,
-                    item=item,
-                    period_end=period_end_raw if isinstance(period_end_raw, str) else None,
-                    doc_id=doc_id_raw if isinstance(doc_id_raw, int) else None,
-                    tier=tier_raw if isinstance(tier_raw, str) else None,
-                )
-            )
+    for raw_item in cast("list[object]", raw_inputs):
+        if not isinstance(raw_item, dict):
+            return None
+        try:
+            inputs.append(DerivedInputRef.model_validate(raw_item))
+        except ValueError:
+            return None
     display = payload.get("display")
     method_flags_raw = payload.get("method_flags")
     return derived_locator(

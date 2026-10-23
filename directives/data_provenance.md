@@ -565,6 +565,19 @@ Derived KPI rows (`extracted_by` `fmp_derived` / `kpi_transform_derived`) carry 
 - `inputs[*].ref` ∈ `financial_fact` | `kpi_fact` | `segment_fact`; `item` is the line_item / KPI label / `"<segment> <metric>"`; `period_end` ISO date. Two-period derivations (YoY) list both periods.
 - `doc_id` + `tier` — the input's source document at derivation time (`tier` injected by `persist_derived_kpis` from `documents.source_quality_tier`), so the popover renders one tier-colored mini-chip per input linking `/source/<doc_id>` with no render-time lookup.
 
+For a selected legacy canonical fact, `ref: "legacy_canonical_fact"` carries
+`fact_table` (`financial_facts` or `kpi_facts`), positive `fact_id` and
+`fact_revision`, exact `observation_id`, exact `resolution_id` and positive
+`resolution_revision`, positive `doc_id`, and `document_version_id` from the
+observation's evidence extraction run. These fields form one V1 identity.
+`resolution_revision_id` belongs to native V2 and cannot stand for a V1
+`resolution_id`. A V1 reference with an absent, extra, mixed, or malformed
+identity field is invalid. A legacy `kpi_fact` reference that has only a label,
+period, or document remains unresolved; its original bytes are retained.
+Display labels and source tiers do not establish identity. Transform producers
+carry the exact current selection into `computed_from`; missing evidence cannot
+make a derived output semantically admitted.
+
 Writers: `compute/fmp_derived_kpis.py` (margins, ratios, YoY growth, ROE, segment KPIs, category-2 transforms). NULL for directly-extracted rows and rows written before 0087 (re-derivation naturally backfills — `derive_for_ticker` is idempotent). No DB-level JSON CHECK, same rationale as §7's locator column.
 
 ### Cell-level surfacing (chip popover)
