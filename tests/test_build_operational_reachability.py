@@ -241,10 +241,29 @@ def test_actual_head_is_supported() -> None:
             )
             for line in lines
         ]
-    # Retain the 159 existing test seams, one shared-ledger admission child, the
-    # dead/live lease-holder children and the session-start pruning child. No
-    # production gap is admitted.
-    assert len(graph.unknown_edges) == 163
+    # Pin the IR fixture lookups: bounded capture entrypoints and monkeypatch
+    # restoration of fixed state-path fields. Line 27 is an existing seam;
+    # the other seven lookups accompany the new isolation/transaction tests.
+    for source, lines in (
+        ("tests/test_ir_supplement_continuation.py", (835,)),
+        ("tests/test_scan_ir_transcripts.py", (422, 424, 484, 486)),
+        ("tests/test_split_root_legacy_adapters.py", (27, 205, 215)),
+    ):
+        assert [edge for edge in graph.unknown_edges if edge.source == source] == [
+            GraphEdge(
+                source=source,
+                target="<dynamic attribute>",
+                kind="getattr",
+                evidence="dynamic getattr expression",
+                confidence="low",
+                line=line,
+                unknown=True,
+            )
+            for line in lines
+        ]
+    # Retain the 163 existing test seams plus seven exact IR fixture lookups.
+    # No production gap is admitted; the zero-production assertions stay above.
+    assert len(graph.unknown_edges) == 170
     assert [
         edge for edge in graph.unknown_edges if edge.source == "tests/test_db_writer_gate.py"
     ] == [
@@ -322,7 +341,7 @@ def test_actual_head_is_supported() -> None:
         | {("tests/test_onboarding_state_authority.py", line) for line in (31, 60, 75)}
         | {
             ("tests/test_scheduled_singleflight.py", 98),
-            ("tests/test_split_root_legacy_adapters.py", 25),
+            ("tests/test_split_root_legacy_adapters.py", 27),
         }
     )
     assert new_fixture_calls <= {(edge.source, edge.line) for edge in graph.unknown_edges}
