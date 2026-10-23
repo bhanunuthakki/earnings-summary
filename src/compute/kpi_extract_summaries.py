@@ -2030,13 +2030,13 @@ def retain_and_publish_reviewed_ir_source(
     retained_exchanges = {response.llm_call_id: response for response in responses}
     capture_versions = [
         ir_supplement_capture.historical_capture_version(conn, exchange, source_sha256)
-        or "v12-closed-witness-fields"
+        or "v13-complete-numeric-prose-end"
         for exchange in exchanges
     ]
     if len(set(capture_versions)) > 1:
         raise ValueError("IR governed exchanges mix producing capture versions")
-    capture_version = capture_versions[0] if capture_versions else "v12-closed-witness-fields"
-    historical = capture_version != "v12-closed-witness-fields"
+    capture_version = capture_versions[0] if capture_versions else "v13-complete-numeric-prose-end"
+    historical = capture_version != "v13-complete-numeric-prose-end"
 
     def retained_rows(raw: object) -> list[_EnumeratedKpi]:
         if historical:
@@ -2406,7 +2406,7 @@ def capture_for_ir_pdf_docs(
                     "source_scope": "direct_pdf_rich",
                     "max_chunks": max_chunks,
                     "max_structured_calls": max_structured_calls,
-                    "continuation_version": "ir-supplement-native-continuation-v12-closed-witness-fields",
+                    "continuation_version": "ir-supplement-native-continuation-v13-complete-numeric-prose-end",
                     "prompt_sha256": prompt_sha256,
                     "schema_sha256": schema_sha256,
                     "projection_identity": projection_identity,

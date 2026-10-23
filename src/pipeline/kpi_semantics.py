@@ -163,7 +163,7 @@ def source_numeric_token_occurs(token: str, quote: str) -> bool:
             or unicodedata.normalize("NFKC", char) in {"+", "-"}
         )
 
-    def delimiter(index: int) -> bool:
+    def delimiter(index: int, envelope_start: int | None = None) -> bool:
         char = quote[index]
         if (
             char.isspace()
@@ -175,6 +175,15 @@ def source_numeric_token_occurs(token: str, quote: str) -> bool:
         if char in ".,":
             before = quote[index - 1 : index] if index else ""
             after = quote[index + 1 : index + 2]
+            # Prose punctuation may follow a complete percent/parenthesized
+            # literal. Parse the whole prefix; never discard a malformed sign,
+            # grouping, control character or wrapper to recover its interior.
+            if before in {"%", ")"} and envelope_start is not None:
+                try:
+                    parse_source_numeric(quote[envelope_start:index])
+                except ValueError:
+                    return False
+                return not after or after.isspace()
             return bool(
                 before
                 and (
@@ -188,13 +197,14 @@ def source_numeric_token_occurs(token: str, quote: str) -> bool:
 
     cursor = 0
     previous_end: int | None = None
+    previous_start: int | None = None
     while cursor < len(quote):
         char = quote[cursor]
         if char == "-" and previous_end is not None and not quote[previous_end:cursor].strip():
             cursor += 1  # A second minus remains part of the next endpoint.
             previous_end = None
             continue
-        if delimiter(cursor):
+        if delimiter(cursor, previous_start if previous_end == cursor else None):
             cursor += 1
             continue
         if (char.isalpha() or char == "_") and not opaque_symbol(char):
@@ -267,7 +277,7 @@ def source_numeric_token_occurs(token: str, quote: str) -> bool:
                     cursor = suffix
                     continue
                 break
-            if delimiter(cursor):
+            if delimiter(cursor, start):
                 break
             # Every other attached character belongs to this envelope. The
             # parser, not a permissive restart, decides whether it is supported.
@@ -279,6 +289,7 @@ def source_numeric_token_occurs(token: str, quote: str) -> bool:
             previous_end = None
             continue
         previous_end = cursor
+        previous_start = start
         if token == lexeme:
             return True
         if lexeme[:1] in {"$", "€", "£"} and token == lexeme[1:].lstrip():

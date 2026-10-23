@@ -690,3 +690,58 @@ def test_closed_boundary_delimiters(quote: str, token: str, valid: bool) -> None
     from pipeline.kpi_semantics import source_numeric_token_occurs
 
     assert source_numeric_token_occurs(token, quote) is valid
+
+
+@pytest.mark.parametrize(
+    ("quote", "token"),
+    [
+        ("tax rate between 15-17%, an increase", "17%"),
+        ("prior outlook of 13-16%.", "16%"),
+    ],
+)
+def test_trial8_percent_range_upper_endpoint_before_prose_punctuation(
+    quote: str, token: str
+) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    assert source_numeric_token_occurs(token, quote)
+
+
+@pytest.mark.parametrize(
+    ("quote", "token", "valid"),
+    [
+        ("Rate 17%, another value", "17%", True),
+        ("Rate 17%.", "17%", True),
+        ("Loss (17), another value", "(17)", True),
+        ("Loss (17).", "(17)", True),
+        ("Loss (17) %, another value", "(17) %", True),
+        ("Loss -$ 17%, another value", "-$ 17%", True),
+        ("Rate 17%, 20%.", "20%", True),
+        ("Rate 17%, -20%.", "-20%", True),
+        ("Rate 17%, -20%.", "20%", False),
+        ("Rate 17%..", "17%", False),
+        ("Rate 17%,,", "17%", False),
+        ("Rate 17%.20", "17%", False),
+        ("Rate 17%.20", ".20", False),
+        ("Rate 17%,20", "17%", False),
+        ("Rate 17%,20", "20", False),
+        ("Rate ,17%.", "17%", False),
+        ("Rate ..17%.", ".17%", False),
+        ("Rate 1,23%.", "23%", False),
+        ("Rate 1e3%.", "3%", False),
+        ("Rate \u221217%.", "17%", False),
+        ("Rate \ufe6317%.", "17%", False),
+        ("Rate -\u200b17%.", "17%", False),
+        ("Rate 17\u200b%.", "17%", False),
+        ("Rate (17)%.", "17%", False),
+        ("Rate (17)%.", "(17)%", True),
+        ("Rate (17%%).", "17%", False),
+        ("Rate (17%%).", "(17%%)", False),
+    ],
+)
+def test_numeric_envelope_prose_end_preserves_closed_start_and_sign(
+    quote: str, token: str, valid: bool
+) -> None:
+    from pipeline.kpi_semantics import source_numeric_token_occurs
+
+    assert source_numeric_token_occurs(token, quote) is valid
