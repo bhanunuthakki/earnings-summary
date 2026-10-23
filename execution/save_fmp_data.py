@@ -27,6 +27,8 @@ import sqlite3
 import sys
 import time
 from collections.abc import Mapping
+from contextlib import nullcontext
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
@@ -40,6 +42,7 @@ from compute.split_normalization import (
     normalize_estimates,
 )
 from db_paths import require_db_path
+from identity import DEFAULT_USER_ID
 from log_redact import redact
 from models.fmp_payloads import STABLE_FMP_RECORD_MODELS
 from net.client import (
@@ -61,6 +64,7 @@ from pipeline.fmp_payload_validation import (
     FmpPayloadCoordinate,
     validate_fmp_prewrite_payload,
 )
+from runtime.job_runtime import JobAlreadyRunningError, JobLock, inherited_lock_is_valid
 from runtime.secrets import load_project_env
 from sources import registry as source_calls_log
 
@@ -91,6 +95,8 @@ def _utc_now() -> datetime:
 class FmpWorkReceiptOutcome(StrEnum):
     SUCCESS = "success"
     EMPTY = "empty"
+    BUDGET_NOT_ATTEMPTED = "budget_not_attempted"
+    PREREQUISITE_NOT_ATTEMPTED = "prerequisite_not_attempted"
     ACCOUNT_UNAUTHORIZED = "account_unauthorized"
     ACCOUNT_PAYMENT_REQUIRED = "account_payment_required"
     ACCOUNT_FORBIDDEN = "account_forbidden"
@@ -99,6 +105,16 @@ class FmpWorkReceiptOutcome(StrEnum):
     SERVER_ERROR = "server_error"
     TRANSPORT_ERROR = "transport_error"
     CONTRACT_ERROR = "contract_error"
+
+
+FMP_BLOCKING_OUTCOMES = frozenset(
+    {
+        FmpWorkReceiptOutcome.ACCOUNT_UNAUTHORIZED,
+        FmpWorkReceiptOutcome.ACCOUNT_PAYMENT_REQUIRED,
+        FmpWorkReceiptOutcome.ACCOUNT_FORBIDDEN,
+        FmpWorkReceiptOutcome.CONTRACT_ERROR,
+    }
+)
 
 
 class FmpWorkReceipt(BaseModel):
@@ -292,6 +308,7 @@ def _should_snapshot(
 #                     day's real drain after the provider window reset. Only
 #                     served attempts may spend the ledger.
 _CALL_COUNTER = 0
+_MAX_HTTP_ATTEMPTS: int | None = None
 _SERVED_COUNTER = 0
 _BUDGET_DIR = PROJECT_ROOT / ".tmp" / "cacher"
 
@@ -320,6 +337,12 @@ def _record_http_attempt(attempt: HttpAttempt) -> None:
 
 
 def _http_get(url: str, params: Mapping[str, object]) -> tuple[int, object | None, str | None]:
+    retry = _FMP_RETRY
+    if _MAX_HTTP_ATTEMPTS is not None:
+        remaining = _MAX_HTTP_ATTEMPTS - _CALL_COUNTER
+        if remaining <= 0:
+            return (0, None, "budget-exhausted")
+        retry = replace(retry, max_attempts=min(retry.max_attempts, remaining))
     query: dict[str, QueryValue] = {}
     for key, value in params.items():
         if value is not None and not isinstance(value, (str, int, float, bool)):
@@ -332,7 +355,7 @@ def _http_get(url: str, params: Mapping[str, object]) -> tuple[int, object | Non
             api_key=API_KEY,
             expected=JsonShape.ANY,
             timeout=TIMEOUT,
-            retry=_FMP_RETRY,
+            retry=retry,
             attempt_hook=_record_http_attempt,
         )
         code = response.status_code
@@ -445,6 +468,8 @@ def fmp_call(
     endpoint_path: str,
     symbol: str | None = None,
     extra: dict[str, object] | None = None,
+    *,
+    stop_on_auth_failure: bool = False,
 ) -> tuple[int, object | None, str | None, str | None]:
     """Try all URL variants. The first HTTP 200 response wins.
 
@@ -458,12 +483,19 @@ def fmp_call(
     last_err = "no-attempt"
     saw_403 = False
     for kind, url, params in _candidates(endpoint_path, symbol, extra):
+        if _MAX_HTTP_ATTEMPTS is not None and _CALL_COUNTER >= _MAX_HTTP_ATTEMPTS:
+            return (last_code, None, "budget-exhausted", None)
         code, body, err = _http_get(url, params)
         last_code, last_err = code, err
         if code == 200 and body is not None:
             return (code, body, None, kind)
         if code == 403:
             saw_403 = True
+            if (
+                stop_on_auth_failure
+                and _forbidden_outcome(err) is FmpWorkReceiptOutcome.ACCOUNT_FORBIDDEN
+            ):
+                return (code, None, err or "account-forbidden", kind)
         if code == 429:
             # The shared client already exhausted its bounded retry policy.
             # Trying aliases or legacy URL shapes cannot repair provider quota
@@ -1017,7 +1049,11 @@ def _date_bounds(records: object) -> tuple[str | None, str | None]:
 def _list_type_for(ticker: str) -> str:
     conn = portfolio_db.get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT list_type FROM tracked_companies WHERE ticker = ?", (ticker,))
+    cur.execute(
+        "SELECT list_type FROM tracked_companies WHERE ticker = ? AND user_id = ? "
+        "AND archived_at IS NULL AND instrument_type IS NOT NULL",
+        (ticker, DEFAULT_USER_ID),
+    )
     row = cur.fetchone()
     conn.close()
     return row["list_type"] if row else "none"
@@ -1032,6 +1068,7 @@ def run_ticker(
     manifest_filter: set[tuple[str, str]] | None = None,
     max_calls: int | None = None,
     work_receipts: list[FmpWorkReceipt] | None = None,
+    stop_on_failure: bool = False,
 ) -> dict[str, int]:
     lt = _list_type_for(ticker)
     print(f"\n=== {ticker} ({lt}) ===", flush=True)
@@ -1068,6 +1105,8 @@ def run_ticker(
     src_calls: list[source_calls_log.PendingSourceCall] = []
 
     for job_index, job in enumerate(jobs):
+        if stop_on_failure and work_receipts and work_receipts[-1].outcome in FMP_BLOCKING_OUTCOMES:
+            break
         endpoint = job["path"]
         period = job["period"]
         suffix = job["suffix"]
@@ -1102,8 +1141,20 @@ def run_ticker(
             continue
 
         _call_started = time.monotonic()
-        code, body, err, kind = fmp_call(endpoint, ticker, job["extra"])
+        if stop_on_failure:
+            code, body, err, kind = fmp_call(
+                endpoint, ticker, job["extra"], stop_on_auth_failure=True
+            )
+        else:
+            code, body, err, kind = fmp_call(endpoint, ticker, job["extra"])
         _call_ms = int((time.monotonic() - _call_started) * 1000)
+
+        # An empty record list is a valid unavailable response. It has no
+        # financial facts to admit through the nonempty payload validator.
+        if code == 200 and isinstance(body, list):
+            body = cast("list[object]", body)
+            if not body:
+                body, err = None, "empty-list"
 
         if code == 200 and body is not None:
             # Pre-write contract gate: validate every provider envelope before
@@ -1427,7 +1478,7 @@ def run_ticker(
                     if 500 <= code <= 599
                     else (
                         FmpWorkReceiptOutcome.CONTRACT_ERROR
-                        if 400 <= code <= 499
+                        if code == 200 or 400 <= code <= 499
                         else FmpWorkReceiptOutcome.TRANSPORT_ERROR
                     )
                 )
@@ -1706,6 +1757,7 @@ def configure_runtime(repo_root: Path, db_path: Path | None) -> Path:
 
 
 def main() -> int:
+    global _MAX_HTTP_ATTEMPTS
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
     ap.add_argument("--db", type=Path)
@@ -1754,14 +1806,20 @@ def main() -> int:
         "--max-calls",
         type=int,
         default=None,
-        help="Soft cap on total HTTP attempts. Run halts mid-ticker when "
-        "the counter exceeds this; remaining work is left for next run",
+        help="Hard cap on total HTTP attempts, including retries and URL fallbacks. "
+        "Remaining work is left for the next run",
     )
-    ap.add_argument(
+    receipt_group = ap.add_mutually_exclusive_group()
+    receipt_group.add_argument(
         "--work-receipt",
         type=Path,
         default=None,
         help="Write one typed receipt for a single-entry manifest.",
+    )
+    receipt_group.add_argument(
+        "--work-receipts",
+        type=Path,
+        help="Write typed receipts for every job in a multi-entry manifest.",
     )
     ap.add_argument(
         "--stable-only",
@@ -1777,6 +1835,9 @@ def main() -> int:
         "do not resolve on stable. Writes nothing.",
     )
     args = ap.parse_args()
+    if args.max_calls is not None and args.max_calls <= 0:
+        ap.error("--max-calls must be positive")
+    args.repo_root = args.repo_root.expanduser().resolve()
 
     try:
         configure_runtime(args.repo_root, args.db)
@@ -1787,6 +1848,25 @@ def main() -> int:
         )
         return 3
 
+    previous_limit = _MAX_HTTP_ATTEMPTS
+    _MAX_HTTP_ATTEMPTS = args.max_calls
+    try:
+        # Only an exact, live inherited artifact claim permits child reuse.
+        artifact_lock = (
+            nullcontext()
+            if inherited_lock_is_valid(args.repo_root, "fmp-fetch-artifacts")
+            else JobLock(args.repo_root, "save-fmp-data", ["fmp-fetch-artifacts"], wait_s=0)
+        )
+        with artifact_lock:
+            return _run_cli(args, ap)
+    except JobAlreadyRunningError:
+        print(json.dumps({"event": "fmp_artifacts_busy"}), file=sys.stderr)
+        return 75
+    finally:
+        _MAX_HTTP_ATTEMPTS = previous_limit
+
+
+def _run_cli(args: argparse.Namespace, ap: argparse.ArgumentParser) -> int:
     if not API_KEY:
         print("FATAL: FMP_API_KEY not configured", file=sys.stderr)
         return 1
@@ -1835,7 +1915,10 @@ def main() -> int:
             ):
                 raise TypeError("FMP manifest coordinates must be strings")
             t = ticker.upper()
-            manifest_filter.setdefault(t, set()).add((endpoint, period))
+            coordinates = manifest_filter.setdefault(t, set())
+            if args.work_receipts is not None and (endpoint, period) in coordinates:
+                raise ValueError("FMP manifest contains duplicate coordinates")
+            coordinates.add((endpoint, period))
         targets = sorted(manifest_filter.keys())
         if (
             args.work_receipt is not None
@@ -1843,8 +1926,8 @@ def main() -> int:
         ):
             print("FATAL: --work-receipt requires a one-entry manifest", file=sys.stderr)
             return 2
-    elif args.work_receipt is not None:
-        print("FATAL: --work-receipt requires --manifest", file=sys.stderr)
+    elif args.work_receipt is not None or args.work_receipts is not None:
+        print("FATAL: work receipts require --manifest", file=sys.stderr)
         return 2
 
     if args.probe:
@@ -1876,6 +1959,12 @@ def main() -> int:
         ap.print_help()
         return 2
 
+    if args.work_receipts is not None and (
+        manifest_filter is None or set(targets) != set(manifest_filter) or do_sector
+    ):
+        print("FATAL: bulk receipts require the exact manifest scope", file=sys.stderr)
+        return 2
+
     snapshot_index = _load_snapshot_index()
     print(f"snapshot index: {len(snapshot_index)} entries", flush=True)
 
@@ -1892,10 +1981,21 @@ def main() -> int:
             force_snapshot=args.force_snapshot,
             manifest_filter=manifest_filter.get(t) if manifest_filter else None,
             max_calls=args.max_calls,
-            work_receipts=work_receipts if args.work_receipt is not None else None,
+            stop_on_failure=args.work_receipts is not None,
+            work_receipts=(
+                work_receipts
+                if args.work_receipt is not None or args.work_receipts is not None
+                else None
+            ),
         )
         for k in grand:
             grand[k] += s[k]
+        if (
+            args.work_receipts is not None
+            and work_receipts
+            and (work_receipts[-1].outcome in FMP_BLOCKING_OUTCOMES)
+        ):
+            break
 
     if do_sector:
         run_sector_industry()
@@ -1929,6 +2029,53 @@ def main() -> int:
         budget_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
     except OSError as e:
         print(f"  [warn] could not write budget file: {e}", file=sys.stderr)
+    if args.work_receipts is not None:
+        assert manifest_filter is not None
+        expected = {
+            (t, endpoint, period)
+            for t, values in manifest_filter.items()
+            for endpoint, period in values
+        }
+        observed = {(r.ticker, r.endpoint, r.period) for r in work_receipts}
+        # Missing jobs cannot inherit success from a process exit code or an
+        # older cache file. Budget omissions remain explicit typed outcomes.
+        missing_outcome = (
+            FmpWorkReceiptOutcome.PREREQUISITE_NOT_ATTEMPTED
+            if any(r.outcome in FMP_BLOCKING_OUTCOMES for r in work_receipts)
+            else FmpWorkReceiptOutcome.BUDGET_NOT_ATTEMPTED
+            if args.max_calls is not None and args.max_calls <= _CALL_COUNTER
+            else FmpWorkReceiptOutcome.CONTRACT_ERROR
+        )
+        work_receipts.extend(
+            FmpWorkReceipt(
+                ticker=t,
+                endpoint=endpoint,
+                period=period,
+                outcome=missing_outcome,
+                captured_at=_utc_now(),
+            )
+            for t, endpoint, period in sorted(expected - observed)
+        )
+        try:
+            args.work_receipts.parent.mkdir(parents=True, exist_ok=True)
+            temporary = args.work_receipts.with_suffix(args.work_receipts.suffix + ".tmp")
+            temporary.write_text(
+                json.dumps([r.model_dump(mode="json") for r in work_receipts], indent=2),
+                encoding="utf-8",
+            )
+            temporary.replace(args.work_receipts)
+        except OSError as exc:
+            print(f"FATAL: work receipts write failed: {redact(exc)}", file=sys.stderr)
+            return 1
+        keys = [(r.ticker, r.endpoint, r.period) for r in work_receipts]
+        if len(keys) != len(set(keys)) or set(keys) != expected:
+            return 1
+        if any(
+            r.outcome not in (FmpWorkReceiptOutcome.SUCCESS, FmpWorkReceiptOutcome.EMPTY)
+            for r in work_receipts
+        ):
+            return 1
+        return 0
     if args.work_receipt is not None:
         if len(work_receipts) != 1:
             print("FATAL: fetch did not produce exactly one work receipt", file=sys.stderr)

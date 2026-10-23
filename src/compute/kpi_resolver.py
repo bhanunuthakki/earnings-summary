@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 
@@ -1597,6 +1597,8 @@ def canonical_metric_name(
     ticker: str,
     raw_label: str,
     unit: Unit,
+    *,
+    planned_fact_counts: Mapping[int, int] | None = None,
 ) -> str:
     """Return the ``kpi_definitions.name`` a captured ``(raw_label, unit)`` should
     be stored under for ``ticker`` — the write-path canonicalizer for the
@@ -1624,6 +1626,8 @@ def canonical_metric_name(
     family-compatible normalized match exists, returning a bare name that collides
     with a surface-identical row of a DIFFERENT unit family would false-merge two
     distinct metrics; step 4 prevents that by minting a unit-safe name instead.
+    ``planned_fact_counts`` projects earlier values in the same uncommitted
+    manifest for reversible identity preflight; persisted counts remain unchanged.
     Requires ``conn.row_factory = sqlite3.Row``.
     """
     cleaned = _clean_new_name(raw_label)
@@ -1655,6 +1659,9 @@ def canonical_metric_name(
         return _mint_unit_safe_name(cleaned, unit, rows)
 
     counts = _definition_fact_counts(conn, ticker)
+    if planned_fact_counts:
+        for definition_id, count in planned_fact_counts.items():
+            counts[definition_id] = counts.get(definition_id, 0) + count
 
     def _rank(r: sqlite3.Row) -> tuple[int, int, int, int]:
         obs = counts.get(int(r["id"]), 0)

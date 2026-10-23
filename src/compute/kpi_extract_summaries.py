@@ -30,10 +30,11 @@ import re
 import sqlite3
 import time
 from collections.abc import Callable, Mapping
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
+from functools import partial
 from pathlib import Path
 from typing import Literal, cast
 
@@ -47,9 +48,23 @@ from pydantic import (
     model_validator,
 )
 
-from compute.kpi_resolver import normalize_kpi_name
+from compute import ir_supplement_capture
+from compute.ir_supplement_capture import (
+    SupplementCapture,
+    SupplementExchange,
+    SupplementSaturatedError,
+)
+from compute.kpi_resolver import canonical_metric_name, normalize_kpi_name
+from db_paths import db_path_context
+from llm.ledger import capture_call_records
+from llm.prompt_ab import active_prompt_override, apply_prompt_override, edits_to_json
 from llm.resolver import resolve_model_and_backend, structured_capability_profile
-from llm.structured import call_llm_structured
+from llm.structured import (
+    StructuredCallResult,
+    call_llm_structured,
+    call_llm_structured_with_raw,
+    parse_json_payload,
+)
 from llm.untrusted import spotlight
 from llm_client import FAST_CLASSIFIER_MODEL
 from models.documents import SourceType, tier_for_source_type
@@ -64,6 +79,7 @@ from pipeline.kpi_persistence import (
     KpiExtractionManifest,
     KpiValue,
     PersistResult,
+    find_or_create_kpi_definition,
     guard_llm_extracted_parent,
     persist_manifest,
     record_validation_issue,
@@ -92,10 +108,20 @@ from pipeline.source_policy import (
     authorize_collection_target_in_connection,
 )
 from provenance.document_evidence_pipeline import DocumentEvidenceRequest, process_document_evidence
-from provenance.fulltext_backfill import project_source_text
+from provenance.fulltext_backfill import project_source_text, source_text_projection_identity
 from provenance.immutable_artifact import assert_artifact_unchanged, read_stable_artifact
+from provenance.ir_reported_facts import (
+    IrCandidateRetentionRequest,
+    IrRawExchange,
+    IrRawRow,
+    IrReportedPublicationRequest,
+    find_exact_ir_source_review,
+    publish_ir_reported_facts,
+    retain_ir_pdf_candidates,
+)
 from provenance.legacy_document_evidence import require_legacy_document_evidence
 from provenance.llm_extracted_parent import resolve_parent
+from provenance.reporting_entity_registry import ReportingEntityRegistry
 from run_lock import hold_run_lock
 from runtime.job_runtime import current_lock_claim, inherited_lock_is_valid
 
@@ -112,8 +138,11 @@ def _persist_accounted(
     invocation_inputs: Mapping[str, JsonValue],
     manifest: KpiExtractionManifest,
     force: bool = False,
+    pre_persist_validation: Callable[[], None] | None = None,
 ) -> PersistResult:
     """Persist one document manifest and close its run attempt exactly once."""
+    if conn.in_transaction:
+        raise ValueError("KPI manifest persistence requires an owned transaction boundary")
     run_id = start_run(
         conn,
         directive=directive,
@@ -121,13 +150,15 @@ def _persist_accounted(
         invocation_inputs=invocation_inputs,
         deduplicate_completed=True,
         force=force,
+        pre_persist_validation=pre_persist_validation,
     )
     try:
-        result = persist_manifest(conn, run_id=run_id, manifest=manifest)
+        result = persist_manifest(conn, run_id=run_id, manifest=manifest, commit=False)
+        end_run(conn, run_id, StageStatus.OK)
     except Exception as exc:
+        conn.rollback()
         end_run(conn, run_id, StageStatus.FAILED, error_summary=f"{type(exc).__name__}: {exc}")
         raise
-    end_run(conn, run_id, StageStatus.OK)
     return result
 
 
@@ -178,8 +209,10 @@ class _EnumeratedKpi(BaseModel):
     currency: Currency | None = None
     source_excerpt: str = Field(min_length=1, max_length=200)
     source_value_text: str | None = Field(default=None, min_length=1, max_length=80)
+    reported_period_start: date | None = None
     reported_period_end: date
     period_role: KpiPeriodRole
+    range_bound: Literal["lower", "upper"] | None = None
     accounting_basis: KpiAccountingBasis
     consolidation_scope: KpiConsolidationScope
     dimensions: dict[str, str] = Field(default_factory=dict)
@@ -204,6 +237,8 @@ class _EnumeratedKpi(BaseModel):
                 raise ValueError("COUNT values require the exact source numeric token")
             if self.source_value_text not in self.source_excerpt:
                 raise ValueError("source numeric token must occur in source_excerpt")
+        if self.range_bound is not None and self.period_role is not KpiPeriodRole.GUIDANCE:
+            raise ValueError("range endpoints require explicit guidance period role")
         return self
 
 
@@ -1232,10 +1267,138 @@ _CAPTURE_STAGE: dict[str, str] = {
 }
 
 
+def _enumerate_prompt(
+    ticker: str,
+    period_label: str,
+    text: str,
+    max_facts: int,
+    *,
+    source_scope: Literal["summary_current", "direct_pdf_rich"] = "summary_current",
+) -> str:
+    spotlighted = spotlight(
+        text, source=f"{ticker} {period_label} earnings/IR document (issuer-published)"
+    )
+    introduction = (
+        "There is NO list of metrics to look for — capture every labeled number that is a reported ACTUAL for THIS period: revenue and each revenue line, margins, growth rates, customer/subscriber/account counts, ARPU/ARPAC, take rate, GMV, deposits, loans, NPL, efficiency ratio, capex, free cash flow, headcount, and anything else stated."
+        if source_scope == "summary_current"
+        else "There is NO list of metrics to look for — capture every labeled number in this direct issuer PDF: current reported actuals, explicit prior-period and prior-year comparatives, year-to-date actuals, and numeric management guidance or outlook. Preserve each source period, basis, scope, dimension, label, and full management wording in its exact quoted excerpt. Guidance is forward-looking, never a realized actual."
+    )
+    source_token_field = (
+        '  "source_value_text": "<for counts, the exact numeric token before scale expansion; it must occur in source_excerpt>",'
+        if source_scope == "summary_current"
+        else '  "source_value_text": "<for EVERY numeric row, including monetary values and guidance bounds, the exact source numeric token before scale expansion; it must occur in source_excerpt>",'
+    )
+    rich_fields = (
+        (
+            ',\n  "reported_period_start": "<ISO date when the source states a duration start; omit when not supported>",'
+            '\n  "range_bound": "<lower | upper for each endpoint of an explicit guidance range; omit for a point value>"'
+        )
+        if source_scope == "direct_pdf_rich"
+        else ""
+    )
+    scope_rule = (
+        "  - THIS-period reported actuals only. Skip guidance/outlook for a future period and explicit prior-period comparatives. Classify period_role before deciding; never relabel a comparator as current."
+        if source_scope == "summary_current"
+        else "  - Retain actuals, explicit comparatives, and year-to-date values with their own source period. Set period_role to current, prior_period_comparator, or prior_year_comparator as stated. Set guidance/outlook to guidance; set unresolved forecast context to unknown. Never relabel either as current."
+    )
+    range_rule = (
+        ""
+        if source_scope == "summary_current"
+        else "\n  - For each explicit two-endpoint guidance range, return TWO rows with the SAME verbatim source_excerpt and source label: one range_bound lower and one range_bound upper. Keep each exact endpoint token in source_value_text and the numeric value in the standard full-unit convention. Never invent a midpoint, endpoint, or realized value."
+    )
+    return f"""You are enumerating EVERY reported numeric fact for {ticker} ({period_label}) from the document below.
+
+{introduction}
+
+Return a JSON ARRAY. Each element:
+{{
+  "label": "<the metric's name as a clean noun phrase — e.g. 'Gross merchandise volume', NOT a whole sentence>",
+  "value": <numeric only, no unit symbols>,
+  "unit": EXACTLY ONE of "percent" | "actual" | "count" | "ratio" | "bps",
+  "currency": "ISO currency code required for every actual monetary value (e.g. USD, BRL, DKK); omit for counts and rates",
+  "source_excerpt": "<verbatim snippet under 200 characters, copied character-for-character, that contains the value>",
+{source_token_field}
+  "reported_period_end": "<ISO date for this value>",
+  "period_role": "current | prior_period_comparator | prior_year_comparator | guidance | unknown",
+  "accounting_basis": "gaap | non_gaap | management | unknown",
+  "consolidation_scope": "consolidated | geography | segment | product | other | unknown",
+  "dimensions": {{"<axis>":"<member>"}},
+  "source_unit_scale": "none | thousands | millions | billions | unknown",
+  "source_row_label": "<verbatim table row label when present>",
+  "source_column_header": "<verbatim table column header when present>"{rich_fields}
+}}
+
+Unit conventions (identical to our standard):
+  - "percent" — rates/margins/growth/retention (NRR 120% -> 120; NIM 17.8% -> 17.8). Drop the % sign; do NOT divide by 100.
+  - "actual"  — ALL monetary amounts, as the FULL figure in the issuer's base currency, NEVER pre-scaled ("$1.2 billion" -> 1200000000; ARPAC "$11.20" -> 11.20).
+    Include its explicit ISO "currency" code; never infer one.
+  - "count"   — headcount/customers/subscribers/accounts as the full integer ("12.5 million customers" -> 12500000).
+  - "ratio"   — unitless multiples reported with an "x" (coverage 1.8x -> 1.8).
+  - "bps"     — only when the document states the metric in basis points.
+
+Rules:
+{scope_rule}{range_rule}
+  - For continuation inputs with CONTEXT ONLY and EXTRACT ONLY FROM THIS SOURCE SECTION blocks, use context for headers, currency, units and period only. Enumerate and quote facts only from the source section.
+  - One row per distinct metric, reported period, accounting basis, scope and dimensions. Preserve repeated labels for distinct scopes. Do not invent — if you cannot quote it verbatim, omit it.
+  - Return at most {max_facts} rows. Return ONLY the JSON array — no markdown fence, no commentary.
+
+Document text:
+{spotlighted}"""
+
+
+def _validated_enumerated_rows(
+    raw: object,
+    *,
+    source_scope: Literal["summary_current", "direct_pdf_rich"],
+    saturation_limit: int | None = None,
+) -> list[_EnumeratedKpi]:
+    rows = TypeAdapter(list[_EnumeratedKpi]).validate_python(raw)
+    if source_scope == "summary_current":
+        return rows
+    ranges: dict[tuple[object, ...], dict[str, Decimal]] = {}
+    for row in rows:
+        if row.source_value_text is None or row.source_value_text not in row.source_excerpt:
+            raise ValueError("direct IR PDF numeric token must occur in its exact source quote")
+        if row.range_bound is None:
+            continue
+        key = (
+            row.label,
+            row.source_excerpt,
+            row.reported_period_start,
+            row.reported_period_end,
+            row.accounting_basis,
+            row.consolidation_scope,
+            tuple(sorted(row.dimensions.items())),
+            row.unit,
+            row.currency,
+            row.source_unit_scale,
+        )
+        bounds = ranges.setdefault(key, {})
+        if row.range_bound in bounds:
+            raise ValueError("direct IR PDF guidance range repeats an endpoint")
+        bounds[row.range_bound] = row.value
+    if (saturation_limit is None or len(rows) < saturation_limit) and any(
+        set(bounds) != {"lower", "upper"} or bounds["lower"] >= bounds["upper"]
+        for bounds in ranges.values()
+    ):
+        raise ValueError("direct IR PDF guidance range requires both exact endpoints")
+    return rows
+
+
 def _llm_extract_enumerate(
-    ticker: str, period_label: str, text: str, *, max_facts: int = _CAPTURE_MAX_FACTS
+    ticker: str,
+    period_label: str,
+    text: str,
+    *,
+    max_facts: int = _CAPTURE_MAX_FACTS,
+    model: str | None = None,
+    backend: str | None = None,
+    db_path: Path | None = None,
+    run_id: str | None = None,
+    exchange_observer: Callable[[StructuredCallResult[list[_EnumeratedKpi]]], None] | None = None,
+    source_scope: Literal["summary_current", "direct_pdf_rich"] = "summary_current",
 ) -> list[dict[str, object]]:
-    """Single Haiku call — enumerate EVERY labeled this-period numeric fact (no
+    """One governed structured call — enumerate labeled this-period numeric facts (no
     allowlist). Returns a list of ``{label, value, unit, source_excerpt}`` dicts.
 
     The unit vocabulary + money convention mirror ``_llm_extract`` exactly, so a
@@ -1248,55 +1411,38 @@ def _llm_extract_enumerate(
     # prose that can carry adversarial instructions. Wrapping it in tamper-evident
     # markers marks it as DATA, not instructions (sec-llm; the enumerate path is a
     # no-allowlist capture so the doc text reaches the model verbatim).
-    spotlighted = spotlight(
-        text, source=f"{ticker} {period_label} earnings/IR document (issuer-published)"
+    prompt = _enumerate_prompt(ticker, period_label, text, max_facts, source_scope=source_scope)
+    if exchange_observer is not None:
+        exchange = call_llm_structured_with_raw(
+            prompt,
+            purpose="kpi_summary_enumerate",
+            expect="array",
+            schema=TypeAdapter(list[_EnumeratedKpi]),
+            ticker=ticker,
+            run_id=run_id,
+            model=model,
+            backend=backend,
+            db_path=db_path,
+        )
+        exchange_observer(exchange)
+        parsed = exchange.value
+    else:
+        parsed = call_llm_structured(
+            prompt,
+            purpose="kpi_summary_enumerate",
+            model=model,
+            backend=backend,
+            db_path=db_path,
+            expect="array",
+            schema=TypeAdapter(list[_EnumeratedKpi]),
+        )
+    validated = _validated_enumerated_rows(
+        parsed, source_scope=source_scope, saturation_limit=max_facts
     )
-    prompt = f"""You are enumerating EVERY reported numeric fact for {ticker} ({period_label}) from the document below.
-
-There is NO list of metrics to look for — capture every labeled number that is a reported ACTUAL for THIS period: revenue and each revenue line, margins, growth rates, customer/subscriber/account counts, ARPU/ARPAC, take rate, GMV, deposits, loans, NPL, efficiency ratio, capex, free cash flow, headcount, and anything else stated.
-
-Return a JSON ARRAY. Each element:
-{{
-  "label": "<the metric's name as a clean noun phrase — e.g. 'Gross merchandise volume', NOT a whole sentence>",
-  "value": <numeric only, no unit symbols>,
-  "unit": EXACTLY ONE of "percent" | "actual" | "count" | "ratio" | "bps",
-  "currency": "ISO currency code required for every actual monetary value (e.g. USD, BRL, DKK); omit for counts and rates",
-  "source_excerpt": "<verbatim snippet under 200 characters, copied character-for-character, that contains the value>",
-  "source_value_text": "<for counts, the exact numeric token before scale expansion; it must occur in source_excerpt>",
-  "reported_period_end": "<ISO date for this value>",
-  "period_role": "current | prior_period_comparator | prior_year_comparator | guidance | unknown",
-  "accounting_basis": "gaap | non_gaap | management | unknown",
-  "consolidation_scope": "consolidated | geography | segment | product | other | unknown",
-  "dimensions": {{"<axis>":"<member>"}},
-  "source_unit_scale": "none | thousands | millions | billions | unknown",
-  "source_row_label": "<verbatim table row label when present>",
-  "source_column_header": "<verbatim table column header when present>"
-}}
-
-Unit conventions (identical to our standard):
-  - "percent" — rates/margins/growth/retention (NRR 120% -> 120; NIM 17.8% -> 17.8). Drop the % sign; do NOT divide by 100.
-  - "actual"  — ALL monetary amounts, as the FULL figure in the issuer's base currency, NEVER pre-scaled ("$1.2 billion" -> 1200000000; ARPAC "$11.20" -> 11.20).
-    Include its explicit ISO "currency" code; never infer one.
-  - "count"   — headcount/customers/subscribers/accounts as the full integer ("12.5 million customers" -> 12500000).
-  - "ratio"   — unitless multiples reported with an "x" (coverage 1.8x -> 1.8).
-  - "bps"     — only when the document states the metric in basis points.
-
-Rules:
-  - THIS-period reported actuals only. Skip guidance/outlook for a future period and explicit prior-period comparatives. Classify period_role before deciding; never relabel a comparator as current.
-  - One row per distinct metric; do not duplicate. Do not invent — if you cannot quote it verbatim, omit it.
-  - Return at most {max_facts} rows. Return ONLY the JSON array — no markdown fence, no commentary.
-
-Document text:
-{spotlighted}"""
-    parsed = call_llm_structured(
-        prompt,
-        purpose="kpi_summary_enumerate",
-        expect="array",
-        schema=TypeAdapter(list[_EnumeratedKpi]),
-    )
-    validated = TypeAdapter(list[_EnumeratedKpi]).validate_python(parsed)
     if len(validated) >= max_facts:
-        raise ValueError("IR capture reached its fact limit; document coverage is unknown")
+        raise SupplementSaturatedError(
+            "IR capture reached its fact limit; chunk coverage is unknown"
+        )
     out: list[dict[str, object]] = []
     for item in validated:
         out.append(item.model_dump(mode="python"))
@@ -1445,6 +1591,9 @@ def capture_for_ticker(
     log = TickerExtractionLog(ticker=ticker, stage=_CAPTURE_STAGE[source_group])
     log.started_at = _now_iso_z()
     t0 = time.perf_counter()
+    if conn.in_transaction:
+        log.error = "KPI capture requires an owned transaction boundary before source preparation"
+        return _close_log(log, t0)
 
     sources = _list_sources(repo_root, ticker, _SOURCE_GROUPS[source_group])
     # Coverage accounting (PR3): every enumerated fact is captured, dropped by the
@@ -1476,6 +1625,9 @@ def capture_for_ticker(
                 conn=conn,
                 source_text=text,
             )
+            # Source-anchor validation belongs to this preparation phase, not
+            # the following atomic financial manifest transaction.
+            conn.commit()
             result = _persist_accounted(
                 conn,
                 directive=f"capture_kpis_from_{source_group}",
@@ -1735,6 +1887,217 @@ def _list_ir_capture_pdf_docs(
     return out
 
 
+def _require_distinct_capture_identities(
+    conn: sqlite3.Connection, manifest: KpiExtractionManifest
+) -> None:
+    """Block contexts the current KPI fact identity cannot retain separately.
+
+    Native chunk artifacts retain each candidate. This guard does not expand
+    the financial persistence owner's identity or silently rename source labels.
+    """
+    # Use the writer's evolving registry in a reversible savepoint. Novel aliases
+    # must resolve as they would after earlier definitions in the same manifest.
+    conn.execute("SAVEPOINT ir_capture_identity_preflight")
+    try:
+        identities: dict[int, str] = {}
+        planned_fact_counts: dict[int, int] = {}
+        for value in manifest.values:
+            name = canonical_metric_name(
+                conn,
+                manifest.ticker,
+                value.name,
+                value.unit,
+                planned_fact_counts=planned_fact_counts,
+            )
+            definition_id = find_or_create_kpi_definition(
+                conn,
+                ticker=manifest.ticker,
+                name=name,
+                unit=value.unit,
+                primary_source=manifest.primary_source,
+                origin=manifest.origin,
+            )
+            planned_fact_counts[definition_id] = planned_fact_counts.get(definition_id, 0) + 1
+            context = value.semantic_context
+            signature = json.dumps(
+                {
+                    "value": str(value.value),
+                    "unit": value.unit.value,
+                    "currency": value.currency.value if value.currency else None,
+                    "reported_period_end": context.reported_period_end.isoformat()
+                    if context and context.reported_period_end
+                    else None,
+                    "period_role": context.period_role.value if context else None,
+                    "accounting_basis": context.accounting_basis.value if context else None,
+                    "scope": context.consolidation_scope.value if context else None,
+                    "dimensions": context.dimensions if context else {},
+                    "unit_scale": context.unit_scale.value if context else None,
+                },
+                sort_keys=True,
+            )
+            previous = identities.setdefault(definition_id, signature)
+            if previous != signature:
+                raise ValueError(
+                    f"IR distinct source contexts collide in current KPI persistence: {name}; "
+                    "candidates retained in native chunk artifacts; financial writes blocked"
+                )
+    finally:
+        conn.execute("ROLLBACK TO SAVEPOINT ir_capture_identity_preflight")
+        conn.execute("RELEASE SAVEPOINT ir_capture_identity_preflight")
+
+
+def retain_and_publish_reviewed_ir_source(
+    conn: sqlite3.Connection,
+    *,
+    document_version_id: str,
+    source_sha256: str,
+    raw_pdf_bytes: bytes,
+    page_rows: list[tuple[int, list[dict[str, object]]]],
+    exchanges: list[SupplementExchange],
+    max_facts_per_doc: int,
+    extractor_config_sha256: str,
+    extraction_started_at: datetime,
+    precommit_validation: Callable[[], None] | None = None,
+) -> None:
+    """Retain every raw candidate; publish only a pre-existing exact review."""
+    responses = tuple(
+        IrRawExchange(
+            raw_response=exchange.raw_response,
+            response_sha256=exchange.response_sha256,
+            prompt_sha256=exchange.prompt_sha256,
+            model=exchange.model,
+            provider=exchange.provider,
+            transport=exchange.transport,
+            llm_call_id=exchange.llm_call_id,
+        )
+        for exchange in exchanges
+    )
+    processed: list[tuple[SupplementExchange, list[dict[str, object]]]] = []
+    for exchange in exchanges:
+        parsed: object = parse_json_payload(exchange.raw_response, expect="array")
+        source_rows = _validated_enumerated_rows(
+            parsed,
+            source_scope="direct_pdf_rich",
+            saturation_limit=max_facts_per_doc,
+        )
+        if len(source_rows) < max_facts_per_doc:
+            if not isinstance(parsed, list) or any(
+                not isinstance(row, dict) for row in cast("list[object]", parsed)
+            ):
+                raise ValueError("IR governed response is not an array of raw rows")
+            processed.append((exchange, cast("list[dict[str, object]]", parsed)))
+    if len(processed) != len(page_rows):
+        raise ValueError("IR page sections and governed responses do not match")
+    raw_rows: list[IrRawRow] = []
+    for (page, rows), (exchange, original) in zip(page_rows, processed, strict=True):
+        validated = [
+            item.model_dump(mode="json")
+            for item in _validated_enumerated_rows(original, source_scope="direct_pdf_rich")
+        ]
+        if validated != rows:
+            raise ValueError("IR page rows differ from their governed raw response")
+        raw_rows.extend(
+            IrRawRow(
+                page_number=page,
+                response_sha256=exchange.response_sha256,
+                response_row_ordinal=ordinal,
+                raw_row=original[ordinal],
+            )
+            for ordinal in range(len(original))
+        )
+    completed_at = datetime.now(UTC)
+    population = retain_ir_pdf_candidates(
+        conn,
+        IrCandidateRetentionRequest(
+            document_version_id=document_version_id,
+            source_sha256=source_sha256,
+            extractor_name="ir-supplement-native-continuation",
+            extractor_code_version="v2",
+            extractor_config_sha256=extractor_config_sha256,
+            extraction_started_at=extraction_started_at,
+            extraction_completed_at=completed_at,
+            responses=responses,
+            rows=tuple(raw_rows),
+        ),
+        raw_pdf_bytes=raw_pdf_bytes,
+        page_projection=ir_supplement_capture.project_pdf_page_texts,
+        precommit_validation=precommit_validation,
+    )
+    reviewed = find_exact_ir_source_review(conn, population, raw_pdf_bytes=raw_pdf_bytes)
+    if reviewed is None:
+        logger.info(
+            {
+                "event": "ir_source_candidate_disposition",
+                "document_version_id": document_version_id,
+                "candidate_count": len(population.candidate_node_ids),
+                "source_publication_count": 0,
+                "disposition": "pending_source_context_review",
+            }
+        )
+        return
+    review_node_id, review = reviewed
+    accepted = tuple(
+        entry.fact for entry in review.entries if entry.disposition == "accepted" and entry.fact
+    )
+    if not accepted:
+        logger.info(
+            {
+                "event": "ir_source_candidate_disposition",
+                "document_version_id": document_version_id,
+                "candidate_count": len(population.candidate_node_ids),
+                "source_publication_count": 0,
+                "disposition": "reviewed_no_accepted_source_facts",
+            }
+        )
+        return
+    now = datetime.now(UTC)
+    issuer_row = conn.execute(
+        "SELECT issuer_id FROM evidence_document_versions WHERE document_version_id=?",
+        (document_version_id,),
+    ).fetchone()
+    if issuer_row is None:
+        raise ValueError("IR reviewed source document disappeared")
+    subject = ReportingEntityRegistry(conn).canonicalize_recorded_subject(
+        str(issuer_row[0]), knowledge_at=now
+    )
+    if subject.reporting_entity_id is None or subject.material_dissent:
+        raise ValueError("IR reviewed source subject is unresolved")
+    receipt = publish_ir_reported_facts(
+        conn,
+        IrReportedPublicationRequest(
+            document_version_id=document_version_id,
+            source_sha256=source_sha256,
+            subject_binding_revision_id=subject.binding_revision_id,
+            reporting_entity_id=subject.reporting_entity_id,
+            scope_security_id=subject.security_id,
+            concept_namespace="issuer-ir-pdf-source:" + str(issuer_row[0]),
+            extractor_name="ir-supplement-native-continuation",
+            extractor_code_version="v2",
+            extractor_config_sha256=extractor_config_sha256,
+            candidate_population_sha256=population.candidate_population_sha256,
+            review_node_id=review_node_id,
+            extraction_started_at=extraction_started_at,
+            extraction_completed_at=completed_at,
+            knowledge_at=now,
+            recorded_at=now,
+            candidates=accepted,
+        ),
+        raw_pdf_bytes=raw_pdf_bytes,
+        precommit_validation=precommit_validation,
+    )
+    logger.info(
+        {
+            "event": "ir_source_candidate_disposition",
+            "document_version_id": document_version_id,
+            "candidate_count": len(population.candidate_node_ids),
+            "reviewed_count": len(review.entries),
+            "source_publication_count": len(receipt.observation_ids),
+            "disposition": "reviewed_source_only",
+            "exact_replay": receipt.exact_replay,
+        }
+    )
+
+
 def capture_for_ir_pdf_docs(
     ticker: str,
     repo_root: Path,
@@ -1744,79 +2107,275 @@ def capture_for_ir_pdf_docs(
     refresh: bool = False,
     max_facts_per_doc: int = _CAPTURE_MAX_FACTS,
     max_input_chars: int = _CAPTURE_MAX_INPUT_CHARS,
+    max_chunks: int = 256,
+    max_structured_calls: int = 256,
 ) -> TickerExtractionLog:
-    """Enumerate-mode (no allowlist) capture for one ticker's IR supplement PDFs.
+    """Process bounded native-page sections from registered supplement PDFs.
 
-    For every registered ``ir_supplement`` PDF (the doc kind with no LLM brief
-    handler), reads the PDF text, enumerates every labeled this-period number, and
-    persists with origin=CAPTURE at IR_DOC tier — so each raw label is canonicalized
-    onto an existing series or mints a clean CAPTURE definition, and the long tail
-    becomes askable / DIY-pickable / DCF-resolvable. No holdings JSON required
-    (there's no allowlist). Idempotent: an already-captured doc is skipped without
-    an LLM call unless ``refresh``. Requires ``conn.row_factory = sqlite3.Row``.
-
-    Missing, empty, and over-budget sources produce an explicit run error.
-    They cannot be marked as fully captured from a partial input.
+    The existing derived-artifact cache resumes exact source/model/prompt inputs.
+    Raw candidates are retained after all planned sections pass. Only an exact
+    manual source-context review can publish source-only facts. The legacy
+    ``max_facts_per_doc`` parameter is a per-section saturation limit; exceeding
+    it requires smaller source sections. Blank/image-only pages, failed sections,
+    exhausted budgets, and ungrounded quotes remain unresolved. Processing every
+    page does not prove financial fact recall.
     """
     ticker = ticker.upper()
     log = TickerExtractionLog(ticker=ticker, stage="stage_b_capture_ir_supplement")
     log.started_at = _now_iso_z()
     t0 = time.perf_counter()
+    if conn.in_transaction:
+        log.error = "KPI capture requires an owned transaction boundary before source preparation"
+        return _close_log(log, t0)
 
     for doc_id, pdf_path, period_end in _list_ir_capture_pdf_docs(
         conn, repo_root, ticker, doc_types
     ):
         period_label = f"{period_end.date().isoformat()} [ir_supplement]"
         log.quarters_attempted.append(period_label)
+        extraction_run_id: str | None = None
         try:
-            if not refresh and _doc_already_captured(conn, doc_id):
-                log.quarters_skipped_no_missing.append(period_label)
-                continue
             if not pdf_path.exists():
                 logger.info(
                     {"event": "ir_supplement_pdf_missing", "ticker": ticker, "path": str(pdf_path)}
                 )
                 raise FileNotFoundError("IR capture source is missing")
-            text = _complete_capture_text(_read_pdf_text(str(pdf_path)), max_input_chars)
-            rows = _llm_extract_enumerate(ticker, period_label, text, max_facts=max_facts_per_doc)
-            if not rows:
-                continue
-            # Phase B (provenance_clickthrough.md §3.2): attribute each
-            # LLM-returned excerpt to its PDF page (+ bbox where findable) so
-            # the value persists with a renderable pdf_slide locator; an
-            # unlocatable excerpt keeps the escape hatch.
-            from pipeline.locators import PdfQuoteLocator
-
-            manifest = _build_capture_manifest(
-                ticker,
-                period_end,
-                _fiscal_period_type_for(ticker, period_end),
-                doc_id,
-                rows,
-                primary_source=SourceType.IR_DOC,
-                locate_quote=PdfQuoteLocator(pdf_path),
-            )
-            result = _persist_accounted(
+            snapshot, raw_bytes = read_stable_artifact(pdf_path)
+            document = conn.execute(
+                "SELECT doc_type FROM documents WHERE id=?", (doc_id,)
+            ).fetchone()
+            if document is None:
+                raise ValueError("IR source document is not registered")
+            evidence = require_legacy_document_evidence(
                 conn,
-                directive="capture_kpis_from_ir_supplement",
+                document_id=doc_id,
                 ticker=ticker,
+                source_type=SourceType.IR_DOC.value,
+                doc_type=str(document[0]),
+                period_end=period_end,
+                source_sha256=snapshot.file_sha256,
+            )
+            db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+            model, backend = resolve_model_and_backend(
+                "kpi_summary_enumerate",
+                capability_profile=structured_capability_profile(None),
+                db_path=db_path,
+            )
+
+            def effective_prompt(prompt: str, *, db_path: Path = db_path) -> str:
+                with db_path_context(db_path):
+                    return apply_prompt_override("kpi_summary_enumerate", None, prompt)
+
+            def override_identity(*, db_path: Path = db_path) -> str:
+                edits = active_prompt_override("kpi_summary_enumerate", db_path=db_path) or ()
+                return hashlib.sha256(edits_to_json(edits).encode()).hexdigest()
+
+            def extract_section(
+                text: str,
+                *,
+                model: str = model,
+                backend: str = backend,
+                db_path: Path = db_path,
+                period_label: str = period_label,
+                run_id: str,
+            ) -> SupplementExchange:
+                if (model, backend) != resolve_model_and_backend(
+                    "kpi_summary_enumerate",
+                    capability_profile=structured_capability_profile(None),
+                    db_path=db_path,
+                ):
+                    raise ValueError("IR continuation model route changed during extraction")
+                exchange: StructuredCallResult[list[_EnumeratedKpi]] | None = None
+
+                def observe(value: StructuredCallResult[list[_EnumeratedKpi]]) -> None:
+                    nonlocal exchange
+                    exchange = value
+
+                with db_path_context(db_path), capture_call_records() as captured:
+                    with suppress(SupplementSaturatedError):
+                        _llm_extract_enumerate(
+                            ticker,
+                            period_label,
+                            text,
+                            max_facts=max_facts_per_doc,
+                            model=model,
+                            backend=backend,
+                            db_path=db_path,
+                            run_id=run_id,
+                            exchange_observer=observe,
+                            source_scope="direct_pdf_rich",
+                        )
+                    records = captured()
+                if exchange is None:
+                    raise ValueError("IR governed structured exchange is unavailable")
+                response_sha = hashlib.sha256(exchange.raw_response.encode()).hexdigest()
+                final_prompt_sha = hashlib.sha256(
+                    effective_prompt(exchange.prompt).encode()
+                ).hexdigest()
+                producing = next(
+                    (
+                        record
+                        for record in reversed(records)
+                        if record.purpose == "kpi_summary_enumerate"
+                        and record.run_id == run_id
+                        and record.error is None
+                        and record.outcome == "success"
+                        and record.response_sha256 == response_sha
+                        and record.prompt_sha256 == final_prompt_sha
+                    ),
+                    None,
+                )
+                if producing is None or not producing.provider or not producing.transport:
+                    raise ValueError("IR actual successful governed call cannot be attributed")
+                call = conn.execute(
+                    "SELECT id FROM llm_calls WHERE run_id=? AND purpose=? AND model=? "
+                    "AND prompt_sha256=? AND response_sha256=? AND provider=? AND transport=? "
+                    "AND error IS NULL AND outcome='success' ORDER BY id DESC LIMIT 1",
+                    (
+                        run_id,
+                        "kpi_summary_enumerate",
+                        producing.model,
+                        final_prompt_sha,
+                        response_sha,
+                        producing.provider,
+                        producing.transport,
+                    ),
+                ).fetchone()
+                if call is None:
+                    raise ValueError(
+                        "IR producing governed call was not retained in the selected database"
+                    )
+                return SupplementExchange(
+                    raw_response=exchange.raw_response,
+                    submitted_prompt=exchange.prompt,
+                    model=producing.model,
+                    provider=producing.provider,
+                    transport=producing.transport,
+                    prompt_sha256=final_prompt_sha,
+                    response_sha256=response_sha,
+                    llm_call_id=int(call[0]),
+                    run_id=run_id,
+                )
+
+            def validate_rows(raw: object) -> list[dict[str, object]]:
+                return [
+                    row.model_dump(mode="json")
+                    for row in _validated_enumerated_rows(
+                        raw,
+                        source_scope="direct_pdf_rich",
+                        saturation_limit=max_facts_per_doc,
+                    )
+                ]
+
+            prompt_sha256 = hashlib.sha256(
+                _enumerate_prompt(
+                    ticker,
+                    period_label,
+                    "",
+                    max_facts_per_doc,
+                    source_scope="direct_pdf_rich",
+                ).encode()
+            ).hexdigest()
+            schema_sha256 = hashlib.sha256(
+                json.dumps(TypeAdapter(list[_EnumeratedKpi]).json_schema(), sort_keys=True).encode()
+            ).hexdigest()
+            projection_identity = source_text_projection_identity(str(pdf_path), "application/pdf")
+            extraction_run_id = start_run(
+                conn,
+                directive="capture_ir_supplement_sections",
+                ticker_scope=[ticker],
                 invocation_inputs={
                     "document_id": doc_id,
+                    "source_sha256": snapshot.file_sha256,
                     "period_end": period_end.isoformat(),
-                    "doc_types": list(doc_types),
-                    "source": file_fingerprint(pdf_path, root=repo_root),
-                    "refresh": refresh,
-                    "max_facts_per_doc": max_facts_per_doc,
+                    "model": model,
+                    "backend": backend,
                     "max_input_chars": max_input_chars,
+                    "max_facts_per_doc": max_facts_per_doc,
+                    "source_scope": "direct_pdf_rich",
+                    "max_chunks": max_chunks,
+                    "max_structured_calls": max_structured_calls,
+                    "continuation_version": "ir-supplement-native-continuation-v2",
+                    "prompt_sha256": prompt_sha256,
+                    "schema_sha256": schema_sha256,
+                    "projection_identity": projection_identity,
                 },
-                manifest=manifest,
-                force=refresh,
             )
-            log.kpis_inserted_total += result.inserted
-            log.quarters_extracted.append(period_label)
-        except PipelineRunSuppressedError:
+            continuation = SupplementCapture(
+                conn=conn,
+                ticker=ticker,
+                document_id=doc_id,
+                source_sha256=snapshot.file_sha256,
+                model=model,
+                backend=backend,
+                period_label=period_label,
+                max_input_chars=max_input_chars,
+                max_facts=max_facts_per_doc,
+                max_chunks=max_chunks,
+                max_structured_calls=max_structured_calls,
+                prompt=partial(
+                    _enumerate_prompt,
+                    ticker,
+                    period_label,
+                    max_facts=max_facts_per_doc,
+                    source_scope="direct_pdf_rich",
+                ),
+                extract=partial(extract_section, run_id=extraction_run_id),
+                effective_prompt=effective_prompt,
+                override_identity=override_identity,
+                validate_rows=validate_rows,
+                refresh=refresh,
+                schema_sha256=schema_sha256,
+                projection_identity=projection_identity,
+                document_version_id=evidence.document_version_id,
+            )
+            source_started_at = datetime.now(UTC)
+            page_rows = continuation.capture(raw_bytes)
+            assert_artifact_unchanged(snapshot)
+            source_config_sha256 = hashlib.sha256(
+                json.dumps(
+                    {
+                        "model": model,
+                        "backend": backend,
+                        "prompt_sha256": prompt_sha256,
+                        "schema_sha256": schema_sha256,
+                        "projection_identity": projection_identity,
+                        "prompt_override_identity": override_identity(),
+                        "max_input_chars": max_input_chars,
+                        "max_facts_per_doc": max_facts_per_doc,
+                        "source_scope": "direct_pdf_rich",
+                    },
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+            retain_and_publish_reviewed_ir_source(
+                conn,
+                document_version_id=evidence.document_version_id,
+                source_sha256=snapshot.file_sha256,
+                raw_pdf_bytes=raw_bytes,
+                page_rows=page_rows,
+                exchanges=continuation.exchanges,
+                max_facts_per_doc=max_facts_per_doc,
+                extractor_config_sha256=source_config_sha256,
+                extraction_started_at=source_started_at,
+                precommit_validation=partial(assert_artifact_unchanged, snapshot),
+            )
+            assert_artifact_unchanged(snapshot)
+            end_run(conn, extraction_run_id, StageStatus.OK)
+            extraction_run_id = None
+        except PipelineRunSuppressedError as exc:
+            if exc.status is StageStatus.OK:
+                log.quarters_skipped_no_missing.append(period_label)
+                continue
             raise
         except Exception as e:
+            if extraction_run_id is not None:
+                end_run(
+                    conn,
+                    extraction_run_id,
+                    StageStatus.FAILED,
+                    error_summary=f"{type(e).__name__}: {e}",
+                )
             log.error = f"{period_label}: {type(e).__name__}: {e}"
             break
 

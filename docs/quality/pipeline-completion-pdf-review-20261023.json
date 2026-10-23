@@ -1,0 +1,58 @@
+{
+  "scope": "stage_2_local_implementation",
+  "review_kind": "ad_hoc_independent",
+  "reviewer_model": "gpt-6.1-sol",
+  "reviewer_task": "/root/pdf_stage_judge",
+  "artifacts": {
+    "src/compute/kpi_extract_summaries.py": "300dc26a27eeab0b9e2a0b9790921f235ec941bdf732fa8d552957b35129ed39",
+    "src/compute/ir_supplement_capture.py": "dd0cc14a51c622b6e9b50b7cc0fe0b72a3dd6176ba5bb9a0d3bdb09613b7208f",
+    "src/llm_artifact_store.py": "43d94e79a581300d761b13670ab0092f619fb23712462bd4ff34ef846471d4ec",
+    "src/pipeline/locators.py": "20f764c9a72ec274dce5b857ebcac0472af14b5298d2e59e567ff5e7a2382eb6",
+    "src/provenance/fulltext_backfill.py": "70a5f25371c20b772e29ee8bb11b0f79839d2d9bc1409bbd46d083d0d6547c2e",
+    "tests/test_kpi_capture_enumerate.py": "a3f1120983e64936f3ea53cb695420265e20c97f1476aa12a84bb752c1857a5f",
+    "tests/test_ir_supplement_continuation.py": "e41cd676626e70a51dfbc448940875139eae3debba5794755cf940cf0d722b50",
+    "src/compute/kpi_resolver.py": "b726a27107e975f5f3f45772d63fdcb8f25b5e02d5f5baf47467f8a46ab2b169",
+    "src/llm/structured.py": "5f5ea33953df31a33efe1573552b7747951edbcbe9fef69cddd8c420d110b67d",
+    "src/pipeline/pdf_render.py": "0c84537ae71c8038d2439087469d462902278987d5babef1b490e68235ea76dc"
+  },
+  "attempts": [
+    {
+      "score": 78,
+      "verdict": "HOLD",
+      "blocking_findings": [
+        "evolving legacy identity collision guard",
+        "effective prompt and actual governed exchange attribution",
+        "mutable PDF reopened during locator construction",
+        "partial financial writes committed by failure accounting"
+      ]
+    },
+    {
+      "score": 93,
+      "verdict": "PASS",
+      "components": {
+        "source_scope_completeness": 19,
+        "lineage_semantic_correctness": 24,
+        "execution_correctness": 19,
+        "recovery_isolation": 15,
+        "verification": 7,
+        "reuse_maintainability": 9
+      },
+      "blocking_findings": []
+    }
+  ],
+  "deterministic_evidence": {
+    "targeted_tests_reported": 327,
+    "strict_pyright_errors_reported": 0,
+    "ruff_reported": "PASS",
+    "native_final_source_qualification": "pending",
+    "root_check_fast": "strict types initially failed in unfinished next-stage adapter; review scope unchanged"
+  },
+  "limits": [
+    "reviewer inspected code and tests but did not execute them",
+    "real-model expected-fact fidelity and recall evaluation remains pending",
+    "rich source-publication integration excluded",
+    "no corpus completeness, deployment or decision-grade admission established"
+  ],
+  "architecture_refresh_review": "proportionate; exact final source must be remeasured",
+  "calibrated_governance_receipt": false
+}

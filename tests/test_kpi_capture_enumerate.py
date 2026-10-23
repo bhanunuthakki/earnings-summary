@@ -5,16 +5,18 @@ the tier_1 allowlist drops.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
+from functools import partial
 from pathlib import Path
 from typing import cast
 
 import pytest
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 import compute.kpi_extract_summaries as kes
 from compute.kpi_extract_summaries import (
@@ -57,8 +59,8 @@ def _const_caller(response: str) -> Callable[..., object]:
 
 _ENUMERATE_JSON = (
     "[\n"
-    '  {"label": "Revenue", "value": 1200000000, "unit": "actual", "currency": "USD", "source_excerpt": "Revenue was $1.2 billion", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "gaap", "consolidation_scope": "consolidated", "source_unit_scale": "none"},\n'
-    '  {"label": "Net interest margin", "value": 17.8, "unit": "percent", "source_excerpt": "NIM of 17.8%", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "management", "consolidation_scope": "consolidated", "source_unit_scale": "none"},\n'
+    '  {"label": "Revenue", "value": 1200000000, "unit": "actual", "currency": "USD", "source_excerpt": "Revenue was $1.2 billion", "source_value_text": "1.2", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "gaap", "consolidation_scope": "consolidated", "source_unit_scale": "none"},\n'
+    '  {"label": "Net interest margin", "value": 17.8, "unit": "percent", "source_excerpt": "NIM of 17.8%", "source_value_text": "17.8%", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "management", "consolidation_scope": "consolidated", "source_unit_scale": "none"},\n'
     '  {"label": "Customers", "value": 118000000, "unit": "count", "source_excerpt": "118 million customers", "source_value_text": "118", "reported_period_end": "2025-03-31", "period_role": "current", "accounting_basis": "management", "consolidation_scope": "consolidated", "source_unit_scale": "millions"}\n'
     "]"
 )
@@ -454,41 +456,91 @@ def test_fiscal_period_type_for_calendar_and_jan_fye() -> None:
     assert _fiscal_period_type_for("AMAT", datetime(2026, 1, 31)) is FiscalPeriodType.Q1
 
 
+def _governed_fixture_call(
+    prompt: str, *, response: Callable[..., object], **kwargs: object
+) -> object:
+    from llm.ledger import record_llm_call
+    from llm.prompt_ab import apply_prompt_override
+    from llm.structured import StructuredCallResult
+
+    payload = response(prompt, **kwargs)
+    raw = json.dumps(payload)
+    effective = apply_prompt_override("kpi_summary_enumerate", None, prompt)
+    record_llm_call(
+        started_at=datetime.now(UTC),
+        elapsed_ms=0,
+        model="fixture-actual",
+        prompt_sha=hashlib.sha256(effective.encode()).hexdigest(),
+        prompt_chars=len(effective),
+        purpose="kpi_summary_enumerate",
+        ticker=None,
+        scope=None,
+        run_id=str(kwargs["run_id"]),
+        response_text=raw,
+        provider="fixture",
+        transport="fixture",
+        outcome="success",
+    )
+    schema = cast(TypeAdapter[object], kwargs["schema"])
+    return StructuredCallResult(
+        value=schema.validate_python(payload), raw_response=raw, prompt=prompt
+    )
+
+
+def _fixture_model_route(*args: object, **kwargs: object) -> tuple[str, str]:
+    return ("fixture", "fixture")
+
+
 def _register_supplement_pdf(
-    conn: sqlite3.Connection, root: Path, ticker: str, period_end_iso: str, sha8: str
+    conn: sqlite3.Connection,
+    root: Path,
+    ticker: str,
+    period_end_iso: str,
+    sha8: str,
+    doc_type: str = "ir_supplement",
 ) -> Path:
     """Create an on-disk supplement PDF + its `documents` row; return the path."""
     pdf = root / "ir_documents" / ticker / period_end_iso / f"ir_supplement__{sha8}.pdf"
     pdf.parent.mkdir(parents=True, exist_ok=True)
-    pdf.write_bytes(b"%PDF-1.4\n% dummy supplement\n")
+    pdf.write_bytes(f"%PDF-1.4\n% dummy supplement {sha8}\n".encode())
     conn.execute(
         "INSERT INTO documents (ticker, source_type, doc_type, period_end, file_path, "
         "sha256, fetched_at, fetch_status, raw_bytes_size) "
-        "VALUES (?, 'ir_doc', 'ir_supplement', ?, ?, ?, ?, 'ok', ?)",
+        "VALUES (?, 'ir_doc', ?, ?, ?, ?, ?, 'ok', ?)",
         (
             ticker,
+            doc_type,
             f"{period_end_iso} 00:00:00",
             str(pdf).replace("\\", "/"),
-            "a" * 64,
+            hashlib.sha256(pdf.read_bytes()).hexdigest(),
             "2026-02-15 00:00:00",
             pdf.stat().st_size,
         ),
     )
+    from provenance.evidence_backfill import ensure_legacy_document_evidence
+
+    document_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    if conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name='evidence_document_versions'"
+    ).fetchone():
+        ensure_legacy_document_evidence(conn, repo_root=root, document_id=document_id)
     conn.commit()
     return pdf
 
 
 def test_capture_for_ir_pdf_docs_supplement_long_tail(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
 ) -> None:
-    """The supplement PDF path captures the long tail at CAPTURE origin while an
-    existing analyst series stays untouched (RBRK exercises the Jan-FYE mapping)."""
+    """Direct PDF candidates remain source evidence until exact manual review."""
     db = tmp_path / "data" / "portfolio.db"
     db.parent.mkdir(parents=True)
-    _make_capture_db(db)
+    migrated_db(db)
     conn = sqlite3.connect(str(db))
     conn.row_factory = sqlite3.Row
 
+    seeded_names = {
+        str(row[0]) for row in conn.execute("SELECT name FROM kpi_definitions WHERE ticker='RBRK'")
+    }
     # Seed an analyst "Revenue" series at an earlier fiscal year-end (Q4).
     conn.execute(
         "INSERT INTO kpi_definitions (ticker, name, unit, primary_source, definition_origin) "
@@ -499,11 +551,15 @@ def test_capture_for_ir_pdf_docs_supplement_long_tail(
             "SELECT id FROM kpi_definitions WHERE ticker='RBRK' AND name='Revenue'"
         ).fetchone()["id"]
     )
+    _register_supplement_pdf(
+        conn, tmp_path, "RBRK", "2025-01-31", "prior", doc_type="prior_fixture"
+    )
+    prior_id = int(conn.execute("SELECT MAX(id) FROM documents").fetchone()[0])
     conn.execute(
         "INSERT INTO kpi_facts (ticker, period_end, fiscal_period_type, kpi_definition_id, "
         "value, unit, source_doc_id, confidence, extracted_by) "
-        "VALUES ('RBRK', '2025-01-31 00:00:00', 'Q4', ?, '500000000', 'actual', 99, 1.0, 'llm:x')",
-        (rev_def_id,),
+        "VALUES ('RBRK', '2025-01-31 00:00:00', 'Q4', ?, '500000000', 'actual', ?, 1.0, 'llm:x')",
+        (rev_def_id, prior_id),
     )
     conn.commit()
 
@@ -513,26 +569,36 @@ def test_capture_for_ir_pdf_docs_supplement_long_tail(
     def fake_pdf_text(path: str) -> str:
         return "Revenue was $1.2 billion. NIM of 17.8%. We ended with 118 million customers."
 
-    monkeypatch.setattr(kes, "_read_pdf_text", fake_pdf_text)
+    def native_pages(raw: bytes) -> tuple[str, ...]:
+        return (fake_pdf_text("fixture"),)
+
+    monkeypatch.setattr("compute.ir_supplement_capture.project_pdf_page_texts", native_pages)
+    monkeypatch.setattr(kes, "resolve_model_and_backend", _fixture_model_route)
     calls: list[int] = []
 
     def fake_call(prompt: str, **_: object) -> object:
         calls.append(1)
         return json.loads(_ENUMERATE_JSON)
 
-    monkeypatch.setattr(kes, "call_llm_structured", fake_call)
+    monkeypatch.setattr(
+        kes, "call_llm_structured_with_raw", partial(_governed_fixture_call, response=fake_call)
+    )
 
     log = capture_for_ir_pdf_docs("RBRK", tmp_path, conn)
-    assert log.kpis_inserted_total == 3
+    assert log.error is None and log.kpis_inserted_total == 0
+    assert log.quarters_extracted == []
     assert len(calls) == 1
 
-    # Analyst "Revenue" def is unchanged (captured Revenue collapsed onto it); the
-    # two new long-tail metrics minted as capture origin.
+    # The analyst series is unchanged. Unreviewed long-tail labels cannot create
+    # a definition or a fact in the legacy financial store.
     defs = {
         str(r["name"]): str(r["definition_origin"])
-        for r in conn.execute("SELECT name, definition_origin FROM kpi_definitions").fetchall()
+        for r in conn.execute(
+            "SELECT name, definition_origin FROM kpi_definitions WHERE ticker='RBRK'"
+        ).fetchall()
+        if str(r["name"]) not in seeded_names
     }
-    assert defs == {"Revenue": "analyst", "Net interest margin": "capture", "Customers": "capture"}
+    assert defs == {"Revenue": "analyst"}
 
     # The pre-existing analyst fact is byte-for-byte untouched.
     rev_prior = conn.execute(
@@ -541,22 +607,28 @@ def test_capture_for_ir_pdf_docs_supplement_long_tail(
     ).fetchone()
     assert Decimal(str(rev_prior["value"])) == Decimal("500000000")
 
-    # Captured Revenue landed on the SAME def at fiscal Q4 (Jan-FYE reversal), not
-    # a duplicate "Revenue" definition.
+    # The pre-existing analyst series does not gain an unreviewed fiscal Q4 row.
     rev_facts = conn.execute(
         "SELECT period_end, fiscal_period_type FROM kpi_facts "
         "WHERE kpi_definition_id=? ORDER BY period_end",
         (rev_def_id,),
     ).fetchall()
-    assert len(rev_facts) == 2
-    assert str(rev_facts[-1]["period_end"]).startswith("2026-01-31")
+    assert len(rev_facts) == 1
+    assert str(rev_facts[-1]["period_end"]).startswith("2025-01-31")
     assert str(rev_facts[-1]["fiscal_period_type"]) == "Q4"
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM evidence_nodes WHERE node_id LIKE 'ir-pdf-candidate:%'"
+        ).fetchone()[0]
+        == 3
+    )
+    assert conn.execute("SELECT COUNT(*) FROM fact_cells_v2").fetchone()[0] == 0
 
-    # Idempotent: a second run skips the doc, no new LLM call, no new facts.
+    # The exact response replays without another model call or a financial write.
     log2 = capture_for_ir_pdf_docs("RBRK", tmp_path, conn)
     assert log2.kpis_inserted_total == 0
     assert len(calls) == 1
-    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 4
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts WHERE ticker='RBRK'").fetchone()[0] == 1
     conn.close()
 
 
@@ -602,19 +674,15 @@ def test_capture_for_ir_pdf_docs_skips_non_pdf_and_missing(
     conn.close()
 
 
-def test_capture_for_ir_pdf_docs_emits_pdf_slide_locators(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_capture_for_ir_pdf_docs_retains_native_page_locators_without_financial_writes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, migrated_db: Callable[..., Path]
 ) -> None:
-    """Phase B (provenance_clickthrough.md section 3.2): a supplement capture
-    over a REAL PDF attributes each located source_excerpt to its page and
-    persists a renderable v2 pdf_slide locator; an excerpt that can't be
-    found verbatim keeps the escape hatch (locator stays NULL)."""
+    """A real PDF keeps exact page locators on immutable raw candidate nodes."""
     fitz = pytest.importorskip("fitz", reason="PyMuPDF (fitz) not installed")
-    from models.facts import FactLocator, LocatorKind
 
     db = tmp_path / "data" / "portfolio.db"
     db.parent.mkdir(parents=True)
-    _make_capture_db(db)
+    migrated_db(db)
     conn = sqlite3.connect(str(db))
     conn.row_factory = sqlite3.Row
 
@@ -635,29 +703,41 @@ def test_capture_for_ir_pdf_docs_emits_pdf_slide_locators(
         "'2026-01-15 00:00:00', 'ok', 1)",
         (str(pdf).replace("\\", "/"),),
     )
+    document_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    conn.execute(
+        "UPDATE documents SET sha256=?,raw_bytes_size=? WHERE id=?",
+        (hashlib.sha256(pdf.read_bytes()).hexdigest(), pdf.stat().st_size, document_id),
+    )
+    from provenance.evidence_backfill import ensure_legacy_document_evidence
+
+    ensure_legacy_document_evidence(conn, repo_root=tmp_path, document_id=document_id)
     conn.commit()
 
-    monkeypatch.setattr(kes, "call_llm_structured", _const_caller(_ENUMERATE_JSON))
+    import pypdf
+
+    from provenance.fulltext_extractor_identity import PDF_FULLTEXT_PYPDF_VERSION
+
+    monkeypatch.setattr(pypdf, "__version__", PDF_FULLTEXT_PYPDF_VERSION)
+    monkeypatch.setattr(kes, "resolve_model_and_backend", _fixture_model_route)
+
+    def extract_page(prompt: str, **kwargs: object) -> object:
+        return json.loads(_ENUMERATE_JSON)[:2] if "NIM of 17.8%" in prompt else []
+
+    monkeypatch.setattr(
+        kes, "call_llm_structured_with_raw", partial(_governed_fixture_call, response=extract_page)
+    )
 
     log = capture_for_ir_pdf_docs("NU", tmp_path, conn)
-    assert log.kpis_inserted_total == 3
-
-    rows = {
-        str(r["name"]): r["locator"]
-        for r in conn.execute(
-            "SELECT kd.name, kf.locator FROM kpi_facts kf "
-            "JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id"
-        ).fetchall()
+    assert log.error is None
+    assert log.kpis_inserted_total == 0
+    assert conn.execute("SELECT COUNT(*) FROM kpi_facts").fetchone()[0] == 0
+    rows = conn.execute(
+        "SELECT text,locator_json FROM evidence_nodes WHERE node_id LIKE 'ir-pdf-candidate:%'"
+    ).fetchall()
+    assert len(rows) == 2
+    assert all(json.loads(str(row["locator_json"]))["page_number"] == 2 for row in rows)
+    assert {json.loads(str(row["text"]))["row"]["raw_row"]["label"] for row in rows} == {
+        "Revenue",
+        "Net interest margin",
     }
-    # "Revenue was $1.2 billion" and "NIM of 17.8%" are on page 2 verbatim.
-    for name in ("Revenue", "Net interest margin"):
-        loc = FactLocator.from_json(str(rows[name]))
-        assert loc is not None, name
-        assert loc.locator_version == 2
-        assert loc.kind == LocatorKind.PDF_SLIDE
-        assert loc.pdf_page == 2
-        assert loc.verbatim_snippet
-    # "118 million customers" is NOT in the PDF text -> honest escape hatch,
-    # locator column stays NULL (never a fabricated anchor).
-    assert rows["Customers"] is None
     conn.close()

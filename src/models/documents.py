@@ -141,6 +141,8 @@ class DocType(StrEnum):
     # native filing document types are reserved for separately captured bytes.
     SEC_COMPANYFACTS_SNAPSHOT = "sec_companyfacts_snapshot"
     IR_PRESS_RELEASE = "ir_press_release"
+    # Supporting calendar notice. period_end is its publication date, not a fiscal quarter.
+    IR_EARNINGS_ANNOUNCEMENT = "ir_earnings_announcement"
     IR_PRESENTATION = "ir_presentation"
     IR_SUPPLEMENT = "ir_supplement"
     IR_INVESTOR_UPDATE = "ir_investor_update"

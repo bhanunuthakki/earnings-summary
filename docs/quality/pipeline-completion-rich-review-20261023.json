@@ -1,0 +1,166 @@
+{
+  "review_id": "rich-source-review-20261023-attempt-4",
+  "created_at": "2026-10-23T08:55:37.147485+00:00",
+  "review_kind": "ad_hoc_independent_code_review_not_calibrated_certificate",
+  "reviewer_model": "GPT-6.1-sol",
+  "freeze_path": ".tmp/pipeline-completion/rich-range-saturation-freeze.json",
+  "freeze_sha256": "a83352549339c8a0d4b414657884dfe03db37544f299573be1649d7780c23c0d",
+  "artifact_sha256": {
+    "src/compute/kpi_extract_summaries.py": "644785f67ea3a54dc7fa8b431485d71057b2083c05c5f575049f462826151594",
+    "src/provenance/ir_reported_facts.py": "7aaa40a49e5b70a1895f337b013ef8ef5a8bf003b9d174d4738579d0cfabac5c",
+    "src/compute/ir_supplement_capture.py": "dd0cc14a51c622b6e9b50b7cc0fe0b72a3dd6176ba5bb9a0d3bdb09613b7208f",
+    "tests/test_ir_source_entrypoint.py": "eb9f738a4c5c1f022ba1e5f6fc5635628ce3a6bcc2fe3cd1dfc4af648ea509b7",
+    "tests/test_ir_reported_facts.py": "71316b68e27b4bb7af64605bb8891420c3a826804deb2c64a0e6271a513c0dff",
+    "tests/test_ir_source_review_wire.py": "6999716de4b2ba7f8525c17261a51e25886f337deee84f436ebd53087faca301",
+    "tests/test_ir_supplement_continuation.py": "4cb4359c7fc27b973a20ca97754ccc68414d4ddd32dc0b62da8049d57be2cc98",
+    "tests/test_kpi_capture_enumerate.py": "745e68b9b9d6d331dfbf4e73583d00aa3c9d703f9d56b7a4645571417b059cfa"
+  },
+  "current_sha256_matches_frozen_reviewed_snapshot": {
+    "src/compute/kpi_extract_summaries.py": true,
+    "src/provenance/ir_reported_facts.py": true,
+    "src/compute/ir_supplement_capture.py": true,
+    "tests/test_ir_source_entrypoint.py": true,
+    "tests/test_ir_reported_facts.py": true,
+    "tests/test_ir_source_review_wire.py": true,
+    "tests/test_ir_supplement_continuation.py": true,
+    "tests/test_kpi_capture_enumerate.py": true
+  },
+  "prior_review_receipts_unchanged": {
+    ".tmp/pipeline-completion/rich-source-review.json": "ed07f3b3795dfae37e2c1495d0f6d2dd554868ab64afbada7482b041c90f58e9",
+    ".tmp/pipeline-completion/rich-source-review-attempt-2.json": "ad5cc385fcb1b5296b22ea3a5acd00d3c03540bdbcaefb694aa6d1a0d408640e",
+    ".tmp/pipeline-completion/rich-source-review-attempt-3.json": "6d58bc1796115993a11acb10ef3ead278094799a48121de2fa68411364b77fe0"
+  },
+  "verdict": "HOLD",
+  "verdict_reason": "Frozen code review passes. Final architecture remeasurement/baseline and complete applicable project gate are pending, so delivery acceptance is not established.",
+  "code_review_verdict": "PASS",
+  "score": 96,
+  "score_threshold_requested": ">90 with no blockers",
+  "score_breakdown": {
+    "sources": {
+      "score": 19,
+      "maximum": 20
+    },
+    "lineage": {
+      "score": 24,
+      "maximum": 25
+    },
+    "execution": {
+      "score": 20,
+      "maximum": 20
+    },
+    "recovery": {
+      "score": 15,
+      "maximum": 15
+    },
+    "verification": {
+      "score": 8,
+      "maximum": 10
+    },
+    "reuse": {
+      "score": 10,
+      "maximum": 10
+    }
+  },
+  "blocking_code_findings": [],
+  "findings": [],
+  "closed_findings": [
+    {
+      "id": "IR-SOURCE-002",
+      "status": "closed_in_frozen_artifact",
+      "evidence": [
+        {
+          "path": "src/compute/kpi_extract_summaries.py",
+          "line": 1353
+        },
+        {
+          "path": "src/compute/kpi_extract_summaries.py",
+          "line": 1379
+        },
+        {
+          "path": "src/compute/kpi_extract_summaries.py",
+          "line": 1439
+        },
+        {
+          "path": "tests/test_ir_source_entrypoint.py",
+          "line": 393
+        },
+        {
+          "path": "tests/test_ir_source_entrypoint.py",
+          "line": 490
+        },
+        {
+          "path": "tests/test_ir_source_entrypoint.py",
+          "line": 525
+        }
+      ],
+      "explanation": "The exact configured cap is passed to the actual enumeration validator, continuation validator and retained-exchange classifier. Schema/token/duplicate-endpoint checks remain unconditional. Complete ordered range-pair validation is deferred only when the response reaches the configured cap; the producer retains the attributed raw response as saturated and recursively splits. Final unsaturated leaf responses are strictly checked again before candidate retention."
+    },
+    {
+      "id": "IR-SOURCE-001",
+      "status": "remains_closed",
+      "explanation": "The automatic PDF entrypoint has no legacy manifest financial write path. Missing or rejected review remains retain-only; exact pre-existing accepted entries use SourceFactRepository."
+    }
+  ],
+  "positive_evidence": [
+    "The new capped-lower-bound test uses the real enumeration seam and a governed-call fixture, rather than replacing _llm_extract_enumerate.",
+    "The test checks three attributed calls, one saturated cache response with unchanged raw lower endpoint, two processed responses, four final raw candidates and zero financial facts.",
+    "Replay uses the existing exact caches without another governed model call.",
+    "Unsaturated single-bound guidance and malformed numeric token at the cap fail closed.",
+    "Direct rich scope remains part of prompt/cache/run/config identity; legacy summary_current default remains current-only.",
+    "Guidance/unknown/range endpoints remain immutable raw evidence and cannot be manually promoted through the reported-actual publication adapter.",
+    "Exact manual source review, raw source hashes, source-stability precommit callbacks, stable identity, correction ancestry and provenance-aware reader boundaries remain intact."
+  ],
+  "architecture_assessment": {
+    "recommendation": "Support a deliberate exact baseline refresh for this measured capability growth; do not weaken scanners, thresholds, duplicate gates or admission policy.",
+    "justification": "The continuation module has one source-specific responsibility: bounded, resumable native-section processing with exact governed-call/cache attribution. The provenance adapter owns typed raw retention, exact manual review and source-only publication through the existing fact plane. The orchestration module wires these existing owners. There is no new fact store, parser, model purpose/router, batch engine or external operator service.",
+    "observed_physical_lines": {
+      "src/compute/ir_supplement_capture.py": 338,
+      "src/provenance/ir_reported_facts.py": 1125,
+      "src/compute/kpi_extract_summaries.py": 2410
+    },
+    "reported_pre_fix_measurement": {
+      "original_total_noncomment_loc": 563851,
+      "pre_fix_proposed_total_noncomment_loc": 566263,
+      "new_modules": 2,
+      "additional_modules_over_1000_loc": 1,
+      "additional_modules_over_2000_loc": 1,
+      "reported_unchanged": [
+        "fan-out maximum",
+        "SCC counters",
+        "composition roots",
+        "duplicates",
+        "scanner"
+      ]
+    },
+    "independently_observed_control_diff": "No working-tree diff for src/quality/architecture.py, src/quality/duplicates.py, src/quality/admission_policy.py, scripts/check_architecture_ratchet.py or docs/quality/duplicates-ratchet.json.",
+    "acceptance_limit": "This review does not certify a final measured count. The inspected pipeline-completion-growth-20261023.json explicitly excludes rich publication and is stale for this final scope. Root must replace/extend the final receipt with complete inventory and rerun the architecture gate. Larger module buckets are disclosed maintenance cost, not evidence to hide with a threshold change."
+  },
+  "verification": {
+    "executed_tests": false,
+    "reason": "Root owns serial pytest. This review did not run tests, model calls, network access, live database operations, listeners, or source edits.",
+    "inspected_raw_log": {
+      "path": ".tmp/pipeline-completion/rich-range-saturation-pytest.log",
+      "sha256": "2f86940819bd882ea84fbcbba05340df066c3477978729f1e8f3ca8ad2db608e",
+      "hash_matches_freeze": true,
+      "observed_result": "116 passed, 5 existing SWIG deprecation warnings, 12.69s"
+    },
+    "other_reported_gates": {
+      "format": "passed",
+      "lint": "passed",
+      "strict_pyright": "0 errors, 0 warnings, 0 informations",
+      "diff_check": "passed"
+    },
+    "remaining_required_delivery_evidence": [
+      "Final exact architecture measurement and reviewed baseline receipt for all new tracked modules.",
+      "Fresh complete applicable project gate."
+    ],
+    "probabilistic_limit": "Synthetic fixture evidence is sufficient for the reviewed deterministic repair, not for actual model recall or complete PDF financial extraction. Actual model/provider quality remains a separate pilot/evaluation obligation."
+  },
+  "scope_limits": [
+    "Ad hoc independent review; not a calibrated/governed Judge certificate.",
+    "No production host/database, public publication, deployment, canonical admission or decision-grade claim.",
+    "No full repository audit or numerical architecture measurement run.",
+    "Manual field witnesses require human semantic interpretation.",
+    "Receipt binds exact frozen hashes. Further code changes need a new binding; final passing gate evidence can be attached in a separate delivery receipt without rewriting historical reviews."
+  ]
+}

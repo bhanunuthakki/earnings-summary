@@ -89,6 +89,7 @@ _DOCTYPE_ALIAS: dict[str, str] = {
     "spreadsheet": "supplement",
     "deck": "presentation",
     "press_release": "press_release",
+    "earnings_announcement": "earnings_announcement",
     "transcript": "transcript",
 }
 

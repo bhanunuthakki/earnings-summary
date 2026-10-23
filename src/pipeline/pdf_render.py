@@ -92,12 +92,18 @@ def _run_pdf(operation: Operation, pdf_path: Path, directory: Path, **arguments:
     return None
 
 
-def _read_pdf(operation: Operation, pdf_path: Path, **arguments: object) -> object:
+def _read_pdf(
+    operation: Operation, pdf_path: Path, *, raw_bytes: bytes | None = None, **arguments: object
+) -> object:
     try:
-        if not pdf_path.is_file():
+        if raw_bytes is None and not pdf_path.is_file():
             return None
         with tempfile.TemporaryDirectory(prefix=".pdf-worker-") as temporary:
-            return _run_pdf(operation, pdf_path, Path(temporary), **arguments)
+            directory = Path(temporary)
+            if raw_bytes is not None:
+                pdf_path = directory / "pinned-source.pdf"
+                pdf_path.write_bytes(raw_bytes)
+            return _run_pdf(operation, pdf_path, directory, **arguments)
     except OSError:
         log.warning({"event": "pdf_operation_failed", "operation": operation})
         return None
@@ -165,9 +171,9 @@ def render_page_image(
         return None
 
 
-def extract_page_texts(pdf_path: Path) -> list[str] | None:
+def extract_page_texts(pdf_path: Path, *, raw_bytes: bytes | None = None) -> list[str] | None:
     """Extract page text within one document-wide deadline and output limit."""
-    value = _read_pdf("texts", pdf_path)
+    value = _read_pdf("texts", pdf_path, raw_bytes=raw_bytes)
     if not isinstance(value, list):
         return None
     values = cast("list[object]", value)
@@ -179,17 +185,23 @@ def extract_page_texts(pdf_path: Path) -> list[str] | None:
 
 
 def find_quote_bbox(
-    pdf_path: Path, page: int, quote: str
+    pdf_path: Path, page: int, quote: str, *, raw_bytes: bytes | None = None
 ) -> tuple[float, float, float, float] | None:
     """Locate a verbatim quote; a timeout never creates a fabricated anchor."""
     if not quote.strip():
         return None
-    value = _coordinates(_read_pdf("bbox", pdf_path, page=page, quote=quote), 4)
+    value = _coordinates(
+        _read_pdf("bbox", pdf_path, page=page, quote=quote, raw_bytes=raw_bytes), 4
+    )
     return (value[0], value[1], value[2], value[3]) if value is not None else None
 
 
 def find_page_for_quote(
-    pdf_path: Path, quote: str, *, page_texts: list[str] | None = None
+    pdf_path: Path,
+    quote: str,
+    *,
+    page_texts: list[str] | None = None,
+    raw_bytes: bytes | None = None,
 ) -> tuple[int, tuple[float, float, float, float] | None] | None:
     """Locate a verbatim excerpt in the PDF: (1-based page, bbox-or-None).
 
@@ -202,12 +214,14 @@ def find_page_for_quote(
     """
     if not quote.strip():
         return None
-    texts = page_texts if page_texts is not None else extract_page_texts(pdf_path)
+    texts = (
+        page_texts if page_texts is not None else extract_page_texts(pdf_path, raw_bytes=raw_bytes)
+    )
     if not texts:
         return None
     needle = _normalize(quote)
     for i, text in enumerate(texts):
         if needle in _normalize(text):
             page = i + 1
-            return (page, find_quote_bbox(pdf_path, page, quote))
+            return (page, find_quote_bbox(pdf_path, page, quote, raw_bytes=raw_bytes))
     return None
