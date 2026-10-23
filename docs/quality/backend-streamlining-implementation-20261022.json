@@ -62,6 +62,22 @@
       "review_receipt": ".tmp/shared-data-owners-independent-review.json",
       "review_sha256": "b826a4f782317008f0be77e9c1dd7420e8146acd2f11a65bd39978355d51ebdd",
       "local_commit_receipt": ".tmp/shared-data-owners-final/local-commit.json"
+    },
+    "L2": {
+      "scope": "Unused generic row-pruner retirement",
+      "score": 97,
+      "status": "accepted local source only; broaderHOLD",
+      "review_receipt": ".tmp/lifecycle-and-macro-independent-review.json",
+      "review_sha256": "4b73fb04f667f65d7805799d5f47c0b549c738d4bb1bfa48d0ea9cf18ddedea0",
+      "local_commit_receipt": ".tmp/lifecycle-and-macro-final/local-commit.json"
+    },
+    "T2": {
+      "scope": "Macro-store test schema consolidation",
+      "score": 95,
+      "status": "accepted local source only; broaderHOLD",
+      "review_receipt": ".tmp/lifecycle-and-macro-independent-review.json",
+      "review_sha256": "4b73fb04f667f65d7805799d5f47c0b549c738d4bb1bfa48d0ea9cf18ddedea0",
+      "local_commit_receipt": ".tmp/lifecycle-and-macro-final/local-commit.json"
     }
   },
   "authority": {
@@ -845,7 +861,7 @@
     "transport": "claude_membership"
   },
   "static_count_clarification": "Old2012/1835 values are previous configured ceilings, not a paired prechange measurement of actual diagnostics/suppressions. Revised measured1826/1811 values tighten those ceilings.",
-  "status": "LOCAL_SHARED_DATA_OWNER_CUTS_ACCEPTED; scoped deterministic gates PASS; independent Sol advisory 95.67; original large-module-count FAIL and wider roadmap open",
+  "status": "LOCAL_UNUSED_PRUNER_AND_MACRO_SCHEMA_CUT_ACCEPTED; Sol advisory96; original architecture FAIL and wider roadmap open",
   "third_independent_sol_proxy_review": {
     "binding_sha256": "53493b3675b5a59400c3527a8954914d8a50ea0ae9d09a819d27d854d8c897d0",
     "effort": "high",
@@ -3766,5 +3782,33 @@
       "broader_branch": "HOLD; original architecture failure and wider qualification unwaived"
     },
     "local_commit_receipt": ".tmp/shared-data-owners-final/local-commit.json"
+  },
+  "lifecycle_macro_checkpoint": {
+    "status": "ACCEPTED_LOCAL_SOURCE_CHECKPOINT",
+    "source_binding": ".tmp/lifecycle-and-macro-final/freeze.json",
+    "source_binding_sha256": "94b6ed0594c237188779f4ea1c8771593dd168ad998793da73e5a84227ff22dc",
+    "source_lines_removed": 229,
+    "test_lines_removed": 157,
+    "independent_review": {
+      "path": ".tmp/lifecycle-and-macro-independent-review.json",
+      "sha256": "4b73fb04f667f65d7805799d5f47c0b549c738d4bb1bfa48d0ea9cf18ddedea0",
+      "score": 96,
+      "unit_scores": {
+        "L2": 97,
+        "T2": 95
+      },
+      "verdict": "ACCEPT",
+      "qualification": "Independent user-selected GPT-6.1 Sol advisory proxy"
+    },
+    "local_commit_receipt": ".tmp/lifecycle-and-macro-final/local-commit.json",
+    "proof": ".tmp/lifecycle-and-macro-final/checkpoint-data.json",
+    "retained_tests": "217pass1Windows-onlyskip; finalmacro75pass0skip",
+    "changed_gate": "125files clean",
+    "whole_static": "2864files1825diagnostics1804suppressions",
+    "graph": "COMPLETE/PASS;0productiongaps;sourceb9a414...",
+    "source_noncomment_lines": 561405,
+    "reduction_from_original": 877,
+    "broader_branch": "HOLD; oversized25vs24",
+    "next_approved": "Retire SEC plan creation; preserve current saved-plan verification"
   }
 }

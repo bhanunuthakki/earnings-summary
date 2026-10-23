@@ -2213,3 +2213,21 @@ Evidence belongs to the implementation checkpoint: synthetic migrated fixtures,
 full before/current row and result comparisons, caller rollback, revision history,
 review/replay mutations and retained consumer tests. These source changes do not
 activate a live service, collect data or establish native financial acceptance.
+
+## Unused row-pruner retirement and macro test schema — 2026-10-23
+
+Disposition: **no surface change**. The unused `pipeline.lifecycle` module and
+its dedicated tests are retired after source and dependency closure. Its generic
+row-pruning/JSON restore API and separate retention matrix had no application,
+CLI, reconstruction or receipt-reader caller. The existing weekly cleanup,
+`db_gc.py`, `gc_restore.py` and temporary-run owners retain their exact bytes,
+allowlists, receipts and recovery contracts. `data_pipeline_dag.md` still owns
+retention policy. No row, receipt, source document or backup is deleted.
+
+The dedicated test also repeated a scheduler check. The retained scheduler
+manifest suite checks the exact task population and the same wrapper/source-tree
+validator. No scheduler definition or installed task changes. The macro-store test
+suite uses the existing migrated-schema fixture instead of its private SQL schema.
+Its missing-database/table cases remain explicit. The two acquisition suites keep
+their existing setup; no private-function test adapters or suppression exceptions
+are added. Production macro behavior and provider policy do not change.

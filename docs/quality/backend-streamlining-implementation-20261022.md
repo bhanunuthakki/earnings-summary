@@ -1,6 +1,6 @@
 # Backend streamlining: implementation checkpoints
 
-Status: **shared data-owner consolidation accepted locally at 95.67/100; broader release HOLD**.
+Status: **unused pruner and macro-schema cuts accepted locally at 96/100; broader release HOLD**.
 Production source is below the original baseline. One large-module-count gate still fails.
 Started 2026-10-22; revised 2026-10-23 Pacific. Base: `c978523d`.
 Branch: `codex/research-procedure-cleanup`. R1 corrections are at `3065638a`,
@@ -587,6 +587,34 @@ and `.tmp/dcf-input-consolidation/`. The review is
 `.tmp/shared-data-owners-final/local-commit.json`. Design sync, directive/folder/boundary contracts
 and all 11 reconstruction subsystems pass. This is local source work, without new
 collection, provider calls, database migration, deployment or live activation.
+
+## Unused pruner and shared macro test schema — 2026-10-23
+
+Independent Sol advisory review accepts the unused-pruner cut at **97**, the
+macro-store setup cut at **95**, and this checkpoint at **96/100**, with no scoped
+blockers. Remove the unused generic row-pruner/restore API and its separate retention
+matrix. Canonical cleanup, recovery, receipts and scheduler sources stay byte-identical.
+The macro-store suite reuses the migrated fixture and keeps all 23 assertions,
+including explicit missing-database/table cases. This removes **229 source lines**
+and **157 test lines**, including one schema builder and two table definitions.
+
+The broader three-suite fixture candidate hit the unchanged suppression gate.
+Two acquisition suites were restored exactly; no test adapter, export or exception
+was added. Final checks: **217 passed, one Windows-only skip** for retained
+scheduler/recovery/dependency paths; **75 macro tests passed**, without skips.
+The selected macro run took 5.84s versus the earlier 1.68s baseline. This is
+current-schema alignment and less setup code; no speed gain is claimed. All 125
+changed files pass current checks. Whole static checking covers 2,864 files with
+1,825 diagnostics and 1,804 suppressions. The current normal graph is COMPLETE/PASS
+with zero production gaps; all attempted input hashes match. All contract checks pass.
+
+Source now measures **561,405 noncomment lines**, **877 below** the original baseline.
+Duplication passes; the original oversized-module gate remains **25 versus 24, FAIL**.
+Proof: `.tmp/lifecycle-and-macro-final/checkpoint-data.json` and
+`.tmp/lifecycle-and-macro-independent-review.json`. The commit receipt is
+`.tmp/lifecycle-and-macro-final/local-commit.json`. No live activation or full-matrix
+rerun is claimed. The owner next approved retiring new SEC plan creation while
+keeping saved-plan parsing, seals and existing admission rules. That is a separate phase.
 
 ## Gates that remain open
 

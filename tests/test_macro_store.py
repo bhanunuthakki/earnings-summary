@@ -1,4 +1,4 @@
-"""Tests for src/macro_store.py and migration 0045 (macro_series).
+"""Tests for src/macro_store.py against the current migrated database schema.
 
 Covers the write/read surface, idempotency, lookback windowing, and
 graceful degradation when the DB is missing or the table isn't present.
@@ -7,6 +7,7 @@ graceful degradation when the DB is missing or the table isn't present.
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -20,42 +21,9 @@ from macro_store import (
 )
 
 
-def _schema(conn: sqlite3.Connection) -> None:
-    conn.executescript(
-        """
-        CREATE TABLE macro_series (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            series_id VARCHAR(48) NOT NULL,
-            rate_date DATE NOT NULL,
-            value NUMERIC(20,8) NOT NULL,
-            source VARCHAR(32) NOT NULL DEFAULT 'FMP',
-            created_at DATETIME NOT NULL,
-            UNIQUE(series_id, rate_date)
-        );
-        CREATE TABLE macro_sensitivities (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker VARCHAR(16) NOT NULL,
-            series_id VARCHAR(48) NOT NULL,
-            beta FLOAT NOT NULL,
-            r_squared FLOAT,
-            lookback_window_days INTEGER NOT NULL,
-            computed_at DATETIME NOT NULL,
-            UNIQUE(ticker, series_id, lookback_window_days)
-        );
-        """
-    )
-    conn.commit()
-
-
 @pytest.fixture()
-def db(tmp_path: Path) -> Path:
-    p = tmp_path / "macro.db"
-    conn = sqlite3.connect(str(p))
-    try:
-        _schema(conn)
-    finally:
-        conn.close()
-    return p
+def db(tmp_path: Path, migrated_db: Callable[..., Path]) -> Path:
+    return migrated_db(tmp_path / "macro.db")
 
 
 def test_upsert_series_inserts_first_time(db: Path) -> None:
@@ -157,54 +125,45 @@ def test_fetch_returns_empty_when_table_missing(tmp_path: Path) -> None:
     assert series_row_count(series_id="x", db_path=p) == 0
 
 
-def test_upsert_sensitivity_idempotent_and_distinct_lookbacks() -> None:
+def test_upsert_sensitivity_idempotent_and_distinct_lookbacks(db: Path) -> None:
     """Sensitivities table: same (ticker, series, lookback) overwrites; different lookback creates new row."""
-    import tempfile
-
     from macro_store import fetch_sensitivities, upsert_sensitivity
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        p = Path(tmpdir) / "sens.db"
-        conn = sqlite3.connect(str(p))
-        try:
-            _schema(conn)
-        finally:
-            conn.close()
-        a = upsert_sensitivity(
-            ticker="AMZN",
-            series_id="brent",
-            beta=-0.45,
-            r_squared=0.32,
-            lookback_window_days=252,
-            db_path=p,
-        )
-        b = upsert_sensitivity(
-            ticker="AMZN",
-            series_id="brent",
-            beta=-0.50,
-            r_squared=0.35,
-            lookback_window_days=252,
-            db_path=p,
-        )
-        c = upsert_sensitivity(
-            ticker="AMZN",
-            series_id="brent",
-            beta=-0.30,
-            r_squared=0.22,
-            lookback_window_days=756,
-            db_path=p,
-        )
-        assert a == b  # same lookback → overwrite
-        assert a != c  # different lookback → new row
-        rows = fetch_sensitivities(ticker="AMZN", db_path=p)
-        # Should see two rows: one 252-day, one 756-day; the 252 row carries
-        # the *updated* beta (-0.50), not the original (-0.45).
-        assert len(rows) == 2
-        by_lookback = {r.lookback_window_days: r for r in rows}
-        assert by_lookback[252].beta == pytest.approx(-0.50)
-        assert by_lookback[756].beta == pytest.approx(-0.30)
-        # computed_at must be a datetime, not a string.
-        assert isinstance(by_lookback[252].computed_at, datetime)
+    a = upsert_sensitivity(
+        ticker="AMZN",
+        series_id="brent",
+        beta=-0.45,
+        r_squared=0.32,
+        lookback_window_days=252,
+        db_path=db,
+    )
+    b = upsert_sensitivity(
+        ticker="AMZN",
+        series_id="brent",
+        beta=-0.50,
+        r_squared=0.35,
+        lookback_window_days=252,
+        db_path=db,
+    )
+    c = upsert_sensitivity(
+        ticker="AMZN",
+        series_id="brent",
+        beta=-0.30,
+        r_squared=0.22,
+        lookback_window_days=756,
+        db_path=db,
+    )
+    assert a == b  # same lookback → overwrite
+    assert a != c  # different lookback → new row
+    rows = fetch_sensitivities(ticker="AMZN", db_path=db)
+    # Should see two rows: one 252-day, one 756-day; the 252 row carries
+    # the *updated* beta (-0.50), not the original (-0.45).
+    assert len(rows) == 2
+    by_lookback = {r.lookback_window_days: r for r in rows}
+    assert by_lookback[252].beta == pytest.approx(-0.50)
+    assert by_lookback[756].beta == pytest.approx(-0.30)
+    # computed_at must be a datetime, not a string.
+    assert isinstance(by_lookback[252].computed_at, datetime)
 
 
 def test_created_at_is_recent(db: Path) -> None:
