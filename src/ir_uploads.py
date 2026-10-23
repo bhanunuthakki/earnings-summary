@@ -16,7 +16,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Protocol, cast
@@ -56,6 +58,18 @@ from models.ir_uploads import (
 )
 
 log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class BoundIRClassification:
+    """One classifier outcome tied to exact bytes and classification context."""
+
+    outcome: CategorizationResult | CategorizationFailure
+    sha256: str
+    byte_size: int
+    ticker_hint: str | None
+    calendar_override: str | None
+    source_url: str | None
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +191,20 @@ def set_runtime_registry(entries: list[tuple[str, str, tuple[str, ...]]] | None)
     """Install the effective registry for this process (None resets to curated)."""
     global _RUNTIME_REGISTRY
     _RUNTIME_REGISTRY = entries
+
+
+@contextmanager
+def scoped_runtime_registry(
+    entries: list[tuple[str, str, tuple[str, ...]]],
+) -> Generator[None]:
+    """Restore the caller's classifier registry after an in-process intake."""
+    global _RUNTIME_REGISTRY
+    previous = _RUNTIME_REGISTRY
+    _RUNTIME_REGISTRY = entries
+    try:
+        yield
+    finally:
+        _RUNTIME_REGISTRY = previous
 
 
 def _effective_registry() -> list[tuple[str, str, tuple[str, ...]]]:

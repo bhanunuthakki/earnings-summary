@@ -25,6 +25,7 @@ from openpyxl import Workbook
 from execution import fetch_ir_documents as fid
 from models.documents import DocType
 from models.ir_uploads import CategorizationResult, Confidence
+from pipeline import managed_ir_sources as managed
 from pipeline.issuer_document_inventory import (
     ExpectedIssuerDocument,
     IssuerDocumentInventoryRequest,
@@ -405,9 +406,9 @@ def test_attempt_receipt_publish_preserves_installer_residue(
     def fail_install(*_args: object, **_kwargs: object) -> SecureFileInstallResult:
         raise SecureFileInstallError("secure_install_failed", residue_paths=(residue,))
 
-    monkeypatch.setattr(fid, "install_bytes_no_clobber", fail_install)
+    monkeypatch.setattr(managed, "install_bytes_no_clobber", fail_install)
     with pytest.raises(fid.IssuerDocumentPreparationError) as exc:
-        cast(Callable[[Path, str], None], getattr(fid, "_publish_attempt_text"))(
+        cast(Callable[[Path, str], None], getattr(managed, "_publish_attempt_text"))(
             attempt / "staging_receipt.json", "{}"
         )
 
@@ -424,10 +425,10 @@ def test_final_preparation_reports_owned_receipt_after_post_rename_verification_
     root = tmp_path / "state"
     (root / "data").mkdir(parents=True)
     request = _preparation_request()
-    monkeypatch.setattr(fid, "authorize_stored_collection_target", _allow_preparation_policy)
-    monkeypatch.setattr(fid, "reported_quarter_is_in_window", _preparation_window)
+    monkeypatch.setattr(managed, "authorize_stored_collection_target", _allow_preparation_policy)
+    monkeypatch.setattr(managed, "reported_quarter_is_in_window", _preparation_window)
     monkeypatch.setattr(fid, "_download", _prepare_staged_object)
-    monkeypatch.setattr(fid, "classify_ir_file", _classify_prepared_object)
+    monkeypatch.setattr(managed, "classify_ir_file", _classify_prepared_object)
 
     def reject_final_verification(*_args: object, **_kwargs: object) -> None:
         raise SecureFileInstallError("installed_target_unsafe")
@@ -520,10 +521,10 @@ def test_preparation_accepts_actual_xlsx_supplement(
     (root / "data").mkdir(parents=True)
     db_path = migrated_db(root / "data" / "portfolio.db")
     request = _supplement_preparation_request()
-    monkeypatch.setattr(fid, "authorize_stored_collection_target", _allow_preparation_policy)
-    monkeypatch.setattr(fid, "reported_quarter_is_in_window", _preparation_window)
+    monkeypatch.setattr(managed, "authorize_stored_collection_target", _allow_preparation_policy)
+    monkeypatch.setattr(managed, "reported_quarter_is_in_window", _preparation_window)
     monkeypatch.setattr(fid, "_download", _prepare_staged_supplement)
-    monkeypatch.setattr(fid, "classify_ir_file", _classify_supplement_prepared_object)
+    monkeypatch.setattr(managed, "classify_ir_file", _classify_supplement_prepared_object)
     monkeypatch.setattr("pipeline.managed_ir_sources._policy", _allow_managed_preparation_policy)
     monkeypatch.setattr(
         "pipeline.managed_ir_sources.classify_ir_file", _classify_supplement_prepared_object
@@ -618,10 +619,10 @@ def test_final_preparation_errors_report_staged_objects_and_direct_residue(
     (root / "data").mkdir(parents=True)
     request = _preparation_request()
     objects = root / ".tmp" / "managed_ir_staging" / request.attempt_id / "objects"
-    monkeypatch.setattr(fid, "authorize_stored_collection_target", _allow_preparation_policy)
-    monkeypatch.setattr(fid, "reported_quarter_is_in_window", _preparation_window)
+    monkeypatch.setattr(managed, "authorize_stored_collection_target", _allow_preparation_policy)
+    monkeypatch.setattr(managed, "reported_quarter_is_in_window", _preparation_window)
     monkeypatch.setattr(fid, "_download", _prepare_staged_object)
-    monkeypatch.setattr(fid, "classify_ir_file", _classify_prepared_object)
+    monkeypatch.setattr(managed, "classify_ir_file", _classify_prepared_object)
     if failure == "receipt":
         residue = objects.parent / ".staging_receipt.json.retained.tmp"
 
@@ -633,7 +634,7 @@ def test_final_preparation_errors_report_staged_objects_and_direct_residue(
                 residue_paths=(residue.name,),
             )
 
-        monkeypatch.setattr(fid, "_publish_attempt_text", fail_publish)
+        monkeypatch.setattr(managed, "_publish_attempt_text", fail_publish)
     else:
         residue = objects / ".validator.retained.tmp"
 
@@ -642,7 +643,7 @@ def test_final_preparation_errors_report_staged_objects_and_direct_residue(
                 "staged_object_invalid", remaining_paths=(str(residue),)
             )
 
-        monkeypatch.setattr(fid, "validate_prepared_staging", fail_validation)
+        monkeypatch.setattr(managed, "validate_prepared_staging", fail_validation)
 
     with pytest.raises(fid.IssuerDocumentPreparationError) as raised:
         fid.prepare_issuer_document_sources(
@@ -665,15 +666,15 @@ def test_staging_replay_error_reports_existing_objects_and_direct_residue(
     _prepare_staged_object("", objects, "")
     (staging / "staging_receipt.json").write_text("{}\n", encoding="utf-8")
     residue = objects / ".replay.retained.tmp"
-    monkeypatch.setattr(fid, "authorize_stored_collection_target", _allow_preparation_policy)
-    monkeypatch.setattr(fid, "reported_quarter_is_in_window", _preparation_window)
+    monkeypatch.setattr(managed, "authorize_stored_collection_target", _allow_preparation_policy)
+    monkeypatch.setattr(managed, "reported_quarter_is_in_window", _preparation_window)
 
     def fail_replay(*_args: object, **_kwargs: object) -> object:
         raise fid.PreparedIssuerDocumentPublisherError(
             "staging_receipt_invalid", remaining_paths=(str(residue),)
         )
 
-    monkeypatch.setattr(fid, "validate_prepared_staging", fail_replay)
+    monkeypatch.setattr(managed, "validate_prepared_staging", fail_replay)
     with pytest.raises(fid.IssuerDocumentPreparationError) as raised:
         fid.prepare_issuer_document_sources(
             request, state_root=root, db_path=root / "data" / "portfolio.db"

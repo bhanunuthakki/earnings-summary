@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sqlite3
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,7 +11,7 @@ from typing import cast
 import pytest
 
 import db
-from execution import backfill_transcripts, process_ir_documents_state, save_fmp_data
+from execution import backfill_transcripts, process_ir_documents, save_fmp_data
 from pipeline import quarterly_refresh
 from pipeline.sec_xbrl import IngestStats
 
@@ -81,21 +80,20 @@ def test_transcript_retarget_preserves_explicit_database(
     assert root / "transcripts/processed" == getattr(backfill_transcripts, "_PROCESSED_DIR")
 
 
-def test_ir_state_adapter_preserves_database_and_missing_summary_selector(
+def test_ir_job_preserves_database_and_missing_summary_selector(
     state: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     root, database = state
-    index = SimpleNamespace()
-    seen: list[str] = []
-    processor = SimpleNamespace(
-        PROJECT_ROOT=Path("."),
-        CACHE_DIR=Path("."),
-        index_manager=index,
-        main=lambda: seen.extend(sys.argv),
-    )
-    monkeypatch.setattr(process_ir_documents_state, "_load_processor", lambda: processor)
+    seen: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def run(*args: object, **kwargs: object) -> None:
+        seen.append((args, kwargs))
+
+    monkeypatch.setattr(process_ir_documents, "run_for_ticker", run)
+    monkeypatch.setattr(process_ir_documents, "load_project_env", _no_environment)
+    original_db = db.DB_PATH
     assert (
-        process_ir_documents_state.main(
+        process_ir_documents.main(
             [
                 "--ticker",
                 "NEWCO",
@@ -108,9 +106,8 @@ def test_ir_state_adapter_preserves_database_and_missing_summary_selector(
         )
         == 0
     )
-    assert Path(db.DB_PATH) == database
-    assert root == processor.PROJECT_ROOT
-    assert seen == ["process_ir_documents.py", "--ticker", "NEWCO", "--regenerate-missing"]
+    assert seen == [(("NEWCO", None, None, False, True), {"repo_root": root, "db_path": database})]
+    assert original_db == db.DB_PATH
 
 
 def test_quarterly_sec_selection_does_not_depend_on_static_cik_map(

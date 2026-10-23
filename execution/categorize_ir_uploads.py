@@ -45,12 +45,13 @@ except ImportError:
 import index_manager
 from compute.evidence_snapshot import capture_snapshot
 from ir_uploads import (
+    BoundIRClassification,
     CategorizationFailure,
     canonical_path,
     classify_ir_file,
     iter_uncategorized_files,
     parse_canonical_path,
-    set_runtime_registry,
+    scoped_runtime_registry,
     sha256_of,
     ticker_hint_from_path,
 )
@@ -71,10 +72,6 @@ UNSORTED_DIR = IR_DIR / "_unsorted"
 RUN_MANIFEST_DIR = PROJECT_ROOT / ".tmp" / "ir_categorization"
 DB_PATH = PROJECT_ROOT / "data" / "portfolio.db"
 DEFAULT_REL_PATH_ROOT = PROJECT_ROOT
-# {staging_filename: source_url} written by fetch_ir_documents.py, so auto-fetched
-# docs carry their real IR URL as documents.source_url (not a manual_upload: stub).
-INCOMING_URLS_PATH = PROJECT_ROOT / ".tmp" / "ir_incoming_urls.json"
-
 LOG_FORMAT = json.dumps({"level": "%(levelname)s", "ts": "%(asctime)s", "msg": "%(message)s"})
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stderr)
 log = logging.getLogger("categorize_ir_uploads")
@@ -304,6 +301,8 @@ def process_ir_document(
     *,
     url_overrides: dict[str, str] | None = None,
     calendar_override: str | None = None,
+    document_index_path: Path | None = None,
+    classification: BoundIRClassification | None = None,
 ) -> dict[str, object]:
     """Classify, move, register one file. Returns a record for the run manifest.
 
@@ -355,7 +354,14 @@ def process_ir_document(
             if legacy is not None:
                 year, qlabel = _quarter_label_from_period_end(canonical.period_end)
                 existing_idx = cast(
-                    object, index_manager.has_document(canonical.ticker, year, qlabel, legacy)
+                    object,
+                    index_manager.has_document(
+                        canonical.ticker,
+                        year,
+                        qlabel,
+                        legacy,
+                        document_index_path=document_index_path,
+                    ),
                 )
                 already_processed = (
                     isinstance(existing_idx, dict) and existing_idx.get("processed") is True
@@ -371,6 +377,7 @@ def process_ir_document(
                         fiscal_label=canonical.period_label,
                         note="reindexed_by:categorize_ir_uploads",
                         processed=False,
+                        document_index_path=document_index_path,
                     )
         return {
             "status": "reindexed",
@@ -384,10 +391,21 @@ def process_ir_document(
         }
 
     hint = ticker_hint_from_path(path, ir_dir)
-    outcome = classify_ir_file(path, ticker_hint=hint, calendar_override=calendar_override)
+    src_url = (url_overrides or {}).get(path.name)
+    if classification is not None:
+        if (
+            classification.sha256 != source_snapshot.sha256
+            or classification.byte_size != len(source_snapshot.payload)
+            or classification.ticker_hint != hint
+            or classification.calendar_override != calendar_override
+            or classification.source_url != src_url
+        ):
+            raise ValueError("IR classification bytes or context changed before legacy handoff")
+        outcome = classification.outcome
+    else:
+        outcome = classify_ir_file(path, ticker_hint=hint, calendar_override=calendar_override)
     if capture_snapshot(path, path.parent).sha256 != source_snapshot.sha256:
         raise ValueError("IR source changed during classification")
-    src_url = (url_overrides or {}).get(path.name)
     if isinstance(outcome, CategorizationFailure):
         log.warning({"event": "rejected", "file": path.name, "reason": outcome.reason})
         if hint is not None:
@@ -468,6 +486,7 @@ def process_ir_document(
                 fiscal_label=outcome.period_label,
                 note="categorized_by:categorize_ir_uploads",
                 processed=False,
+                document_index_path=document_index_path,
             )
         elif outcome.doc_type == DocType.IR_EVENT:
             # Events are keyed by (ticker, event_date, sha256[:8]) — see
@@ -479,6 +498,7 @@ def process_ir_document(
                 sha256=sha,
                 confidence=1.0 if outcome.confidence.value == "high" else 0.6,
                 note="categorized_by:categorize_ir_uploads",
+                document_index_path=document_index_path,
             )
 
     return {
@@ -549,7 +569,7 @@ def main() -> int:
     # tickers categorize without a code edit. No-op when the store is absent.
     import issuer_registry
 
-    set_runtime_registry(issuer_registry.effective_entries(PROJECT_ROOT))
+    state_root = args.rel_root.resolve()
 
     src_dir: Path = args.source_dir.resolve()
     if not src_dir.exists():
@@ -569,29 +589,31 @@ def main() -> int:
     if not args.dry_run:
         conn = _connect_db(args.db_path)
 
-    url_overrides = _load_url_overrides(INCOMING_URLS_PATH)
+    url_overrides = _load_url_overrides(state_root / ".tmp" / "ir_incoming_urls.json")
 
     records: list[dict[str, object]] = []
     counts = {"categorized": 0, "rejected": 0, "skipped": 0}
     try:
-        for f in files:
-            record = process_ir_document(
-                f,
-                conn,
-                args.dry_run,
-                args.ticker,
-                ir_dir=src_dir,
-                rel_root=args.rel_root.resolve(),
-                url_overrides=url_overrides,
-                calendar_override=args.calendar,
-            )
-            records.append(record)
-            status = record["status"]
-            if not isinstance(status, str):
-                raise RuntimeError("IR categorization returned an invalid status")
-            counts[status] = counts.get(status, 0) + 1
-            if conn is not None:
-                conn.commit()
+        with scoped_runtime_registry(issuer_registry.effective_entries(state_root)):
+            for f in files:
+                record = process_ir_document(
+                    f,
+                    conn,
+                    args.dry_run,
+                    args.ticker,
+                    ir_dir=src_dir,
+                    rel_root=state_root,
+                    url_overrides=url_overrides,
+                    calendar_override=args.calendar,
+                    document_index_path=state_root / ".tmp" / "document_index.json",
+                )
+                records.append(record)
+                status = record["status"]
+                if not isinstance(status, str):
+                    raise RuntimeError("IR categorization returned an invalid status")
+                counts[status] = counts.get(status, 0) + 1
+                if conn is not None:
+                    conn.commit()
     finally:
         if conn is not None:
             conn.close()

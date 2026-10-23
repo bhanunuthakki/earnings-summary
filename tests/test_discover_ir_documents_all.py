@@ -24,6 +24,20 @@ from execution import discover_ir_documents_all as batch
 from execution import onboard_ticker
 
 
+@pytest.mark.parametrize(
+    "stdout",
+    [
+        'progress {not JSON}\n{"status":"partial","ready":1,"failed":1,"legacy_outcomes":[{"status":"failed"}]}\nfinished',
+        '{"status":"old"}\n{"status":"partial","ready":1,"failed":1,"legacy_outcomes":[{"status":"failed"}]}',
+    ],
+)
+def test_child_result_retains_top_level_truth_with_nested_outcomes(stdout: str) -> None:
+    parse = cast(Callable[[str], dict[str, object]], getattr(batch, "_json_object"))
+    result = parse(stdout)
+    assert (result["status"], result["ready"], result["failed"]) == ("partial", 1, 1)
+    assert result["legacy_outcomes"] == [{"status": "failed"}]
+
+
 class _FakeCompleted:
     def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
         self.returncode = returncode
@@ -74,7 +88,15 @@ class _RecordingRun:
             out = json.dumps({"ticker": ticker, "status": status, "discovered": 2})
             return _FakeCompleted(self._drc.get(ticker, 0), out)
         out = json.dumps(
-            {"ticker": ticker, "status": "done", "downloaded": self._downloaded.get(ticker, 2)}
+            {
+                "ticker": ticker,
+                "status": "done",
+                "downloaded": self._downloaded.get(ticker, 2),
+                "ready": self._downloaded.get(ticker, 2),
+                "failed": 0,
+                "projection_repaired": 0,
+                "projection_failed": 0,
+            }
         )
         return _FakeCompleted(self._frc.get(ticker, 0), out)
 
@@ -460,7 +482,7 @@ def test_process_stage_runs_anchor_and_flags_brief_dirty(
     assert rc == 0
     scripts = [_script_of(c) for c in fake.calls]
     assert "ir_narrative.py" in scripts  # anchor refresh ran (cheap)
-    assert "process_ir_documents_state.py" not in scripts  # LLM summaries are opt-in
+    assert "process_ir_documents.py" not in scripts  # LLM summaries are opt-in
     conn = sqlite3.connect(str(db))
     val = conn.execute("SELECT brief_dirty FROM tracked_companies WHERE ticker='NU'").fetchone()[0]
     conn.close()
@@ -476,7 +498,7 @@ def test_summaries_flag_runs_process_ir_documents(
     fake = _RecordingRun(downloaded={"NU": 2})
     _install(monkeypatch, fake, ["NU"])
     batch.main(["--repo-root", str(tmp_path), "--db", str(db), "--summaries"])
-    command = next(c for c in fake.calls if _script_of(c) == "process_ir_documents_state.py")
+    command = next(c for c in fake.calls if _script_of(c) == "process_ir_documents.py")
     assert command[command.index("--db") + 1] == str(db)
     assert command[command.index("--repo-root") + 1] == str(tmp_path)
 
@@ -559,7 +581,7 @@ def test_summary_reported_failure_is_not_hidden_by_zero_exit_status(
     _make_tracked_db(db, "NU")
 
     def child(argv: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
-        summary = _script_of(argv) == "process_ir_documents_state.py"
+        summary = _script_of(argv) == "process_ir_documents.py"
         return subprocess.CompletedProcess(argv, 0, json.dumps({"failed": int(summary)}), "")
 
     monkeypatch.setattr(batch, "_run_child", child)

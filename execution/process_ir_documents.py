@@ -23,17 +23,17 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-# Paths
-SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_DIR))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import index_manager  # noqa: E402
-from alias_manager import resolve_ticker  # noqa: E402
-from llm_client import (  # noqa: E402
+import index_manager
+from alias_manager import resolve_ticker
+from db_paths import db_path_context, require_db_path
+from llm_client import (
     compose_anchor_block,
     generate_event_brief,
     generate_presentation_brief,
@@ -43,9 +43,8 @@ from llm_client import (  # noqa: E402
     load_ir_anchor,
     load_thesis_anchor,
 )
-from parser import extract_text_from_pdf, read_text_file  # noqa: E402
-
-CACHE_DIR = PROJECT_ROOT / ".tmp"
+from parser import extract_text_from_pdf, read_text_file
+from runtime.secrets import load_project_env
 
 LOG_FORMAT = json.dumps({"level": "%(levelname)s", "ts": "%(asctime)s", "msg": "%(message)s"})
 logging.basicConfig(level=logging.INFO, format=LOG_FORMAT, stream=sys.stderr)
@@ -59,7 +58,7 @@ RATE_LIMIT_SLEEP = 15
 # §7 thesis-read-through needs the same). Press-release and presentation
 # briefs are pure structured-data summaries — no anchor needed; their job is
 # to be factual condensers, not to render thesis judgments.
-DOC_TYPE_CONFIG: dict[str, dict] = {
+DOC_TYPE_CONFIG: dict[str, dict[str, Any]] = {
     "press_release": {
         "cache_suffix": "press_release_summary.txt",
         "llm_fn": generate_press_release_summary,
@@ -97,11 +96,12 @@ DOC_TYPE_CONFIG: dict[str, dict] = {
 }
 
 
-def _is_event(doc: dict) -> bool:
+def _is_event(doc: dict[str, Any]) -> bool:
     return doc.get("doc_type") == "event"
 
 
-def cache_path_for(doc: dict) -> Path:
+def cache_path_for(doc: dict[str, Any], *, repo_root: Path = PROJECT_ROOT) -> Path:
+    cache_dir = repo_root / ".tmp"
     ticker = doc["ticker"]
     suffix = DOC_TYPE_CONFIG[doc["doc_type"]]["cache_suffix"]
     if _is_event(doc):
@@ -109,23 +109,30 @@ def cache_path_for(doc: dict) -> Path:
         # local_path's filename ends in `__<sha8>.pdf` which we surface in the cache name.
         event_date = doc["event_date"]
         sha8 = Path(doc["local_path"]).stem.split("__")[-1]
-        return CACHE_DIR / f"{ticker}_event_{event_date}_{sha8}_{suffix}"
+        return cache_dir / f"{ticker}_event_{event_date}_{sha8}_{suffix}"
     quarter = doc["quarter"]
     year = doc["year"]
-    return CACHE_DIR / f"{ticker}_{quarter}_{year}_{suffix}"
+    return cache_dir / f"{ticker}_{quarter}_{year}_{suffix}"
 
 
-def _mark_processed(doc: dict) -> None:
+def _mark_processed(doc: dict[str, Any], *, repo_root: Path = PROJECT_ROOT) -> None:
+    index_path = repo_root / ".tmp" / "document_index.json"
     if _is_event(doc):
         sha8 = Path(doc["local_path"]).stem.split("__")[-1]
-        index_manager.mark_event_processed(doc["ticker"], doc["event_date"], sha8)
+        index_manager.mark_event_processed(
+            doc["ticker"], doc["event_date"], sha8, document_index_path=index_path
+        )
         return
     index_manager.mark_document_processed(
-        doc["ticker"], doc["year"], doc["quarter"], doc["doc_type"]
+        doc["ticker"],
+        doc["year"],
+        doc["quarter"],
+        doc["doc_type"],
+        document_index_path=index_path,
     )
 
 
-def _doc_log_fields(doc: dict) -> dict:
+def _doc_log_fields(doc: dict[str, Any]) -> dict[str, Any]:
     if _is_event(doc):
         return {"ticker": doc["ticker"], "event_date": doc["event_date"], "doc_type": "event"}
     return {
@@ -143,13 +150,21 @@ def extract_text(local_path: str) -> str:
     return read_text_file(str(path))
 
 
-def process_document(doc: dict, dry_run: bool = False) -> bool:
+def process_document(
+    doc: dict[str, Any],
+    dry_run: bool = False,
+    *,
+    repo_root: Path = PROJECT_ROOT,
+    db_path: Path | None = None,
+) -> bool:
     """
     Process a single document entry. Returns True if processed successfully.
     Idempotent: skips if cache already exists.
     """
     doc_type = doc["doc_type"]
     local_path = doc.get("local_path")
+    if local_path and not Path(local_path).is_absolute():
+        local_path = str(repo_root / local_path)
     log_fields = _doc_log_fields(doc)
 
     config = DOC_TYPE_CONFIG.get(doc_type)
@@ -161,11 +176,11 @@ def process_document(doc: dict, dry_run: bool = False) -> bool:
         log.warning({"event": "local_path_missing", **log_fields})
         return False
 
-    cache = cache_path_for(doc)
+    cache = cache_path_for(doc, repo_root=repo_root)
 
     if cache.exists():
         log.info({"event": "cache_hit", "cache": str(cache)})
-        _mark_processed(doc)
+        _mark_processed(doc, repo_root=repo_root)
         return True
 
     log.info({"event": "processing", "label": config["label"], **log_fields})
@@ -180,21 +195,23 @@ def process_document(doc: dict, dry_run: bool = False) -> bool:
             log.error({"event": "empty_text", "local_path": local_path})
             return False
 
-        if config.get("uses_anchor", False):
-            anchor_block = compose_anchor_block(
-                load_thesis_anchor(PROJECT_ROOT, doc["ticker"]),
-                load_bear_anchor(PROJECT_ROOT, doc["ticker"]),
-                load_ir_anchor(PROJECT_ROOT, doc["ticker"]),
-            )
-            result_text = config["llm_fn"](text, anchor_block=anchor_block)
-        else:
-            result_text = config["llm_fn"](text)
+        with db_path_context(db_path):
+            if config.get("uses_anchor", False):
+                anchor_block = compose_anchor_block(
+                    load_thesis_anchor(repo_root, doc["ticker"]),
+                    load_bear_anchor(repo_root, doc["ticker"]),
+                    load_ir_anchor(repo_root, doc["ticker"]),
+                )
+                result_text = config["llm_fn"](text, anchor_block=anchor_block)
+            else:
+                result_text = config["llm_fn"](text)
 
+        cache.parent.mkdir(parents=True, exist_ok=True)
         with open(cache, "w", encoding="utf-8") as f:
             f.write(result_text)
 
         log.info({"event": "cached", "cache": str(cache)})
-        _mark_processed(doc)
+        _mark_processed(doc, repo_root=repo_root)
         time.sleep(RATE_LIMIT_SLEEP)
         return True
 
@@ -209,7 +226,11 @@ def run_for_ticker(
     year: str | None = None,
     dry_run: bool = False,
     regenerate_missing: bool = False,
+    *,
+    repo_root: Path = PROJECT_ROOT,
+    db_path: Path | None = None,
 ) -> None:
+    index_path = repo_root / ".tmp" / "document_index.json"
     ticker = resolve_ticker(ticker).upper()
     if regenerate_missing:
         # Self-heal: re-include every registered quarterly doc regardless of its
@@ -221,16 +242,15 @@ def run_for_ticker(
         # a summary are skipped (no re-billing); only missing artifacts regenerate.
         docs = [
             d
-            for d in cast(
-                list[dict[str, Any]],
-                index_manager.get_documents_for_ticker(ticker),
+            for d in index_manager.get_documents_for_ticker(
+                ticker, document_index_path=index_path, quarterly_only=True
             )
             if d.get("doc_type") in DOC_TYPE_CONFIG
             and d.get("doc_type") != "event"
             and d.get("local_path")
         ]
     else:
-        docs = index_manager.get_unprocessed_documents(ticker)
+        docs = index_manager.get_unprocessed_documents(ticker, document_index_path=index_path)
 
     if quarter:
         docs = [d for d in docs if d["quarter"].upper() == quarter.upper()]
@@ -241,7 +261,7 @@ def run_for_ticker(
     # `--year` filters events by event_date year so users can scope to a specific period.
     # regenerate_missing intentionally scopes to quarterly docs (the Say-Do inputs).
     if not quarter and not regenerate_missing:
-        events = index_manager.get_unprocessed_events(ticker)
+        events = index_manager.get_unprocessed_events(ticker, document_index_path=index_path)
         if year:
             events = [e for e in events if e.get("event_date", "").startswith(str(year))]
         docs = docs + events
@@ -253,7 +273,7 @@ def run_for_ticker(
     print(f"[{ticker}] Processing {len(docs)} document(s)...")
     success = 0
     for doc in docs:
-        ok = process_document(doc, dry_run=dry_run)
+        ok = process_document(doc, dry_run=dry_run, repo_root=repo_root, db_path=db_path)
         if ok:
             success += 1
 
@@ -269,7 +289,7 @@ def run_for_ticker(
     )
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="LLM-process downloaded IR documents.")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--ticker", type=str, help="Company ticker to process")
@@ -290,21 +310,44 @@ def main() -> None:
         "§6 Say-Do empty). Never re-bills a doc that already has a cached summary. "
         "Intended with --ticker.",
     )
-    args = parser.parse_args()
+    parser.add_argument("--repo-root", type=Path, default=PROJECT_ROOT)
+    parser.add_argument("--db", type=Path)
+    args = parser.parse_args(argv)
+    repo_root = args.repo_root.resolve()
+    load_project_env(repo_root)
+    database = require_db_path(args.db) if args.db is not None or not args.dry_run else None
+    index_path = repo_root / ".tmp" / "document_index.json"
 
     if args.all:
-        unprocessed = (
-            index_manager.get_unprocessed_documents() + index_manager.get_unprocessed_events()
-        )
+        unprocessed = index_manager.get_unprocessed_documents(
+            document_index_path=index_path
+        ) + index_manager.get_unprocessed_events(document_index_path=index_path)
         tickers = sorted({d["ticker"] for d in unprocessed})
         if not tickers:
             print("No unprocessed documents found.")
-            return
+            return 0
         for t in tickers:
-            run_for_ticker(t, args.quarter, args.year, args.dry_run, args.regenerate_missing)
+            run_for_ticker(
+                t,
+                args.quarter,
+                args.year,
+                args.dry_run,
+                args.regenerate_missing,
+                repo_root=repo_root,
+                db_path=database,
+            )
     else:
-        run_for_ticker(args.ticker, args.quarter, args.year, args.dry_run, args.regenerate_missing)
+        run_for_ticker(
+            args.ticker,
+            args.quarter,
+            args.year,
+            args.dry_run,
+            args.regenerate_missing,
+            repo_root=repo_root,
+            db_path=database,
+        )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

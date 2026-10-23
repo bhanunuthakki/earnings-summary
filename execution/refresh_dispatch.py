@@ -329,7 +329,7 @@ def _argv_transcripts(project_root: Path, state_root: Path, ticker: str) -> list
 def _argv_process_ir(project_root: Path, state_root: Path, ticker: str) -> list[str]:
     return managed_python_argv(
         project_root,
-        project_root / "execution" / "process_ir_documents_state.py",
+        project_root / "execution" / "process_ir_documents.py",
         "--ticker",
         ticker,
         "--repo-root",

@@ -571,7 +571,7 @@ def _run_saydo(ticker: str) -> int:
 
     Returns the first non-zero subprocess exit code, or 0 on success.
     """
-    process_ir = PROJECT_ROOT / "execution" / "process_ir_documents_state.py"
+    process_ir = PROJECT_ROOT / "execution" / "process_ir_documents.py"
     build_saydo = PROJECT_ROOT / "execution" / "build_saydo_pairs.py"
     rc = subprocess.run(
         [

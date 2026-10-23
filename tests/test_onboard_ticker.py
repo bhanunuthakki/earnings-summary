@@ -522,7 +522,7 @@ def test_run_saydo_runs_summary_then_pairs(monkeypatch: pytest.MonkeyPatch) -> N
     assert len(calls) == 2
     # The state adapter preserves the summary selector and both authorities.
     assert Path(calls[0][1]).name == "sqlite_bootstrap.py"
-    assert Path(calls[0][2]).name == "process_ir_documents_state.py"
+    assert Path(calls[0][2]).name == "process_ir_documents.py"
     assert calls[0][3:] == [
         "--ticker",
         "UBER",

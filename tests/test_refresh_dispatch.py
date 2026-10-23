@@ -356,7 +356,7 @@ def test_execute_full_runs_all_six_steps(tmp_path: Path) -> None:
     assert script_names == [
         "fetch_fmp_historical_data",
         "backfill_transcripts",
-        "process_ir_documents_state",
+        "process_ir_documents",
         "extract_kpis_from_summaries",
         "build_saydo_pairs",
         "build_artifacts",
@@ -378,7 +378,7 @@ def test_execute_stale_skips_fmp_when_planned(tmp_path: Path) -> None:
     assert "fetch_fmp_historical_data" not in script_names
     assert script_names == [
         "backfill_transcripts",
-        "process_ir_documents_state",
+        "process_ir_documents",
         "extract_kpis_from_summaries",
         "build_saydo_pairs",
         "build_artifacts",
@@ -459,7 +459,7 @@ def test_execute_uses_code_root_for_scripts_and_state_root_for_outputs(tmp_path:
     for script_name in (
         "fetch_fmp_historical_data",
         "backfill_transcripts",
-        "process_ir_documents_state",
+        "process_ir_documents",
         "extract_kpis_from_summaries",
         "build_saydo_pairs",
         "refresh_dcf",

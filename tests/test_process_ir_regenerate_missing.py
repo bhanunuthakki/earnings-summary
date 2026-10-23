@@ -14,17 +14,12 @@ have a summary (no re-billing).
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import cast
 
 import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
-sys.path.insert(0, str(PROJECT_ROOT / "execution"))
-
-import process_ir_documents as pir  # noqa: E402
+from execution import process_ir_documents as pir
 
 # --- typed test doubles (pyright-strict friendly; no bare untyped lambdas) ----
 
@@ -56,7 +51,7 @@ class _Patched:
 
 @pytest.fixture
 def patched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Patched:
-    """Isolate CACHE_DIR and stub the LLM call, anchor IO, rate-limit sleep,
+    """Use an explicit cache root and stub the LLM call, anchor IO, rate-limit sleep,
     index writes, and ticker resolution so run_for_ticker is hermetic."""
     cache = tmp_path / ".tmp"
     cache.mkdir()
@@ -66,7 +61,6 @@ def patched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Patched:
         llm_calls.append(text)
         return "SUMMARY: " + text[:20]
 
-    monkeypatch.setattr(pir, "CACHE_DIR", cache)
     monkeypatch.setattr(pir, "resolve_ticker", _upper)
     monkeypatch.setattr(pir.time, "sleep", _noop)
     monkeypatch.setattr(pir, "compose_anchor_block", _empty_anchor)
@@ -102,17 +96,17 @@ def test_regenerate_missing_summarizes_processed_doc_without_cache(
 ) -> None:
     doc = _transcript_doc(tmp_path)
 
-    def fake_all(_ticker: str) -> list[dict[str, object]]:
+    def fake_all(_ticker: str, **_kwargs: object) -> list[dict[str, object]]:
         return [doc]
 
-    def fake_unprocessed(_ticker: str | None = None) -> list[dict[str, object]]:
+    def fake_unprocessed(_ticker: str | None = None, **_kwargs: object) -> list[dict[str, object]]:
         return []
 
     monkeypatch.setattr(pir.index_manager, "get_documents_for_ticker", fake_all)
     # Prove the default path would have skipped it (processed=True).
     monkeypatch.setattr(pir.index_manager, "get_unprocessed_documents", fake_unprocessed)
 
-    pir.run_for_ticker("UBER", regenerate_missing=True)
+    pir.run_for_ticker("UBER", regenerate_missing=True, repo_root=tmp_path)
 
     out = patched.cache_dir / "UBER_Q1_2026_summary.txt"
     assert out.exists(), "a processed transcript with no summary cache should be regenerated"
@@ -127,12 +121,12 @@ def test_regenerate_missing_skips_doc_with_existing_cache(
     # Pre-existing summary → must be skipped, never re-billed.
     (patched.cache_dir / "UBER_Q1_2026_summary.txt").write_text("PRIOR SUMMARY", encoding="utf-8")
 
-    def fake_all(_ticker: str) -> list[dict[str, object]]:
+    def fake_all(_ticker: str, **_kwargs: object) -> list[dict[str, object]]:
         return [doc]
 
     monkeypatch.setattr(pir.index_manager, "get_documents_for_ticker", fake_all)
 
-    pir.run_for_ticker("UBER", regenerate_missing=True)
+    pir.run_for_ticker("UBER", regenerate_missing=True, repo_root=tmp_path)
 
     assert patched.llm_calls == [], "a doc that already has a summary must not be re-summarized"
     assert (patched.cache_dir / "UBER_Q1_2026_summary.txt").read_text(
@@ -147,13 +141,13 @@ def test_default_path_skips_processed_doc(
     bug this whole change exists to fix, pinned so a future refactor can't
     silently reintroduce it."""
 
-    def fake_unprocessed(_ticker: str | None = None) -> list[dict[str, object]]:
+    def fake_unprocessed(_ticker: str | None = None, **_kwargs: object) -> list[dict[str, object]]:
         return []
 
     monkeypatch.setattr(pir.index_manager, "get_unprocessed_documents", fake_unprocessed)
     monkeypatch.setattr(pir.index_manager, "get_unprocessed_events", fake_unprocessed)
 
-    pir.run_for_ticker("UBER", regenerate_missing=False)
+    pir.run_for_ticker("UBER", regenerate_missing=False, repo_root=tmp_path)
 
     assert patched.llm_calls == []
     assert not (patched.cache_dir / "UBER_Q1_2026_summary.txt").exists()
@@ -173,12 +167,12 @@ def test_regenerate_missing_excludes_events(
         "processed": True,
     }
 
-    def fake_all(_ticker: str) -> list[dict[str, object]]:
+    def fake_all(_ticker: str, **_kwargs: object) -> list[dict[str, object]]:
         return [transcript, event]
 
     monkeypatch.setattr(pir.index_manager, "get_documents_for_ticker", fake_all)
 
-    pir.run_for_ticker("UBER", regenerate_missing=True)
+    pir.run_for_ticker("UBER", regenerate_missing=True, repo_root=tmp_path)
 
     # Only the transcript was summarized; the event was filtered out (no KeyError
     # on its missing quarter/year).

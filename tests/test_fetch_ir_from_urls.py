@@ -37,8 +37,8 @@ def _make_db(db: Path, *, role: str = "portfolio") -> None:
     conn.close()
 
 
-def _noop(*_a: object, **_k: object) -> None:
-    return None
+def _noop(*_a: object, **_k: object) -> bool:
+    return True
 
 
 def _install_fake_process(
@@ -57,7 +57,14 @@ def _install_fake_process(
         captured["categorize"] = categorize
         captured["root"] = root
         captured["owner_requested"] = owner_requested
-        return {"ticker": ticker, "status": "done", "downloaded": downloaded, "failed": 0}
+        return {
+            "ticker": ticker,
+            "status": "done",
+            "downloaded": downloaded,
+            "registered": downloaded,
+            "ready": downloaded,
+            "failed": 0,
+        }
 
     monkeypatch.setattr("execution.fetch_ir_from_urls.process_ticker", _fake_process)
     monkeypatch.setattr("execution.fetch_ir_from_urls._run_narrative", _noop)

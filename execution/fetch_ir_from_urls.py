@@ -40,22 +40,27 @@ from datetime import date
 from pathlib import Path
 from typing import cast
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / "src"))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import ir_fetch_status  # noqa: E402
-from execution.fetch_ir_documents import process_ticker  # noqa: E402
-from ir_pipeline.manifest import ManifestEntry, merge_write  # noqa: E402
-from ir_uploads import calendar_id_from_fye  # noqa: E402
-from pipeline.source_policy import (  # noqa: E402
+try:
+    from .fetch_ir_documents import process_ticker
+except ImportError:
+    from fetch_ir_documents import process_ticker
+
+import ir_fetch_status
+from ir_pipeline.manifest import ManifestEntry, merge_write
+from ir_uploads import calendar_id_from_fye
+from pipeline.source_policy import (
     ArtifactKind,
     CollectionSource,
     authorize_stored_collection_target,
     reported_quarter_is_in_window,
 )
-from runtime.python_process import managed_python_prefix  # noqa: E402
-from sqlite_runtime import SQLiteConnectionRole, connect_sqlite  # noqa: E402
+from runtime.python_process import managed_python_prefix
+from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
 
 def _ticker_fye(db_path: Path, ticker: str) -> str | None:
@@ -80,37 +85,42 @@ def _ticker_fye(db_path: Path, ticker: str) -> str | None:
     return str(val) if val else None
 
 
-def _set_brief_dirty(db_path: Path, ticker: str) -> None:
-    """Queue the ticker for the daily ``--enable-llm`` rebuild (best-effort)."""
+def _set_brief_dirty(db_path: Path, ticker: str) -> bool:
+    """Confirm the ticker was queued for the daily ``--enable-llm`` rebuild."""
     if not db_path.exists():
-        return
+        return False
     try:
         conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.WRITER, schema_preflight=True)
         try:
-            conn.execute(
-                "UPDATE tracked_companies SET brief_dirty = 1 WHERE ticker = ?", (ticker.upper(),)
+            cursor = conn.execute(
+                "UPDATE tracked_companies SET brief_dirty=1 WHERE ticker=?", (ticker.upper(),)
             )
             conn.commit()
+            return cursor.rowcount > 0
         finally:
             conn.close()
     except sqlite3.Error:
-        return
+        return False
 
 
-def _run_narrative(ticker: str, repo_root: Path) -> None:
-    """Refresh the IR anchor (cheap pypdf extraction) so the new docs feed prompts."""
-    subprocess.run(
-        [
-            *managed_python_prefix(PROJECT_ROOT),
-            str(PROJECT_ROOT / "src" / "compute" / "ir_narrative.py"),
-            "--ticker",
-            ticker,
-            "--repo-root",
-            str(repo_root),
-        ],
-        cwd=str(PROJECT_ROOT),
-        check=False,
-    )
+def _run_narrative(ticker: str, repo_root: Path) -> bool:
+    """Confirm deterministic IR anchor extraction completed."""
+    try:
+        result = subprocess.run(
+            [
+                *managed_python_prefix(PROJECT_ROOT),
+                str(PROJECT_ROOT / "src" / "compute" / "ir_narrative.py"),
+                "--ticker",
+                ticker,
+                "--repo-root",
+                str(repo_root),
+            ],
+            cwd=str(PROJECT_ROOT),
+            check=False,
+        )
+    except OSError:
+        return False
+    return result.returncode == 0
 
 
 def collect_urls(url_args: list[str] | None, urls_file: Path | None) -> list[str]:
@@ -141,7 +151,12 @@ def register_urls(
     quarter: int,
     process: bool = True,
 ) -> int:
-    """Seed the manifest with ``urls`` then download+register (+anchor). Returns count downloaded."""
+    """Return ready URL entries, including repaired/unchanged registrations.
+
+    Any candidate failure returns zero. Ready or repaired work still completes
+    deterministic anchor/dirty effects when process=True, including coherent
+    replay and partial attempts. Effect failure also returns zero.
+    """
     ticker = ticker.upper()
     authorization = authorize_stored_collection_target(
         db_path,
@@ -197,23 +212,56 @@ def register_urls(
     )
     downloaded = summary.get("downloaded")
     downloaded_n = downloaded if isinstance(downloaded, int) else 0
+    transport_skips = summary.get("transport_skipped")
+    transport_skipped_n = transport_skips if isinstance(transport_skips, int) else 0
 
-    if downloaded_n and process:
-        _run_narrative(ticker, repo_root)
-        _set_brief_dirty(db_path, ticker)
+    registered = summary.get("ready")
+    registered_n = registered if isinstance(registered, int) else 0
+
+    recovered = summary.get("projection_repaired")
+    recovered_n = recovered if isinstance(recovered, int) else 0
+
+    existing = summary.get("ready_existing")
+    existing_n = existing if isinstance(existing, int) else 0
+    ready_urls = registered_n + existing_n
+    failed = summary.get("failed")
+    projection_failed = summary.get("projection_failed")
+    attempt_failed = (
+        summary.get("status") in {"failed", "partial", "policy_denied"}
+        or (isinstance(failed, int) and failed > 0)
+        or (isinstance(projection_failed, int) and projection_failed > 0)
+    )
+    processed = False
+    effects_failed = False
+    if ready_urls and process:
+        processed = _run_narrative(ticker, repo_root) and _set_brief_dirty(db_path, ticker)
+        effects_failed = not processed
+    success = ready_urls > 0 and not attempt_failed and not effects_failed
 
     ir_fetch_status.record_attempt(
         db_path,
         ticker,
-        status="ok" if downloaded_n else "failed",
+        status="ok" if success else "failed",
         discovered=len(urls),
         downloaded=downloaded_n,
-        reason=None if downloaded_n else "no documents downloaded from the provided URLs",
+        reason=(
+            f"{transport_skipped_n} transport/no-document skips; registrations retained"
+            if transport_skipped_n
+            else None
+        )
+        if success
+        else "deterministic anchor or brief-dirty update failed"
+        if effects_failed
+        else "registration or required metadata failed"
+        if attempt_failed
+        else "no registration completed with required metadata",
     )
     sys.stdout.write(
-        f"[{ticker}] done: downloaded={downloaded_n}, processed={bool(downloaded_n and process)}\n"
+        f"[{ticker}] done: downloaded={downloaded_n}, registered={registered_n}, "
+        f"repaired={recovered_n}, transport_skipped={transport_skipped_n}, "
+        f"processed={processed}, success={success}\n"
     )
-    return downloaded_n
+    return ready_urls if success else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -224,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
     if not urls:
         sys.stderr.write("No URLs provided (use --url and/or --urls-file).\n")
         return 2
-    downloaded = register_urls(
+    registered = register_urls(
         cast("str", args.ticker),
         urls,
         repo_root=repo_root,
@@ -233,7 +281,7 @@ def main(argv: list[str] | None = None) -> int:
         quarter=cast("int", args.quarter),
         process=not cast("bool", args.no_process),
     )
-    return 0 if downloaded else 1
+    return 0 if registered else 1
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
