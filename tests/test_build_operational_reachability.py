@@ -246,7 +246,7 @@ def test_actual_head_is_supported() -> None:
     # restoration of fixed state-path fields. Line 27 is an existing seam;
     # the other seven lookups accompany the new isolation/transaction tests.
     for source, lines in (
-        ("tests/test_ir_supplement_continuation.py", (854,)),
+        ("tests/test_ir_supplement_continuation.py", (984,)),
         ("tests/test_scan_ir_transcripts.py", (422, 424, 484, 486)),
         ("tests/test_split_root_legacy_adapters.py", (27, 205, 215)),
     ):

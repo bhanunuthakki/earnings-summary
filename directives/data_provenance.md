@@ -118,6 +118,16 @@ population. Full/unprofiled evidence cannot consume a scoped table certificate.
 No detector identity, semantic admission, financial accuracy or full-letter table
 completion is inferred from a reviewed deferral.
 
+An explicit reviewed PDF page revision can mark one OCR-flagged IR supplement
+page as `no_financial_content` for native continuation. It binds the document
+version, raw PDF hash, retained OCR assessment, page and native-text hashes,
+reviewed render hash, reviewer, review time and rationale. A later revision can
+withdraw the decision. Detector flags and raw pages remain unchanged. Capture
+omits only current exact reviewed pages from model input and retains their
+identities in its versioned prompt and source configuration. Unreviewed image
+pages still block capture. This review does not satisfy default OCR processing,
+financial completeness, semantic admission or decision-grade evidence.
+
 ### Progressive proof and legacy repair (2026-09-19)
 
 Capture, extraction, source coverage, semantic admission, and reader parity are

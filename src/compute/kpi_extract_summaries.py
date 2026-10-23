@@ -112,7 +112,11 @@ from pipeline.source_policy import (
 )
 from provenance.document_evidence_pipeline import DocumentEvidenceRequest, process_document_evidence
 from provenance.fulltext_backfill import project_source_text, source_text_projection_identity
-from provenance.immutable_artifact import assert_artifact_unchanged, read_stable_artifact
+from provenance.immutable_artifact import (
+    ImmutableArtifactSnapshot,
+    assert_artifact_unchanged,
+    read_stable_artifact,
+)
 from provenance.ir_reported_facts import (
     IrCandidateRetentionRequest,
     IrRawExchange,
@@ -2407,7 +2411,7 @@ def capture_for_ir_pdf_docs(
                     "source_scope": "direct_pdf_rich",
                     "max_chunks": max_chunks,
                     "max_structured_calls": max_structured_calls,
-                    "continuation_version": "ir-supplement-native-continuation-v14-page-bounded-sections",
+                    "continuation_version": "v14-page-bounded-sections-or-v15-reviewed-pages",
                     "prompt_sha256": prompt_sha256,
                     "schema_sha256": schema_sha256,
                     "projection_identity": projection_identity,
@@ -2449,6 +2453,7 @@ def capture_for_ir_pdf_docs(
             source_started_at = datetime.now(UTC)
             page_rows = continuation.capture(raw_bytes)
             assert_artifact_unchanged(snapshot)
+            continuation.assert_review_scope_unchanged()
             source_config_sha256 = hashlib.sha256(
                 json.dumps(
                     {
@@ -2461,10 +2466,23 @@ def capture_for_ir_pdf_docs(
                         "max_input_chars": max_input_chars,
                         "max_facts_per_doc": max_facts_per_doc,
                         "source_scope": "direct_pdf_rich",
+                        **(
+                            {"review_scope_sha256": continuation.review_scope_sha256}
+                            if continuation.reviewed_non_financial_pages
+                            else {}
+                        ),
                     },
                     sort_keys=True,
                 ).encode()
             ).hexdigest()
+
+            def validate_capture_source(
+                _snapshot: ImmutableArtifactSnapshot = snapshot,
+                _continuation: ir_supplement_capture.SupplementCapture = continuation,
+            ) -> None:
+                assert_artifact_unchanged(_snapshot)
+                _continuation.assert_review_scope_unchanged()
+
             retain_and_publish_reviewed_ir_source(
                 conn,
                 document_version_id=evidence.document_version_id,
@@ -2475,7 +2493,7 @@ def capture_for_ir_pdf_docs(
                 max_facts_per_doc=max_facts_per_doc,
                 extractor_config_sha256=source_config_sha256,
                 extraction_started_at=source_started_at,
-                precommit_validation=partial(assert_artifact_unchanged, snapshot),
+                precommit_validation=validate_capture_source,
             )
             assert_artifact_unchanged(snapshot)
             end_run(conn, extraction_run_id, StageStatus.OK)

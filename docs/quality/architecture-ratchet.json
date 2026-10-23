@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "9317d0a36d9e776f1c357421d423bb7ca715b375",
+  "scoped_commit": "a4ad40b3bc7b1d941344c1befaf11432e449acc4",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "6e15c94493e3a6555fab0225de14eb6222df80f1c72125728f2a0cccd7503dad",
+  "source_sha256": "74d12a7287b782b1949774eec9aac4d1c6791b429fb4bc69a99654c186143468",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1476,
-    "total_noncomment_loc": 567876,
+    "executable_modules": 1477,
+    "total_noncomment_loc": 568129,
     "modules_over_1000_loc": 110,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -8416,11 +8416,11 @@
         "path": "src/compute/ir_supplement_capture.py",
         "module": "compute.ir_supplement_capture",
         "lines": {
-          "physical": 646,
-          "nonblank": 597,
-          "noncomment": 587
+          "physical": 716,
+          "nonblank": 666,
+          "noncomment": 656
         },
-        "internal_fan_out": 6,
+        "internal_fan_out": 7,
         "responsibilities": [
           "database",
           "network"
@@ -8464,9 +8464,9 @@
         "path": "src/compute/kpi_extract_summaries.py",
         "module": "compute.kpi_extract_summaries",
         "lines": {
-          "physical": 2527,
-          "nonblank": 2359,
-          "noncomment": 2248
+          "physical": 2545,
+          "nonblank": 2375,
+          "noncomment": 2264
         },
         "internal_fan_out": 33,
         "responsibilities": [
@@ -16456,9 +16456,9 @@
         "path": "src/provenance/integrity_audit.py",
         "module": "provenance.integrity_audit",
         "lines": {
-          "physical": 6777,
-          "nonblank": 6517,
-          "noncomment": 6508
+          "physical": 6778,
+          "nonblank": 6518,
+          "noncomment": 6509
         },
         "internal_fan_out": 17,
         "responsibilities": [
@@ -16704,6 +16704,21 @@
         ],
         "public_functions": 3,
         "fully_annotated_public_functions": 3
+      },
+      {
+        "path": "src/provenance/ocr_page_review.py",
+        "module": "provenance.ocr_page_review",
+        "lines": {
+          "physical": 189,
+          "nonblank": 167,
+          "noncomment": 167
+        },
+        "internal_fan_out": 1,
+        "responsibilities": [
+          "database"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
       },
       {
         "path": "src/provenance/ooxml_extraction.py",

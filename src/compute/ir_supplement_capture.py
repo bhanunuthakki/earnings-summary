@@ -28,6 +28,7 @@ from log_redact import redact
 from pipeline.locators import locate_char_span
 from provenance.fulltext_backfill import project_pdf_page_texts
 from provenance.ocr_extraction import PDFPreflight, normalize_extracted_text
+from provenance.ocr_page_review import current_reviewed_pdf_page
 
 SupplementContextField = Literal[
     "accounting_basis",
@@ -155,6 +156,8 @@ LEGACY_RELAXED_CAPTURE_VERSIONS = frozenset(
         "v6-native-hyphen-wrap",
     }
 )
+CURRENT_CAPTURE_VERSION = "ir-supplement-native-continuation-v15-reviewed-pages"
+UNREVIEWED_CAPTURE_VERSION = "ir-supplement-native-continuation-v14-page-bounded-sections"
 
 
 def producing_capture_version(
@@ -172,7 +175,8 @@ def producing_capture_version(
         "ir-supplement-native-continuation-v5-literal-endpoint-repair",
         "ir-supplement-native-continuation-v6-native-hyphen-wrap",
         "ir-supplement-native-continuation-v13-complete-numeric-prose-end",
-        "ir-supplement-native-continuation-v14-page-bounded-sections",
+        UNREVIEWED_CAPTURE_VERSION,
+        CURRENT_CAPTURE_VERSION,
     }
     db_path = str(conn.execute("PRAGMA database_list").fetchone()[2])
     if not db_path:
@@ -261,6 +265,9 @@ class SupplementCapture:
     projection_identity: str = ""
     document_version_id: str | None = None
     native_assessment_id: str | None = field(default=None, init=False)
+    reviewed_non_financial_pages: dict[int, str] = field(default_factory=dict[int, str], init=False)
+    review_scope_sha256: str = field(default="", init=False)
+    capture_version: str = field(default=UNREVIEWED_CAPTURE_VERSION, init=False)
     exchanges: list[SupplementExchange] = field(
         default_factory=list[SupplementExchange], init=False
     )
@@ -280,12 +287,23 @@ class SupplementCapture:
         if hashlib.sha256(raw_bytes).hexdigest() != self.source_sha256:
             raise ValueError("IR continuation source SHA mismatch")
         pages = project_pdf_page_texts(raw_bytes)
-        unresolved = [str(index) for index, text in enumerate(pages, 1) if not text.strip()]
-        if not pages or unresolved:
+        if not pages:
+            raise ValueError("IR native pages unresolved (empty or image-only): none")
+        self._existing_page_preflight(pages)
+        self.capture_version = (
+            CURRENT_CAPTURE_VERSION
+            if self.reviewed_non_financial_pages
+            else UNREVIEWED_CAPTURE_VERSION
+        )
+        unresolved = [
+            str(index)
+            for index, page_text in enumerate(pages, 1)
+            if not page_text.strip() and index not in self.reviewed_non_financial_pages
+        ]
+        if unresolved:
             raise ValueError(
                 "IR native pages unresolved (empty or image-only): " + ",".join(unresolved)
             )
-        self._existing_page_preflight(pages)
         self._pages = pages
         # This packet supplies context, not a completeness or accounting verdict.
         # Whole pages only: omitted pages remain explicit unknown context.
@@ -294,6 +312,8 @@ class SupplementCapture:
         used = 0
         self._context_pages = set()
         for page, text in enumerate(pages, 1):
+            if page in self.reviewed_non_financial_pages:
+                continue
             entry: dict[str, object] = {
                 "page": page,
                 "char_start": 0,
@@ -306,17 +326,22 @@ class SupplementCapture:
                 context_pages.append(entry)
                 self._context_pages.add(page)
                 used += size
-        self._document_context = json.dumps(
-            {
-                "source_sha256": self.source_sha256,
-                "pages": context_pages,
-                "omitted_page_count": len(pages) - len(context_pages),
-                "coverage": "native context only; visual/table coverage and financial recall unknown",
-            },
-            ensure_ascii=False,
+        context: dict[str, object] = {
+            "source_sha256": self.source_sha256,
+            "pages": context_pages,
+            "omitted_page_count": len(pages) - len(context_pages),
+        }
+        if self.reviewed_non_financial_pages:
+            context["reviewed_non_financial_pages"] = self.reviewed_non_financial_pages
+            context["review_scope_sha256"] = self.review_scope_sha256
+        context["coverage"] = (
+            "native context only; visual/table coverage and financial recall unknown"
         )
+        self._document_context = json.dumps(context, ensure_ascii=False)
         planned: list[tuple[int, int, str]] = []
         for page, text in enumerate(pages, 1):
+            if page in self.reviewed_non_financial_pages:
+                continue
             # Keep bounded native tables together. Dense pages use the existing
             # fact-saturation continuation rather than an arbitrary line cutoff.
             if len(text) <= self.max_input_chars // 4:
@@ -360,7 +385,10 @@ class SupplementCapture:
         No assessment means unknown visual coverage. Even a retained native-
         sufficient assessment does not prove recall of image/table facts.
         """
+        self.native_assessment_id = None
+        self.reviewed_non_financial_pages = {}
         if self.document_version_id is None:
+            self.review_scope_sha256 = hashlib.sha256(b"no-retained-page-assessment").hexdigest()
             return
         assessment = self.conn.execute(
             "SELECT assessment_id,input_sha256,page_count,outcome,native_output_sha256,reason_code "
@@ -369,6 +397,7 @@ class SupplementCapture:
             (self.document_version_id,),
         ).fetchone()
         if assessment is None:
+            self.review_scope_sha256 = hashlib.sha256(b"no-retained-page-assessment").hexdigest()
             return
         if assessment["input_sha256"] != self.source_sha256:
             raise ValueError("IR existing native-page assessment source SHA mismatch")
@@ -386,17 +415,58 @@ class SupplementCapture:
                 "pages": [dict(row) for row in rows],
             }
         )
-        if preflight.outcome != "native_sufficient":
+        if preflight.outcome not in {"native_sufficient", "ocr_required"}:
             raise ValueError(f"IR existing native-page coverage unresolved: {preflight.outcome}")
         if preflight.page_count != len(pages):
             raise ValueError("IR existing native-page assessment page count mismatch")
+        if tuple(page.page_number for page in preflight.pages) != tuple(range(1, len(pages) + 1)):
+            raise ValueError("IR existing native-page assessment page set incomplete")
+        reviewed: dict[int, str] = {}
         for page, text in zip(preflight.pages, pages, strict=True):
             digest = hashlib.sha256(normalize_extracted_text(text).encode()).hexdigest()
             if digest != page.native_text_sha256:
                 raise ValueError(
                     f"IR existing native-page assessment text mismatch at page {page.page_number}"
                 )
+            if page.requires_ocr:
+                review = current_reviewed_pdf_page(
+                    self.conn,
+                    document_version_id=self.document_version_id,
+                    assessment_id=str(assessment["assessment_id"]),
+                    page_number=page.page_number,
+                )
+                if (
+                    review is None
+                    or review.disposition != "no_financial_content"
+                    or review.source_sha256 != self.source_sha256
+                    or review.native_text_sha256 != digest
+                ):
+                    raise ValueError(
+                        f"IR existing native-page coverage unresolved: page {page.page_number}"
+                    )
+                reviewed[page.page_number] = review.review_id
         self.native_assessment_id = str(assessment["assessment_id"])
+        self.reviewed_non_financial_pages = reviewed
+        self.review_scope_sha256 = hashlib.sha256(
+            json.dumps(
+                {
+                    "assessment_id": self.native_assessment_id,
+                    "document_version_id": self.document_version_id,
+                    "page_count": len(pages),
+                    "reviewed_non_financial_pages": reviewed,
+                    "source_sha256": self.source_sha256,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+
+    def assert_review_scope_unchanged(self) -> None:
+        """Recheck the exact assessed/reviewed page set before persistence."""
+        old = (self.native_assessment_id, self.review_scope_sha256)
+        self._existing_page_preflight(self._pages)
+        if old != (self.native_assessment_id, self.review_scope_sha256):
+            raise ValueError("IR reviewed page scope changed during capture")
 
     def _section_text(self, page: int, start: int, body: str) -> str:
         """Serialize the exact section and bounded native context for preflight/replay."""
@@ -458,7 +528,7 @@ class SupplementCapture:
             prompt,
             *[repair_supplement_prompt(prompt, error) for error in _SUPPLEMENT_REPAIR_FEEDBACK],
         ]
-        version = "ir-supplement-native-continuation-v14-page-bounded-sections"
+        version = self.capture_version
         scope = f"ir_supplement:{self.document_id}:page:{page}:section:{start}:{len(body)}"
         expected_sha = compute_input_sha256(prompt_version=version, cache_inputs=inputs)
         artifact = read_current(

@@ -361,6 +361,7 @@ _OCR_TABLES = (
     "ocr_preflight_pages",
     "ocr_extraction_governance",
     "ocr_page_results",
+    "reviewed_pdf_page_revisions",
 )
 _SEARCH_TABLES = (
     "search_corpus_manifests",

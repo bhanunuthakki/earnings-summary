@@ -2122,11 +2122,21 @@ or an ambiguous span fails validation. Numeric source tokens remain literal;
 range endpoints cannot acquire currency or percent symbols absent from that
 endpoint. Repair feedback uses fixed known validation reasons and never copies
 arbitrary exception text into the prompt. This cache does not confer acquisition,
-extraction completeness or semantic admission. Known OCR-required page assessments,
-blank pages, unsupported quotes, failed sections and budget exhaustion remain
-unresolved. Nonblank page text can omit visual facts. Absent page assessments
+extraction completeness or semantic admission. Unreviewed OCR-required pages,
+unreviewed blank pages, unsupported quotes, failed sections and budget exhaustion
+remain unresolved. Nonblank page text can omit visual facts. Absent page assessments
 remain unknown. The exact raw source and its immutable binding must match before
 model calls; the source must remain unchanged before financial persistence.
+
+An exact append-only reviewed PDF page revision can mark a flagged decorative
+page as `no_financial_content`. The existing OCR/page-evidence library owns the
+typed review write. This change adds no CLI, scheduled job, dashboard action,
+provider route or automatic review. An authorized operator must supply a real
+source-bound visual review before any production insertion. Capture checks the
+current review and its source/preflight commitments before model work and again
+before persistence. Only those reviewed pages leave the model input; original
+page numbers and detector flags remain. Other OCR-required or blank pages still
+block. No default OCR or document-processing certificate becomes complete.
 
 After all planned sections pass, this path retains the governed raw responses
 and page-bound candidates in the existing immutable evidence ledger. Capture does
