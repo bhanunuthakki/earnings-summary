@@ -11,6 +11,11 @@ document URL for that issuer.
 from __future__ import annotations
 
 import importlib
+from dataclasses import replace
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ir_pipeline.discover.generic import DocumentDiscoveryInventory
 
 from ir_pipeline.config import IrConfig
 from ir_pipeline.discover._docmeta import CandidateDoc
@@ -73,19 +78,43 @@ def discover_history_hybrid(
     """
     from ir_pipeline.discover import generic
 
-    docs = generic.discover_document_history(
-        ir_url=ir_url, max_quarters=max_quarters, timeout_ms=timeout_ms
+    inventory = discover_inventory_hybrid(ir_url=ir_url, config=config, timeout_ms=timeout_ms)
+    return generic.truncate_to_quarters(list(inventory.candidates), max_quarters)
+
+
+def discover_inventory_hybrid(
+    *, ir_url: str, config: IrConfig | None = None, timeout_ms: int = 60_000
+) -> DocumentDiscoveryInventory:
+    """Retain the existing crawl receipt while merging precise current-quarter links."""
+    from ir_pipeline.discover import generic
+
+    inventory = generic.discover_document_inventory(
+        ir_url=ir_url, timeout_ms=timeout_ms, candidate_link_scope="observed_binary"
     )
+    docs = list(inventory.candidates)
     if config is not None and config.platform == "mz":
         try:
             precise = discover_documents(config)
         except IrDiscoveryAuthenticationDeniedError:
             raise
-        except Exception:  # precise path is best-effort; the generic crawl still stands
-            precise = {}
+        except Exception as exc:
+            return replace(
+                inventory,
+                pages=(
+                    *inventory.pages,
+                    generic.CrawlPageOutcome(
+                        page_url=config.results_center_url,
+                        outcome="failed",
+                        anchor_count=0,
+                        failure_reason=f"precise_adapter:{type(exc).__name__}",
+                    ),
+                ),
+                crawl_complete=False,
+                crawl_stop_reason="page_failure",
+            )
         seen = {d.url for d in docs}
         for cand in generic.precise_to_candidates(precise, config.results_center_url):
             if cand.url not in seen:
                 seen.add(cand.url)
                 docs.append(cand)
-    return docs
+    return replace(inventory, candidates=tuple(docs))

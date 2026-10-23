@@ -13,19 +13,11 @@ suffixes and slightly different doc_type labels for provenance:
   - "ir"        (Stage 3): `_press_release_summary.txt` + `_presentation_brief.txt`
                            — IR-pipeline structured briefs
 
-Pipeline per (ticker, quarter, source-doc):
-  1. Locate matching files in `.tmp/`.
-  2. Auto-register each as a `documents` row (`source_type=llm_extracted`,
-     doc_type per source) so kpi_facts can FK to it.
-  3. From the holdings JSON tier_1_kpis, list KPI names NOT yet present in
-     kpi_facts for this (ticker, period). Skip if all are already extracted.
-  4. Single Haiku call returning {kpi_name: {value, unit, confidence}}.
-  5. Persist via the existing KpiExtractionManifest pipeline.
-
-Idempotent on (ticker, period_end, kpi_definition_id): re-runs skip rows whose
-missing-KPI list is empty. Force re-extraction with `--refresh`.
-
-Per-run state lands in `data/kpi_extraction_log.json` keyed by ticker → stage.
+Each distinct allowlist source is processed with the full configured KPI list.
+Completion records bounded processing, including empty or partial output. It does
+not establish disclosure completeness or semantic admission. Exact completed
+material inputs skip model work; --refresh repeats completed work without
+superseding an active writer.
 """
 
 from __future__ import annotations
@@ -33,10 +25,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import sqlite3
 import time
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -53,15 +47,15 @@ from pydantic import (
     model_validator,
 )
 
-import parser  # first-party src/parser.py (untyped legacy module — read PDFs via _read_pdf_text)
 from compute.kpi_resolver import normalize_kpi_name
+from llm.resolver import resolve_model_and_backend, structured_capability_profile
 from llm.structured import call_llm_structured
 from llm.untrusted import spotlight
 from llm_client import FAST_CLASSIFIER_MODEL
 from models.documents import SourceType, tier_for_source_type
 from models.facts import Currency, FactLocator, FiscalPeriodType, LegacyEscapeHatch, Unit
 from models.kpis import DefinitionOrigin
-from models.runs import StageStatus
+from models.runs import StageName, StageStatus
 from models.unit_convert import same_family
 from models.validation import Severity, ValidationRule
 from pipeline.capture_coverage import CaptureCoverageRecord, record_coverage
@@ -89,9 +83,21 @@ from pipeline.run_accounting import (
     JsonValue,
     PipelineRunSuppressedError,
     end_run,
+    record_stage,
     start_run,
 )
+from pipeline.source_policy import (
+    ArtifactKind,
+    CollectionSource,
+    authorize_collection_target_in_connection,
+)
+from provenance.document_evidence_pipeline import DocumentEvidenceRequest, process_document_evidence
+from provenance.fulltext_backfill import project_source_text
+from provenance.immutable_artifact import assert_artifact_unchanged, read_stable_artifact
+from provenance.legacy_document_evidence import require_legacy_document_evidence
 from provenance.llm_extracted_parent import resolve_parent
+from run_lock import hold_run_lock
+from runtime.job_runtime import current_lock_claim, inherited_lock_is_valid
 
 # Named `logger` (not `log`) to avoid colliding with the `TickerExtractionLog`
 # locals named `log` throughout this module.
@@ -321,6 +327,9 @@ class TickerExtractionLog:
     quarters_attempted: list[str] = field(default_factory=list[str])
     quarters_extracted: list[str] = field(default_factory=list[str])
     quarters_skipped_no_missing: list[str] = field(default_factory=list[str])
+    documents_completed: list[dict[str, JsonValue]] = field(
+        default_factory=list[dict[str, JsonValue]]
+    )
     kpis_inserted_total: int = 0
     error: str | None = None
 
@@ -331,12 +340,19 @@ _GROUP_TO_STAGE: dict[str, str] = {
 }
 
 
+# Bump when prompt, schema, conversion, or admission behavior changes.
+_ALLOWLIST_EXTRACTOR_CONTRACT = "summary-allowlist-completion-v1"
+_ALLOWLIST_PURPOSE = "kpi_summary_extract"
+
+
 def extract_for_ticker(
     ticker: str,
     repo_root: Path,
     conn: sqlite3.Connection,
     refresh: bool = False,
     source_group: str = "earnings",
+    *,
+    requested: bool = False,
 ) -> TickerExtractionLog:
     ticker = ticker.upper()
     if source_group not in _SOURCE_GROUPS:
@@ -346,44 +362,126 @@ def extract_for_ticker(
     log = TickerExtractionLog(ticker=ticker, stage=_GROUP_TO_STAGE[source_group])
     log.started_at = _now_iso_z()
     t0 = time.perf_counter()
-
-    sources = _list_sources(repo_root, ticker, _SOURCE_GROUPS[source_group])
-    holdings = _read_holdings(repo_root, ticker)
-    if holdings is None:
+    holdings_path = repo_root / "micro_thesis" / "holdings" / f"{ticker}.json"
+    if not holdings_path.exists():
         log.error = f"no holdings JSON for {ticker}"
         return _close_log(log, t0)
-    tier_1_names = _tier_1_names(holdings)
-    if not tier_1_names:
-        log.error = "holdings JSON has no tier_1_kpis"
-        return _close_log(log, t0)
-    # Veto a break-rule's *comparison* unit (a YoY-growth percent on a dollar
-    # LEVEL) using the metric's recorded fact unit before it becomes canonical.
-    fact_units = _fact_units_by_name(conn, ticker, tier_1_names)
-    canonical_units = _canonical_units_from_holdings(holdings, tier_1_names, fact_units=fact_units)
-
-    for quarter, year, source_path, spec in sources:
-        period_end = _canonical_summary_period_end(
-            conn, ticker, _period_end(ticker, quarter, year), source_path, spec.doc_type
+    try:
+        holdings_snapshot, holdings_raw = read_stable_artifact(holdings_path)
+        decoded: object = json.loads(holdings_raw)
+        if not isinstance(decoded, dict):
+            raise ValueError("holdings JSON must be an object")
+        holdings = cast("dict[str, object]", decoded)
+        tier_1_names = _tier_1_names(holdings)
+        if not tier_1_names:
+            raise ValueError("holdings JSON has no tier_1_kpis")
+        db_path = Path(conn.execute("PRAGMA database_list").fetchone()[2])
+        model, backend = resolve_model_and_backend(
+            _ALLOWLIST_PURPOSE,
+            capability_profile=structured_capability_profile(None),
+            db_path=db_path,
         )
+    except Exception as exc:
+        log.error = f"{type(exc).__name__}: {exc}"
+        return _close_log(log, t0)
+
+    for quarter, year, source_path, spec in _list_sources(
+        repo_root, ticker, _SOURCE_GROUPS[source_group]
+    ):
         period_label = f"Q{quarter} {year} [{spec.name}]"
         log.quarters_attempted.append(period_label)
-
-        already_extracted = _already_extracted_kpis(conn, ticker, period_end, tier_1_names)
-        missing = [n for n in tier_1_names if n not in already_extracted]
-        if not missing and not refresh:
-            log.quarters_skipped_no_missing.append(period_label)
-            continue
-
+        run_id: str | None = None
         try:
-            doc_id = _ensure_summary_document_row(
-                conn, ticker, period_end, source_path, spec.doc_type
+            source_snapshot, source_raw = read_stable_artifact(source_path)
+            text = source_raw.decode("utf-8")
+            period_end = _canonical_summary_period_end(
+                conn, ticker, _period_end(ticker, quarter, year), source_path, spec.doc_type
             )
-            text = source_path.read_text(encoding="utf-8")
+            doc_id = _prepare_summary_document_evidence(
+                conn,
+                repo_root=repo_root,
+                db_path=db_path,
+                ticker=ticker,
+                source_path=source_path,
+                captured_bytes=source_raw,
+                doc_type=spec.doc_type,
+                period_end=period_end,
+                source_sha256=source_snapshot.file_sha256,
+                requested=requested,
+            )
+            document_state = _allowlist_document_state(
+                conn,
+                doc_id,
+                ticker,
+                period_end,
+                source_path,
+                spec.doc_type,
+                source_snapshot.file_sha256,
+            )
+            canonical_units = _canonical_units_from_holdings(
+                holdings,
+                tier_1_names,
+                fact_units=_fact_units_by_name(conn, ticker, tier_1_names),
+            )
+            invocation_inputs: dict[str, JsonValue] = {
+                "extractor_contract": _ALLOWLIST_EXTRACTOR_CONTRACT,
+                "ticker": ticker,
+                "source_group": source_group,
+                "owner_requested": requested,
+                "document": document_state,
+                "period_end": period_end.isoformat(),
+                "fiscal_period_type": f"Q{quarter}",
+                "source_sha256": source_snapshot.file_sha256,
+                "holdings_sha256": holdings_snapshot.file_sha256,
+                "requested_kpis": tier_1_names,
+                "canonical_units": {name: unit.value for name, unit in canonical_units.items()},
+                "purpose": _ALLOWLIST_PURPOSE,
+                "model": model,
+                "backend": backend,
+                "allow_admission": False,
+            }
+            run_id = start_run(
+                conn,
+                directive=f"extract_kpis_from_{source_group}",
+                ticker_scope=[ticker],
+                invocation_inputs=invocation_inputs,
+                deduplicate_completed=not refresh,
+                force=False,
+            )
             extracted = _llm_extract(
-                ticker, period_label, missing if not refresh else tier_1_names, text
+                ticker,
+                period_label,
+                tier_1_names,
+                text,
+                model=model,
+                backend=backend,
+                run_id=run_id,
+                db_path=db_path,
             )
-            if not extracted:
-                continue
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
+            assert_artifact_unchanged(source_snapshot)
+            assert_artifact_unchanged(holdings_snapshot)
+            if document_state != _allowlist_document_state(
+                conn,
+                doc_id,
+                ticker,
+                period_end,
+                source_path,
+                spec.doc_type,
+                source_snapshot.file_sha256,
+            ) or canonical_units != _canonical_units_from_holdings(
+                holdings,
+                tier_1_names,
+                fact_units=_fact_units_by_name(conn, ticker, tier_1_names),
+            ):
+                raise ValueError("summary extraction database inputs changed before persistence")
+            if (model, backend) != resolve_model_and_backend(
+                _ALLOWLIST_PURPOSE,
+                capability_profile=structured_capability_profile(None),
+                db_path=db_path,
+            ):
+                raise ValueError("summary extraction model route changed before persistence")
             manifest = _build_manifest(
                 ticker,
                 period_end,
@@ -394,34 +492,218 @@ def extract_for_ticker(
                 conn=conn,
                 source_text=text,
             )
-            result = _persist_accounted(
+            manifest.model_name = model
+            result = persist_manifest(conn, run_id=run_id, manifest=manifest, commit=False)
+            disposition: dict[str, JsonValue] = {
+                "document_id": doc_id,
+                "requested_kpis": tier_1_names,
+                "returned_kpis": list(extracted),
+                "unreturned_kpis": [name for name in tier_1_names if name not in extracted],
+                "unreturned_disposition": "unknown",
+                "completion_scope": "bounded_processing",
+                "issuer_acquisition_completeness": "not_asserted_derived_summary",
+                "inserted": result.inserted,
+                "skipped_existing": result.skipped_existing,
+                "validation_issues": result.validation_issues,
+            }
+            record_stage(
                 conn,
-                directive=f"extract_kpis_from_{source_group}",
-                ticker=ticker,
-                invocation_inputs={
-                    "document_id": doc_id,
-                    "period_end": period_end.isoformat(),
-                    "source_group": source_group,
-                    "source": file_fingerprint(source_path, root=repo_root),
-                    "holdings": file_fingerprint(
-                        repo_root / "micro_thesis" / "holdings" / f"{ticker}.json",
-                        root=repo_root,
-                    ),
-                    "requested_kpis": sorted(missing if not refresh else tier_1_names),
-                    "refresh": refresh,
-                },
-                manifest=manifest,
-                force=refresh,
+                run_id,
+                ticker,
+                StageName.PARSE,
+                StageStatus.OK,
+                period_end=period_end,
+                error_msg=json.dumps(disposition, sort_keys=True),
+                commit=False,
             )
+            end_run(conn, run_id, StageStatus.OK)
+            log.documents_completed.append(disposition)
             log.kpis_inserted_total += result.inserted
             log.quarters_extracted.append(period_label)
-        except PipelineRunSuppressedError:
-            raise
-        except Exception as e:
-            log.error = f"{period_label}: {type(e).__name__}: {e}"
+        except PipelineRunSuppressedError as exc:
+            if exc.status is not StageStatus.OK:
+                raise
+            log.quarters_skipped_no_missing.append(period_label)
+        except Exception as exc:
+            conn.rollback()
+            if run_id is not None:
+                try:
+                    end_run(
+                        conn,
+                        run_id,
+                        StageStatus.FAILED,
+                        error_summary=f"{type(exc).__name__}: {exc}",
+                    )
+                except Exception:
+                    conn.rollback()
+                    logger.exception("summary extraction failure accounting failed")
+            log.error = f"{period_label}: {type(exc).__name__}: {exc}"
             break
-
     return _close_log(log, t0)
+
+
+def _prepare_summary_document_evidence(
+    conn: sqlite3.Connection,
+    *,
+    repo_root: Path,
+    db_path: Path,
+    ticker: str,
+    source_path: Path,
+    captured_bytes: bytes,
+    doc_type: str,
+    period_end: datetime,
+    source_sha256: str,
+    requested: bool,
+) -> int:
+    """Sequence existing registration and deterministic evidence under one DB owner."""
+    if conn.in_transaction:
+        raise RuntimeError("summary evidence preparation requires an idle connection")
+    authorization = authorize_collection_target_in_connection(
+        conn,
+        ticker,
+        requested=requested,
+        source=CollectionSource.IR,
+        artifact_kind=ArtifactKind.IR_DOCUMENT,
+    )
+    if not authorization.allowed:
+        raise ValueError("summary evidence source policy denied: " + authorization.status.value)
+    configured_database = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
+    owns_database = (
+        bool(configured_database) and Path(configured_database).resolve() == db_path.resolve()
+    )
+    inherited = owns_database and (
+        current_lock_claim(repo_root, "portfolio-db") is not None
+        or inherited_lock_is_valid(repo_root, "portfolio-db")
+    )
+    with (
+        nullcontext()
+        if inherited
+        else hold_run_lock(db_path, owner="summary-document-evidence", timeout_s=0)
+    ):
+        document_id = _ensure_summary_document_row(
+            conn,
+            ticker,
+            period_end,
+            source_path,
+            doc_type,
+            captured_bytes=captured_bytes,
+        )
+        # An invalid explicit selection must not be repaired or replaced.
+        if (
+            conn.execute(
+                "SELECT 1 FROM legacy_document_evidence_binding_revisions WHERE legacy_document_id=?",
+                (document_id,),
+            ).fetchone()
+            is not None
+        ):
+            require_legacy_document_evidence(
+                conn,
+                document_id=document_id,
+                ticker=ticker,
+                source_type=SourceType.LLM_EXTRACTED.value,
+                doc_type=doc_type,
+                period_end=period_end,
+                source_sha256=source_sha256,
+            )
+        result = process_document_evidence(
+            conn,
+            DocumentEvidenceRequest(
+                repo_root=repo_root,
+                ticker=ticker,
+                document_id=document_id,
+                source_type=SourceType.LLM_EXTRACTED,
+                requested=requested,
+                apply=True,
+                batch_size=1,
+            ),
+        )
+    if len(result.items) != 1 or result.items[0].document_id != document_id:
+        raise ValueError("summary evidence preparation did not select the exact document")
+    item = result.items[0]
+    if item.status not in {"extracted", "already-covered"}:
+        raise ValueError("summary evidence preparation incomplete: " + ",".join(item.findings))
+    # Missing issuer-inventory linkage remains degraded. A derived summary is
+    # not an issuer disclosure; the unchanged readiness gate checks its evidence.
+    return document_id
+
+
+def _allowlist_document_state(
+    conn: sqlite3.Connection,
+    doc_id: int,
+    ticker: str,
+    period_end: datetime,
+    path: Path,
+    doc_type: str,
+    sha: str,
+) -> dict[str, JsonValue]:
+    row = conn.execute(
+        "SELECT id,ticker,source_type,doc_type,period_end,sha256,parent_document_id "
+        "FROM documents WHERE id = ?",
+        (doc_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("summary document no longer exists")
+    match = resolve_parent(
+        conn,
+        ticker=ticker,
+        doc_type=doc_type,
+        file_path=str(path).replace("\\", "/"),
+        period_end=period_end,
+    )
+    expected_parent = match.parent_document_id if match is not None else None
+    if (
+        str(row["ticker"]).upper() != ticker
+        or row["source_type"] != SourceType.LLM_EXTRACTED.value
+        or row["doc_type"] != doc_type
+        or row["sha256"] != sha
+        or datetime.fromisoformat(str(row["period_end"])) != period_end
+        or row["parent_document_id"] != expected_parent
+    ):
+        raise ValueError("summary document identity or parent binding does not match source")
+    parent: dict[str, JsonValue] | None = None
+    if expected_parent is not None:
+        parent_row = conn.execute(
+            "SELECT id,ticker,source_type,doc_type,period_end,sha256,file_path "
+            "FROM documents WHERE id=?",
+            (expected_parent,),
+        ).fetchone()
+        if parent_row is None:
+            raise ValueError("summary parent document no longer exists")
+        parent = {
+            key: (None if parent_row[key] is None else str(parent_row[key]))
+            for key in (
+                "id",
+                "ticker",
+                "source_type",
+                "doc_type",
+                "period_end",
+                "sha256",
+                "file_path",
+            )
+        }
+    readiness = require_legacy_document_evidence(
+        conn,
+        document_id=doc_id,
+        ticker=ticker,
+        source_type=SourceType.LLM_EXTRACTED.value,
+        doc_type=doc_type,
+        period_end=period_end,
+        source_sha256=sha,
+    )
+    return {
+        "evidence_document_version_id": readiness.document_version_id,
+        "evidence_node_id": readiness.evidence_node_id,
+        "evidence_extraction_run_id": readiness.extraction_run_id,
+        "evidence_binding_revision_id": readiness.binding_revision_id,
+        "id": doc_id,
+        "ticker": ticker,
+        "source_type": str(row["source_type"]),
+        "doc_type": doc_type,
+        "period_end": period_end.isoformat(),
+        "sha256": sha,
+        "parent_document_id": expected_parent,
+        "parent": parent,
+    }
 
 
 def _list_sources(
@@ -443,14 +725,6 @@ def _list_sources(
             break
     out.sort(key=lambda x: (x[1], x[0], x[3].name))
     return out
-
-
-def _read_holdings(repo_root: Path, ticker: str) -> dict[str, object] | None:
-    path = repo_root / "micro_thesis" / "holdings" / f"{ticker}.json"
-    if not path.exists():
-        return None
-    decoded: object = json.loads(path.read_text(encoding="utf-8"))
-    return cast("dict[str, object]", decoded) if isinstance(decoded, dict) else None
 
 
 def _tier_1_names(holdings: dict[str, object]) -> list[str]:
@@ -584,30 +858,14 @@ def _period_end(ticker: str, quarter: int, year: int) -> datetime:
     return datetime(year, month, day)
 
 
-def _already_extracted_kpis(
-    conn: sqlite3.Connection, ticker: str, period_end: datetime, names: list[str]
-) -> set[str]:
-    if not names:
-        return set()
-    placeholders = ",".join("?" * len(names))
-    cur = conn.execute(
-        f"""
-        SELECT DISTINCT kd.name
-        FROM kpi_facts kf JOIN kpi_definitions kd ON kd.id = kf.kpi_definition_id
-        WHERE kf.ticker = ? AND kf.period_end = ?
-          AND kd.name IN ({placeholders})
-        """,
-        (ticker, period_end, *names),
-    )
-    return {str(r["name"]) for r in cur.fetchall()}
-
-
 def _ensure_summary_document_row(
     conn: sqlite3.Connection,
     ticker: str,
     period_end: datetime,
     path: Path,
     doc_type: str,
+    *,
+    captured_bytes: bytes | None = None,
 ) -> int:
     """Insert documents row for the summary file if not already present, return id.
 
@@ -619,7 +877,7 @@ def _ensure_summary_document_row(
     kpi_facts needs the FK — but flagged via ``guard_llm_extracted_parent``
     rather than silently left unlinked.
     """
-    raw = path.read_bytes()
+    raw = path.read_bytes() if captured_bytes is None else captured_bytes
     sha = hashlib.sha256(raw).hexdigest()
     existing = conn.execute("SELECT id FROM documents WHERE sha256 = ?", (sha,)).fetchone()
     if existing is not None:
@@ -698,7 +956,15 @@ def _canonical_summary_period_end(
 
 
 def _llm_extract(
-    ticker: str, period_label: str, kpi_names: list[str], summary_text: str
+    ticker: str,
+    period_label: str,
+    kpi_names: list[str],
+    summary_text: str,
+    *,
+    model: str | None = None,
+    backend: str | None = None,
+    run_id: str | None = None,
+    db_path: Path | None = None,
 ) -> dict[str, dict[str, object]]:
     """Single Haiku call. Returns {kpi_name: {value, unit, confidence,
     source_excerpt?}}.
@@ -753,6 +1019,11 @@ Return ONLY the JSON object — no markdown fence, no commentary."""
     parsed = call_llm_structured(
         prompt,
         purpose="kpi_summary_extract",
+        ticker=ticker,
+        model=model,
+        backend=backend,
+        run_id=run_id,
+        db_path=db_path,
         expect="object",
         schema=TypeAdapter(_KpiSummaryResponse),
     )
@@ -1023,8 +1294,11 @@ Document text:
         expect="array",
         schema=TypeAdapter(list[_EnumeratedKpi]),
     )
+    validated = TypeAdapter(list[_EnumeratedKpi]).validate_python(parsed)
+    if len(validated) >= max_facts:
+        raise ValueError("IR capture reached its fact limit; document coverage is unknown")
     out: list[dict[str, object]] = []
-    for item in TypeAdapter(list[_EnumeratedKpi]).validate_python(parsed):
+    for item in validated:
         out.append(item.model_dump(mode="python"))
         if len(out) >= max_facts:
             break
@@ -1135,8 +1409,11 @@ def _build_capture_manifest(
 
 
 def _doc_already_captured(conn: sqlite3.Connection, doc_id: int) -> bool:
-    """True iff any kpi_fact already cites this source doc — lets the enumerate
-    pass skip the (costly) LLM call on a doc it has already processed."""
+    """Avoid rebilling documents that already have captured facts.
+
+    This legacy idempotency check does not prove extraction completeness.
+    Partial and older capped captures remain unknown until explicitly refreshed.
+    """
     row = conn.execute(
         "SELECT 1 FROM kpi_facts WHERE source_doc_id = ? LIMIT 1", (doc_id,)
     ).fetchone()
@@ -1186,7 +1463,7 @@ def capture_for_ticker(
             if not refresh and _doc_already_captured(conn, doc_id):
                 log.quarters_skipped_no_missing.append(period_label)
                 continue
-            text = source_path.read_text(encoding="utf-8")[:max_input_chars]
+            text = _complete_capture_text(source_path.read_text(encoding="utf-8"), max_input_chars)
             rows = _llm_extract_enumerate(ticker, period_label, text, max_facts=max_facts_per_doc)
             if not rows:
                 continue
@@ -1266,11 +1543,21 @@ def capture_for_ticker(
 _IR_CAPTURE_PDF_DOC_TYPES: tuple[str, ...] = ("ir_supplement",)
 
 
+def _complete_capture_text(text: str, max_input_chars: int) -> str:
+    """Reject incomplete inputs before capture can be marked as complete."""
+    if not text.strip():
+        raise ValueError("IR capture source has no extractable text; OCR may be required")
+    if len(text) > max_input_chars:
+        raise ValueError(
+            f"IR capture source exceeds input limit ({len(text)} > {max_input_chars}); "
+            "full-document capture requires a larger approved budget or chunked extraction"
+        )
+    return text
+
+
 def _read_pdf_text(path: str) -> str:
-    """Single seam over ``parser.extract_text_from_pdf`` (a `from`-import of the
-    untyped legacy module trips pyright; the module-qualified call is clean and
-    its return is already ``str``). Isolated so tests can stub PDF reads here."""
-    return parser.extract_text_from_pdf(path)
+    """Use the full-text owner's source projection for KPI candidates."""
+    return project_source_text(Path(path).read_bytes(), path, "application/pdf")
 
 
 def _fiscal_period_type_for(ticker: str, period_end: datetime) -> FiscalPeriodType:
@@ -1468,8 +1755,8 @@ def capture_for_ir_pdf_docs(
     (there's no allowlist). Idempotent: an already-captured doc is skipped without
     an LLM call unless ``refresh``. Requires ``conn.row_factory = sqlite3.Row``.
 
-    A missing file on disk is skipped (non-fatal): IR PDFs live in the MAIN
-    checkout, so a worktree run may not see them.
+    Missing, empty, and over-budget sources produce an explicit run error.
+    They cannot be marked as fully captured from a partial input.
     """
     ticker = ticker.upper()
     log = TickerExtractionLog(ticker=ticker, stage="stage_b_capture_ir_supplement")
@@ -1489,8 +1776,8 @@ def capture_for_ir_pdf_docs(
                 logger.info(
                     {"event": "ir_supplement_pdf_missing", "ticker": ticker, "path": str(pdf_path)}
                 )
-                continue
-            text = _read_pdf_text(str(pdf_path))[:max_input_chars]
+                raise FileNotFoundError("IR capture source is missing")
+            text = _complete_capture_text(_read_pdf_text(str(pdf_path)), max_input_chars)
             rows = _llm_extract_enumerate(ticker, period_label, text, max_facts=max_facts_per_doc)
             if not rows:
                 continue

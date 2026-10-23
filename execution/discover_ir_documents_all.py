@@ -21,7 +21,8 @@ Resilience contract (mirrors ``refresh_ir_kpis_all.py``):
     and killable — it cannot take down the batch.
   * The batch NEVER aborts early: a failed/timed-out ticker is logged and the
     remaining tickers still run.
-  * A ticker with no resolvable IR URL is ``SKIPPED`` (best-effort, NOT a failure).
+  * A ticker with no resolvable IR URL is ``SKIPPED``. An empty crawl or an
+    incomplete download/registration is ``FAILED`` and remains retryable.
   * Exit code = count of FAILED tickers (0 = all good), reported only AFTER every
     ticker has been attempted — so cron/monitoring can detect partial failure.
 
@@ -57,6 +58,7 @@ except ImportError:
 
 import ir_fetch_status
 from compute.ir_narrative import has_pending_narrative
+from db_paths import require_db_path
 from ir_uploads import calendar_id_from_fye
 from log_redact import redact
 from models.companies import ListType
@@ -68,6 +70,7 @@ from pipeline.source_policy import (
     authorize_stored_collection_target,
     select_collection_targets,
 )
+from provenance.document_evidence_pipeline import DocumentEvidenceResult
 from runtime.python_process import ensure_managed_python_argv, managed_python_prefix
 from sqlite_runtime import SQLiteConnectionRole, connect_sqlite
 
@@ -85,6 +88,7 @@ _DEFAULT_DISCOVERY_WORKERS = 3
 _DEFAULT_TICKER_DEADLINE_S = 600
 _DEFAULT_WHOLE_RUN_DEADLINE_S = 1800
 _CHECKPOINT_VERSION = 2
+_PROCESSING_CONTRACT_VERSION = 1
 
 
 class TickerStatus(StrEnum):
@@ -116,41 +120,41 @@ class DiscoveryResult:
     stderr: str = ""
     error: str | None = None
     processing_pending: bool = False
+    crawl_incomplete: bool = False
 
 
 def _resolve_roster(db_path: Path, requested: list[str] | None) -> tuple[list[str], list[str]]:
     """Resolve active companies admitted by the shared collection policy."""
 
     targets: list[CollectionTarget] = []
-    if db_path.exists():
+    try:
+        conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
+        conn.row_factory = sqlite3.Row
         try:
-            conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)
-            conn.row_factory = sqlite3.Row
-            try:
-                rows = conn.execute(
-                    "SELECT ticker,list_type FROM tracked_companies "
-                    "WHERE archived_at IS NULL ORDER BY ticker"
-                ).fetchall()
-            finally:
-                conn.close()
-            wanted = {ticker.upper() for ticker in requested or []}
-            for row in rows:
-                ticker = str(row["ticker"]).upper()
-                if requested and ticker not in wanted:
-                    continue
-                try:
-                    role = ListType(str(row["list_type"]))
-                except ValueError:
-                    continue
-                targets.append(
-                    CollectionTarget(
-                        ticker=ticker,
-                        coverage_role=role,
-                        requested=requested is not None,
-                    )
-                )
-        except sqlite3.Error:
-            targets = []
+            rows = conn.execute(
+                "SELECT ticker,list_type FROM tracked_companies "
+                "WHERE archived_at IS NULL ORDER BY ticker"
+            ).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error as exc:
+        raise RuntimeError("IR roster is unavailable or has an invalid schema") from exc
+    wanted = {ticker.upper() for ticker in requested or []}
+    for row in rows:
+        ticker = str(row["ticker"]).upper()
+        if requested and ticker not in wanted:
+            continue
+        try:
+            role = ListType(str(row["list_type"]))
+        except ValueError as exc:
+            raise RuntimeError(f"IR roster has an invalid role for {ticker}") from exc
+        targets.append(
+            CollectionTarget(
+                ticker=ticker,
+                coverage_role=role,
+                requested=requested is not None,
+            )
+        )
     selection = select_collection_targets(
         tuple(targets),
         source=CollectionSource.IR,
@@ -221,17 +225,19 @@ def _set_brief_dirty(db_path: Path, ticker: str) -> bool:
 
 def _json_field(stdout: str, key: str) -> object:
     """Pull ``key`` from the last balanced top-level JSON object in ``stdout``."""
-    s = stdout.strip()
-    start, end = s.rfind("{"), s.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None
-    try:
-        obj = json.loads(s[start : end + 1])
-    except json.JSONDecodeError:
-        return None
-    if not isinstance(obj, dict):
-        return None
-    return cast("dict[str, object]", obj).get(key)
+    decoder = json.JSONDecoder()
+    position = 0
+    last: dict[str, object] = {}
+    while (start := stdout.find("{", position)) >= 0:
+        try:
+            value, end = decoder.raw_decode(stdout, start)
+        except json.JSONDecodeError:
+            position = start + 1
+            continue
+        position = end
+        if isinstance(value, dict):
+            last = cast("dict[str, object]", value)
+    return last.get(key)
 
 
 def _fail(
@@ -241,6 +247,7 @@ def _fail(
     *,
     discovered: int | None = None,
     downloaded: int | None = None,
+    processed: bool = False,
 ) -> TickerResult:
     sys.stderr.write(f"\n!!! [{ticker}] FAILED - {reason}\n")
     sys.stdout.write(f"[{ticker}] FAILED - {reason} ({elapsed}s)\n")
@@ -251,6 +258,7 @@ def _fail(
         downloaded,
         elapsed,
         error=reason,
+        processed=processed,
     )
 
 
@@ -297,17 +305,91 @@ def _run_process_stage(
     summaries: bool,
     timeout_s: float,
     deadline_at: float | None = None,
+    refresh_views: bool = True,
+    owner_requested: bool = False,
 ) -> bool:
-    """Extract retained document text; optionally produce LLM summaries.
+    """Continue canonical evidence, then refresh existing derived text views.
 
-    Always: ``ir_narrative.py`` (cheap pypdf extraction → ``data/ir_narrative/<T>/``,
-    the IR anchor every ``--enable-llm`` prompt reads) + flip ``brief_dirty`` so the
-    daily brief rebuild surfaces the docs. With ``summaries``: also
-    ``process_ir_documents.py`` (LLM per-doc summaries feeding the press-release /
-    transcript sections — the cost step, opt-in).
+    The existing document-evidence owner retains byte capture, extraction,
+    idempotency and coverage authority. Narrative and summary caches are derived
+    views. Missing inventory stays degraded but does not block those views when
+    all selected documents have current extracted evidence.
     """
-    first_timeout = _remaining_timeout(timeout_s, deadline_at)
-    if first_timeout is None:
+    deadline_at = min(deadline_at or float("inf"), time.monotonic() + timeout_s)
+    before_document_id = 0
+    evidence_ok = True
+    views_ready = True
+    while True:
+        evidence_timeout = _remaining_timeout(timeout_s, deadline_at)
+        if evidence_timeout is None:
+            sys.stderr.write(f"[{ticker}] process deadline exhausted before document evidence\n")
+            return False
+        command = [
+            *managed_python_prefix(PROJECT_ROOT),
+            str(PROJECT_ROOT / "execution" / "process_document_evidence.py"),
+            "--ticker",
+            ticker,
+            "--source-type",
+            "ir_doc",
+            "--repo-root",
+            str(repo_root),
+            "--db",
+            str(db_path),
+            "--batch-size",
+            "500",
+            "--apply",
+        ]
+        if owner_requested:
+            command.append("--requested")
+        if before_document_id:
+            command.extend(["--before-document-id", str(before_document_id)])
+        try:
+            evidence = _run_child(command, evidence_timeout)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            sys.stderr.write(f"[{ticker}] document evidence failed: {redact(exc)}\n")
+            return False
+        if evidence.stdout:
+            sys.stdout.write(redact(evidence.stdout) + "\n")
+        if evidence.stderr:
+            sys.stderr.write(redact(evidence.stderr))
+        try:
+            evidence_result = DocumentEvidenceResult.model_validate_json(evidence.stdout)
+        except ValueError:
+            sys.stderr.write(f"[{ticker}] document evidence returned an invalid result\n")
+            return False
+        if (
+            evidence.returncode not in (0, 2)
+            or evidence_result.mode != "apply"
+            or not evidence_result.items
+            or any(item.ticker.upper() != ticker.upper() for item in evidence_result.items)
+        ):
+            sys.stderr.write(f"[{ticker}] document evidence returned an invalid scope or status\n")
+            return False
+        views_ready = views_ready and all(
+            item.status in {"extracted", "already-covered"} for item in evidence_result.items
+        )
+        page_ok = evidence.returncode == 0 and not evidence_result.degraded
+        if evidence_result.has_more:
+            # has_more degrades the bounded CLI result until its caller drains
+            # the next page. Retain actual item and coverage degradation.
+            page_ok = not evidence_result.findings and all(
+                not item.degraded for item in evidence_result.items
+            )
+        evidence_ok = evidence_ok and page_ok
+        if not evidence_result.has_more:
+            break
+        next_before = evidence_result.next_before_document_id
+        if next_before <= 0 or (before_document_id and next_before >= before_document_id):
+            sys.stderr.write(f"[{ticker}] document evidence cursor did not advance\n")
+            return False
+        before_document_id = next_before
+    if not views_ready:
+        sys.stderr.write(f"[{ticker}] document evidence incomplete; derived views deferred\n")
+        return False
+    if not refresh_views:
+        return evidence_ok
+    narrative_timeout = _remaining_timeout(timeout_s, deadline_at)
+    if narrative_timeout is None:
         sys.stderr.write(f"[{ticker}] process deadline exhausted before ir_narrative\n")
         return False
     nar = _run_tolerant(
@@ -319,7 +401,7 @@ def _run_process_stage(
             "--repo-root",
             str(repo_root),
         ],
-        first_timeout,
+        narrative_timeout,
         f"[{ticker}] ir_narrative",
     )
     summaries_ok = True
@@ -338,13 +420,14 @@ def _run_process_stage(
                 str(repo_root),
                 "--db",
                 str(db_path),
+                "--regenerate-missing",
             ],
             summary_timeout,
             f"[{ticker}] process_ir_documents",
         )
     if not nar or not summaries_ok:
         return False
-    return _set_brief_dirty(db_path, ticker)
+    return _set_brief_dirty(db_path, ticker) and evidence_ok
 
 
 def _remaining_timeout(stage_timeout_s: float, deadline_at: float | None) -> float | None:
@@ -434,6 +517,16 @@ def _run_discovery(
             stdout=disc.stdout,
             stderr=disc.stderr,
         )
+    if status not in {"done", "partial"} or discovered_n is None or discovered_n == 0:
+        return DiscoveryResult(
+            ticker,
+            TickerStatus.FAILED,
+            discovered_n,
+            _elapsed(t0),
+            stdout=disc.stdout,
+            stderr=disc.stderr,
+            error=f"discovery_incomplete:{status or 'missing_status'}",
+        )
     return DiscoveryResult(
         ticker,
         TickerStatus.OK,
@@ -441,6 +534,7 @@ def _run_discovery(
         _elapsed(t0),
         stdout=disc.stdout,
         stderr=disc.stderr,
+        crawl_incomplete=status == "partial",
     )
 
 
@@ -487,6 +581,13 @@ def _finish_discovery(
             discovery.elapsed_seconds,
         )
     if skip_download:
+        if discovery.crawl_incomplete:
+            return _fail(
+                ticker,
+                "discovery_incomplete:partial",
+                discovery.elapsed_seconds,
+                discovered=discovery.discovered,
+            )
         sys.stdout.write(f"[{ticker}] OK (discovered={discovery.discovered}, download skipped)\n")
         return TickerResult(
             ticker,
@@ -556,26 +657,44 @@ def _finish_discovery(
     if fetch.stderr:
         sys.stderr.write(redact(fetch.stderr))
     if fetch.returncode != 0:
+        reported_status = _json_field(fetch.stdout, "status")
+        reported_downloaded = _json_field(fetch.stdout, "downloaded")
+        reason = f"fetch exited {fetch.returncode}"
+        if fetch.returncode == 10:
+            reason = "auth_denial: fetch halted"
+        elif isinstance(reported_status, str):
+            reason = f"fetch_incomplete:{reported_status}"
         return _fail(
             ticker,
-            (
-                "auth_denial: fetch halted"
-                if fetch.returncode == 10
-                else f"fetch exited {fetch.returncode}"
-            ),
+            reason,
             round(discovery.elapsed_seconds + _elapsed(finish_t0), 3),
             discovered=discovery.discovered,
+            downloaded=(reported_downloaded if isinstance(reported_downloaded, int) else None),
         )
 
+    fetch_status = _json_field(fetch.stdout, "status")
+    fetch_failed = _json_field(fetch.stdout, "failed")
     downloaded = _json_field(fetch.stdout, "downloaded")
-    downloaded_n = downloaded if isinstance(downloaded, int) else None
-    processed = False
-    if process and (
-        downloaded_n
-        or discovery.processing_pending
-        or summaries
-        or has_pending_narrative(repo_root, ticker)
+    categorize_rc = _json_field(fetch.stdout, "categorize_rc")
+    if (
+        fetch_status != "done"
+        or not isinstance(fetch_failed, int)
+        or fetch_failed > 0
+        or not isinstance(downloaded, int)
+        or (downloaded > 0 and categorize_rc != 0)
+        or (downloaded == 0 and categorize_rc not in (None, 0))
     ):
+        return _fail(
+            ticker,
+            f"fetch_incomplete:{fetch_status or 'missing_status'}",
+            round(discovery.elapsed_seconds + _elapsed(finish_t0), 3),
+            discovered=discovery.discovered,
+            downloaded=downloaded if isinstance(downloaded, int) else None,
+        )
+
+    downloaded_n = downloaded
+    processed = False
+    if process:
         process_budget = _remaining_timeout(process_timeout, effective_deadline)
         if process_budget is not None:
             processed = _run_process_stage(
@@ -583,8 +702,15 @@ def _finish_discovery(
                 repo_root=repo_root,
                 db_path=db_path,
                 summaries=summaries,
+                owner_requested=owner_requested,
                 timeout_s=process_budget,
                 deadline_at=effective_deadline,
+                refresh_views=bool(
+                    downloaded_n
+                    or discovery.processing_pending
+                    or summaries
+                    or has_pending_narrative(repo_root, ticker)
+                ),
             )
         else:
             sys.stderr.write(f"[{ticker}] process skipped: bounded deadline exhausted\n")
@@ -600,6 +726,15 @@ def _finish_discovery(
             )
 
     elapsed = round(discovery.elapsed_seconds + _elapsed(finish_t0), 3)
+    if discovery.crawl_incomplete:
+        return _fail(
+            ticker,
+            "discovery_incomplete:partial",
+            elapsed,
+            discovered=discovery.discovered,
+            downloaded=downloaded_n,
+            processed=processed,
+        )
     sys.stdout.write(
         f"[{ticker}] OK (discovered={discovery.discovered}, downloaded={downloaded_n}, "
         f"processed={processed}, {elapsed}s)\n"
@@ -782,6 +917,7 @@ def _discovery_to_checkpoint(result: DiscoveryResult) -> dict[str, object]:
         "elapsed_seconds": result.elapsed_seconds,
         "error": result.error,
         "processing_pending": result.processing_pending,
+        "crawl_incomplete": result.crawl_incomplete,
     }
 
 
@@ -809,6 +945,7 @@ def _discovery_from_checkpoint(value: object) -> DiscoveryResult | None:
         elapsed_seconds=float(elapsed),
         error=error if isinstance(error, str) else None,
         processing_pending=row.get("processing_pending") is True,
+        crawl_incomplete=row.get("crawl_incomplete") is True,
     )
 
 
@@ -878,6 +1015,7 @@ def _load_checkpoint(
                 parsed is not None
                 and parsed.ticker == ticker
                 and parsed.status is not TickerStatus.FAILED
+                and not parsed.crawl_incomplete
             ):
                 discoveries[ticker] = parsed
     results: dict[str, TickerResult] = {}
@@ -886,6 +1024,20 @@ def _load_checkpoint(
         for ticker, value in cast("dict[str, object]", raw_results).items():
             parsed = _result_from_checkpoint(value)
             if parsed is not None and parsed.ticker == ticker:
+                if (
+                    parsed.status is TickerStatus.OK
+                    and not signature.get("no_process")
+                    and not signature.get("skip_download")
+                    and state.get("processing_contract_version") != _PROCESSING_CONTRACT_VERSION
+                ):
+                    # Old completions predate the evidence continuation. Keep
+                    # their crawl and rerun only the idempotent mutation phase.
+                    pending = discoveries.get(ticker) or DiscoveryResult(
+                        ticker, TickerStatus.OK, parsed.discovered, parsed.elapsed_seconds
+                    )
+                    pending.processing_pending = True
+                    discoveries[ticker] = pending
+                    continue
                 results[ticker] = parsed
     return discoveries, results
 
@@ -899,6 +1051,7 @@ def _save_checkpoint(
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "version": _CHECKPOINT_VERSION,
+        "processing_contract_version": _PROCESSING_CONTRACT_VERSION,
         "signature": signature,
         "discoveries": {
             ticker: _discovery_to_checkpoint(discoveries[ticker]) for ticker in sorted(discoveries)
@@ -924,11 +1077,19 @@ def _record_result(db_path: Path, result: TickerResult) -> None:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     repo_root = cast("Path", args.repo_root)
-    db_path = cast("Path", args.db) if args.db else repo_root / "data" / "portfolio.db"
+    try:
+        db_path = require_db_path(cast("Path | None", args.db))
+    except (FileNotFoundError, RuntimeError) as exc:
+        sys.stderr.write(f"IR discovery stopped: {redact(exc)}\n")
+        return 2
     requested = cast("list[str] | None", args.tickers)
 
     t0 = time.monotonic()
-    selected, skipped_not_in_roster = _resolve_roster(db_path, requested)
+    try:
+        selected, skipped_not_in_roster = _resolve_roster(db_path, requested)
+    except RuntimeError as exc:
+        sys.stderr.write(f"IR discovery stopped: {redact(exc)}\n")
+        return 2
     for t in skipped_not_in_roster:
         sys.stdout.write(f"[{t}] not authorized by stored identity/role policy — skipped\n")
 
@@ -938,7 +1099,7 @@ def main(argv: list[str] | None = None) -> int:
         selected = [t for t in selected if t in gaps]
         if dropped:
             sys.stdout.write(
-                f"--only-failing: {len(dropped)} name(s) already have IR docs, "
+                f"--only-failing: {len(dropped)} name(s) have IR docs and no failed crawl, "
                 f"rescanning {len(selected)} gap(s): {selected}\n"
             )
 
@@ -1126,15 +1287,12 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p.add_argument(
         "--only-failing",
         action="store_true",
-        help=(
-            "Rescan only roster names with ZERO registered IR docs (the periodic "
-            "retry of bot-protected / failed crawlers — see the failing-crawler cron)"
-        ),
+        help=("Rescan roster names with zero IR docs or a failed last crawl"),
     )
     p.add_argument(
         "--no-process",
         action="store_true",
-        help="Skip the post-registration stage (no ir_narrative anchor refresh / brief_dirty)",
+        help="Skip post-registration evidence continuation and derived text views",
     )
     p.add_argument(
         "--summaries",

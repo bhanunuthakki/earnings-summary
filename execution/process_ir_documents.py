@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import logging
 import sys
@@ -25,15 +26,15 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
-# Paths
-SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_ROOT = SCRIPT_DIR.parent
-SRC_DIR = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_DIR))
+try:
+    from _lib import PROJECT_ROOT
+except ImportError:
+    from execution._lib import PROJECT_ROOT
 
-import index_manager  # noqa: E402
-from alias_manager import resolve_ticker  # noqa: E402
-from llm_client import (  # noqa: E402
+
+import index_manager
+from alias_manager import resolve_ticker
+from llm_client import (
     compose_anchor_block,
     generate_event_brief,
     generate_presentation_brief,
@@ -43,7 +44,10 @@ from llm_client import (  # noqa: E402
     load_ir_anchor,
     load_thesis_anchor,
 )
-from parser import extract_text_from_pdf, read_text_file  # noqa: E402
+from provenance.fulltext_backfill import (
+    project_source_text,
+    source_text_projection_identity,
+)
 
 CACHE_DIR = PROJECT_ROOT / ".tmp"
 
@@ -59,7 +63,7 @@ RATE_LIMIT_SLEEP = 15
 # §7 thesis-read-through needs the same). Press-release and presentation
 # briefs are pure structured-data summaries — no anchor needed; their job is
 # to be factual condensers, not to render thesis judgments.
-DOC_TYPE_CONFIG: dict[str, dict] = {
+DOC_TYPE_CONFIG: dict[str, dict[str, Any]] = {
     "press_release": {
         "cache_suffix": "press_release_summary.txt",
         "llm_fn": generate_press_release_summary,
@@ -97,11 +101,11 @@ DOC_TYPE_CONFIG: dict[str, dict] = {
 }
 
 
-def _is_event(doc: dict) -> bool:
+def _is_event(doc: dict[str, Any]) -> bool:
     return doc.get("doc_type") == "event"
 
 
-def cache_path_for(doc: dict) -> Path:
+def cache_path_for(doc: dict[str, Any]) -> Path:
     ticker = doc["ticker"]
     suffix = DOC_TYPE_CONFIG[doc["doc_type"]]["cache_suffix"]
     if _is_event(doc):
@@ -115,7 +119,7 @@ def cache_path_for(doc: dict) -> Path:
     return CACHE_DIR / f"{ticker}_{quarter}_{year}_{suffix}"
 
 
-def _mark_processed(doc: dict) -> None:
+def _mark_processed(doc: dict[str, Any]) -> None:
     if _is_event(doc):
         sha8 = Path(doc["local_path"]).stem.split("__")[-1]
         index_manager.mark_event_processed(doc["ticker"], doc["event_date"], sha8)
@@ -125,7 +129,7 @@ def _mark_processed(doc: dict) -> None:
     )
 
 
-def _doc_log_fields(doc: dict) -> dict:
+def _doc_log_fields(doc: dict[str, Any]) -> dict[str, Any]:
     if _is_event(doc):
         return {"ticker": doc["ticker"], "event_date": doc["event_date"], "doc_type": "event"}
     return {
@@ -138,12 +142,22 @@ def _doc_log_fields(doc: dict) -> dict:
 
 def extract_text(local_path: str) -> str:
     path = Path(local_path)
-    if path.suffix.lower() == ".pdf":
-        return extract_text_from_pdf(str(path))
-    return read_text_file(str(path))
+    return project_source_text(path.read_bytes(), str(path))
 
 
-def process_document(doc: dict, dry_run: bool = False) -> bool:
+def _summary_source_matches(cache: Path, source: Path) -> bool:
+    try:
+        receipt = json.loads(cache.with_suffix(".source.json").read_text(encoding="utf-8"))
+        return (
+            receipt["source_text_identity"] == source_text_projection_identity(str(source))
+            and receipt["source_sha256"] == hashlib.sha256(source.read_bytes()).hexdigest()
+            and receipt["summary_sha256"] == hashlib.sha256(cache.read_bytes()).hexdigest()
+        )
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+
+
+def process_document(doc: dict[str, Any], dry_run: bool = False) -> bool:
     """
     Process a single document entry. Returns True if processed successfully.
     Idempotent: skips if cache already exists.
@@ -163,7 +177,7 @@ def process_document(doc: dict, dry_run: bool = False) -> bool:
 
     cache = cache_path_for(doc)
 
-    if cache.exists():
+    if cache.exists() and _summary_source_matches(cache, Path(local_path)):
         log.info({"event": "cache_hit", "cache": str(cache)})
         _mark_processed(doc)
         return True
@@ -175,6 +189,7 @@ def process_document(doc: dict, dry_run: bool = False) -> bool:
         return True
 
     try:
+        source_sha256 = hashlib.sha256(Path(local_path).read_bytes()).hexdigest()
         text = extract_text(local_path)
         if not text.strip():
             log.error({"event": "empty_text", "local_path": local_path})
@@ -190,9 +205,23 @@ def process_document(doc: dict, dry_run: bool = False) -> bool:
         else:
             result_text = config["llm_fn"](text)
 
-        with open(cache, "w", encoding="utf-8") as f:
-            f.write(result_text)
+        pending_cache = cache.with_suffix(".pending")
+        try:
+            pending_cache.write_text(result_text, encoding="utf-8")
+            pending_cache.replace(cache)
+        finally:
+            pending_cache.unlink(missing_ok=True)
 
+        cache.with_suffix(".source.json").write_text(
+            json.dumps(
+                {
+                    "source_text_identity": source_text_projection_identity(local_path),
+                    "source_sha256": source_sha256,
+                    "summary_sha256": hashlib.sha256(cache.read_bytes()).hexdigest(),
+                }
+            ),
+            encoding="utf-8",
+        )
         log.info({"event": "cached", "cache": str(cache)})
         _mark_processed(doc)
         time.sleep(RATE_LIMIT_SLEEP)
@@ -209,7 +238,7 @@ def run_for_ticker(
     year: str | None = None,
     dry_run: bool = False,
     regenerate_missing: bool = False,
-) -> None:
+) -> int:
     ticker = resolve_ticker(ticker).upper()
     if regenerate_missing:
         # Self-heal: re-include every registered quarterly doc regardless of its
@@ -218,7 +247,7 @@ def run_for_ticker(
         # written is otherwise skipped forever by get_unprocessed_documents —
         # the gap that leaves §6 Say-Do empty for freshly-onboarded names.
         # process_document early-returns on cache-hit, so docs that already have
-        # a summary are skipped (no re-billing); only missing artifacts regenerate.
+        # a current source-bound summary are skipped; stale artifacts regenerate.
         docs = [
             d
             for d in cast(
@@ -230,7 +259,7 @@ def run_for_ticker(
             and d.get("local_path")
         ]
     else:
-        docs = index_manager.get_unprocessed_documents(ticker)
+        docs = cast(list[dict[str, Any]], index_manager.get_unprocessed_documents(ticker))
 
     if quarter:
         docs = [d for d in docs if d["quarter"].upper() == quarter.upper()]
@@ -241,14 +270,14 @@ def run_for_ticker(
     # `--year` filters events by event_date year so users can scope to a specific period.
     # regenerate_missing intentionally scopes to quarterly docs (the Say-Do inputs).
     if not quarter and not regenerate_missing:
-        events = index_manager.get_unprocessed_events(ticker)
+        events = cast(list[dict[str, Any]], index_manager.get_unprocessed_events(ticker))
         if year:
             events = [e for e in events if e.get("event_date", "").startswith(str(year))]
         docs = docs + events
 
     if not docs:
         print(f"[{ticker}] No unprocessed documents found.")
-        return
+        return 0
 
     print(f"[{ticker}] Processing {len(docs)} document(s)...")
     success = 0
@@ -267,9 +296,10 @@ def run_for_ticker(
             }
         )
     )
+    return int(success != len(docs))
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="LLM-process downloaded IR documents.")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--ticker", type=str, help="Company ticker to process")
@@ -287,24 +317,30 @@ def main() -> None:
         help="Re-include every registered quarterly doc whose summary cache file "
         "is absent, even if marked processed. Self-heals transcripts registered "
         "processed=True without a summary ever being written (the gap that leaves "
-        "§6 Say-Do empty). Never re-bills a doc that already has a cached summary. "
+        "§6 Say-Do empty). Reuses only summaries bound to the current source bytes. "
         "Intended with --ticker.",
     )
     args = parser.parse_args()
 
     if args.all:
-        unprocessed = (
-            index_manager.get_unprocessed_documents() + index_manager.get_unprocessed_events()
+        unprocessed = cast(list[dict[str, Any]], index_manager.get_unprocessed_documents()) + cast(
+            list[dict[str, Any]], index_manager.get_unprocessed_events()
         )
         tickers = sorted({d["ticker"] for d in unprocessed})
         if not tickers:
             print("No unprocessed documents found.")
-            return
+            return 0
+        status = 0
         for t in tickers:
-            run_for_ticker(t, args.quarter, args.year, args.dry_run, args.regenerate_missing)
-    else:
-        run_for_ticker(args.ticker, args.quarter, args.year, args.dry_run, args.regenerate_missing)
+            status = max(
+                status,
+                run_for_ticker(t, args.quarter, args.year, args.dry_run, args.regenerate_missing),
+            )
+        return status
+    return run_for_ticker(
+        args.ticker, args.quarter, args.year, args.dry_run, args.regenerate_missing
+    )
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

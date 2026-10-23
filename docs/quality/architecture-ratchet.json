@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "90237a7e7cada65114a5d5bee2b03e97612705f9",
+  "scoped_commit": "d2c36ae56fbce9c83975823e641941d718cd52bc",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "b61d193ced0d755296c8df441263c801ba02736bf3485151f5cbc3d901cbe4f2",
+  "source_sha256": "b248cea8e123899fc4de22cbe181656177601419977451b7a9c7d6a33a33043b",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1470,
-    "total_noncomment_loc": 562513,
+    "executable_modules": 1472,
+    "total_noncomment_loc": 563851,
     "modules_over_1000_loc": 108,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -270,6 +270,21 @@
           "database",
           "filesystem",
           "network"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
+        "path": "execution/audit_cohort_readiness.py",
+        "module": "execution.audit_cohort_readiness",
+        "lines": {
+          "physical": 55,
+          "nonblank": 47,
+          "noncomment": 47
+        },
+        "internal_fan_out": 4,
+        "responsibilities": [
+          "database"
         ],
         "public_functions": 1,
         "fully_annotated_public_functions": 1
@@ -2639,11 +2654,11 @@
         "path": "execution/discover_ir_documents.py",
         "module": "execution.discover_ir_documents",
         "lines": {
-          "physical": 208,
-          "nonblank": 185,
-          "noncomment": 185
+          "physical": 230,
+          "nonblank": 207,
+          "noncomment": 207
         },
-        "internal_fan_out": 7,
+        "internal_fan_out": 9,
         "responsibilities": [
           "database"
         ],
@@ -2654,11 +2669,11 @@
         "path": "execution/discover_ir_documents_all.py",
         "module": "execution.discover_ir_documents_all",
         "lines": {
-          "physical": 1183,
-          "nonblank": 1093,
-          "noncomment": 1087
+          "physical": 1341,
+          "nonblank": 1250,
+          "noncomment": 1240
         },
-        "internal_fan_out": 9,
+        "internal_fan_out": 11,
         "responsibilities": [
           "database",
           "filesystem",
@@ -3012,11 +3027,11 @@
         "path": "execution/extract_kpis_from_summaries.py",
         "module": "execution.extract_kpis_from_summaries",
         "lines": {
-          "physical": 158,
-          "nonblank": 138,
-          "noncomment": 138
+          "physical": 174,
+          "nonblank": 155,
+          "noncomment": 155
         },
-        "internal_fan_out": 4,
+        "internal_fan_out": 6,
         "responsibilities": [
           "database"
         ],
@@ -3339,9 +3354,9 @@
         "path": "execution/fetch_ir_documents.py",
         "module": "execution.fetch_ir_documents",
         "lines": {
-          "physical": 963,
-          "nonblank": 872,
-          "noncomment": 856
+          "physical": 1010,
+          "nonblank": 918,
+          "noncomment": 895
         },
         "internal_fan_out": 11,
         "responsibilities": [
@@ -4600,13 +4615,14 @@
         "path": "execution/process_document_evidence.py",
         "module": "execution.process_document_evidence",
         "lines": {
-          "physical": 251,
-          "nonblank": 233,
-          "noncomment": 231
+          "physical": 270,
+          "nonblank": 252,
+          "noncomment": 250
         },
-        "internal_fan_out": 6,
+        "internal_fan_out": 7,
         "responsibilities": [
-          "filesystem"
+          "filesystem",
+          "network"
         ],
         "public_functions": 1,
         "fully_annotated_public_functions": 1
@@ -4615,11 +4631,11 @@
         "path": "execution/process_ir_documents.py",
         "module": "execution.process_ir_documents",
         "lines": {
-          "physical": 310,
-          "nonblank": 265,
-          "noncomment": 242
+          "physical": 346,
+          "nonblank": 298,
+          "noncomment": 276
         },
-        "internal_fan_out": 4,
+        "internal_fan_out": 5,
         "responsibilities": [
           "filesystem",
           "network"
@@ -8371,16 +8387,17 @@
         "path": "src/compute/ir_narrative.py",
         "module": "compute.ir_narrative",
         "lines": {
-          "physical": 280,
-          "nonblank": 238,
-          "noncomment": 230
+          "physical": 441,
+          "nonblank": 377,
+          "noncomment": 369
         },
-        "internal_fan_out": 0,
+        "internal_fan_out": 4,
         "responsibilities": [
-          "filesystem"
+          "filesystem",
+          "network"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
       },
       {
         "path": "src/compute/key_metrics.py",
@@ -8418,11 +8435,11 @@
         "path": "src/compute/kpi_extract_summaries.py",
         "module": "compute.kpi_extract_summaries",
         "lines": {
-          "physical": 1564,
-          "nonblank": 1415,
-          "noncomment": 1313
+          "physical": 1851,
+          "nonblank": 1703,
+          "noncomment": 1599
         },
-        "internal_fan_out": 19,
+        "internal_fan_out": 26,
         "responsibilities": [
           "database",
           "filesystem",
@@ -11401,9 +11418,9 @@
         "path": "src/ir_fetch_status.py",
         "module": "ir_fetch_status",
         "lines": {
-          "physical": 260,
-          "nonblank": 227,
-          "noncomment": 223
+          "physical": 267,
+          "nonblank": 234,
+          "noncomment": 229
         },
         "internal_fan_out": 4,
         "responsibilities": [
@@ -11527,16 +11544,16 @@
         "path": "src/ir_pipeline/discover/__init__.py",
         "module": "ir_pipeline.discover",
         "lines": {
-          "physical": 91,
-          "nonblank": 71,
-          "noncomment": 71
+          "physical": 120,
+          "nonblank": 96,
+          "noncomment": 96
         },
         "internal_fan_out": 3,
         "responsibilities": [
           "network"
         ],
-        "public_functions": 4,
-        "fully_annotated_public_functions": 4
+        "public_functions": 5,
+        "fully_annotated_public_functions": 5
       },
       {
         "path": "src/ir_pipeline/discover/_docmeta.py",
@@ -11558,17 +11575,17 @@
         "path": "src/ir_pipeline/discover/generic.py",
         "module": "ir_pipeline.discover.generic",
         "lines": {
-          "physical": 619,
-          "nonblank": 532,
-          "noncomment": 506
+          "physical": 576,
+          "nonblank": 495,
+          "noncomment": 473
         },
         "internal_fan_out": 4,
         "responsibilities": [
           "filesystem",
           "network"
         ],
-        "public_functions": 4,
-        "fully_annotated_public_functions": 4
+        "public_functions": 5,
+        "fully_annotated_public_functions": 5
       },
       {
         "path": "src/ir_pipeline/discover/meli.py",
@@ -11779,17 +11796,17 @@
         "path": "src/ir_uploads.py",
         "module": "ir_uploads",
         "lines": {
-          "physical": 1536,
-          "nonblank": 1367,
-          "noncomment": 1187
+          "physical": 1568,
+          "nonblank": 1397,
+          "noncomment": 1215
         },
         "internal_fan_out": 2,
         "responsibilities": [
           "filesystem",
           "network"
         ],
-        "public_functions": 12,
-        "fully_annotated_public_functions": 12
+        "public_functions": 13,
+        "fully_annotated_public_functions": 13
       },
       {
         "path": "src/issuer_registry.py",
@@ -11858,11 +11875,11 @@
         "path": "src/llm/anchors.py",
         "module": "llm.anchors",
         "lines": {
-          "physical": 850,
-          "nonblank": 732,
-          "noncomment": 671
+          "physical": 815,
+          "nonblank": 703,
+          "noncomment": 646
         },
-        "internal_fan_out": 7,
+        "internal_fan_out": 8,
         "responsibilities": [
           "database",
           "filesystem",
@@ -13238,16 +13255,16 @@
         "path": "src/operations/storage_reservation.py",
         "module": "operations.storage_reservation",
         "lines": {
-          "physical": 203,
-          "nonblank": 179,
-          "noncomment": 175
+          "physical": 222,
+          "nonblank": 195,
+          "noncomment": 191
         },
         "internal_fan_out": 0,
         "responsibilities": [
           "filesystem"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 4,
+        "fully_annotated_public_functions": 4
       },
       {
         "path": "src/operations/temp_coverage.py",
@@ -13269,17 +13286,17 @@
         "path": "src/operations/temp_run_retention.py",
         "module": "operations.temp_run_retention",
         "lines": {
-          "physical": 890,
-          "nonblank": 818,
-          "noncomment": 812
+          "physical": 979,
+          "nonblank": 897,
+          "noncomment": 887
         },
         "internal_fan_out": 0,
         "responsibilities": [
           "filesystem",
           "network"
         ],
-        "public_functions": 6,
-        "fully_annotated_public_functions": 6
+        "public_functions": 7,
+        "fully_annotated_public_functions": 7
       },
       {
         "path": "src/owner_profile/__init__.py",
@@ -14310,9 +14327,9 @@
         "path": "src/pipeline/kpi_persistence.py",
         "module": "pipeline.kpi_persistence",
         "lines": {
-          "physical": 1022,
-          "nonblank": 931,
-          "noncomment": 828
+          "physical": 1039,
+          "nonblank": 948,
+          "noncomment": 842
         },
         "internal_fan_out": 12,
         "responsibilities": [
@@ -14953,9 +14970,9 @@
         "path": "src/pipeline/run_accounting.py",
         "module": "pipeline.run_accounting",
         "lines": {
-          "physical": 509,
-          "nonblank": 463,
-          "noncomment": 459
+          "physical": 512,
+          "nonblank": 466,
+          "noncomment": 462
         },
         "internal_fan_out": 3,
         "responsibilities": [
@@ -15959,6 +15976,22 @@
         "fully_annotated_public_functions": 0
       },
       {
+        "path": "src/provenance/cohort_readiness.py",
+        "module": "provenance.cohort_readiness",
+        "lines": {
+          "physical": 374,
+          "nonblank": 345,
+          "noncomment": 344
+        },
+        "internal_fan_out": 2,
+        "responsibilities": [
+          "database",
+          "network"
+        ],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
+      },
+      {
         "path": "src/provenance/companyfacts_source_proof.py",
         "module": "provenance.companyfacts_source_proof",
         "lines": {
@@ -16027,11 +16060,11 @@
         "path": "src/provenance/document_evidence_pipeline.py",
         "module": "provenance.document_evidence_pipeline",
         "lines": {
-          "physical": 352,
-          "nonblank": 327,
-          "noncomment": 319
+          "physical": 364,
+          "nonblank": 338,
+          "noncomment": 330
         },
-        "internal_fan_out": 4,
+        "internal_fan_out": 5,
         "responsibilities": [
           "database"
         ],
@@ -16294,9 +16327,9 @@
         "path": "src/provenance/fulltext_backfill.py",
         "module": "provenance.fulltext_backfill",
         "lines": {
-          "physical": 1880,
-          "nonblank": 1696,
-          "noncomment": 1680
+          "physical": 1920,
+          "nonblank": 1726,
+          "noncomment": 1710
         },
         "internal_fan_out": 4,
         "responsibilities": [
@@ -16304,8 +16337,8 @@
           "filesystem",
           "network"
         ],
-        "public_functions": 3,
-        "fully_annotated_public_functions": 3
+        "public_functions": 5,
+        "fully_annotated_public_functions": 5
       },
       {
         "path": "src/provenance/fulltext_extractor_identity.py",
@@ -16474,16 +16507,16 @@
         "path": "src/provenance/legacy_document_evidence.py",
         "module": "provenance.legacy_document_evidence",
         "lines": {
-          "physical": 189,
-          "nonblank": 156,
-          "noncomment": 156
+          "physical": 282,
+          "nonblank": 244,
+          "noncomment": 244
         },
         "internal_fan_out": 2,
         "responsibilities": [
           "database"
         ],
-        "public_functions": 0,
-        "fully_annotated_public_functions": 0
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
       },
       {
         "path": "src/provenance/legacy_fact_evidence_match.py",

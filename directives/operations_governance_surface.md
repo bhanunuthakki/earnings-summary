@@ -41,6 +41,9 @@ inventory. The cleanup does not infer ownership or deletion rights from that cou
 
 ## Outcome
 
+### Pytest session-start pruning of abandoned temp runs (2026-10-22)
+Disposition: **no surface change** (internal test-harness storage behavior; not an operator workflow). No host ran a cleaner for local pytest session roots. Weekly cleanup only counts system-temp test pools, completed runs kept their folder, manifest and receipts with no expiry, and failed runs waited indefinitely for a reviewed resolution. A Mac accumulated 435 such roots (about 15 GB). Each pytest controller now prunes earlier harness-named roots whose lease holder no longer runs: completed and manifest-less roots after one day, failed and holder-gone active roots after the seven-day review window (owner decision). Shared secrets folders, links, unreadable manifests and live-leased roots are kept. No operator action, scheduler, service or Operations surface changed. Regression evidence: `tests/test_temp_run_pruning.py`.
+
 ### Linear fixture retirement validation and Actions runner exit (2026-10-21)
 Disposition: **no surface change** (internal performance change inside existing retention; not an operator workflow). Exact retirement re-read and re-hashed the run's `.earnings-temp-run.json` up to three times per payload file. For a large pytest shard (22,182 files, a 5 MiB manifest) that took 383 s at process exit, and CI shard 4 hung after its tests passed until the 40-minute job timeout. `src/operations/artifact_retention.py` still reads fresh manifest and proof bytes for every validation and never trusts file metadata; it now reuses a SHA-256 only for byte-identical content already hashed in the process (`_fresh_digest`, `_fresh_file_digest`). The same run now exits in 208 s locally; the remaining cost is the deliberate per-file fresh read. `tests/conftest.py` skips the at-exit payload retirement on GitHub Actions runners, which are discarded after the job; those runs are still sealed `completed` with their lease released, and fixtures stay inside the admitted temporary roots. Batching validations under one manifest read would make retirement linear but changes its freshness guarantee, so it is left to the retention owner. Evidence: `tests/test_artifact_retention.py::test_fresh_file_digest_rereads_bytes_and_ignores_metadata` (same-length tamper with a restored mtime is detected), `tests/test_pytest_temp_lifecycle.py` (local successful runs still retire at exit; an Actions run seals and keeps its payload; failed runs stay protected), and the unchanged retention suites.
 
@@ -362,6 +365,54 @@ Forward calendar coverage is deliberately surfaced beside its retained events us
 claim about provider health. Missing, stale and failed receipts cannot render a
 verified empty calendar. `tests/test_ir_events_ingestion.py` and
 `tests/test_ir_events_cli_unavailable.py` cover these boundaries and disabled apply.
+
+### IR acquisition batch
+
+The weekly IR discovery batch now treats an empty crawl, failed URL download,
+or failed registration as a failed ticker. The failing-crawler retry includes
+both zero-document names and names with a failed last crawl despite older
+registered documents. The source status and batch exit code expose these cases;
+no new scheduler task or operator action was added. The batch requires an
+existing configured database and rejects the checkout-default database before
+opening a source. A successful batch still means acquisition and optional
+narrative processing only; it does not certify fact-extraction completeness.
+Hybrid and list discovery now use the same inventory crawler. Partial crawls
+retain available documents, expose page diagnostics, and retry discovery.
+Categorizer exit zero must also reconcile every downloaded source URL with
+registered documents. The batch invokes the existing bounded document-evidence
+continuation before derived views, including when downloads are unchanged.
+Its existing selector accepts an optional source-type filter; the IR batch uses
+`ir_doc` so unrelated stored source formats do not block IR work. The existing
+resume receipt binds that filter. It adds no second cursor or evidence writer. Failed or unfinished extraction
+defers views. Missing inventory remains degraded but does not block views of
+current extracted documents. Summary and narrative views share the full-text
+owner's source-text projection. Financial admission remains with existing owners.
+Official HTML earnings releases use the existing download, classification,
+registration, and source-URL operation. Failed HTML classification remains an
+acquisition failure. No new operation, listener, or scheduled LLM leg was added.
+
+Narrative extraction, pending checks, and prompt anchors use one verified cache
+envelope. The envelope binds all current source bytes and the extraction method.
+An unreadable, changed, or missing preferred source produces an explicit context
+gap. Legacy text caches remain retained but cannot supply prompt text.
+
+The existing summary-KPI CLI requires the configured database or an explicit
+`--db-path`; `--repo-root` selects source files only. Allowlist extraction checks
+existing evidence before a model call. It registers the exact summary bytes and
+uses the existing document-evidence coordinator for that document ID when
+deterministic preparation is needed. Registration and preparation share the exact
+database writer lock; the lock is released before model work. Invalid explicit
+bindings fail closed. Failed preparation makes no model call and remains
+retryable. Missing issuer-inventory linkage for a derived summary stays degraded;
+it does not become an acquisition-completeness claim. The existing run ledger binds
+each completed attempt to its exact source, parent, holdings, and model route.
+Empty and partial responses record bounded processing; unreturned metrics remain
+unknown. `--refresh` repeats completed work but cannot replace an active writer.
+The capture/enumeration path is unchanged. `--requested` carries explicit owner
+request context for a selected ticker or document. Resume receipts bind that
+context. Existing automatic role policy is unchanged. Derived summaries do not
+gain financial admission from this completion record. No scheduler task or service
+was added.
 
 ### Legacy evidence backfill and managed IR byte admission
 
@@ -1915,6 +1966,24 @@ Selected legacy PRE baselines do not acquire verified binding. Scheduled generat
 and financial state remain unchanged. There are no provider calls or new routes.
 Evidence: `tests/test_report_contract.py`, `tests/test_report_preview.py`, existing
 artifact-index and PRE/POST regressions, and isolated rendered preview receipts.
+
+### Explicit cohort rollout census — 2026-10-22
+
+Disposition: **manual read-only CLI; no dashboard or scheduler change**. Run
+`execution/sqlite_bootstrap.py execution/audit_cohort_readiness.py` with a required
+`--db-path`, one or more `--issuer-id` selectors, `--knowledge-cutoff`, and
+`--observed-through`. The command reads one SQLite transaction through the
+read-only role. It emits acquisition, processing, semantic/publication, and
+global consumer-receipt evidence counts. Missing schema is unknown, not zero.
+It performs no collection, writes, provider calls, or consumer audit. It creates
+no persisted state and adds no scheduler or dashboard control. Evidence census
+clock comparisons have whole-second precision under the existing reporting
+selector; receipt clock equality preserves microseconds. Both limits appear in
+the JSON output. Counts do not certify completeness or readiness.
+`execution/audit_data_cutover_readiness.py` and the existing population cutover
+evaluator remain the verification authorities. See
+`docs/architecture/cohort-rollout-readiness.md` for invocation, representative
+cohort criteria, and the bounded population sequence.
 
 ### Isolated pre-integration Hero revision recovery — 2026-10-22
 

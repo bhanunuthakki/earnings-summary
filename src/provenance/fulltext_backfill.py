@@ -271,6 +271,46 @@ class _ExtractionError(Exception):
         super().__init__(reason)
 
 
+SOURCE_TEXT_PROJECTION_VERSION = "fulltext-source-text@1"
+
+
+class SourceTextProjectionError(ValueError):
+    """A source cannot provide text through the canonical fulltext extractor."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
+
+
+def source_text_projection_identity(source_ref: str, media_type: str | None = None) -> str:
+    identity = resolve_fulltext_extractor_identity(source_ref, media_type)
+    return f"{SOURCE_TEXT_PROJECTION_VERSION}:{identity.code_version}:{identity.config_sha256}"
+
+
+def project_source_text(raw_bytes: bytes, source_ref: str, media_type: str | None = None) -> str:
+    """Project canonical text nodes for derived views; this is not a coverage receipt.
+
+    Structural HTML table/row nodes repeat their cell text. Select only source
+    text nodes, including section headings, in the extractor's source order.
+    Raw bytes and the canonical node hierarchy remain unchanged.
+    """
+    suffix = Path(urlparse(source_ref).path).suffix.lower()
+    if suffix not in {".pdf", ".html", ".htm", ".xhtml", ".txt", ".text", ".md"}:
+        raise SourceTextProjectionError("unsupported_source_text_format")
+    try:
+        nodes = _extract_nodes(source_ref, raw_bytes, media_type)
+    except _ExtractionError as error:
+        raise SourceTextProjectionError(error.reason) from error
+    text = "\n".join(
+        node.text
+        for node in nodes
+        if node.node_kind in {"section", "passage", "table_cell", "pdf_page"}
+    )
+    if not text.strip():
+        raise SourceTextProjectionError("no_substantive_text")
+    return text
+
+
 def emit_structured_event(event: str, **fields: object) -> None:
     """Emit one JSONL event without contaminating a CLI's JSON stdout."""
 

@@ -16,7 +16,8 @@
       "src/provenance/evidence_native_candidates.py:401:_sha256",
       "src/provenance/meli_reported_statements.py:124:_sha",
       "src/provenance/reviewed_sec_financial_tables.py:53:_sha",
-      "src/provenance/financial_derivations.py:71:_digest"
+      "src/provenance/financial_derivations.py:71:_digest",
+      "execution/extract_kpis_from_summaries.py:152:_resolve_tickers"
     ]
   },
   "schema_version": "1",
@@ -1130,28 +1131,53 @@
       "canonical_extra": null,
       "canonical_target": null,
       "disposition": "retained",
-      "end_line": 154,
+      "end_line": 161,
       "family": "tickers",
       "file": "execution/extract_kpis_from_summaries.py",
-      "line": 142,
+      "historical_captures": [
+        {
+          "canonical_extra": null,
+          "canonical_target": null,
+          "capture_commit": "93703523577c96a2a62b15be528b1dba6401afdc",
+          "capture_status": "historical retained implementation superseded by explicit configured database authority",
+          "disposition": "retained",
+          "end_line": 154,
+          "family": "tickers",
+          "file": "execution/extract_kpis_from_summaries.py",
+          "line": 142,
+          "name": "_resolve_tickers",
+          "referenced": {
+            "SQLiteConnectionRole": {
+              "import_module": "sqlite_runtime",
+              "import_name": "SQLiteConnectionRole"
+            },
+            "connect_sqlite": {
+              "import_module": "sqlite_runtime",
+              "import_name": "connect_sqlite"
+            },
+            "db": {
+              "import_module": "db",
+              "import_name": "db"
+            }
+          },
+          "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+          "scope": "module",
+          "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+          "unresolved": []
+        }
+      ],
+      "line": 152,
       "name": "_resolve_tickers",
       "referenced": {
-        "SQLiteConnectionRole": {
-          "import_module": "sqlite_runtime",
-          "import_name": "SQLiteConnectionRole"
-        },
-        "connect_sqlite": {
-          "import_module": "sqlite_runtime",
-          "import_name": "connect_sqlite"
-        },
         "db": {
           "import_module": "db",
           "import_name": "db"
         }
       },
-      "retained_reason": "no two variants share identical semantics: they differ in connection acquisition (checkout-default data/portfolio.db literal vs passed conn), CLI conventions (--ticker vs --tickers), archived_at/list_type filters, and collection authorization policy; the identical sub-clusters are owned by the execution-lib-adoption seam (execution/_lib.py) which threads the resolved DB path, so canonicalizing here would pre-empt that feature",
+      "retained_reason": "Retain this active-roster selector and explicit --ticker convention. The caller now supplies the one configured database connection, so this helper cannot infer or open a checkout-local database. Its ACTIVE_LIST_TYPES scope differs from briefed/evaluation and source-authorized collection selectors. The former checkout-default implementation remains in historical_captures; it is not a canonical collapse.",
       "scope": "module",
-      "source": "def _resolve_tickers(repo_root: Path, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    db_path = repo_root / \"data\" / \"portfolio.db\"\n    conn = connect_sqlite(str(db_path), role=SQLiteConnectionRole.READ_ONLY)\n    cur = conn.cursor()\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    conn.close()\n    return [r[0] for r in rows]",
+      "source": "def _resolve_tickers(conn: sqlite3.Connection, args: argparse.Namespace) -> list[str]:\n    if args.ticker:\n        return [args.ticker.upper()]\n    cur = conn.cursor()\n    cur.execute(\n        f\"SELECT DISTINCT ticker FROM tracked_companies \"\n        f\"WHERE list_type IN {db.ACTIVE_LIST_TYPES_SQL} ORDER BY ticker\"\n    )\n    rows = cur.fetchall()\n    return [r[0] for r in rows]",
+      "source_commit": "231b42c024064479bbb16982fd2eabe9443c8543",
       "unresolved": []
     },
     {

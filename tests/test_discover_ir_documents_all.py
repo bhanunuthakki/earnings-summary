@@ -63,6 +63,21 @@ class _RecordingRun:
     def __call__(self, argv: list[str], **kwargs: object) -> _FakeCompleted:
         self.calls.append(list(argv))
         ticker = _ticker_of(argv)
+        if _script_of(argv) == "process_document_evidence.py":
+            return _FakeCompleted(
+                0,
+                json.dumps(
+                    {
+                        "mode": "apply",
+                        "items": [
+                            {"document_id": 1, "ticker": ticker, "status": "already-covered"}
+                        ],
+                        "status_counts": {"already-covered": 2},
+                        "has_more": False,
+                        "degraded": False,
+                    }
+                ),
+            )
         stage = _stage_of(argv)
         if stage == "discover" and ticker in self._timeout:
             raise subprocess.TimeoutExpired(
@@ -73,7 +88,13 @@ class _RecordingRun:
             out = json.dumps({"ticker": ticker, "status": status, "discovered": 2})
             return _FakeCompleted(self._drc.get(ticker, 0), out)
         out = json.dumps(
-            {"ticker": ticker, "status": "done", "downloaded": self._downloaded.get(ticker, 2)}
+            {
+                "ticker": ticker,
+                "status": "done",
+                "downloaded": self._downloaded.get(ticker, 2),
+                "failed": 0,
+                "categorize_rc": 0 if self._downloaded.get(ticker, 2) else None,
+            }
         )
         return _FakeCompleted(self._frc.get(ticker, 0), out)
 
@@ -134,6 +155,8 @@ def _install(monkeypatch: pytest.MonkeyPatch, fake: _RecordingRun, roster: list[
 def _argv(tmp_path: Path, extra: list[str] | None = None) -> list[str]:
     # The resilience tests isolate the discover/fetch stages with --no-process;
     # the post-registration stage gets its own dedicated tests below.
+    # The batch now requires an existing state file before it invokes children.
+    sqlite3.connect(tmp_path / "x.db").close()
     return [
         "--repo-root",
         str(tmp_path),
@@ -287,6 +310,100 @@ def test_no_ir_url_is_skipped_not_failed(
     assert ("ZZ", "fetch") not in fake.stages
 
 
+def test_no_documents_discovered_fails_without_using_stale_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    fake = _RecordingRun(discover_status={"NU": "no_docs"})
+    _install(monkeypatch, fake, ["NU"])
+    assert batch.main(_argv(tmp_path)) == 1
+    assert ("NU", "fetch") not in fake.stages
+
+
+def test_partial_crawl_retains_candidates_and_retries_discovery(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    first = _RecordingRun(discover_status={"NU": "partial"}, downloaded={"NU": 1})
+    _install(monkeypatch, first, ["NU"])
+    argv = _argv(tmp_path)
+    assert batch.main(argv) == 1
+    assert first.stages == [("NU", "discover"), ("NU", "fetch")]
+    result = _summary(capsys.readouterr().out)
+    assert result["downloaded"] == 1
+    assert result["failed"] == 1
+    retry = _RecordingRun(downloaded={"NU": 0})
+    _install(monkeypatch, retry, ["NU"])
+    assert batch.main(argv) == 0
+    assert retry.stages == [("NU", "discover"), ("NU", "fetch")]
+
+
+def test_discovery_reads_nested_inventory_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    payload = {
+        "ticker": "NU",
+        "status": "done",
+        "discovered": 1,
+        "crawl_complete": True,
+        "archive_complete": False,
+        "pages": [{"page_url": "https://issuer.example/results", "outcome": "succeeded"}],
+    }
+
+    def child(argv: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(batch, "_run_child", child)
+    result = cast(Callable[..., batch.DiscoveryResult], getattr(batch, "_run_discovery"))(
+        "NU",
+        repo_root=tmp_path,
+        db_path=tmp_path / "db.sqlite",
+        quarters=5,
+        timeout_s=30,
+        owner_requested=True,
+    )
+    assert result.status is batch.TickerStatus.OK
+    assert result.discovered == 1
+
+
+def test_fetch_reported_partial_failure_is_not_success(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _install(monkeypatch, _RecordingRun(), ["NU"])
+
+    def child(argv: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
+        if _script_of(argv) == "discover_ir_documents.py":
+            payload = {"ticker": "NU", "status": "done", "discovered": 2}
+        else:
+            payload = {
+                "ticker": "NU",
+                "status": "done",
+                "downloaded": 1,
+                "failed": 1,
+                "categorize_rc": 0,
+            }
+        return subprocess.CompletedProcess(argv, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(batch, "_run_child", child)
+    assert batch.main(_argv(tmp_path)) == 1
+
+
+def test_missing_or_invalid_roster_fails_closed(tmp_path: Path) -> None:
+    db = tmp_path / "missing.db"
+    assert batch.main(["--repo-root", str(tmp_path), "--db", str(db)]) == 2
+    assert not db.exists()
+    sqlite3.connect(db).close()
+    assert batch.main(["--repo-root", str(tmp_path), "--db", str(db)]) == 2
+
+
+def test_malformed_stored_roster_role_fails_closed(tmp_path: Path) -> None:
+    db = tmp_path / "x.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "CREATE TABLE tracked_companies (ticker TEXT, list_type TEXT, archived_at TEXT)"
+        )
+        conn.execute("INSERT INTO tracked_companies VALUES ('NU', 'unknown_role', NULL)")
+    assert batch.main(["--repo-root", str(tmp_path), "--db", str(db)]) == 2
+
+
 def test_discover_failure_does_not_abort_batch(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
@@ -347,6 +464,35 @@ def test_checkpoint_retries_failed_discovery_on_resume(
 
     assert batch.main(_argv(tmp_path)) == 0
     assert second.stages == [("NU", "discover"), ("NU", "fetch")]
+    assert not checkpoint.exists()
+
+
+def test_old_completed_checkpoint_reuses_crawl_but_continues_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "x.db"
+    _make_tracked_db(db, "NU")
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO tracked_companies (ticker, list_type, fiscal_year_end) "
+            "VALUES ('ORCL', 'evaluation', '05-31')"
+        )
+    first = _RecordingRun(fetch_rc={"ORCL": 3})
+    _install(monkeypatch, first, ["NU", "ORCL"])
+    argv = ["--repo-root", str(tmp_path), "--db", str(db)]
+    assert batch.main(argv) == 1
+    checkpoint = tmp_path / ".tmp" / "ir_document_discovery_all" / "state.json"
+    old = json.loads(checkpoint.read_text())
+    old.pop("processing_contract_version")
+    checkpoint.write_text(json.dumps(old))
+    second = _RecordingRun(downloaded={"NU": 0, "ORCL": 0})
+    _install(monkeypatch, second, ["NU", "ORCL"])
+    assert batch.main(argv) == 0
+    assert not any(_script_of(command) == "discover_ir_documents.py" for command in second.calls)
+    evidence = [
+        command for command in second.calls if _script_of(command) == "process_document_evidence.py"
+    ]
+    assert {_ticker_of(command) for command in evidence} == {"NU", "ORCL"}
     assert not checkpoint.exists()
 
 
@@ -458,6 +604,7 @@ def test_process_stage_runs_anchor_and_flags_brief_dirty(
     rc = batch.main(["--repo-root", str(tmp_path), "--db", str(db)])  # process ON, summaries off
     assert rc == 0
     scripts = [_script_of(c) for c in fake.calls]
+    assert scripts.index("process_document_evidence.py") < scripts.index("ir_narrative.py")
     assert "ir_narrative.py" in scripts  # anchor refresh ran (cheap)
     assert "process_ir_documents_state.py" not in scripts  # LLM summaries are opt-in
     conn = sqlite3.connect(str(db))
@@ -465,6 +612,144 @@ def test_process_stage_runs_anchor_and_flags_brief_dirty(
     conn.close()
     assert val == 1  # queued for the daily --enable-llm rebuild
     assert _summary(capsys.readouterr().out)["processed"] == 1
+
+
+def test_unchanged_downloads_still_continue_canonical_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "x.db"
+    _make_tracked_db(db, "NU")
+    fake = _RecordingRun(downloaded={"NU": 0})
+    _install(monkeypatch, fake, ["NU"])
+    assert batch.main(["--repo-root", str(tmp_path), "--db", str(db)]) == 0
+    command = next(c for c in fake.calls if _script_of(c) == "process_document_evidence.py")
+    assert command[command.index("--db") + 1] == str(db)
+    assert command[command.index("--repo-root") + 1] == str(tmp_path)
+    assert command[command.index("--ticker") + 1] == "NU"
+    assert command[command.index("--source-type") + 1] == "ir_doc"
+    assert "--apply" in command
+    assert "--resume" not in command  # Do not create a ticker-specific cursor owner.
+
+
+def test_incomplete_evidence_blocks_summary_handoff(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "x.db"
+    _make_tracked_db(db, "NU")
+    calls: list[str] = []
+
+    def child(argv: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
+        script = _script_of(argv)
+        calls.append(script)
+        assert script == "process_document_evidence.py"
+        return subprocess.CompletedProcess(
+            argv,
+            2,
+            json.dumps(
+                {
+                    "mode": "apply",
+                    "status_counts": {"quarantined": 1},
+                    "items": [{"document_id": 1, "ticker": "NU", "status": "quarantined"}],
+                    "has_more": False,
+                    "degraded": True,
+                }
+            ),
+            "",
+        )
+
+    monkeypatch.setattr(batch, "_run_child", child)
+    assert not cast(Callable[..., bool], getattr(batch, "_run_process_stage"))(
+        "NU", repo_root=tmp_path, db_path=db, summaries=True, timeout_s=30
+    )
+    assert calls == ["process_document_evidence.py"]
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT brief_dirty FROM tracked_companies").fetchone() == (0,)
+
+
+@pytest.mark.parametrize("stuck_cursor", [False, True])
+def test_evidence_uses_existing_cursor_to_drain_large_ticker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stuck_cursor: bool
+) -> None:
+    calls: list[list[str]] = []
+
+    def child(argv: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        assert _script_of(argv) == "process_document_evidence.py"
+        payload = {
+            "mode": "apply",
+            "items": [
+                {
+                    "document_id": 501 if len(calls) == 1 else 1,
+                    "ticker": "NU",
+                    "status": "already-covered",
+                    "inventory_state": "linked",
+                    "coverage_statuses": ["extracted"],
+                }
+            ],
+            "has_more": len(calls) == 1 or stuck_cursor,
+            "next_before_document_id": 501,
+            "degraded": len(calls) == 1 or stuck_cursor,
+        }
+        return subprocess.CompletedProcess(
+            argv, 2 if payload["degraded"] else 0, json.dumps(payload), ""
+        )
+
+    monkeypatch.setattr(batch, "_run_child", child)
+    result = cast(Callable[..., bool], getattr(batch, "_run_process_stage"))(
+        "NU",
+        repo_root=tmp_path,
+        db_path=tmp_path / "fixture.db",
+        summaries=False,
+        timeout_s=30,
+        refresh_views=False,
+    )
+    # The first page reports more work. That alone is not a permanent degradation.
+    assert result is (not stuck_cursor)
+    assert len(calls) == 2
+    assert "--before-document-id" not in calls[0]
+    assert calls[1][calls[1].index("--before-document-id") + 1] == "501"
+    assert all(command[command.index("--source-type") + 1] == "ir_doc" for command in calls)
+
+
+def test_missing_inventory_allows_existing_views_but_stays_degraded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    db = tmp_path / "x.db"
+    _make_tracked_db(db, "NU")
+    calls: list[str] = []
+
+    def child(argv: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
+        script = _script_of(argv)
+        calls.append(script)
+        if script == "process_document_evidence.py":
+            return subprocess.CompletedProcess(
+                argv,
+                2,
+                json.dumps(
+                    {
+                        "mode": "apply",
+                        "status_counts": {"extracted": 1},
+                        "items": [{"document_id": 1, "ticker": "NU", "status": "extracted"}],
+                        "has_more": False,
+                        "degraded": True,
+                        "inventory_uninitialized": 1,
+                    }
+                ),
+                "",
+            )
+        return subprocess.CompletedProcess(argv, 0, '{"failed": 0}', "")
+
+    monkeypatch.setattr(batch, "_run_child", child)
+    assert not cast(Callable[..., bool], getattr(batch, "_run_process_stage"))(
+        "NU", repo_root=tmp_path, db_path=db, summaries=True, timeout_s=30
+    )
+    assert calls == [
+        "process_document_evidence.py",
+        "ir_narrative.py",
+        "process_ir_documents_state.py",
+    ]
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT brief_dirty FROM tracked_companies").fetchone() == (1,)
 
 
 def test_summaries_flag_runs_process_ir_documents(
@@ -478,6 +763,7 @@ def test_summaries_flag_runs_process_ir_documents(
     command = next(c for c in fake.calls if _script_of(c) == "process_ir_documents_state.py")
     assert command[command.index("--db") + 1] == str(db)
     assert command[command.index("--repo-root") + 1] == str(tmp_path)
+    assert "--regenerate-missing" in command
 
 
 def test_existing_uncached_narrative_is_processed_without_new_downloads(
@@ -529,7 +815,7 @@ def test_processing_failure_is_failed_and_retried_after_download_count_drops_to_
     assert calls == ["NU"]
 
 
-def test_cached_existing_narrative_does_not_dirty_brief_or_rerun_children(
+def test_unverified_existing_narrative_is_rechecked(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     db = tmp_path / "x.db"
@@ -543,9 +829,9 @@ def test_cached_existing_narrative_does_not_dirty_brief_or_rerun_children(
     fake = _RecordingRun(downloaded={"NU": 0})
     _install(monkeypatch, fake, ["NU"])
     assert batch.main(["--repo-root", str(tmp_path), "--db", str(db)]) == 0
-    assert "ir_narrative.py" not in [_script_of(c) for c in fake.calls]
+    assert "ir_narrative.py" in [_script_of(c) for c in fake.calls]
     with sqlite3.connect(db) as conn:
-        assert conn.execute("SELECT brief_dirty FROM tracked_companies").fetchone() == (0,)
+        assert conn.execute("SELECT brief_dirty FROM tracked_companies").fetchone() == (1,)
 
 
 def test_summary_reported_failure_is_not_hidden_by_zero_exit_status(
@@ -555,6 +841,21 @@ def test_summary_reported_failure_is_not_hidden_by_zero_exit_status(
     _make_tracked_db(db, "NU")
 
     def child(argv: list[str], _timeout: float) -> subprocess.CompletedProcess[str]:
+        if _script_of(argv) == "process_document_evidence.py":
+            return subprocess.CompletedProcess(
+                argv,
+                0,
+                json.dumps(
+                    {
+                        "mode": "apply",
+                        "status_counts": {"already-covered": 1},
+                        "items": [{"document_id": 1, "ticker": "NU", "status": "already-covered"}],
+                        "has_more": False,
+                        "degraded": False,
+                    }
+                ),
+                "",
+            )
         summary = _script_of(argv) == "process_ir_documents_state.py"
         return subprocess.CompletedProcess(argv, 0, json.dumps({"failed": int(summary)}), "")
 
@@ -634,3 +935,29 @@ def test_only_failing_rescans_only_zero_doc_names(
     assert rc == 0
     ran = {t for t, _ in fake.stages}
     assert ran == {"NOW"}  # NU already has docs → excluded from the failing-only rescan
+
+
+@pytest.mark.parametrize("owner_requested", [False, True])
+def test_processing_continuation_retains_request_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    owner_requested: bool,
+) -> None:
+    fake = _RecordingRun()
+    monkeypatch.setattr(batch.subprocess, "run", fake)
+    # The exact ticker is always present, but it must not imply a request flag.
+    getattr(batch, "_run_process_stage")(
+        "NU",
+        repo_root=tmp_path,
+        db_path=tmp_path / "test.db",
+        summaries=False,
+        timeout_s=30,
+        refresh_views=False,
+        owner_requested=owner_requested,
+    )
+    evidence = [
+        command for command in fake.calls if _script_of(command) == "process_document_evidence.py"
+    ]
+    assert len(evidence) == 1
+    assert ("--requested" in evidence[0]) is owner_requested
+    assert _ticker_of(evidence[0]) == "NU"

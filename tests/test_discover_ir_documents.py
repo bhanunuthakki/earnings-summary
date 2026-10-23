@@ -1,6 +1,6 @@
 """Tests for execution/discover_ir_documents.py (PR3 — single-ticker orchestrator).
 
-discover_history_hybrid is monkeypatched (no browser); these lock URL resolution
+discover_inventory_hybrid is monkeypatched (no browser); these lock URL resolution
 (no-ir_url exits 0), the CandidateDoc → ManifestEntry mapping, idempotent manifest
 writing, and the JSON status the batch reads (done / no_docs / no_ir_url).
 """
@@ -19,15 +19,16 @@ import pytest
 from execution import discover_ir_documents
 from ir_pipeline.discover import IrDiscoveryAuthenticationDeniedError
 from ir_pipeline.discover._docmeta import CandidateDoc
+from ir_pipeline.discover.generic import CrawlPageOutcome, DocumentDiscoveryInventory
 from ir_pipeline.manifest import load_manifest
 from pipeline.source_policy import SOURCE_POLICY_CONFIG
 
 
 def _patch_hybrid(monkeypatch: pytest.MonkeyPatch, cands: list[CandidateDoc]) -> None:
-    def _fake(**_kw: object) -> list[CandidateDoc]:
-        return cands
+    def _fake(**_kw: object) -> DocumentDiscoveryInventory:
+        return DocumentDiscoveryInventory(tuple(cands), (), True, "frontier_exhausted")
 
-    monkeypatch.setattr(discover_ir_documents, "discover_history_hybrid", _fake)
+    monkeypatch.setattr(discover_ir_documents, "discover_inventory_hybrid", _fake)
 
 
 def _make_tracked_db(db: Path, ticker: str, role: str, *, ir_url: str | None = None) -> None:
@@ -154,7 +155,7 @@ def test_auth_denial_is_not_reported_as_no_docs(
     def deny_auth(**_kwargs: object) -> list[object]:
         raise IrDiscoveryAuthenticationDeniedError(status)
 
-    monkeypatch.setattr(discover_ir_documents, "discover_history_hybrid", deny_auth)
+    monkeypatch.setattr(discover_ir_documents, "discover_inventory_hybrid", deny_auth)
 
     rc = discover_ir_documents.main(
         [
@@ -186,7 +187,7 @@ def test_direct_url_cannot_bypass_stored_collection_role(
     def _must_not_crawl(**_kwargs: object) -> list[CandidateDoc]:
         raise AssertionError("network crawl crossed a denied policy boundary")
 
-    monkeypatch.setattr(discover_ir_documents, "discover_history_hybrid", _must_not_crawl)
+    monkeypatch.setattr(discover_ir_documents, "discover_inventory_hybrid", _must_not_crawl)
     rc = discover_ir_documents.main(
         [
             "--ticker",
@@ -211,11 +212,11 @@ def test_direct_discovery_uses_the_canonical_reported_quarter_bound(
     _make_tracked_db(db, "PORT", "portfolio")
     captured: dict[str, object] = {}
 
-    def _capture(**kwargs: object) -> list[CandidateDoc]:
+    def _capture(**kwargs: object) -> DocumentDiscoveryInventory:
         captured.update(kwargs)
-        return []
+        return DocumentDiscoveryInventory((), (), True, "frontier_exhausted")
 
-    monkeypatch.setattr(discover_ir_documents, "discover_history_hybrid", _capture)
+    monkeypatch.setattr(discover_ir_documents, "discover_inventory_hybrid", _capture)
     assert (
         discover_ir_documents.main(
             [
@@ -231,7 +232,7 @@ def test_direct_discovery_uses_the_canonical_reported_quarter_bound(
         )
         == 0
     )
-    assert captured["max_quarters"] == SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters
+    assert "max_quarters" not in captured  # The inventory retains every discovered candidate.
 
     with pytest.raises(SystemExit):
         cast(
@@ -245,3 +246,52 @@ def test_direct_discovery_uses_the_canonical_reported_quarter_bound(
                 str(SOURCE_POLICY_CONFIG.reported_quarter_window.max_quarters + 1),
             ]
         )
+
+
+@pytest.mark.parametrize("candidates_present", [False, True])
+def test_partial_crawl_retains_candidates_and_failure_receipt(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    candidates_present: bool,
+) -> None:
+    db = tmp_path / "m.db"
+    _make_tracked_db(db, "NU", "evaluation")
+    candidates = (
+        (CandidateDoc("https://x/a.pdf", "", "a.pdf", "press_release", 2025, 3, "https://x/"),)
+        if candidates_present
+        else ()
+    )
+    inventory = DocumentDiscoveryInventory(
+        candidates,
+        (CrawlPageOutcome("https://x/archive", "failed", 0, "TimeoutError"),),
+        False,
+        "page_failure",
+    )
+
+    def discover(**kwargs: object) -> DocumentDiscoveryInventory:
+        return inventory
+
+    monkeypatch.setattr(discover_ir_documents, "discover_inventory_hybrid", discover)
+    assert (
+        discover_ir_documents.main(
+            [
+                "--ticker",
+                "NU",
+                "--url",
+                "https://x/",
+                "--repo-root",
+                str(tmp_path),
+                "--db",
+                str(db),
+            ]
+        )
+        == 0
+    )
+    output = json.loads(capsys.readouterr().out)
+    assert output["status"] == "partial"
+    assert output["discovered"] == int(candidates_present)
+    assert output["archive_complete"] is False
+    assert output["authority_complete"] is False
+    assert output["pages"][0]["failure_reason"] == "TimeoutError"
+    assert len(load_manifest(tmp_path, "NU")) == int(candidates_present)

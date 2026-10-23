@@ -118,15 +118,16 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Replace prior process_ir_documents.py target with process_ir_documents_state.py: _run_child accepts only argv assembled by this module fixed discovery/fetch and opt-in narrative/summary call sites, then ensure_managed_python_argv. The summary adapter is the existing state-root-aware owner; ticker/repo-root are arguments, never script identity. Opt-in narrative remains unchanged in authority.",
-      "fingerprint": "b3fd310b2a1280a1246bb8fa37a35861190e218e72a9c59b9bad143ca1559fa3",
-      "line": 258,
+      "evidence": "_run_child accepts only argv assembled by this module fixed discovery, fetch, canonical document-evidence, narrative and summary-adapter call sites, then ensure_managed_python_argv. process_document_evidence.py is the existing byte-capture/extraction/coverage owner; source type ir_doc, ticker, explicit database and state root are arguments, never script identity. Narrative and summaries remain derived views; this disposition grants no collection or persistence authority.",
+      "fingerprint": "9d269109d5fbc63a7775d07583881b44cbd9138c1d37d28078adf59f8b31aee6",
+      "line": 266,
       "path": "execution/discover_ir_documents_all.py",
       "targets": [
         "execution/discover_ir_documents.py",
         "execution/fetch_ir_documents.py",
         "src/compute/ir_narrative.py",
-        "execution/process_ir_documents_state.py"
+        "execution/process_ir_documents_state.py",
+        "execution/process_document_evidence.py"
       ]
     },
     {
@@ -144,8 +145,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_run_categorize invokes the fixed _CATEGORIZER script via managed_python_prefix.",
-      "fingerprint": "31c1d250e92b6f908a4fab20feb9db246df66886afe34f8ca1b2f3749f8bcf7b",
-      "line": 577,
+      "fingerprint": "deabedc12f5483af5bb9081af290fd1959638791509db250ab44a093e322007a",
+      "line": 598,
       "path": "execution/fetch_ir_documents.py",
       "targets": [
         "execution/categorize_ir_uploads.py"
@@ -985,6 +986,17 @@
       ]
     },
     {
+      "disposition": "internal_python_target",
+      "evidence": "The synthetic HTML-release registration regression invokes only fixed execution/sqlite_bootstrap.py and fixed execution/categorize_ir_uploads.py through sys.executable. Its explicit database, source directory and relative root belong to pytest tmp_path. It verifies retained publisher bytes and source URL without live state, network collection or model calls. Arguments cannot select a different script.",
+      "fingerprint": "a9be80fc7e4580eed44692048ed179e1ec9fc8a7c082364755e39957aaa43129",
+      "line": 240,
+      "path": "tests/test_ir_autofetch_registration.py",
+      "targets": [
+        "execution/sqlite_bootstrap.py",
+        "execution/categorize_ir_uploads.py"
+      ]
+    },
+    {
       "disposition": "external_process",
       "evidence": "Test-only process runs configured WorkbookRuntime.node with the literal generated edits.mjs in tmp_path, no shell and timeout120s. The script imports @oai/artifact-tool plus a copied checked-in meli_workbook_adapter.mjs, edits synthetic workbooks and verifies recalculated/exported values and fixed Actuals. Runtime executable and dependency identity are configurable, not identity-verified by this test. No production data or application source is executed as a Python target.",
       "fingerprint": "036481c70183f92c7f8c2e8a6bfd1cc1b2925064f2a3f0e01b9f303e9c1ac39d",
@@ -1012,6 +1024,17 @@
       "fingerprint": "65f67f50bbc9c1244ddf5dad81b269cb35803c6b892709b8beb25a3b6ac9e097",
       "line": 1020,
       "path": "tests/test_reconcile_quality_baseline.py"
+    },
+    {
+      "disposition": "internal_python_target",
+      "evidence": "Fixed literal synthetic child runs the managed SQLite preload and compute.kpi_extract_summaries with its model call replaced by a local empty extractor. Arguments are exact disposable database and fixture-root paths. It proves real ancestor-lock inheritance versus contention; no command, module, provider or source URL comes from user data.",
+      "fingerprint": "636e58646821ee56f2ea5bbf13dbf4c8e4c68aec6b46b25f9b6bf55766ef1fd0",
+      "line": 900,
+      "path": "tests/test_summary_kpi_completion.py",
+      "targets": [
+        "execution/sqlite_bootstrap.py",
+        "src/compute/kpi_extract_summaries.py"
+      ]
     }
   ],
   "graph_provenance": {
@@ -1019,7 +1042,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "54a26504587ddd9132492da8ed94ad4e682ac787b1a0bc31142ab2c205961674",
+      "source_sha256": "cdc99bedbd634d8638d09b9dfc27e14ad7e67a5edab2b089f05eb3ae886dbd7d",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

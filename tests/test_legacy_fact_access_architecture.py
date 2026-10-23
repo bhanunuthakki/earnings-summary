@@ -116,7 +116,7 @@ AUDITED_LEGACY_FACT_READS = {
     # Shared fact-aware unit resolution moved this existing read out of the
     # seeding CLI so Ask approval and seeding use one deterministic authority.
     "src/compute/kpi_definition_units.py": 1,
-    "src/compute/kpi_extract_summaries.py": 3,
+    "src/compute/kpi_extract_summaries.py": 2,
     "src/compute/metrics_engine/io.py": 8,
     "src/compute/say_do.py": 1,
     "src/compute/segment_q4_derive.py": 1,
@@ -127,7 +127,10 @@ AUDITED_LEGACY_FACT_READS = {
     "src/decision_conditions.py": 2,
     "src/pipeline/confidence.py": 2,
     "src/pipeline/explore_panel.py": 1,
-    "src/pipeline/kpi_persistence.py": 5,  # reviewed scale guard excludes superseded neighbors
+    # Includes the pre-0059 logical-index duplicate guard. It preserves an
+    # existing source's semantic context when an incoming insert is ignored;
+    # this write-boundary check retires with the legacy KPI projection.
+    "src/pipeline/kpi_persistence.py": 6,
     # Exact predecessor/head reads guard the one governed append-only repair
     # write. They are not product analytics and retire with that write seam.
     "src/pipeline/kpi_source_review.py": 2,

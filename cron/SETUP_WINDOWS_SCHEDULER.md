@@ -149,7 +149,7 @@ Runs Sunday 01:30 — just after `refresh_ir_kpis` (01:00) and before Sunday-nig
 
 | Task name | Cadence | XML | Wrapper | What it does |
 |---|---|---|---|---|
-| `earnings-summary\discover_ir_failing` | Twice weekly, Wed + Sat 02:30 | `discover_ir_failing.task.xml` | `run_discover_ir_failing.bat` | **Failing-crawler rescan.** Rechecks applicable portfolio, evaluation, and watchlist names with zero registered IR documents through shared stored-role/instrument and 5-quarter policy. A recovered name drops out; persistent source blocks remain visible. Idempotent and per-ticker isolated. **Requires the optional `ir` extra.** |
+| `earnings-summary\discover_ir_failing` | Twice weekly, Wed + Sat 02:30 | `discover_ir_failing.task.xml` | `run_discover_ir_failing.bat` | **Failing-crawler rescan.** Rechecks applicable portfolio, evaluation, and watchlist names with zero registered IR documents or a failed last crawl through shared stored-role/instrument and 5-quarter policy. A recovered name drops out; persistent source blocks remain visible. Idempotent and per-ticker isolated. **Requires the optional `ir` extra.** |
 
 The failing-only rescan is the cheap mid-week companion to the Sunday full sweep: the full sweep re-checks every name weekly, this re-checks only the still-failing ones on Wednesday + Saturday so a recovered site is picked up within ~3 days. Coverage + each name's last crawl outcome are visible in the command center's **IR Docs** tab (`GET /api/panel/ir_coverage`), which also shows where to drop a manually-pulled file for the names that stay blocked.
 

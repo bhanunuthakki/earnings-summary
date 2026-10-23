@@ -2008,3 +2008,53 @@ def test_retained_pdf_identity_matches_original_bytes() -> None:
         ).hexdigest()
         == "ea890987a338e86830c366dac7c9587344de831e487695cb6753f51cbb042f15"  # pragma: allowlist secret -- retained extractor config digest, not a credential
     )
+
+
+def test_source_text_projection_preserves_order_without_table_duplicates() -> None:
+    raw = (
+        b"<h1>Quarter results</h1><p>Revenue increased.</p>"
+        b"<table><tr><th>Metric</th><th>Value</th></tr>"
+        b"<tr><td>Revenue</td><td>100</td></tr></table>"
+        b"<p>Closing statement.</p><script>hidden script</script>"
+    )
+    text = fulltext_backfill_module.project_source_text(raw, "release.html")
+    assert text.splitlines() == [
+        "Quarter results",
+        "Revenue increased.",
+        "Metric",
+        "Value",
+        "Revenue",
+        "100",
+        "Closing statement.",
+    ]
+    assert raw.endswith(b"</script>")
+
+
+def test_source_text_projection_reuses_pdf_runtime_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_versioned_pdf_reader(monkeypatch, "unapproved-runtime")
+    with pytest.raises(fulltext_backfill_module.SourceTextProjectionError) as caught:
+        fulltext_backfill_module.project_source_text(b"PDF fixture", "release.pdf")
+    assert caught.value.reason == "pdf_parser_runtime_not_approved"
+
+
+def test_source_text_projection_rejects_empty_pdf(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pypdf
+
+    class Page:
+        def extract_text(self) -> str:
+            return ""
+
+    class Reader:
+        is_encrypted = False
+        pages = (Page(),)
+
+        def __init__(self, _stream: object) -> None:
+            pass
+
+    monkeypatch.setattr(pypdf, "__version__", PDF_FULLTEXT_PYPDF_VERSION)
+    monkeypatch.setattr(pypdf, "PdfReader", Reader)
+    with pytest.raises(fulltext_backfill_module.SourceTextProjectionError) as caught:
+        fulltext_backfill_module.project_source_text(b"PDF fixture", "release.pdf")
+    assert caught.value.reason == "no_substantive_text"

@@ -20,6 +20,12 @@ skipped. Best-effort transport failures are logged and skipped, while an explici
 HTTP 401/403 is a typed authentication denial that halts the current job; auth is
 never bypassed.
 
+The JSON summary reports ``failed`` or ``partial`` for download failures and
+``registration_failed`` for a nonzero categorizer exit or missing source registration.
+``registration_missing`` counts downloaded sources absent after a successful categorizer exit.
+These states and a missing manifest return exit code 1. Successful downloads remain available for
+recovery. An automatic ``--all`` run continues after these failures.
+
 Usage:
     python execution/fetch_ir_documents.py --ticker GOOG
     python execution/fetch_ir_documents.py --ticker NU --categorize --calendar calendar
@@ -41,6 +47,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -407,7 +414,9 @@ def _fetch_bytes(url: str) -> tuple[bytes, str, str] | None:
         return _fetch_curl_cffi(url)
 
 
-def _download(url: str, dest_dir: Path, base_name: str) -> Path | None:
+def _download(
+    url: str, dest_dir: Path, base_name: str, *, allow_html_release: bool = False
+) -> Path | None:
     """GET ``url`` into ``dest_dir/<base_name><ext>``; ext from response headers.
 
     Returns the written Path, or None on any network/HTTP error (logged, skipped).
@@ -418,6 +427,18 @@ def _download(url: str, dest_dir: Path, base_name: str) -> Path | None:
         return None
     data, cd, ct = fetched
     ext = _ext_from_headers(url, cd, ct)
+    binary_extensions = {".pdf", ".xlsx", ".xls", ".pptx", ".ppt"}
+    url_extension = Path(urllib.parse.urlsplit(url).path).suffix.lower()
+    # A manifest release hint permits staging HTML for content classification.
+    # It does not admit a financial fact or certify the page as a release.
+    # A binary download that returns HTML remains a failed download.
+    if (
+        allow_html_release
+        and ct.split(";", 1)[0].strip().lower() == "text/html"
+        and url_extension not in binary_extensions
+        and not re.search(r"\.(?:pdf|xlsx?|pptx?)(?:[\";\s]|$)", cd, re.IGNORECASE)
+    ):
+        ext = ".html"
     dest = dest_dir / f"{base_name}{ext}"
     try:
         require_no_reparse_points(dest)
@@ -826,6 +847,7 @@ def process_ticker(
     already = _registered_source_urls(db_path, ticker)
     dest_dir = root / "ir_documents" / ticker
     sidecar: dict[str, str] = {}
+    downloaded_urls: set[str] = set()
     downloaded = skipped = failed = 0
 
     for entry in entries:
@@ -842,29 +864,47 @@ def process_ticker(
             print(f"[DRY RUN] would download {url} -> {dest_dir / base}.<ext>")
             skipped += 1
             continue
-        dest = _download(url, dest_dir, base)
+        if entry.get("doc_type") == "press_release" and Path(
+            urllib.parse.urlsplit(url).path
+        ).suffix.lower() not in {".pdf", ".xlsx", ".xls", ".pptx", ".ppt"}:
+            dest = _download(url, dest_dir, base, allow_html_release=True)
+        else:
+            dest = _download(url, dest_dir, base)
         time.sleep(_RATE_LIMIT_S)
         if dest is None:
             failed += 1
             continue
         sidecar[dest.name] = url
+        downloaded_urls.add(url)
         downloaded += 1
 
     if not dry_run:
         _write_incoming_sidecar(root, sidecar)
 
     cat_rc: int | None = None
+    registration_missing: int | None = None
     if categorize and not dry_run and downloaded:
         cat_rc = _run_categorize(ticker, root, db_path, calendar)
+        if cat_rc == 0:
+            # A zero exit can mean no eligible files or skipped duplicates.
+            # Check each source, independently of the staging filename sidecar.
+            registered = _registered_source_urls(db_path, ticker)
+            registration_missing = len(downloaded_urls - registered)
 
+    status = "done"
+    if failed:
+        status = "partial" if downloaded or skipped else "failed"
+    if cat_rc not in (None, 0) or registration_missing:
+        status = "registration_failed"
     summary: dict[str, object] = {
         "ticker": ticker,
-        "status": "done",
+        "status": status,
         "downloaded": downloaded,
         "skipped": skipped,
         "failed": failed,
         "policy_skipped": policy_skipped,
         "categorize_rc": cat_rc,
+        "registration_missing": registration_missing,
     }
     print(json.dumps(summary))
     return summary
@@ -902,9 +942,10 @@ def main(argv: list[str] | None = None) -> int:
         if not manifests:
             print(f"No URL manifests in {manifest_dir(root)}", file=sys.stderr)
             return 1
+        failed = False
         try:
             for p in manifests:
-                process_ticker(
+                summary = process_ticker(
                     p.stem.replace("_urls", ""),
                     root=root,
                     db_path=db_path,
@@ -913,9 +954,13 @@ def main(argv: list[str] | None = None) -> int:
                     calendar=args.calendar,
                     owner_requested=False,
                 )
+                # Automatic sweeps may skip names outside collection policy.
+                # An admitted name with incomplete acquisition still fails the run.
+                if summary["status"] not in {"done", "policy_denied"}:
+                    failed = True
         except SourceAuthenticationDeniedError:
             return 10
-        return 0
+        return int(failed)
 
     try:
         summary = process_ticker(
@@ -929,7 +974,9 @@ def main(argv: list[str] | None = None) -> int:
         )
     except SourceAuthenticationDeniedError:
         return 10
-    return 2 if summary["status"] == "policy_denied" else 0
+    if summary["status"] == "policy_denied":
+        return 2
+    return 0 if summary["status"] == "done" else 1
 
 
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:

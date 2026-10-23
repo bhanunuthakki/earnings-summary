@@ -21,6 +21,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Protocol, cast
 
+from bs4 import BeautifulSoup
 from openpyxl import load_workbook
 from pypdf import PdfReader
 
@@ -666,12 +667,23 @@ def fingerprint_xlsx(path: Path) -> str:
         wb.close()
 
 
+def fingerprint_html(path: Path) -> str:
+    """Read a release classification view without changing its publisher bytes."""
+    soup = BeautifulSoup(path.read_bytes(), "html.parser")
+    for node in soup.select("script, style, noscript, template, nav, header, footer"):
+        node.decompose()
+    content = soup.find("article") or soup.find("main") or soup.body or soup
+    return content.get_text(" ", strip=True)[:_PDF_FINGERPRINT_CHARS]
+
+
 def fingerprint(path: Path) -> str:
     sfx = path.suffix.lower()
     if sfx == ".pdf":
         return fingerprint_pdf(path)
     if sfx == ".xlsx":
         return fingerprint_xlsx(path)
+    if sfx in {".html", ".htm"}:
+        return fingerprint_html(path)
     raise ValueError(f"Unsupported extension {sfx!r} for {path.name}")
 
 
@@ -1236,7 +1248,7 @@ def classify_ir_file(
     a local filename.
     """
     ext = path.suffix.lower()
-    if ext not in {".pdf", ".xlsx"}:
+    if ext not in {".pdf", ".xlsx", ".html", ".htm"}:
         return CategorizationFailure(
             reason=f"unsupported_extension:{ext!r}",
             text_sample="",
@@ -1286,7 +1298,26 @@ def classify_ir_file(
                 text_sample=text[:600],
             )
 
-    doc_type, doc_ev = _detect_doc_type(text, ext, path.name)
+    # HTML is limited to releases with a positive content signal. A staging
+    # filename cannot promote an access-denied page or an unrelated listing.
+    is_html = ext in {".html", ".htm"}
+    doc_type, doc_ev = _detect_doc_type(text, ext, "" if is_html else path.name)
+    html_release_signal = (
+        any(
+            rule_type is DocType.IR_PRESS_RELEASE
+            and label != "press_release_dateline"
+            and pattern.search(text) is not None
+            for rule_type, pattern, label in _DOC_TYPE_RULES
+        )
+        if is_html
+        else False
+    )
+    if is_html and (doc_type is not DocType.IR_PRESS_RELEASE or not html_release_signal):
+        return CategorizationFailure(
+            reason="html_earnings_release_unidentified",
+            text_sample=text[:600],
+            ticker_guess=ticker,
+        )
     if doc_type is None:
         return CategorizationFailure(
             reason="doc_type_unidentified",
@@ -1414,7 +1445,7 @@ _CANONICAL_PATH_RX = re.compile(
     # both round-trip the reindexer fast-path; `parse_canonical_path` validates the
     # token against the DocType enum, so an unknown token still falls through.
     r"(?P<doc_type>(?:ir|sec)_[a-z0-9_]+)__(?P<sha8>[0-9a-f]{8})"
-    r"\.(?P<ext>pdf|xlsx)$"
+    r"\.(?P<ext>pdf|xlsx|html|htm)$"
 )
 
 
@@ -1486,7 +1517,7 @@ def iter_uncategorized_files(root: Path) -> list[Path]:
     for p in sorted(root.rglob("*")):
         if not p.is_file() or p.name.startswith("."):
             continue
-        if p.suffix.lower() not in {".pdf", ".xlsx"}:
+        if p.suffix.lower() not in {".pdf", ".xlsx", ".html", ".htm"}:
             continue
         try:
             rel_parts = p.resolve().relative_to(root.resolve()).parts
@@ -1527,6 +1558,7 @@ __all__: Sequence[str] = (
     "classify_ir_file",
     "detect_sec_form",
     "fingerprint",
+    "fingerprint_html",
     "fingerprint_pdf",
     "fingerprint_xlsx",
     "iter_uncategorized_files",

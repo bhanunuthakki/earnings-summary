@@ -6,7 +6,8 @@ LLM-prompt consumption.
 
 Source: ir_documents/<TICKER>/<period>/ir_<doctype>__<sha8>.pdf and
         ir_documents/_events/<TICKER>/<event_date>/ir_event__<sha8>.pdf.
-Cache:  data/ir_narrative/<TICKER>/<doctype>__<period>.txt
+Cache:  data/ir_narrative/<TICKER>/<doctype>__<period>.json
+Legacy text caches are preserved, but are not verified prompt inputs.
 
 This is the SOURCE-TEXT companion to ``src/table_extractors/investor_decks.py``:
 that module extracts numeric strategic targets from the same decks; this one
@@ -32,8 +33,8 @@ a single cache file with a ``=== SOURCE BREAK ===`` delimiter so the loader
 sees the full narrative for that period in one read.
 
 CLI:
-    python src/compute/ir_narrative.py --ticker META
-    python src/compute/ir_narrative.py --all
+    python execution/sqlite_bootstrap.py src/compute/ir_narrative.py --ticker META
+    python execution/sqlite_bootstrap.py src/compute/ir_narrative.py --all
 """
 
 from __future__ import annotations
@@ -42,11 +43,20 @@ import argparse
 import json
 import logging
 import re
+import stat
 import sys
-from collections.abc import Callable
-from importlib import import_module
+from collections.abc import Iterator
+from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from provenance.fulltext_backfill import project_source_text, source_text_projection_identity
+
+if TYPE_CHECKING:
+    from provenance.immutable_artifact import ImmutableArtifactSnapshot
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +91,6 @@ _NOISE_LINE = re.compile(
 )
 
 _MIN_CACHE_BYTES = 200  # below this the deck has no usable narrative
-_MAX_CHARS_PER_DOC = 24000  # post-normalize per-PDF cap; loader trims further
 _SOURCE_BREAK = "\n\n=== SOURCE BREAK ===\n\n"
 
 
@@ -100,59 +109,244 @@ def _normalize(text: str) -> str:
 
 
 def _cache_path_for(repo_root: Path, ticker: str, doctype: str, period: str) -> Path:
-    """data/ir_narrative/<TICKER>/<doctype>__<period>.txt"""
+    """One current text-and-manifest envelope per narrative group."""
     out_dir = repo_root / "data" / "ir_narrative" / ticker.upper()
-    return out_dir / f"{doctype}__{period}.txt"
+    return out_dir / f"{doctype}__{period}.json"
+
+
+def _entries(directory: Path, *, optional: bool = False) -> list[Path]:
+    """Only absent optional roots are empty; unreadable directories are gaps."""
+    try:
+        metadata = directory.stat()
+    except FileNotFoundError:
+        if optional:
+            return []
+        raise
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise OSError("expected a narrative directory")
+    return sorted(directory.iterdir())
 
 
 def _discover_sources(repo_root: Path, ticker: str) -> dict[tuple[str, str], list[Path]]:
-    """Map (doctype, period) → list of source PDFs.
-
-    Walks both the periodized layout (``ir_documents/<T>/<period>/``) and the
-    event layout (``ir_documents/_events/<T>/<event_date>/``). One ticker can
-    have multiple PDFs per (doctype, period) — they all flow into one cache
-    file with the SOURCE BREAK delimiter.
-    """
-    ticker_u = ticker.upper()
+    """Discover every matching source in the established period/event order."""
     base = repo_root / "ir_documents"
     out: dict[tuple[str, str], list[Path]] = {}
-
-    periodized = base / ticker_u
-    if periodized.is_dir():
-        for period_dir in sorted(periodized.iterdir()):
-            if not period_dir.is_dir():
+    for root, events_only in (
+        (base / ticker.upper(), False),
+        (base / "_events" / ticker.upper(), True),
+    ):
+        for period_dir in _entries(root, optional=True):
+            if not stat.S_ISDIR(period_dir.stat().st_mode):
                 continue
-            period = period_dir.name
-            for pdf in sorted(period_dir.glob("*.pdf")):
-                m = _FILENAME_RX.match(pdf.name)
-                if not m:
+            for pdf in _entries(period_dir):
+                match = _FILENAME_RX.match(pdf.name)
+                if match is None:
                     continue
-                doctype = m.group("doctype")
-                if doctype not in _NARRATIVE_DOCTYPES:
+                doctype = match.group("doctype")
+                if events_only and doctype != "ir_event":
                     continue
-                out.setdefault((doctype, period), []).append(pdf)
-
-    events_root = base / "_events" / ticker_u
-    if events_root.is_dir():
-        for event_dir in sorted(events_root.iterdir()):
-            if not event_dir.is_dir():
-                continue
-            event_date = event_dir.name
-            for pdf in sorted(event_dir.glob("*.pdf")):
-                m = _FILENAME_RX.match(pdf.name)
-                if not m or m.group("doctype") != "ir_event":
-                    continue
-                out.setdefault(("ir_event", event_date), []).append(pdf)
-
+                out.setdefault((doctype, period_dir.name), []).append(pdf)
     return out
 
 
-def has_pending_narrative(repo_root: Path, ticker: str) -> bool:
-    """Use the extractor's source and cache rules to find retryable local work."""
-    return any(
-        not _cache_path_for(repo_root, ticker, doctype, period).is_file()
-        for doctype, period in _discover_sources(repo_root, ticker)
+class _Source(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    path: str
+    sha256: str
+    size_bytes: int = Field(ge=0)
+
+
+class _Envelope(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal[3] = 3
+    ticker: str
+    doctype: str
+    period: str
+    method: str
+    sources: list[_Source]
+    text: str
+    text_sha256: str
+
+
+@dataclass(frozen=True)
+class NarrativeCache:
+    """Local extraction validity; never financial admission or archive coverage."""
+
+    status: Literal["valid", "unavailable"]
+    source_tag: str
+    reason: str = ""
+    body: str = ""
+
+
+def _method_identity() -> str:
+    payload = {
+        "revision": 3,
+        "source_text_identity": source_text_projection_identity("source.pdf"),
+        "normalizer_code": sha256(Path(__file__).read_bytes()).hexdigest(),
+        "minimum_chars": _MIN_CACHE_BYTES,
+        "source_break": _SOURCE_BREAK,
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _read_sources(
+    repo_root: Path, pdfs: list[Path]
+) -> Iterator[tuple[ImmutableArtifactSnapshot, bytes]]:
+    # Project imports stay lazy for this module's standalone CLI entrypoint.
+    from provenance.immutable_artifact import read_stable_artifact
+
+    for pdf in pdfs:
+        yield read_stable_artifact(pdf, allowed_root=repo_root)
+
+
+def _assert_population_unchanged(
+    repo_root: Path,
+    ticker: str,
+    key: tuple[str, str],
+    pdfs: list[Path],
+    snapshots: list[ImmutableArtifactSnapshot],
+) -> None:
+    from provenance.immutable_artifact import assert_artifact_unchanged
+
+    if _discover_sources(repo_root, ticker).get(key, []) != pdfs:
+        raise ValueError("source population changed")
+    for snapshot in snapshots:
+        assert_artifact_unchanged(snapshot)
+
+
+def _read_cache(
+    repo_root: Path, ticker: str, key: tuple[str, str], pdfs: list[Path]
+) -> NarrativeCache:
+    from provenance.immutable_artifact import (
+        ImmutableArtifactConflictError,
+        read_stable_artifact,
     )
+
+    doctype, period = key
+    tag = f"{doctype}__{period}"
+    if not pdfs:
+        return NarrativeCache("unavailable", tag, "missing_sources")
+    cache = _cache_path_for(repo_root, ticker, doctype, period)
+    try:
+        _, raw = read_stable_artifact(cache, allowed_root=repo_root)
+        envelope = _Envelope.model_validate_json(raw)
+        if (envelope.ticker, envelope.doctype, envelope.period) != (ticker.upper(), *key):
+            return NarrativeCache("unavailable", tag, "identity_mismatch")
+        if envelope.method != _method_identity():
+            return NarrativeCache("unavailable", tag, "method_changed")
+        if sha256(envelope.text.encode("utf-8")).hexdigest() != envelope.text_sha256:
+            return NarrativeCache("unavailable", tag, "output_changed")
+        snapshots: list[ImmutableArtifactSnapshot] = []
+        actual: list[tuple[str, str, int]] = []
+        for pdf, (snapshot, _) in zip(pdfs, _read_sources(repo_root, pdfs), strict=True):
+            snapshots.append(snapshot)
+            actual.append(
+                (str(pdf.relative_to(repo_root)), snapshot.file_sha256, snapshot.size_bytes)
+            )
+        recorded = [(s.path, s.sha256, s.size_bytes) for s in envelope.sources]
+        if actual != recorded:
+            return NarrativeCache("unavailable", tag, "sources_changed")
+        _assert_population_unchanged(repo_root, ticker, key, pdfs, snapshots)
+        if not envelope.text.strip() or not envelope.sources:
+            return NarrativeCache("unavailable", tag, "invalid_disposition")
+        return NarrativeCache("valid", tag, body=envelope.text)
+    except FileNotFoundError:
+        return NarrativeCache("unavailable", tag, "missing_cache_or_source")
+    except (OSError, ValueError, ImmutableArtifactConflictError):
+        return NarrativeCache("unavailable", tag, "unreadable_invalid_or_unstable")
+
+
+def _selected_key(
+    repo_root: Path, ticker: str, sources: dict[tuple[str, str], list[Path]]
+) -> tuple[str, str] | None:
+    keys = set(sources)
+    base = repo_root / "data" / "ir_narrative" / ticker.upper()
+    for path in _entries(base, optional=True):
+        doctype, sep, period = path.stem.partition("__")
+        if sep and period and doctype in _NARRATIVE_DOCTYPES and path.suffix in {".json", ".txt"}:
+            keys.add((doctype, period))
+    for doctype in _NARRATIVE_DOCTYPES:
+        periods = [period for dt, period in keys if dt == doctype]
+        if periods:
+            return doctype, max(periods)
+    return None
+
+
+def load_latest_narrative(repo_root: Path, ticker: str) -> NarrativeCache | None:
+    """Select once across sources and caches; never fall back after a gap."""
+    try:
+        sources = _discover_sources(repo_root, ticker)
+        key = _selected_key(repo_root, ticker, sources)
+        if key is None:
+            return None
+        result = _read_cache(repo_root, ticker, key, sources.get(key, []))
+        current = _selected_key(repo_root, ticker, _discover_sources(repo_root, ticker))
+        if current != key:
+            return NarrativeCache("unavailable", "__".join(current or key), "selection_changed")
+        return result
+    except OSError:
+        return NarrativeCache("unavailable", "IR materials", "discovery_unavailable")
+
+
+def has_pending_narrative(repo_root: Path, ticker: str) -> bool:
+    """Retry available local source groups; source-less caches are reader gaps."""
+    try:
+        return any(
+            _read_cache(repo_root, ticker, key, pdfs).status == "unavailable"
+            for key, pdfs in _discover_sources(repo_root, ticker).items()
+        )
+    except OSError:
+        return True
+
+
+def _extract_group(repo_root: Path, ticker: str, key: tuple[str, str], pdfs: list[Path]) -> bool:
+    # Parse the exact stable bytes that were hashed, never a second file read.
+    from materialized_cache import write_payload_atomically
+
+    method = _method_identity()
+    snapshots: list[ImmutableArtifactSnapshot] = []
+    sources: list[_Source] = []
+    chunks: list[str] = []
+    empty_sources = 0
+    for pdf, (snapshot, payload) in zip(pdfs, _read_sources(repo_root, pdfs), strict=True):
+        snapshots.append(snapshot)
+        cleaned = _normalize(project_source_text(payload, str(pdf)))
+        if len(cleaned) < _MIN_CACHE_BYTES:
+            empty_sources += 1
+        else:
+            chunks.append(cleaned)
+        sources.append(
+            _Source(
+                path=str(pdf.relative_to(repo_root)),
+                sha256=snapshot.file_sha256,
+                size_bytes=snapshot.size_bytes,
+            )
+        )
+    if empty_sources:
+        if not chunks:
+            return False
+        raise ValueError("narrative source population contains empty documents")
+    merged = _SOURCE_BREAK.join(chunks)
+    envelope = _Envelope(
+        ticker=ticker.upper(),
+        doctype=key[0],
+        period=key[1],
+        method=method,
+        sources=sources,
+        text=merged,
+        text_sha256=sha256(merged.encode("utf-8")).hexdigest(),
+    )
+    _assert_population_unchanged(repo_root, ticker, key, pdfs, snapshots)
+    if method != _method_identity():
+        raise ValueError("extraction method changed")
+    write_payload_atomically(
+        _cache_path_for(repo_root, ticker, *key),
+        envelope.model_dump(mode="json"),
+        prefix=".ir-narrative-",
+    )
+    return bool(chunks)
 
 
 def extract_for_ticker(
@@ -160,67 +354,34 @@ def extract_for_ticker(
     ticker: str,
     refresh: bool = False,
 ) -> dict[str, int]:
-    """Extract narrative text for every IR PDF in the ticker's tree. Idempotent.
-
-    Returns a count dict: ``{processed, cached, failed, skipped_empty}``.
-    Failures are logged and counted but don't abort the run — a single
-    corrupted PDF can't block the rest of a ticker's narrative cache.
-    """
-    # Late import: pypdf is a heavy dep and tests that don't touch the
-    # extractor shouldn't pay for it. Also keeps this module importable in
-    # environments where pypdf isn't installed (the cache may already exist).
+    """Build one atomic text+manifest envelope per source group, with one writer."""
     src_dir = Path(__file__).resolve().parents[1]
     if str(src_dir) not in sys.path:
         sys.path.insert(0, str(src_dir))
-    extract_text_from_pdf = cast(
-        Callable[[str], str], import_module("parser").extract_text_from_pdf
-    )
+    from run_lock import hold_run_lock
 
-    sources = _discover_sources(repo_root, ticker)
     counts = {"processed": 0, "cached": 0, "failed": 0, "skipped_empty": 0}
-    if not sources:
-        return counts
-
-    for (doctype, period), pdfs in sources.items():
-        cache = _cache_path_for(repo_root, ticker, doctype, period)
-        if cache.exists() and not refresh:
-            counts["cached"] += 1
-            continue
-
-        chunks: list[str] = []
-        had_failure = False
-        for pdf in pdfs:
+    # The adjacent-file lock guards this cache write set; no database is opened.
+    authority = repo_root.resolve() / "data" / "ir_narrative" / ticker.upper()
+    with hold_run_lock(authority, owner="ir-narrative"):
+        for key, pdfs in _discover_sources(repo_root, ticker).items():
+            if not refresh and _read_cache(repo_root, ticker, key, pdfs).status != "unavailable":
+                counts["cached"] += 1
+                continue
             try:
-                raw = extract_text_from_pdf(str(pdf))
-            except Exception as exc:  # pypdf has many failure modes
+                included = _extract_group(repo_root, ticker, key, pdfs)
+            except Exception as exc:  # pypdf has many extraction failure modes
                 log.warning(
                     {
-                        "event": "pdf_extract_failed",
-                        "pdf": str(pdf),
-                        "error": f"{type(exc).__name__}: {exc}",
+                        "event": "ir_narrative_group_failed",
+                        "ticker": ticker,
+                        "source_tag": "__".join(key),
+                        "error_type": type(exc).__name__,
                     }
                 )
-                had_failure = True
+                counts["failed"] += 1
                 continue
-            cleaned = _normalize(raw)
-            if len(cleaned) < _MIN_CACHE_BYTES:
-                continue
-            if len(cleaned) > _MAX_CHARS_PER_DOC:
-                cleaned = cleaned[:_MAX_CHARS_PER_DOC].rstrip() + "\n[...truncated]"
-            chunks.append(cleaned)
-
-        if had_failure:
-            counts["failed"] += 1
-            continue
-        if not chunks:
-            counts["skipped_empty"] += 1
-            continue
-
-        merged = _SOURCE_BREAK.join(chunks)
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        cache.write_text(merged, encoding="utf-8")
-        counts["processed"] += 1
-
+            counts["processed" if included else "skipped_empty"] += 1
     return counts
 
 
@@ -263,7 +424,7 @@ def main() -> int:
     failures = 0
     for ticker in tickers:
         counts = extract_for_ticker(repo_root, ticker, refresh=args.refresh)
-        failures += counts["failed"]
+        failures += counts["failed"] + counts["skipped_empty"]
         row: dict[str, object] = dict(counts)
         row["ticker"] = ticker
         summary.append(row)
