@@ -189,6 +189,7 @@ def _expected_document_family(
         "earnings_transcript": "issuer_earnings_materials",
         "financial_statement": "issuer_financial_statements",
         "investor_presentation": "issuer_presentations",
+        "ir_presentation": "issuer_presentations",
         "presentation": "issuer_presentations",
         "supplement": "issuer_financial_statements",
     }

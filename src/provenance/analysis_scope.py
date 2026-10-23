@@ -38,6 +38,7 @@ from provenance.historical_public_witness import (
 )
 from provenance.immutable_artifact import ImmutableArtifactConflictError, read_stable_artifact
 from provenance.issuer_registry import AuthoritySurfaceRevision, IssuerRegistry
+from provenance.publisher_document_link import PublisherDocumentLink, verify_publisher_document_link
 from provenance.report_evidence_contract import MemoReportSourcePopulation
 from provenance.sec_package_subject_witness import verify_sec_package_subject_witness
 from provenance.source_coverage import ExpectedDocument
@@ -76,6 +77,9 @@ class AnalysisIssuerDocumentSelection(_Frozen):
     expected_document_id: str = Field(min_length=1, max_length=128)
     document_version_id: str = Field(min_length=1, max_length=128)
     authority_surface_revision_id: str = Field(min_length=1, max_length=128)
+    publisher_link: PublisherDocumentLink | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     issuer_day: HistoricalIssuerDaySelection | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
@@ -104,6 +108,9 @@ class AnalysisIssuerDocumentWitness(_Frozen):
     authority_source_observation_id: str
     authority_blob_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     archive_completeness: Literal["not_claimed"] = "not_claimed"
+    publisher_link: PublisherDocumentLink | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class HistoricalReconstruction(_Frozen):
@@ -257,6 +264,12 @@ class AnalysisScopeRequest(_Frozen):
             if self.readiness_profile != "complete_report_evidence/v1":
                 raise ValueError("issuer document selections require the complete report profile")
             historical = self.historical_reconstruction
+            if historical is not None and any(
+                item.publisher_link is not None for item in self.issuer_documents
+            ):
+                raise ValueError(
+                    "publisher document links cannot establish historical availability"
+                )
             if historical is None and any(
                 item.issuer_day is not None for item in self.issuer_documents
             ):
@@ -321,6 +334,7 @@ class AnalysisEvidenceScope(_Frozen):
         "analysis-evidence-scope/v5",
         "analysis-evidence-scope/v6",
         "analysis-evidence-scope/v7",
+        "analysis-evidence-scope/v8",
     ] = "analysis-evidence-scope/v1"
     request: AnalysisScopeRequest
     inventory: AnalysisInventoryIdentity
@@ -339,7 +353,9 @@ class AnalysisEvidenceScope(_Frozen):
     @model_validator(mode="after")
     def _commitment(self) -> Self:
         expected_version = (
-            "analysis-evidence-scope/v7"
+            "analysis-evidence-scope/v8"
+            if any(item.publisher_link is not None for item in self.request.issuer_documents)
+            else "analysis-evidence-scope/v7"
             if self.request.report_pdf_tables
             else "analysis-evidence-scope/v6"
             if self.request.issuer_documents and self.request.historical_reconstruction is not None
@@ -365,6 +381,10 @@ class AnalysisEvidenceScope(_Frozen):
             item.expected_document_id for item in self.request.issuer_documents
         ):
             raise ValueError("issuer document witnesses differ from their exact selections")
+        if tuple(item.publisher_link for item in self.issuer_document_witnesses) != tuple(
+            item.publisher_link for item in self.request.issuer_documents
+        ):
+            raise ValueError("issuer publisher link witnesses differ from their exact selections")
         if not {item.document_version_id for item in self.request.report_pdf_tables} <= {
             item.document_version_id for item in self.request.issuer_documents
         }:
@@ -650,7 +670,9 @@ def build_analysis_scope(
     )
     material = {
         "schema_version": (
-            "analysis-evidence-scope/v7"
+            "analysis-evidence-scope/v8"
+            if any(item.publisher_link is not None for item in request.issuer_documents)
+            else "analysis-evidence-scope/v7"
             if request.report_pdf_tables
             else "analysis-evidence-scope/v5"
             if request.issuer_documents
@@ -860,6 +882,29 @@ def _issuer_day_witness(
     return witness
 
 
+def _verify_issuer_publisher_link(
+    conn: sqlite3.Connection,
+    selection: AnalysisIssuerDocumentSelection,
+    authority: AuthoritySurfaceRevision,
+    request: AnalysisScopeRequest,
+    document_url: str,
+) -> None:
+    proof = selection.publisher_link
+    if proof is None:
+        raise ValueError("issuer document publisher link is missing")
+    page, raw = _issuer_source_bytes(conn, proof.publisher_page_observation_id, request)
+    location = urlsplit(str(page["source_url"]))
+    if (
+        page["source_kind"] != "ir_publisher_page"
+        or page["media_type"] not in {"text/html", "application/xhtml+xml"}
+        or _issuer_https_host(str(page["source_url"])) != _issuer_https_host(authority.source_url)
+        or location.query
+        or location.fragment
+    ):
+        raise ValueError("issuer document publisher link page authority differs")
+    verify_publisher_document_link(raw, proof, document_url)
+
+
 def _issuer_document_entries(
     conn: sqlite3.Connection, request: AnalysisScopeRequest
 ) -> tuple[
@@ -944,13 +989,25 @@ def _issuer_document_entries(
                 conn, selection, request
             )
         authority, authority_source = authorities[selection.authority_surface_revision_id]
+        linked = selection.publisher_link is not None
+        if linked:
+            _verify_issuer_publisher_link(conn, selection, authority, request, expected.source_url)
         if (
             source["source_url"] != expected.source_url
             or source["blob_sha256"] != document["blob_sha256"]
-            or source["source_kind"] not in {"ir_document", "earnings_call"}
+            or source["source_kind"]
+            not in (
+                {"ir_document", "earnings_call", "ir_doc"}
+                if linked
+                else {"ir_document", "earnings_call"}
+            )
             or source["media_type"] != "application/pdf"
             or not raw.startswith(b"%PDF-")
-            or _issuer_https_host(expected.source_url) != _issuer_https_host(authority.source_url)
+            or (
+                not linked
+                and _issuer_https_host(expected.source_url)
+                != _issuer_https_host(authority.source_url)
+            )
         ):
             raise ValueError("issuer document PDF hash, exact URL or publisher authority differs")
         if request.historical_reconstruction is not None:
@@ -978,6 +1035,7 @@ def _issuer_document_entries(
                 authority_surface_sha256=_sha(authority.model_dump(mode="json")),
                 authority_source_observation_id=authority.source_observation_id or "",
                 authority_blob_sha256=str(authority_source["blob_sha256"]),
+                publisher_link=selection.publisher_link,
             )
         )
     return entries, witnesses, public_witnesses

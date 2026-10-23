@@ -293,6 +293,7 @@ def classify_reporting_document(
         "earnings_transcript": "issuer_earnings_materials",
         "transcript": "issuer_earnings_materials",
         "investor_presentation": "issuer_presentations",
+        "ir_presentation": "issuer_presentations",
         "presentation": "issuer_presentations",
         "investor_update": "issuer_presentations",
     }

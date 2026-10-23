@@ -230,6 +230,12 @@ class ExpectedDocumentImport(_ClosedModel):
     period_end: datetime | None = None
     filing_at: datetime | None = None
     expected_at: datetime | None = None
+    source_obligation_revision_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        exclude_if=lambda value: value is None,
+    )
     expectation_basis: Literal["authoritative", "publisher_candidate", "policy_inferred"]
     absence: ExplicitAbsence | None = None
     dissent: tuple[str, ...] = ()
@@ -780,6 +786,7 @@ def _expected_document(
         expected_at=imported.expected_at,
         expectation_basis=imported.expectation_basis,
         recorded_at=request.recorded_at,
+        source_obligation_revision_id=imported.source_obligation_revision_id,
     )
 
 

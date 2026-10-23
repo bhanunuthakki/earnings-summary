@@ -1,5 +1,5 @@
 {
-  "manifest_version": "2026-10-19.1",
+  "manifest_version": "2026-10-23.1",
   "workspace_name": "earnings-summary",
   "description": "11-subsystem reconstruction manifest and deterministic inventory definition for the earnings-summary research platform.",
   "canonical_runtime": {
@@ -117,6 +117,7 @@
         "execution/publish_meli_reported_statements.py",
         "execution/plan_analysis_evidence_scope.py",
         "src/provenance/analysis_scope.py",
+        "src/provenance/publisher_document_link.py",
         "src/provenance/report_evidence_contract.py",
         "execution/preview_meli_inputs.py",
         "src/filings/sec_submission_text.py",
@@ -132,7 +133,7 @@
         "pytest tests/test_source_context_entrypoints.py tests/test_refresh_dispatch.py -q",
         "pytest tests/test_meli_reported_statements.py -q",
         "pytest tests/test_analysis_scope.py tests/test_historical_analysis_scope.py tests/test_historical_research_boundary.py tests/test_report_evidence_scope.py tests/test_decision_brief_report_scope.py tests/test_analysis_scope_cli.py -q",
-        "pytest tests/test_report_pdf_table_scope.py -q",
+        "pytest tests/test_report_pdf_table_scope.py tests/test_analysis_issuer_pdf_scope.py tests/test_publisher_document_link.py -q",
         "pytest tests/test_meli_input_evidence.py -q",
         "pytest tests/test_sec_submission_text.py tests/test_sec_submission_import.py tests/test_sec_subject_date_witness.py -q"
       ],

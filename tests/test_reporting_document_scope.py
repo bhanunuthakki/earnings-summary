@@ -22,7 +22,10 @@ from provenance.evidence_ledger import (
     SourceObservation,
 )
 from provenance.issuer_registry import IssuerEntity, IssuerRegistry
-from provenance.reporting_document_scope import ReportingDocumentDecision
+from provenance.reporting_document_scope import (
+    ReportingDocumentDecision,
+    classify_reporting_document,
+)
 from provenance.reporting_entity_registry import (
     EvidenceSubjectBindingRevision,
     ReportingEntity,
@@ -775,3 +778,12 @@ def test_builder_rejects_manual_projection_reduction(package: Package) -> None:
     )
     with pytest.raises(ValueError, match="exact governed reporting projection"):
         build_grounded_search_corpus(conn, reduced)
+
+
+@pytest.mark.parametrize(
+    "document_type", ["investor_presentation", "ir_presentation", "presentation"]
+)
+def test_presentation_aliases_preserve_governed_reporting_family(document_type: str) -> None:
+    assert classify_reporting_document(
+        source_kind="ir_document", document_type=document_type, form_type="IR"
+    ) == ("governed_reporting", "issuer_presentations", "governed_ir_reporting_document")

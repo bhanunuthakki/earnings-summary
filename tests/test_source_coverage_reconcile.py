@@ -11,6 +11,7 @@ import pytest
 from alembic.config import Config
 
 from alembic import command
+from provenance import source_coverage_reconcile
 from provenance.evidence_ledger import (
     ContentBlob,
     DocumentVersion,
@@ -20,6 +21,7 @@ from provenance.evidence_ledger import (
     SourceObservation,
 )
 from provenance.evidence_links import DocumentObservationLink, EvidenceLinkLedger
+from provenance.source_coverage import SourceCoverageLedger
 from provenance.source_coverage_reconcile import (
     ExpectedDocumentImport,
     ExplicitAbsence,
@@ -250,6 +252,82 @@ def test_reconciler_dry_run_derives_extracted_without_writing(tmp_path: Path) ->
         assert result.mode == "dry_run"
         assert result.assessment_statuses == ("extracted",)
         assert conn.execute("SELECT COUNT(*) FROM source_inventory_snapshots").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_explicit_obligation_binds_expected_document_to_qualified_reporting_entity() -> None:
+    conn = sqlite3.connect(":memory:")
+    reporting_entity_id = "reporting-acme-financial-unit"
+    try:
+        assert "source_obligation_revision_id" not in _expected().model_dump(mode="json")
+        conn.execute("CREATE TABLE issuer_entities (issuer_id TEXT, entity_kind TEXT)")
+        conn.execute(
+            "CREATE TABLE source_obligation_revisions ("
+            "obligation_revision_id TEXT, reporting_entity_id TEXT, document_family TEXT, "
+            "issuer_id TEXT, authority_kind TEXT, completeness_rule TEXT, obligation_state TEXT, "
+            "active_from TEXT, active_to TEXT, knowledge_at TEXT, recorded_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO issuer_entities VALUES (?,?)", ("issuer-acme", "operating_company")
+        )
+        conn.executemany(
+            "INSERT INTO source_obligation_revisions VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                (
+                    "issuer-level-duty",
+                    None,
+                    "operating_company_periodic",
+                    "issuer-acme",
+                    "sec_edgar",
+                    "regulator_inventory",
+                    "required",
+                    "2026-07-26 04:00:00",
+                    None,
+                    "2026-07-27 04:00:00",
+                    "2026-07-27 04:00:00",
+                ),
+                (
+                    "entity-level-duty",
+                    reporting_entity_id,
+                    "operating_company_periodic",
+                    "issuer-acme",
+                    "sec_edgar",
+                    "regulator_inventory",
+                    "required",
+                    "2026-07-26 04:00:00",
+                    None,
+                    "2026-07-27 04:00:00",
+                    "2026-07-27 04:00:00",
+                ),
+            ),
+        )
+        unselected = getattr(source_coverage_reconcile, "_expected_document")(
+            "source-snapshot:qualified", _request(apply=False), _expected()
+        )
+        with pytest.raises(ValueError, match="exactly one explicit active source"):
+            getattr(SourceCoverageLedger(conn), "_resolve_source_obligation")(unselected)
+        selected = _expected().model_copy(
+            update={"source_obligation_revision_id": "entity-level-duty"}
+        )
+        assert (
+            selected.model_dump(mode="json")["source_obligation_revision_id"] == "entity-level-duty"
+        )
+        request = _request(apply=False, expected=(selected,))
+        record = getattr(source_coverage_reconcile, "_expected_document")(
+            "source-snapshot:qualified",
+            request,
+            selected,
+        )
+        resolved = getattr(SourceCoverageLedger(conn), "_resolve_source_obligation")(record)
+
+        assert record.source_obligation_revision_id == "entity-level-duty"
+        assert resolved is not None
+        assert tuple(resolved) == (
+            "entity-level-duty",
+            reporting_entity_id,
+            "operating_company_periodic",
+        )
     finally:
         conn.close()
 
