@@ -114,6 +114,8 @@ def _public_link(value: str) -> bool:
 
 
 def _reading_copy(text: str) -> str:
+    # HTML parsing normalizes source line endings; keep the input file untouched.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     parser = _BalancedHTML()
     parser.feed(text)
     parser.close()

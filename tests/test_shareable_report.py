@@ -132,6 +132,19 @@ def test_never_overwrites_any_file(tmp_path: Path) -> None:
     assert destination.read_bytes() == existing
 
 
+@pytest.mark.parametrize("newline", ["\r\n", "\r"])
+def test_html_line_endings_preserve_source_bytes(tmp_path: Path, newline: str) -> None:
+    source = tmp_path / "source.html"
+    destination = tmp_path / "share.html"
+    original = workspace().replace("\n", newline).encode("utf-8")
+    source.write_bytes(original)
+    export_shareable_report(source, destination)
+    assert source.read_bytes() == original
+    soup = BeautifulSoup(destination.read_bytes().decode("utf-8"), "html.parser")
+    script = soup.select_one("script")
+    assert script is not None and script.string == JS
+
+
 def test_rejects_invalid_encoding_and_oversized_input(tmp_path: Path) -> None:
     source = tmp_path / "source.html"
     destination = tmp_path / "share.html"
