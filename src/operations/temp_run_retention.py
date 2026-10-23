@@ -406,11 +406,12 @@ def finish_temp_run(
         if fixture_holds and not allow_partial:
             raise ValueError(fixture_holds[0].reason)
         held.extend(fixture_holds)
+        held_paths = frozenset(item.path for item in fixture_holds)
         configured = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
         live = _absolute(Path(configured)) if configured else None
         for declared in disposable_paths:
             try:
-                if _under_hold(root, declared, fixture_holds):
+                if _under_hold(root, declared, held_paths):
                     continue
                 item = _seal_file(root, declared, names, live, isolated_fixture=isolated_fixture)
                 if item is not None:
@@ -524,9 +525,9 @@ def _blocking_holds(holds: Iterable[TempRunHold]) -> list[TempRunHold]:
     return [hold for hold in holds if hold.reason not in _RETAINED_SHAPE_HOLDS]
 
 
-def _under_hold(root: Path, declared: Path, holds: Iterable[TempRunHold]) -> bool:
+def _under_hold(root: Path, declared: Path, held_paths: frozenset[Path]) -> bool:
     absolute = _absolute(declared if declared.is_absolute() else root / declared)
-    return any(absolute == hold.path or hold.path in absolute.parents for hold in holds)
+    return absolute in held_paths or any(parent in held_paths for parent in absolute.parents)
 
 
 def _write_once(path: Path, payload: BaseModel) -> None:
@@ -575,13 +576,14 @@ def resolve_failed_temp_run(
         holds = _fixture_tree_holds(root)
         if blocking := _blocking_holds(holds):
             raise ValueError(blocking[0].reason)
+    held_paths = frozenset(item.path for item in holds)
     configured = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
     live = _absolute(Path(configured)) if configured else None
     names: set[str] = set()
     files = [
         item
         for declared in disposable_paths
-        if not _under_hold(root, declared, holds)
+        if not _under_hold(root, declared, held_paths)
         and (
             item := _seal_file(
                 root,
@@ -629,12 +631,13 @@ def register_reviewed_test_run(
     if isolated and review.fixture_origin != "synthetic_generated":
         raise ValueError("reviewed_fixture_origin_required")
     fixture_holds = _fixture_tree_holds(root) if isolated else []
+    held_paths = frozenset(item.path for item in fixture_holds)
     configured = os.environ.get("EARNINGS_SUMMARY_DB_PATH", "").strip()
     live = _absolute(Path(configured)) if configured else None
     names: set[str] = set()
     files: list[TempRunFile] = []
     for declared in review.files:
-        if _under_hold(root, declared.relative_path, fixture_holds):
+        if _under_hold(root, declared.relative_path, held_paths):
             raise ValueError("reviewed_fixture_storage_unsafe")
         item = _seal_file(root, declared.relative_path, names, live, isolated_fixture=isolated)
         if item is None or item.sha256 != declared.sha256 or item.size != declared.size:

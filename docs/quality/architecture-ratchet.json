@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "ee2a3c136bedaff56c10995dae6539772e86aece",
+  "scoped_commit": "90237a7e7cada65114a5d5bee2b03e97612705f9",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "6ca4b995f281dc5902b994526179da1b778718a36e691cdbfceaffce09ab0fb1",
+  "source_sha256": "b61d193ced0d755296c8df441263c801ba02736bf3485151f5cbc3d901cbe4f2",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -22,8 +22,8 @@
     "cohesion": "facade has no database/network/filesystem/process responsibility and all public functions are fully annotated"
   },
   "metrics": {
-    "executable_modules": 1468,
-    "total_noncomment_loc": 561901,
+    "executable_modules": 1470,
+    "total_noncomment_loc": 562513,
     "modules_over_1000_loc": 108,
     "modules_over_2000_loc": 24,
     "modules_at_least_3000_loc": 4,
@@ -6677,13 +6677,14 @@
         "path": "execution/upgrade_database.py",
         "module": "execution.upgrade_database",
         "lines": {
-          "physical": 490,
-          "nonblank": 426,
-          "noncomment": 400
+          "physical": 625,
+          "nonblank": 551,
+          "noncomment": 520
         },
         "internal_fan_out": 4,
         "responsibilities": [
-          "database"
+          "database",
+          "network"
         ],
         "public_functions": 5,
         "fully_annotated_public_functions": 5
@@ -13268,9 +13269,9 @@
         "path": "src/operations/temp_run_retention.py",
         "module": "operations.temp_run_retention",
         "lines": {
-          "physical": 887,
-          "nonblank": 815,
-          "noncomment": 809
+          "physical": 890,
+          "nonblank": 818,
+          "noncomment": 812
         },
         "internal_fan_out": 0,
         "responsibilities": [
@@ -16579,6 +16580,21 @@
         "fully_annotated_public_functions": 4
       },
       {
+        "path": "src/provenance/nu_historical_backfill.py",
+        "module": "provenance.nu_historical_backfill",
+        "lines": {
+          "physical": 453,
+          "nonblank": 429,
+          "noncomment": 429
+        },
+        "internal_fan_out": 9,
+        "responsibilities": [
+          "database"
+        ],
+        "public_functions": 2,
+        "fully_annotated_public_functions": 2
+      },
+      {
         "path": "src/provenance/observation_resolution.py",
         "module": "provenance.observation_resolution",
         "lines": {
@@ -16925,9 +16941,9 @@
         "path": "src/provenance/search_index_lineage.py",
         "module": "provenance.search_index_lineage",
         "lines": {
-          "physical": 390,
-          "nonblank": 341,
-          "noncomment": 341
+          "physical": 393,
+          "nonblank": 344,
+          "noncomment": 342
         },
         "internal_fan_out": 2,
         "responsibilities": [
@@ -19284,9 +19300,9 @@
         "path": "src/research/decision_brief.py",
         "module": "research.decision_brief",
         "lines": {
-          "physical": 1610,
-          "nonblank": 1521,
-          "noncomment": 1496
+          "physical": 1618,
+          "nonblank": 1529,
+          "noncomment": 1504
         },
         "internal_fan_out": 19,
         "responsibilities": [
@@ -19438,6 +19454,19 @@
         ],
         "public_functions": 8,
         "fully_annotated_public_functions": 8
+      },
+      {
+        "path": "src/research/memo_financial_links.py",
+        "module": "research.memo_financial_links",
+        "lines": {
+          "physical": 57,
+          "nonblank": 51,
+          "noncomment": 51
+        },
+        "internal_fan_out": 3,
+        "responsibilities": [],
+        "public_functions": 1,
+        "fully_annotated_public_functions": 1
       },
       {
         "path": "src/research/memo_model_evidence.py",

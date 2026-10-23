@@ -584,3 +584,98 @@ def test_repeat_discovery_after_retirement_does_not_report_missing_file_failure(
     assert repeated.deleted == 0
     assert repeated.errors == 0
     assert repeated.decisions[0].action == "missing"
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_hold_lookup_preserves_exact_descendant_and_sibling_boundaries(
+    tmp_path: Path, absolute: bool
+) -> None:
+    root = tmp_path / ".tmp" / "held-path-boundaries"
+    begin_temp_run(
+        root,
+        repo_root=tmp_path,
+        now=NOW,
+        disposable_class="isolated_test_fixture",
+        purpose="hold lookup synthetic fixture",
+    )
+    original = tmp_path / "original"
+    original.mkdir()
+    (original / "child.bin").write_bytes(b"protected original")
+    held = root / "held"
+    try:
+        held.symlink_to(original, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation is unavailable")
+    sibling = root / "held-sibling.bin"
+    sibling.write_bytes(b"disposable sibling")
+    paths = [held, held / "child.bin", sibling]
+    finished = finish_temp_run(
+        root,
+        repo_root=tmp_path,
+        success=True,
+        disposable_paths=paths if absolute else [path.relative_to(root) for path in paths],
+        allow_partial=True,
+        now=NOW,
+    )
+    assert {item.relative_path for item in finished.files} == {Path("held-sibling.bin")}
+    assert any(
+        item.path == held and item.reason == "linked_fixture" for item in finished.held_paths
+    )
+    assert held.is_symlink()
+    assert (original / "child.bin").read_bytes() == b"protected original"
+
+
+def test_large_hold_population_is_indexed_once_per_completion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / ".tmp" / "many-held-paths"
+    begin_temp_run(
+        root,
+        repo_root=tmp_path,
+        now=NOW,
+        disposable_class="isolated_test_fixture",
+        purpose="hold lookup synthetic fixture",
+    )
+    files = [root / f"fixture-{index}.bin" for index in range(16)]
+    for path in files:
+        path.write_bytes(b"synthetic disposable fixture")
+    holds = [
+        temp_run.TempRunHold(path=root / f"protected-{index}", reason="linked_fixture")
+        for index in range(1000)
+    ]
+    identities = {id(item.path) for item in holds}
+
+    def fixture_holds(_root: Path) -> list[temp_run.TempRunHold]:
+        return holds
+
+    monkeypatch.setattr(temp_run, "_fixture_tree_holds", fixture_holds)
+    original_equal, original_hash = Path.__eq__, Path.__hash__
+    comparisons, hashes = 0, 0
+
+    def count_equal(path: Path, other: object) -> bool:
+        nonlocal comparisons
+        if id(path) in identities or id(other) in identities:
+            comparisons += 1
+        return original_equal(path, other)
+
+    def count_hash(path: Path) -> int:
+        nonlocal hashes
+        if id(path) in identities:
+            hashes += 1
+        return original_hash(path)
+
+    monkeypatch.setattr(Path, "__eq__", count_equal)
+    monkeypatch.setattr(Path, "__hash__", count_hash)
+    finished = finish_temp_run(
+        root,
+        repo_root=tmp_path,
+        success=True,
+        disposable_paths=files,
+        allow_partial=True,
+        now=NOW,
+    )
+    assert len(finished.files) == len(files)
+    # Every hold is hashed once for the operation, never once per declaration.
+    # Missing candidates then use hashed ancestor lookups rather than hold scans.
+    assert comparisons < len(holds)
+    assert hashes == len(holds)
