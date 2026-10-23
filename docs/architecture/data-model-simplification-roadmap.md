@@ -1,9 +1,11 @@
 # Research platform: backend and ingestion retirement roadmap
 
-Status: **Expanded proposal; implementation held for independent review.**
+Status: **Revised after three independent Sol reviews; Opus acceptance pending.**
 Source baseline: `d19bc3e38dc5c13f27d78555ae69947bc2d9aee9`.
 This version supersedes the helper-first sequence. Three fresh GPT-6.1 Sol judges
-will independently assess ambition and effectiveness. Opus 5.5 must then score the
+reviewed the previous version; all requested revision. Their original scores and
+findings remain in the [panel receipt](../quality/backend-streamlining-panel-20261022.json).
+This revision has not been independently regraded. Opus 5.5 must then score the
 roadmap and each key finished implementation strictly above 90 with no blockers.
 The owner chose subscription-only review after its reset; no paid fallback.
 
@@ -78,12 +80,13 @@ one registration owner. Compare already-present inputs, changed bytes, partial
 failure, classification failure and denied collection. Delete the superseded
 registration/success branches, not merely add managed publication alongside them.
 
-### R3 — One explicit-state document-product executor and completion owner
+### R3 — Explicit-state execution, then qualified product completion
 
 **Cut:** give processing explicit state/database arguments and remove
 `process_ir_documents_state.py` global-module rebinding/`sys.argv` machinery.
-Then replace JSON-index `processed` flags and cache-file existence as processing
-success authorities with existing exact source/product attempt and artifact receipts.
+This adapter removal preserves current behavior and can proceed independently.
+Then qualify an exact source/product completion operation before replacing JSON
+`processed` flags or cache-file existence as success authorities.
 Move consumers before retiring `mark_document_processed`, `get_unprocessed_documents`,
 `mark_event_processed` and `get_unprocessed_events`.
 
@@ -93,10 +96,38 @@ Preserve quarter/event identity, aliases, file moves, anchors and missing-summar
 repair. Raw narrative and analytical summaries remain different products. Existing
 index readers and transcript acquisition are mapped before changing their state.
 
-**MVP/proof:** explicit-state processing matches existing paths/results without
-mutating module globals. A source change or missing artifact produces exact pending
-work; unchanged completed inputs do not repeat LLM work. Remove the adapter first,
-then the obsolete processing-state procedures when their callers are gone.
+The completion contract is to be built and qualified within existing owners:
+
+- `run_accounting` owns attempts; `llm_artifact_store` owns saved generated output.
+  Its current best-effort `upsert()` can return `(None, False)` and commit on its
+  own connection. Add a narrow fail-closed, connection-owned operation reusing the
+  existing writer; do not duplicate persistence or create another store.
+- Bind logical identity to issuer, exact document/event, fiscal coordinate and
+  product purpose. Hash consumed source bytes, parser/version/limits, prompt/style,
+  effective model configuration, exact anchor/context and dependent artifact IDs.
+  These dependencies must enter `cache_inputs`; descriptive model/source/parent
+  metadata is not automatically hashed. Qualify exact-key storage/lookup for two
+  documents in one quarter before cutover. A necessary key/schema change needs its
+  own bounded review, rather than an opaque-ID encoding in a purpose field.
+- Save one checksummed payload containing body, input identity, generation identity
+  and source/context receipt references. Verify its read-back. The current output
+  hash chooses Markdown or JSON; do not leave one unchecked alongside the other.
+- Reserve the attempt, verify reusable saved output, then generate outside a write
+  transaction. Recheck inputs/ownership; persist output plus the SYNTHESIZE receipt
+  together. Atomically project compatibility text from that committed artifact.
+  Record required publication and finish the run only after projection succeeds.
+- A crash after output commit resumes from the verified body. Repair missing/corrupt
+  projections with zero generation calls. Persistence failure stays failed/pending;
+  an OK attempt or text file cannot override missing/corrupt output. Retain the
+  original generation identity during repair. A legacy quarter filename must name
+  a deterministically selected artifact, not prove another document complete.
+
+**MVP/proof:** first remove global mutation with exact path/anchor parity. The later
+completion cut tests changed source/anchor/prompt/model, same-quarter documents,
+missing/corrupt output, unavailable DB, output-commit interruption, projection
+failure/repair and unchanged replay. Raw `ir_narrative` envelopes are a useful
+source-population/projection pattern, not proof of generated-summary completion.
+Only then remove the obsolete processing-state procedures and their callers.
 
 ### R4 — Retire generated-summary-to-number extraction
 
@@ -171,6 +202,10 @@ costs, not predicted gains. Recursive derivation reads must be counted too.
 
 **MVP/proof:** full values/order/reasons/citations match qualified behavior; a corrupt
 report cell leaves valid cells usable; snapshot and explicit-clock tests pass.
+Require an available derived-value result alongside unavailable/corrupt cases. Reuse
+the existing positive derived-series case and real publication/binding builders for
+the report case. The current ambiguous-coordinate report fixture remains a negative
+case; never relabel it as usable or fabricate admission to fill this coverage gap.
 Eliminate direct redundant consumer bundle fetches and measure batch/derivation
 verification counts, SELECTs and latency. Share definition checks/metadata while
 removing their consumer copies; those helpers support this retirement, not replace it.
@@ -188,9 +223,15 @@ owner-context, cost and verification ownership; do not silently delete judgment.
 Historical artifacts retain reconstruction support. Extend existing report section
 models; avoid a parallel presentation fact database.
 
-**MVP/proof:** one prepared section supports compact/full/evidence views with the
-same values and complete argument. Rendering that section performs no database or
-model work. Demonstrate the result in the browser and retain export/source parity.
+**First section:** `SayDoSection`, retaining `SayDoCard` narrative and reusing or
+extending its existing structured rows. Do not assume `SayDoHistoricalMetric` alone
+covers every row currently selected from narrative. Prepare the complete supported
+population and owner-context selection before removing its Markdown parser/filter.
+**MVP/proof:** that section supports compact/full/evidence/export views with the
+same values, strategic selection, complete argument and source links. Rendering
+performs zero database/model work. Preserve invalidation on thesis/context/source
+changes and repair/recovery; qualify prompt/schema changes through existing LLM
+ops and financial-grounding gates. Demonstrate the result in the browser.
 The existing durable Copilot handoff stays; no duplicate chat system is proposed.
 
 ## Delivery order, subtraction and scope controls
@@ -198,17 +239,56 @@ The existing durable Copilot handoff stays; no duplicate chat system is proposed
 - **Wave 1:** R1 FMP engine consolidation and R6 read batching, as separate reviewable
   changes. These are structural cuts without waiting for native table retirement.
 - **Wave 2:** one R2 managed-IR family and R3 explicit-state/completion consolidation;
-  qualify one R7 typed-section frontend MVP alongside them.
+  qualify one R7 typed-section frontend MVP alongside them. Make the R4 original-
+  source coverage feasibility decision here; do not defer that major lane cut.
 - **Wave 3:** migrate R4 original-source numeric extraction and R5 publication one
   qualified producer/class at a time. Do not require a whole-platform cutover.
 
 Each change records old procedure → owner, actual callers, old definitions removed,
 new abstractions added, and the remaining compatibility path with an explicit removal
-condition. Do not preserve the old active engine behind a feature flag after parity.
+condition. Maintain one cumulative acquisition/processing/publication/read owner map
+for migrated source classes. Do not preserve the old active engine behind a feature
+flag after parity.
 Keep a code revert for code-only changes; persistent cutovers require bounded
 migration, reconciliation and tested rollback without discarding immutable history.
 CLI/process isolation remains where deadlines, native libraries or writer ownership
 require it; remove duplicated business logic, not purposeful process boundaries.
+
+## Bounded acceptance scorecard
+
+| Change | Completion condition |
+|---|---|
+| R1 ownership | Two active batch engines become one: one dispatch/override registry, selection/order policy and executor. Delete the other active implementations and migrate actual callers. Exercise a valid record followed by malformed input; audit all selected extractor/receipt commit closures before claiming rollback. |
+| R6 reported populations | On the exact WIX-21 and SYNTH-8 populations in `.tmp/reader-reuse-comparison.json`, direct consumer rereads become zero and full-publication verification becomes once per distinct complete verifier-input key inside the operation. Keys include publication, semantic clock inputs and snapshot; K/O partitions remain distinct. Require at least 20% fewer SELECTs on each reported population. |
+| R6 derivations/failures | Count all recursive verification, not only outer reader calls. State each required key and any remaining repeated verification explicitly. Qualify an available derived report value plus stale, missing, corrupt and explicit-O cases before closing the unit. A required extra verification is an explicit reviewed exception, not a hidden exclusion from the count. |
+| Latency/setup | Use balanced paired operation timing, excluding instrumentation/setup, with at least five samples per side. Median operation latency must not regress by more than max(10%, 5 ms); one balanced repeat may resolve noise. Record cold/warm focused-test setup separately, including migrated-template cost. These small synthetic samples establish no production speedup. |
+| Net complexity | Record removed/added owning procedures, public operations, independent write/completion decisions, stores and compatibility paths. At least one old active engine/lane must be gone; moving copies behind a facade fails. No extra independent state/authority is accepted. Review any module/LOC ratchet change explicitly; do not loosen a scanner to pass. |
+
+The numeric SELECT threshold is an implementation acceptance target, not an achieved
+result. If it proves incompatible with required integrity work, show the measured
+tradeoff and revise the acceptance decision explicitly. Do not weaken checks or
+count a helper-only change as the completed batch retirement.
+
+## Retained core-task acceptance
+
+Use these bounded cases with the relevant cuts and before feature pruning. They
+test one shared evidence flow; they are not a new test framework. For every affected
+path compare issuer, period/unit/basis, selected observation, cutoff, source links,
+missing/degraded states and retained analytical content. Fixtures remain hermetic.
+
+| Task/reference | Required retained result |
+|---|---|
+| NU PRE: `report_NU_2026-10-20_6c613e17e0dfc741faa5` | Pre-event expectations, watch items, thesis conditions and supporting history use the exact pre-event scope/cutoffs; later evidence cannot leak in. |
+| NU POST: `report_NU_2026-10-20_9998561c61f3404e62c9` | Actual changes versus the prior setup, surprises and thesis implications retain exact source/context links and separate physical/knowledge clocks. |
+| MELI deep research: `report_MELI_2026-10-20_169e43887147a28df9e8` | Retain full thesis/counter-case, assumptions, scenarios and sensitivities. Recalculate the workbook and compare relevant formulas/results with the cited inputs. Compact presentation preserves access to this depth. |
+| Research/Q&A from a selected report | Carry its immutable report identity, issuer, period, facts and citations into the answer context. Deeper work uses the held corpus; missing evidence produces an explicit gap/collection plan. No implicit collection or unrelated latest-report substitution. |
+| Portfolio/threshold decision | Use existing approved snapshot or synthetic holdings/threshold fixtures. Shared facts/calculations must produce the same supported allocation/hold/trim conditions, preserve assumptions and evidence, and expose unavailable inputs. No trade or live state action. |
+
+The retained NU/MELI artifacts are depth/comparison references, not accepted truth
+oracles. Their bytes were reconciled, but native and semantic acceptance remains
+unproved. Correctness comes from verified sources, formulas and applicable review.
+Record unexecuted checks as pending. A section-only render or identical artifact
+bytes cannot establish the broader product endpoint.
 
 Consolidate fixtures/setup with their owner change. Preserve unique financial,
 corruption, clocks, admission and recovery assertions. Use existing migrated_db;
@@ -239,6 +319,7 @@ acceptance. Report further parity only after it is actually executed.
 Locally committed groundwork: shared fiscal calendars; two parser helpers removed;
 one summary database authority; source-aware completion and correction handling.
 None of the seven retirement units above is implemented. No overall deletion
-percentage or production speedup is claimed. The three-Sol panel reviews this
-proposal independently; its judgments supplement source evidence and do not replace
-Opus sign-off or deterministic implementation gates.
+percentage or production speedup is claimed. The three-Sol panel's original scores
+were ambition 91/92/91 and effectiveness 87/88/84, all REVISE. This revision addresses
+their required plan changes; that is a root disposition, not a new panel verdict.
+Their judgments do not replace Opus sign-off or deterministic implementation gates.
