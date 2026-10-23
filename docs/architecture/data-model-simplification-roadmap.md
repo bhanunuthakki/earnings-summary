@@ -1,226 +1,244 @@
-# Data-model simplification roadmap
+# Research platform: backend and ingestion retirement roadmap
 
-Status: **Proposed; implementation remains held.** Opus 5.5 last reviewed the prior
-roadmap at 83/100. This replacement has not been graded. The owner requires above
-90/100 and no blockers before implementation, then independent review of each key
-finished change. No application change from this roadmap has started.
+Status: **Expanded proposal; implementation held for independent review.**
+Source baseline: `d19bc3e38dc5c13f27d78555ae69947bc2d9aee9`.
+This version supersedes the helper-first sequence. Three fresh GPT-6.1 Sol judges
+will independently assess ambition and effectiveness. Opus 5.5 must then score the
+roadmap and each key finished implementation strictly above 90 with no blockers.
+The owner chose subscription-only review after its reset; no paid fallback.
 
-## Program overview
+## Product and architecture endpoint
 
-The application serves earnings briefs, deep research/Q&A, and portfolio decisions
-through one evidence flow:
+Serve pre/post earnings briefs, deep research/Q&A, and portfolio decisions through
+one evidence flow. Retain the depth demonstrated by NU PRE/POST and MELI, including
+historical context, thesis implications, assumptions, scenarios, sensitivities and
+workbooks. Reuse owner profile, holdings and thresholds without mixing assumptions
+with company-reported facts. Expansion uses evidence already held; preserve source
+collection authority and require approval for new collection outside approved scope.
 
-**Source bytes → extraction with exact context → admitted observations → selected
-facts and reusable calculations → analytical sections → views and exports.**
+**Source bytes → contextual extraction → explicit admission → selected facts and
+calculations → prepared analysis → views and exports.**
 
-Each stage has one owner. Existing owner profile, thesis, holdings, thresholds and
-valuation assumptions supply personal context; reported evidence retains its own
-identity. Pre-earnings questions, post-earnings interpretation and investment
-decisions keep their distinct analytical work. All reading depths retain the same
-financial accuracy and access to full analysis. Expansion first uses held evidence;
-new collection requires owner approval.
-Retain novel, one-off and unclassified observations with explicit dispositions and
-source links throughout consolidation.
+The eight logical DAG stages remain. Each stage has one execution owner and the
+receipts needed for its claim. Acquired, extracted, admitted and published prove
+different properties. Replace duplicate success authorities; keep those meanings.
+Source adapters handle source-specific interpretation. They do not each own a
+second registration, completion, fact-selection or publication procedure.
 
-| Workstream | Concrete change and removal target | Result and acceptance |
-|---|---|---|
-| Financial data reads | Use `CanonicalFactResolutionEngine` selections and their existing bundles. Share repeated definition/binding checks in the ontology owner and document metadata reads in the provenance owner. Delete superseded consumer copies. | Briefs, research, valuation and readiness use the same facts and evidence checks. Compare full outputs, gaps, clocks, query counts and verification calls. The first reader cut is ready for independent approval. |
-| Acquisition, parsing and publication | Route discovered and explicit URLs through managed document registration. Replace the spreadsheet value-only handoff with source-preserving typed values and locators. Converge eligible publication on `SourceFactRepository`, retaining necessary compatibility projections. | Remove competing registration/completion, conversions and producer-specific write procedures once their replacements preserve admission, replay, corrections and recovery. Specialized source parsers remain where document formats differ. Writer replacement is not yet qualified. |
-| Backend/frontend boundary | Build structured analytical sections under their existing section owners. Move panel loading and enrichment out of rendering; replace data → Markdown → data round trips with prepared rows. | Renderers display prepared results. HTML, Markdown and JSON share their analytical inputs. First qualify the Say/Do and panel-loading paths; do not infer structured facts from generated prose. This is a source-supported proposal, not an implemented change. |
-| Frontend reuse | Use existing controls, source chips, tables/charts and styles for compact views, detailed reading and exact evidence. Carry the selected company, fiscal period, cutoff and report identity between views. | Demonstrate one company section at multiple depths with consistent values and source links. Reuse the existing durable Copilot handoff. Preserve exports and full analysis. No frontend consolidation has been implemented in this cleanup. |
-| Tests, setup and later feature cuts | Share existing fixture builders and the migrated database template. Keep invariant tests with their business owner and a small set of cross-surface task checks. Review feature usage and dependencies after initial pruning. | Remove repeated setup and redundant wrappers with their superseded procedures. Keep unique corruption, clock, financial and recovery coverage. Remove an unused feature's route, UI and backend together after its evidence and replacement are clear. |
+Success requires old active procedures to disappear in the same bounded change as
+their replacement. A shared helper alone does not complete a retirement unit.
+Existing owners can gain a coherent operation; a new generic workflow engine,
+attempt store, cache service or universal fact model is unnecessary.
 
-The model work separates repeated representations from distinct information.
-Source documents, observations, metric meaning/admission, calculated results,
-research artifacts and personal investment state already have different roles.
-Use their existing records and stable IDs. Reduce competing writes and repeated
-read/presentation objects before considering physical table retirement. No new
-store, universal fact model or generic orchestration framework is proposed.
+## Seven retirement units
 
-## Delivery sequence and visible MVPs
+### R1 — One FMP document-batch extraction engine
 
-1. **Shared financial reads:** remove the proven extra evidence fetches and default-
-   clock checks; show identical results with measured query/verification reductions.
-   Share semantic checks and metadata through existing owners in bounded follow-ups.
-2. **One prepared research section:** qualify and implement a structured section
-   that removes a Markdown parsing round trip and render-time loading. Show the
-   compact view, complete analysis and exact evidence in the same frontend MVP.
-3. **One source-processing cluster:** converge registration and source handoff,
-   then replace and remove a qualifying competing publication procedure. Demonstrate
-   replay, changed-source handling and failure recovery on the same inputs.
-4. **Feature pruning:** use observed use and core-task coverage to remove redundant
-   surfaces and their backend procedures. Initial structural work must not become
-   an indefinite prerequisite; the bounded matrix below supplies an owner-decision
-   exit when a larger consolidation lacks required capabilities.
+**Cut:** replace `execution/extract_facts.py::_run_extraction` and
+`pipeline/quarterly_refresh.py::_stage_extract_fmp_facts` orchestration with one
+cohesive document-batch operation in the existing pipeline package. Delete the
+second selection/dispatch/execution implementation. Both callers retain thin
+CLI/stage adapters. Their maps currently duplicate **11 entries and 2 NU overrides**.
 
-Fixture/setup simplification accompanies each MVP. NU PRE/POST and MELI supply
-protected comparison cases for analysis depth: thesis implications, historical
-context, assumptions, scenarios, sensitivities and workbook detail. Retained artifact
-bytes were reconciled; native and semantic acceptance still need their own proof.
+Centralize document ordering, extractor selection, outcomes and failure accounting.
+Preserve income-before-segment dependencies, NU IFRS behavior, source locators,
+restatements and legitimate zero-result documents. Fix the demonstrated policy
+mismatch: quarterly `_safe_extract` converts known errors to zero, and its caller
+then reports OK. A parsing failure must be an explicit failed document.
 
-Already committed locally: shared fiscal calendars, removal of two unused parser
-helpers, one summary database authority, and source-aware completion/correction
-handling. Several of these are correctness improvements rather than size cuts.
-The broader data-plane and frontend consolidation remains proposed. Measure each
-MVP by removed competing procedures, fewer reads/conversions, simpler setup,
-preserved financial meaning and demonstrated user behavior. No overall deletion
-percentage or production speedup is established.
+First retain existing per-document commit boundaries. Roll back pending failed
+work before committing failure accounting; preserve earlier completed documents.
+A fatal database/schema failure stops dependent work. Qualify the exact extractor
+commit paths before promising atomicity. `refresh_cache` uses supplied immutable
+records and `commit=False`; preserve that caller-owned transaction path rather than
+route it through an independently committing batch.
 
-Sol implements; Astra judges consequential architecture; root integrates and
-reports. Independent Opus above 90 and applicable checks remain required. The
-following sections specify the first cut and the limits of later changes.
+**MVP/proof:** both production routes process the same synthetic documents with the
+same facts/lineage; malformed input fails truthfully; revenue precedes segments;
+replay and failure recovery preserve completed work. Replace the quarterly test's
+139-line hand-built schema with the existing session-migrated fixture, preserving
+behavioral assertions and explicit historical tests. No schema migration is needed.
 
-## Next change: use the evidence already selected
+### R2 — One managed issuer-document registration path
 
-In `src/sources/discovery_financials.py::read_financial_history`, replace each
-`as_known(cell_id, K)` with `read_as_known((cell_id,), K)[0]`. Use its resolution
-and bundle. Remove the second `provenance_bundle` call and the now-unused
-`FactReadModel` construction/import. Use the same path for reported and derived
-observations. `as_known` already makes this exact call and discards its bundle.
+**Cut:** retire loose `fetch_ir_documents.process_ticker` → URL sidecar → categorizer
+registration and `fetch_ir_from_urls.register_urls` registration decisions. Route
+both discovered and explicit URLs through managed prepare/validate/publish.
+Keep transport/discovery and manual input capabilities. Remove obsolete CLI
+surfaces only after their callers move; a distinct useful CLI can remain an adapter.
 
-In `src/sources/report_financials.py::_admit_cell`, do the same only when
-`resolution_observed_through is None`. Remove the repeated derivation-currentness
-check in that branch: the selection owner has already called the identical
-`observation_lineage_current(id, K)` and cleared stale selections in that snapshot.
-For every explicit observed cutoff O, including O=K, retain the existing resolution
-at O, source read at K, and K-based derivation check. Those clocks are distinct.
-Reuse one `CanonicalFinancialSeriesReader` per cell for the remaining checks,
-created at the current first construction point. Do not share it across cells.
+Use `prepare_issuer_document_sources` and `pipeline.managed_ir_sources` as owners.
+Resolve unknown document type/period through bounded triage before publication;
+do not guess. Preserve automatic `requested=False`, fiscal-calendar forwarding,
+index/metadata side effects, denied collection and staged-residue recovery. Loose
+local-upload categorization stays until its separate input contract is supported.
 
-Keep the existing missing/non-resolved/null-selected-ID guards before using a
-bundle. After those guards, a missing bundle raises `RuntimeError` for type safety;
-the owner normally raises before it can return this incomplete selection. Do not
-add a selected-ID comparison, fallback fetch, or new exception interpretation.
-Keep candidate SQL, row order, duplicate rows, metric-ID lookup, future-period
-checks, role/scope exclusions, ontology lookups, currency checks, and serialization.
-Keep existing exception tuples and lookup order. A report cell failure must still
-leave other cells usable; outer failures retain the table-wide unavailable result.
-No multi-cell batching, changed DISTINCT/order, or eager consumer checks belong here.
-DCF already uses the batch owner; its read procedure stays unchanged in this change.
+**MVP/proof:** one IR input family supports discovery and explicit URL input through
+one registration owner. Compare already-present inputs, changed bytes, partial
+failure, classification failure and denied collection. Delete the superseded
+registration/success branches, not merely add managed publication alongside them.
 
-**Why this is ready:** the owner returns the same provenance type through the same
-bundle/relations methods. Its batch subclass changes only publication verification.
-Existing derived-bundle proof shows object and JSON equality, with empty relations.
-The [initialization proof](../quality/reader-initialization-evidence.md) uses an
-existing sealed-derived fixture on a fresh connection: stored resolution succeeds
-while the four FactPlaneV2-only SQL functions are absent; `read_as_known` then
-initializes its own reader and returns derived value 3201 without durable writes.
-The engine's early verification closure uses canonical-table reads and Python
-hash/JSON helpers, not those functions. DCF already calls it without a prior reader.
-There is no remaining architecture blocker to this cut; the independent gate and
-implementation checks remain required.
+### R3 — One explicit-state document-product executor and completion owner
 
-## Proportionate implementation evidence
+**Cut:** give processing explicit state/database arguments and remove
+`process_ir_documents_state.py` global-module rebinding/`sys.argv` machinery.
+Then replace JSON-index `processed` flags and cache-file existence as processing
+success authorities with existing exact source/product attempt and artifact receipts.
+Move consumers before retiring `mark_document_processed`, `get_unprocessed_documents`,
+`mark_event_processed` and `get_unprocessed_events`.
 
-Use existing builders and owner tests. Do not add a permanent baseline loader,
-variant factory, or large failure-injection test module for this mechanical change.
-Sol owns one task-only paired comparison of exact pre-edit and candidate source,
-with recorded source hashes, cutoffs, and the same committed synthetic population.
-Compare serialized public outputs, reference order, reasons, and unknown states.
+Keep deterministic source extraction separate from narrative synthesis. Reuse
+`document_evidence_pipeline` fulltext only when source and extractor identity match.
+Preserve quarter/event identity, aliases, file moves, anchors and missing-summary
+repair. Raw narrative and analytical summaries remain different products. Existing
+index readers and transcript acquisition are mapped before changing their state.
 
-- Discovery: existing `seed_growth_graph(include_screen_financials=True)`, one WIX
-  database, as_of 2026-09-18. It has nine revenue rows and four each of gross profit,
-  operating income, and free cash flow. Record which cells reach the changed path.
-- Report: existing `seed_table` builder with its supported reported population,
-  plus existing `test_report_financial_resolution_clock.py` cases for explicit O.
-- Derived: reuse `test_ytd_subtraction_publishes_sealed_quarter_and_keeps_original`.
-  Its report probe reaches derived evidence but returns `ambiguous_table_coordinate`.
-  Pair that actual outcome and reached-path counts; do not claim an available
-  derived report. Keep the existing owner-level bundle equality proof as well.
+**MVP/proof:** explicit-state processing matches existing paths/results without
+mutating module globals. A source change or missing artifact produces exact pending
+work; unchanged completed inputs do not repeat LLM work. Remove the adapter first,
+then the obsolete processing-state procedures when their callers are gone.
 
-Trace SELECTs and wrap the real publication verifier using the existing batch-reader
-spy pattern. Require one fewer outer bundle fetch per reached substituted cell,
-with its attributable query/verification reduction; count constructor work too.
-Explicit-O results must match, with no added query/verification work. A later call
-must verify again. Do not claim performance for branches the fixtures do not reach.
-If cheap, record balanced before/after timings excluding setup as a non-regression
-check; fresh connections are not cold OS caches. Make no latency-speedup claim.
+### R4 — Retire generated-summary-to-number extraction
 
-Extend existing owner tests with the smallest assertion that prevents duplicate
-reads from returning. Preserve real corruption, stale lineage, per-cell failure,
-K/O, and snapshot tests. Add a focused regression only for an uncovered changed
-boundary; do not populate the suite with impossible-contract variants. Run the
-existing discovery/growth/readiness dependents, report/cadence/clock tests, source
-repair and batch-reader tests serially, plus applicable `make check-fast`, static,
-architecture and reachability checks. Record the exact nodes and results at delivery.
-The known full-suite teardown failure remains an unresolved release obligation.
-Synthetic reader evidence does not establish end-to-end NU/MELI, allocation, Ask,
-advisor, or memo parity. Their depth and source contracts remain protected.
+**Cut:** move numeric extraction to original documents, then remove each migrated
+class from summary-input `extract_for_ticker` and `capture_for_ticker`. Once all
+classes and callers migrate, retire `extract_kpis_from_summaries.py` and its two
+summary-input jobs. Keep the module's live direct-PDF/shared functionality and
+retain narrative summaries and historical summary-derived observations.
 
-## Following stages: separate changes, not ready to execute
+Extend the existing direct-source extractor one class at a time. Its automated
+PDF capture currently defaults to `ir_supplement`, caps inputs at 80,000 characters
+and output at 200 facts, and does not prove transcript/other-IR parity. Manual
+manifest support is not equivalent to automated coverage. Keep bounded partial and
+missing-original states visible. Preserve configured KPIs plus novel/one-off
+management observations, wording, speaker where applicable, scale and locators.
+Do not collect missing originals implicitly or promote unclassified values.
 
-**1. Share semantic checks.** Replace the three copies in discovery, report, and
-`src/sources/dcf_statements.py::_read_cell` with two pure operations owned by
-`provenance.metric_ontology`: `numeric_definition_binding_matches` over existing
-definition/admitted-definition/binding/cell-ID and expected period/unit family;
-`definition_matches_source_context` over definition and existing `FactCellV2`.
-Preserve lifecycle, bound/cell identity, numeric/period/unit checks, and equality of
-lifecycle, definition_text, value_kind, period_kind, unit_family, accounting_basis,
-and scope_constraints; then accounting basis, entity, and consolidation scope.
-No I/O or catches belong in either function. Report must retain lazy order:
-first predicate → DB-backed currency check → source-context predicate. Discovery
-retains its early missing/inactive-definition exit before binding queries.
-Require field-by-field tests and consumer failure/order tests. DCF parity relies
-on `test_dcf_canonical_statements.py` unless a paired DCF comparison is actually run.
-Keep `GrowthFactReference`, `FinancialTableCell`, and `DcfStatementCell`: their
-calculation, report-coordinate, and model-input roles differ.
+**MVP/proof:** one original document class supplies at least the retained supported
+numeric population, with exact original-source anchors and explicit exclusions.
+Reroute refresh/comment callers and remove that class's summary-number procedure.
+Measure model calls and latency; narrative output remains required, so total call
+reduction is not assumed. Missing parity blocks that class, not other retirement units.
 
-Retain the short quarter-span expressions for now: both use
-`70 <= (end - start).days <= 105`; semiannual uses the distinct `days + 1` rule.
-They encode local cadence acceptance, not competing fact authority. Do not create
-a calendar abstraction to remove two expressions. Retain DCF's per-cell ontology
-construction in this stage: moving its setup changes query scheduling, whereas the
-pure checks require no such move. Neither decision blocks the first cut.
+### R5 — One publication authority for each migrated producer
 
-**2. Simplify fixture ownership.** Move only the unchanged `STAMP` and
-`seed_growth_graph` from the growth test into the existing `tests/fixtures` pattern.
-Inventory imports first; update all consumers together. Preserve asserts, collected
-node IDs, and fixture population. Require zero imports from the old test module.
-No pytest configuration, assertion hook, new factory, or setup-speed claim is needed.
+**Cut:** for a qualified spreadsheet producer, replace value-only parsing and
+`ingest_spreadsheet_kpis` → `persist_manifest` → independent legacy restatement /
+resolution → native bridge sequencing with one source-preserving publication
+operation using existing locator/value types and `SourceFactRepository`.
+Required legacy outputs become controlled compatibility projections, not a second
+fact-selection or completion authority. Shared legacy owners remain for other
+producers and historical reconstruction until their own migration qualifies.
 
-**3. Select the next write-procedure cut from a bounded compatibility matrix.**
-Reuse the [spreadsheet audit](../quality/spreadsheet-publication-parity-audit.md).
-Finish only these named rows; each must identify current readers/writers, existing
-replacement owner, removable procedure, and PASS/FAIL/RETAIN with source/fixture proof.
+Keep one handoff carrying source identity, winning sheet/cell locator, raw available
+representation, scale, period and disposition. Canonical-name/period overwrites
+must carry the winning value's provenance. Preserve current numeric and replay
+identity until an intended change is separately qualified. Do not reconstruct an
+unavailable XML lexical token from an openpyxl float.
 
-| Current representation/procedure | Target or necessary distinction |
-|---|---|
-| `population_source_facts._source_fact_from_row` legacy financial namespace; discovery/report/series/DCF selectors | Existing ontology/role selection only if it preserves population and immutable IDs. |
-| DCF legacy `documents` eligibility join and report document metadata join | Existing evidence owner; keep authority fields separate from URL/display fields. `ExactEvidenceReference` alone is insufficient for DCF eligibility. |
-| `refresh_ir_kpis` → `ingest_spreadsheet_kpis` → `persist_manifest` → restatement/resolution writers | Existing `prepare_reviewed_kpi_native_projection` → `populate_source_fact_plane` → `SourceFactRepository`, only after same-input semantic and recovery parity. |
-| `financial_facts`/`kpi_facts` observation/resolution bridge | One publication procedure with necessary compatibility projections; preserve history. |
-| KPI configuration, issuer definitions, semantic admission, canonical ontology | RETAIN distinct meanings; remove repeated procedures, not their information. |
+**Unresolved design gate:** native complete-context cells do not establish storage
+parity for unknown/unclassified/rejected captures. Name their existing lossless
+capture/disposition owner and prove read/recovery parity before routing new data.
+If existing storage is insufficient, present that exact capability decision; do not
+invent financial context, weaken admission or add a second generic raw store.
 
-Compare identity, value, period, unit/currency, scope, locator, definition/admission,
-cutoff, supersession, replay, partial failure, transactions, and recovery, including
-rejected/unclassified observations. Choose only a procedure with every required
-behavior PASS; prioritize core-consumer reach, then least scope and simplest rollback.
-Remove its competing implementation when replacing it. Do not force a failed row.
-An existing owner may gain a narrow shared operation; the helper need not already
-exist. Report/series metadata query reuse is one modest candidate in the existing
-provenance-read owner. Qualify null/error/conversion parity and unchanged query
-counts; it does not replace DCF authority or reduce durable representations.
+**MVP/proof:** same-workbook parser-to-publication equality, unknown/rejected/novel
+retention, exact replay/conflict and supersession results, and tested mid-period
+failure/recovery. Specify the new transaction boundary explicitly; current per-period
+commits differ from native graph atomicity. Then remove that producer's competing
+publication sequence. Current audit does not yet qualify this switch.
 
-No spreadsheet writer currently qualifies. The float-only handoff loses coordinates,
-scale and original representation; native semantics and recovery also differ.
-If no matrix row qualifies, prepare one bounded handoff feasibility proposal using
-existing `SpreadsheetCellRef`/`FactLocator`, replacing the float-only intermediate.
-It must preserve values/replay and the winning cell's provenance when canonical-name
-merging overwrites a period. Measure coordinate/number-format parsing cost against
-current `iter_rows(values_only=True)`; `openpyxl(data_only=True)` does not expose the
-original XML lexical token. Do not fabricate it or infer missing semantic admission.
-This proposal is not implementation authorization. After the matrix and this one
-proposal, stop if no procedure qualifies. Return exact missing capabilities and
-feature-usage evidence to the owner for the next priority decision; do not add guards
-or repeat open-ended audits. Feature cuts otherwise wait for one matrix-selected
-procedure consolidation, not physical table deletion.
+### R6 — One bounded multi-cell financial read per consumer operation
 
-## Boundaries and completion
+**Cut:** replace per-row selection/bundle orchestration with existing batch reads.
+Discovery can use `read_as_known(tuple_ids, K)` with ordered row fanout. Reports need
+a narrow ordered-outcome operation in the same resolution owner, reusing existing
+read/failure types where their semantics fit. The required-bundle API currently
+raises on one corrupt source and cannot preserve report cell isolation as-is.
+Keep required reads as an adapter over the same owner rather than a second engine.
 
-All proposed implementation is local code with synthetic fixtures. No production
-writes, collection, schema/data migration, or physical retirement is authorized.
-Section 11 of `directives/data_provenance.md` retains its two-quarter/one-annual
-observation windows, recovery evidence, and separate final retirement approval.
-Code-only rollback is a revert. Each stage needs Astra review, independent Opus 5.5
-above 90 with no blockers, and applicable deterministic checks. Report actual
-removed work and limits; a score cannot override failed tests or an incomplete gate.
+Treat missing selection, cell-specific evidence corruption, operation-wide
+DB/schema/snapshot failure and programmer errors distinctly. Qualify this deliberate
+failure policy; do not claim exact incidental error-order parity. Batch only matching
+cutoffs. Every explicit observed clock O retains selection at O and source/admission
+at K, including O=K. Keep growth, report-coordinate and DCF eligibility policies local.
+
+Verification reuse is bounded by snapshot and cutoff, never global or persistent.
+Independent requests verify again. Baseline: WIX 21 facts used 1,660 SELECTs and
+105 full-publication verifier calls for **one distinct publication**; reported
+report 8 cells used 649 SELECTs and 40 calls for one publication. These are measured
+costs, not predicted gains. Recursive derivation reads must be counted too.
+
+**MVP/proof:** full values/order/reasons/citations match qualified behavior; a corrupt
+report cell leaves valid cells usable; snapshot and explicit-clock tests pass.
+Eliminate direct redundant consumer bundle fetches and measure batch/derivation
+verification counts, SELECTs and latency. Share definition checks/metadata while
+removing their consumer copies; those helpers support this retirement, not replace it.
+
+### R7 — Prepared analytical sections; renderers display results
+
+**Cut:** move panel loading and enrichment out of `workspace_html`/`workspace_data`
+into existing section/build owners. Replace Say/Do and news data → Markdown → data
+round trips with structured section output. Remove superseded render-time parsers,
+filter/cache machinery and independent context assembly for migrated sections.
+
+Preserve specialized pre/post research, full narrative, source links and exports.
+Any LLM filtering/selection remains a qualified analytical operation with source,
+owner-context, cost and verification ownership; do not silently delete judgment.
+Historical artifacts retain reconstruction support. Extend existing report section
+models; avoid a parallel presentation fact database.
+
+**MVP/proof:** one prepared section supports compact/full/evidence views with the
+same values and complete argument. Rendering that section performs no database or
+model work. Demonstrate the result in the browser and retain export/source parity.
+The existing durable Copilot handoff stays; no duplicate chat system is proposed.
+
+## Delivery order, subtraction and scope controls
+
+- **Wave 1:** R1 FMP engine consolidation and R6 read batching, as separate reviewable
+  changes. These are structural cuts without waiting for native table retirement.
+- **Wave 2:** one R2 managed-IR family and R3 explicit-state/completion consolidation;
+  qualify one R7 typed-section frontend MVP alongside them.
+- **Wave 3:** migrate R4 original-source numeric extraction and R5 publication one
+  qualified producer/class at a time. Do not require a whole-platform cutover.
+
+Each change records old procedure → owner, actual callers, old definitions removed,
+new abstractions added, and the remaining compatibility path with an explicit removal
+condition. Do not preserve the old active engine behind a feature flag after parity.
+Keep a code revert for code-only changes; persistent cutovers require bounded
+migration, reconciliation and tested rollback without discarding immutable history.
+CLI/process isolation remains where deadlines, native libraries or writer ownership
+require it; remove duplicated business logic, not purposeful process boundaries.
+
+Consolidate fixtures/setup with their owner change. Preserve unique financial,
+corruption, clocks, admission and recovery assertions. Use existing migrated_db;
+no new fixture framework or schema rebuilt per test. Run focused serial tests and
+applicable static, architecture, reachability and make check-fast gates. The known
+full-suite teardown failure remains an unresolved release obligation.
+
+For a blocked unit, name the exact missing capability and move to another qualified
+unit. After one bounded feasibility decision, bring the unresolved choice to the
+owner rather than repeat audits or add guards. Feature pruning can proceed from
+actual usage and core-task coverage after initial structural cuts; it does not wait
+for every producer migration or physical table deletion.
+
+No live state changes, collection, application model calls, deployment or physical
+retirement are authorized by this proposal. Legacy fact-plane physical retirement
+retains the §11 observation windows and separate final owner approval. Existing
+source artifacts, unknown/novel observations, histories and financial meanings stay.
+
+## Evidence and current state
+
+[Procedure inventory](../quality/backend-ingestion-retirement-inventory.md) records
+source callers and bounded retirement candidates. Existing test references are not
+new test passes. [Reader evidence](../quality/reader-initialization-evidence.md) and
+[spreadsheet audit](../quality/spreadsheet-publication-parity-audit.md) retain their
+precise proof limits. NU/MELI artifact byte reconciliation is not native/semantic
+acceptance. Report further parity only after it is actually executed.
+
+Locally committed groundwork: shared fiscal calendars; two parser helpers removed;
+one summary database authority; source-aware completion and correction handling.
+None of the seven retirement units above is implemented. No overall deletion
+percentage or production speedup is claimed. The three-Sol panel reviews this
+proposal independently; its judgments supplement source evidence and do not replace
+Opus sign-off or deterministic implementation gates.
