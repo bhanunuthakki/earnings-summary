@@ -146,3 +146,30 @@ implementation and its code-only rollback remain local.
 Final directive validation and actual-head reachability closure pass. No
 disposition decision or source body changed. The closure rerun follows tracking
 the final public-only test module and rebinding the resulting scanner input hash.
+
+## Reader-consolidation assessment before implementation
+
+The spreadsheet comparison is recorded in `spreadsheet-publication-parity-audit.md`.
+Four existing synthetic tests passed. No writer replacement is established.
+
+A task-owned runtime wrapper extended the existing
+`test_fact_read_model_batch::test_batch_preserves_valid_publications_and_revalidates_each_call`
+without editing source or tests. After the original case, it compared scalar and
+required-batch bundles for `observation-independent` at 2026-07-27T12:00:00Z.
+Complete object and JSON equality passed. Both carried
+`derivation-seal-independent`; relation tuples matched but were empty.
+The exact test node passed: 1 test in 3.38s. This is owner-interface evidence,
+not a nonempty-derived-relation or end-to-end report qualification.
+
+Source inspection confirms the bounded batch calls the same bundle and relation
+methods, with only publication-verification reuse overridden. Astra accepted
+uniform bundle reuse without a per-kind branch. It also approved removing the
+unused discovery construction, the same-clock duplicate report lineage check,
+and the selected-ID mismatch guard. Paired financial outputs, fresh-connection
+behavior and explicit-O cases remain required before implementation acceptance.
+No new application implementation has started while the roadmap's Opus gate is
+unmet. The known full-suite teardown blocker remains open.
+
+Retain `.tmp/verify_derived_bundle_parity.py` and its small log until the assertions
+move into the owning test during implementation. Superseded scan payloads were
+removed after calendar closure; prior failed full-suite evidence is preserved.
