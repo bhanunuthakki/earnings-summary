@@ -1,0 +1,38 @@
+{
+  "scope": "Owner-approved source-only filing launcher through a shared stdlib Windows AppContainer runtime; report ABI declarations reused.",
+  "reason": "Preserve kernel containment while removing the custom unsigned executable. Explicit source mode and complete source/runtime seals; no new provider, dependency, database or service. Independent review and native qualification remain required.",
+  "scanner_unchanged": true,
+  "measurement": {
+    "executable_modules": {
+      "prior": 1476,
+      "current": 1479
+    },
+    "total_noncomment_loc": {
+      "prior": 566614,
+      "current": 568507
+    },
+    "modules_over_1000_loc": {
+      "prior": 109,
+      "current": 110
+    },
+    "modules_over_2000_loc": {
+      "prior": 25,
+      "current": 25
+    },
+    "max_internal_fan_out": {
+      "prior": 40,
+      "current": 40
+    },
+    "scc_count": {
+      "prior": 21,
+      "current": 21
+    },
+    "largest_scc": {
+      "prior": 16,
+      "current": 16
+    }
+  },
+  "baseline_update": "Complete unchanged-scanner receipt regenerated intentionally for the reviewed source launcher. Full checks and independent GPT-6.1 Sol activation review remain required.",
+  "integrated_main": "2a3e7bed8b4f869311313d54e200e0eb83cde37e",
+  "additional_noncomment_loc": 1893
+}

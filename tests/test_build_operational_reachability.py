@@ -218,7 +218,7 @@ def test_actual_head_is_supported() -> None:
             line=line,
             unknown=True,
         )
-        for line in (123, 913)
+        for line in (124, 914)
     ]
     # Keep the exact managed-startup, shared-ledger admission, dead/live
     # lease-holder and harness session-start pruning test children. Reject any
@@ -226,6 +226,7 @@ def test_actual_head_is_supported() -> None:
     for source, lines in (
         ("tests/test_sqlite_bootstrap.py", (32, 108)),
         ("tests/test_weekly_cleanup.py", (190,)),
+        ("tests/test_filing_xbrl_appcontainer_launcher.py", (22, 34)),
         ("tests/test_storage_reservation.py", (61, 121, 139)),
         ("tests/test_temp_run_pruning.py", (166,)),
         ("tests/test_financial_source_semantic_quarantine.py", (49,)),
@@ -262,9 +263,10 @@ def test_actual_head_is_supported() -> None:
             )
             for line in lines
         ]
-    # Retain the 171 existing test seams and the exact integrity-audit fixture run.
+    # Retain the existing test seams, the integrity-audit fixture run, and
+    # both exact XBRL launcher process fixtures pinned above.
     # No production gap is admitted; the zero-production assertions stay above.
-    assert len(graph.unknown_edges) == 172
+    assert len(graph.unknown_edges) == 174
     assert [
         edge
         for edge in graph.unknown_edges

@@ -59,8 +59,8 @@ RETAINED_PDF_FULLTEXT_EXTRACTOR_6_21_1 = FulltextExtractorIdentity(
     hierarchy="flat",
 )
 RETAINED_PDF_FULLTEXT_EXTRACTORS = (
-    RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0,
     RETAINED_PDF_FULLTEXT_EXTRACTOR_6_21_1,
+    RETAINED_PDF_FULLTEXT_EXTRACTOR_6_19_0,
 )
 PDF_FULLTEXT_PYPDF_VERSION = "6.21.2"
 PDF_FULLTEXT_EXTRACTOR = FulltextExtractorIdentity(
@@ -253,8 +253,10 @@ def select_approved_fulltext_run(
         candidates.append((next(iter(run_ids)), page_numbers))
     if not candidates:
         return None
-    if required_pages is None and len(candidates) > 1:
-        promoted, retained = candidates[:2]
-        if not retained[1] or not retained[1].issubset(promoted[1]):
-            return retained[0]
-    return candidates[0][0]
+    # Replay each promotion against the previously selected whole run. An
+    # incomplete intermediate generation cannot hide older complete coverage.
+    selected = candidates[-1]
+    for candidate in reversed(candidates[:-1]):
+        if selected[1] and selected[1].issubset(candidate[1]):
+            selected = candidate
+    return selected[0]

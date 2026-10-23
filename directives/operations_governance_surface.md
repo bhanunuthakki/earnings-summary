@@ -1333,6 +1333,69 @@ installation descriptor. Missing, template, unapproved, source-drift and runtime
 failures are separate states. Preflight cannot approve a bundle. Protocol v2
 uses canonical XBRL measure units and a separately committed unit helper.
 
+The Windows filing-XBRL launcher gives each invocation a new noninteractive
+window station and desktop. Only the launcher owner and its AppContainer package
+receive access. The package cannot change permissions or ownership, switch the
+desktop, read the screen, use the clipboard, or install hooks. The launcher
+checks the effective permissions and low-integrity label, restores its own UI
+context, and starts the child with the private desktop. It stops the complete
+child process tree before it closes the private objects. A failed check refuses
+the invocation. This adds no network capability, loopback exemption, host-desktop
+grant, service, schedule, or installed-runtime approval. The launcher uses the
+stable `EarningsSummaryFilingXbrlV2` profile and its V2 mutex. The mutex uses the global Windows namespace to serialize sessions. Its
+protected permissions allow only LocalSystem and built-in Administrators. The
+launcher checks the effective owner and exact grants before it changes any
+profile or directory. Other operators fail closed. It preserves the existing V1
+profile. The stdout protocol remains unchanged.
+
+The source launcher uses the verified bundle Python with `-I -S -B`. Its
+`python_source` manifest mode binds both the Python entrypoint and the shared
+`runtime.windows_appcontainer` source in the complete runtime member set. The
+builder accepts `--launcher-kind python_source`; it checks both copied sources
+against the reviewed repository files before sealing. There is no automatic
+fallback from an executable to source. Existing executable manifests retain
+their own identity and approval requirements.
+
+Source execution does not disable Smart App Control, load a blocked assembly,
+add a certificate, or add a network capability. It keeps the private desktop,
+protected mutex, exact permission grants, suspended child ownership and full
+child-tree cleanup requirements. The launcher runs in a dedicated subprocess;
+it does not change the dashboard process's window station. Fresh native
+qualification must bind the exact interpreter, source closure and runtime
+before bundle approval or installation. Source mode is an implementation
+change, not proof of host compatibility or an installed-runtime approval.
+
+Source installations also name one explicit `sandbox_state_root`. All approved
+V2 versions share this protected operational authority. It is outside the sealed
+runtime and input trees. The controller creates an exclusive pending invocation
+record before launch. An existing record refuses another invocation. Changing
+an installation descriptor cannot authorize a different recovery authority or
+clear a pending record.
+
+The controller owns a separate Job for the launcher and its descendants. It
+starts the launcher suspended and assigns the Job before resume. Timeout or
+output overflow requests cancellation first and leaves a bounded cleanup period.
+The parser receives neither the cancellation handle nor the separate cleanup
+acknowledgement pipe. Parser stdout is never cleanup proof. The controller clears
+the pending record only after trusted acknowledgement, launcher exit, zero active
+Job processes, exact permission parity and byte verification. Forced termination
+or unproved cleanup leaves a recovery hold. If descendant stop is unproved, the
+controller also retains its write fences and owned resources. Process exit can
+close handles; it does not clear the durable recovery requirement.
+
+Use the existing descriptor for normal operation. Direct qualification calls
+must name `--sandbox-state-root` explicitly. Recovery requires the exact retained
+invocation identity, stopped-process proof, permission and byte reconciliation,
+and independent review before clearing a hold. No automatic retry or stale-grant
+removal is supported by the source launcher.
+
+The bridge gives the SEC renderer a fresh `MPLCONFIGDIR` inside its private
+temporary directory. It restores the environment and removes that directory on
+success or handled failure. Four incomplete directories block another allocation
+and require recovery; the bridge does not delete prior incomplete requests.
+This avoids reading a host home configuration or writing into the sealed runtime.
+Recovery follows the bounded filing-XBRL procedure in `agent_host_operations.md`.
+
 `provenance.integrity_audit.verify_filing_xbrl_run` is a read-only retained-run
 verifier. Its caller must hold one read transaction and supply an exact retained
 extraction-run ID. It rejects missing schema, run, input/disposition seal,
@@ -2218,3 +2281,18 @@ completeness flag distinguishes a complete sample from a bounded one. A
 malformed immutable clock or missing selected outcome, link, or observation
 blocks the as-known read and the audit. It cannot expose an older resolution
 as a complete current answer.
+
+### pypdf 6.21.2 identity promotion — no operational surface change
+
+New PDF full-text extraction uses the reviewed locked pypdf 6.21.2 runtime with
+its own exact code/config identity and idempotency namespace. The exact 6.21.1
+and 6.19.0 identities and namespaces stay approved for readers and retained
+coverage. The evidence namespace remains `fulltext-pdf-v6`. No old node or run
+is relabelled. Readers retain one whole run; without preflight, a newer run must
+preserve the previously selected complete page population through every prior
+generation. Retained coverage still prevents automatic re-extraction. Existing
+seals, cutoffs and financial evidence checks remain required. This changes no
+operator action, route, service, schedule, budget, schema or live-state writer.
+Tests cover three-generation partial promotions, retained seals, native transcript
+readers and exact runtime/lock identity. Any re-extraction remains separately
+approved.

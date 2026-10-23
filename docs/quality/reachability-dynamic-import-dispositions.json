@@ -13,8 +13,8 @@
     {
       "disposition": "external_adapter",
       "evidence": "The isolated bridge imports the fixed bundled unit helper. build_filing_xbrl_processor_bundle requires its exact byte equality with src/filings/xbrl_units.py; the bundle seals one earnings_summary_xbrl_units.py member and digest, and the approved loader rechecks current source bytes. This boundary does not prove installed/native qualification.",
-      "fingerprint": "b31977f6ee73d5cc836ddd6fcfb1da0867b99ab708044e6c94085cb17471e957",
-      "line": 27,
+      "fingerprint": "8bce254084bd23c8c99028c18a57a4568248d10234349a6352c2ce80a1db4536",
+      "line": 29,
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "earnings_summary_xbrl_units"
@@ -23,8 +23,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Bridge lazily loads the optional arelle.api.Session factory.",
-      "fingerprint": "a15cfa75ec25a7e79ef7ca8051fe6d8e94367010372e89573881906638db5eb9",
-      "line": 351,
+      "fingerprint": "c4638d621dc0bcfc15f78c51bddb0b4664af5594815a000333982c472b6956a4",
+      "line": 354,
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "arelle.api.Session"
@@ -33,8 +33,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Bridge lazily loads the optional arelle.RuntimeOptions factory.",
-      "fingerprint": "3e238bdad6c000866c243ef12d91eebdd2cc2dc09429a5fac2f5b830dea30b75",
-      "line": 355,
+      "fingerprint": "eedfc3afbf857942fdc82b4db2b92a724916319f9b04f02a4feee0d08f463b9c",
+      "line": 358,
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "arelle.RuntimeOptions"
@@ -43,8 +43,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Bridge lazily loads the optional lxml.etree parser.",
-      "fingerprint": "5f3dd33c49748b3816f0ceee5ca2d9426dc1cd93eeee5dca6b0c1413424bd716",
-      "line": 417,
+      "fingerprint": "50ea078df5732958392e95e2f08c01876b21ebca53a1e35815293b26ea90dc3b",
+      "line": 420,
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "lxml.etree"
@@ -53,8 +53,8 @@
     {
       "disposition": "external_optional_dependency",
       "evidence": "Bridge lazily loads the optional arelle.XbrlConst module.",
-      "fingerprint": "e6375b01931e2bf8c4f570c1565561cad66a67fd2efd435d737a3028ba603350",
-      "line": 862,
+      "fingerprint": "ee5e24613566d101d6ecd2eab955966214a79ca730d94a8133e6b2827e68739b",
+      "line": 865,
       "path": "execution/filing_xbrl_bridge.py",
       "targets": [
         "arelle.XbrlConst"
@@ -297,7 +297,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "c7359acdff0616cd49d37d1d7e4ef4bf79c27a5458f867b44e4a68441ac6a0d9",
+      "source_sha256": "3af4cfc025ecda5b2f3e384786033602f475b4a70be3d1d77fc6c9026d998f46",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

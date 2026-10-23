@@ -482,6 +482,91 @@ def test_actual_detector_preserves_adjacent_secrets_at_reconciliation_paths(
     assert _run_detect_secrets(tmp_path, unrelated, filtered=True).returncode == 1
 
 
+FILING_XBRL_HASH_KEYS = {
+    "docs/quality/filing-xbrl-architecture-review.json": {"integrated_main": 40},
+    "docs/quality/filing-xbrl-v2-candidate.json": {
+        "supersedes_candidate_commit": 40,
+        "execution/build_filing_xbrl_processor_bundle.py": 64,
+        "execution/filing_xbrl_bridge.py": 64,
+        "execution/filing_xbrl_appcontainer_launcher.cs": 64,
+        "execution/filing_xbrl_appcontainer_launcher.py": 64,
+        "src/runtime/windows_appcontainer.py": 64,
+        "src/runtime/windows_appcontainer_supervisor.py": 64,
+        "src/filings/xbrl_units.py": 64,
+        "runtime_artifact_sha256": 64,
+        "sandbox_launcher_sha256": 64,
+        "manifest_sha256": 64,
+        "manifest_artifact_sha256": 64,
+    },
+    "docs/quality/filing-xbrl-v2-approval-proposal.json": {
+        "manifest_sha256": 64,
+        "manifest_artifact_sha256": 64,
+        "runtime_artifact_sha256": 64,
+        "sandbox_launcher_sha256": 64,
+        "bridge_source_sha256": 64,
+        "launcher_source_sha256": 64,
+        "unit_source_sha256": 64,
+        "support_source_sha256": 64,
+    },
+}
+
+
+@pytest.mark.parametrize(
+    ("filename", "key", "length"),
+    [
+        (filename, key, length)
+        for filename, keys in FILING_XBRL_HASH_KEYS.items()
+        for key, length in keys.items()
+    ],
+)
+@pytest.mark.parametrize("delimiter", (":", "="))
+def test_filing_xbrl_hashes_require_exact_path_key_and_value(
+    filename: str, key: str, length: int, delimiter: str
+) -> None:
+    digest = hashlib.sha256(b"public filing XBRL scanner fixture").hexdigest()[:length]
+    line = f'  "{key}" {delimiter} "{digest}",\n'
+    assert FILTER.is_quality_evidence_hash(filename, line)
+    for prefix in ("other/", "./", "/", "docs/../"):
+        assert not FILTER.is_quality_evidence_hash(prefix + filename, line)
+    for other, keys in FILING_XBRL_HASH_KEYS.items():
+        if key not in keys:
+            assert not FILTER.is_quality_evidence_hash(other, line)
+    for value in (digest.upper(), digest[:-1], digest + "a", "g" + digest[1:]):
+        assert not FILTER.is_quality_evidence_hash(filename, f'"{key}" {delimiter} "{value}"')
+    for malformed in (
+        line.replace(key, "unknown_sha256"),
+        line.replace(key, "execution/other.py"),
+        line.replace(key, SCANNER_FIELD_NAME),
+        line.replace(digest, "ghp_" + digest[:36]),
+        "prefix " + line,
+        line.rstrip() + ' "token": "secret"',
+        line.rstrip() + " // generated",
+    ):
+        assert not FILTER.is_quality_evidence_hash(filename, malformed)
+
+
+@pytest.mark.parametrize("filename", FILING_XBRL_HASH_KEYS)
+def test_actual_detector_keeps_secrets_visible_in_filing_xbrl_evidence(
+    tmp_path: Path, filename: str
+) -> None:
+    original = (ROOT / filename).read_text(encoding="utf-8")
+    fixture = tmp_path / filename
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text(original, encoding="utf-8")
+    assert _run_detect_secrets(tmp_path, filename, filtered=False).returncode == 1
+    assert _run_detect_secrets(tmp_path, filename, filtered=True).returncode == 0
+    digest = hashlib.sha256(b"public adjacent XBRL scanner fixture").hexdigest()
+    for key, value in (
+        (SCANNER_FIELD_NAME, "ghp_" + digest[:36]),
+        (UNRECOGNIZED_MEMBER, digest),
+        ("private_key", "-----BEGIN " + "PRIVATE KEY----- synthetic-fixture"),
+    ):
+        payload = json.loads(original)
+        payload[key] = value
+        fixture.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        assert _run_detect_secrets(tmp_path, filename, filtered=True).returncode == 1
+
+
 def test_detect_secrets_helper_uses_exact_filter_bytes_and_drive_free_reference(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -506,3 +591,47 @@ def test_detect_secrets_helper_uses_exact_filter_bytes_and_drive_free_reference(
     # colon in the authority consumes the function separator instead.
     absolute_windows = f"file://{PureWindowsPath('C:/repo/filter.py')}::is_quality_evidence_hash"
     assert len(urlparse(absolute_windows).path.split("::")) != 2
+
+
+PDF_IDENTITY_GROWTH = "docs/quality/pdf-6212-architecture-growth-20261023.json"
+PDF_IDENTITY_HASH_KEYS = {
+    "scoped_commit": 40,
+    "baseline_commit": 40,
+    "current_source_sha256": 64,
+    "baseline_source_sha256": 64,
+}
+
+
+@pytest.mark.parametrize(("key", "length"), PDF_IDENTITY_HASH_KEYS.items())
+@pytest.mark.parametrize("delimiter", (":", "="))
+def test_pdf_identity_growth_accepts_only_exact_digest_members(
+    key: str, length: int, delimiter: str
+) -> None:
+    digest = hashlib.sha256(b"public PDF identity quality fixture").hexdigest()[:length]
+    line = f'  "{key}" {delimiter} "{digest}",\n'
+    assert FILTER.is_quality_evidence_hash(PDF_IDENTITY_GROWTH, line)
+    for path in ("other/" + PDF_IDENTITY_GROWTH, "./" + PDF_IDENTITY_GROWTH):
+        assert not FILTER.is_quality_evidence_hash(path, line)
+    for malformed in (
+        line.replace(key, "unrecognized_hash"),
+        line.replace(key, SCANNER_FIELD_NAME),
+        line.replace(digest, digest.upper()),
+        line.replace(digest, digest[:-1]),
+        line.rstrip() + ' "token": "secret"',
+    ):
+        assert not FILTER.is_quality_evidence_hash(PDF_IDENTITY_GROWTH, malformed)
+
+
+def test_actual_detector_preserves_secrets_adjacent_to_pdf_identity_hashes(tmp_path: Path) -> None:
+    fixture = tmp_path / PDF_IDENTITY_GROWTH
+    fixture.parent.mkdir(parents=True)
+    original = (ROOT / PDF_IDENTITY_GROWTH).read_text(encoding="utf-8")
+    fixture.write_text(original, encoding="utf-8")
+    assert _run_detect_secrets(tmp_path, PDF_IDENTITY_GROWTH, filtered=False).returncode == 1
+    assert _run_detect_secrets(tmp_path, PDF_IDENTITY_GROWTH, filtered=True).returncode == 0
+    digest = hashlib.sha256(b"public adjacent PDF scanner fixture").hexdigest()
+    for key, value in ((SCANNER_FIELD_NAME, "ghp_" + digest[:36]), (UNRECOGNIZED_MEMBER, digest)):
+        payload = json.loads(original)
+        payload[key] = value
+        fixture.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        assert _run_detect_secrets(tmp_path, PDF_IDENTITY_GROWTH, filtered=True).returncode == 1
