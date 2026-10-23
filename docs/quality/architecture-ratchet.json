@@ -1,9 +1,9 @@
 {
   "schema_version": "architecture-measurement-v1",
   "scoped_revision": "WORKTREE",
-  "scoped_commit": "2d22362439cf9d0976f6f6654898943851f1ab2b",
+  "scoped_commit": "5913b1fc18be872e7297ffc55fe1e074fdc40af8",
   "scanner_sha256": "63658dc2f6b7250253629317b33b63b0970a0fdb1a32655cd8ad770f412793a7",
-  "source_sha256": "b77b75525660898282bb24f39fdd4c04a9a09930fa0ad854787c5b21809a7d2a",
+  "source_sha256": "b59f08e09fb3f61e29759f92a7bbc3e16ca990cefd165064c3fdaca2872a6a2a",
   "python_version": "3.14.7",
   "ast_version": "python-3.14",
   "source_roots": [
@@ -23,7 +23,7 @@
   },
   "metrics": {
     "executable_modules": 1479,
-    "total_noncomment_loc": 569277,
+    "total_noncomment_loc": 569345,
     "modules_over_1000_loc": 111,
     "modules_over_2000_loc": 25,
     "modules_at_least_3000_loc": 4,
@@ -3478,9 +3478,9 @@
         "path": "execution/fetch_sec_xbrl.py",
         "module": "execution.fetch_sec_xbrl",
         "lines": {
-          "physical": 454,
-          "nonblank": 419,
-          "noncomment": 408
+          "physical": 497,
+          "nonblank": 459,
+          "noncomment": 448
         },
         "internal_fan_out": 10,
         "responsibilities": [
@@ -14865,9 +14865,9 @@
         "path": "src/pipeline/queries.py",
         "module": "pipeline.queries",
         "lines": {
-          "physical": 191,
-          "nonblank": 166,
-          "noncomment": 158
+          "physical": 224,
+          "nonblank": 194,
+          "noncomment": 186
         },
         "internal_fan_out": 4,
         "responsibilities": [

@@ -6,8 +6,9 @@ import json
 import os
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Protocol, cast
+from urllib.parse import urlparse
 
 import pytest
 
@@ -207,7 +208,11 @@ def _run_detect_secrets(
         "--no-verify",
     ]
     if filtered:
-        command.extend(("-f", f"file://{FILTER_PATH}::is_quality_evidence_hash"))
+        relative_filter = FILTER_PATH.relative_to(ROOT)
+        local_filter = tmp_path / relative_filter
+        local_filter.parent.mkdir(parents=True, exist_ok=True)
+        local_filter.write_bytes(FILTER_PATH.read_bytes())
+        command.extend(("-f", f"file://{relative_filter.as_posix()}::is_quality_evidence_hash"))
     command.extend(filenames)
     return subprocess.run(command, cwd=tmp_path, text=True, capture_output=True, check=False)
 
@@ -560,3 +565,29 @@ def test_actual_detector_keeps_secrets_visible_in_filing_xbrl_evidence(
         payload[key] = value
         fixture.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         assert _run_detect_secrets(tmp_path, filename, filtered=True).returncode == 1
+
+
+def test_detect_secrets_helper_uses_exact_filter_bytes_and_drive_free_reference(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commands: list[list[str]] = []
+
+    def capture(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(subprocess, "run", capture)
+    _run_detect_secrets(tmp_path, "docs/quality/architecture-ratchet.json", filtered=True)
+    reference = commands[0][commands[0].index("-f") + 1]
+    filename, function = reference.removeprefix("file://").split("::")
+    assert function == "is_quality_evidence_hash"
+    assert filename == FILTER_PATH.relative_to(ROOT).as_posix()
+    assert not Path(filename).is_absolute()
+    assert not PureWindowsPath(filename).drive
+    assert not PureWindowsPath(filename).is_absolute()
+    assert len(urlparse(reference).path.split("::")) == 2
+    assert (tmp_path / filename).read_bytes() == FILTER_PATH.read_bytes()
+    # Detector1.5 validates the URL path before it imports the file. A drive
+    # colon in the authority consumes the function separator instead.
+    absolute_windows = f"file://{PureWindowsPath('C:/repo/filter.py')}::is_quality_evidence_hash"
+    assert len(urlparse(absolute_windows).path.split("::")) != 2
