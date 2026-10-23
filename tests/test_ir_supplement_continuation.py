@@ -935,3 +935,25 @@ def test_context_witnesses_are_native_and_limited_to_supplied_pages(
     omitted.capture(b"original source")
     with pytest.raises(ValueError, match="supplied native context"):
         omitted.require_context_witnesses([row])
+
+
+def test_existing_source_coordinate_fields_have_native_context_witnesses(
+    conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    header = "In millions, except percentages and per share amounts"
+    capture = _capture(conn, monkeypatch, (header + "\nRow label\n",), lambda text: [])
+    capture.capture(b"original source")
+    capture.require_context_witnesses(
+        [
+            {
+                "context_witnesses": [
+                    {
+                        "page": 1,
+                        "quote": header,
+                        "fields": ["source_unit_scale", "source_column_header"],
+                    },
+                    {"page": 1, "quote": "Row label", "fields": ["source_row_label"]},
+                ]
+            }
+        ]
+    )

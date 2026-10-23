@@ -11,9 +11,9 @@ import json
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal, cast
+from typing import Literal, cast, get_args
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from llm.structured import parse_json_payload, repair_structured_prompt
 from llm_artifact_store import (
@@ -28,6 +28,40 @@ from log_redact import redact
 from pipeline.locators import locate_char_span
 from provenance.fulltext_backfill import project_pdf_page_texts
 from provenance.ocr_extraction import PDFPreflight, normalize_extracted_text
+
+SupplementContextField = Literal[
+    "accounting_basis",
+    "consolidation_scope",
+    "dimensions",
+    "period_kind",
+    "reported_period_start",
+    "reported_period_end",
+    "guidance_horizon",
+    "source_definition",
+    "source_unit_scale",
+    "currency",
+    "period_role",
+    "source_row_label",
+    "source_column_header",
+]
+
+
+class SupplementContextWitness(BaseModel):
+    """Prospective raw context evidence; never a reviewed publication witness."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    page: int = Field(gt=0)
+    quote: str = Field(min_length=1, max_length=512)
+    fields: list[SupplementContextField] = Field(min_length=1)
+
+
+SUPPLEMENT_CONTEXT_WITNESS_INSTRUCTIONS = (
+    "context_witnesses fields must contain only these exact names: "
+    + ", ".join(get_args(SupplementContextField))
+    + ". Use only exact quotes on the supplied native page. Row/column witnesses "
+    "support source coordinates only; they do not grant financial admission."
+)
 
 
 class SupplementSaturatedError(ValueError):
@@ -81,6 +115,7 @@ def repair_supplement_prompt(prompt: str, error: str = "") -> str:
         "(or the supplied page when no section marker exists). Do not repair spelling, "
         "spacing, punctuation or context. "
         + SUPPLEMENT_NUMERIC_FIELD_INSTRUCTIONS
+        + SUPPLEMENT_CONTEXT_WITNESS_INSTRUCTIONS
         + "source_value_text must not be a formatted or scale-expanded value. "
         "For a range, do not add a currency or percent symbol absent from that endpoint. "
         "Synthetic examples: $10-20 permits literal tokens 10 and 20, not $20; "
@@ -404,7 +439,7 @@ class SupplementCapture:
             prompt,
             *[repair_supplement_prompt(prompt, error) for error in _SUPPLEMENT_REPAIR_FEEDBACK],
         ]
-        version = "ir-supplement-native-continuation-v11-explicit-numeric-fields"
+        version = "ir-supplement-native-continuation-v12-closed-witness-fields"
         scope = f"ir_supplement:{self.document_id}:page:{page}:section:{start}:{len(body)}"
         expected_sha = compute_input_sha256(prompt_version=version, cache_inputs=inputs)
         artifact = read_current(
@@ -549,19 +584,6 @@ class SupplementCapture:
 
     def require_context_witnesses(self, rows: list[dict[str, object]]) -> None:
         """Check proposed evidence against supplied native pages, not admission."""
-        allowed_fields = {
-            "accounting_basis",
-            "consolidation_scope",
-            "dimensions",
-            "period_kind",
-            "reported_period_start",
-            "reported_period_end",
-            "guidance_horizon",
-            "source_definition",
-            "source_unit_scale",
-            "currency",
-            "period_role",
-        }
         for row in rows:
             witnesses = row.get("context_witnesses", [])
             if not isinstance(witnesses, list):
@@ -570,32 +592,18 @@ class SupplementCapture:
             if len(witness_list) > 8:
                 raise ValueError("IR context witness is not supported by supplied native context")
             for witness in witness_list:
-                if not isinstance(witness, dict):
+                try:
+                    item = SupplementContextWitness.model_validate(witness)
+                except ValidationError:
                     raise ValueError(
                         "IR context witness is not supported by supplied native context"
-                    )
-                item = cast(dict[str, object], witness)
-                if set(item) != {"page", "quote", "fields"}:
-                    raise ValueError(
-                        "IR context witness is not supported by supplied native context"
-                    )
-                page, quote, fields = item["page"], item["quote"], item["fields"]
-                if not isinstance(fields, list):
-                    raise ValueError(
-                        "IR context witness is not supported by supplied native context"
-                    )
-                field_list = cast(list[object], fields)
+                    ) from None
                 if (
-                    type(page) is not int
-                    or page not in self._context_pages
-                    or not isinstance(quote, str)
-                    or not 0 < len(quote) <= 512
-                    or not field_list
-                    or any(
-                        not isinstance(name, str) or name not in allowed_fields
-                        for name in field_list
+                    item.page not in self._context_pages
+                    or locate_char_span(
+                        item.quote, self._pages[item.page - 1], whitespace_only=True
                     )
-                    or locate_char_span(quote, self._pages[page - 1], whitespace_only=True) is None
+                    is None
                 ):
                     raise ValueError(
                         "IR context witness is not supported by supplied native context"

@@ -942,3 +942,52 @@ def test_retained_attempt5_rejections_remain_strict(
         {"source_value_text": token + " %"} if unit == "percent" else {"value": "60801000000"}
     )
     assert validate([corrected], source_scope="direct_pdf_rich")
+
+
+def test_witness_wire_rejects_unknown_field_before_native_guard() -> None:
+    row = json.loads(_ENUMERATE_JSON)[0]
+    row["context_witnesses"] = [{"page": 1, "quote": "Currency USD", "fields": ["arbitrary_alias"]}]
+    with pytest.raises(ValidationError):
+        getattr(kes, "_validated_enumerated_rows")([row], source_scope="direct_pdf_rich")
+
+
+def test_closed_witness_wire_preserves_source_coordinates_and_raw_shape() -> None:
+    from typing import get_args
+
+    row = json.loads(_ENUMERATE_JSON)[0]
+    witnesses = [
+        {"page": 1, "quote": "Column header", "fields": ["source_column_header"]},
+        {"page": 1, "quote": "Row label", "fields": ["source_row_label"]},
+    ]
+    row["context_witnesses"] = witnesses
+    parsed = getattr(kes, "_validated_enumerated_rows")([row], source_scope="direct_pdf_rich")[0]
+    assert parsed.model_dump(mode="json")["context_witnesses"] == witnesses
+    schema = kes.ir_supplement_capture.SupplementContextWitness.model_json_schema()
+    enum = schema["properties"]["fields"]["items"]["enum"]
+    assert enum == list(get_args(kes.ir_supplement_capture.SupplementContextField))
+    primary = getattr(kes, "_enumerate_prompt")(
+        "TEST", "2026-06-30", "source", 200, source_scope="direct_pdf_rich"
+    )
+    repaired = kes.ir_supplement_capture.repair_supplement_prompt(primary)
+    for field in enum:
+        assert field in primary and field in repaired
+
+
+@pytest.mark.parametrize(
+    "witness",
+    [
+        {"page": True, "quote": "Header", "fields": ["currency"]},
+        {"page": "1", "quote": "Header", "fields": ["currency"]},
+        {"page": 0, "quote": "Header", "fields": ["currency"]},
+        {"page": 1, "quote": "Header", "fields": []},
+        {"page": 1, "quote": "", "fields": ["currency"]},
+        {"page": 1, "quote": "x" * 513, "fields": ["currency"]},
+        {"page": 1, "quote": "Header", "fields": ["currency"], "alias": "USD"},
+    ],
+)
+def test_witness_wire_and_native_guard_share_shape_rejections(witness: dict[str, object]) -> None:
+    row = json.loads(_ENUMERATE_JSON)[0] | {"context_witnesses": [witness]}
+    with pytest.raises(ValidationError):
+        getattr(kes, "_validated_enumerated_rows")([row], source_scope="direct_pdf_rich")
+    with pytest.raises(ValidationError):
+        kes.ir_supplement_capture.SupplementContextWitness.model_validate(witness)

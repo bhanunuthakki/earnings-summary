@@ -216,8 +216,8 @@ class _EnumeratedKpi(BaseModel):
     period_kind: Literal["instant", "duration", "unknown"] = "unknown"
     guidance_horizon: str | None = Field(default=None, max_length=200)
     source_definition: str | None = Field(default=None, max_length=512)
-    context_witnesses: list[dict[str, object]] = Field(
-        default_factory=list[dict[str, object]], max_length=8
+    context_witnesses: list[ir_supplement_capture.SupplementContextWitness] = Field(
+        default_factory=list[ir_supplement_capture.SupplementContextWitness], max_length=8
     )
     reported_period_start: date | None = None
     reported_period_end: date
@@ -1312,6 +1312,7 @@ def _enumerate_prompt(
     )
     numeric_field_rule = (
         ir_supplement_capture.SUPPLEMENT_NUMERIC_FIELD_INSTRUCTIONS
+        + ir_supplement_capture.SUPPLEMENT_CONTEXT_WITNESS_INSTRUCTIONS
         if source_scope == "direct_pdf_rich"
         else ""
     )
@@ -2029,13 +2030,13 @@ def retain_and_publish_reviewed_ir_source(
     retained_exchanges = {response.llm_call_id: response for response in responses}
     capture_versions = [
         ir_supplement_capture.historical_capture_version(conn, exchange, source_sha256)
-        or "v11-explicit-numeric-fields"
+        or "v12-closed-witness-fields"
         for exchange in exchanges
     ]
     if len(set(capture_versions)) > 1:
         raise ValueError("IR governed exchanges mix producing capture versions")
-    capture_version = capture_versions[0] if capture_versions else "v11-explicit-numeric-fields"
-    historical = capture_version != "v11-explicit-numeric-fields"
+    capture_version = capture_versions[0] if capture_versions else "v12-closed-witness-fields"
+    historical = capture_version != "v12-closed-witness-fields"
 
     def retained_rows(raw: object) -> list[_EnumeratedKpi]:
         if historical:
@@ -2405,7 +2406,7 @@ def capture_for_ir_pdf_docs(
                     "source_scope": "direct_pdf_rich",
                     "max_chunks": max_chunks,
                     "max_structured_calls": max_structured_calls,
-                    "continuation_version": "ir-supplement-native-continuation-v11-explicit-numeric-fields",
+                    "continuation_version": "ir-supplement-native-continuation-v12-closed-witness-fields",
                     "prompt_sha256": prompt_sha256,
                     "schema_sha256": schema_sha256,
                     "projection_identity": projection_identity,
