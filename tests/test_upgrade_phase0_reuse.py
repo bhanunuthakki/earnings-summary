@@ -9,11 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 import upgrade_database as owner
-from alembic.config import Config
 from sqlalchemy import event
 from sqlalchemy.engine import Connection, Engine
 
-from alembic import command
 from execution import portfolio_readiness_receipt as readiness
 from execution.backup_restore_readiness_receipt import collect_backup_restore_receipt
 from sqlite_snapshot import SnapshotRequest, create_snapshot
@@ -142,10 +140,7 @@ def test_reviewed_page_migration_rolls_back_first_ddl_failure(
     event.listen(Engine, "after_cursor_execute", fail_after_first_ddl)
     try:
         with pytest.raises(RuntimeError, match="injected_after_first_reviewed_page_ddl"):
-            config = Config(str(ROOT / "alembic.ini"))
-            config.set_main_option("script_location", str(ROOT / "alembic"))
-            config.set_main_option("sqlalchemy.url", f"sqlite:///{db.as_posix()}")
-            command.upgrade(config, NEW)
+            migrated_db(db, target=NEW, upgrade_existing=True)
     finally:
         event.remove(Engine, "after_cursor_execute", fail_after_first_ddl)
     with sqlite3.connect(db) as connection:

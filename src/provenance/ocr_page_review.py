@@ -6,14 +6,13 @@ one visually inspected page has no financial content for native IR capture.
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
 from datetime import UTC, datetime
 from typing import Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
-from runtime.deterministic import canonical_json
+from runtime.deterministic import content_sha256
 
 
 class ReviewedPdfPageRevision(BaseModel):
@@ -63,24 +62,16 @@ class RetainedPdfPageReview(BaseModel):
     commitment_sha256: str
 
 
-def _sha(value: object) -> str:
-    return hashlib.sha256(canonical_json(value).encode()).hexdigest()
-
-
-def _aware(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value)
-    if parsed.tzinfo is None:
-        raise ValueError("review time must be timezone aware")
-    return parsed.astimezone(UTC)
-
-
 def _row(row: sqlite3.Row) -> RetainedPdfPageReview:
     data: dict[str, object] = dict(zip(row.keys(), tuple(row), strict=True))
-    data["reviewed_at"] = _aware(str(data["reviewed_at"]))
-    data["recorded_at"] = _aware(str(data["recorded_at"]))
+    for field in ("reviewed_at", "recorded_at"):
+        parsed = datetime.fromisoformat(str(data[field]))
+        if parsed.tzinfo is None:
+            raise ValueError("review time must be timezone aware")
+        data[field] = parsed.astimezone(UTC)
     review = RetainedPdfPageReview.model_validate(data)
     commitment = review.model_dump(mode="json", exclude={"review_id", "commitment_sha256"})
-    if _sha(commitment) != review.commitment_sha256 or review.review_id != (
+    if content_sha256(commitment) != review.commitment_sha256 or review.review_id != (
         "pdf-page-review:" + review.commitment_sha256
     ):
         raise ValueError("reviewed PDF page commitment mismatch")
@@ -152,7 +143,7 @@ def record_reviewed_pdf_page(
         "revision": revision,
         "supersedes_review_id": prior.review_id if prior else None,
     }
-    commitment_sha256 = _sha(body)
+    commitment_sha256 = content_sha256(body)
     review_id = "pdf-page-review:" + commitment_sha256
     conn.execute(
         "INSERT INTO reviewed_pdf_page_revisions "
