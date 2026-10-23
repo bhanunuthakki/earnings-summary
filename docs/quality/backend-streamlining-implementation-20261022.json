@@ -807,7 +807,7 @@
     "transport": "claude_membership"
   },
   "static_count_clarification": "Old2012/1835 values are previous configured ceilings, not a paired prechange measurement of actual diagnostics/suppressions. Revised measured1826/1811 values tighten those ceilings.",
-  "status": "LOCAL_CHECKPOINTS_ACCEPTED: first92,retention95,metricsfixture94,FMPfixture94,series93; fullcombinedgateRUNNING; originalstructuralbaselineFAIL; widerroadmapopen",
+  "status": "LOCAL_CHECKPOINTS_ACCEPTED; reachability and legacy inventory accepted at97 overall; original structural baseline FAIL; full roadmap open",
   "third_independent_sol_proxy_review": {
     "binding_sha256": "53493b3675b5a59400c3527a8954914d8a50ea0ae9d09a819d27d854d8c897d0",
     "effort": "high",
@@ -2269,17 +2269,19 @@
     "wire_amendment": ".tmp/r5-capture-wire-amendment.md"
   },
   "current_combined_source": {
-    "head": "8027659a6ddb852607f4d010e3eaa3860c304b38",
-    "source_sha256": "3a4f95a24b23efae3f97f7d7ff9b3301f3c8f042adf15f2593898bb28ced3ecd",
-    "noncomment_source_loc": 563630,
+    "head": "86617f00",
+    "source_sha256": "78ff1c24dc3a018f843c3cdf980efc4d3b30ea62532a69c631b821ebebeddd99",
+    "noncomment_source_loc": 563583,
     "original": 562282,
-    "delta": 1348,
+    "delta": 1301,
     "large_modules": 25,
     "original_large_modules": 24,
     "original_architecture_result": "FAIL",
     "duplication_result": "PASS against unchanged original baseline",
-    "measurement": ".tmp/streamlining-architecture-comparison-checkpoint5.json",
-    "configured_baseline": "Working-tree proposal remains unapproved; current source is below that proposal but above original."
+    "measurement": ".tmp/streamlining-architecture-comparison-checkpoint7.json",
+    "configured_baseline": "ORIGINAL_ACTIVE_BASELINE_RESTORED; no transition exception approved. Earlier configured passes used the explicitly unapproved proposal, retained separately.",
+    "baseline_disposition": ".tmp/architecture-active-baseline-disposition.json",
+    "source_hash_scope": "Recorded measurement input tree. Later changes only reconcile tests and reviewed manifests; src/execution remain byte-identical to this measurement."
   },
   "combined_full_gate": {
     "status": "FAILED_COMPLETE_SUITE_WITH_CLEAN_TEARDOWN",
@@ -2328,7 +2330,7 @@
       "test_canonical_helpers_equivalence.py::test_tree_state_matches_every_disposition",
       "test_legacy_fact_access_architecture.py::test_no_new_legacy_fact_readers_before_canonical_cutover"
     ],
-    "disposition": "Investigating. No full-gate pass. Reachability HOLD was already disclosed; counter/disposition and report path corrections need proof. Legacy-reader inventory affected sources are byte-identical to cleanup base; exact baseline evidence pending.",
+    "disposition": "The complete suite failed five checks. Later scoped checks validate counter/helper and public-path corrections. Reachability and legacy inventory corrections are under final independent review. This does not convert the original full run into a pass; no complete rerun is claimed.",
     "legacy_inventory_baseline_proof": ".tmp/combined-legacy-inventory-baseline.json",
     "public_tree_report_path_fix": "Normalized personal worktree roots only in checkpoint report metadata. Raw ignored proofs unchanged. Direct execution/verify_public_tree.py PASS afterfix; no test guard changed."
   },
@@ -2402,7 +2404,7 @@
     "next": ".tmp/r5-capture-reader-proof.py prepared only; serial database test pending. Hostile-resource preflight, output-artifact recovery and financial admission/transaction parity remain open."
   },
   "owner_approved_feature_cuts_20261023": {
-    "status": "COMMITTED_IN_FEATURE_WORKTREE_MAIN_INTEGRATION_PENDING",
+    "status": "INTEGRATED_LOCAL_ONLY",
     "sandbox": "Retire standalone shell, exclusive setup/theme pipeline and optional dependency; retain Explore and shared analytics. Eight files,1430netphysical lines including generatedCSS;560deletedPythonlines.",
     "advisor_memos": "Remove monthly automatic declaration and its XML/BAT; retain requested CLI/dashboard generation, analysis and history.",
     "live_authority": "No live scheduler change. Exact-task disable/unregister and recovery require separately reserved owner approval.",
@@ -2499,7 +2501,9 @@
       "deletions": 1515,
       "net": -1473,
       "note": "Git text stat excludes UTF16 binary XML lines; includes generatedCSS,docs,test/generator deletion. Not core source reduction."
-    }
+    },
+    "main_commit": "613fa773",
+    "main_proof": ".tmp/feature-retirement-review/main-integration.json"
   },
   "path_notation": {
     "ATTACHED_FEATURE_WORKTREE": "Attached managed research-test-retention worktree; local absolute roots are retained only in ignored raw proof artifacts. Report path normalization does not alter raw review/proof files."
@@ -2587,5 +2591,413 @@
     "finding": "No second spreadsheet-specific financial writer exists. Active path uses shared persist_manifest and legacy KPI consumers; native financial promotion would require new source-reviewed semantic context and does not mechanically delete shared writer.",
     "candidate": "Resolve config definitions/currency once in existing adapter, preserve all-spec validation, ordering, typedlocators and errorsemantics. No newregistry/model/store.",
     "scope_boundary": "Native financial promotion is a separate qualification feature, not present retirement credit. Current speculative native migration stays on HOLD."
+  },
+  "current_combined_source_checkpoint5": {
+    "head": "8027659a6ddb852607f4d010e3eaa3860c304b38",
+    "source_sha256": "3a4f95a24b23efae3f97f7d7ff9b3301f3c8f042adf15f2593898bb28ced3ecd",
+    "noncomment_source_loc": 563630,
+    "original": 562282,
+    "delta": 1348,
+    "large_modules": 25,
+    "original_large_modules": 24,
+    "original_architecture_result": "FAIL",
+    "duplication_result": "PASS against unchanged original baseline",
+    "measurement": ".tmp/streamlining-architecture-comparison-checkpoint5.json",
+    "configured_baseline": "Working-tree proposal remains unapproved; current source is below that proposal but above original."
+  },
+  "integrated_fast_gate_checkpoint6": {
+    "receipt": {
+      "command": [
+        "make",
+        "-j1",
+        "check-fast",
+        "PYTHON_BIN=/Applications/earnings-summary/.venv/bin/python",
+        "BASE=c978523d",
+        "CHANGE_MODE=worktree",
+        "PYTEST_WORKERS=2"
+      ],
+      "head_before": "613fa7733ffa32aa6266f7cf05a47dd3a84cff6c",
+      "head_after": "613fa7733ffa32aa6266f7cf05a47dd3a84cff6c",
+      "source_sha256_before": "2b04ff7a80248781cca769791695a1f418591dd4c40ad4ff76c22fa5d8e6c689",
+      "source_sha256_after": "2b04ff7a80248781cca769791695a1f418591dd4c40ad4ff76c22fa5d8e6c689",
+      "source_unchanged": true,
+      "elapsed_seconds": 203.96,
+      "returncode": 0,
+      "supervision_failure": null,
+      "observed_task_processes": 7,
+      "cleanup_signalled_pids": [],
+      "remaining_task_processes": [],
+      "log": ".tmp/streamlining-integrated-fast-checkpoint6.log",
+      "log_sha256": "4b7baf4245770e2e26a9dc15f83cc006227334e41fdc2bd4c91ba3e02909dd04",
+      "original_architecture_comparison": "FAIL retained explicitly; configured architecture baseline is proposed, not owner-approved."
+    },
+    "tests": {
+      "passed": 907,
+      "skipped": 1,
+      "seconds": 134.95
+    },
+    "checks": "78 retained changed Python files format/lint/strict types clean; suppression check passed.",
+    "limits": "Occurred before next2backendcuts. Configured architecture passed using explicitly unapproved proposal; original activebaseline is nowrestored andstillfails."
+  },
+  "reader_oracle_correction": {
+    "main_commit": "6d0f94fc",
+    "source_packet": ".tmp/reader-oracle-correction/source-frozen.json",
+    "independent_review": {
+      "review_kind": "owner-requested independent GPT-6.1 Sol proxy; not Opus or formal qualification",
+      "requested_model": "gpt-6.1-sol",
+      "model_route": "exact CLI --model, no fallback; resolved model not separately exposed in event receipt",
+      "transport": "codex_chatgpt_membership",
+      "effort": "high",
+      "elapsed_seconds": 25.43,
+      "usage": {
+        "input_tokens": 77781,
+        "cached_input_tokens": 8960,
+        "output_tokens": 730,
+        "reasoning_output_tokens": 271
+      },
+      "prompt_sha256": "bd3f5d15ebaee544eed3c29d3b4fc265f29edc3a4fa88c48926c94d85682caa0",
+      "binding_sha256": "2e7a071c42a92653a45cda1da44e3103ac086b5399a712694cb6349d6e12ba8c",
+      "review": {
+        "artifact": "reader-oracles",
+        "criteria": {
+          "goal_fit_simplicity": 29,
+          "correctness_preservation": 29,
+          "performance_setup_plan": 19,
+          "scope_acceptance": 20
+        },
+        "score": 97,
+        "verdict": "ACCEPT",
+        "blocking_findings": [],
+        "units": [
+          {
+            "unit": "R6-oracles",
+            "scope": "Three-file correction: Ask verification spy, batch clock tests, and two retained helper inventory records.",
+            "score": 97,
+            "verdict": "ACCEPT",
+            "findings": []
+          }
+        ],
+        "strengths": [
+          "The corrected spy counts complete verification bodies and delegates to the real implementation. The unchanged exact-count assertion rejects the cache bypass with eight verifications.",
+          "The supplied delta preserves existing assertions, including rank, value, context, transaction, and corruption checks.",
+          "Captured original parser bodies independently support the five valid-output expectations; inventory refresh alone is not treated as correctness proof.",
+          "New tests assert exact typed parser failures and real publication quarantine. The corrected year-zero fixture reaches parsing while retaining the SQL CHECK.",
+          "Inventory changes are confined to source and reason fields for two retained, unmapped helpers; production code and scanner enforcement are unchanged.",
+          "Supplied scoped results report 89 passed and five explicitly unavailable bench checks, with initial fixture failures retained."
+        ],
+        "required_changes": [],
+        "limitations": [
+          "Review used supplied text only; hashes, repository state, original-source provenance, and execution results were not independently verified.",
+          "Five bench-dependent checks remain unexecuted. The original full-suite result remains 21410 passed, five failed, and 101 skipped; no post-correction full-suite result is supplied.",
+          "Valid-clock parity covers five representative inputs per owner, not every accepted datetime form.",
+          "The Ask adapter fixture doubles trace admission and does not establish complete retrieval promotion or sealed Ask readiness.",
+          "Verification counts establish reuse behavior, not a measured runtime speedup. Acceptance is limited to this correction and does not establish release closure."
+        ]
+      },
+      "owner_proxy_gate_passed": true
+    },
+    "tests": "89passed5benchskips; cache-bypass negativefailed at exactcount1 seeing8, asintended; all originalassertions retained.",
+    "limits": "Three test/inventory paths only; production clockbodies unchanged."
+  },
+  "next_backend_checkpoint": {
+    "main_commits": {
+      "R6-quarterly": "2bd7aae5",
+      "R5-ingest-cleanup": "86617f00"
+    },
+    "independent_review": {
+      "review_kind": "owner-requested independent GPT-6.1 Sol proxy; not Opus or formal qualification",
+      "requested_model": "gpt-6.1-sol",
+      "model_route": "exact CLI --model, no fallback; resolved model not separately exposed in event receipt",
+      "transport": "codex_chatgpt_membership",
+      "effort": "high",
+      "elapsed_seconds": 58.69,
+      "usage": {
+        "input_tokens": 152575,
+        "cached_input_tokens": 12672,
+        "output_tokens": 1765,
+        "reasoning_output_tokens": 996
+      },
+      "prompt_sha256": "ba1eb7ffbd23ab4f3a74db73bc539d1ef246a0218ab5abeded9dd04a17ecba86",
+      "binding_sha256": "c8d4829061274732b89499d1a6d6c15f2745c2c52c133617c4f846375a8d61ce",
+      "review": {
+        "artifact": "next-backend",
+        "criteria": {
+          "goal_fit_simplicity": 29,
+          "correctness_preservation": 28,
+          "performance_setup_plan": 18,
+          "scope_acceptance": 20
+        },
+        "score": 95,
+        "verdict": "ACCEPT",
+        "blocking_findings": [],
+        "units": [
+          {
+            "unit": "R6-quarterly",
+            "scope": "Operation-local shared preparation for the fresh combined financial consumer, preserving separate series and coordinate reducers.",
+            "score": 95,
+            "verdict": "ACCEPT",
+            "findings": [
+              "The extracted preparation preserves the original source, clock, label, supported-duration and eager cumulative-verification order. Series reduction still precedes coordinate reduction.",
+              "Nonquarterly reducers retain distinct eligibility, binding and canonical-read gates; annual mismatches and exception precedence are not flattened.",
+              "Quarterly source enumeration, canonical population and bundle materialization decrease from two to one. Full publication verification remains unchanged, and no scalar selection or persistent preparation cache is introduced.",
+              "Supplied evidence reports 162 before/current comparisons covering complete results, exceptions and provenance handoffs, plus 326 passing regressions.",
+              "The concurrent-write injection remains after completed series reduction. Snapshot, pending-write, cancellation and row-factory assertions remain substantive."
+            ]
+          },
+          {
+            "unit": "R5-ingest-cleanup",
+            "scope": "Resolve spreadsheet configuration once and roll back failed-period pending writes before committing failure accounting through existing owners.",
+            "score": 94,
+            "verdict": "ACCEPT",
+            "findings": [
+              "Ordinal resolutions preserve duplicate configured-name last-winner behavior while validating currencies for every spec, including absent and overwritten specs.",
+              "All definition resolution still precedes currency validation. Canonical currency conflicts, analyst-origin precedence and per-period overwrites remain intact.",
+              "Typed values retain their corresponding locators and source labels; source-hash issuer checks and unknown semantic states remain unchanged.",
+              "The real migrated-database trigger case demonstrates the pending-write leak. Rollback before end_run prevents failure accounting from committing the partial period while retaining prior committed periods.",
+              "Supplied evidence reports all 24 cases passing, including retry inserting the remaining four facts without changing retained history. The measured six-to-three resolution reduction applies to the tested capture-name calls."
+            ]
+          }
+        ],
+        "strengths": [
+          "Both changes remove repeated work through existing owners without adding production stores, schemas, caches or policy frameworks.",
+          "Expected baseline failures demonstrate that the new contracts detect duplicate preparation and the actual partial-period commit bug.",
+          "Savings distinguish operation counts from latency and publication-verification work.",
+          "Changes remain bounded; no shared-writer retirement, native financial promotion or structural exception is implied."
+        ],
+        "required_changes": [],
+        "limitations": [
+          "Review used supplied code and deterministic evidence only; no tools, independent execution or hash recomputation occurred.",
+          "The complete R6 result artifact was omitted; its harness, summaries, hashes and five complete examples were inspected.",
+          "Full dependency implementations and complete application-level deep brief, research and portfolio workflows were not independently audited.",
+          "R5 retains existing document and run-helper commits and per-period transaction ownership; caller-atomic operation and cancellation recovery are not established.",
+          "No latency, production, root, replica, provider, collection, release or deployment qualification is granted.",
+          "The failed whole-branch original-architecture comparison remains unresolved and is not overridden by these bounded acceptances.",
+          "This is the requested numeric proxy judgment, not formal frontier qualification."
+        ]
+      },
+      "owner_proxy_gate_passed": true
+    },
+    "source_reduction_physical": 46,
+    "quarterly": {
+      "proof": ".tmp/r6-terminal-series/quarterly-one-pass/review-index.json",
+      "paired_cases": 81,
+      "continuities_each": 2,
+      "before_current_pairs": 162,
+      "regressions_passed": 326,
+      "source_and_canonical_bundle_populations": "2 to1 quarterly; annualsource2to1 whilecanonical/bundle2remain; fullverificationwork unchanged"
+    },
+    "ingest": {
+      "proof": ".tmp/r5-ingest-cleanup/proof.json",
+      "tests_passed": 24,
+      "source_reduction_physical": 16,
+      "production_procedures": "9to7; no newprocedures/cache/store/schema",
+      "resolution_capture_calls": "6to3 for testednumeric/typed cases",
+      "failure_integrity": "Rollback pendingfailedperiod before failedaccountingcommit. Priorcompletedperiods/history remain; retryadds onlyremaining4facts."
+    },
+    "limits": "No production latency/root/replica/provider/release/fullsemanticacceptance; olddocument/runhelpercommit andcallertransactionlimits retained."
+  },
+  "task_proof_storage": {
+    "relocation": ".tmp/feature-backend-proofs-relocation.json",
+    "files": 58,
+    "bytes": 3391535,
+    "source_worktree": "ARCHIVED_SECONDARY_WORKTREE",
+    "confirmed": "Secondarycheckoutremoved, archived_worktreeattachmentreturned. Alllocalcommitsintegrated; exacttemporaryproofbytescopiedbeforearchive. No databasecopy.",
+    "retention": "Existingtasktemporaryartifactowner; rawreviewbindingsremainhistorical, relocation+Gitcommits own reconstruction."
+  },
+  "legacy_guard_disposition": {
+    "status": "SCOPED_TESTS_AND_INDEPENDENT_PROXY_ACCEPTED",
+    "evidence": ".tmp/legacy-reader-inventory-disposition.md",
+    "decision": "Retain existing pre0059 cross-source duplicate guard only after noinsert/exactsource-miss andactualoldlogicalindex. It protects historicalfact/context; no newruntimeSQLoranalyticalreader. Retirewhenpre0059recoverysupportends.",
+    "inventory_change": "summary3to2 for realdeletedskip; persistence5to6 for separately justifiedexistinghistoricalguard, not a relocation. Exactequality/othercounts unchanged.",
+    "tests": "88passed12.26s; legacyarchitecture+persistence+summarycompletion. No productioncode change.",
+    "review_score": 98
+  },
+  "reachability_requalification": {
+    "status": "SCOPED_TESTS_AND_INDEPENDENT_PROXY_ACCEPTED",
+    "plan": ".tmp/reachability-requalification-plan.md",
+    "finding": "All 188 production dynamic edges match reviewed sites. Preserve 176 unchanged source/target attestations; recheck 27 focused attestations, eight line moves, three adapter targets and one removed shellout. The unchanged scanner reports zero production unknown or unresolved edges. Exact fixture count and three stale coordinates are corrected with source proof; final regression result is pending.",
+    "rule": "Preserve the scanner, source lists, production-zero guards and all other expectations. Rebind provenance only to inspected source and retain failed runs.",
+    "frozen_receipt": ".tmp/reachability-reconciliation/source-frozen.json",
+    "graph": ".tmp/reachability-reconciliation/raw-qualified.json",
+    "source_sha256": "379738f162bc3cb9225d7562a313ee6c3b7bceca4fc7c396c40034374f43cec9",
+    "qualification": "85 passed in 73.70s; final graph COMPLETE/PASS, 161 nonproduction unknown edges, zero production unknown/unresolved, zero diagnostics; scanner unchanged.",
+    "review_score": 97
+  },
+  "static_checkpoint8": {
+    "receipt": ".tmp/streamlining-static-checkpoint8.json",
+    "status": "PASS",
+    "head": "86617f00",
+    "scope": "79 changed files: format, lint and strict type checks. Whole retained population: 2874 files; 1826 diagnostics and 1811 suppressions, with no increase.",
+    "remaining_task_processes": [],
+    "annotation_correction": "The raw supervisor receipt inherited a stale note about the proposed architecture baseline. This command ran static targets only. The original architecture baseline is restored and fails independently; no architecture pass is attributed to this static run."
+  },
+  "contract_checks_checkpoint8": {
+    "receipt": ".tmp/checkpoint8-contract-checks.json",
+    "status": "PASS",
+    "checks": [
+      "directive authority graph",
+      "folder structure",
+      "reconstruction 11 of 11",
+      "design sync",
+      "public tree"
+    ],
+    "scope": "Direct validators, not application semantic acceptance or live verification."
+  },
+  "r2_next_pruning_assessment": {
+    "plan": ".tmp/r2-next-pruning-plan.md",
+    "status": "READ_ONLY_PROPOSED_NOT_IMPLEMENTED",
+    "finding": "Two bounded cuts estimate 15 noncomment source lines. They do not resolve the structural gate. The ten-file R2 closure grows by 927 lines; the four-file Say/Do closure grows by 110 lines. Larger legacy route removal is not yet qualified.",
+    "next_action": "Inspect one material behavior-preserving consolidation. Do not split files or raise ceilings to manufacture a size pass."
+  },
+  "governance_proxy_review": {
+    "raw_receipt": ".tmp/governance-independent-review.json",
+    "sha256": "7c65652834ce213443550bbcefaa3cb6fa2de37383edcdea680b0977ed9d2424",
+    "review": {
+      "schema_version": "1.0",
+      "reviewer": {
+        "role": "Independent owner-requested GPT-6.1 Sol implementation judge proxy",
+        "qualification": "Ad hoc advisory implementation review. Not Opus, not a formal frontier-qualified blocking Judge seat.",
+        "skills": [
+          "chisle",
+          "judging"
+        ],
+        "independence": "Separately briefed. No preferred verdict or prior score provided. No implementation edits performed."
+      },
+      "scope": {
+        "units": [
+          "G1-reachability",
+          "G2-legacy-guard"
+        ],
+        "subject_commit": "86617f00f0ab6da8dd792dc3f24dc14b843198bf",
+        "excluded": [
+          "Whole cleanup acceptance",
+          "Architectural growth beyond the exact historical recovery read disposition",
+          "Whole-suite or structural gate pass",
+          "Release, push, merge, deployment, publication or live verification"
+        ]
+      },
+      "criteria": {
+        "goal_fit_simplicity": {
+          "score": 29,
+          "maximum": 30,
+          "reason": "The patch corrects stale manifests and exact debt inventories with existing owners and no new framework. The two removed/added KPI queries remain separate decisions."
+        },
+        "correctness_preservation": {
+          "score": 29,
+          "maximum": 30,
+          "reason": "Direct Git/AST/SQL/hash checks support each change. Production zero-gap checks, exact inventory equality, negative tests, and all existing assertion ASTs remain. Runtime test results are supplied evidence, not independently executed by this reviewer."
+        },
+        "performance_setup_plan": {
+          "score": 19,
+          "maximum": 20,
+          "reason": "The implementation adds no runtime query, dependency, fixture, migration, or test harness. Existing serial tests provide bounded validation. This review makes no runtime performance measurement claim."
+        },
+        "scope_acceptance": {
+          "score": 20,
+          "maximum": 20,
+          "reason": "Acceptance is limited to G1/G2 and the frozen hashes. No whole-cleanup, architecture-growth, release, deployment, or live-state acceptance is given."
+        }
+      },
+      "total_score": 97,
+      "maximum_score": 100,
+      "verdict": "ACCEPT",
+      "blocking_findings": [],
+      "units": {
+        "G1-reachability": {
+          "criteria": {
+            "goal_fit_simplicity": 29,
+            "correctness_preservation": 29,
+            "performance_setup_plan": 19,
+            "scope_acceptance": 20
+          },
+          "score": 97,
+          "verdict": "ACCEPT",
+          "findings": [],
+          "evidence": [
+            "All 202 current disposition fingerprints were independently recomputed and match the actual source lines. Manifest population is 28 dynamic-import, 80 getattr, and 94 process entries.",
+            "Exact Git comparison supports eight moved line/fingerprint pairs, three removed-state-adapter target replacements, four evidence rewrites, and retirement of execution/fetch_ir_documents.py:577. All disposition classifications remain unchanged.",
+            "The three target populations select execution/process_ir_documents.py directly. The categorizer dependency is now a static import/call. fetch_ir_from_urls keeps the same fixed narrative target and now checks completion/failure.",
+            "The scanner SHA256 c9ec98b1cbcdf93c9b890d9a8a8c59ef6109598f67b1739c38463d79d5986175 is byte-identical to HEAD and the original manifest commit 630a74c5d510a221e76674b9ed936cfc93350584.",
+            "The test AST matches HEAD after exactly four permitted numeric normalizations: unknown count 162 to 161 and coordinates 31/60/75 to 30/59/74. All 188 assertion ASTs remain. The deleted sandbox test accounts for one deduplicated test-only dynamic edge; the three onboarding calls are byte-identical at their new lines.",
+            "The final packet and every file/proof hash in its frozen receipt match. Every hashed attempted input in raw-qualified.json matches current bytes. The graph reports COMPLETE/PASS, unknown 161, production unknown 0, production unresolved 0, diagnostics 0.",
+            "Bound serial qualification log records 85 passed in 73.70s. This reviewer inspected the log but did not execute pytest."
+          ]
+        },
+        "G2-legacy-guard": {
+          "criteria": {
+            "goal_fit_simplicity": 29,
+            "correctness_preservation": 30,
+            "performance_setup_plan": 19,
+            "scope_acceptance": 20
+          },
+          "score": 98,
+          "verdict": "ACCEPT",
+          "findings": [],
+          "evidence": [
+            "Independent AST/string-token reconstruction produces summary 3 and persistence 5 at c96bab532 parent; summary 2 and persistence 6 at c96bab532, cleanup base c978523d, and current source.",
+            "Git proves c96bab532 removed _already_extracted_kpis and separately added the old-index duplicate guard. This is not a relocated query. Equal aggregate counts are not the justification.",
+            "Actual _insert_kpi_fact code runs the added lookup only after no insert/exact-source miss and an sqlite_master check for uq_kpi_facts_logical. A retained cross-source row returns no incoming context attachment. An unexplained missing retained row raises IntegrityError.",
+            "Existing historical regression preserves source 100/value 12 and the complete prior semantic context against incoming source 200/value 13 with a different basis. The changed-summary regression requires processing revised source bytes and both source identities.",
+            "The production sources match the reported frozen hashes and cleanup base. The architecture test AST is identical to HEAD after normalization of only the two inventory integers. Exact equality, scanner, functions, assertions, exemptions and production SQL remain unchanged.",
+            "The bounded disposition covers only existing pre-0059 recovery debt in the existing write owner, with retirement when that recovery support ends. It does not grant a general new analytical-reader allowance.",
+            "Bound serial qualification log records 88 passed in 12.26s. This reviewer inspected the log but did not execute pytest."
+          ]
+        }
+      },
+      "required_changes": [],
+      "owner_gate": {
+        "rule": "Overall and each unit must score strictly greater than 90, return ACCEPT, and have no blocking findings.",
+        "overall_pass": true,
+        "unit_pass": {
+          "G1-reachability": true,
+          "G2-legacy-guard": true
+        },
+        "meaning": "This satisfies the requested proxy review threshold for these units only. It does not confer formal frontier qualification or action authority."
+      },
+      "executed_by_reviewer": [
+        "Read scoped diffs, production source snippets, exact Git history, review/disposition documents, frozen receipts and supplied logs.",
+        "Ran local read-only Python AST, SQL-token, fingerprint and SHA256 checks plus read-only Git commands.",
+        "Wrote only .tmp/governance-independent-review.json."
+      ],
+      "not_executed_by_reviewer": [
+        "No pytest or other test runner.",
+        "No scanner execution or database operation.",
+        "No live host, service, listener, model call, external network request or Codex chat/thread tool contact. Parent-agent status messages only.",
+        "No source, test, manifest, canonical document, Git/index or runtime-state mutation."
+      ],
+      "limitations": [
+        "This is a bounded static implementation review with supplied test evidence; tests were not independently rerun because the task prohibited it.",
+        "Final acceptance binds raw-qualified.json and the current frozen receipts. Earlier raw graph snapshots and intermediate attestation digests are historical evidence, not the final source binding.",
+        "The whole-branch structural/full-suite result remains outside this review. No broader pass claim is made."
+      ],
+      "inspected_sha256": {
+        "docs/quality/reachability-dynamic-import-dispositions.json": "38d9c08ca84bbc2b1bd89eec42eabee08c9d98e545ea156b0614efdcebff205d",
+        "docs/quality/reachability-getattr-dispositions.json": "96b555b4a9486f7a35be234d816c8d185f3c504e72d31d16ad6232899902680a",
+        "docs/quality/reachability-process-dispositions.json": "282c267e94e2b8feeb5cdbceee785cc4e52965ee84da04b74168494994bc4369",
+        "tests/test_build_operational_reachability.py": "288d0ee32628370614af8e690a79b45e61afbb541d8f5dc8693d03730b81fee9",
+        "tests/test_legacy_fact_access_architecture.py": "3ebc59c87c871c86fe3393039efb4bc92e5a1afd3efcb3d8d9715db1c4eed2c6",
+        "src/quality/reachability.py": "c9ec98b1cbcdf93c9b890d9a8a8c59ef6109598f67b1739c38463d79d5986175",
+        "src/compute/kpi_extract_summaries.py": "b042fa9e97e07fff2437edfb7acc42d7130b336d5ae513a9d77d626b5b9869dd",
+        "src/pipeline/kpi_persistence.py": "8546f918eb276b97d34851d6347a2ec4de1f575453391272c925afb7f2115a5d",
+        "tests/test_pipeline_kpi_persistence.py": "87bce5ecb654df4b199af2f9a17c19c9dfad6a9c4bcbae7b91a4ff30e856e5c2",
+        "tests/test_summary_kpi_completion.py": "1cc6a241a8dc59dd6c4db96f6f5d3abeb5c44f56f34089490723664fd24b69d3",
+        "execution/discover_ir_documents_all.py": "4d5bdbc9db6d7986c3c23eed3897e9970fde2bcfa23973831e9efbdf3423c5cc",
+        "execution/onboard_ticker.py": "f69757e81f58653ababe18625f635e5c731b810ee07e9e1a1c5b72aa297e4afd",
+        "execution/refresh_dispatch.py": "63749ece9ddceb5f5b0bede81418dd3e2502a620510220628567c8bd314a4fc0",
+        "execution/fetch_ir_documents.py": "851201de2119965690d8bb092d6d298b817b4f9529fcd3101e72fb0d48766a66",
+        "execution/fetch_ir_from_urls.py": "c35ef9eab3e44f2e70e332730cf5043f55beba65eb552964de52f197eb98e5c0",
+        "tests/test_onboarding_state_authority.py": "7c02c6b6ecc3de0e8267cccd283ab5fd36e733521fb1d24980395e3669cf247e",
+        ".tmp/legacy-reader-inventory-disposition.md": "7c0b8063527ac85ac15e244172996fef5c4323052a11fd83ea861d68c2cd0fdd",
+        ".tmp/legacy-reader-inventory-correction/source-frozen.json": "f5f4676bb73d8aeeb0bc6c601f8b46b260a1f3c8458da00fcc3bf9d6e7cdc4df",
+        ".tmp/reachability-requalification-plan.md": "d0d91db3f113abfaa90512f526857c9044f8f5f58aa15c67c94e56fe9f66f6d7",
+        ".tmp/reachability-reconciliation/review-packet.md": "3d82541f605b04054d2f0481775d71e19bd17bfad874b93c05af3ed07211a77b",
+        ".tmp/reachability-reconciliation/source-frozen.json": "c58e755ad119132c1405bafa6f90e5e9f70eae9a8f746c3e544ccbe4c4cd32f4",
+        ".tmp/reachability-reconciliation/raw-qualified.json": "482e3a5acb8bcdc16e927f7392db3c48474d2ca6aa36ea2900ca865de109c7b1",
+        ".tmp/reachability-reconciliation/tests.log": "fff8b0f4fd3e603fd2b7cb270114d5fabcaad381b0ede021e87f4efa015fe331",
+        ".tmp/legacy-reader-inventory-correction/combined-tests.log": "37b48099417d79a8eb345007efd626809701853b87978c70e8d16fd46243f95b"
+      },
+      "final_graph_source_digest": "379738f162bc3cb9225d7562a313ee6c3b7bceca4fc7c396c40034374f43cec9"
+    },
+    "root_binding_check": "All inspected source and proof hashes match immediately before checkpoint commit."
   }
 }

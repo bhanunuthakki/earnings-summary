@@ -116,7 +116,7 @@ AUDITED_LEGACY_FACT_READS = {
     # Shared fact-aware unit resolution moved this existing read out of the
     # seeding CLI so Ask approval and seeding use one deterministic authority.
     "src/compute/kpi_definition_units.py": 1,
-    "src/compute/kpi_extract_summaries.py": 3,
+    "src/compute/kpi_extract_summaries.py": 2,
     "src/compute/metrics_engine/io.py": 8,
     "src/compute/say_do.py": 1,
     "src/compute/segment_q4_derive.py": 1,
@@ -127,7 +127,12 @@ AUDITED_LEGACY_FACT_READS = {
     "src/decision_conditions.py": 2,
     "src/pipeline/confidence.py": 2,
     "src/pipeline/explore_panel.py": 1,
-    "src/pipeline/kpi_persistence.py": 5,  # reviewed scale guard excludes superseded neighbors
+    # c96bab532 added one existing-owner recovery read: _insert_kpi_fact
+    # checks a cross-source duplicate only after the exact-source lookup misses
+    # and uq_kpi_facts_logical exists. Preserve the prior fact/context unchanged.
+    # Retire this read when pre-0059 logical-index recovery is no longer supported.
+    # The remaining reads include the reviewed scale guard excluding superseded neighbors.
+    "src/pipeline/kpi_persistence.py": 6,
     # Exact predecessor/head reads guard the one governed append-only repair
     # write. They are not product analytics and retire with that write seam.
     "src/pipeline/kpi_source_review.py": 2,

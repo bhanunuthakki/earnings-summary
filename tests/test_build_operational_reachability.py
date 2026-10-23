@@ -186,9 +186,8 @@ def test_actual_head_is_supported() -> None:
         for edge in graph.unknown_edges
         if not edge.source.startswith(("tests/", "instruction_tests/"))
     ]
-    # Test-sourced dynamic references stay tolerated (the residual assertion
-    # below is the production gate); the sandbox kit's drift test resolves every
-    # re-export through getattr to prove the kit never forks a control helper.
+    # Test-sourced dynamic references stay tolerated; the residual assertion
+    # below is the production gate.
     # Keep the OS proxies and actual native metadata field lookup test-only and exact.
     assert [
         edge for edge in graph.unknown_edges if edge.source == "tests/test_bounded_source_reader.py"
@@ -239,9 +238,9 @@ def test_actual_head_is_supported() -> None:
             )
             for line in lines
         ]
-    # Retain the 159 existing test seams, one shared-ledger admission child and
-    # the dead/live lease-holder children. No production gap is admitted.
-    assert len(graph.unknown_edges) == 162
+    # Retain the existing test seams and managed children after sandbox retirement.
+    # No production gap is admitted.
+    assert len(graph.unknown_edges) == 161
     assert [
         edge for edge in graph.unknown_edges if edge.source == "tests/test_db_writer_gate.py"
     ] == [
@@ -316,7 +315,7 @@ def test_actual_head_is_supported() -> None:
     # Exact AST evidence is retained in followup-test-edge-census.json.
     new_fixture_calls = (
         {("tests/test_onboard_sec_fallback.py", line) for line in (70, 320, 365, 397, 403)}
-        | {("tests/test_onboarding_state_authority.py", line) for line in (31, 60, 75)}
+        | {("tests/test_onboarding_state_authority.py", line) for line in (30, 59, 74)}
         | {
             ("tests/test_scheduled_singleflight.py", 98),
             ("tests/test_split_root_legacy_adapters.py", 25),

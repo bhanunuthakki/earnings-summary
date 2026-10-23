@@ -75,8 +75,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "_TICKER_SPECIFIC_EXTRACTORS remains one NVO extract_nvo_patent_timeline_state.py entry; adds require_db_path() --db. Optional LLM gating is separate caller behavior.",
-      "fingerprint": "4426c7b711a819e92f879973e570a2f696f4e85964fe0d4d0602b14849c15935",
-      "line": 123,
+      "fingerprint": "09053a3981106ed14c5f9719aa492c96548389e26dde4e2fa92ea1c17967495e",
+      "line": 119,
       "path": "execution/build_artifacts.py",
       "targets": [
         "execution/extract_nvo_patent_timeline_state.py"
@@ -118,15 +118,15 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Replace prior process_ir_documents.py target with process_ir_documents_state.py: _run_child accepts only argv assembled by this module fixed discovery/fetch and opt-in narrative/summary call sites, then ensure_managed_python_argv. The summary adapter is the existing state-root-aware owner; ticker/repo-root are arguments, never script identity. Opt-in narrative remains unchanged in authority.",
-      "fingerprint": "b3fd310b2a1280a1246bb8fa37a35861190e218e72a9c59b9bad143ca1559fa3",
-      "line": 258,
+      "evidence": "Fixed _run_child callers assemble only discovery/fetch, IR-anchor, or process_ir_documents.py summary argv before ensure_managed_python_argv. Summary generation receives explicit --repo-root state and --db; these values do not select executable identity. This is the direct narrative job after retirement of its state-rebinding adapter.",
+      "fingerprint": "87d23e45331f7946f89217fbc1c78664b5a38dfcb246dd3d54e3a64939e1ab0e",
+      "line": 262,
       "path": "execution/discover_ir_documents_all.py",
       "targets": [
         "execution/discover_ir_documents.py",
         "execution/fetch_ir_documents.py",
         "src/compute/ir_narrative.py",
-        "execution/process_ir_documents_state.py"
+        "execution/process_ir_documents.py"
       ]
     },
     {
@@ -143,19 +143,9 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "_run_categorize invokes the fixed _CATEGORIZER script via managed_python_prefix.",
-      "fingerprint": "31c1d250e92b6f908a4fab20feb9db246df66886afe34f8ca1b2f3749f8bcf7b",
-      "line": 577,
-      "path": "execution/fetch_ir_documents.py",
-      "targets": [
-        "execution/categorize_ir_uploads.py"
-      ]
-    },
-    {
-      "disposition": "internal_python_target",
-      "evidence": "_run_narrative invokes the fixed src/compute/ir_narrative.py via managed_python_prefix.",
-      "fingerprint": "787ac30592c592b6293695149c0c2930f4ef481e1d34895b0426c61e97f30b19",
-      "line": 102,
+      "evidence": "The fixed subprocess target remains src/compute/ir_narrative.py through managed_python_prefix. _run_narrative now catches OSError and reports returncode success instead of ignoring completion; ticker and repo-root remain arguments, not executable selectors.",
+      "fingerprint": "97a7f4256c7767ea62989960cd8a47b478202f76d5986e7ecc91e35644aff767",
+      "line": 109,
       "path": "execution/fetch_ir_from_urls.py",
       "targets": [
         "src/compute/ir_narrative.py"
@@ -246,12 +236,12 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "process_ir now names execution/process_ir_documents_state.py, replacing execution/process_ir_documents.py. Explicit state/database flags accompany the changed state adapter. Old target file existence cannot validate the old declaration.",
+      "evidence": "The fixed process_ir variable names execution/process_ir_documents.py directly. Missing-summary repair retains explicit --repo-root and --db arguments and the managed subprocess boundary. This replaces the retired process_ir_documents_state.py adapter; ticker/state/database values never select code.",
       "fingerprint": "a9da13e4c5f70850d0477e2f45e4f7699215ee35eaec07eaa1b4f6dd949eb921",
       "line": 576,
       "path": "execution/onboard_ticker.py",
       "targets": [
-        "execution/process_ir_documents_state.py"
+        "execution/process_ir_documents.py"
       ]
     },
     {
@@ -403,14 +393,14 @@
     },
     {
       "disposition": "internal_python_target",
-      "evidence": "Dispatcher builds only the nine fixed STEP_NAMES scripts via managed_python_argv.",
+      "evidence": "Dispatcher argv builders select only the nine fixed STEP_NAMES scripts via managed_python_argv, including execution/process_ir_documents.py directly after its state adapter retirement. Ticker and state arguments do not select executable identity.",
       "fingerprint": "6ca92b671a9dd36ae25ad37309876a28fdebf0dd8d9c87c1c47e5d001b723f62",
       "line": 288,
       "path": "execution/refresh_dispatch.py",
       "targets": [
         "execution/fetch_fmp_historical_data.py",
         "execution/backfill_transcripts.py",
-        "execution/process_ir_documents_state.py",
+        "execution/process_ir_documents.py",
         "execution/fetch_news.py",
         "execution/extract_kpis_from_summaries.py",
         "execution/build_saydo_pairs.py",
@@ -560,8 +550,8 @@
     {
       "disposition": "internal_python_target",
       "evidence": "Conformance check runs the fixed execution/verify_design_conformance.py --check command.",
-      "fingerprint": "eac8f2ac073867b7b5e2f243e522338d8f1fc1b4e09a11e268c3d5e9abe6136c",
-      "line": 100,
+      "fingerprint": "35b493e2d3bbbcc9cb25ae87a5226ccb7160edbeb1a230946eec85fd764bd734",
+      "line": 89,
       "path": "scripts/check_design_sync.py",
       "targets": [
         "execution/verify_design_conformance.py"
@@ -835,8 +825,8 @@
     {
       "disposition": "external_process",
       "evidence": "The whole-tree gate invokes only the pinned Pyright executable with the checked-in configuration and selected project interpreter.",
-      "fingerprint": "9053c116acecaa29ba63892a99b5514b5a4b4061a911de564ffc52379ef5ef0c",
-      "line": 418,
+      "fingerprint": "22e0afb8297cfa70e77121855a7175c36677a6be20531d163b124d78ebe24494",
+      "line": 412,
       "path": "src/quality/static_quality_gate.py",
       "targets": [
         "pyright"
@@ -845,8 +835,8 @@
     {
       "disposition": "external_process",
       "evidence": "The hidden-path parity scan invokes only the pinned Pyright executable over byte-identical temporary copies of tracked hidden Python files.",
-      "fingerprint": "92f7c624b5ff1686515911efe7d613fce230d8098cc178aa217dd3e51410c880",
-      "line": 440,
+      "fingerprint": "2b60f9935b5aa3792ac70196d641821104fa5eefd0704781b1482e160210c65f",
+      "line": 434,
       "path": "src/quality/static_quality_gate.py",
       "targets": [
         "pyright"
@@ -1019,7 +1009,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "915723d9d58ae747349da0ec29cdeec3687dec0f7a517ba07e2b6f12c7b85897",
+      "source_sha256": "379738f162bc3cb9225d7562a313ee6c3b7bceca4fc7c396c40034374f43cec9",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

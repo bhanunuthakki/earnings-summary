@@ -111,8 +111,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "getattr validates only the checked-in positive_fields argparse tuple.",
-      "fingerprint": "a76c4c585e475230eefcc95258829da571c4aef31dfd6c9dcd77bb3930ee3cb0",
-      "line": 1174,
+      "fingerprint": "98bffbfb6980ca2e542faed8febde29868fb060a176fd9d42bc4fd0ed74049fb",
+      "line": 1203,
       "path": "execution/discover_ir_documents_all.py",
       "targets": [
         "positive_fields"
@@ -991,8 +991,8 @@
     {
       "disposition": "closed_literal_set",
       "evidence": "The parameterized reporting-date regression selects only the two literal quarter and annual cell readers declared in its pytest parameter table.",
-      "fingerprint": "e252ddb5e4049a27d98f84a5b6aacac9e228665b46b2bb0bde8ec8c405f1e759",
-      "line": 220,
+      "fingerprint": "1a38add493f94a92e3af7e88f21b7032e1a67453f229a988d040d88a5d3b06a6",
+      "line": 199,
       "path": "tests/test_metrics_engine_io.py",
       "targets": [
         "_build_quarter_cells",
@@ -1018,7 +1018,7 @@
     "parser": {
       "name": "ast+xml+literal-scanner",
       "python": ">=3.11",
-      "source_sha256": "915723d9d58ae747349da0ec29cdeec3687dec0f7a517ba07e2b6f12c7b85897",
+      "source_sha256": "379738f162bc3cb9225d7562a313ee6c3b7bceca4fc7c396c40034374f43cec9",
       "version": "1.3.0"
     },
     "path": ".tmp/quality/reachability-check.json",

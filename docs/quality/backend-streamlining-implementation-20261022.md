@@ -8,6 +8,8 @@ and R7 at `f1056db4`. The roadmap is at `1a265164`. Separate retention cleanup
 is accepted at **95/100** and committed at `274074fb`. These are local commits.
 The full roadmap and release gate remain open. The owner selected independent
 GPT-6.1 Sol proxy reviews; no further Astra or Opus dependency applies.
+The next two backend cuts are integrated at `2bd7aae5` and `86617f00` after a
+fresh **95/100** acceptance: quarterly reads 95, spreadsheet cleanup 94.
 
 The private application retains deep pre/post earnings briefs, research/Q&A
 and portfolio decisions. The cleanup targets four sources of friction:
@@ -20,7 +22,7 @@ and portfolio decisions. The cleanup targets four sources of friction:
   its parsing, context and verdict reads.
 - Setup and unused features: shared migration fixtures replace copied SQL schemas;
   the owner-approved standalone sandbox and monthly memo schedule are committed
-  in a separate worktree after 256 passing tests and independent acceptance.
+  locally after 256 passing tests and independent acceptance.
 
 No analytical-depth reduction is approved. Other feature removals need an owner
 decision. Whole-branch source remains larger; the exact cost and open gates below
@@ -292,13 +294,13 @@ It passes **17 tests in 3.84 seconds** and the fresh Sol proxy scores it **94/10
 ACCEPT. Local commit `127470e6` removes **87 net physical test lines**. Evidence
 is under `.tmp/fmp-fixture-proof/`. Neither setup cut claims a runtime speedup.
 
-The terminal financial-series cut is locally committed at `8027659a`. Its first
+The first terminal financial-series cut is locally committed at `8027659a`. Its first
 Sol proxy scored **88, REVISE** and found a missing duplicate-observation disposition
 check. The corrected version scored **93, ACCEPT**, with no blockers. It passes
 **375 affected and strict-owner tests in 103.92 seconds**. Full result, citation,
 exception and provenance-handoff comparison passes **51 paired cases in 19.96
-seconds**. Separate series/coordinate composition still makes two ordered reads
-per consumer; full R6 terminal closure is not claimed. The separate MELI instrumentation correction
+seconds**. That checkpoint still makes two ordered reads per consumer. The next
+qualified cut below addresses quarterly composition. The separate MELI instrumentation correction
 keeps exact one/two full-verification thresholds and catches a cache-bypass fault;
 it measures work rather than cache lookups. Its corrected five-case file passes.
 
@@ -317,24 +319,34 @@ is a proof oracle; no production one-parse design or efficiency credit is accept
 No application code changed. This earns no writer-retirement
 credit and does not enable live collection or writes.
 
-Current combined source at `8027659a` measures **563,630 noncomment lines**,
+The earlier combined source at `8027659a` measures **563,630 noncomment lines**,
 versus **562,282** originally: **+1,348**. Modules over 2,000 lines remain 25 versus
 24. The new series cut removes 20 physical source lines and duplicated read/cache
 procedures; it does not make the whole branch smaller. Original architecture
 comparison still fails; duplication passes its unchanged baseline. Exact current
-measurement is `.tmp/streamlining-architecture-comparison-checkpoint5.json`.
+measurement for that checkpoint is `.tmp/streamlining-architecture-comparison-checkpoint5.json`.
 The earlier 563,645 measurement above describes the first frozen checkpoint.
+
+Current source at `86617f00` measures **563,583 noncomment lines**: **+1,301**
+against the original 562,282. The active original baseline is restored; the
+unapproved larger proposal is retained only as an ignored historical artifact.
+The original structural gate still fails; duplication passes its unchanged baseline.
+Current measurement: `.tmp/streamlining-architecture-comparison-checkpoint7.json`.
 
 The complete combined `make check` finished with **21,410 passed, five failed,
 101 skipped and two passed subtests** in 1,537.30 seconds. Supervised teardown
 completed with no remaining observed task-owned processes. Source and HEAD stayed
 unchanged. The failures concern the disclosed reachability HOLD, a verification
 counter, helper dispositions, a private path in this checkpoint JSON and the
-legacy-reader inventory. They are under investigation; this is not a passed gate.
-The proposed architecture baseline remains unapproved despite its configured
-check passing. See `.tmp/streamlining-full-check-checkpoint5.log` and its JSON receipt.
+legacy-reader inventory. The counter/helper corrections passed 89 tests and a
+fresh Sol review at 97. The private-path fix passed the public-tree verifier.
+The integrated changed-file gate passed 907 tests, one Windows-only skip and
+format/lint/strict typing for 78 files. Its configured structural check used the
+explicitly unapproved proposal; it does not establish original-baseline acceptance.
+Legacy/reachability reconciliation remains separately qualified below. The original
+full suite is not reclassified as passing and has not been repeated.
 
-Two owner-approved feature cuts are implemented in the separate feature worktree.
+Two owner-approved feature cuts are integrated locally at `613fa773`.
 The standalone sandbox cut deletes eight files and its exclusive setup/theme
 pipeline: 1,430 net physical lines, including generated CSS, with 560 deleted Python
 lines. Shared Explore, analytics and dependency locks remain. Three retained
@@ -343,15 +355,73 @@ automatic task and its XML/BAT. Manual CLI/dashboard generation and saved histor
 remain. All other 44 declarations match; the calibration XML changes its description
 only. Static checks and **256 tests in 96.11 seconds** pass, including synthetic
 browser behavior. Fresh Sol accepts **95 overall**, sandbox 95 and memo cadence 96,
-with no blockers. Local feature commit: `9f69835b`; main integration is pending.
+with no blockers. The separate worktree was archived after all commits and 58 exact
+proof files (3.39 MB) were preserved in this worktree. The main integration check
+matches 22 paths exactly and retains both operations-governance sections.
 No installed Windows task was changed; declaration removal alone does not stop it.
 
 A source review corrects an R5 assumption: the active spreadsheet adapter already
 uses shared `persist_manifest` for KPI writes. There is no second spreadsheet-specific
 financial writer to delete. Keep that owner and the typed capture boundary. Native
 financial promotion needs source-reviewed meaning absent from current config and is
-a separate feature, not cleanup credit. The next real duplicate cut is shared
-quarterly read preparation; configuration-resolution reuse is a smaller later cut.
+a separate feature, not cleanup credit.
+
+The next backend checkpoint removes **46 physical source lines** and two helper
+procedures. Shared quarterly preparation reduces source enumeration, canonical
+populations and bundle materialization **2 → 1**. Annual canonical admission stays
+separate; only its source enumeration is shared. Full publication-verification
+work is unchanged. **81 paired cases**, each with two continuity modes, and
+**326 regressions** pass. No production latency claim is made.
+
+Spreadsheet config resolution reuses one ordinal result population: tested capture
+name resolutions fall **6 → 3**. All configured currencies still validate, including
+absent and overwritten rows. A real migrated constraint fault showed failure
+accounting committing a pending partial period. Rollback now precedes that commit;
+prior complete periods remain and retry inserts only the remaining facts. **24 tests
+pass**. Existing document/run helper commits remain; caller-atomic behavior is not
+claimed. Fresh independent Sol accepts 95 overall, quarterly reads 95 and ingest 94.
+
+### Historical KPI guard disposition
+
+Root retains the exact pre-0059 `_insert_kpi_fact` duplicate guard introduced at
+`c96bab532`. It runs only after no insert, an exact-source miss and proof of the old
+logical index. It prevents an incoming document's context from attaching to the
+retained older fact. This approves no new SQL or analytical reader. Retire the guard
+when pre-0059 recovery support ends. The separate deleted pre-model skip justifies
+summary inventory **3 → 2**; the existing historical guard justifies persistence
+**5 → 6**. Fresh independent Sol accepts this unit at **98/100**. Exact equality and all other counts
+remain. The three existing architecture/persistence/completion suites pass **88
+tests**; production code is unchanged.
+
+### Current static and contract checks
+
+At `86617f00`, the static gate passes for 79 changed files. Format, lint and strict
+type checks are clean. The retained population is 2,874 files; diagnostic and
+suppression totals do not increase. The reachability test corrections have separate
+whole-file static checks. The raw checkpoint-8 supervisor record has an inherited
+architecture note; its command ran only static targets. That note does not describe
+the active baseline. The original structural baseline is restored and fails.
+
+Directive authority, folder structure, reconstruction (11 of 11), design sync and
+public-tree validators pass. These checks do not prove live behavior or complete
+investment-analysis acceptance.
+
+### Further pruning assessment
+
+The ten-file ingestion closure grows by 927 noncomment lines against `c978523d`.
+The four-file Say/Do closure grows by 110. Preparation moved into shared owners,
+but total source growth remains. A bounded read-only assessment identifies two
+small cuts worth 15 lines; they are proposals and do not solve the structural gate.
+A material consolidation remains under investigation. Do not split files or raise
+ceilings to count those changes as a reduction.
+
+The NU/MELI review artifacts remain a separate evidence baseline. Read-only review
+of the retained MELI result confirms a verified bounded report receipt with
+`decision_grade: false`, `joint_mvp_status: not_verified` and independent analyst
+acceptance pending. The receipt explicitly retains the native workbook parity
+requirement. These reports support preserving analytical depth; they do not qualify
+R4 raw-presentation retirement or whole-application semantic acceptance. No artifact,
+model, policy or live state was changed by this reconciliation.
 
 ## Gates that remain open
 
@@ -362,12 +432,18 @@ It is not a passed full suite. Full NU/MELI/Q&A/portfolio semantic acceptance an
 canonical-host verification are not claimed. R5 native writer retirement remains
 HOLD; R3 product completion and R4 original-source numeric retirement remain open.
 
-The operational scan collected its full population with zero unresolved production
-edges. Global closure remains HOLD: three disposition receipts have stale source
-bindings and 188 production dynamic edges require review. They were not restamped
-to imply proof. Bounded searches and caller tests cover retired paths; this is not
-a whole-repository dead-code proof. The final source scan is
-`.tmp/streamlining-reachability-round3.json`.
+The final operational scan reports **COMPLETE/PASS**, with zero unknown or unresolved
+production edges and zero diagnostics. All 188 previously unknown production edges
+match reviewed sites. Reconciliation preserves 176 byte-identical source/target
+attestations and rechecks 27 focused attestations. It corrects eight line moves,
+three adapter targets and one removed shellout. The sandbox retirement removes one
+deduplicated test-only edge; an unused import removal shifts three fixture lines.
+The scanner, source lists and all other assertions remain. **85 tests pass in
+73.70 seconds**. Independent Sol accepts reachability at **97/100**, the historical
+reader guard at **98**, and the combined scoped checkpoint at **97**, with no blockers.
+The frozen graph is `.tmp/reachability-reconciliation/raw-qualified.json`.
+Both intermediate failed runs remain. This is not a whole-repository dead-code proof
+or a full-suite rerun.
 
 A separate R4 read-only canonical metadata inventory found held PDFs and retained
 rendered presentation counterparts for NU/MELI. Registered raw Markdown was missing

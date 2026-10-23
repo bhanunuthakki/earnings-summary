@@ -1,6 +1,6 @@
 # Research platform: backend and ingestion retirement roadmap
 
-Status: **Implementation in progress; first bounded checkpoint under review.**
+Status: **Implementation in progress; bounded checkpoints accepted independently.**
 The owner authorized execution before the pending roadmap review on 2026-10-22.
 See the [implementation checkpoint](../quality/backend-streamlining-implementation-20261022.md)
 for implemented scope, measured results, review state and unfinished work.
@@ -322,6 +322,17 @@ code and historical summary-derived observations. An unavailable original/brief
 pair leaves that class explicitly open; it does not justify a narrower terminal goal.
 
 ### R5 — Retire active legacy financial and KPI write/bridge lanes
+
+**2026-10-23 execution amendment:** the spreadsheet adapter already uses the
+shared KPI writer. There is no separate spreadsheet-specific financial writer
+to delete. The qualified cleanup keeps that owner, resolves configured definitions
+once and rolls back a failed period before committing failure accounting. The
+typed extraction-output reader is a synthetic prototype, not a production one-parse
+consumer or financial admission. Native promotion still needs source-reviewed
+meaning and historical consumer/recovery proof absent from the current config.
+The larger terminal proposal below remains conditional; it earns no cleanup credit
+from this adapter change. See the current checkpoint for exact source, evidence,
+independent scores and the restored original structural gate.
 
 **Cut:** for a qualified spreadsheet producer, replace value-only parsing and
 `ingest_spreadsheet_kpis` → `persist_manifest` → independent legacy restatement /

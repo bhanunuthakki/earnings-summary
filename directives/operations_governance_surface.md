@@ -97,6 +97,12 @@ duplicate-selected-observation disposition and admitted-bundle handoff stay inta
 Strict outcome validation remains in the canonical resolver. These are internal
 read changes, with no new operator action, data source or completion authority.
 
+Combined quarterly consumers now share source preparation, canonical outcomes and
+bundle materialization once. Separate series and coordinate reducers retain their
+own validation and handoff rules. Nonquarterly canonical admission remains separate;
+only its source enumeration is shared. Complete publication-verification work is
+unchanged. No prepared-population cache, schema or stored authority is added.
+
 Temporary-run finalization, recovery and reviewed registration build a hold-path
 set once per operation. Full reasons and ordering remain. The lookup algorithm
 changes; retention policy and operator capabilities do not. Metrics and FMP-derived
@@ -118,6 +124,12 @@ hash registered to another issuer is rejected before document/fact writes; same-
 retry suppression remains. This guard does not change the global hash schema. The
 existing KPI writer, per-period commits and recovery contract remain; native writer
 retirement and durable per-cell rejected capture are not qualified by this change.
+Definition resolution now runs once per configured spec. Currency validation still
+examines absent and overwritten specs in original order after all resolutions.
+On a failed period, pending writes roll back before failed-run accounting commits;
+prior completed periods remain. New-document and run helpers retain their existing
+commits. This fix does not make the adapter caller-transaction safe or atomic across
+all periods. The source, shared writer, semantic admission and history owners stay.
 
 Evidence belongs to the FMP batch/quarterly, explicit-state, canonical read,
 spreadsheet ingest and Say/Do regression suites and the bounded implementation
