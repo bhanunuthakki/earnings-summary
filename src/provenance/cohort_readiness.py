@@ -161,19 +161,24 @@ def _extraction(
     conn: sqlite3.Connection, issuer: str, scope: PopulationTemporalScope
 ) -> ReadinessEvidence:
     cutoff, observed = scope.knowledge_cutoff.isoformat(), scope.observed_through.isoformat()
-    current = (
-        " FROM document_processing_obligation_revisions obligation "
-        "JOIN source_obligation_revisions source "
-        "ON source.obligation_revision_id=obligation.source_obligation_revision_id "
-        "WHERE source.issuer_id=? AND datetime(obligation.knowledge_at)<=datetime(?) "
-        "AND datetime(obligation.recorded_at)<=datetime(?) "
-        "AND NOT EXISTS (SELECT 1 FROM document_processing_obligation_revisions newer "
-        "WHERE newer.processing_obligation_key=obligation.processing_obligation_key "
-        "AND newer.revision>obligation.revision AND datetime(newer.knowledge_at)<=datetime(?) "
-        "AND datetime(newer.recorded_at)<=datetime(?))"
-    )
     params = (issuer, cutoff, observed, cutoff, observed)
-    counts = {"processing_obligations": _count(conn, "SELECT COUNT(*)" + current, params)}
+    counts = {
+        "processing_obligations": _count(
+            conn,
+            (
+                "SELECT COUNT(*) FROM document_processing_obligation_revisions obligation JOIN "
+                "source_obligation_revisions source ON "
+                "source.obligation_revision_id=obligation.source_obligation_revision_id WHERE "
+                "source.issuer_id=? AND datetime(obligation.knowledge_at)<=datetime(?) AND "
+                "datetime(obligation.recorded_at)<=datetime(?) AND NOT EXISTS (SELECT 1 FROM "
+                "document_processing_obligation_revisions newer WHERE "
+                "newer.processing_obligation_key=obligation.processing_obligation_key AND "
+                "newer.revision>obligation.revision AND datetime(newer.knowledge_at)<=datetime(?) AND "
+                "datetime(newer.recorded_at)<=datetime(?))"
+            ),
+            params,
+        )
+    }
     for name, status in (
         ("succeeded", "succeeded"),
         ("failed", "failed"),
@@ -183,14 +188,23 @@ def _extraction(
     ):
         counts[name] = _count(
             conn,
-            "SELECT COUNT(*)" + current + " AND EXISTS (SELECT 1 FROM "
-            "document_processing_disposition_headers disposition "
-            "JOIN document_processing_disposition_seals seal USING (processing_disposition_id) "
-            "WHERE disposition.processing_obligation_revision_id="
-            "obligation.processing_obligation_revision_id AND disposition.terminal_status=? "
-            "AND datetime(disposition.knowledge_at)<=datetime(?) "
-            "AND datetime(disposition.recorded_at)<=datetime(?) "
-            "AND datetime(seal.sealed_at)<=datetime(?))",
+            (
+                "SELECT COUNT(*) FROM document_processing_obligation_revisions obligation JOIN "
+                "source_obligation_revisions source ON "
+                "source.obligation_revision_id=obligation.source_obligation_revision_id WHERE "
+                "source.issuer_id=? AND datetime(obligation.knowledge_at)<=datetime(?) AND "
+                "datetime(obligation.recorded_at)<=datetime(?) AND NOT EXISTS (SELECT 1 FROM "
+                "document_processing_obligation_revisions newer WHERE "
+                "newer.processing_obligation_key=obligation.processing_obligation_key AND "
+                "newer.revision>obligation.revision AND datetime(newer.knowledge_at)<=datetime(?) AND "
+                "datetime(newer.recorded_at)<=datetime(?)) AND EXISTS (SELECT 1 FROM "
+                "document_processing_disposition_headers disposition JOIN "
+                "document_processing_disposition_seals seal USING (processing_disposition_id) WHERE "
+                "disposition.processing_obligation_revision_id=obligation.processing_obligation_revision_id "
+                "AND disposition.terminal_status=? AND datetime(disposition.knowledge_at)<=datetime(?) "
+                "AND datetime(disposition.recorded_at)<=datetime(?) AND "
+                "datetime(seal.sealed_at)<=datetime(?))"
+            ),
             (*params, status, cutoff, observed, observed),
         )
     blockers = tuple(
@@ -219,30 +233,44 @@ def _semantic(
 ) -> ReadinessEvidence:
     cutoff, observed = scope.knowledge_cutoff.isoformat(), scope.observed_through.isoformat()
     params = (issuer, cutoff, observed)
-    cell_scope = (
-        " FROM fact_cells_v2 cell JOIN reporting_entities entity USING (reporting_entity_id) "
-        "WHERE entity.issuer_id=? AND datetime(cell.knowledge_at)<=datetime(?) "
-        "AND datetime(cell.recorded_at)<=datetime(?)"
-    )
-    counts = {"fact_cells": _count(conn, "SELECT COUNT(*)" + cell_scope, params)}
-    observations = (
-        " FROM fact_observations_v2 observation JOIN fact_cells_v2 cell USING (fact_cell_id) "
-        "JOIN reporting_entities entity USING (reporting_entity_id) "
-        "WHERE entity.issuer_id=? AND datetime(cell.knowledge_at)<=datetime(?) "
-        "AND datetime(cell.recorded_at)<=datetime(?) "
-        "AND datetime(observation.knowledge_at)<=datetime(?) "
-        "AND datetime(observation.recorded_at)<=datetime(?)"
-    )
+    counts = {
+        "fact_cells": _count(
+            conn,
+            (
+                "SELECT COUNT(*) FROM fact_cells_v2 cell JOIN reporting_entities entity USING "
+                "(reporting_entity_id) WHERE entity.issuer_id=? AND "
+                "datetime(cell.knowledge_at)<=datetime(?) AND datetime(cell.recorded_at)<=datetime(?)"
+            ),
+            params,
+        )
+    }
+
     counts["observations"] = _count(
-        conn, "SELECT COUNT(*)" + observations, (*params, cutoff, observed)
+        conn,
+        (
+            "SELECT COUNT(*) FROM fact_observations_v2 observation JOIN fact_cells_v2 cell USING "
+            "(fact_cell_id) JOIN reporting_entities entity USING (reporting_entity_id) WHERE "
+            "entity.issuer_id=? AND datetime(cell.knowledge_at)<=datetime(?) AND "
+            "datetime(cell.recorded_at)<=datetime(?) AND "
+            "datetime(observation.knowledge_at)<=datetime(?) AND "
+            "datetime(observation.recorded_at)<=datetime(?)"
+        ),
+        (*params, cutoff, observed),
     )
     counts["observations_with_publication_seal"] = _count(
         conn,
-        "SELECT COUNT(*)" + observations + " AND EXISTS (SELECT 1 FROM "
-        "source_fact_publication_members member JOIN source_fact_publication_seals seal "
-        "USING (publication_id) WHERE member.record_kind='fact_observation' "
-        "AND member.record_id=observation.observation_id "
-        "AND datetime(member.recorded_at)<=datetime(?) AND datetime(seal.sealed_at)<=datetime(?))",
+        (
+            "SELECT COUNT(*) FROM fact_observations_v2 observation JOIN fact_cells_v2 cell USING "
+            "(fact_cell_id) JOIN reporting_entities entity USING (reporting_entity_id) WHERE "
+            "entity.issuer_id=? AND datetime(cell.knowledge_at)<=datetime(?) AND "
+            "datetime(cell.recorded_at)<=datetime(?) AND "
+            "datetime(observation.knowledge_at)<=datetime(?) AND "
+            "datetime(observation.recorded_at)<=datetime(?) AND EXISTS (SELECT 1 FROM "
+            "source_fact_publication_members member JOIN source_fact_publication_seals seal USING "
+            "(publication_id) WHERE member.record_kind='fact_observation' AND "
+            "member.record_id=observation.observation_id AND "
+            "datetime(member.recorded_at)<=datetime(?) AND datetime(seal.sealed_at)<=datetime(?))"
+        ),
         (*params, cutoff, observed, observed, observed),
     )
     counts["canonical_metric_cells"] = _count(
